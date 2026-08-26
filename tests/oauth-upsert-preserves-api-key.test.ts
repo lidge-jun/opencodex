@@ -60,6 +60,24 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(config.providers.xai!.modelCosts).toEqual(costs);
   });
 
+  test("carries the per-provider account-failover opt-out across a re-login upsert (#2568d)", () => {
+    // The sequence that makes this load-bearing: an operator switches rotation off, then logs in
+    // a SECOND account. That login rebuilds this row from the preset and simultaneously creates
+    // the 2-account quorum that turns presence-driven rotation on — so losing the opt-out here
+    // enables the exact behaviour the operator declined, during an unrelated action.
+    const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+    config.providers.xai!.oauthAccountFailover = { enabled: false };
+    upsertOAuthProvider(config, "xai");
+    expect(config.providers.xai!.oauthAccountFailover).toEqual({ enabled: false });
+  });
+
+  test("an opt-IN survives too: preservation is about operator intent, not a preferred answer", () => {
+    const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+    config.providers.xai!.oauthAccountFailover = { enabled: true };
+    upsertOAuthProvider(config, "xai");
+    expect(config.providers.xai!.oauthAccountFailover).toEqual({ enabled: true });
+  });
+
   test("carries the key over without changing oauth billing when the user did not pick key mode", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
     config.providers.xai!.authMode = "oauth";

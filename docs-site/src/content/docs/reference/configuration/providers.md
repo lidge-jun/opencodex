@@ -295,15 +295,35 @@ Leave this disabled unless you understand Anthropic account policy risk. Prefer 
 `ocx account use anthropic <id>` switching when unsure.
 :::
 
-### `oauthAccountFailover` (experimental)
+### `oauthAccountFailover`
 
 Rotates to another logged-in account of the same provider when one is rate-limited, for OAuth
 providers that have no pool of their own — xAI, Cursor, Kimi, GitHub Copilot, Google Antigravity,
-and Nous. Off by default.
+and Nous.
+
+**Logging in a second account is what turns this on.** With no configuration, rotation activates
+for any of those providers holding 2 or more accounts that are not flagged for reauthentication —
+the same rule `apiKeyPool` already applies to a 2+ key pool. A provider with one stored account
+behaves exactly as before.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `oauthAccountFailover.enabled?` | `boolean` | `false` | Enable 429 cooldown failover across stored OAuth accounts. |
+| `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global override. `false` forces single-account behaviour everywhere; `true` forces rotation on. |
+| `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider override; beats the global setting and beats account presence. |
+
+To keep strict single-account behaviour for one provider whose terms you would rather not test:
+
+```json
+{
+  "providers": {
+    "cursor": {
+      "oauthAccountFailover": { "enabled": false }
+    }
+  }
+}
+```
+
+That setting survives logging in, adding an account, and reauthenticating.
 
 Deliberately narrower than `anthropicAccountPool`: no session affinity, no quota-ranked
 selection, no probe leases. It answers one question — the account that just returned 429 is
@@ -327,8 +347,9 @@ events rather than an HTTP status, and the standalone Antigravity image endpoint
 request path; neither rotates yet.
 
 :::caution[Experimental]
-Rotating across subscription accounts spends a second account's quota and may violate provider
-terms. Leave this disabled unless that is a tradeoff you have decided to make.
+Rotating across subscription accounts spends a second account's quota and may violate some
+providers' terms. If that is not a tradeoff you want, set `enabled: false` globally or for the
+provider in question.
 :::
 
 ### Managed record shapes

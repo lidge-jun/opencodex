@@ -2810,6 +2810,38 @@ async function handleResponsesInner(
   // the request actually used, so a concurrent rotation cannot cool an innocent replacement.
   let genericFailoverAccountId: string | null = null;
   let genericFailovers = 0;
+  /**
+   * Apply a rotated account's FULL credential snapshot to the live route (#2568d).
+   *
+   * One helper for all three rotation sites on purpose. Each site used to inline the same four
+   * lines, and the divergence that produced was the bug: `apiKey` was swapped while the routing
+   * metadata paired with it stayed behind.
+   *
+   * Returns false when the snapshot cannot be used safely, and the caller must then abandon the
+   * rotation rather than send a half-applied identity:
+   *
+   * - Copilot pins its bearer to an account-scoped regional origin, so transport is re-resolved
+   *   with the new account's `apiBaseUrl` instead of inheriting the previous account's host.
+   * - A Cloud Code Assist provider needs an account-matched project. Antigravity's refresh path
+   *   tolerates project discovery failing, so a stored account can legitimately have no project;
+   *   sending that account's bearer with the FAILED account's project is worse than not rotating.
+   */
+  const applyFailoverSnapshot = (snapshot: OAuthAccessSnapshot): boolean => {
+    if (route.provider.googleMode === "cloud-code-assist" && !snapshot.projectId) return false;
+    let rotatedProvider: OcxProviderConfig = { ...route.provider, apiKey: snapshot.accessToken };
+    if (route.providerName === "github-copilot") {
+      rotatedProvider = resolveProviderTransport(
+        route.providerName,
+        rotatedProvider,
+        parsed.options.promptCacheKey,
+        snapshot.apiBaseUrl,
+      ) as OcxProviderConfig;
+    }
+    if (snapshot.projectId) rotatedProvider = { ...rotatedProvider, project: snapshot.projectId };
+    route.provider = rotatedProvider;
+    if (route.providerName === "kiro") parsed._kiroAuthContext = { ...(snapshot.kiro ?? {}) };
+    return true;
+  };
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
     ? anthropicSessionKeyFromParts({
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
@@ -4283,11 +4315,7 @@ async function handleResponsesInner(
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
         genericFailoverAccountId = nextAccountId;
         genericFailovers += 1;
-        route.provider = { ...route.provider, apiKey: snapshot.accessToken };
-        if (route.providerName === "kiro") parsed._kiroAuthContext = { ...(snapshot.kiro ?? {}) };
-        if (route.provider.googleMode === "cloud-code-assist" && snapshot.projectId) {
-          route.provider = { ...route.provider, project: snapshot.projectId };
-        }
+        if (!applyFailoverSnapshot(snapshot)) return null;
       } catch {
         return null;
       }
@@ -4588,11 +4616,7 @@ async function handleResponsesInner(
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
         genericFailoverAccountId = nextAccountId;
         genericFailovers += 1;
-        route.provider = { ...route.provider, apiKey: snapshot.accessToken };
-        if (route.providerName === "kiro") parsed._kiroAuthContext = { ...(snapshot.kiro ?? {}) };
-        if (route.provider.googleMode === "cloud-code-assist" && snapshot.projectId) {
-          route.provider = { ...route.provider, project: snapshot.projectId };
-        }
+        if (!applyFailoverSnapshot(snapshot)) return false;
         // A Cursor conversation/checkpoint is credential-scoped. The failed attempt emitted no
         // client-visible bytes, so replay is safe, but carrying its account identity into the next
         // account would not be. Let the rotated adapter derive a fresh identity and conversation.
@@ -5180,11 +5204,7 @@ async function handleResponsesInner(
           const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
           genericFailoverAccountId = nextAccountId;
           genericFailovers += 1;
-          route.provider = { ...route.provider, apiKey: snapshot.accessToken };
-          if (route.providerName === "kiro") parsed._kiroAuthContext = { ...(snapshot.kiro ?? {}) };
-          if (route.provider.googleMode === "cloud-code-assist" && snapshot.projectId) {
-            route.provider = { ...route.provider, project: snapshot.projectId };
-          }
+          if (!applyFailoverSnapshot(snapshot)) break;
           invalidateSameTargetRequest();
           activeAdapter = resolveAdapter(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),

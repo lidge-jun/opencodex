@@ -27,6 +27,21 @@ const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 15 * 60_000;
 
 /**
+ * How long a presence answer may be reused before the store is consulted again.
+ *
+ * `loadAuthStore` has no cache: every call chmods the config dir and the secret, reads the whole
+ * file, parses it and normalizes the store (store.ts:136-151). Since presence now decides
+ * activation, this predicate runs on paths that have not seen a 429 at all — the streaming and
+ * non-streaming runTurn entry points evaluate it once per request — so an uncached check would put
+ * a synchronous file read in front of every request for every OAuth provider.
+ *
+ * Two seconds is short enough that a login in another window is picked up before the operator can
+ * switch back and send a prompt, and long enough that a burst of requests shares one read. The
+ * cache holds a COUNT, never a credential.
+ */
+const PRESENCE_CACHE_TTL_MS = 2_000;
+
+/**
  * Providers whose rotation is owned elsewhere and must not be handled here.
  *
  * `openai` is the Codex pool: quota scopes, probe leases and affinity semantics that this
@@ -40,8 +55,16 @@ interface AccountHealth {
   cooldownSource: "retry-after" | "default";
 }
 
+interface PresenceEntry {
+  eligible: number;
+  readAt: number;
+}
+
 /** Process-local, like the Anthropic pool's: a restart is allowed to forget a cooldown. */
 const health = new Map<string, AccountHealth>();
+
+/** Provider -> recent eligible-account count. TTL-bounded; never holds credential material. */
+const presence = new Map<string, PresenceEntry>();
 
 const healthKey = (provider: string, accountId: string) => `${provider}\u0000${accountId}`;
 
@@ -61,16 +84,59 @@ export function isGenericFailoverProvider(providerName: string, provider: OcxPro
 }
 
 /**
+ * Stored accounts that could serve traffic if asked, ignoring cooldowns.
+ *
+ * Cooldowns are excluded on purpose: they are transient and per-request, while this answers the
+ * durable question "did the operator log in more than one account". Treating a cooled account as
+ * absent would switch the feature off for the rest of the cooldown, which is exactly when it is
+ * needed.
+ */
+function eligibleAccountCount(providerName: string, now: number): number {
+  const cached = presence.get(providerName);
+  if (cached && now >= cached.readAt && now - cached.readAt < PRESENCE_CACHE_TTL_MS) return cached.eligible;
+  const set = getAccountSet(providerName);
+  const eligible = set ? set.accounts.filter(account => account.needsReauth !== true).length : 0;
+  presence.set(providerName, { eligible, readAt: now });
+  return eligible;
+}
+
+/**
+ * Presence IS consent (#2568d).
+ *
+ * `hasKeyPoolFailover` already reads a 2+ key pool as the operator asking for rotation, and a
+ * second OAuth login is the same statement. One account stays a strict no-op either way, so this
+ * only changes behaviour for someone who deliberately logged in twice.
+ */
+export function hasFailoverAccountQuorum(providerName: string, now = Date.now()): boolean {
+  return eligibleAccountCount(providerName, now) >= 2;
+}
+
+/**
  * Whether generic rotation is active for this provider.
  *
- * Default OFF pending an owner decision on presence-driven activation (#2568 asks for no
- * toggle; rotating spends another subscription account's quota, so the default is escalated
- * rather than chosen here). The mechanism does not change if the default flips.
+ * Precedence, most specific first:
+ *
+ *   1. `providers.<name>.oauthAccountFailover.enabled` — an operator may accept rotation on one
+ *      provider and refuse it on another, because provider terms differ.
+ *   2. `oauthAccountFailover.enabled` — the global switch. Anyone who already wrote `false` keeps
+ *      strict single-account behaviour across this change.
+ *   3. Presence: 2 or more eligible stored accounts (#2568d, owner decision).
+ *
+ * Only an explicit boolean overrides presence. A malformed value falls through instead of
+ * throwing, because a typo in a knob must not take a provider out of service.
  */
-export function isGenericOAuthFailoverEnabled(config: OcxConfig, providerName: string): boolean {
+export function isGenericOAuthFailoverEnabled(
+  config: OcxConfig,
+  providerName: string,
+  now = Date.now(),
+): boolean {
   const provider = config.providers?.[providerName];
   if (!provider || !isGenericFailoverProvider(providerName, provider)) return false;
-  return config.oauthAccountFailover?.enabled === true;
+  const perProvider = provider.oauthAccountFailover?.enabled;
+  if (typeof perProvider === "boolean") return perProvider;
+  const global = config.oauthAccountFailover?.enabled;
+  if (typeof global === "boolean") return global;
+  return hasFailoverAccountQuorum(providerName, now);
 }
 
 /** Accounts that may serve traffic right now: not cooled, not flagged for reauth. */
@@ -110,6 +176,9 @@ export function rotateGenericOAuthAccountOn429(
 
   const eligible = eligibleFailoverAccounts(providerName, now).filter(id => id !== failedAccountId);
   if (eligible.length === 0) return null;
+  // A rotation means the roster in use just changed; do not answer the next activation question
+  // from a count read before the failure.
+  presence.delete(providerName);
   // Deterministic: start after the failed account so repeated 429s walk the roster instead of
   // hammering whichever id happens to sort first.
   const order = set.accounts.map(account => account.id);
@@ -152,8 +221,10 @@ export function genericFailoverRetryAfterSeconds(providerName: string, now = Dat
 export function clearGenericFailoverHealth(providerName?: string): void {
   if (!providerName) {
     health.clear();
+    presence.clear();
     return;
   }
+  presence.delete(providerName);
   for (const key of [...health.keys()]) {
     if (key.startsWith(`${providerName}\u0000`)) health.delete(key);
   }

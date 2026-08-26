@@ -351,6 +351,16 @@ export interface OcxProviderConfig {
    * providers whose registry entry declares authKind "local" (management API enforces).
    */
   authMode?: "key" | "forward" | "oauth" | "local";
+  /**
+   * Per-provider override for generic OAuth multi-account 429 failover (#2568).
+   *
+   * Rotation is presence-driven by default — 2+ logged-in accounts activate it — so this exists
+   * for the operator who accepts rotation on one provider and refuses it on another. An explicit
+   * boolean here beats the global `oauthAccountFailover` and beats presence.
+   */
+  oauthAccountFailover?: {
+    enabled?: boolean;
+  };
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;
   /**

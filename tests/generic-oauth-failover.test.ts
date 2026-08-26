@@ -6,11 +6,12 @@ import {
   clearGenericFailoverHealth,
   eligibleFailoverAccounts,
   genericFailoverRetryAfterSeconds,
+  hasFailoverAccountQuorum,
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
 } from "../src/oauth/generic-account-failover";
-import { getAccountSet, saveCredential } from "../src/oauth/store";
+import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../src/oauth/store";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 const originalHome = process.env.OPENCODEX_HOME;
@@ -35,15 +36,23 @@ const OAUTH_PROVIDER = {
   authMode: "oauth",
 } as unknown as OcxProviderConfig;
 
-function config(enabled: boolean): OcxConfig {
+/**
+ * `enabled: undefined` means the key is ABSENT, which after #2568d is the case that matters most:
+ * it is what every install that never edited its config looks like.
+ */
+function config(enabled?: boolean, perProvider?: boolean): OcxConfig {
   return {
-    providers: { xai: OAUTH_PROVIDER },
-    ...(enabled ? { oauthAccountFailover: { enabled: true } } : {}),
+    providers: {
+      xai: perProvider === undefined
+        ? OAUTH_PROVIDER
+        : { ...OAUTH_PROVIDER, oauthAccountFailover: { enabled: perProvider } },
+    },
+    ...(enabled === undefined ? {} : { oauthAccountFailover: { enabled } }),
   } as unknown as OcxConfig;
 }
 
-async function seed(count: number): Promise<string[]> {
-  for (let i = 0; i < count; i++) {
+async function seed(count: number, offset = 0): Promise<string[]> {
+  for (let i = offset; i < offset + count; i++) {
     await saveCredential("xai", {
       access: `access-${i}`,
       refresh: `refresh-${i}`,
@@ -55,26 +64,64 @@ async function seed(count: number): Promise<string[]> {
 }
 
 describe("#2568 generic OAuth account failover", () => {
-  test("rotates to another logged-in account and cools the one that 429'd", async () => {
+  test("two logged-in accounts rotate with NO configuration at all (#2568d)", async () => {
+    // The reported workflow: three xAI accounts are logged in, the active one hits its limit, and
+    // the operator never went looking for a toggle. Presence is the consent signal.
     const [first, second] = await seed(2);
-    const next = rotateGenericOAuthAccountOn429(config(true), "xai", first!, null);
+    const next = rotateGenericOAuthAccountOn429(config(), "xai", first!, null);
     expect(next).toBe(second);
     // The failed account is cooled, so it is not offered again while the window holds.
     expect(eligibleFailoverAccounts("xai")).toEqual([second!]);
+  });
+
+  test("an explicit knob still wins over presence, in both directions", async () => {
+    const ids = await seed(2);
+    expect(rotateGenericOAuthAccountOn429(config(false), "xai", ids[0]!, null)).toBeNull();
+    clearGenericFailoverHealth();
+    expect(rotateGenericOAuthAccountOn429(config(true), "xai", ids[0]!, null)).toBe(ids[1]);
+  });
+
+  test("a per-provider override beats the global switch", async () => {
+    // Provider terms differ, so an operator may accept rotation on one provider and refuse it on
+    // another. The narrower setting is the one that means something.
+    const ids = await seed(2);
+    expect(isGenericOAuthFailoverEnabled(config(true, false), "xai")).toBe(false);
+    expect(isGenericOAuthFailoverEnabled(config(false, true), "xai")).toBe(true);
+    expect(rotateGenericOAuthAccountOn429(config(true, false), "xai", ids[0]!, null)).toBeNull();
+  });
+
+  test("a second account flagged for reauth is not a quorum", async () => {
+    // A revoked account cannot serve the replay, so counting it would arm the failover machinery
+    // for a user who still has exactly one usable credential.
+    const ids = await seed(2);
+    expect(hasFailoverAccountQuorum("xai")).toBe(true);
+    await markAccountNeedsReauth("xai", ids[1]!, true);
+    clearGenericFailoverHealth();
+    expect(hasFailoverAccountQuorum("xai")).toBe(false);
+    expect(isGenericOAuthFailoverEnabled(config(), "xai")).toBe(false);
+  });
+
+  test("the presence answer is cached, but a fresh login is visible within the TTL window", async () => {
+    // The predicate now runs on requests that never see a 429, and loadAuthStore has no cache of
+    // its own — it chmods and re-reads the whole store every call. A count is memoized; a
+    // credential never is.
+    const start = Date.now();
+    await seed(1);
+    expect(hasFailoverAccountQuorum("xai", start)).toBe(false);
+    await seed(1, 1);
+    // Same instant: still the memoized answer.
+    expect(hasFailoverAccountQuorum("xai", start)).toBe(false);
+    // Past the window: the new login is seen without any explicit invalidation call.
+    expect(hasFailoverAccountQuorum("xai", start + 2_001)).toBe(true);
   });
 
   test("a single stored account is a strict no-op", async () => {
     // Rotating to itself would replay the same 429 against the same credential, and cooling
     // the only account would take the provider out of service for nothing.
     const [solo] = await seed(1);
-    expect(rotateGenericOAuthAccountOn429(config(true), "xai", solo!, null)).toBeNull();
+    expect(rotateGenericOAuthAccountOn429(config(), "xai", solo!, null)).toBeNull();
+    expect(isGenericOAuthFailoverEnabled(config(), "xai")).toBe(false);
     expect(eligibleFailoverAccounts("xai")).toEqual([solo!]);
-  });
-
-  test("the knob off is a strict no-op regardless of account count", async () => {
-    const ids = await seed(2);
-    expect(rotateGenericOAuthAccountOn429(config(false), "xai", ids[0]!, null)).toBeNull();
-    expect(eligibleFailoverAccounts("xai")).toEqual(ids);
   });
 
   test("Codex and Anthropic are excluded: their own pools own rotation", () => {
@@ -90,7 +137,7 @@ describe("#2568 generic OAuth account failover", () => {
 
   test("all accounts cooled reports the earliest remaining window", async () => {
     const ids = await seed(2);
-    const cfg = config(true);
+    const cfg = config();
     expect(rotateGenericOAuthAccountOn429(cfg, "xai", ids[0]!, "120")).toBe(ids[1]);
     expect(rotateGenericOAuthAccountOn429(cfg, "xai", ids[1]!, "30")).toBeNull();
     const retryAfter = genericFailoverRetryAfterSeconds("xai");
@@ -101,14 +148,15 @@ describe("#2568 generic OAuth account failover", () => {
 
   test("Retry-After drives the cooldown length", async () => {
     const ids = await seed(2);
-    rotateGenericOAuthAccountOn429(config(true), "xai", ids[0]!, "600");
+    rotateGenericOAuthAccountOn429(config(), "xai", ids[0]!, "600");
     expect(genericFailoverRetryAfterSeconds("xai")).toBeGreaterThan(500);
   });
 
-  test("enablement requires both the knob and a participating OAuth provider", async () => {
+  test("an excluded provider is never enabled, however many accounts it has", async () => {
     await seed(2);
-    expect(isGenericOAuthFailoverEnabled(config(true), "xai")).toBe(true);
-    expect(isGenericOAuthFailoverEnabled(config(false), "xai")).toBe(false);
+    // Codex and Anthropic own quota scopes, probe leases and affinity that this must not
+    // reimplement, so presence does not speak for them.
+    expect(isGenericOAuthFailoverEnabled(config(), "openai")).toBe(false);
     expect(isGenericOAuthFailoverEnabled(config(true), "openai")).toBe(false);
   });
 });
@@ -156,16 +204,54 @@ describe("sidecar on429 wiring", () => {
     expect(oauth).toBeGreaterThan(keyPool);
 
     // The OAuth branch is gated on all three of: an account this request actually used, the
-    // per-request bound, and the knob. Dropping any one of them turns an opt-in feature into a
-    // default-on one, or lets a short Retry-After spin.
+    // per-request bound, and the activation predicate. Dropping the bound lets a short
+    // Retry-After spin; dropping the account binding lets a rotation cool an innocent account.
     expect(body).toContain("!genericFailoverAccountId");
     expect(body).toContain("genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST");
     expect(body).toContain("!isGenericOAuthFailoverEnabled(config, route.providerName)");
 
-    // The FULL snapshot, not a bare bearer: Kiro carries routing metadata and Antigravity pairs
-    // an account-matched projectId with its token, so a token-only swap mixes two accounts.
+    // The FULL snapshot, not a bare bearer, and applied through the shared helper rather than
+    // inline. Inlining is what produced the original defect: three sites each swapped `apiKey`
+    // and only two of them remembered the routing metadata paired with it.
     expect(body).toContain("failoverAccountSnapshot(");
+    expect(body).toContain("applyFailoverSnapshot(snapshot)");
+    expect(body).not.toContain("apiKey: snapshot.accessToken");
+  });
+
+  test("every rotation site applies the credential through the one shared helper", () => {
+    // The pairing rules (Copilot's account-scoped origin, Antigravity's account-matched project,
+    // Kiro's routing metadata) live in exactly one place. A fourth rotation site that swaps the
+    // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
+    const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
+    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot\)/g) ?? [];
+    expect(snapshotUses.length).toBe(3);
+    expect(helperUses.length).toBe(snapshotUses.length);
+    // The bearer is written in exactly one place — inside the helper. Any other occurrence is a
+    // rotation site that skipped the pairing rules.
+    const bearerWrites = coreSource.match(/apiKey: snapshot\.accessToken/g) ?? [];
+    expect(bearerWrites.length).toBe(1);
+    const helperStart = coreSource.indexOf("const applyFailoverSnapshot =");
+    expect(coreSource.indexOf("apiKey: snapshot.accessToken")).toBeGreaterThan(helperStart);
+  });
+
+  test("the helper fails closed rather than pairing a new bearer with an old identity", () => {
+    const start = coreSource.indexOf("const applyFailoverSnapshot =");
+    expect(start).toBeGreaterThan(-1);
+    const body = coreSource.slice(start, coreSource.indexOf("\n  };", start));
+
+    // Antigravity: a rotated account with no project must abort the rotation, NOT inherit the
+    // failed account's project. Its refresh path tolerates discovery failure, so this is
+    // reachable with ordinary stored credentials.
+    expect(body).toContain("cloud-code-assist");
+    expect(body).toContain("!snapshot.projectId");
+
+    // Copilot: the bearer is pinned to an account-scoped regional origin, so transport is
+    // re-resolved with the rotated account's own apiBaseUrl.
+    expect(body).toContain("github-copilot");
+    expect(body).toContain("snapshot.apiBaseUrl");
+    expect(body).toContain("resolveProviderTransport(");
+
+    // Kiro routing metadata still travels with its own token.
     expect(body).toContain("_kiroAuthContext");
-    expect(body).toContain("snapshot.projectId");
   });
 });

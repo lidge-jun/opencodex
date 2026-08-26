@@ -59,10 +59,19 @@ export interface OAuthAccessSnapshot {
   projectId?: string;
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
+  /**
+   * Allowlisted GitHub Copilot API origin belonging to THIS account.
+   *
+   * Copilot pins its bearer to an account-scoped regional host, and the initial route already
+   * pairs the two (`core.ts` resolves transport with `getOAuthCredentialApiBaseUrl`). Account
+   * failover must carry the pairing across the rotation; without it, account B's token is sent to
+   * account A's origin (#2568d).
+   */
+  apiBaseUrl?: string;
 }
 
 export interface ObservedOAuthAccessSnapshot extends OAuthAccessSnapshot {
-  /** Allowlisted provider API origin consumed by GitHub Copilot model discovery. */
+  /** Retained for callers that predate `apiBaseUrl` moving onto the base snapshot. */
   apiBaseUrl?: string;
 }
 
@@ -355,12 +364,19 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     ...(cred.kiro?.apiRegion ? { apiRegion: cred.kiro.apiRegion } : {}),
     ...(cred.kiro?.ssoRegion ? { ssoRegion: cred.kiro.ssoRegion } : {}),
   };
+  // Validated here, not at the call site: an unvalidated origin from a legacy or crafted
+  // credential must never travel with a bearer, and dropping it makes the transport fall back to
+  // the canonical host rather than to whatever the previous account was using.
+  const copilotApiBaseUrl = provider === "github-copilot"
+    ? validateCopilotApiBaseUrl(cred.apiBaseUrl)
+    : undefined;
   return {
     provider,
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
     ...(cred.projectId ? { projectId: cred.projectId } : {}),
+    ...(copilotApiBaseUrl ? { apiBaseUrl: copilotApiBaseUrl } : {}),
     // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
     // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
     ...(provider === "kiro"
@@ -1094,6 +1110,14 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   // Logs/Usage estimates.
   if (existing?.modelCosts !== undefined) {
     next.modelCosts = existing.modelCosts;
+  }
+  // The per-provider account-failover opt-out is operator intent about SPENDING, and the login
+  // path is exactly where losing it does damage: adding a second account both rebuilds this row
+  // from the preset and creates the 2-account quorum that turns presence-driven rotation on
+  // (#2568d). Dropping the opt-out here would enable the thing the operator switched off, at the
+  // moment they were doing something unrelated.
+  if (existing?.oauthAccountFailover !== undefined) {
+    next.oauthAccountFailover = existing.oauthAccountFailover;
   }
   if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
     // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.

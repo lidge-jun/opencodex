@@ -11,6 +11,8 @@ const actualResolver = await import("../src/server/adapter-resolve");
 const actualResolveAdapter = actualResolver.resolveAdapter;
 let attempts: AdapterEvent[][] = [];
 let attemptKeys: string[] = [];
+/** Set by the delivery test: an attempt that emits, then blocks before completing the turn. */
+let slowAttempt: ((emit: (event: AdapterEvent) => void) => Promise<void>) | undefined;
 
 function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter {
   return {
@@ -22,6 +24,7 @@ function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter {
     async runTurn(_parsed, _incoming, emit) {
       const index = attemptKeys.length;
       attemptKeys.push(provider.apiKey ?? "");
+      if (slowAttempt) return await slowAttempt(emit);
       for (const event of attempts[index] ?? []) emit(event);
     },
   };
@@ -39,7 +42,11 @@ const { handleResponses } = await import("../src/server/responses");
 const originalHome = process.env.OPENCODEX_HOME;
 let home = "";
 
-function config(enabled = true): OcxConfig {
+/**
+ * `enabled: undefined` is the case that matters after #2568d — the key absent entirely, which is
+ * what every install that never edited its config looks like.
+ */
+function config(enabled?: boolean): OcxConfig {
   return {
     port: 0,
     defaultProvider: "cursor",
@@ -51,7 +58,7 @@ function config(enabled = true): OcxConfig {
         models: ["model"],
       },
     },
-    ...(enabled ? { oauthAccountFailover: { enabled: true } } : {}),
+    ...(enabled === undefined ? {} : { oauthAccountFailover: { enabled } }),
   } as OcxConfig;
 }
 
@@ -80,6 +87,7 @@ beforeEach(() => {
   clearGenericFailoverHealth();
   attempts = [];
   attemptKeys = [];
+  slowAttempt = undefined;
 });
 
 afterEach(() => {
@@ -115,6 +123,52 @@ describe("#2568 adapter-event OAuth failover", () => {
 
     expect(attemptKeys).toEqual(["cursor-access-0"]);
     expect(body).toContain("rate_limit_exceeded");
+  });
+
+  test("an explicit opt-out keeps single-account behaviour with two accounts stored", async () => {
+    // Presence is consent, but only when the operator has not already said no. Someone who wrote
+    // `enabled: false` gets the pre-#2568d behaviour unchanged.
+    await seedAccounts(2);
+    attempts = [[{ type: "error", message: "Cursor rate limit exceeded: resource_exhausted" }]];
+
+    const body = await (await handleResponses(request(true), config(false), { model: "", provider: "" })).text();
+
+    expect(attemptKeys).toEqual(["cursor-access-1"]);
+    expect(body).toContain("rate_limit_exceeded");
+  });
+
+  test("the first delta reaches the client before the turn completes", async () => {
+    // Presence-driven activation puts every multi-account user behind preflightRunTurnFailover,
+    // which holds events until the first meaningful one. Holding the FIRST DELTA would be a
+    // silent time-to-first-token regression that a whole-body assertion cannot see, so this reads
+    // the stream incrementally and refuses to wait for `done`.
+    await seedAccounts(2);
+    let releaseCompletion: (() => void) | undefined;
+    const completionGate = new Promise<void>(resolve => { releaseCompletion = resolve; });
+    slowAttempt = async emit => {
+      emit({ type: "text_delta", text: "first token" });
+      await completionGate;
+      emit({ type: "done" });
+    };
+
+    const response = await handleResponses(request(true), config(), { model: "", provider: "" });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let seen = "";
+    // Bounded: if the delta never arrives before completion, this rejects instead of hanging the
+    // suite, because the completion gate is still closed.
+    while (!seen.includes("first token")) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("first delta withheld until completion")), 2_000)),
+      ]);
+      if (chunk.done) throw new Error("stream ended before the first delta");
+      seen += decoder.decode(chunk.value, { stream: true });
+    }
+
+    expect(seen).toContain("first token");
+    releaseCompletion?.();
+    await reader.cancel();
   });
 
   test("Codex and Anthropic remain excluded", async () => {

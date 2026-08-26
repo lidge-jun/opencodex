@@ -605,16 +605,17 @@ export interface OcxConfig {
     stickyLimit?: number;
   };
   /**
-   * Opt-in generic OAuth multi-account 429 failover (#2568). Default OFF.
+   * Generic OAuth multi-account 429 failover (#2568). Presence-driven by default.
    *
    * Rotates to another logged-in account of the SAME provider when one is rate-limited, for
    * OAuth providers that have no pool of their own — xAI, Cursor, Kimi, GitHub Copilot,
    * Antigravity, Nous. The Codex pool and the Anthropic pool own their own rotation and are
-   * excluded; enabling this changes neither.
+   * excluded; this setting changes neither.
    *
-   * Default OFF is a recorded escalation, not a settled preference: the issue asks for
-   * presence-driven activation (2+ accounts implies consent, mirroring API-key pools), but
-   * rotating spends a second subscription account's quota, so the default is left to the owner.
+   * With the key absent, rotation activates when a provider has 2 or more eligible stored
+   * accounts — the same consent rule API-key pools already apply to a 2+ key pool (#2568d). A
+   * single account is a strict no-op. Set `false` to keep strict single-account behaviour;
+   * `providers.<name>.oauthAccountFailover` overrides this per provider.
    */
   oauthAccountFailover?: {
     enabled?: boolean;
