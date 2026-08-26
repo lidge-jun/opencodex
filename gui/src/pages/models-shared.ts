@@ -1,4 +1,4 @@
-import type { TFn } from "../i18n/shared";
+import type { TFn, TKey } from "../i18n/shared";
 import type { ProviderDiscoverySummary } from "../models-groups";
 import { modelVisible, type ProviderModelMap } from "../model-visibility";
 import { formatNamespacedModelId } from "../provider-icons";
@@ -35,12 +35,26 @@ export interface ModelRow {
   custom?: boolean;
   customId?: string;
   displayName?: string;
+  displayNameOverride?: string;
+  displayNameSource?: "operator" | "provider" | "fallback";
   inputModalities?: string[];
   contextWindow?: number;
   contextCap?: number;
   contextCapped?: boolean;
   /** Stored custom-row override (not the inherited ladder); only present on custom rows. */
   reasoningEfforts?: string[];
+}
+
+const DISPLAY_NAME_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+
+/** Mirror the server display-name contract for immediate form feedback. */
+export function modelDisplayNameValidationKey(value: string): TKey | null {
+  const trimmed = value.trim();
+  if (!trimmed) return "models.displayNameRequired";
+  if (trimmed.length > 128) return "models.displayNameTooLong";
+  if (trimmed.includes("/")) return "models.displayNameNoSlash";
+  if (DISPLAY_NAME_CONTROL_CHARS.test(trimmed)) return "models.displayNameNoControl";
+  return null;
 }
 
 /**
