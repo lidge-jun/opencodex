@@ -161,8 +161,8 @@ returns:
 ```
 
 `--quota` adds a `QUOTA` column with each account's own usage, for providers that support a
-per-account probe (Anthropic today). It is opt-in because the proxy probes the upstream once per
-stored credential; the default listing stays a local read. `--refresh` bypasses the cached
+per-account probe (Anthropic and Google Antigravity today). It is opt-in because the proxy probes
+the upstream once per stored credential; the default listing stays a local read. `--refresh` bypasses the cached
 result. An account with no per-account quota shows `-`, and one whose probe failed shows
 `unavailable` — blank would read as "no usage" rather than "not measured". `--json` carries the
 full breakdown per account, not just the two summarized windows:

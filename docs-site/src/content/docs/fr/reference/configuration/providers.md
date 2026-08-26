@@ -243,6 +243,12 @@ exploitable, la temporisation par défaut est de 60 secondes ; une valeur amont 
 les comptes admissibles sont en temporisation, le client reçoit un 429 avec le premier `Retry-After`
 connu.
 
+La rotation spécialisée sur échec 402/429 est limitée au chemin d'envoi principal Responses ordinaire
+et aux continuations de terminal. Lorsqu'elles passent par Google, les boucles `image/video bridge` et
+`web-search sidecar` peuvent utiliser le compte initialement sélectionné pour la requête, mais elles ne
+le placent pas en temporisation et ne le font pas tourner via ce pool spécialisé. Le point de terminaison
+d'image Antigravity autonome reste lui aussi hors de ce chemin de rotation.
+
 :::caution[Résilience opérationnelle, pas contournement de quota]
 Utilisez ce pool pour récupérer après des défaillances transitoires, pas pour contourner les quotas ou
 les contrôles du fournisseur. L'automatisation multicomptes peut enfreindre les conditions du fournisseur ;

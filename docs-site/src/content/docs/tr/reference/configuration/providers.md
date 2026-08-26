@@ -265,6 +265,11 @@ bağlılığını temizler ve isteği başka bir uygun anlık görüntü için y
 Bir istek en fazla üç yük devretmeye, yani toplam dört upstream gönderime izin verir. Uygun hesapların
 tamamı soğuyorsa istemci en erken bilinen `Retry-After` ile 429 alır.
 
+Özelleşmiş 402/429 hata rotasyonu, normal Responses ana gönderim ve terminal devam yollarıyla sınırlıdır.
+Google üzerinden yönlendirildiklerinde `image/video bridge` ve `web-search sidecar` döngüleri isteğin
+başlangıçta seçilen hesabını kullanabilir, ancak bu özelleşmiş havuz üzerinden hesabı soğumaya almaz veya
+döndürmez. Bağımsız Antigravity görüntü uç noktası da bu rotasyon yolunun dışındadır.
+
 :::caution[Operasyonel dayanıklılık; kota aşma yöntemi değildir]
 Bu havuzu geçici hesap hatalarından kurtulmak için kullanın; kota veya sağlayıcı yaptırımını aşmak için
 kullanmayın. Çoklu hesap otomasyonu sağlayıcı koşullarını ihlal edebilir; bu riski kabul etmiyorsanız

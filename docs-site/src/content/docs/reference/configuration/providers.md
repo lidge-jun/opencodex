@@ -326,6 +326,12 @@ rebuilds the request for another eligible snapshot. The default cooldown is 60 s
 three failovers (four total upstream dispatches). If every eligible account is cooling, the client
 receives 429 with the earliest known `Retry-After`.
 
+Specialized 402/429 failure rotation is limited to the ordinary Responses main dispatch and terminal
+continuation paths. When routed through Google, the `image/video bridge` and `web-search sidecar`
+loops can use the account initially selected for the request, but they do not cool or rotate it
+through this specialized pool. The standalone Antigravity image endpoint is also outside this
+rotation path.
+
 :::caution[Operational resilience, not quota bypass]
 Use this pool to recover from transient account failures, not to evade quotas or provider enforcement.
 Multi-account automation can violate provider terms; keep the feature disabled unless you accept that
