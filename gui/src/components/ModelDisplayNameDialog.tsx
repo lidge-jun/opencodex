@@ -31,6 +31,7 @@ export default function ModelDisplayNameDialog({
   const t = useT();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const wasSavingRef = useRef(saving);
   const titleId = useId();
   const helpId = useId();
   const errorId = useId();
@@ -43,6 +44,12 @@ export default function ModelDisplayNameDialog({
     inputRef.current?.focus();
     return () => { if (dialog?.open) dialog.close(); };
   }, []);
+
+  useEffect(() => {
+    const saveFailed = wasSavingRef.current && !saving && Boolean(requestError);
+    wasSavingRef.current = saving;
+    if (saveFailed) inputRef.current?.focus();
+  }, [requestError, saving]);
 
   const validationError = validationKey ? t(validationKey) : null;
   const visibleError = validationError ?? requestError;
@@ -113,7 +120,7 @@ export default function ModelDisplayNameDialog({
           maxLength={129}
           placeholder={t("models.displayNamePlaceholder")}
           aria-describedby={`${helpId}${visibleError ? ` ${errorId}` : ""}`}
-          aria-invalid={visibleError ? true : undefined}
+          aria-invalid={validationError ? true : undefined}
           disabled={saving}
           onChange={event => {
             setDraft(event.target.value);

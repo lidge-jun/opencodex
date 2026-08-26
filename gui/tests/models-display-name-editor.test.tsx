@@ -66,6 +66,14 @@ describe("Models dashboard discovered display name integration", () => {
     });
     currentModels = [
       routedModel(),
+      {
+        provider: "command-code",
+        id: "deepseek-deepseek-v4-flash",
+        namespaced: "command-code/deepseek-deepseek-v4-flash",
+        disabled: false,
+        displayName: "DeepSeek V4 Flash",
+        displayNameSource: "provider",
+      },
       { provider: "openai", id: "gpt-5.5", namespaced: "openai/gpt-5.5", disabled: false, native: true },
       {
         provider: "xai-demo", id: "custom-one", namespaced: "xai-demo/custom-one",
@@ -81,6 +89,7 @@ describe("Models dashboard discovered display name integration", () => {
       models: currentModels,
       providers: [
         { name: "xai-demo", liveModels: false, models: ["grok-4.6", "custom-one"] },
+        { name: "command-code", liveModels: false, models: ["deepseek-deepseek-v4-flash"] },
         { name: "openai", liveModels: false, models: ["gpt-5.5"] },
       ],
       selectedModels: {},
@@ -97,6 +106,7 @@ describe("Models dashboard discovered display name integration", () => {
       }
       if (url.endsWith("/api/providers")) return Response.json([
         { name: "xai-demo", liveModels: false, models: ["grok-4.6", "custom-one"] },
+        { name: "command-code", liveModels: false, models: ["deepseek-deepseek-v4-flash"] },
         { name: "openai", liveModels: false, models: ["gpt-5.5"] },
       ]);
       if (url.endsWith("/api/selected-models")) return Response.json({ selected: {} });
@@ -182,11 +192,14 @@ describe("Models dashboard discovered display name integration", () => {
     await mountModels();
 
     expect(nameTrigger()).not.toBeNull();
-    expect(container.querySelectorAll('[aria-label^="Edit friendly name for "]')).toHaveLength(1);
+    expect(container.querySelectorAll('[aria-label^="Edit friendly name for "]')).toHaveLength(2);
     expect(container.querySelector('[aria-label="Edit friendly name for openai/gpt-5.5"]')).toBeNull();
     expect(container.querySelector('[aria-label="Edit friendly name for xai-demo/custom-one"]')).toBeNull();
     expect(container.textContent).toContain("Grok 4.6");
     expect(container.textContent).toContain("xai-demo/grok-4.6");
+    expect([...container.querySelectorAll("code")].some(code =>
+      code.textContent === "command-code/deepseek-deepseek-v4-flash"
+    )).toBe(true);
     expect(container.textContent).toContain("Custom One");
   });
 
@@ -231,6 +244,7 @@ describe("Models dashboard discovered display name integration", () => {
     expect(container.querySelector("dialog")).not.toBeNull();
     expect(dialogInput().value).toBe("Retry Name");
     expect(container.textContent).toContain("Catalog refresh failed");
+    expect(testWindow.document.activeElement).toBe(dialogInput());
   });
 
   test("a pending save blocks duplicate mutations", async () => {
@@ -314,7 +328,7 @@ describe("discovered model display name dialog", () => {
     }
   });
 
-  async function mountDialog(options: {
+  async function renderDialog(options: {
     saving?: boolean;
     requestError?: string | null;
     onSave?: (value: string) => void;
@@ -323,7 +337,7 @@ describe("discovered model display name dialog", () => {
   } = {}) {
     const { createRoot } = await import("react-dom/client");
     await act(async () => {
-      root = createRoot(container);
+      root ??= createRoot(container);
       root.render(
         <LanguageProvider>
           <ModelDisplayNameDialog
@@ -346,7 +360,7 @@ describe("discovered model display name dialog", () => {
   }
 
   test("opens with immutable identity and only the operator override in the input", async () => {
-    await mountDialog();
+    await renderDialog();
 
     const dialog = container.querySelector<HTMLDialogElement>("dialog")!;
     const input = container.querySelector<HTMLInputElement>("input")!;
@@ -360,7 +374,7 @@ describe("discovered model display name dialog", () => {
 
   test("validates before save and sends the trimmed safe draft", async () => {
     const onSave = jest.fn();
-    await mountDialog({ onSave });
+    await renderDialog({ onSave });
     const input = container.querySelector<HTMLInputElement>("input")!;
     const save = [...container.querySelectorAll<HTMLButtonElement>("button")]
       .find(button => button.textContent === "Save")!;
@@ -383,7 +397,7 @@ describe("discovered model display name dialog", () => {
   test("keeps request errors visible and locks every closing action while saving", async () => {
     const onClose = jest.fn();
     const onReset = jest.fn();
-    await mountDialog({ saving: true, requestError: "Catalog refresh failed", onClose, onReset });
+    await renderDialog({ saving: true, requestError: "Catalog refresh failed", onClose, onReset });
 
     expect(container.textContent).toContain("Catalog refresh failed");
     const actionButtons = [...container.querySelectorAll<HTMLButtonElement>("button")];
@@ -396,5 +410,24 @@ describe("discovered model display name dialog", () => {
     });
     expect(onClose).not.toHaveBeenCalled();
     expect(onReset).not.toHaveBeenCalled();
+  });
+
+  test("a request failure does not mark a valid display name as invalid", async () => {
+    await renderDialog({ requestError: "Catalog refresh failed" });
+
+    const input = container.querySelector<HTMLInputElement>("input")!;
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    expect(testWindow.document.activeElement).toBe(input);
+  });
+
+  test("focus returns to the editable name after a pending save fails", async () => {
+    await renderDialog({ saving: true });
+    testWindow.document.body.tabIndex = -1;
+    testWindow.document.body.focus();
+    expect(testWindow.document.activeElement).toBe(testWindow.document.body);
+
+    await renderDialog({ requestError: "Catalog refresh failed" });
+
+    expect(testWindow.document.activeElement).toBe(container.querySelector("input"));
   });
 });
