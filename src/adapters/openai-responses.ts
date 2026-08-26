@@ -6,6 +6,7 @@ import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompac
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
+import { debugProviderDiagnostic } from "../lib/debug";
 import {
   CODEX_FORWARD_BASE_URL,
   destinationDecodesNativeCompactionBlob,
@@ -20,7 +21,11 @@ import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-com
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
 import { normalizeXaiResponsesWebSearch } from "./xai-web-search";
-import { isXaiSchemaTarget, normalizeXaiToolParameters } from "./xai-tool-schema";
+import {
+  isXaiSchemaTarget,
+  normalizeXaiToolParameters,
+  XaiToolSchemaCompatibilityError,
+} from "./xai-tool-schema";
 import {
   createAdapterTierMetadata,
 } from "../providers/fastwire";
@@ -545,9 +550,56 @@ function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown
   };
 }
 
+/**
+ * Re-point `tool_choice` after an incompatible function was dropped from the catalog. Names here
+ * are already wire names, because namespace lowering rewrote the declarations and the selector
+ * together before this runs. A selector left naming an omitted tool reaches Grok as a dangling
+ * reference it rejects, and silently relaxing it to `auto` is worse: the turn would quietly
+ * proceed without the tool the caller required. So an `allowed_tools` list drops the omitted
+ * entries while any remain, and a selection with nothing left to point at fails locally with the
+ * same 400 the caller gets for a tool catalog this proxy cannot lower.
+ */
+function reconcileToolChoiceForOmittedTools(
+  body: Record<string, unknown>,
+  omittedFunctionNames: ReadonlySet<string>,
+): Record<string, unknown> {
+  if (omittedFunctionNames.size === 0) return body;
+  const toolChoice = body.tool_choice;
+  if (!isPlainObject(toolChoice)) return body;
+
+  const refuse = (name: string): never => {
+    throw new XaiToolSchemaCompatibilityError(
+      `tool_choice requires function "${name}", but its parameter schema cannot be represented for this destination; `
+      + "relax tool_choice or simplify the tool's parameter schema",
+    );
+  };
+
+  if (toolChoice.type === "function" && typeof toolChoice.name === "string") {
+    return omittedFunctionNames.has(toolChoice.name) ? refuse(toolChoice.name) : body;
+  }
+
+  if (toolChoice.type === "allowed_tools" && Array.isArray(toolChoice.tools)) {
+    const omitted = toolChoice.tools.filter(tool =>
+      isPlainObject(tool)
+      && tool.type === "function"
+      && typeof tool.name === "string"
+      && omittedFunctionNames.has(tool.name));
+    if (omitted.length === 0) return body;
+    const kept = toolChoice.tools.filter(tool => !omitted.includes(tool));
+    if (kept.length === 0) {
+      const first = omitted[0];
+      return refuse(isPlainObject(first) && typeof first.name === "string" ? first.name : "unknown");
+    }
+    return { ...body, tool_choice: { ...toolChoice, tools: kept } };
+  }
+
+  return body;
+}
+
 function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown {
   if (!isPlainObject(body)) return body;
 
+  const omittedFunctionNames = new Set<string>();
   const normalizeTools = (tools: unknown[]): unknown[] => {
     let changed = false;
     const normalized: unknown[] = [];
@@ -555,6 +607,7 @@ function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown {
       const fixed = normalizeFunctionToolSchema(tool, xaiTarget);
       if (fixed === undefined) {
         changed = true;
+        if (isPlainObject(tool) && typeof tool.name === "string") omittedFunctionNames.add(tool.name);
         continue;
       }
       if (fixed !== tool) changed = true;
@@ -579,7 +632,14 @@ function normalizeToolSchemas(body: unknown, xaiTarget: boolean): unknown {
     });
     if (inputChanged) normalizedBody = { ...normalizedBody, input };
   }
-  return normalizedBody;
+  if (omittedFunctionNames.size > 0) {
+    // A dropped tool is a capability the caller declared and will not get, and the only other
+    // trace of it is a turn that never makes the call. Name them so the cause is recoverable.
+    debugProviderDiagnostic("openai-responses", "tool-schema-omitted", {
+      omitted: [...omittedFunctionNames],
+    });
+  }
+  return reconcileToolChoiceForOmittedTools(normalizedBody, omittedFunctionNames);
 }
 
 function activateDeferredTool(tool: Record<string, unknown>): Record<string, unknown> {

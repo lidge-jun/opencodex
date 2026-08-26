@@ -141,7 +141,9 @@ describe("xAI Grok CLI tool schema normalization", () => {
     type: "object",
     properties: {
         command: {
-        anyOf: [
+        // The branches overlap, so `oneOf` exclusivity is load-bearing and is kept verbatim on
+        // the property. Only the ROOT union is what this destination rejects.
+        oneOf: [
             { type: "string" },
             { type: "string", minLength: 1 },
         ],
@@ -150,5 +152,182 @@ describe("xAI Grok CLI tool schema normalization", () => {
     required: ["command"],
     additionalProperties: false,
     });
+  });
+
+  test("keeps an overlapping root oneOf exclusive instead of widening it to anyOf", async () => {
+    // A root `oneOf` rejects an instance matching several branches. Flattening the differing
+    // property to `anyOf` would accept `{ mode: "view" }`, which matches BOTH branches here and
+    // the original therefore rejects.
+    const request = await xaiAdapter().buildRequest(parsedRequest({
+      name: "Bash",
+      description: "Execute a shell command",
+      parameters: {
+        oneOf: [
+          { type: "object", properties: { mode: { type: "string" } }, required: ["mode"] },
+          { type: "object", properties: { mode: { const: "view" } }, required: ["mode"] },
+        ],
+      },
+    }));
+    const body = JSON.parse(request.body) as {
+      tools?: Array<{ function: { parameters: Record<string, unknown> } }>;
+    };
+
+    expect(body.tools?.[0]?.function.parameters).toEqual({
+      type: "object",
+      properties: { mode: { oneOf: [{ type: "string" }, { const: "view" }] } },
+      required: ["mode"],
+    });
+  });
+
+  test("promotes an optional discriminator into required when flattening a root oneOf", async () => {
+    // `mode` absent matches both branches, so the root `oneOf` rejects `{}`. A per-property union
+    // alone would accept it; requiring the discriminator restores the original's accepted set.
+    const request = await xaiAdapter().buildRequest(parsedRequest({
+      name: "Bash",
+      description: "Execute a shell command",
+      parameters: {
+        type: "object",
+        oneOf: [
+          { properties: { mode: { const: "view" } } },
+          { properties: { mode: { const: "edit" } } },
+        ],
+      },
+    }));
+    const body = JSON.parse(request.body) as {
+      tools?: Array<{ function: { parameters: Record<string, unknown> } }>;
+    };
+
+    expect(body.tools?.[0]?.function.parameters).toEqual({
+      type: "object",
+      properties: { mode: { anyOf: [{ const: "view" }, { const: "edit" }] } },
+      required: ["mode"],
+    });
+  });
+
+  test("collapses a root oneOf whose branches are identical", async () => {
+    // Duplicated branches always match together, so the union strictly accepts nothing. No author
+    // means that and no root object schema can express it, so the duplicates collapse and the tool
+    // stays usable rather than vanishing over a source-schema bug.
+    const request = await xaiAdapter().buildRequest(parsedRequest({
+      name: "Bash",
+      description: "Execute a shell command",
+      parameters: {
+        oneOf: [
+          { type: "object", properties: { mode: { const: "view" } }, required: ["mode"] },
+          { type: "object", properties: { mode: { const: "view" } }, required: ["mode"] },
+        ],
+      },
+    }));
+    const body = JSON.parse(request.body) as {
+      tools?: Array<{ function: { parameters: Record<string, unknown> } }>;
+    };
+
+    expect(body.tools?.[0]?.function.parameters).toEqual({
+      type: "object",
+      properties: { mode: { const: "view" } },
+      required: ["mode"],
+    });
+  });
+
+  test("omits a oneOf nested inside another union rather than guessing its meaning", async () => {
+    // `anyOf: [oneOf[V1, V2], V3]` accepts `{}` — it fails the inner `oneOf` but matches V3. A flat
+    // variant list cannot say that, and promoting the discriminator into `required` would NARROW
+    // the schema by rejecting it. Neither direction is faithful, so the tool is omitted.
+    const request = await xaiAdapter().buildRequest(parsedRequest({
+      name: "Bash",
+      description: "Execute a shell command",
+      parameters: {
+        type: "object",
+        anyOf: [
+          {
+            oneOf: [
+              { properties: { mode: { const: "view" } } },
+              { properties: { mode: { const: "edit" } } },
+            ],
+          },
+          { properties: { mode: { const: "list" } } },
+        ],
+      },
+    }));
+    const body = JSON.parse(request.body) as { tools?: unknown[] };
+
+    expect(body.tools).toBeUndefined();
+  });
+
+  test("bounds a nested root union instead of expanding 2^n variants", async () => {
+    // 30 nested binary unions, every branch distinct, is 2^30 variants. Reaching the assertion at
+    // all is the point: an unbounded walk never returns from this.
+    let parameters: Record<string, unknown> = {
+      type: "object",
+      properties: { leaf: { type: "string" } },
+      required: ["leaf"],
+    };
+    for (let depth = 0; depth < 30; depth += 1) {
+      parameters = {
+        oneOf: [
+          { ...parameters, properties: { [`k${depth}`]: { const: `a${depth}` } } },
+          { ...parameters, properties: { [`k${depth}`]: { const: `b${depth}` } } },
+        ],
+      };
+    }
+
+    const request = await xaiAdapter().buildRequest(parsedRequest({
+      name: "Bash",
+      description: "Execute a shell command",
+      parameters,
+    }));
+    const body = JSON.parse(request.body) as { tools?: unknown[] };
+
+    expect(body.tools).toBeUndefined();
+  });
+
+  test("omits a root union wider than the variant budget but keeps one within it", async () => {
+    const flatUnion = (branches: number) => ({
+      oneOf: Array.from({ length: branches }, (_, index) => ({
+        type: "object",
+        properties: { mode: { const: `m${index}` } },
+        required: ["mode"],
+      })),
+    });
+    const toolsFor = async (branches: number) => {
+      const request = await xaiAdapter().buildRequest(parsedRequest({
+        name: "Bash",
+        description: "Execute a shell command",
+        parameters: flatUnion(branches),
+      }));
+      return (JSON.parse(request.body) as { tools?: unknown[] }).tools;
+    };
+
+    expect(await toolsFor(200)).toHaveLength(1);
+    expect(await toolsFor(300)).toBeUndefined();
+  });
+
+  test("omits a tool whose $ref graph fans out past the node budget", async () => {
+    // Each level references the one below it twice. No cycle is ever formed, so the ref stack
+    // alone does not stop it; only the node budget does.
+    const defs: Record<string, unknown> = { level0: { type: "string" } };
+    for (let level = 1; level <= 32; level += 1) {
+      defs[`level${level}`] = {
+        type: "object",
+        properties: {
+          left: { $ref: `#/$defs/level${level - 1}` },
+          right: { $ref: `#/$defs/level${level - 1}` },
+        },
+      };
+    }
+
+    const request = await xaiAdapter().buildRequest(parsedRequest({
+      name: "Bash",
+      description: "Execute a shell command",
+      parameters: {
+        type: "object",
+        $defs: defs,
+        properties: { root: { $ref: "#/$defs/level32" } },
+        required: ["root"],
+      },
+    }));
+    const body = JSON.parse(request.body) as { tools?: unknown[] };
+
+    expect(body.tools).toBeUndefined();
   });
 });

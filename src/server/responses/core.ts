@@ -30,6 +30,7 @@ import {
 import { awaitThoughtSignatureDurability, thoughtSignatureReplaySalt } from "../../responses/thought-signature-replay";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
+import { XaiToolSchemaCompatibilityError } from "../../adapters/xai-tool-schema";
 import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
@@ -3165,7 +3166,9 @@ async function handleResponsesInner(
       // the rotation-rebuild and bridged paths already answer 400 for the identical throw. Rethrowing
       // it here escaped every catch up to the Bun handler, so the same request produced an
       // unstructured 500 — and no request log — depending only on whether a rotation ran first.
-      if (error instanceof NamespaceToolCollisionError) {
+      // Same shape for a tool_choice this proxy cannot honor: the destination rejects a schema the
+      // catalog had to drop, so the selector naming it is a client input error, not a 500.
+      if (error instanceof NamespaceToolCollisionError || error instanceof XaiToolSchemaCompatibilityError) {
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(error.message));
       }
       throw error;

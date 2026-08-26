@@ -950,13 +950,77 @@ describe("OpenAI Responses passthrough sanitization", () => {
         type: "object",
         properties: {
           token: { type: "string" },
+          // Disjoint consts, so `anyOf` describes the same set the root `oneOf` did. `mode` is
+          // promoted into `required`: absent, it matched BOTH branches, which `oneOf` rejects.
           mode: { anyOf: [{ const: "view" }, { const: "delete" }] },
         },
-        required: ["token"],
+        required: ["token", "mode"],
       });
       expect(tools?.find(tool => tool.name === "mcp__codex_app__plain")?.parameters)
         .toEqual({ type: "object" });
     }
+  });
+
+  test("reconciles tool_choice against tools the xAI CLI schema policy omitted", () => {
+    // `oneOf` branches that disagree on which property names exist cannot be flattened, so this
+    // function is dropped. Namespace lowering already rewrote both the declaration and the
+    // selector to wire names, so the selector is left pointing at a tool that no longer ships.
+    const unsafe = {
+      oneOf: [
+        { type: "object", properties: { mode: { const: "view" } }, required: ["mode"] },
+        { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      ],
+    };
+    const namespace = {
+      type: "namespace",
+      name: "mcp__codex_app",
+      tools: [
+        { type: "function", name: "automation_update", parameters: unsafe },
+        { type: "function", name: "plain", parameters: {} },
+      ],
+    };
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: XAI_GROK_CLI_BASE_URL,
+      authMode: "oauth",
+      apiKey: "xai-test",
+    });
+    const build = (toolChoice: unknown) => adapter.buildRequest({
+      modelId: "grok-4.6",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "grok-4.6", input: [], tools: [namespace], tool_choice: toolChoice },
+    }, { headers: new Headers() });
+
+    // A forced selection has no safe replacement: relaxing it to auto would quietly run the turn
+    // without the tool the caller required, so this fails locally instead of reaching Grok.
+    expect(() => build({ type: "function", name: "mcp__codex_app__automation_update" }))
+      .toThrow(/tool_choice requires function "mcp__codex_app__automation_update"/);
+
+    // An allowed_tools list still has a usable entry, so it simply loses the omitted one.
+    const narrowed = JSON.parse(build({
+      type: "allowed_tools",
+      mode: "auto",
+      tools: [
+        { type: "function", name: "mcp__codex_app__automation_update" },
+        { type: "function", name: "mcp__codex_app__plain" },
+      ],
+    }).body) as { tool_choice: { tools: Array<{ name: string }> } };
+    expect(narrowed.tool_choice.tools).toEqual([{ type: "function", name: "mcp__codex_app__plain" }]);
+
+    // Nothing left to point at is the forced case again.
+    expect(() => build({
+      type: "allowed_tools",
+      mode: "auto",
+      tools: [{ type: "function", name: "mcp__codex_app__automation_update" }],
+    })).toThrow(/tool_choice requires function/);
+
+    // A selector naming a surviving tool is untouched.
+    const kept = JSON.parse(build({ type: "function", name: "mcp__codex_app__plain" }).body) as {
+      tool_choice: unknown;
+    };
+    expect(kept.tool_choice).toEqual({ type: "function", name: "mcp__codex_app__plain" });
   });
 
   test("keeps native root unions on public xAI Responses", () => {

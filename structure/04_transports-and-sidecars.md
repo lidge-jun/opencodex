@@ -131,6 +131,21 @@ letting one incompatible declaration reject the entire request before inference.
 `cli-chat-proxy.grok.com`: public `api.x.ai` keeps native root unions, as do unrelated Responses
 gateways. Both top-level `tools` and Responses Lite `additional_tools` pass through this policy.
 
+Only the ROOT rejects a union, so exclusivity is preserved by moving it down rather than widening
+it: a root `oneOf` whose branches differ in one property becomes that property's `oneOf`, or its
+`anyOf` when the branches are provably disjoint and the two keywords describe the same set. That
+property is also promoted into `required`, because absent it matched every branch — which the root
+`oneOf` rejects. Branches that are wholly identical validate nothing and have no faithful
+flattening, so they omit the tool. The walk carries depth, node, and variant budgets, since nested
+unions are combinatorial and a `$ref` diamond amplifies the same way without ever cycling;
+exceeding a budget omits that one function rather than expanding until memory is gone.
+
+Omitting a function makes `tool_choice` the loose end. A selector naming a dropped tool would reach
+Grok as a dangling reference, and relaxing it to `auto` is worse — the turn would quietly run
+without the tool the caller required. So an `allowed_tools` list drops the omitted entries while any
+remain, and a selection with nothing left to point at fails locally with the same 400 a tool catalog
+this proxy cannot lower already returns.
+
 The same noncanonical boundary strips ChatGPT's private `external_web_access` bit from routed
 `web_search` declarations. The public tool remains enabled and all other options remain intact;
 canonical OpenAI forwarding preserves the bit. xAI's public Responses schema enables browsing by

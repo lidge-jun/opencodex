@@ -207,7 +207,9 @@ describe("xAI auth-mode transport selection", () => {
       token: { type: "string" },
       mode: { anyOf: [{ const: "path" }, { const: "url" }] },
     });
-    expect(xaiParameters.required).toEqual(["token"]);
+    // `mode` absent matched BOTH branches, which the root `oneOf` rejects, so flattening has to
+    // require the discriminator to keep accepting exactly what the original accepted.
+    expect(xaiParameters.required).toEqual(["token", "mode"]);
   });
 
   test("omits an xAI union whose branch required fields cannot be flattened", () => {
