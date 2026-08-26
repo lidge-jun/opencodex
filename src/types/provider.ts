@@ -422,6 +422,12 @@ export interface OcxProviderConfig {
    */
   supportsOpenAiWebSearchToolFields?: boolean;
   /**
+   * Opt xAI Responses destinations into the provider-hosted `x_search` declaration when a live
+   * `web_search` tool survives final request normalization. Disabled by default. This is separate
+   * from the web-search sidecar's `search.xSearch` options and never widens caller tool selectors.
+   */
+  xaiResponsesXSearch?: boolean;
+  /**
    * Whether the Responses upstream accepts native custom tools and custom_tool_call items.
    * Set false only for a provider whose native contract rejects them; absence preserves
    * apply_patch passthrough compatibility for OpenAI and unclassified gateways.

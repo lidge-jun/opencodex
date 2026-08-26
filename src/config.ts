@@ -530,6 +530,7 @@ const providerConfigSchema = z.object({
     repairInvalidIds: z.boolean().optional(),
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
+  xaiResponsesXSearch: z.boolean().optional(),
 }).passthrough();
 
 export { isValidProviderName, hasOwnProvider } from "./config/provider-name";

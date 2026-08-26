@@ -901,6 +901,31 @@ describe("opencodex config defaults", () => {
     expect(readConfigDiagnostics().error).toContain("responsesSnapshotRepair");
   });
 
+  test("accepts only a boolean xaiResponsesXSearch provider opt-in", () => {
+    const provider = {
+      adapter: "openai-responses",
+      baseUrl: "https://cli-chat-proxy.grok.com/v1",
+    };
+    writeConfig({
+      port: 12345,
+      providers: { xai: { ...provider, xaiResponsesXSearch: true } },
+      defaultProvider: "xai",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+    expect(readConfigDiagnostics().config.providers.xai.xaiResponsesXSearch).toBe(true);
+    expect(providerManagementConfigError("xai", { ...provider, xaiResponsesXSearch: true })).toBeNull();
+
+    writeConfig({
+      port: 12345,
+      providers: { xai: { ...provider, xaiResponsesXSearch: { enabled: true } } },
+      defaultProvider: "xai",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("xaiResponsesXSearch");
+    expect(providerManagementConfigError("xai", { ...provider, xaiResponsesXSearch: "true" }))
+      .toBe("provider xai xaiResponsesXSearch must be a boolean");
+  });
+
   test("direct Gemini wire rename opt-out is a boolean and round-trips", () => {
     const base = {
       port: 12345,

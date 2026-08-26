@@ -1433,7 +1433,13 @@ describe("xAI hosted-call authorization through handleResponses", () => {
     status: "completed",
   };
 
-  async function post(baseUrl: string): Promise<Response> {
+  async function post(
+    baseUrl: string,
+    options: {
+      injectXSearch?: boolean;
+      observeOutbound?: (body: Record<string, unknown>) => void;
+    } = {},
+  ): Promise<Response> {
     const config = {
       port: 0,
       defaultProvider: "fixture",
@@ -1443,15 +1449,23 @@ describe("xAI hosted-call authorization through handleResponses", () => {
           baseUrl,
           authMode: "key",
           apiKey: "fixture-key",
+          ...(options.injectXSearch
+            ? { xaiResponsesXSearch: true, supportsOpenAiWebSearchToolFields: false }
+            : {}),
         },
       },
     } as OcxConfig;
     const savedFetch = globalThis.fetch;
-    globalThis.fetch = (async () => Response.json({
-      id: "resp_search",
-      status: "completed",
-      output: [hostedCall],
-    })) as typeof fetch;
+    globalThis.fetch = (async (_input, init) => {
+      if (options.observeOutbound && init?.body !== undefined) {
+        options.observeOutbound(JSON.parse(String(init.body)) as Record<string, unknown>);
+      }
+      return Response.json({
+        id: "resp_search",
+        status: "completed",
+        output: [hostedCall],
+      });
+    }) as typeof fetch;
     try {
       return await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -1460,10 +1474,15 @@ describe("xAI hosted-call authorization through handleResponses", () => {
           model: "fixture/grok-4.6",
           stream: false,
           input: [{ role: "user", content: [{ type: "input_text", text: "search" }] }],
-          tools: [
-            { type: "function", name: "shell", parameters: { type: "object" } },
-            { type: "x_search" },
-          ],
+          tools: options.injectXSearch
+            ? [
+              { type: "function", name: "shell", parameters: { type: "object" } },
+              { type: "web_search", external_web_access: true },
+            ]
+            : [
+              { type: "function", name: "shell", parameters: { type: "object" } },
+              { type: "x_search" },
+            ],
         }),
       }), config, { model: "", provider: "" });
     } finally {
@@ -1475,6 +1494,20 @@ describe("xAI hosted-call authorization through handleResponses", () => {
     const response = await post("https://api.x.ai/v1");
 
     expect(response.status).toBe(200);
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject(hostedCall);
+  });
+
+  test("authorizes an x_search declaration injected into the actual xAI outbound body", async () => {
+    let outbound: Record<string, unknown> | undefined;
+    const response = await post("https://cli-chat-proxy.grok.com/v1", {
+      injectXSearch: true,
+      observeOutbound: body => { outbound = body; },
+    });
+
+    expect(response.status).toBe(200);
+    expect((outbound?.tools as Record<string, unknown>[]).map(tool => tool.type))
+      .toEqual(["function", "web_search", "x_search"]);
     const body = await response.json() as { output: Array<Record<string, unknown>> };
     expect(body.output[0]).toMatchObject(hostedCall);
   });

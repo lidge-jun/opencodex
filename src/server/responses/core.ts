@@ -3385,9 +3385,10 @@ async function handleResponsesInner(
     );
     // Hosted calls the PROVIDER runs itself. Gated on the destination actually being xAI, so a
     // declaration alone cannot buy the exemption on some other upstream that never serves it.
-    const providerExecutedCallTypes = isXaiResponsesDestination(route.provider)
-      ? collectProviderExecutedCallTypes(clientToolAuthorizationBody)
-      : new Set<ProviderExecutedCallType>();
+    // Provider-executed declarations are authorized from the actual outbound body, after the
+    // adapter has applied destination-specific injection and normalization. Client-executed tool
+    // authority remains bounded to the caller-owned catalog above.
+    const providerExecutedCallTypes = new Set<ProviderExecutedCallType>();
     let request: Awaited<ReturnType<typeof adapter.buildRequest>>;
     try {
       request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
@@ -3455,6 +3456,21 @@ async function handleResponsesInner(
     let undeclaredToolGuardActive = false;
     const refreshUndeclaredToolGuard = (builtRequest: AdapterRequest): void => {
       outboundRequestBody = parseOutboundRequestBody(builtRequest.body);
+      providerExecutedCallTypes.clear();
+      if (isXaiResponsesDestination(route.provider)) {
+        // Preserve the caller-declared authorization recognized by the original classifier, then
+        // add adapter-injected declarations from the actual current-turn outbound catalog.
+        for (const callType of collectProviderExecutedCallTypes(clientToolAuthorizationBody)) {
+          providerExecutedCallTypes.add(callType);
+        }
+        const currentOutboundCatalog = currentTurnWireToolCatalogBody(
+          outboundRequestBody,
+          replayedInputPrefixLength,
+        );
+        for (const callType of collectProviderExecutedCallTypes(currentOutboundCatalog)) {
+          providerExecutedCallTypes.add(callType);
+        }
+      }
       declaredWireToolNames.clear();
       // With no replay prefix the full outbound body belongs to this turn and its normalized
       // aliases are authoritative. A continuation's outbound body still contains historical

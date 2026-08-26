@@ -3,6 +3,7 @@ import { isXaiResponsesDestination } from "../providers/xai-transport";
 
 const CODEX_WEB_SEARCH_TOOL = "web_search";
 const CODEX_WEB_SEARCH_PREVIEW_TOOL = "web_search_preview";
+const XAI_SEARCH_TOOL = "x_search";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -135,6 +136,15 @@ function normalizeToolChoice(body: Record<string, unknown>): Record<string, unkn
   return body;
 }
 
+function currentInputStart(inputLength: number, replayPrefixLength: number | undefined): number {
+  if (typeof replayPrefixLength !== "number" || !Number.isFinite(replayPrefixLength)) return 0;
+  return Math.min(inputLength, Math.max(0, Math.trunc(replayPrefixLength)));
+}
+
+function hasToolType(tools: unknown, type: string): boolean {
+  return Array.isArray(tools) && tools.some(tool => isPlainObject(tool) && tool.type === type);
+}
+
 /**
  * Make Codex's hosted web-search declaration acceptable to xAI Responses without changing other
  * providers or mutating the caller-owned request body.
@@ -183,4 +193,52 @@ export function normalizeXaiResponsesWebSearch(
   }
 
   return normalizeToolChoice(next);
+}
+
+function isLiveWebSearchTool(tool: unknown): boolean {
+  return isPlainObject(tool)
+    && tool.type === CODEX_WEB_SEARCH_TOOL
+    && (!Object.hasOwn(tool, "external_web_access") || tool.external_web_access === true);
+}
+
+/**
+ * Add xAI's hosted X search declaration without changing web-search normalization or selectors.
+ * Destination classification belongs only to this opt-in injection path; the public-API
+ * normalizer above intentionally retains its narrower causality boundary.
+ */
+export function injectXaiResponsesXSearch(
+  body: unknown,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "xaiResponsesXSearch">,
+  replayPrefixLength?: number,
+): unknown {
+  if (
+    !isPlainObject(body)
+    || !isXaiResponsesDestination(provider)
+    || provider.xaiResponsesXSearch !== true
+  ) return body;
+
+  const input = Array.isArray(body.input) ? body.input : undefined;
+  const inputStart = input ? currentInputStart(input.length, replayPrefixLength) : 0;
+  const currentInput = input?.slice(inputStart) ?? [];
+  const currentXSearchDeclared = hasToolType(body.tools, XAI_SEARCH_TOOL)
+    || currentInput.some(item =>
+      isPlainObject(item)
+      && item.type === "additional_tools"
+      && hasToolType(item.tools, XAI_SEARCH_TOOL)
+    );
+  if (currentXSearchDeclared) return body;
+
+  const liveWebSearchSurvives = Array.isArray(body.tools) && body.tools.some(isLiveWebSearchTool)
+    || currentInput.some(item =>
+      isPlainObject(item)
+      && item.type === "additional_tools"
+      && Array.isArray(item.tools)
+      && item.tools.some(isLiveWebSearchTool)
+    );
+  if (!liveWebSearchSurvives) return body;
+
+  // Declaration does not grant selection when `tool_choice` names a specific tool or carries an
+  // `allowed_tools` set that excludes x_search, so leave that selector byte-shape untouched.
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  return { ...body, tools: [...tools, { type: XAI_SEARCH_TOOL }] };
 }
