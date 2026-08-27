@@ -1442,6 +1442,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       // The DeepSeek vision preview id is metadata-only here: the Go roster is
       // discovered live, so it applies the moment the gateway serves the id.
       [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576,
+      // Muse Spark 1.2 Contributor serves a 1,048,576-token (1M) context window over
+      // /responses on Zen Go, matching its 1.1 sibling (Meta developer docs, verified 2026-08-28).
+      // Without this declaration the catalog falls back to 128k, capping real usable context.
+      "muse-spark-1.2-contributor": 1_048_576,
     },
     modelInputModalities: {
       "kimi-k3": ["text", "image"],
