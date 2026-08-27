@@ -78,7 +78,7 @@ describe("antigravity reasoning-replay cache", () => {
     observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", {}, "short")]);
     const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: {} } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
   });
 
   test("does not clobber an existing signature on the outgoing part", () => {
@@ -153,7 +153,7 @@ describe("antigravity reasoning-replay cache", () => {
       ],
     }];
     applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
     expect((contents[0].parts[1] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
   });
 
@@ -165,7 +165,7 @@ describe("antigravity reasoning-replay cache", () => {
     ]);
     const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: {} } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
   });
 
   test("clear-on-invalid empties the entry", () => {
@@ -173,7 +173,7 @@ describe("antigravity reasoning-replay cache", () => {
     clearAntigravityReplay(MODEL, SESSION);
     const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: {} } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
   });
 
   test("retains EVERY signature across a sequential tool loop (regression)", () => {
@@ -278,7 +278,7 @@ describe("antigravity reasoning-replay cache", () => {
     }];
     try {
       applyAntigravityReplay(MODEL, SESSION, contents);
-      expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+      expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
       expect(parseCalled).toBe(false);
       expect(encodeCalledOnPayload).toBe(false);
     } finally {
@@ -313,7 +313,7 @@ describe("antigravity reasoning-replay cache", () => {
     observeAntigravityReplay(MODEL, SESSION, [fcPart("three", {}, "sig-three-cccccccccc")]);
     const contents = ["one", "two", "three"].map(name => ({ role: "model", parts: [fcPart(name, {})] }));
     applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
     expect((contents[1].parts[0] as { thoughtSignature?: string }).thoughtSignature).toContain("sig-two");
     expect((contents[2].parts[0] as { thoughtSignature?: string }).thoughtSignature).toContain("sig-three");
   });
@@ -330,7 +330,7 @@ describe("antigravity reasoning-replay cache", () => {
     expect(metrics.calls).toBe(2);
     const contents = ["one", "two", "three"].map(name => ({ role: "model", parts: [fcPart(name, {})] }));
     applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
   });
 
   test("does not cache one oversized signature", () => {
@@ -354,7 +354,7 @@ describe("antigravity reasoning-replay cache", () => {
       now = 1_001 + 60 * 60 * 1000;
       const expired = [{ role: "model", parts: [fcPart("one", {})] }];
       applyAntigravityReplay(MODEL, SESSION, expired);
-      expect((expired[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+      expect((expired[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
     } finally {
       Date.now = originalNow;
     }
@@ -382,7 +382,7 @@ describe("antigravity reasoning-replay cache", () => {
       expect(antigravityReplayRetainedStoreSnapshot().bytes).toBe(before.bytes - released);
       const old = [{ role: "model", parts: [fcPart("one", {})] }];
       applyAntigravityReplay(MODEL, "old", old);
-      expect((old[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+      expect((old[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
     } finally {
       Date.now = originalNow;
     }
@@ -705,7 +705,7 @@ describe("durable antigravity replay snapshot", () => {
     expect(keys).toContain(antigravityReplayKeyForTests(MODEL, SESSION));
     // The surviving session still replays.
     applyAntigravityReplay(MODEL, "-stale", staleContents);
-    expect((staleContents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((staleContents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
     const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
@@ -854,11 +854,11 @@ describe("durable antigravity replay snapshot", () => {
     writeFileSync(snapshotPath(), "{not valid json");
     const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
     setAntigravityReplayLimitsForTests();
     writeFileSync(snapshotPath(), JSON.stringify({ version: 99, sessions: [] }));
     applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
   });
 
   test("clear-on-invalid removes the session from the next snapshot", async () => {
@@ -873,7 +873,7 @@ describe("durable antigravity replay snapshot", () => {
     writeFileSync(snapshotPath(), "x".repeat(33 * 1024 * 1024));
     const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe("skip_thought_signature_validator");
   });
 
   test("flush waits out a blocked writer and persists mutations that land during it", async () => {

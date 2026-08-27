@@ -745,9 +745,6 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
   const now = Date.now();
   deleteExpiredReplaySessionsThrottled(now);
   const entry = replayCache.get(replayKey(model, sessionId));
-  if (!entry) {
-    return contents;
-  }
 
   let touched = false;
   // Align from the END of the recorded signature list. History may have been truncated
@@ -758,6 +755,21 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
   for (let ci = (contents as { role?: string; parts?: unknown[] }[]).length - 1; ci >= 0; ci--) {
     const c = (contents as { role?: string; parts?: unknown[] }[])[ci];
     if (!c || typeof c !== "object" || c.role !== "model" || !Array.isArray(c.parts)) continue;
+    let turnHasSignature = false;
+    let firstMissingPart: Record<string, unknown> | undefined;
+    for (let pi = 0; pi < c.parts.length; pi++) {
+      const raw = c.parts[pi];
+      if (!raw || typeof raw !== "object") continue;
+      const part = raw as Record<string, unknown>;
+      const fc = part.functionCall as { name?: unknown; args?: unknown } | undefined;
+      if (!fc) continue;
+      if (part.thoughtSignature !== undefined || part.thought_signature !== undefined) {
+        turnHasSignature = true;
+      } else if (!firstMissingPart) {
+        firstMissingPart = part;
+      }
+    }
+    if (entry) {
     for (let pi = c.parts.length - 1; pi >= 0; pi--) {
       const raw = c.parts[pi];
       if (!raw || typeof raw !== "object") continue;
@@ -809,15 +821,24 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
           entry.byCall.delete(matchedKey);
           entry.byCall.set(matchedKey, { ...call, touchedAtMs: now });
           touched = true;
+          turnHasSignature = true;
         }
       } else if (part.thoughtSignature === undefined && part.thought_signature === undefined && call) {
         part.thoughtSignature = call.signature;
         touched = true;
+        turnHasSignature = true;
       }
+    }
+    }
+    // Fallback: Gemini models require thought_signature on the first functionCall part of a turn.
+    // If neither the wire metadata nor replay cache had a valid signature for this model turn,
+    // inject the official validator bypass token on the first functionCall part.
+    if (!turnHasSignature && firstMissingPart) {
+      firstMissingPart.thoughtSignature = "skip_thought_signature_validator";
     }
   }
 
-  if (touched) {
+  if (touched && entry) {
     entry.lastActiveAtMs = now;
     refreshReplaySessionCandidate(replayKey(model, sessionId), entry);
     markReplayDirty();
