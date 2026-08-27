@@ -932,6 +932,61 @@ function isXaiSchemaTarget(provider: OcxProviderConfig): boolean {
   }
 }
 
+/** Moonshot flavored schema targets reject `$ref` nodes that carry a sibling `type`. */
+function isMoonshotSchemaTarget(provider: OcxProviderConfig): boolean {
+  try {
+    const hostname = new URL(provider.baseUrl).hostname;
+    return hostname === "api.kimi.com"
+      || hostname === "api.moonshot.ai"
+      || hostname === "api.moonshot.cn";
+  } catch {
+    return false;
+  }
+}
+
+const MOONSHOT_SCHEMA_MAP_KEYS = new Set(["properties", "$defs", "definitions", "patternProperties"]);
+const MOONSHOT_SCHEMA_LIST_KEYS = new Set(["oneOf", "anyOf", "allOf"]);
+
+/**
+ * Moonshot's JSON-schema validator (used by Kimi coding API) rejects any node that has both
+ * `$ref` and `type`: the type must live on the referenced schema, not the parent. OpenAI
+ * tolerates the parent `type` sibling (strict-mode generated schemas emit it). Recursively
+ * drop `type` (and nullable-ish siblings that only make sense with a concrete type) from any
+ * node that carries `$ref`, leaving the referenced definition intact.
+ */
+function sanitizeMoonshotToolParameters(schema: unknown): unknown {
+  if (Array.isArray(schema)) return schema.map(sanitizeMoonshotToolParameters);
+  if (!schema || typeof schema !== "object") return schema;
+  const input = schema as Record<string, unknown>;
+  if (typeof input.$ref === "string") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input)) {
+      if (key === "type" || key === "nullable") continue; // type belongs on the referenced schema
+      out[key] = MOONSHOT_SCHEMA_MAP_KEYS.has(key) || MOONSHOT_SCHEMA_LIST_KEYS.has(key)
+        ? sanitizeMoonshotToolParameters(value)
+        : value;
+    }
+    return out;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (MOONSHOT_SCHEMA_MAP_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+      const map: Record<string, unknown> = {};
+      for (const [name, child] of Object.entries(value as Record<string, unknown>)) {
+        map[name] = sanitizeMoonshotToolParameters(child);
+      }
+      out[key] = map;
+    } else if (MOONSHOT_SCHEMA_LIST_KEYS.has(key) && Array.isArray(value)) {
+      out[key] = value.map(sanitizeMoonshotToolParameters);
+    } else if (key === "items" || key === "additionalProperties" || key === "not") {
+      out[key] = sanitizeMoonshotToolParameters(value);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 const VOLCENGINE_ARK_HOSTNAMES = new Set([
   "ark.cn-beijing.volces.com",
   "ark.ap-southeast.volces.com",
@@ -1228,10 +1283,13 @@ function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig
   const tools = parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools));
   if (tools.length === 0) return undefined;
   const xaiTarget = isXaiSchemaTarget(provider);
+  const moonshotTarget = isMoonshotSchemaTarget(provider);
   const formatted = tools.flatMap(t => {
     const parameters = stripResponsesOnlyEncryptedMarker(xaiTarget
       ? normalizeXaiToolParameters(t.parameters)
-      : ensureRootObjectType(t.parameters));
+      : moonshotTarget
+        ? sanitizeMoonshotToolParameters(t.parameters)
+        : ensureRootObjectType(t.parameters));
 
     if (parameters === undefined) return [];
     return [{
