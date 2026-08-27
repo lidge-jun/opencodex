@@ -484,6 +484,17 @@ const fastWireSchema = z.object({
   if (error) ctx.addIssue({ code: "custom", message: error });
 }).transform(fastWire => fastWire as FastWire);
 
+const modelDisplayNamesSchema = z.unknown().superRefine((value, ctx) => {
+  const error = modelDisplayNamesConfigError(value);
+  if (error) ctx.addIssue({ code: "custom", message: error });
+}).transform(value => {
+  const labels = Object.create(null) as Record<string, string>;
+  for (const [modelId, displayName] of Object.entries(value as Record<string, string>)) {
+    labels[modelId] = displayName;
+  }
+  return labels;
+});
+
 /**
  * Zod schema for one provider entry: known fields are validated strictly while unknown
  * fields pass through (preserved for runtime extensions).
@@ -493,7 +504,7 @@ const providerConfigSchema = z.object({
   baseUrl: z.string().min(1),
   alias: z.string().optional(),
   modelAliases: z.record(z.string(), z.string()).optional(),
-  modelDisplayNames: z.record(z.string(), z.string()).optional(),
+  modelDisplayNames: modelDisplayNamesSchema.optional(),
   defaultAliases: z.boolean().optional(),
   requestPacing: requestPacingSchema.optional().catch(undefined),
   mcpMaxTools: z.number().int().positive().optional(),

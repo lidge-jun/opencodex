@@ -6,6 +6,7 @@ import {
   getConfigPath,
   getDefaultConfig,
   loadConfig,
+  saveConfig,
   validateConfigCandidate,
 } from "../src/config";
 
@@ -81,6 +82,21 @@ test("load keeps a provider and valid labels when one hand edited label is inval
     },
   });
   expect(loaded.providers.xai.modelDisplayNames).not.toHaveProperty("unsafe");
+});
+
+test("load and save preserve a prototype shaped model id as data", () => {
+  writeCandidate(JSON.parse('{"__proto__":"Prototype Model"}'));
+
+  const loaded = loadConfig();
+
+  expect(Object.hasOwn(loaded.providers.xai.modelDisplayNames ?? {}, "__proto__")).toBe(true);
+  expect(loaded.providers.xai.modelDisplayNames?.["__proto__"]).toBe("Prototype Model");
+
+  saveConfig(loaded);
+  const reloaded = loadConfig();
+
+  expect(Object.hasOwn(reloaded.providers.xai.modelDisplayNames ?? {}, "__proto__")).toBe(true);
+  expect(reloaded.providers.xai.modelDisplayNames?.["__proto__"]).toBe("Prototype Model");
 });
 
 test("load drops only a malformed display name map", () => {
