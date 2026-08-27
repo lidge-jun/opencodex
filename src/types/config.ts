@@ -620,13 +620,23 @@ export interface OcxConfig {
     /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
     stickyLimit?: number;
   };
+  /** Opt-in quota auto-switching and cooldown pooling for Google Antigravity (Cloud Code Assist). */
+  googleAntigravityAccountPool?: {
+    enabled?: boolean;
+    /** Usage % threshold for new-session auto-pick. Default 80. 0 = disabled (affinity/active only). */
+    autoSwitchThreshold?: number;
+    /** New-session rotation strategy. Default quota (today's behaviour). */
+    strategy?: OcxAccountPoolRotationStrategy;
+    /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
+    stickyLimit?: number;
+  };
   /**
    * Generic OAuth multi-account 429 failover (#2568). Presence-driven by default.
    *
    * Rotates to another logged-in account of the SAME provider when one is rate-limited, for
-   * OAuth providers that have no pool of their own — xAI, Cursor, Kimi, GitHub Copilot,
+   * OAuth providers while no provider-owned pool is active — xAI, Cursor, Kimi, GitHub Copilot,
    * Antigravity, Nous. The Codex pool and the Anthropic pool own their own rotation and are
-   * excluded; this setting changes neither.
+   * excluded; an enabled Google Antigravity pool likewise owns that request instead.
    *
    * With the key absent, rotation activates when a provider has 2 or more eligible stored
    * accounts — the same consent rule API-key pools already apply to a 2+ key pool (#2568d). A

@@ -168,13 +168,41 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | `POST /api/oauth/logout` | Удалить сохранённый credential выбранного провайдера | 400 unknown provider; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | Показать список masked-аккаунтов или удалить один аккаунт | 400 invalid provider/id; 404 account missing; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Выбрать активный OAuth-аккаунт | 400 invalid provider/account; `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Прочитать или обновить policy Anthropic OAuth pool | 400 non-Anthropic provider or invalid policy |
-| `POST /api/oauth/accounts/clear-cooldown` | Очистить runtime cooldown одного OAuth-аккаунта | 400 invalid provider/account |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Прочитать или обновить policy Anthropic или Google Antigravity OAuth pool | 400 unsupported provider or invalid policy |
+| `POST /api/oauth/accounts/clear-cooldown` | Очистить runtime cooldown одного OAuth-аккаунта | 400 некорректный provider или неизвестный аккаунт; известный аккаунт без cooldown возвращает 200 и `{ ok: true, cleared: false }` |
 | `PUT /api/oauth/accounts/alias` | Задать или очистить alias OAuth-аккаунта | 400 invalid provider/account/alias |
 | `GET, POST, DELETE /api/providers/keys` | Показать список masked provider-key'ов, добавить/активировать один или удалить один | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/active` | Выбрать активный ключ провайдера | 400 invalid input; 404 provider/key missing |
 | `PUT /api/providers/keys/alias` | Задать или очистить alias provider-key'а | 400 invalid input; 404 provider/key missing |
 | `GET, POST, PATCH, DELETE /api/keys` | Показать список, создать, отредактировать или удалить admission key data plane | 400 invalid body/id; 404 key missing |
+
+#### Контракт OAuth-пула в рамках провайдера
+
+`GET /api/oauth/accounts/pool?provider=anthropic|google-antigravity` требует query-параметр `provider`.
+Верхнеуровневые поля ответа: `provider`, `enabled`, `autoSwitchThreshold` (по умолчанию `80`),
+`strategy` (нормализуется в `quota`, `round-robin` или `fill-first`), `stickyLimit` (нормализуется в
+целое число от 1 до 100) и `experimental: true`.
+
+`PUT` и `PATCH /api/oauth/accounts/pool` требуют JSON-объект с `provider` и принимают необязательные
+`enabled` (boolean), `autoSwitchThreshold` (целое число 0–100), `strategy` (`quota`, `round-robin` или
+`fill-first`) и `stickyLimit` (целое число 1–100). Пропущенные поля сохраняют текущее значение или
+значение по умолчанию. Успешный ответ содержит на верхнем уровне `{ ok: true, provider, enabled,
+autoSwitchThreshold, strategy, stickyLimit, experimental: true }`; обёртки `config` нет. Некорректный
+или не являющийся объектом body, неподдерживаемый provider или некорректное поле возвращает обычный
+ответ с ошибкой HTTP 400.
+
+Для `google-antigravity` запись `enabled: false` также сохраняет
+`providers.google-antigravity.oauthAccountFailover.enabled: false`. Благодаря этому значение «off»
+в management API/CLI действительно отключает как специализированный пул с учётом квоты, так и
+generic fallback при 429, который в противном случае активируется наличием аккаунтов. Прямое
+редактирование только `googleAntigravityAccountPool.enabled` не изменяет эту generic policy.
+
+`POST /api/oauth/accounts/clear-cooldown` принимает `{ provider, accountId }`. Provider должен быть
+`anthropic` или `google-antigravity`, а аккаунт должен существовать внутри этого provider. Неизвестный
+аккаунт возвращает обычную ошибку HTTP 400 `account not found`. Известный аккаунт без cooldown даёт
+идемпотентный успех: HTTP 200 с `{ ok: true, cleared: false }`. Для Google операция очищает как
+состояние специализированного пула, так и состояние generic fallback, поэтому остаётся допустимой
+после смены pool-mode. Эти ответы не содержат token'ов, email-адресов или полных key.
 
 Ответы со списками credential'ов намеренно маскируются. OAuth access-token'ы и полные API-key'и
 провайдеров клиентам дашборда не возвращаются.
@@ -234,7 +262,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `PUT /api/codex-auth/accounts/alias` | Задать или очистить alias аккаунта | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Поставить один аккаунт на паузу или снять её | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
-| `POST /api/codex-auth/accounts/clear-cooldown` | Очистить runtime cooldown для одного аккаунта или для всех | 400 invalid id |
+| `POST /api/codex-auth/accounts/clear-cooldown` | Очистить runtime cooldown одного аккаунта | 400 некорректный или неизвестный id аккаунта; известный аккаунт без cooldown возвращает 200 и `{ ok: true, id, cleared: false }` |
 | `GET, PUT /api/codex-auth/active` | Прочитать или выбрать активный аккаунт | 400 invalid or missing account; 409 paused/legacy-row conflict |
 | `PUT /api/codex-auth/auto-switch` | Задать порог квоты для автоматического переключения аккаунтов | 400 invalid threshold |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Обновить стратегию выбора в пуле аккаунтов Codex | 400 invalid strategy/config |

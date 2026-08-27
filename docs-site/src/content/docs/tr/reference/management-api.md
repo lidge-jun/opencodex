@@ -185,13 +185,41 @@ gönderin. Kurtarma gerekebileceğinde karantinayı tercih edin.
 | `POST /api/oauth/logout` | Seçilen sağlayıcı kimlik bilgisini kaldırın | 400 bilinmeyen sağlayıcı; `oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | Maskelenmiş hesapları listeleyin veya bir hesabı kaldırın | 400 geçersiz sağlayıcı/kimlik; 404 hesap eksik; `oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | Aktif OAuth hesabını seçin | 400 geçersiz sağlayıcı/hesap; `oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic OAuth havuz politikasını okuyun veya güncelleyin | 400 Anthropic olmayan sağlayıcı veya geçersiz politika |
-| `POST /api/oauth/accounts/clear-cooldown` | Bir OAuth hesabının çalışma zamanı soğuma süresini temizleyin | 400 geçersiz sağlayıcı/hesap |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | Anthropic veya Google Antigravity OAuth havuz politikasını okuyun veya güncelleyin | 400 desteklenmeyen sağlayıcı veya geçersiz politika |
+| `POST /api/oauth/accounts/clear-cooldown` | Bir OAuth hesabının çalışma zamanı soğumasını temizleyin | 400 geçersiz sağlayıcı veya bilinmeyen hesap; soğuması olmayan bilinen hesap 200 ve `{ ok: true, cleared: false }` döndürür |
 | `PUT /api/oauth/accounts/alias` | Bir OAuth hesap takma adını ayarlayın veya temizleyin | 400 geçersiz sağlayıcı/hesap/takma ad |
 | `GET, POST, DELETE /api/providers/keys` | Maskelenmiş sağlayıcı anahtarlarını listeleyin, bir tane ekleyin/etkinleştirin veya kaldırın | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `PUT /api/providers/keys/active` | Bir sağlayıcının etkin anahtarını seçin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `PUT /api/providers/keys/alias` | Bir sağlayıcı anahtarı takma adını ayarlayın veya temizleyin | 400 geçersiz girdi; 404 sağlayıcı/anahtar eksik |
 | `GET, POST, PATCH, DELETE /api/keys` | Veri düzlemi kabul anahtarlarını listeleyin, oluşturun, düzenleyin veya silin | 400 geçersiz gövde/kimlik; 404 anahtar eksik |
+
+#### Sağlayıcı kapsamlı OAuth havuzu sözleşmesi
+
+`GET /api/oauth/accounts/pool?provider=anthropic|google-antigravity`, `provider` sorgu parametresini
+zorunlu kılar. Yanıtın üst düzey alanları `provider`, `enabled`, `autoSwitchThreshold` (varsayılan
+`80`), `strategy` (`quota`, `round-robin` veya `fill-first` olarak normalleştirilir), `stickyLimit`
+(1–100 aralığında bir tamsayı olarak normalleştirilir) ve `experimental: true` değerleridir.
+
+`PUT` ve `PATCH /api/oauth/accounts/pool`, `provider` içeren bir JSON nesnesi gerektirir ve isteğe bağlı
+`enabled` (boolean), `autoSwitchThreshold` (0–100 tamsayısı), `strategy` (`quota`, `round-robin` veya
+`fill-first`) ve `stickyLimit` (1–100 tamsayısı) alanlarını kabul eder. Atlanan alanlar geçerli veya
+varsayılan değerlerini korur. Başarı yanıtı üst düzeyde `{ ok: true, provider, enabled,
+autoSwitchThreshold, strategy, stickyLimit, experimental: true }` döndürür; `config` sarmalayıcısı
+yoktur. Bozuk veya nesne olmayan gövde, desteklenmeyen provider ya da geçersiz alan genel bir HTTP
+400 hata yanıtı döndürür.
+
+`google-antigravity` için `enabled: false` yazmak ayrıca
+`providers.google-antigravity.oauthAccountFailover.enabled: false` değerini saklar. Bu, hem özelleşmiş
+kota duyarlı havuzu hem de aksi halde varlığa dayalı genel 429 yük devretmesini devre dışı bırakarak
+yönetim/CLI'daki `off` anlamını dürüst kılar. Yalnızca `googleAntigravityAccountPool.enabled` değerini
+doğrudan düzenlemek genel politikayı değiştirmez.
+
+`POST /api/oauth/accounts/clear-cooldown`, `{ provider, accountId }` gövdesini alır. Provider
+`anthropic` veya `google-antigravity` olmalı ve account ilgili provider içinde bulunmalıdır. Bilinmeyen
+account, genel HTTP 400 `account not found` hatası döndürür. Cooldown durumunda olmayan bilinen bir
+account için işlem idempotent olarak başarılıdır: HTTP 200 ve `{ ok: true, cleared: false }`. Google
+için işlem hem özelleşmiş havuz durumunu hem de genel yük devretme durumunu temizler; böylece havuz modu
+değişikliğinden sonra da geçerli kalır. Bu yanıtlar token, e-posta adresi veya eksiksiz key içermez.
 
 Kimlik bilgisi listesi yanıtları kasıtlı olarak maskelenir. OAuth erişim
 belirteçleri ve eksiksiz sağlayıcı API anahtarları kontrol paneli istemcilerine
@@ -258,7 +286,7 @@ devreder. Rotaları şunlardır:
 | `PUT /api/codex-auth/accounts/alias` | Bir hesap takma adını ayarlayın veya temizleyin | 400 geçersiz hesap/takma ad |
 | `PUT /api/codex-auth/accounts/pause` | Bir hesabı duraklatın veya devam ettirin | 400 geçersiz hesap/durum; 404 eksik hesap |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Kotası tükenen hesapları duraklatın | Mutasyon kilidi arızaları 503 olur |
-| `POST /api/codex-auth/accounts/clear-cooldown` | Bir hesap veya tüm hesaplar için çalışma zamanı soğuma süresini temizleyin | 400 geçersiz kimlik |
+| `POST /api/codex-auth/accounts/clear-cooldown` | Bir hesabın çalışma zamanı soğumasını temizleyin | 400 geçersiz veya bilinmeyen hesap kimliği; soğuması olmayan bilinen hesap 200 ve `{ ok: true, id, cleared: false }` döndürür |
 | `GET, PUT /api/codex-auth/active` | Aktif hesabı okuyun veya seçin | 400 geçersiz veya eksik hesap; 409 duraklatılmış/eski satır çakışması |
 | `PUT /api/codex-auth/auto-switch` | Otomatik hesap geçişi için kota eşiğini ayarlayın | 400 geçersiz eşik |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex hesap havuzu seçim stratejisini güncelleyin | 400 geçersiz strateji/yapılandırma |
@@ -300,5 +328,4 @@ rehberli iş akışını sağlar. Başsız ana bilgisayarlar ve otomasyon için 
 olduğunda veya işlem başarısız olduğunda sıfır olmayan bir sonuç döndürürler.
 Doğrudan HTTP, yukarıdaki tam uç nokta sözleşmelerine ihtiyaç duyan
 entegrasyonlar için en yararlıdır.
-
 

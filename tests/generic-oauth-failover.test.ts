@@ -220,12 +220,15 @@ describe("sidecar on429 wiring", () => {
 
   test("every rotation site applies the credential through the one shared helper", () => {
     // The pairing rules (Copilot's account-scoped origin, Antigravity's account-matched project,
-    // Kiro's routing metadata) live in exactly one place. A fourth rotation site that swaps the
-    // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
-    const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
+    // Kiro's routing metadata) live in exactly one place. Count both the generic snapshot resolver
+    // and the opt-in Antigravity pool resolver: adding a specialized rotation path must not create
+    // a second place that writes the bearer or its account-scoped metadata by hand.
+    const genericSnapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
+    const googleSnapshotUses = coreSource.match(/getGoogleAntigravityPoolAccessSnapshot\(/g) ?? [];
     const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot\)/g) ?? [];
-    expect(snapshotUses.length).toBe(3);
-    expect(helperUses.length).toBe(snapshotUses.length);
+    expect(genericSnapshotUses.length).toBe(3);
+    expect(googleSnapshotUses.length).toBe(3);
+    expect(helperUses.length).toBe(genericSnapshotUses.length + googleSnapshotUses.length);
     // The bearer is written in exactly one place — inside the helper. Any other occurrence is a
     // rotation site that skipped the pairing rules.
     const bearerWrites = coreSource.match(/apiKey: snapshot\.accessToken/g) ?? [];

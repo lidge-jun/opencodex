@@ -234,6 +234,112 @@ Anthropic hesap politikası riskini anlamadığınız sürece bunu devre dışı
 Emin olmadığınızda manuel `ocx account use anthropic <id>` geçişini tercih edin.
 :::
 
+### `googleAntigravityAccountPool` (deneysel)
+
+Bu isteğe bağlı özellik Google Antigravity OAuth hesaplarını yalnızca `google-antigravity` Cloud Code
+Assist sağlayıcısı için havuzlar. Varsayılan olarak devre dışıdır. Havuz, kimlik bilgilerini hiçbir
+zaman Google AI Studio, Vertex AI, başka bir sağlayıcı kaydı veya API anahtarı rotasına vermez.
+
+Yapılandırmada `googleAntigravityAccountPool.enabled` değerini doğrudan `false` yapmak kota duyarlı
+seçimi, oturum bağlılığını ve özelleşmiş 402/429 yeniden deneme bütçesini kapatır; ayrı genel OAuth
+fallback ayarını değiştirmez. Buna karşılık `ocx account auto-switch google-antigravity off` ile açıkça
+`enabled: false` gönderen Management API `PUT/PATCH /api/oauth/accounts/pool`, strict single-account
+denetimleridir ve `providers.google-antigravity.oauthAccountFailover.enabled` değerini de `false`
+olarak kaydeder. `enabled` alanını atlayan kısmi güncellemeler mevcut genel failover niyetini korur.
+Özelleşmiş havuz kapalıyken genel fallback'i korumak için yapılandırmayı doğrudan düzenleyip bu sağlayıcı
+override değerini `true` yapın.
+
+| Anahtar | Tip | Varsayılan | Açıklama |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | İşleme özgü oturum bağlılığını ve son 429 ya da yüzeye çıkan 402 yanıtında sınırlı yük devretmeyi etkinleştirir. |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | 0–100 kullanım tüketme eşiği. `quota` ve `fill-first`, istek modelinin `Gem` veya `Cla` ailesiyle ilgili önbelleğe alınmış en yüksek kullanımı kullanır; kullanım bilinmiyorsa sağlıklı etkin hesap korunur. `0` yalnızca kullanıma dayalı geçişi kapatır, hata kurtarmayı kapatmaz. |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Yeni veya henüz bağlanmamış oturumların stratejisi. |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | Bir `round-robin` seçiminde tutulan yeni oturum bağlama sayısı. Aralık 1–100'dür; diğer stratejileri etkilemez. |
+
+Tüm stratejiler, hesap uygun kaldığı sürece mevcut oturum bağlılığını korur. Yeni veya bağlanmamış bir
+oturumda `quota`, ilgili kullanım bilinmiyorsa ya da eşik altındaysa sağlıklı etkin hesabı korur; ardından
+bilinen kullanımı en düşük uygun hesabı seçer. `round-robin` bağlamaları eşit dağıtır ve normal rotasyonda
+eşiği kullanmaz. `fill-first`, etkin hesabı soğuma, kullanılamazlık veya tüketme eşiğine kadar doldurur,
+sonra sıradaki uygun hesaba geçer.
+
+Her gönderim bearer token ile Cloud Code Assist `projectId` değerini birlikte içeren, üretime bağlı tek
+bir OAuth anlık görüntüsü çözümler. Son 429 veya yüzeye çıkan 402, başarısız hesabı soğumaya alır,
+bağlılığını temizler ve isteği başka bir uygun anlık görüntü için yeniden kurar. Kullanılabilir bir
+`Retry-After` yoksa varsayılan soğuma 60 saniyedir; ayrıştırılmış upstream değeri en fazla 15 dakikadır.
+Bir istek en fazla üç yük devretmeye, yani toplam dört upstream gönderime izin verir. Uygun hesapların
+tamamı soğuyorsa istemci en erken bilinen `Retry-After` ile 429 alır.
+
+Özelleşmiş 402/429 hata rotasyonu, normal Responses ana gönderim ve terminal devam yollarıyla sınırlıdır.
+Google üzerinden yönlendirildiklerinde `image/video bridge` ve `web-search sidecar` döngüleri isteğin
+başlangıçta seçilen hesabını kullanabilir, ancak bu özelleşmiş havuz üzerinden hesabı soğumaya almaz veya
+döndürmez. Bağımsız Antigravity görüntü uç noktası da bu rotasyon yolunun dışındadır.
+
+:::caution[Operasyonel dayanıklılık; kota aşma yöntemi değildir]
+Bu havuzu geçici hesap hatalarından kurtulmak için kullanın; kota veya sağlayıcı yaptırımını aşmak için
+kullanmayın. Çoklu hesap otomasyonu sağlayıcı koşullarını ihlal edebilir; bu riski kabul etmiyorsanız
+özelliği devre dışı bırakın.
+:::
+
+### `oauthAccountFailover`
+
+Bir hesap hız sınırına takıldığında, sağlayıcıya ait bir havuz etkin değilken aynı OAuth
+sağlayıcısının oturum açılmış başka bir hesabına geçer — xAI, Cursor, Kimi, GitHub Copilot, Google
+Antigravity ve Nous. `googleAntigravityAccountPool.enabled` değeri `true` olduğunda Google
+yönlendirmesini bunun yerine bu özelleşmiş havuz yönetir; kapalı olduğunda bu genel politika acil 429
+yük devretmesi sağlamaya devam edebilir.
+
+**İkinci bir hesapla oturum açmak bunu etkinleştirir.** Yapılandırma olmadan, bu sağlayıcılardan yeniden
+kimlik doğrulama için işaretlenmemiş 2 veya daha fazla hesaba sahip herhangi biri için rotasyon
+etkinleşir — `apiKeyPool`'un 2+ anahtarlı bir havuza zaten uyguladığı kuralla aynıdır. Saklanan tek
+hesabı olan bir sağlayıcı tam olarak önceki gibi davranır.
+
+| Anahtar | Tip | Varsayılan | Açıklama |
+| --- | --- | --- | --- |
+| `oauthAccountFailover.enabled?` | `boolean` | varlığa dayalı | Genel geçersiz kılma. `false` her yerde tek hesap davranışını zorlar; `true` rotasyonu zorla etkinleştirir. |
+| `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | devralır | Sağlayıcı başına geçersiz kılma; genel ayarı ve hesap varlığını geçersiz kılar. |
+
+Koşullarını sınamak istemediğiniz bir sağlayıcıda katı tek hesap davranışını korumak için:
+
+```json
+{
+  "providers": {
+    "cursor": {
+      "oauthAccountFailover": { "enabled": false }
+    }
+  }
+}
+```
+
+Bu ayar oturum açma, hesap ekleme ve yeniden kimlik doğrulama işlemleri boyunca korunur.
+
+`anthropicAccountPool`'dan kasıtlı olarak daha dardır: oturum bağlılığı, kota sıralamalı seçim ve prob
+kiralamaları yoktur. Yalnızca tek bir soruyu yanıtlar — az önce 429 döndüren hesap soğumaya alındı;
+kullanılabilir başka bir hesap var mı?
+
+Codex havuzu ve Anthropic havuzu kapsam dışıdır ve kendi rotasyonlarını sürdürür; bunu etkinleştirmek
+ikisini de değiştirmez. Saklanan tek hesabı olan bir sağlayıcı için kesinlikle işlem yapılmaz ve hiçbir
+soğuma kaydedilmez.
+
+429 durumunda başarısız hesap, mevcut olduğunda `Retry-After` kullanılarak (en fazla 15 dakika) veya
+varsayılan bir geri çekilmeyle soğumaya alınır ve istek, istek başına en fazla üç rotasyonla sonraki
+uygun hesapta yeniden oynatılır. Yeniden kimlik doğrulama için işaretlenen bir hesap asla seçilmez.
+Soğuma süreleri işleme özgüdür; yeniden başlatma bunları unutur.
+
+Rotasyon yalnızca bearer belirtecini değil, alternatif hesabın **tam** kimlik bilgisi anlık görüntüsünü
+taşır. Böylece yönlendirme meta verilerini belirteciyle eşleştiren bir sağlayıcı — örneğin
+Antigravity'nin Cloud Code Assist proje kimliği — bir hesabın belirtecini başka bir hesabın meta
+verileriyle gönderemez.
+
+Geçerli kapsam sıradan Responses istek yollarıdır. Cursor, hız sınırlarını HTTP durumu yerine adaptör
+olayları olarak bildirir ve bağımsız Antigravity görüntü uç noktasının kendi istek yolu vardır; henüz
+ikisi de rotasyon yapmaz.
+
+:::caution[Deneysel]
+Abonelik hesapları arasında rotasyon yapmak ikinci bir hesabın kotasını harcar ve bazı sağlayıcıların
+koşullarını ihlal edebilir. İstediğiniz ödünleşim bu değilse genel olarak veya söz konusu sağlayıcı için
+`enabled: false` ayarlayın.
+:::
+
 ### Yönetilen kayıt biçimleri
 
 `apiKeys[]` girdileri `id`, `name`, oluşturulan `key` ve ISO `createdAt`

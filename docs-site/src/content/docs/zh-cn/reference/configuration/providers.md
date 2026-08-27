@@ -167,6 +167,98 @@ affinity。这些策略不能规避 provider enforcement。
 除非你理解 Anthropic 账户策略风险，否则请保持关闭。若不确定，优先手动使用 `ocx account use anthropic <id>` 切换。
 :::
 
+### `googleAntigravityAccountPool`（实验性）
+
+此可选功能仅为 `google-antigravity` Cloud Code Assist 提供方池化 Google Antigravity OAuth
+账户，默认关闭。该池绝不会把凭据用于 Google AI Studio、Vertex AI、其他提供方条目或 API 密钥路由。
+
+在配置中直接将 `googleAntigravityAccountPool.enabled` 设为 `false`，只会关闭配额感知选择、
+会话亲和性及专用 402/429 重试预算，不会改变独立的通用 OAuth fallback。相比之下，
+`ocx account auto-switch google-antigravity off` 以及显式提交 `enabled: false` 的 Management API
+`PUT/PATCH /api/oauth/accounts/pool` 属于 strict single-account 操作：它们还会将
+`providers.google-antigravity.oauthAccountFailover.enabled` 持久化为 `false`。省略 `enabled` 的
+部分更新会保留现有的通用 failover 意图。若要在专用池关闭时保留通用 fallback，请直接编辑
+配置并将此提供方 override 设为 `true`。
+
+| 键 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | 启用进程本地会话亲和性，以及最终 429 或透传到此处的 402 响应触发的有界故障转移。 |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | 0–100 的使用率耗尽阈值。`quota` 和 `fill-first` 使用与请求模型 `Gem` 或 `Cla` 系列相关的最大缓存使用率；使用率未知时保留健康的活跃账户。`0` 只关闭按使用率切换，不关闭故障恢复。 |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新会话或未绑定会话的策略。 |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | 一次 `round-robin` 选择所保留的新会话绑定数。范围 1–100；不影响其他策略。 |
+
+只要账户仍然合格，所有策略都会保留已有的会话亲和性。对于新会话或未绑定会话，`quota` 会在
+相关使用率未知或低于阈值时保留健康的活跃账户，之后选择已知使用率最低的合格账户。
+`round-robin` 均匀分配绑定，普通轮换不使用该阈值。`fill-first` 会持续使用活跃账户，直到账户
+进入冷却、不可用或达到耗尽阈值，再前进到下一个合格账户。
+
+每次派发都会解析一个绑定到该代请求的 OAuth 快照，其中同时包含 bearer token 和 Cloud Code
+Assist `projectId`。最终 429 或透传到此处的 402 会让失败账户进入冷却、清除其亲和性，并用另一个
+合格快照重建请求。如果没有可用的 `Retry-After`，默认冷却 60 秒；成功解析的上游值最高限制为
+15 分钟。单个请求最多允许 3 次故障转移，即总计 4 次上游派发。如果所有合格账户都在冷却，
+客户端会收到 429，并带上已知的最早 `Retry-After`。
+
+专用的 402/429 故障轮换仅适用于普通 Responses 主派发路径和终端续接路径。通过 Google 路由时，
+`image/video bridge` 和 `web-search sidecar` 循环可以使用请求最初选定的账户，但不会通过此专用池
+让该账户进入冷却或进行轮换。独立的 Antigravity 图像端点同样不在此轮换路径内。
+
+:::caution[用于运行韧性，而不是绕过配额]
+请只用该池从暂时性账户故障中恢复，不要用它规避配额或提供方管控。多账户自动化可能违反提供方
+条款；如果不接受这一风险，请保持关闭。
+:::
+
+### `oauthAccountFailover`
+
+当没有提供方自有的池处于活动状态时，如果某个账户受到限流，此策略会为 OAuth 提供方轮换到
+同一提供方的另一个已登录账户——适用于 xAI、Cursor、Kimi、GitHub Copilot、Google Antigravity
+和 Nous。当 `googleAntigravityAccountPool.enabled` 为 `true` 时，该专用池会接管 Google 路由；
+关闭时，这项通用策略仍可提供紧急 429 故障转移。
+
+**登录第二个账户就是开启此功能的方式。** 未配置时，只要上述任一提供方持有 2 个或更多未标记为
+需要重新认证的账户，轮换就会启用——与 `apiKeyPool` 已对包含 2 个以上密钥的密钥池采用的规则
+相同。只存储一个账户的提供方仍保持原有行为。
+
+| 键 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `oauthAccountFailover.enabled?` | `boolean` | 由账户存在情况驱动 | 全局覆盖项。`false` 强制所有提供方保持单账户行为；`true` 强制启用轮换。 |
+| `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | 继承 | 按提供方设置的覆盖项；优先级高于全局设置和账户存在情况。 |
+
+若要让某个不想试探其条款的提供方严格保持单账户行为：
+
+```json
+{
+  "providers": {
+    "cursor": {
+      "oauthAccountFailover": { "enabled": false }
+    }
+  }
+}
+```
+
+该设置在登录、添加账户和重新认证后都会保留。
+
+此功能刻意比 `anthropicAccountPool` 更窄：没有会话亲和性、没有按配额排名的选择，也没有探测租约。
+它只回答一个问题——刚刚返回 429 的账户已进入冷却，是否还有另一个账户可用。
+
+Codex 池和 Anthropic 池不在此功能范围内，并保留各自的轮换；启用此功能不会改变两者。仅存储一个
+账户的提供方严格不执行任何操作，也不会为其记录冷却。
+
+收到 429 时，失败账户会按 `Retry-After`（上限 15 分钟）或默认退避进入冷却，并在下一个合格账户
+上重放请求；每个请求最多轮换三次。标记为需要重新认证的账户永远不会被选中。冷却仅存在于进程
+本地，因此重启后会被遗忘。
+
+轮换会携带替代账户的**完整**凭据快照，而不只是 bearer；这样，对于将路由元数据与 token 配对的
+提供方——例如 Antigravity 的 Cloud Code Assist 项目 id——就不会把一个账户的 token 与另一个
+账户的元数据一起发送。
+
+当前范围是普通 Responses 请求路径。Cursor 会以适配器事件而不是 HTTP 状态报告限流，而独立的
+Antigravity 图像端点拥有自己的请求路径；两者目前都不会轮换。
+
+:::caution[实验性]
+在订阅账户之间轮换会消耗第二个账户的配额，也可能违反某些提供方的条款。如果你不接受这种取舍，
+请在全局或相应提供方上设置 `enabled: false`。
+:::
+
 ### 托管记录形状
 
 `apiKeys[]` 条目包含 `id`、`name`、生成的 `key` 以及 ISO 格式的 `createdAt` 字符串。`codexAccounts[]` 条目要求有 `id`、`email` 和 `isMain`，并可选 `plan`、`chatgptAccountId` 和具备隐私安全性的 `logLabel`。这些记录通常由仪表板管理。

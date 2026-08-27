@@ -207,6 +207,55 @@ Laissez cette option désactivée, sauf si vous comprenez les risques liés aux 
 préférez le changement manuel avec `ocx account use anthropic <id>`.
 :::
 
+### `googleAntigravityAccountPool` (expérimental)
+
+Cette option regroupe des comptes OAuth Google Antigravity uniquement pour le fournisseur Cloud Code
+Assist `google-antigravity`. Elle est désactivée par défaut. Le pool ne fournit jamais d'identifiants à
+Google AI Studio, Vertex AI, une autre entrée de fournisseur ou une route utilisant une clé API.
+
+Définir directement `googleAntigravityAccountPool.enabled` sur `false` dans la configuration désactive
+la sélection selon les quotas, l'affinité de session et le budget spécialisé 402/429 sans modifier le
+basculement OAuth générique distinct. En revanche, `ocx account auto-switch google-antigravity off` et un
+`PUT/PATCH /api/oauth/accounts/pool` de l'API de gestion avec `enabled: false` explicite imposent le
+mode strict à un seul compte : ils enregistrent aussi
+`providers.google-antigravity.oauthAccountFailover.enabled` à `false`. Une mise à jour partielle qui
+omet `enabled` conserve l'intention existante du basculement générique. Pour garder ce basculement avec
+le pool spécialisé désactivé, modifiez directement la configuration et réglez cet override sur `true`.
+
+| Clé | Type | Par défaut | Description |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | Active l'affinité de session locale au processus et un basculement borné après une réponse finale 429 ou une réponse 402 remontée. |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | Seuil d'épuisement de 0 à 100. `quota` et `fill-first` utilisent l'utilisation maximale en cache correspondant à la famille `Gem` ou `Cla` du modèle demandé ; une utilisation inconnue conserve le compte actif sain. `0` désactive le changement selon l'utilisation, pas la reprise après échec. |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Stratégie pour les sessions nouvelles ou sans liaison. |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | Nombre de liaisons de nouvelles sessions conservées sur une sélection `round-robin`. Plage 1–100 ; sans effet sur les autres stratégies. |
+
+Les stratégies conservent l'affinité d'une session tant que son compte reste admissible. Pour une
+session nouvelle ou sans liaison, `quota` conserve le compte actif sain lorsque l'utilisation pertinente
+est inconnue ou inférieure au seuil, puis choisit le compte admissible dont l'utilisation connue est la
+plus faible. `round-robin` répartit uniformément les liaisons et n'emploie pas le seuil pour la rotation
+ordinaire. `fill-first` remplit le compte actif jusqu'à sa temporisation, son indisponibilité ou le seuil
+d'épuisement, puis passe au compte admissible suivant.
+
+Chaque envoi résout un instantané OAuth lié à cette génération, avec le jeton bearer et le `projectId`
+Cloud Code Assist. Une réponse finale 429 ou une réponse 402 remontée met le compte en temporisation,
+efface son affinité et reconstruit la requête pour un autre instantané admissible. Sans `Retry-After`
+exploitable, la temporisation par défaut est de 60 secondes ; une valeur amont analysée est plafonnée à
+15 minutes. Une requête autorise au plus trois basculements, soit quatre envois amont au total. Si tous
+les comptes admissibles sont en temporisation, le client reçoit un 429 avec le premier `Retry-After`
+connu.
+
+La rotation spécialisée sur échec 402/429 est limitée au chemin d'envoi principal Responses ordinaire
+et aux continuations de terminal. Lorsqu'elles passent par Google, les boucles `image/video bridge` et
+`web-search sidecar` peuvent utiliser le compte initialement sélectionné pour la requête, mais elles ne
+le placent pas en temporisation et ne le font pas tourner via ce pool spécialisé. Le point de terminaison
+d'image Antigravity autonome reste lui aussi hors de ce chemin de rotation.
+
+:::caution[Résilience opérationnelle, pas contournement de quota]
+Utilisez ce pool pour récupérer après des défaillances transitoires, pas pour contourner les quotas ou
+les contrôles du fournisseur. L'automatisation multicomptes peut enfreindre les conditions du fournisseur ;
+laissez cette fonction désactivée si vous n'acceptez pas ce risque.
+:::
+
 ### Formes d'enregistrement gérées
 
 Les entrées `apiKeys[]` contiennent les chaînes `id`, `name`, la valeur `key` générée et la date ISO `createdAt`.

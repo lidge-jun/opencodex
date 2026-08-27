@@ -136,6 +136,53 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 除非你了解 Anthropic 帳號政策風險，否則保持停用。不確定時偏好手動 `ocx account use anthropic <id>` 切換。
 :::
 
+### `googleAntigravityAccountPool`（實驗性）
+
+此選用功能只為 `google-antigravity` Cloud Code Assist 供應商池化 Google Antigravity OAuth
+帳號，預設停用。此池絕不會把憑證用於 Google AI Studio、Vertex AI、其他供應商項目或 API-key 路由。
+
+在設定中直接將 `googleAntigravityAccountPool.enabled` 設為 `false`，只會關閉配額感知選擇、
+session 親和性及專用 402/429 重試額度，不會改變獨立的通用 OAuth fallback。相較之下，
+`ocx account auto-switch google-antigravity off` 與明確送出 `enabled: false` 的 Management API
+`PUT/PATCH /api/oauth/accounts/pool` 都是 strict single-account 操作：它們也會將
+`providers.google-antigravity.oauthAccountFailover.enabled` 持久化為 `false`。省略 `enabled` 的
+部分更新會保留既有的通用 failover 意圖。若要在專用池關閉時保留通用 fallback，請直接編輯
+設定並將此供應商 override 設為 `true`。
+
+| Key | 型別 | 預設值 | 說明 |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | 啟用行程本地的 session 親和性，以及最終 429 或傳到此處的 402 回應所觸發的有界容錯移轉。 |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | 0–100 的用量耗盡閾值。`quota` 與 `fill-first` 使用和請求模型 `Gem` 或 `Cla` 家族相關的最高快取用量；用量未知時保留健康的現用帳號。`0` 只停用依用量切換，不停用故障復原。 |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新 session 或未綁定 session 的策略。 |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | 一次 `round-robin` 選擇所保留的新 session 綁定數。範圍 1–100；不影響其他策略。 |
+
+只要帳號仍合格，所有策略都會保留既有 session 親和性。對於新 session 或未綁定 session，
+`quota` 會在相關用量未知或低於閾值時保留健康的現用帳號，之後選擇已知用量最低的合格帳號。
+`round-robin` 平均分配綁定，正常輪換不使用該閾值。`fill-first` 會持續使用現用帳號，直到帳號
+進入冷卻、不可用或到達耗盡閾值，再前進到下一個合格帳號。
+
+每次派送都會解析一份綁定到該代請求的 OAuth 快照，其中同時包含 bearer token 與 Cloud Code
+Assist `projectId`。最終 429 或傳到此處的 402 會讓失敗帳號進入冷卻、清除其親和性，並用另一份
+合格快照重建請求。若沒有可用的 `Retry-After`，預設冷卻 60 秒；成功解析的上游值最高限制為
+15 分鐘。單一請求最多允許 3 次容錯移轉，也就是總計 4 次上游派送。若所有合格帳號都在冷卻，
+客戶端會收到 429，並附上已知最早的 `Retry-After`。
+
+專用的 402/429 故障輪換只適用於一般 Responses 主派送路徑與終端續接路徑。透過 Google 路由時，
+`image/video bridge` 與 `web-search sidecar` 迴圈可以使用請求最初選定的帳號，但不會透過此專用池
+讓該帳號進入冷卻或輪換。獨立的 Antigravity 圖像端點也不在此輪換路徑內。
+
+:::caution[用於營運韌性，而非繞過配額]
+請只用此池從暫時性帳號故障中復原，不要用來規避配額或供應商管控。多帳號自動化可能違反供應商
+條款；若不接受這項風險，請保持停用。
+:::
+
+### `oauthAccountFailover`
+
+當沒有供應商自有的池處於啟用狀態時，若某個 OAuth 帳號遭到限流，此機制會輪換到同一供應商的
+另一個已登入帳號，適用於 xAI、Cursor、Kimi、GitHub Copilot、Google Antigravity 與 Nous。
+當 `googleAntigravityAccountPool.enabled` 為 `true` 時，該專用池會接管 Google 路由；當它關閉時，
+這項通用政策仍可能提供緊急 429 容錯移轉。
+
 ### 受管記錄結構
 
 `apiKeys[]` 項目包含 `id`、`name`、生成的 `key` 與 ISO `createdAt` 字串。

@@ -98,20 +98,26 @@ List and switch provider accounts and API-key pools through the running proxy. T
 surface is:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage:
+  ocx account list [provider] [--json] [--all]
+  ocx account current <provider> [--json]
+  ocx account use <provider> <account-or-key-id|main> [--json]
+  ocx account refresh <provider> [--json]
+  ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
+  ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
+  ocx account remove <provider> <account-or-key-id|main> --yes [--json]
+  ocx account clear-cooldown <provider> <account-id|main> [--json]
+  ocx account add-key <provider> [--label <label>] [--json]
+  ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
+  ocx account cancel <provider> [--flow <flow-id>] [--json]
+  ocx account reset-credits <account-id|main> [--consume --yes] [--json]
+  ocx account main <doctor|list|register|add|switch|recover> ...
 
-list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
-current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
-refresh <provider>  Force-refresh Codex or provider quota reports.
-auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
-add-key <provider> [--label <label>]  Add a key read only from piped stdin.
-login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
-reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
-Switching the active account takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.
-A selection-order change applies from the next unbound request and never moves a bound thread.
+List and switch provider accounts and API-key pools (masked output only).
+'main' selects the Codex App login for the openai account pool.
 ```
 
 All subcommands require the proxy to be running; the CLI auto-resolves its recorded runtime port.
@@ -155,8 +161,8 @@ returns:
 ```
 
 `--quota` adds a `QUOTA` column with each account's own usage, for providers that support a
-per-account probe (Anthropic today). It is opt-in because the proxy probes the upstream once per
-stored credential; the default listing stays a local read. `--refresh` bypasses the cached
+per-account probe (Anthropic and Google Antigravity today). It is opt-in because the proxy probes
+the upstream once per stored credential; the default listing stays a local read. `--refresh` bypasses the cached
 result. An account with no per-account quota shows `-`, and one whose probe failed shows
 `unavailable` — blank would read as "no usage" rather than "not measured". `--json` carries the
 full breakdown per account, not just the two summarized windows:
@@ -215,12 +221,28 @@ instead (exit 0), matching the dashboard's quota bars.
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Controls only the `openai` Codex account pool. `on` sets 80%, `off` sets 0%, `status` reads the current
-value, and `threshold <n>` accepts an integer from 0 through 100. Other providers and invalid values
-exit 1. `--json` returns:
+Controls the `openai` Codex pool and the supported `anthropic` and `google-antigravity` OAuth pools.
+For Codex, `on` sets 80% and `off` sets 0%. For OAuth pools, `on`/`off` toggle the pool while retaining
+its threshold; `threshold <n>` stores the integer from 0 through 100 and enables the pool when nonzero.
+`status` reads the current policy. Other providers and invalid values exit 1. `--json` returns:
+
+For `google-antigravity`, `off` disables the specialized quota-aware pool and also stores the
+per-provider generic OAuth 429 opt-out, so the command really enters strict single-account mode.
+Directly setting only `googleAntigravityAccountPool.enabled: false` does not change that separate
+generic policy.
 
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
+```
+
+### `ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]`
+
+Sets a display alias on an existing Codex account, OAuth account, or API key; pass `-` to clear it.
+Aliases are at most 80 printable characters. The reserved `main` Codex App login cannot be renamed, so
+`ocx account alias openai main ...` exits 1. `--json` returns:
+
+```text
+{ ok: true, provider, id, alias: string | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
@@ -259,7 +281,7 @@ its model-catalog refresh remains pending, human output still exits successfully
 `ocx sync` recovery guidance on stderr. `--json` keeps stdout parseable and carries
 `catalogRefreshPending: true` in the completed login state without the human warning.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <account-or-key-id|main> --yes [--json]`
 
 This guarded, non-interactive deletion requires `--yes`. Before deleting, it verifies that the id
 exists; a missing id exits 1 without sending DELETE. The main Codex App login cannot be removed, so
@@ -277,6 +299,18 @@ success and failure shapes are:
 already saved; human output prints generic `ocx sync` recovery guidance on stderr and still exits 0.
 OAuth-account and API-key removal envelopes do not gain this field.
 
+### `ocx account clear-cooldown <provider> <account-id|main> [--json]`
+
+Clears one runtime cooldown in the `openai` Codex pool or the supported `anthropic` and
+`google-antigravity` OAuth pools. `main` is accepted only for `openai` and is normalized to `__main__`
+in JSON. An invalid provider or unknown account is rejected by the API with 400 and the CLI exits 1.
+A real account with no active cooldown is an idempotent success: the API returns 200, the CLI exits 0,
+and `cleared` is `false`. `--json` returns exactly:
+
+```text
+{ ok: true, provider, id, cleared: boolean }
+```
+
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 
 Adds and activates a key for an API-key provider. The key is read only from non-TTY piped/redirected
@@ -289,6 +323,25 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ```
 
 `--json` returns `{ ok: true, id: string | null, label?: string }` and never includes the key.
+
+### `ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]`
+
+Imports a bounded account export. Version 1 accepts only provider `google-antigravity` with format
+`cockpit-tools`, from exactly one of `--file` or `--stdin`; inline JSON and extra positional arguments
+are rejected before their contents are inspected. Keep exports private and remove or secure them after
+use. JSON output is the secret-free summary below. Any failed or unsupported record makes the command
+exit 1; otherwise it exits 0.
+
+```text
+{
+  totalCount,
+  importedCount,
+  updatedCount,
+  failedCount,
+  unsupportedCount,
+  results: Array<{ index, status, code }>
+}
+```
 
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 

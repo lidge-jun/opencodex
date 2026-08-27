@@ -100,20 +100,26 @@ Répertoriez et changez de compte de fournisseur et de pools de clés API via le
 la surface est :
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage:
+  ocx account list [provider] [--json] [--all]
+  ocx account current <provider> [--json]
+  ocx account use <provider> <account-or-key-id|main> [--json]
+  ocx account refresh <provider> [--json]
+  ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
+  ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
+  ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
+  ocx account remove <provider> <account-or-key-id|main> --yes [--json]
+  ocx account clear-cooldown <provider> <account-id|main> [--json]
+  ocx account add-key <provider> [--label <label>] [--json]
+  ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
+  ocx account cancel <provider> [--flow <flow-id>] [--json]
+  ocx account reset-credits <account-id|main> [--consume --yes] [--json]
+  ocx account main <doctor|list|register|add|switch|recover> ...
 
-list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
-current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
-refresh <provider>  Force-refresh Codex or provider quota reports.
-auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
-add-key <provider> [--label <label>]  Add a key read only from piped stdin.
-login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
-reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
-Switching the active account takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.
-A selection-order change applies from the next unbound request and never moves a bound thread.
+List and switch provider accounts and API-key pools (masked output only).
+'main' selects the Codex App login for the openai account pool.
 ```
 
 Toutes les sous-commandes nécessitent que le proxy soit en cours d'exécution ; le CLI résout automatiquement son port d'exécution enregistré.
@@ -203,12 +209,31 @@ renvoient 1 ; une sonde de quota en amont qui échoue ou expire produit plutôt 
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Contrôle uniquement le groupe de comptes Codex `openai`. `on` règle 80 %, `off` règle 0 %, `status` lit la
-valeur actuelle et `threshold <n>` accepte un entier de 0 à 100. Les autres fournisseurs et les valeurs
-invalides entraînent le code de sortie 1. `--json` renvoie :
+Contrôle le pool Codex `openai` et les pools OAuth pris en charge `anthropic` et `google-antigravity`.
+Pour `openai`, `on` fixe le seuil à 80 % et `off` à 0 %. Pour les pools OAuth, `on` et `off`
+activent ou désactivent le pool tout en conservant son seuil. `threshold <n>` enregistre un entier de
+0 à 100 et active le pool si la valeur est différente de zéro. `status` lit la stratégie actuelle.
+Les fournisseurs non pris en charge et les valeurs invalides entraînent le code de sortie 1.
+`--json` renvoie :
+
+Pour `google-antigravity`, `off` désactive le pool spécialisé tenant compte des quotas et enregistre
+également la désactivation du basculement OAuth générique sur 429 pour ce fournisseur ; la commande
+passe donc réellement en mode strict à compte unique. Définir directement uniquement
+`googleAntigravityAccountPool.enabled: false` ne modifie pas cette stratégie générique distincte.
 
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }
+```
+
+### `ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]`
+
+Définit un alias d'affichage sur un compte Codex, un compte OAuth ou une clé API existants ; passez
+`-` pour l'effacer. Un alias contient au plus 80 caractères imprimables. Le login Codex App réservé
+`main` ne peut pas être renommé : `ocx account alias openai main ...` se termine avec le code 1.
+`--json` renvoie :
+
+```text
+{ ok: true, provider, id, alias: string | null }
 ```
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
@@ -245,7 +270,7 @@ l'actualisation de son catalogue de modèles reste en attente, la sortie humaine
 `ocx sync` conseils de récupération sur stderr. `--json` garde la sortie standard analysable et transporte
 `catalogRefreshPending: true` dans l'état de connexion terminé sans avertissement humain.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <account-or-key-id|main> --yes [--json]`
 
 Cette suppression gardée et non interactive nécessite `--yes`. Avant de supprimer, il vérifie que l'identifiant
 existe; un identifiant manquant quitte 1 sans envoyer DELETE. La connexion principale Codex App ne peut pas être supprimée, donc
@@ -263,6 +288,18 @@ Les formes de réussite et d’échec sont :
 déjà enregistré; la sortie humaine imprime des conseils de récupération génériques `ocx sync` sur stderr et quitte toujours 0.
 Les enveloppes de retrait de compte OAuth et de clé API n'obtiennent pas ce champ.
 
+### `ocx account clear-cooldown <provider> <account-id|main> [--json]`
+
+Efface une temporisation d'exécution du pool Codex `openai` ou des pools OAuth pris en charge
+`anthropic` et `google-antigravity`. `main` n'est accepté que pour `openai` et devient `__main__` dans
+le JSON. Un fournisseur non valide ou un compte inconnu produit une réponse API 400 et la CLI se
+termine avec le code 1. Pour un compte réel sans temporisation active, l'opération est idempotente :
+l'API renvoie 200, la CLI se termine avec le code 0 et `cleared` vaut `false`. `--json` renvoie exactement :
+
+```text
+{ ok: true, provider, id, cleared: boolean }
+```
+
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 
 Ajoute et active une clé pour un fournisseur de clés API. La clé est lue uniquement à partir de non-TTY piped/redirected
@@ -275,6 +312,26 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ```
 
 `--json` renvoie `{ ok: true, id: string | null, label?: string }` et n'inclut jamais la clé.
+
+### `ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]`
+
+Importe une exportation de comptes de taille bornée. La version 1 accepte uniquement le fournisseur
+`google-antigravity` au format `cockpit-tools`, depuis exactement une source, `--file` ou `--stdin`.
+Le JSON en ligne et les arguments positionnels supplémentaires sont refusés avant l'examen de leur
+contenu. Gardez les exportations confidentielles, puis supprimez-les ou sécurisez-les après usage. La
+sortie JSON est le résumé sans secret ci-dessous. Toute entrée en échec ou non prise en charge fait se
+terminer la commande avec le code 1 ; sinon elle se termine avec le code 0.
+
+```text
+{
+  totalCount,
+  importedCount,
+  updatedCount,
+  failedCount,
+  unsupportedCount,
+  results: Array<{ index, status, code }>
+}
+```
 
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 

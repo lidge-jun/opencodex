@@ -29,6 +29,24 @@ async function seedTwoAccounts(): Promise<void> {
   await saveCredential("anthropic", { access: "token-second", refresh: "refresh-second", expires, ...SECOND });
 }
 
+async function seedTwoGoogleAccounts(): Promise<void> {
+  const expires = Date.now() + 60 * 60_000;
+  await saveCredential("google-antigravity", {
+    access: "google-token-first",
+    refresh: "google-refresh-first",
+    expires,
+    accountId: "google-account-first",
+    projectId: "google-project-first",
+  });
+  await saveCredential("google-antigravity", {
+    access: "google-token-second",
+    refresh: "google-refresh-second",
+    expires,
+    accountId: "google-account-second",
+    projectId: "google-project-second",
+  });
+}
+
 function usageBody(fiveHour: number, sevenDay: number): string {
   return JSON.stringify({
     five_hour: { utilization: fiveHour, resets_at: "2026-07-05T12:00:00Z" },
@@ -54,6 +72,49 @@ afterEach(() => {
 });
 
 describe("fetchProviderAccountQuotas", () => {
+  test("Google Antigravity probes each account with its own token and project snapshot", async () => {
+    await seedTwoGoogleAccounts();
+    const seen: Array<{ authorization: string | null; project: unknown }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
+      const authorization = new Headers(init?.headers).get("authorization");
+      const body = JSON.parse(String(init?.body)) as { project?: unknown };
+      seen.push({ authorization, project: body.project });
+      const gemRemaining = authorization === "Bearer google-token-first" ? 0.1 : 0.8;
+      return Response.json({
+        models: {
+          "gemini-3.7-flash": {
+            displayName: "Gemini 3.7 Flash",
+            quotaInfo: { remainingFraction: gemRemaining, resetTime: "2026-09-01T00:00:00Z" },
+          },
+          "claude-sonnet-4-6": {
+            displayName: "Claude Sonnet 4.6",
+            quotaInfo: { remainingFraction: 0.5, resetTime: "2026-09-01T01:00:00Z" },
+          },
+        },
+      });
+    }) as typeof fetch;
+
+    expect(supportsPerAccountQuota("google-antigravity")).toBe(true);
+    const rows = await fetchProviderAccountQuotas("google-antigravity");
+    expect(rows.map(row => row.quota?.customWindows).sort((a, b) =>
+      (a?.[0]?.percent ?? 0) - (b?.[0]?.percent ?? 0)
+    )).toEqual([
+      [
+        { label: "Gem", percent: 20, resetAt: Date.parse("2026-09-01T00:00:00Z") },
+        { label: "Cla", percent: 50, resetAt: Date.parse("2026-09-01T01:00:00Z") },
+      ],
+      [
+        { label: "Gem", percent: 90, resetAt: Date.parse("2026-09-01T00:00:00Z") },
+        { label: "Cla", percent: 50, resetAt: Date.parse("2026-09-01T01:00:00Z") },
+      ],
+    ]);
+    expect(seen).toEqual(expect.arrayContaining([
+      { authorization: "Bearer google-token-first", project: "google-project-first" },
+      { authorization: "Bearer google-token-second", project: "google-project-second" },
+    ]));
+  });
+
   test("reports each account's own rate limits, keyed by the account's bearer token", async () => {
     await seedTwoAccounts();
     const seenTokens: string[] = [];

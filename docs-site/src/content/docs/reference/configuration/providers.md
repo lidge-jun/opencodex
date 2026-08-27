@@ -295,11 +295,59 @@ Leave this disabled unless you understand Anthropic account policy risk. Prefer 
 `ocx account use anthropic <id>` switching when unsure.
 :::
 
+### `googleAntigravityAccountPool` (experimental)
+
+This opt-in pools Google Antigravity OAuth accounts for the `google-antigravity` Cloud Code Assist
+provider only. It is disabled by default. The pool never supplies credentials to Google AI Studio,
+Vertex AI, another provider entry, or an API-key route.
+
+Setting `googleAntigravityAccountPool.enabled` to `false` directly in config disables quota-aware
+selection, session affinity, and the specialized 402/429 retry budget without changing the separate
+generic OAuth fallback. By contrast, `ocx account auto-switch google-antigravity off` and a Management API
+`PUT/PATCH /api/oauth/accounts/pool` with explicit `enabled: false` are strict single-account controls:
+they also persist `providers.google-antigravity.oauthAccountFailover.enabled` as `false`. Partial
+updates that omit `enabled` preserve the existing generic-failover intent. To keep generic fallback
+while the specialized pool is off, edit config directly and set that provider override to `true`.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `googleAntigravityAccountPool.enabled?` | `boolean` | `false` | Enable process-local session affinity and bounded failover on a final 429 or surfaced 402 response. |
+| `googleAntigravityAccountPool.autoSwitchThreshold?` | `number` | `80` | Usage drain threshold from 0–100. `quota` and `fill-first` use the maximum cached usage relevant to the request model's `Gem` or `Cla` family; unknown usage keeps a healthy active account. `0` disables usage-driven switching, not failure recovery. |
+| `googleAntigravityAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Strategy for new or otherwise unbound sessions. |
+| `googleAntigravityAccountPool.stickyLimit?` | `number` | `1` | New-session binds retained on one `round-robin` selection. Range 1–100; it does not affect the other strategies. |
+
+The strategies preserve an eligible session affinity once it exists. For a new or unbound session,
+`quota` keeps the healthy active account while its relevant usage is unknown or below the threshold,
+then selects the eligible account with the lowest known usage. `round-robin` distributes binds evenly
+and does not use the threshold for ordinary rotation. `fill-first` keeps filling the active account
+until cooldown, unavailability, or the drain threshold, then advances to the next eligible account.
+
+Each dispatch resolves one generation-bound OAuth snapshot containing both the bearer token and Cloud
+Code Assist `projectId`. A final 429 or surfaced 402 cools the failed account, clears its affinity, and
+rebuilds the request for another eligible snapshot. The default cooldown is 60 seconds when no usable
+`Retry-After` is present; a parsed upstream value is capped at 15 minutes. One request permits at most
+three failovers (four total upstream dispatches). If every eligible account is cooling, the client
+receives 429 with the earliest known `Retry-After`.
+
+Specialized 402/429 failure rotation is limited to the ordinary Responses main dispatch and terminal
+continuation paths. When routed through Google, the `image/video bridge` and `web-search sidecar`
+loops can use the account initially selected for the request, but they do not cool or rotate it
+through this specialized pool. The standalone Antigravity image endpoint is also outside this
+rotation path.
+
+:::caution[Operational resilience, not quota bypass]
+Use this pool to recover from transient account failures, not to evade quotas or provider enforcement.
+Multi-account automation can violate provider terms; keep the feature disabled unless you accept that
+risk.
+:::
+
 ### `oauthAccountFailover`
 
 Rotates to another logged-in account of the same provider when one is rate-limited, for OAuth
-providers that have no pool of their own — xAI, Cursor, Kimi, GitHub Copilot, Google Antigravity,
-and Nous.
+providers while no provider-owned pool is active — xAI, Cursor, Kimi, GitHub Copilot, Google
+Antigravity, and Nous. When `googleAntigravityAccountPool.enabled` is `true`, that specialized pool
+owns Google routing instead; when it is off, this generic policy may still provide emergency 429
+failover.
 
 **Logging in a second account is what turns this on.** With no configuration, rotation activates
 for any of those providers holding 2 or more accounts that are not flagged for reauthentication —

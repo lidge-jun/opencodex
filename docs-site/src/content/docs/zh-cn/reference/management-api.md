@@ -150,13 +150,38 @@ Authorization: Bearer <admin-token>
 | `POST /api/oauth/logout` | 移除选定的 provider 凭证 | 400 provider 未知；`oauth_mutation_busy` |
 | `GET, DELETE /api/oauth/accounts` | 列出已脱敏账户或移除一个账户 | 400 provider/id 无效；404 账户缺失；`oauth_mutation_busy` |
 | `PUT /api/oauth/accounts/active` | 选择当前活跃的 OAuth 账户 | 400 provider/账户无效；`oauth_mutation_busy` |
-| `GET, PUT, PATCH /api/oauth/accounts/pool` | 读取或更新 Anthropic OAuth 池策略 | 400 非 Anthropic provider 或策略无效 |
-| `POST /api/oauth/accounts/clear-cooldown` | 清除一个 OAuth 账户的运行时冷却 | 400 provider/账户无效 |
+| `GET, PUT, PATCH /api/oauth/accounts/pool` | 读取或更新 Anthropic 或 Google Antigravity OAuth 池策略 | 400 不支持的 provider 或策略无效 |
+| `POST /api/oauth/accounts/clear-cooldown` | 清除一个 OAuth 账户的运行时冷却 | 400：provider 无效或账户未知；已知账户没有冷却时返回 200 和 `{ ok: true, cleared: false }` |
 | `PUT /api/oauth/accounts/alias` | 设置或清除 OAuth 账户别名 | 400 provider/账户/别名无效 |
 | `GET, POST, DELETE /api/providers/keys` | 列出已脱敏的 provider 密钥，添加/激活一个，或移除一个 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/active` | 选择某个 provider 的活跃密钥 | 400 输入无效；404 provider/密钥缺失 |
 | `PUT /api/providers/keys/alias` | 设置或清除 provider 密钥别名 | 400 输入无效；404 provider/密钥缺失 |
 | `GET, POST, PATCH, DELETE /api/keys` | 列出、创建、编辑或删除数据平面准入密钥 | 400 请求体/id 无效；404 密钥缺失 |
+
+#### 提供方范围内的 OAuth 池契约
+
+`GET /api/oauth/accounts/pool?provider=anthropic|google-antigravity` 要求提供 `provider` 查询参数。
+响应的顶层字段为 `provider`、`enabled`、`autoSwitchThreshold`（默认 `80`）、`strategy`（规范化为
+`quota`、`round-robin` 或 `fill-first`）、`stickyLimit`（规范化为 1～100 的整数）以及
+`experimental: true`。
+
+`PUT` 和 `PATCH /api/oauth/accounts/pool` 要求请求体为包含 `provider` 的 JSON 对象，并可选接受
+`enabled`（布尔值）、`autoSwitchThreshold`（0～100 的整数）、`strategy`（`quota`、`round-robin`
+或 `fill-first`）以及 `stickyLimit`（1～100 的整数）。省略的字段会保留当前值或默认值。成功响应
+直接在顶层返回 `{ ok: true, provider, enabled, autoSwitchThreshold, strategy, stickyLimit,
+experimental: true }`，没有 `config` 包装层。格式错误或非对象的请求体、不支持的 provider 或
+无效字段都会返回通用 HTTP 400 错误响应。
+
+对于 `google-antigravity`，写入 `enabled: false` 还会保存
+`providers.google-antigravity.oauthAccountFailover.enabled: false`。这使管理 API/CLI 中“关闭”的
+含义名副其实：它会同时禁用专用的配额感知池和原本由账户存在情况驱动的通用 429 回退。仅直接编辑
+`googleAntigravityAccountPool.enabled` 不会改变这项通用策略。
+
+`POST /api/oauth/accounts/clear-cooldown` 的请求体为 `{ provider, accountId }`。provider 必须是
+`anthropic` 或 `google-antigravity`，且账号必须存在于该 provider 内。未知账号返回通用 HTTP 400
+`account not found` 错误。已知账号即使不在冷却中也会幂等成功：HTTP 200 和
+`{ ok: true, cleared: false }`。对于 Google，此操作会同时清除专用池状态和通用回退状态，因此
+即使池模式发生变化，该操作仍然有效。这些响应不会包含 token、电子邮件地址或完整密钥。
 
 凭证列表响应会刻意脱敏。OAuth 访问令牌和完整的 provider API 密钥不会返回给仪表板客户端。
 
@@ -212,7 +237,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/accounts/alias` | 设置或清除账户别名 | 400 账户/别名无效 |
 | `PUT /api/codex-auth/accounts/pause` | 暂停或恢复一个账户 | 400 账户/状态无效；404 缺少账户 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暂停配额已耗尽的账户 | 变更锁失败会变成 503 |
-| `POST /api/codex-auth/accounts/clear-cooldown` | 清除一个账户或所有账户的运行时冷却 | 400 id 无效 |
+| `POST /api/codex-auth/accounts/clear-cooldown` | 清除一个账户的运行时冷却 | 400：账户 id 无效或未知；已知账户没有冷却时返回 200 和 `{ ok: true, id, cleared: false }` |
 | `GET, PUT /api/codex-auth/active` | 读取或选择当前活跃账户 | 400 账户无效或缺失；409 暂停/旧行冲突 |
 | `PUT /api/codex-auth/auto-switch` | 设置自动切换账户的配额阈值 | 400 阈值无效 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | 更新 Codex 账户池选择策略 | 400 策略/配置无效 |
