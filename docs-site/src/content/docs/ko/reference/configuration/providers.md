@@ -68,7 +68,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `models?` | `string[]` | 시드/폴백 모델 목록입니다. `liveModels: false`이면 이 목록만 발견된 모델로 취급합니다. |
 | `liveModels?` | `boolean` | 시작 또는 동기화 시 라이브 카탈로그를 가져옵니다. 기본값은 `true`입니다. 사용자 지정 공급자는 `${baseUrl}/models`를 사용하고, 내장은 레지스트리 URL을 사용한 뒤 필터링할 수 있습니다. |
 | `selectedModels?` | `string[]` | 발견 후 카탈로그 허용 목록입니다. 값이 비어 있지 않으면 그 id만 노출하고, 비어 있거나 생략하면 발견된 모델을 모두 노출합니다. |
-| `modelDisplayNames?` | `Record<string, string>` | 이 공급자의 정확한 네이티브 모델 id를 키로 쓰는 영구 표시 전용 이름입니다. 키는 대소문자를 구분합니다. 이름은 공급자 카탈로그 메타데이터보다 우선하며 인증, 어댑터, 라우팅, 청구 또는 업스트림 요청을 바꾸지 않습니다. |
+| `modelDisplayNames?` | `Record<string, string>` | 이 공급자의 정확한 네이티브 모델 id를 키로 쓰는 영구 표시 전용 이름입니다. 키는 대소문자를 구분합니다. 이름은 공급자 카탈로그 메타데이터보다 우선하며 인증, 어댑터, 라우팅, 청구 또는 업스트림 요청을 바꾸지 않습니다. 맵은 발견 한도와 같은 최대 2,000개 항목을 가질 수 있습니다. |
 | `contextWindow?` | `number` | 업스트림 메타데이터가 없을 때 쓰이는 공급자 전반의 컨텍스트 값입니다. 메타데이터가 있으면 상한으로 동작해 더 작은 라이브 값을 그대로 둡니다. Models 대시보드에서 `providerContextCaps`와 별도로 설정합니다. |
 | `modelContextWindows?` | `Record<string, number>` | 모델별 컨텍스트 값이자 상한입니다. `contextWindow`보다 우선하며, 창 크기를 알 수 없으면 설정값을 쓰고 더 작은 라이브 메타데이터가 있으면 그쪽을 따릅니다. |
 | `modelInputModalities?` | `Record<string, string[]>` | `["text"]` 또는 `["text", "image"]` 같은 모델별 입력 힌트입니다. |
@@ -304,7 +304,7 @@ OpenRouter는 하나의 모델을 여러 추론 공급자로 제공할 수 있�
 
 `selectedModels`는 발견은 계속하되, 선택된 id만 Codex와 `/v1/models`에 나타나게 하고 싶을 때 사용합니다. 대시보드는 나중에 허용 목록을 바꿀 수 있도록 발견된 전체 목록을 보관합니다.
 
-표시 이름은 `modelDisplayNames`로 설정합니다. 우선순위는 운영자가 설정한 `modelDisplayNames`, 공급자 카탈로그 메타데이터, 일반 `provider/model` 표시 순서입니다. 키는 이 공급자 안의 정확한 네이티브 모델 id입니다. 예를 들어 `xai/grok-4.6`의 키는 `grok-4.6`입니다. 이름은 표시 전용이며 정확한 라우팅 id나 업스트림 모델 id를 바꾸지 않습니다. `PUT /api/providers/:provider/model-display-names`에 `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }`를 보내 저장하고, `displayName: null`을 보내 해당 이름만 초기화합니다. 대시보드의 **Models**에서 **Name**으로 저장하고 **Reset name**으로 되돌립니다. 별도의 연필 버튼은 라우팅 별칭을 편집하며 표시 이름은 바꾸지 않습니다.
+표시 이름은 `modelDisplayNames`로 설정합니다. 우선순위는 운영자가 설정한 `modelDisplayNames`, 공급자 카탈로그 메타데이터, 일반 `provider/model` 표시 순서입니다. 키는 이 공급자 안의 정확한 네이티브 모델 id입니다. 예를 들어 `xai/grok-4.6`의 키는 `grok-4.6`입니다. 이름은 표시 전용이며 정확한 라우팅 id나 업스트림 모델 id를 바꾸지 않습니다. `config.json`의 기존 공급자 설정에 이 필드만 추가하고 다른 모든 필드는 유지하세요. `PUT /api/providers/:provider/model-display-names`에 `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }`를 보내 저장하고, `displayName: null`을 보내 해당 이름만 초기화합니다.
 
 프리뷰 GPT-5.6 폴백 항목도 같은 메커니즘을 사용합니다. OpenAI API 키 프리셋은 base와 Pro id에 컨텍스트 `922000`, 최대 입력 `922000`을 채웁니다. OpenRouter는 `openai/gpt-5.6-sol`, `openai/gpt-5.6-terra`, `openai/gpt-5.6-luna`에 컨텍스트 `922000`을 채웁니다. Pool/Direct는 `922000`을 노출하고, 동기화된 카탈로그는 `xhigh`를 구분한 채 `max`를 노출합니다.
 

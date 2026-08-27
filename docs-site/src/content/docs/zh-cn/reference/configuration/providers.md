@@ -68,7 +68,7 @@ selector，而不是分配一个新名称。
 | `models?` | `string[]` | 种子/回退模型列表。配合 `liveModels: false` 时，这些就是唯一发现到的模型。 |
 | `liveModels?` | `boolean` | 启动/同步时获取实时目录（默认 `true`）。自定义提供者使用 `${baseUrl}/models`；内置项可能使用注册表 URL 并进行过滤。 |
 | `selectedModels?` | `string[]` | 发现之后的目录允许列表。非空时只暴露这些 id；为空或省略时则暴露全部发现到的模型。 |
-| `modelDisplayNames?` | `Record<string, string>` | 持久的仅显示名称，以此提供者的精确原生模型 id 为键。键区分大小写。名称优先于提供者目录元数据，并且不会改变身份验证、适配器、路由、计费或上游请求。 |
+| `modelDisplayNames?` | `Record<string, string>` | 持久的仅显示名称，以此提供者的精确原生模型 id 为键。键区分大小写。名称优先于提供者目录元数据，并且不会改变身份验证、适配器、路由、计费或上游请求。该映射最多可包含 2,000 个条目，与发现上限相同。 |
 | `contextWindow?` | `number` | 上游缺少元数据时使用的提供者级上下文数值；有元数据时作为上限，保留更小的实时数值。Models 面板中与 `providerContextCaps` 分开设置。 |
 | `modelContextWindows?` | `Record<string, number>` | 按模型设置的上下文数值与上限。优先于 `contextWindow`：窗口未知时采用所配置的数值，而更小的实时元数据仍然优先。 |
 | `modelInputModalities?` | `Record<string, string[]>` | 按模型设置的输入提示，例如 `["text"]` 或 `["text", "image"]`。 |
@@ -306,7 +306,7 @@ OpenRouter 可以通过多个推理提供者来提供同一个模型。`openRout
 
 当需要继续运行发现，但只有选定 id 应该出现在 Codex 和 `/v1/models` 中时，请使用 `selectedModels`。仪表板会保留完整的已发现列表，以便之后调整允许列表。
 
-请使用 `modelDisplayNames` 设置显示名称。优先顺序是操作者设置的 `modelDisplayNames`、提供者目录元数据，然后是普通的 `provider/model` 显示。键是此提供者内精确的原生模型 id，例如 `xai/grok-4.6` 的键是 `grok-4.6`。名称只改变显示，不会改变精确路由 id 或上游模型 id。向 `PUT /api/providers/:provider/model-display-names` 发送 `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }` 可保存名称，发送 `displayName: null` 只重置该名称。在仪表板的 **Models** 中，使用 **Name** 保存名称，使用 **Reset name** 恢复原值。单独的铅笔按钮编辑路由别名，不会编辑显示名称。
+请使用 `modelDisplayNames` 设置显示名称。优先顺序是操作者设置的 `modelDisplayNames`、提供者目录元数据，然后是普通的 `provider/model` 显示。键是此提供者内精确的原生模型 id，例如 `xai/grok-4.6` 的键是 `grok-4.6`。名称只改变显示，不会改变精确路由 id 或上游模型 id。请只把此字段加入 `config.json` 中现有的提供者设置，并保留所有其他字段。向 `PUT /api/providers/:provider/model-display-names` 发送 `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }` 可保存名称，发送 `displayName: null` 只重置该名称。
 
 预览版 GPT-5.6 回退条目使用相同机制。OpenAI API key 预设会为基础和 Pro id 设定 `922000` 上下文和 `922000` 最大输入；OpenRouter 会为 `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra` 和 `openai/gpt-5.6-luna` 设定 `922000` 上下文。Pool/Direct 会声明 `922000`；同步后的目录会声明 `max`，同时保留 `xhigh` 的独立性。
 

@@ -81,7 +81,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `models?` | `string[]` | Seed/fallback-список моделей. При `liveModels: false` это и есть единственный список обнаруженных моделей. |
 | `liveModels?` | `boolean` | Получать live-каталог на start/sync (по умолчанию `true`). Custom-провайдеры используют `${baseUrl}/models`; built-in могут использовать registry URL и дополнительно фильтровать результат. |
 | `selectedModels?` | `string[]` | Allowlist каталога после discovery. Непустой список показывает только эти id; пустой или отсутствующий показывает всё, что было обнаружено. |
-| `modelDisplayNames?` | `Record<string, string>` | Постоянные display-only имена с точным нативным id модели этого провайдера в качестве ключа. Ключи чувствительны к регистру. Имена имеют приоритет над metadata каталога провайдера и не меняют аутентификацию, adapter, routing, billing или upstream-запросы. |
+| `modelDisplayNames?` | `Record<string, string>` | Постоянные display-only имена с точным нативным id модели этого провайдера в качестве ключа. Ключи чувствительны к регистру. Имена имеют приоритет над metadata каталога провайдера и не меняют аутентификацию, adapter, routing, billing или upstream-запросы. Карта содержит не более 2 000 записей, как и discovery. |
 | `contextWindow?` | `number` | Значение контекста для всего провайдера, применяемое когда upstream не отдаёт metadata; при наличии metadata работает как cap и сохраняет более маленькое live-значение. Панель Models настраивает его отдельно от `providerContextCaps`. |
 | `modelContextWindows?` | `Record<string, number>` | Значения и cap'ы контекста по отдельным моделям. Перекрывают `contextWindow`: если окно неизвестно, берётся заданное значение, а более маленькая live-metadata остаётся авторитетной. |
 | `modelInputModalities?` | `Record<string, string[]>` | Подсказки modality по модели, например `["text"]` или `["text", "image"]`. |
@@ -388,12 +388,11 @@ malformed-результаты откатываются к stale/configured fall
 Используйте `modelDisplayNames` для отображаемых имён. Порядок приоритета: заданное оператором
 `modelDisplayNames`, metadata каталога провайдера, затем обычная подпись `provider/model`. Ключом
 служит точный нативный id модели внутри этого провайдера: для `xai/grok-4.6` это `grok-4.6`.
-Имя влияет только на отображение и не меняет точный routing id или upstream model id. Отправьте
+Имя влияет только на отображение и не меняет точный routing id или upstream model id. Добавляйте
+это поле в существующую запись провайдера в `config.json`, сохраняя все остальные поля. Отправьте
 `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }` в
 `PUT /api/providers/:provider/model-display-names`, чтобы сохранить имя, или `displayName: null`,
-чтобы сбросить только это имя. В разделе **Models** дашборда действие **Name** сохраняет имя,
-а **Reset name** возвращает исходное значение. Отдельная кнопка с карандашом меняет routing alias,
-но не отображаемое имя.
+чтобы сбросить только это имя.
 
 Preview fallback-записи GPT-5.6 используют тот же механизм. Preset OpenAI API-key заранее засевает
 base- и Pro-id с context `922000` и max input `922000`; OpenRouter заранее засевает

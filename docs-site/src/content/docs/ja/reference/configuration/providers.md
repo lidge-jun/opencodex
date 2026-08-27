@@ -68,7 +68,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `models?` | `string[]` |シード/フォールバック モデルのリスト。 `liveModels: false` では、発見されたモデルはこれらのみです。 |
 | `liveModels?` | `boolean` |開始/同期時にライブ カタログをフェッチします (デフォルトは `true`)。カスタムプロバイダーは `${baseUrl}/models` を使用します。組み込みはレジストリ URL とフィルターを使用する場合があります。 |
 | `selectedModels?` | `string[]` |検出後のカタログ許可リスト。空でない場合は、それらの ID のみが公開されます。空または省略すると、検出されたすべてのモデルが公開されます。 |
-| `modelDisplayNames?` | `Record<string, string>` | このプロバイダーの正確なネイティブモデル ID をキーにした、永続的な表示専用ラベルです。大文字と小文字は区別されます。ラベルはプロバイダーカタログのメタデータより優先され、認証、アダプター、ルーティング、課金、上流リクエストには影響しません。 |
+| `modelDisplayNames?` | `Record<string, string>` | このプロバイダーの正確なネイティブモデル ID をキーにした、永続的な表示専用ラベルです。大文字と小文字は区別されます。ラベルはプロバイダーカタログのメタデータより優先され、認証、アダプター、ルーティング、課金、上流リクエストには影響しません。マップは検出上限と同じ 2,000 件までです。 |
 | `contextWindow?` | `number` | アップストリームのメタデータが無い場合に使うプロバイダー全体のコンテキスト値。メタデータがある場合は上限として働き、より小さいライブ値をそのまま残します。Models ダッシュボードでは `providerContextCaps` とは別に設定します。 |
 | `modelContextWindows?` | `Record<string, number>` | モデルごとのコンテキスト値および上限。`contextWindow` より優先され、ウィンドウが不明なら設定値を使い、より小さいライブメタデータがあればそちらが優先されます。 |
 | `modelInputModalities?` | `Record<string, string[]>` | `["text"]` や `["text", "image"]` などのモデルごとの入力ヒント。 |
@@ -303,7 +303,7 @@ OpenRouter は、複数の推論プロバイダーを通じて 1 つのモデル
 
 検出を実行する必要があるが、選択した ID のみが Codex および `/v1/models` に表示される必要がある場合は、`selectedModels` を使用します。ダッシュボードには、後で許可リストを変更できるように、検出された完全なリストが保持されます。
 
-表示名には `modelDisplayNames` を使用します。優先順位は、運用者が設定した `modelDisplayNames`、プロバイダーカタログのメタデータ、通常の `provider/model` 表示の順です。キーはこのプロバイダー内の正確なネイティブモデル ID です。例えば `xai/grok-4.6` のキーは `grok-4.6` です。ラベルは表示専用で、正確なルーティング ID や上流モデル ID を変更しません。`PUT /api/providers/:provider/model-display-names` に `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }` を送ると保存され、`displayName: null` を送るとその名前だけがリセットされます。ダッシュボードの **Models** では **Name** で保存し、**Reset name** で元に戻します。別の鉛筆アイコンはルーティングエイリアス用で、表示名は編集しません。
+表示名には `modelDisplayNames` を使用します。優先順位は、運用者が設定した `modelDisplayNames`、プロバイダーカタログのメタデータ、通常の `provider/model` 表示の順です。キーはこのプロバイダー内の正確なネイティブモデル ID です。例えば `xai/grok-4.6` のキーは `grok-4.6` です。ラベルは表示専用で、正確なルーティング ID や上流モデル ID を変更しません。`config.json` の既存プロバイダー設定にこのフィールドだけを追加し、他のすべてのフィールドを残してください。`PUT /api/providers/:provider/model-display-names` に `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }` を送ると保存され、`displayName: null` を送るとその名前だけがリセットされます。
 
 プレビュー GPT-5.6 フォールバック エントリは同じメカニズムを使用します。 OpenAI API キー プリセットは、ベース ID と Pro ID にコンテキスト `922000` と最大入力 `922000` をシードします。 OpenRouter は、コンテキスト `922000` を持つ `openai/gpt-5.6-sol`、`openai/gpt-5.6-terra`、および `openai/gpt-5.6-luna` をシードします。プール/ダイレクトは `922000` をアドバタイズします。同期されたカタログは、`xhigh` を区別しつつ、`max` をアドバタイズします。
 
