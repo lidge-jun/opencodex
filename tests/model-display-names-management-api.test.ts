@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { clearModelCache, getFreshCached, setCached } from "../src/codex/model-cache";
+import type { CatalogDisposition } from "../src/codex/convergence-types";
 import { listManagementModelRows, toExportModel } from "../src/server/management/model-rows";
 import { handleModelRoutes } from "../src/server/management/model-routes";
 import type { OcxConfig } from "../src/types";
@@ -108,7 +109,7 @@ describe("provider model display name mutation route", () => {
       provider?: string;
       rawBody?: string;
       persist?: (saved: OcxConfig) => void;
-      converge?: () => Promise<typeof catalogRefresh>;
+      converge?: () => Promise<CatalogDisposition>;
     } = {},
   ): Promise<{ response: Response | null; persisted: OcxConfig[]; convergeCalls: number }> {
     const provider = options.provider ?? DISPLAY_PROVIDER;
@@ -295,6 +296,35 @@ describe("provider model display name mutation route", () => {
 
     expect(persisted?.providers[DISPLAY_PROVIDER].modelDisplayNames).toEqual({ "model-a": "Alpha" });
     expect(liveConfig.providers[DISPLAY_PROVIDER].modelDisplayNames).toEqual({ "model-a": "Alpha" });
+  });
+
+  test("a failed catalog result reports that the saved label still needs refresh", async () => {
+    const liveConfig = config();
+    const failedRefresh: CatalogDisposition = {
+      status: "failed",
+      reason: "disk",
+      phase: "commit",
+      retryable: true,
+      partialWrite: false,
+      cause: { kind: "io", code: "ENOSPC" },
+    };
+
+    const result = await call(liveConfig, { modelId: "model-a", displayName: "Alpha" }, {
+      converge: async () => failedRefresh,
+    });
+    const payload = await result.response!.json() as Record<string, unknown>;
+
+    expect(result.response?.status).toBe(503);
+    expect(result.persisted).toHaveLength(1);
+    expect(liveConfig.providers[DISPLAY_PROVIDER].modelDisplayNames).toEqual({ "model-a": "Alpha" });
+    expect(payload).toEqual({
+      error: "model display name saved but catalog refresh failed",
+      saved: true,
+      provider: DISPLAY_PROVIDER,
+      modelId: "model-a",
+      displayNameOverride: "Alpha",
+      catalogRefresh: failedRefresh,
+    });
   });
 
   test("sequential updates preserve neighboring labels and prototype shaped model ids", async () => {

@@ -394,13 +394,23 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
     clearModelCache(name);
     const catalogRefresh = await convergeCodexCatalog();
+    const storedDisplayName = provider.modelDisplayNames?.[modelId] ?? null;
+    if (catalogRefresh.status === "failed") {
+      return jsonResponse({
+        error: "model display name saved but catalog refresh failed",
+        saved: true,
+        provider: name,
+        modelId,
+        displayNameOverride: storedDisplayName,
+        catalogRefresh,
+      }, 503, req, config);
+    }
     const row = (await listManagementModelRows(config)).find(candidate => (
       candidate.native !== true
       && candidate.custom !== true
       && candidate.provider === name
       && candidate.id === modelId
     ));
-    const storedDisplayName = provider.modelDisplayNames?.[modelId] ?? null;
     return jsonResponse({
       ok: true,
       provider: name,
