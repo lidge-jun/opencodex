@@ -1221,8 +1221,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: ["grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"],
     // grok-4.5 reasoning is always-on with low/medium/high (no off tier, no xhigh).
     // grok-4.6 adds xhigh per docs.x.ai/developers/model-capabilities/text/reasoning;
-    // xAI documents high as the upstream default.
-    modelReasoningEfforts: { "grok-4.6": ["low", "medium", "high", "xhigh"], "grok-4.5": ["low", "medium", "high"] },
+    // multi-agent accepts the same four wire values to select 4 or 16 collaborators. xAI
+    // documents high as the 4.6 default but no multi-agent default, so do not invent one.
+    modelReasoningEfforts: {
+      "grok-4.6": ["low", "medium", "high", "xhigh"],
+      "grok-4.5": ["low", "medium", "high"],
+      "grok-4.20-multi-agent-0309": ["low", "medium", "high", "xhigh"],
+    },
     modelDefaultReasoningEfforts: { "grok-4.6": "high" },
     modelContextWindows: {
       "grok-4.6": 500_000,

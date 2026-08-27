@@ -240,6 +240,45 @@ describe("DeepSeek Responses endpoint contract", () => {
     expect(nativeBody.tools).toEqual(rawBody.tools);
   });
 
+  test("xAI multi-agent clamps synthetic max and ultra efforts to its real Responses ladder", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "xai-test-key",
+        },
+      },
+    };
+    const route = routeModel(config, "xai/grok-4.20-multi-agent-0309");
+    const responsesProvider = resolveWireProtocolOverride(
+      "xai",
+      route.modelId,
+      route.provider,
+      "responses",
+    );
+
+    expect(responsesProvider.adapter).toBe("openai-responses");
+    for (const requested of ["max", "ultra"] as const) {
+      const body = JSON.parse(createResponsesPassthroughAdapter(responsesProvider).buildRequest({
+        modelId: route.modelId,
+        context: { messages: [] },
+        stream: true,
+        options: { reasoning: requested },
+        _rawBody: {
+          model: route.modelId,
+          input: "ping",
+          reasoning: { effort: requested },
+        },
+      }, { headers: new Headers() }).body) as { reasoning?: { effort?: string } };
+
+      expect(body.reasoning?.effort).toBe("xhigh");
+    }
+  });
+
   test("a config saved before the fix is backfilled, and a hand-set path is preserved", () => {
     const saved = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test" } as Parameters<typeof enrichProviderFromRegistry>[1];
     enrichProviderFromRegistry("deepseek", saved);

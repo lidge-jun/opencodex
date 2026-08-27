@@ -14,7 +14,7 @@ import {
   isOpenAiOperatedResponsesDestination,
 } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
-import { modelRecordValue } from "../reasoning-effort";
+import { configuredReasoningEfforts, mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
 import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
@@ -547,6 +547,27 @@ function stripSparkCompatibility(body: unknown): unknown {
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Apply the routed provider's real effort ladder to an existing Responses reasoning field.
+ * Native forward requests keep the server-owned native clamp; unknown third-party ladders stay
+ * byte-equivalent instead of acquiring a policy from this adapter.
+ */
+function mapRoutedResponsesReasoningEffort(
+  body: unknown,
+  provider: OcxProviderConfig,
+  modelId: string,
+): unknown {
+  if (provider.authMode === "forward") return body;
+  if (configuredReasoningEfforts(provider, modelId) === undefined) return body;
+  if (!isPlainObject(body) || !isPlainObject(body.reasoning)) return body;
+  const requested = body.reasoning.effort;
+  if (typeof requested !== "string") return body;
+
+  const mapped = mapReasoningEffort(provider, modelId, requested);
+  if (!mapped || mapped === requested) return body;
+  return { ...body, reasoning: { ...body.reasoning, effort: mapped } };
 }
 
 function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
@@ -1998,6 +2019,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed._rawBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
+      outBody = mapRoutedResponsesReasoningEffort(outBody, provider, parsed.modelId);
       // stripPreviousResponseId() intentionally returns its input on a no-op. Detach before the
       // tier write so a force-fast/default decision can never mutate parsed._rawBody.
       outBody = applyTierDecisionToResponsesBody(outBody, parsed.options?.tierDecision);
