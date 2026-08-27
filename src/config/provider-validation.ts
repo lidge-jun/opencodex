@@ -142,6 +142,7 @@ export function modelDisplayNamesConfigError(
     return `${field} must be a plain object with own properties`;
   }
   const entries = Object.entries(value);
+  // One discovered model can own one label, so both maps share the same safe cap.
   if (entries.length > MODEL_DISCOVERY_MAX_MODELS) {
     return `${field} must contain at most ${MODEL_DISCOVERY_MAX_MODELS} entries`;
   }

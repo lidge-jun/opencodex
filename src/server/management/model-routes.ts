@@ -101,6 +101,7 @@ import { providerCodexAccountMode } from "../../providers/registry";
 import { encodedModelIdCollides, routedSlug, slugEquals } from "../../providers/slug-codec";
 import { knownModelIdsForProvider } from "../../router";
 import { effectiveModelAliases, MODEL_ALIAS_PATTERN } from "../../providers/default-aliases";
+import { isValidModelDiscoveryModelId } from "../../providers/model-discovery-limits";
 import { comboPublicModelId } from "../../combos/types";
 import { COMBO_NAMESPACE, comboDisabledModelSelectors, comboModelId, preservesPhysicalComboProvider } from "../../combos";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
@@ -366,9 +367,12 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
     const modelId = body.modelId.trim();
     const displayName = typeof body.displayName === "string" ? body.displayName.trim() : null;
-    const validationError = modelDisplayNamesConfigError({
-      [modelId]: displayName ?? "Reset",
-    });
+    if (!isValidModelDiscoveryModelId(modelId)) {
+      return jsonResponse({ error: "modelId must be a valid model id" }, 400, req, config);
+    }
+    const validationError = displayName === null
+      ? null
+      : modelDisplayNamesConfigError({ [modelId]: displayName });
     if (validationError) return jsonResponse({ error: validationError }, 400, req, config);
 
     const provider = config.providers[name]!;

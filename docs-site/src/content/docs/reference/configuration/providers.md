@@ -161,6 +161,7 @@ behavior, routing, billing, or upstream request construction. Removing a map ent
 label. A management client can set or reset one label with
 `PUT /api/providers/:provider/model-display-names` and a body of
 `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }`; send `displayName: null` to reset it.
+Provider `PATCH` does not edit this map. Use this dedicated `PUT` endpoint to change or remove labels.
 
 ## Codex catalog and root `config.toml` settings
 

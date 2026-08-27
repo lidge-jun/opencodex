@@ -240,6 +240,7 @@ describe("provider model display name mutation route", () => {
       { body: {}, rawBody: "{" },
       { body: {} },
       { body: { modelId: "", displayName: "Name" } },
+      { body: { modelId: "", displayName: null } },
       { body: { modelId: "model-a", displayName: "   " } },
       { body: { modelId: "model-a", displayName: "Bad/Name" } },
       { body: { modelId: "model-a", displayName: "Bad\nName" } },
