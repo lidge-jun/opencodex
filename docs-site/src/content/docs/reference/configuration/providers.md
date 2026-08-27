@@ -82,7 +82,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `models?` | `string[]` | Seed/fallback model list. With `liveModels: false`, these are the only discovered models. |
 | `liveModels?` | `boolean` | Fetch the live catalog on start/sync (default `true`). Custom providers use `${baseUrl}/models`; built-ins may use a registry URL and filter. |
 | `selectedModels?` | `string[]` | Catalog allowlist after discovery. Non-empty exposes only those ids; empty or omitted exposes all discovered models. |
-| `modelDisplayNames?` | `Record<string, string>` | Durable display only labels keyed by this provider's exact upstream model id. Labels win over provider catalog metadata, survive discovery refreshes and provider edits, and never change the routed `provider/model` selector or upstream wire model. Keys are exact and case sensitive. Unknown model ids are kept so a temporarily missing model receives its label when it returns. |
+| `modelDisplayNames?` | `Record<string, string>` | Durable display only labels keyed by this provider's exact upstream model id. Labels win over provider catalog metadata, survive discovery refreshes and provider edits, and never change authentication, adapter behavior, routing, billing, upstream request construction, the routed `provider/model` selector, or the upstream wire model. Keys are exact and case sensitive. Unknown model ids are kept so a temporarily missing model receives its label when it returns. |
 | `contextWindow?` | `number` | Provider-wide context fallback when upstream metadata is absent; otherwise a cap that retains smaller live metadata. The Models dashboard exposes this separately from `providerContextCaps`. |
 | `modelContextWindows?` | `Record<string, number>` | Per-model context fallbacks/caps. These override `contextWindow`: an unknown window uses the configured value, while smaller live metadata remains authoritative. |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model input hints such as `["text"]` or `["text", "image"]`. |
@@ -144,6 +144,8 @@ label under another provider:
 {
   "providers": {
     "xai": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://api.x.ai/v1",
       "modelDisplayNames": {
         "grok-4.6": "Grok 4.6"
       }
@@ -153,8 +155,10 @@ label under another provider:
 ```
 
 The effective label order is operator `modelDisplayNames`, then provider catalog metadata, then the
-normal `provider/model` fallback. The model id remains `xai/grok-4.6` in routing and on the wire.
-Removing a map entry resets only its label. A management client can set or reset one label with
+normal `provider/model` fallback. The routed selector remains `xai/grok-4.6`, while the upstream
+wire model remains `grok-4.6`. Labels are display only. They do not change authentication, adapter
+behavior, routing, billing, or upstream request construction. Removing a map entry resets only its
+label. A management client can set or reset one label with
 `PUT /api/providers/:provider/model-display-names` and a body of
 `{ "modelId": "grok-4.6", "displayName": "Grok 4.6" }`; send `displayName: null` to reset it.
 
