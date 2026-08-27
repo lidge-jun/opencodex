@@ -534,6 +534,79 @@ describe("claude outbound SSE", () => {
     });
   });
 
+  // Internal response.failed envelopes carry the classified {type, code, message} but no
+  // numeric status (adapterFailureFromEvent drops httpStatus at the wire boundary). The
+  // classified status must be derived the same way /api/logs derives it, or every classified
+  // failure is masked as retryable overloaded_error — a Cursor plan/quota 429 surfaced in
+  // Claude Code as "Repeated 529 Overloaded errors".
+  test("failed with classified rate_limit_error but NO numeric status -> rate_limit_error, not overloaded", async () => {
+    const upstream = [
+      sse("response.created", { response: {} }),
+      sse("response.failed", {
+        response: {
+          status: "failed",
+          error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: "Cursor rate limit exceeded: quota exhausted" },
+        },
+      }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.at(-1)!.data).toEqual({
+      type: "error",
+      error: { type: "rate_limit_error", message: "Cursor rate limit exceeded: quota exhausted" },
+    });
+  });
+
+  test("failed with classified authentication_error but NO numeric status -> authentication_error, not overloaded", async () => {
+    const upstream = [
+      sse("response.created", { response: {} }),
+      sse("response.failed", {
+        response: {
+          status: "failed",
+          error: { type: "authentication_error", code: "invalid_api_key", message: "Cursor authentication failed: expired token" },
+        },
+      }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.at(-1)!.data).toEqual({
+      type: "error",
+      error: { type: "authentication_error", message: "Cursor authentication failed: expired token" },
+    });
+  });
+
+  test("failed with classified invalid_request_error but NO numeric status -> invalid_request_error, not overloaded", async () => {
+    const upstream = [
+      sse("response.created", { response: {} }),
+      sse("response.failed", {
+        response: {
+          status: "failed",
+          error: { type: "invalid_request_error", code: "context_length_exceeded", message: "Cursor context limit exceeded" },
+        },
+      }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.at(-1)!.data).toEqual({
+      type: "error",
+      error: { type: "invalid_request_error", message: "Cursor context limit exceeded" },
+    });
+  });
+
+  test("failed with classified server overload but NO numeric status -> still overloaded_error", async () => {
+    const upstream = [
+      sse("response.created", { response: {} }),
+      sse("response.failed", {
+        response: {
+          status: "failed",
+          error: { type: "server_error", code: "server_is_overloaded", message: "Cursor server overloaded: unavailable" },
+        },
+      }),
+    ].join("");
+    const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
+    expect(events.at(-1)!.data).toEqual({
+      type: "error",
+      error: { type: "overloaded_error", message: "Cursor server overloaded: unavailable" },
+    });
+  });
+
   test("internal reader exception stays api_error (not promoted to overloaded)", async () => {
     const boom = new ReadableStream<Uint8Array>({
       start(controller) {

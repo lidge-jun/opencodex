@@ -11,6 +11,7 @@
  *  - errors: {type:"error", error:{type,message}}; may arrive mid-stream after HTTP 200.
  */
 import { createHash } from "node:crypto";
+import { httpStatusFromTerminalError } from "../lib/errors";
 import { isTransientUpstreamStatus } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
@@ -555,9 +556,19 @@ export function responsesSseToAnthropicSse(
             }
             const status = code === "translation_buffer_limit"
               ? 413
-              : typeof error.status === "number" ? error.status : 500;
-            // status-absent response.failed (relaySseWithFailedTail synthetic tail) defaults
-            // to 500, which is in the transient set — the mid-stream reset shape maps to
+              : typeof error.status === "number"
+                ? error.status
+                // Internal response.failed envelopes carry the classified {type, code, message}
+                // but no numeric status. Derive it with the same mapping /api/logs uses so a
+                // classified 429/401/400 reaches Claude Code as its real Anthropic error type
+                // instead of being masked as retryable overload.
+                : httpStatusFromTerminalError({
+                  type: typeof error.type === "string" ? error.type : undefined,
+                  code: typeof error.code === "string" ? error.code : null,
+                  message,
+                });
+            // Unclassified status-absent response.failed (relaySseWithFailedTail synthetic
+            // tail) still lands on a transient 5xx here — the mid-stream reset shape maps to
             // overloaded_error by design.
             fail(
               status,
