@@ -245,6 +245,12 @@ function prepareCatalog(
   // #2201: resolve operator display labels before ordering. Display-only — the
   // routed slug, provider id and native model id are all unchanged, so ordering,
   // featuring and spawn-candidate derivation below see the same identities.
+  //
+  // One of the two post-gather label boundaries; the other is `fetchAllModels`,
+  // which covers every server surface. This path needs its own because it reaches
+  // the gather through `gatherRoutedModelsForCatalogGather`, which never passes
+  // through `fetchAllModels`. See applyOperatorDisplayLabels for why both sit
+  // after the gather rather than inside it.
   const labeled = applyOperatorDisplayLabels(enabled, config);
   const ordered = orderForSubagents(labeled, featured);
   const modelPickerOrder = config.modelPickerOrder ?? [];

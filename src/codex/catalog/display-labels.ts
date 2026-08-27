@@ -89,7 +89,28 @@ export function resolveModelDisplayLabel(
 }
 
 /**
- * Resolve labels across a discovered model list.
+ * Resolve labels across a discovered model list — the post-gather boundary.
+ *
+ * Called at exactly two places, one per gather entry point, so every surface that
+ * reads live routed models is covered:
+ *
+ *   - `fetchAllModels` (src/server/management/shared.ts) — `/v1/models`,
+ *     `/api/models` via `listManagementModelRows`, and client exports via
+ *     `loadExportModels` all funnel through it;
+ *   - `prepareCatalog` (src/codex/convergence.ts) — reaches the gather by the
+ *     separate catalog-gather entry point, which never passes through the above.
+ *
+ * Anything reading models *without* going through one of those two is a surface
+ * that will emit the routed slug as its label. That is not hypothetical: labelling
+ * only the convergence call site is what left the live `/v1/models` route wrong
+ * while the on-disk catalog was right.
+ *
+ * Both calls sit after the gather rather than inside it, because the gather is
+ * TTL-cached on provider identity and a label baked into a cached entry would
+ * outlive an operator's edit to it.
+ *
+ * Idempotent, so the two boundaries overlapping is harmless: `resolveModelDisplayLabel`
+ * reads the config and the row's own kind, never a previously applied result.
  *
  * Returns the input array unchanged when nothing resolves, and otherwise a new
  * array of new objects — the input models are never mutated, so a caller holding

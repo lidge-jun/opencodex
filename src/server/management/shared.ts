@@ -175,10 +175,25 @@ export function requestLogDto(entry: RequestLogEntry): Record<string, unknown> {
  * canonical, TTL-cached `gatherRoutedModels` (single source of truth) — so the GUI/codex endpoints
  * share the same fetch, the same per-provider cache (dedups Codex's frequent /v1/models polling),
  * and the same stale fallback when a provider blips, instead of a parallel uncached copy.
+ *
+ * This is also the post-gather display-label boundary for every server surface (#2201).
+ * Every consumer that reads live routed models goes through here — `/v1/models` in
+ * src/server/index.ts, `/api/models` via `listManagementModelRows`, and client exports
+ * via `loadExportModels` — so applying labels at this one point covers all of them and
+ * cannot be forgotten by a fourth caller added later. Labelling each call site instead
+ * is what left `/v1/models` emitting the routed slug as `display_name` while the
+ * convergence path was already correct.
+ *
+ * Deliberately applied *after* the gather rather than inside it: `gatherRoutedModels` is
+ * TTL-cached on a key derived from provider identity, so a label baked into a cached
+ * entry would outlive an operator's edit to it. Display-only and idempotent, so a caller
+ * that labels again (convergence does, reaching the gather by a different entry point)
+ * gets the same result.
  */
 export async function fetchAllModels(config: OcxConfig): Promise<CatalogModel[]> {
   const { gatherRoutedModels } = await import("../../codex/catalog");
-  return gatherRoutedModels(config);
+  const { applyOperatorDisplayLabels } = await import("../../codex/catalog/display-labels");
+  return applyOperatorDisplayLabels(await gatherRoutedModels(config), config);
 }
 
 export interface GrokCandidateModel {
