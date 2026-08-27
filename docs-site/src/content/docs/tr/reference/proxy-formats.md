@@ -145,9 +145,10 @@ yanıt kimliği ve çıktı içermeyen sentetik bir `response.created` ve ardın
 `response.completed` döndürür.
 
 :::note
-WebSockets devre dışı bırakıldığında bir yükseltme denemesi `upgrade_required`
-koduyla HTTP 426 alır. Codex bu el sıkışma sonucunu oturum için HTTP'ye geri
-dönme sinyali olarak değerlendirir. Başarısız bir model turu değildir.
+WebSocket bildirimi kapalıyken yönlendirilmiş katalog satırları yetenek bayrağını içermez. Ancak
+`openai_base_url` değiştirildikten sonra yerleşik OpenAI sağlayıcısı yine de yükseltme deneyebilir;
+bu nedenle proxy her iki modda da geçerli yükseltmeleri kabul eder. HTTP 426 yalnızca yükseltme
+tamamlanamadığında kullanılır.
 :::
 
 ## `POST /v1/chat/completions`
@@ -307,7 +308,7 @@ anlamları kararlıdır:
 | 403 | `origin_rejected` | Bir Responses/OpenAI veri düzlemi isteği veya WebSocket yükseltmesi izin verilmeyen bir kaynaktan geldi |
 | 503 | `combo_unavailable` | Seçilen komdodaki her hedef kullanılamaz, soğumada, devre dışı veya başka şekilde uygun değil |
 | 400 | `unreadable_encrypted_agent_task` | Şifrelenmiş bir v2 çalışan görevinin onu tüketebilecek uygun yerel bir ChatGPT hedefi yok |
-| 426 | `upgrade_required` | Responses WebSocket aktarımı devre dışı bırakıldı veya yükseltme başarısız oldu; HTTP kullanın |
+| 426 | `upgrade_required` | Responses WebSocket yükseltmesi tamamlanamadı; HTTP kullanın |
 
 Anthropic kaynaklı arızalar Anthropic'in hata zarfında işlenir, bu nedenle
 kaynak reddi OpenAI tarzı `origin_rejected` gövdesi yerine bu lehçede 403
@@ -329,5 +330,4 @@ okuyamazsa opencodex bu sağlayıcıya okunamayan baytlar göndermek yerine
 `unreadable_encrypted_agent_task` ile başarısız olur. Çalışan görevleri
 etrafındaki istemci davranışı için [Alt Ajan
 Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
-
 

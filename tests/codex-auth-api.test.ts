@@ -71,6 +71,7 @@ import {
   resolveFirstUsableOpenAiSidecar,
 } from "../src/providers/openai-sidecar";
 import { BOUNDED_BODY_MAX_BYTES } from "../src/lib/bounded-body";
+import { observeSuccessfulCodexManagedMainRequest } from "../src/codex/main-account-observation";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -217,10 +218,11 @@ async function completeMockCodexOAuth(options: {
   }
 }
 
-function chatgptPlanJwt(plan: string, accountId = "acct"): string {
+function chatgptPlanJwt(plan: string, accountId = "acct", email?: string): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
   const body = Buffer.from(JSON.stringify({
     chatgpt_account_id: accountId,
+    ...(email ? { email } : {}),
     "https://api.openai.com/auth": { chatgpt_account_id: accountId, chatgpt_plan_type: plan },
   })).toString("base64url");
   return `${header}.${body}.sig`;
@@ -741,10 +743,50 @@ describe("codex-auth API", () => {
     expect(resp).not.toBeNull();
     const data = await resp!.json() as { accounts: unknown[] };
     expect(Array.isArray(data.accounts)).toBe(true);
-    const main = (data.accounts as { isMain: boolean; hasCredential: boolean; needsReauth?: boolean }[]).find(a => a.isMain);
+    const main = (data.accounts as {
+      isMain: boolean;
+      hasCredential: boolean;
+      needsReauth?: boolean;
+      authStatus?: string;
+    }[]).find(a => a.isMain);
     expect(main).toBeTruthy();
     expect(main?.hasCredential).toBe(false);
-    expect(main?.needsReauth).toBe(true);
+    expect(main?.needsReauth).toBe(false);
+    expect(main?.authStatus).toBe("unavailable");
+  });
+
+  test("main account projects auth proven by a successful Codex-managed request", async () => {
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 99);
+    const token = chatgptPlanJwt("pro", "managed-account", "managed@example.test");
+    expect(observeSuccessfulCodexManagedMainRequest(new Headers({
+      authorization: `Bearer ${token}`,
+    }))).toBe(true);
+    // The first request-scoped identity must discard any quota left by an earlier file login.
+    // Core applies the current response's quota headers immediately after this observation.
+    expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
+    const accounts = await listCodexAuthAccounts(makeConfig());
+    const main = accounts.find(account => account.id === MAIN_CODEX_ACCOUNT_ID);
+    expect(main).toMatchObject({
+      plan: "pro",
+      hasCredential: true,
+      needsReauth: false,
+      authStatus: "authenticated",
+      credentialSource: "codex-managed",
+    });
+    expect(main?.email).not.toContain("managed@example.test");
+  });
+
+  test("missing keyring visibility stays unavailable instead of becoming reauthentication", async () => {
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 73);
+    const unavailable = await listCodexAuthAccounts(makeConfig(), true);
+    expect(unavailable.find(account => account.id === MAIN_CODEX_ACCOUNT_ID)).toMatchObject({
+      hasCredential: false,
+      needsReauth: false,
+      authStatus: "unavailable",
+      quota: null,
+    });
   });
 
   test("main account 401 with an undecodable-exp token is terminal and marks needsReauth (#327, #1932)", async () => {

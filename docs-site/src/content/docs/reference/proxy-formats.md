@@ -164,9 +164,10 @@ A warmup frame with `generate: false` does not call an upstream. It returns a sy
 `response.created` followed by `response.completed`, both with an empty response id and no output.
 
 :::note
-When WebSockets are disabled, an upgrade attempt receives HTTP 426 with code
-`upgrade_required`. Codex treats that handshake result as a signal to fall back to HTTP for the
-session. It is not a failed model turn.
+When WebSocket advertisement is disabled, routed catalog rows omit the capability flag. The
+built-in OpenAI provider can still attempt an upgrade after `openai_base_url` is overridden, so the
+proxy accepts valid upgrades in either mode. HTTP 426 is reserved for an upgrade that cannot be
+completed.
 :::
 
 ## `POST /v1/chat/completions`
@@ -316,7 +317,7 @@ Errors use the client dialect's envelope where needed, but these status/code mea
 | 403 | `origin_rejected` | A Responses/OpenAI data-plane request or WebSocket upgrade came from a disallowed origin |
 | 503 | `combo_unavailable` | Every target in the selected combo is unavailable, in cooldown, disabled, or otherwise ineligible |
 | 400 | `unreadable_encrypted_agent_task` | An encrypted v2 worker task has no eligible native ChatGPT target that can consume it |
-| 426 | `upgrade_required` | The Responses WebSocket transport is disabled or the upgrade failed; use HTTP |
+| 426 | `upgrade_required` | A Responses WebSocket upgrade could not be completed; use HTTP |
 
 Anthropic-origin failures are rendered in Anthropic's error envelope, so the origin rejection is a
 403 `permission_error` on that dialect rather than the OpenAI-style `origin_rejected` body.

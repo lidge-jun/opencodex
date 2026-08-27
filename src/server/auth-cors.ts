@@ -29,6 +29,7 @@ import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { modelAutoCompactTokenLimitsConfigError } from "../providers/auto-compact-budget";
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
 import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
+import { extractAccountId } from "../oauth/chatgpt";
 
 let _corsOrigin = "http://localhost:10100";
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
@@ -429,6 +430,23 @@ export class ForwardAdmissionCredentialError extends Error {
 export function validateForwardAdmissionCredential(headers: Headers, config: OcxConfig): void {
   const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (bearer && isProxyAdmissionSecret(bearer, config)) throw new ForwardAdmissionCredentialError();
+}
+
+/**
+ * Whether Authorization carries a caller-owned bearer that may leave the process.
+ *
+ * This is intentionally stricter than "a bearer exists": Pool can use a native Codex request's
+ * keyring-managed token, but an OpenCodex data/admin/session credential must still be substituted
+ * or rejected and can never become a request-scoped main credential.
+ */
+export function hasForwardableCodexBearer(headers: Headers, config: OcxConfig): boolean {
+  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  // Codex versions differ on whether ChatGPT-Account-Id accompanies the first request after a
+  // keyring login. The access-token claim can supply it at materialization time; requiring both
+  // headers here made OpenCodex silently fall back to a stale auth.json credential.
+  const accountId = headers.get("chatgpt-account-id")?.trim()
+    || (bearer ? extractAccountId(undefined, bearer) : undefined);
+  return !!bearer && !!accountId && !isProxyAdmissionSecret(bearer, config);
 }
 
 /**

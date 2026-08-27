@@ -205,7 +205,10 @@ test("startup and CLI sync-cache cannot write models_cache while another process
     const startupStart = startup.indexOf("const startupCodexHome");
     const startupRoot = startup.slice(startupStart, startup.indexOf("armClaudeCodeBaseline", startupStart));
     expect(startupRoot).toContain("withCatalogWriteSerialization(startupCodexHome");
+    expect(startupRoot).toContain("seedMainCodexModelEntitlementsFromNativeCache");
     expect(startupRoot).toContain("invalidateCodexModelsCacheWithPermit");
+    expect(startupRoot.indexOf("seedMainCodexModelEntitlementsFromNativeCache"))
+      .toBeLessThan(startupRoot.indexOf("invalidateCodexModelsCacheWithPermit"));
   } finally {
     holder.release();
     expect(await holder.child.exited).toBe(0);

@@ -160,7 +160,7 @@ home，而 ChatGPT/Codex App 仍讀取 `%USERPROFILE%\\.codex`。`ocx status` �
 在專用 provider 模式下，`requires_openai_auth = true` 會讓 Codex App/TUI 的帳號門控介面與原生
 Codex 保持一致。opencodex 也透過 WebSocket 提供 `/v1/responses`。專用 provider 只會在
 `"websockets": true` 時宣告 `supports_websockets = true`；loopback 模式下，Codex 的內建 provider
-可能先嘗試 WebSocket，若 proxy 未啟用此功能則回傳 `426`，讓 Codex fallback 到 HTTP/SSE。
+可能不考慮此宣告而嘗試 WebSocket，因此 proxy 在兩種模式下都會接受有效的 upgrade。
 
 ## Thread identity 與歷史記錄
 

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
+import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { isThirtyDayOnlyCodexPlan } from "./plan";
 
 export type StoredAccountQuota = {
@@ -38,7 +39,7 @@ export type StoredAccountQuota = {
 
 /** Disk snapshot under OPENCODEX_HOME — usage percents only (no emails/tokens). */
 const QUOTA_CACHE_FILENAME = "codex-quota-cache.json";
-/** Keep last-known bars across restarts; WHAM still refreshes on TTL in live/prime paths. */
+/** Keep pool-account bars across restarts; the unidentifiable keyring main stays process-local. */
 const QUOTA_DISK_MAX_AGE_MS = 6 * 60 * 60_000;
 const QUOTA_PERSIST_DEBOUNCE_MS = 250;
 
@@ -63,6 +64,19 @@ export type WhamUsageResponse = {
     available_count: number;
   } | null;
   additional_rate_limits?: WhamAdditionalRateLimit[] | null;
+};
+
+/**
+ * WebSocket-only quota update emitted by the canonical ChatGPT Codex backend.
+ *
+ * Keep this wire shape local to the quota parser. In particular, the full event may
+ * acquire account-identifying fields over time; callers pass it as `unknown`, and only
+ * the bounded numeric quota fields below are retained.
+ */
+type CodexRateLimitEventWindow = {
+  used_percent?: unknown;
+  window_minutes?: unknown;
+  reset_at?: unknown;
 };
 
 type WhamAdditionalRateLimit = {
@@ -417,6 +431,98 @@ export function applyAccountQuotaFromUpstreamHeaders(
   setAccountQuotaFromParsed(accountId, quota, writerGeneration);
 }
 
+function rateLimitEventRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function rateLimitEventWindow(value: unknown): WhamUsageWindow | null {
+  const record = rateLimitEventRecord(value);
+  if (!record) return null;
+  const row = record as CodexRateLimitEventWindow;
+  const usedPercent = normalizeUsagePercent(row.used_percent);
+  if (usedPercent === undefined) return null;
+  const resetAt = normalizeResetAt(row.reset_at);
+  const windowMinutes = windowMinutes_(row.window_minutes);
+  return {
+    used_percent: usedPercent,
+    ...(resetAt !== undefined ? { reset_at: resetAt } : {}),
+    ...(windowMinutes !== undefined && windowMinutes > 0
+      ? { limit_window_seconds: Math.round(windowMinutes * 60) }
+      : {}),
+  };
+}
+
+/**
+ * Parse the official `codex.rate_limits` WebSocket event into the same quota shape used by
+ * WHAM and response headers. Unknown event kinds and unknown metered buckets fail closed.
+ *
+ * The canonical `codex` bucket supplies the account's ordinary burst/weekly/monthly windows.
+ * Bengalfox is the separately metered Spark bucket and must never overwrite those windows.
+ */
+export function parseCodexRateLimitEventQuota(
+  value: unknown,
+): Omit<StoredAccountQuota, "updatedAt"> | null {
+  const event = rateLimitEventRecord(value);
+  if (!event || event.type !== "codex.rate_limits") return null;
+  const details = rateLimitEventRecord(event.rate_limits);
+  if (!details) return null;
+  const primary = rateLimitEventWindow(details.primary);
+  const secondary = rateLimitEventWindow(details.secondary);
+  if (!primary && !secondary) return null;
+
+  const rawLimitId = typeof event.metered_limit_name === "string"
+    ? event.metered_limit_name
+    : typeof event.limit_name === "string"
+      ? event.limit_name
+      : "codex";
+  const limitId = rawLimitId.trim().toLowerCase().replace(/-/g, "_") || "codex";
+  const planType = typeof event.plan_type === "string" ? event.plan_type : undefined;
+  const rateLimit = {
+    ...(primary ? { primary_window: primary } : {}),
+    ...(secondary ? { secondary_window: secondary } : {}),
+  };
+
+  if (limitId === "codex") {
+    return parseUsageQuota({
+      ...(planType ? { plan_type: planType } : {}),
+      rate_limit: rateLimit,
+    });
+  }
+  if (limitId === "codex_bengalfox") {
+    return parseUsageQuota({
+      ...(planType ? { plan_type: planType } : {}),
+      rate_limit: {},
+      additional_rate_limits: [{
+        limit_name: "GPT-5.3-Codex-Spark",
+        metered_feature: limitId,
+        rate_limit: rateLimit,
+      }],
+    });
+  }
+  return null;
+}
+
+/** Store only the parsed quota observation; no bearer or raw event field is retained. */
+export function applyAccountQuotaFromRateLimitEvent(
+  accountId: string,
+  event: unknown,
+  writerGeneration = captureConfigGeneration(),
+): void {
+  const quota = parseCodexRateLimitEventQuota(event);
+  if (!quota) return;
+  // Each WebSocket event describes one named metered bucket, not the complete account
+  // snapshot. In particular, the ordinary `codex` event does not repeat the separately
+  // metered Bengalfox/Spark window. Preserve that last observation until its own event or
+  // an authoritative WHAM snapshot replaces it.
+  const existingCustomWindows = accountQuota.get(accountId)?.customWindows;
+  const partialQuota = quota.customWindows === undefined && existingCustomWindows !== undefined
+    ? { ...quota, customWindows: existingCustomWindows }
+    : quota;
+  setAccountQuotaFromParsed(accountId, partialQuota, writerGeneration);
+}
+
 export function updateAccountQuota(
   accountId: string,
   weekly: unknown,
@@ -481,6 +587,10 @@ function hydrateAccountQuotasFromDisk(): void {
     if (!parsed || parsed.version !== 1 || !parsed.quotas || typeof parsed.quotas !== "object") return;
     const now = Date.now();
     for (const [accountId, quota] of Object.entries(parsed.quotas)) {
+      // `__main__` can name a different OS-keyring account after restart. Without persisting an
+      // account identifier (which this cache intentionally does not), its old quota cannot safely
+      // be displayed or used for routing before the current request proves the identity.
+      if (accountId === MAIN_CODEX_ACCOUNT_ID) continue;
       if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
       if (now - quota.updatedAt > QUOTA_DISK_MAX_AGE_MS) continue;
       if (!accountQuota.has(accountId)) accountQuota.set(accountId, quota);
@@ -497,6 +607,7 @@ function schedulePersistAccountQuotas(): void {
     try {
       const quotas: Record<string, StoredAccountQuota> = {};
       for (const [accountId, quota] of accountQuota.entries()) {
+        if (accountId === MAIN_CODEX_ACCOUNT_ID) continue;
         quotas[accountId] = quota;
       }
       const body: QuotaDiskFile = { version: 1, quotas };

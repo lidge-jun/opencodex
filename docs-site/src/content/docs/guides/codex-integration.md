@@ -12,6 +12,17 @@ plus `openai-apikey/<model>` for the configured API key. Pool includes main plus
 Direct uses only the caller/main bearer. The routes do not fall back to one another. Shipped v1
 configs migrate to marker 2 and preserve `config.json.pre-openai-tiers-v2.bak` for manual restore.
 
+Codex may keep its main ChatGPT login in the operating-system keyring instead of
+`$CODEX_HOME/auth.json`. OpenCodex does not inspect that keyring or launch Codex to infer login
+presence. Before the first successful request through the proxy, the dashboard therefore explains
+that account type and quota are not available yet instead of claiming either authentication or
+sign-out. In Pool mode, a native Codex request uses the caller-owned bearer already attached to that
+request for the main account. After a successful upstream response, OpenCodex keeps only non-secret
+display metadata and parsed quota values in memory. It can make one bounded, read-only usage lookup
+with that request-scoped bearer to learn fields absent from response headers, such as reset-credit
+count, but it never retains the credential. Reset-credit actions still require a file-backed main
+credential. Other clients still need a file-backed main credential or an added Pool account.
+
 ## Config injection
 
 `ocx init`, `ocx start`, and `ocx sync` call the injector. On the default loopback bind, it keeps
@@ -173,8 +184,8 @@ home, unset `ORCA_CODEX_HOME`, rerun sync/restore, and install the service again
 In dedicated-provider mode, `requires_openai_auth = true` keeps Codex App/TUI account-gated surfaces
 aligned with native Codex. opencodex also serves `/v1/responses` over WebSocket. The dedicated
 provider advertises `supports_websockets = true` only when `"websockets": true`; on loopback Codex's
-built-in provider may try WebSocket first, and a disabled proxy returns `426` so Codex falls back to
-HTTP/SSE.
+built-in provider may try WebSocket regardless of that advertisement, so the proxy accepts a valid
+upgrade in either mode.
 
 ## Thread identity and history
 

@@ -114,10 +114,10 @@ Responses 항목 타입으로 구분됩니다 — 따라서 MCP 네임스페이�
 
 ## 전송과 compaction
 
-`server/index.ts`는 기본적으로 `/v1/responses`를 HTTP/SSE로 제공합니다. `websockets`가 `false`인
-상태에서 Codex가 Responses WebSocket 업그레이드를 시도하면 opencodex는 `426 upgrade_required`를
-반환하고, Codex는 해당 세션에서 HTTP로 폴백합니다. `"websockets": true`가 설정되면 같은
-엔드포인트가 업그레이드를 받아들이고 WebSocket 브리지를 사용합니다.
+`server/index.ts`는 `/v1/responses`에서 HTTP/SSE와 WebSocket 업그레이드를 제공합니다. `websockets`
+설정은 라우팅된 카탈로그 및 provider 행의 기능 광고를 제어합니다. Codex의 내장 OpenAI provider는
+`openai_base_url`이 proxy를 가리키면 업그레이드를 시도할 수 있으므로 광고가 꺼져 있어도 유효한
+업그레이드는 허용됩니다. `426 upgrade_required`는 업그레이드에 실패했을 때만 사용됩니다.
 
 이 클라이언트 설정과 별개로, 루트 `stream: true`인 canonical ChatGPT forward 요청은
 stable Bun 1.4.0 이상에서 Codex 업스트림 WebSocket을 사용할 수 있습니다. 번들 Bun 1.3.14,

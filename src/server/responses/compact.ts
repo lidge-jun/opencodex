@@ -74,10 +74,15 @@ import {
   upstreamHostHealthKey,
   type UpstreamHostAdmissionLease,
 } from "../../codex/upstream-host-health";
-import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
+import {
+  ForwardAdmissionCredentialError,
+  hasForwardableCodexBearer,
+  validateForwardAdmissionCredential,
+} from "../auth-cors";
 import type { DataPlaneAdmission } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
+import { observeSuccessfulCodexManagedMainUsage } from "../../codex/main-account-observation";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -157,14 +162,24 @@ async function resolveAlternateCompactContext(args: {
   route: { provider: OcxProviderConfig; codexAccountMode?: CodexAccountMode };
   selectedModelId: string | undefined;
   excludeAccountId: string | null;
+  requestScopedMainCredential: boolean;
   turnAdmissionLease?: AdmissionLease;
 }): Promise<{ authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers } | null> {
-  const { req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease } = args;
+  const {
+    req,
+    config,
+    route,
+    selectedModelId,
+    excludeAccountId,
+    requestScopedMainCredential,
+    turnAdmissionLease,
+  } = args;
   if (!route.codexAccountMode || !excludeAccountId) return null;
   try {
     const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
       ...(selectedModelId ? { modelId: selectedModelId } : {}),
       excludeAccountId,
+      requestScopedMainCredential,
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
     });
     if (!authCtx.accountId || authCtx.accountId === excludeAccountId) return null;
@@ -326,6 +341,9 @@ export async function handleResponsesCompact(
   // consume that credential. See the longer note in core.ts resolveResponsesCodexAuth.
   const substituteMainCredential = admission?.source === "bearer"
     && route.codexAccountMode !== undefined;
+  const requestScopedMainCredential = route.codexAccountMode !== undefined
+    && !substituteMainCredential
+    && hasForwardableCodexBearer(req.headers, config);
   if (route.codexAccountMode === "direct" && !substituteMainCredential) {
     try { validateForwardAdmissionCredential(req.headers, config); }
     catch (err) {
@@ -372,6 +390,7 @@ export async function handleResponsesCompact(
           accountId: route.codexAccountId,
           modelId: selectedModelId,
           substituteMainCredentialForDirect: substituteMainCredential,
+          requestScopedMainCredential,
           beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
         });
         logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
@@ -568,6 +587,7 @@ export async function handleResponsesCompact(
         route,
         selectedModelId,
         excludeAccountId: authCtx.accountId,
+        requestScopedMainCredential,
         turnAdmissionLease,
       });
       // Resolution can await a credential refresh, so the client may have gone away
@@ -634,6 +654,12 @@ export async function handleResponsesCompact(
       upstream.headers.get("x-codex-secondary-reset-at"),
       upstream.headers.get("x-codex-tertiary-reset-at"),
     ].filter(Boolean);
+    if (upstream.ok
+      && outcomeCtx.kind === "main-pool"
+      && outcomeCtx.credentialSource === "caller"
+      && isCanonicalOpenAiForwardProvider(route.provider)) {
+      void observeSuccessfulCodexManagedMainUsage(req.headers);
+    }
     const buffered = await bufferCompactResponse(upstream, req.signal);
     // Record pool health only after the body is fully delivered (or definitively failed).
     // A premature 200 would clear soft-avoid while the client still sees a buffer 502.

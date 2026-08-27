@@ -38,6 +38,8 @@ export interface CodexAccountEntry {
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
   hasCredential: boolean;
+  authStatus?: "authenticated" | "logged-out" | "unavailable";
+  credentialSource?: "auth-file" | "codex-managed";
   quota: AccountQuota | null;
   needsReauth?: boolean;
   health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };

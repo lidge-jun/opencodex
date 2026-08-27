@@ -5,7 +5,8 @@ import { join } from "node:path";
 import * as authApi from "../src/codex/auth-api";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../src/codex/account-runtime-state";
 import { clearMainAccountInfoCache } from "../src/codex/main-account-cache";
-import { clearAccountQuota, updateAccountQuota } from "../src/codex/quota";
+import { clearAccountQuota, getAccountQuota, updateAccountQuota } from "../src/codex/quota";
+import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/account-id";
 import { clearCodexUpstreamHealth } from "../src/codex/routing";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { saveCredential } from "../src/oauth/store";
@@ -99,6 +100,31 @@ afterEach(() => {
 });
 
 describe("fetchProviderQuotaReports", () => {
+  test("keyring main quota stays process-local and legacy disk entries are ignored", async () => {
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 17);
+    updateAccountQuota("pool-account", 29);
+    await Bun.sleep(300);
+
+    const cachePath = join(opencodexHome, "codex-quota-cache.json");
+    const persisted = JSON.parse(readFileSync(cachePath, "utf8")) as {
+      quotas: Record<string, { weeklyPercent?: number; updatedAt: number }>;
+    };
+    expect(persisted.quotas[MAIN_CODEX_ACCOUNT_ID]).toBeUndefined();
+    expect(persisted.quotas["pool-account"]?.weeklyPercent).toBe(29);
+
+    clearAccountQuota();
+    writeFileSync(cachePath, JSON.stringify({
+      version: 1,
+      quotas: {
+        [MAIN_CODEX_ACCOUNT_ID]: { weeklyPercent: 83, updatedAt: Date.now() },
+        "pool-account": { weeklyPercent: 31, updatedAt: Date.now() },
+      },
+    }));
+
+    expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
+    expect(getAccountQuota("pool-account")?.weeklyPercent).toBe(31);
+  });
+
   test("provider quota probes have no direct Response.json calls", () => {
     const source = readFileSync(join(import.meta.dir, "../src/providers/quota.ts"), "utf8");
     expect(source).not.toMatch(/\.\s*json\s*\(/);
@@ -1876,7 +1902,8 @@ describe("fetchProviderQuotaReports", () => {
       presentation: "coverage-only",
       includedAccounts: 0,
       excludedAccounts: 2,
-      reauthAccounts: 2,
+      reauthAccounts: 1,
+      unknownPlanAccounts: 1,
       incomplete: true,
     });
   });
@@ -1910,8 +1937,10 @@ describe("fetchProviderQuotaReports", () => {
       expect(openai?.aggregation).toMatchObject({
         presentation: "coverage-only",
         includedAccounts: 0,
-        staleQuotaAccounts: 1,
-        missingQuotaAccounts: 1,
+        // Both the pooled account and main's last request-observed quota are retained as stale
+        // evidence. Neither may be restamped or projected as current numeric capacity.
+        staleQuotaAccounts: 2,
+        missingQuotaAccounts: 0,
         unknownPlanAccounts: 1,
         incomplete: true,
         currentAccount: { plan: "prolite", quota: null },

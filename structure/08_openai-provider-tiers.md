@@ -18,6 +18,27 @@ engine. Direct short-circuits that engine before pool state is read or mutated a
 current caller/main-login bearer. Neither mode may fall through to `openai-apikey`, and the API
 provider may not fall through to Codex-login credentials.
 
+The main login has two credential-owner forms. A legacy/file-backed Codex login can still be read
+from `$CODEX_HOME/auth.json`. A modern Codex login can be owned by Codex in the operating-system
+keyring, where OpenCodex neither can nor should extract a reusable token. For that form:
+
+- dashboard polling does not inspect the keyring or launch Codex to infer login presence. Until a
+  successful native request arrives, the management DTO reports keyring visibility as unavailable
+  and the dashboard explains that account details are pending. A successful native request records
+  only decoded email/plan metadata plus parsed numeric quota windows from upstream
+  headers or the WebSocket-only `codex.rate_limits` frame. It may also use that request's bearer for
+  one bounded, read-only WHAM usage probe per five-minute window to learn fields absent from those
+  transports, including reset-credit count. The raw frame, WHAM body, and token material are not
+  retained;
+- the management DTO distinguishes `authenticated`, `logged-out`, and `unavailable`. Missing
+  `auth.json` is unavailable, not sign-out, until a native request proves the keyring credential;
+- a native Codex request admitted independently of its `Authorization` header may use that
+  caller-owned bearer for `__main__` in Pool. The bearer and account header remain scoped to that
+  request and never enter config, provider overrides, or the account store;
+- every OpenCodex data/admin/session admission secret is ineligible for that path. A non-Codex
+  client that supplies no caller-owned bearer still needs a file-backed main credential or a
+  separately added Pool account.
+
 The two routes also keep separate request-compatibility contracts. The canonical ChatGPT Codex
 forward destination removes public `prompt_cache_options` because that backend rejects the field
 before inference; `prompt_cache_key` remains supported. `openai-apikey` and noncanonical/custom
@@ -273,7 +294,10 @@ Models always shows one bare OpenAI group. Disabled or absent canonical `openai`
 restored from the Accounts picker or Codex Auth through gated recovery: missing rows are created
 from the canonical preset, disabled canonical rows are re-enabled without replacing saved mode or
 model settings, and noncanonical `openai` rows never receive that recovery path.
+The provider-scoped Models tab reads that same entitlement-backed bare native catalog through
+`GET /api/selected-models`; provider discovery is not the authority for Codex-login models.
 
-`GET /api/codex-auth/accounts?refresh=1` treats missing main credentials, HTTP 401, and allowlisted
-terminal 403 codes as `needsReauth`; generic permission failures remain non-terminal, and a
-successful main usage refresh clears the runtime mark.
+`GET /api/codex-auth/accounts?refresh=1` treats a file-backed main HTTP 401 and allowlisted terminal
+403 codes as `needsReauth`; unavailable keyring state and generic permission failures remain
+non-terminal. A successful file-backed usage refresh or native keyring-authenticated request clears
+the runtime mark. Management reads never force token refresh or quota access.

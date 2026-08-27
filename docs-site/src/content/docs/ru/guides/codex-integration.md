@@ -171,8 +171,8 @@ runtime-home Orca, тогда как приложение ChatGPT/Codex всё �
 В режиме выделенного провайдера `requires_openai_auth = true` держит account-gated surface App/TUI
 в согласии с нативным Codex. opencodex также обслуживает `/v1/responses` по WebSocket.
 Выделенный провайдер объявляет `supports_websockets = true` только когда `"websockets": true`; на
-loopback встроенный провайдер Codex может сначала пробовать WebSocket, и отключённый прокси
-ответит `426`, после чего Codex откатится на HTTP/SSE.
+loopback встроенный провайдер Codex может пробовать WebSocket независимо от этого объявления,
+поэтому прокси принимает корректный upgrade в обоих режимах.
 
 ## Идентичность тредов и история
 

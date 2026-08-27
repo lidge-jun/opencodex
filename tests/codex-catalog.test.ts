@@ -156,6 +156,49 @@ describe("live model provenance (#448 custom-model misclassification)", () => {
     expect(await liveModelCountAfterDiscovery("prov-stale", ["a", "b"])).toBe(2);
     expect(await liveModelCountAfterDiscovery("prov-stale", "fail")).toBe(2);
   });
+
+  test("the OpenAI provider dashboard receives the entitlement-backed native catalog", async () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "pool",
+        },
+      },
+    } as OcxConfig;
+    const gatedModels = [
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-daybreak-blue-latest",
+    ];
+    let entitlementReads = 0;
+
+    const url = new URL("http://127.0.0.1/api/selected-models");
+    const response = await handleManagementAPI(new Request(url), url, config, {
+      resolveCodexModelEntitlements: async () => {
+        entitlementReads += 1;
+        return {
+          modelsByAccount: new Map([["account-a", new Set(gatedModels)]]),
+          confirmedAccountIds: new Set(["account-a"]),
+          credentialIdentities: new Map([["account-a", "test:account-a"]]),
+        };
+      },
+    });
+    const body = await response!.json() as {
+      available?: Record<string, string[]>;
+      liveModelCounts?: Record<string, number>;
+    };
+    const expected = [...NATIVE_OPENAI_MODELS];
+
+    expect(entitlementReads).toBe(1);
+    expect(body.available?.openai).toEqual(expected);
+    expect(body.liveModelCounts?.openai).toBe(expected.length);
+  });
 });
 
 describe("combo catalog capability intersection", () => {

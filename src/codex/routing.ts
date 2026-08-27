@@ -951,7 +951,11 @@ function getEligiblePoolAccounts(
   if (
     excludeId !== MAIN_CODEX_ACCOUNT_ID
     && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
-    && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
+    // A request-scoped credential is newer evidence than a proxy-owned reauth mark: Codex
+    // may have rotated its keyring token since an earlier turn failed. The usability check
+    // below applies the same exception without weakening stored pool-account quarantine.
+    && (!isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
+      || selectionOptions?.requestScopedMainCredential === true)
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID, selectionOptions)

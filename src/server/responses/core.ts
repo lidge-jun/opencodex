@@ -151,6 +151,8 @@ import {
 } from "../../codex/model-entitlements";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
+import { applyAccountQuotaFromRateLimitEvent } from "../../codex/quota";
+import { observeSuccessfulCodexManagedMainUsage } from "../../codex/main-account-observation";
 import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import {
   computeQuotaCooldown,
@@ -167,7 +169,11 @@ import {
   fetchWithTransientRetry,
   prepareSameTarget429Wait,
 } from "../../lib/upstream-retry";
-import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
+import {
+  ForwardAdmissionCredentialError,
+  hasForwardableCodexBearer,
+  validateForwardAdmissionCredential,
+} from "../auth-cors";
 import type { DataPlaneAdmission } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
@@ -473,11 +479,15 @@ function bindRouteReasoningReplayScope(args: {
       || args.codexAuthContext?.kind === "main-pool"
       ? args.codexAuthContext
       : undefined;
+    const storedPoolContext = poolContext?.kind === "main-pool"
+      && poolContext.credentialSource === "caller"
+      ? undefined
+      : poolContext;
     credentialIdentity = reasoningReplayCodexCredentialIdentity({
-      authorization: poolContext
-        ? `Bearer ${poolContext.accessToken}`
+      authorization: storedPoolContext
+        ? `Bearer ${storedPoolContext.accessToken}`
         : args.forwardHeaders?.get("authorization"),
-      chatgptAccountId: poolContext?.chatgptAccountId
+      chatgptAccountId: storedPoolContext?.chatgptAccountId
         ?? args.forwardHeaders?.get("chatgpt-account-id"),
       accountId: poolContext?.accountId,
       credentialGeneration: poolContext?.kind === "pool"
@@ -486,13 +496,11 @@ function bindRouteReasoningReplayScope(args: {
       writerGeneration: poolContext?.writerGeneration,
       headers: provider.headers,
     });
-    // Durable identity requires a STABLE, TRUSTED account handle. Pool context comes from
-    // our own account store; a client-supplied chatgpt-account-id header is attacker
-    // -influenceable bucket selection and a bearer alone is rotating material — both are
-    // refused, so direct-forward turns get no durable scope (fail closed; the in-process
-    // cache still covers same-process replay).
+    // Durable identity requires a STABLE, TRUSTED account handle. Pool selection supplies
+    // that handle even when Codex owns the request-scoped bearer; a client-supplied
+    // chatgpt-account-id header is never used as the durable handle by itself.
     const codexDurableHandle = poolContext?.accountId
-      ?? poolContext?.chatgptAccountId
+      ?? storedPoolContext?.chatgptAccountId
       ?? undefined;
     credentialDurableIdentity = durableReplayCredentialIdentity(
       "codex",
@@ -803,6 +811,25 @@ export function usesCodexForwardPoolAuth(
     && provider.authMode === "forward" && provider.adapter === "openai-responses";
 }
 
+/**
+ * Bind a quota-only WebSocket frame to the credential context that created that socket.
+ * Capture the local account id/generation now: a later same-request failover must not be able
+ * to reattribute an earlier account's frame. The parser retains only numeric quota windows.
+ */
+function codexRateLimitObserver(
+  authCtx: CodexAuthContext,
+  provider: OcxProviderConfig,
+): ((event: unknown) => void) | undefined {
+  if (!isCanonicalOpenAiForwardProvider(provider)) return undefined;
+  const accountId = authCtx.kind === "pool" || authCtx.kind === "main-pool"
+    ? authCtx.accountId
+    : MAIN_CODEX_ACCOUNT_ID;
+  const writerGeneration = authCtx.kind === "pool" || authCtx.kind === "main-pool"
+    ? authCtx.writerGeneration
+    : undefined;
+  return event => applyAccountQuotaFromRateLimitEvent(accountId, event, writerGeneration);
+}
+
 export function preAuthUpstreamHostCircuitKey(
   route: Pick<RouteResult, "provider" | "providerName" | "codexAccountMode" | "codexAccountId">,
   config: OcxConfig,
@@ -1022,15 +1049,16 @@ async function retryCodexPoolOnAlternateAccount(
   if (!retryAuthCtx && firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
   try {
     retryAuthCtx ??= await resolveCodexAuthContext(
-        req.headers,
-        config,
-        "pool",
-        {
-          excludeAccountId: firstAuthCtx.accountId,
-          modelId: route.modelId,
-          beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
-        },
-      );
+      req.headers,
+      config,
+      "pool",
+      {
+        excludeAccountId: firstAuthCtx.accountId,
+        modelId: route.modelId,
+        requestScopedMainCredential: hasForwardableCodexBearer(req.headers, config),
+        beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+      },
+    );
   } catch (error) {
     if (
       !(error instanceof CodexPoolAuthenticationError)
@@ -1139,6 +1167,7 @@ async function retryCodexPoolOnAlternateAccount(
         providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           providerName: route.providerName,
           modelId: route.modelId,
+          onCodexRateLimits: codexRateLimitObserver(retryAuthCtx, route.provider),
         }),
         // Credential-bearing forward send: never follow a redirect into a
         // dead-host rejection after the credential was seen (#914).
@@ -1587,6 +1616,9 @@ async function resolveResponsesCodexAuth(
     // no-ChatGPT-login install keeps working.
     const substituteMainCredential = options.admission?.source === "bearer"
       && (route.codexAccountMode !== undefined || isCanonicalOpenAiForwardProvider(route.provider));
+    const requestScopedMainCredential = route.codexAccountMode !== undefined
+      && !substituteMainCredential
+      && hasForwardableCodexBearer(req.headers, config);
     if (route.codexAccountMode === "direct" && !substituteMainCredential) {
       validateForwardAdmissionCredential(req.headers, config);
     }
@@ -1596,6 +1628,7 @@ async function resolveResponsesCodexAuth(
         accountId: route.codexAccountId,
         modelId: route.modelId,
         substituteMainCredentialForDirect: substituteMainCredential,
+        requestScopedMainCredential,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
         resolveCodexModelEntitlements: options.resolveCodexModelEntitlements,
       });
@@ -3417,6 +3450,7 @@ async function handleResponsesInner(
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               providerName: route.providerName,
               modelId: route.modelId,
+              onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
             }),
             route.provider.authMode === "forward")
             // Every real attempt response — including an intermediate 5xx the
@@ -3487,6 +3521,7 @@ async function handleResponsesInner(
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 providerName: route.providerName,
                 modelId: route.modelId,
+                onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
               }),
               route.provider.authMode === "forward")
               .then(response => {
@@ -3590,6 +3625,7 @@ async function handleResponsesInner(
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 providerName: route.providerName,
                 modelId: route.modelId,
+                onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
               }),
               route.provider.authMode === "forward")
               .then(res => {
@@ -3652,6 +3688,7 @@ async function handleResponsesInner(
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 providerName: route.providerName,
                 modelId: route.modelId,
+                onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
               }),
               route.provider.authMode === "forward")
               .then(res => {
@@ -3755,6 +3792,12 @@ async function handleResponsesInner(
       continue passthroughRecovery;
     }
     break;
+    }
+    if (upstreamResponse.ok
+      && authCtx.kind === "main-pool"
+      && authCtx.credentialSource === "caller"
+      && isCanonicalOpenAiForwardProvider(route.provider)) {
+      void observeSuccessfulCodexManagedMainUsage(req.headers);
     }
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
     const resolvedModel = headers.get("openai-model")?.trim();
@@ -4396,7 +4439,11 @@ async function handleResponsesInner(
     const imageProviderFetch = providerFetch(
       route.provider,
       options.codexWsRuntimeIdentity,
-      { providerName: route.providerName, modelId: route.modelId },
+      {
+        providerName: route.providerName,
+        modelId: route.modelId,
+        onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
+      },
     );
     const imgResponse = await runWithImageBridge({
       parsed, adapter,
@@ -4572,6 +4619,7 @@ async function handleResponsesInner(
             // Cursor HTTP/1.1 consumes it for RunSSE; every BidiAppend and redial then waits on
             // the same provider queue through this stateful wrapper.
             pacingSlotAcquired: true,
+            onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
           },
         );
         await runTurnAdapter.runTurn?.(
@@ -4905,6 +4953,7 @@ async function handleResponsesInner(
         executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           providerName: route.providerName,
           modelId: route.modelId,
+          onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
         }),
       });
     } else {
@@ -4924,6 +4973,7 @@ async function handleResponsesInner(
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               providerName: route.providerName,
               modelId: route.modelId,
+              onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
             }));
         },
         { abortSignal: upstream.signal, label: safeHostLabel(builtInitialRequest.url) },
@@ -5012,6 +5062,7 @@ async function handleResponsesInner(
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 providerName: route.providerName,
                 modelId: route.modelId,
+                onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
               }),
             });
           }
@@ -5021,6 +5072,7 @@ async function handleResponsesInner(
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               providerName: route.providerName,
               modelId: route.modelId,
+              onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
             }));
         } finally {
           retryRequest.releaseBodyObservation?.();
@@ -5422,6 +5474,7 @@ async function handleResponsesInner(
             executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
               providerName: route.providerName,
               modelId: nextParsed.modelId,
+              onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
             }),
           });
         }
@@ -5444,6 +5497,7 @@ async function handleResponsesInner(
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 providerName: route.providerName,
                 modelId: nextParsed.modelId,
+                onCodexRateLimits: codexRateLimitObserver(authCtx, route.provider),
               }),
             );
           },

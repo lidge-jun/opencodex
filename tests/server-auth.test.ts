@@ -23,6 +23,11 @@ import { clearUpstreamHostHealth, getUpstreamHostHealth, recordUpstreamHostFailu
 import { deriveProviderPresets } from "../src/providers/derive";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import {
+  clearMainAccountCredentialPresence,
+  clearMainAccountInfoCache,
+  getMainAccountCredentialState,
+} from "../src/codex/main-account-cache";
+import {
   assertServerAuthConfig,
   corsHeaders,
   disableResponsesRequestTimeout,
@@ -144,6 +149,8 @@ afterEach(() => {
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
   clearAccountQuota();
+  clearMainAccountInfoCache();
+  clearMainAccountCredentialPresence();
   resetCodexModelEntitlementCacheForTests();
   resetDebugSettingsForTests();
   resetDebugLogBufferForTests();
@@ -1136,7 +1143,7 @@ describe("server local API auth", () => {
     }
   });
 
-  test("websocket upgrade returns 426 when the WS transport is disabled", async () => {
+  test("built-in OpenAI websocket is accepted when catalog WS advertisement is disabled", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
@@ -1145,25 +1152,27 @@ describe("server local API auth", () => {
 
     const server = startServer(0);
     try {
-      // codex-rs maps a connect-time 426 to a clean session-scoped HTTP fallback
-      // (WebsocketStreamOutcome::FallbackToHttp) — this must NOT accept the socket.
-      const response = await fetch(new URL("/v1/responses", server.url), {
-        method: "GET",
-        headers: {
-          connection: "Upgrade",
-          upgrade: "websocket",
-        },
-      });
-      expect(response.status).toBe(426);
-      expect(await response.json()).toMatchObject({
-        error: { type: "upgrade_required" },
+      const url = new URL("/v1/responses", server.url);
+      url.protocol = "ws:";
+      const ws = new WebSocket(url);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("websocket open timed out")), 5_000);
+        ws.addEventListener("open", () => {
+          clearTimeout(timer);
+          ws.close();
+          resolve();
+        }, { once: true });
+        ws.addEventListener("error", () => {
+          clearTimeout(timer);
+          reject(new Error("websocket open failed"));
+        }, { once: true });
       });
     } finally {
       await server.stop(true);
     }
   });
 
-  test("after a 426'd upgrade the same client can immediately fall back to HTTP POST", async () => {
+  test("HTTP POST remains available when catalog WS advertisement is disabled", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
@@ -1188,12 +1197,6 @@ describe("server local API auth", () => {
 
     const server = startServer(0);
     try {
-      // codex-rs FallbackToHttp: the 426 must leave the connection/session fully usable for HTTP.
-      const upgrade = await fetch(new URL("/v1/responses", server.url), {
-        method: "GET",
-        headers: { connection: "Upgrade", upgrade: "websocket" },
-      });
-      expect(upgrade.status).toBe(426);
       const post = await fetch(new URL("/v1/responses", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1511,6 +1514,67 @@ describe("server local API auth", () => {
       clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
       clearCodexUpstreamHealth();
       rmSync(join(isolatedCodexHome!.path, "auth.json"), { force: true });
+
+      const nativeCallerConfig = {
+        ...mainOnlyConfig(),
+        hostname: "0.0.0.0",
+      } as OcxConfig;
+      saveConfig(nativeCallerConfig);
+      const beforeNativeCaller = seen.length;
+      const nativeCaller = startServer(0, { inspectNativeCodexOwnership });
+      try {
+        await waitForNativeMainStartupGate();
+        markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+
+        // The dedicated admission header grants access to the local proxy, but it is not an
+        // upstream ChatGPT credential. Without Codex's own bearer, Pool still fails closed.
+        expect((await request(nativeCaller)).status).toBe(401);
+        expect((await compact(nativeCaller)).status).toBe(401);
+        expect(await wsTurn(nativeCaller)).toContain("401");
+        expect(seen).toHaveLength(beforeNativeCaller);
+
+        // A proxy admission secret placed in Authorization is equally ineligible for forwarding.
+        expect((await request(nativeCaller, { authorization: "Bearer local-secret" })).status).toBe(401);
+        expect(seen).toHaveLength(beforeNativeCaller);
+
+        // An arbitrary caller bearer is not enough to identify native Codex Pool traffic.
+        // Codex's request-scoped credential arrives with its ChatGPT account id.
+        expect((await request(nativeCaller, { authorization: "Bearer unrelated-caller-token" })).status).toBe(401);
+        expect(seen).toHaveLength(beforeNativeCaller);
+
+        const nativeHeaders = {
+          authorization: "Bearer caller-keyring-token",
+          "chatgpt-account-id": "caller-keyring-account",
+        };
+        expect((await request(nativeCaller, nativeHeaders)).status).toBe(200);
+        expect((await compact(nativeCaller, nativeHeaders)).status).toBe(200);
+        expect(await wsTurn(nativeCaller, nativeHeaders)).toContain("resp_tier");
+        const jwt = fakeChatGptJwt({
+          "https://api.openai.com/auth": { chatgpt_account_id: "jwt-keyring-account" },
+        });
+        expect((await request(nativeCaller, { authorization: `Bearer ${jwt}` })).status).toBe(200);
+        expect(seen.slice(beforeNativeCaller)).toEqual([
+          ...Array.from({ length: 3 }, () => ({
+            host: "chatgpt.com",
+            authorization: "Bearer caller-keyring-token",
+            chatgptAccountId: "caller-keyring-account",
+          })),
+          {
+            host: "chatgpt.com",
+            authorization: `Bearer ${jwt}`,
+            chatgptAccountId: "jwt-keyring-account",
+          },
+        ]);
+        expect(getMainAccountCredentialState()).toEqual({
+          status: "authenticated",
+          source: "codex-managed",
+        });
+      } finally {
+        await nativeCaller.stop(true);
+        clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+        clearMainAccountInfoCache();
+        clearMainAccountCredentialPresence();
+      }
 
       saveConfig({
         port: 0,

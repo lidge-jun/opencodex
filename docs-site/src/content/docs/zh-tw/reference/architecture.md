@@ -129,10 +129,10 @@ thread affinity 位於 `codex/` 下，不會出現在管理 API 回應中。請�
 
 ## 傳輸與 compaction
 
-`server/index.ts` 預設在 `/v1/responses` 上提供 HTTP/SSE。當 `websockets` 為 `false` 而 Codex
-嘗試 Responses WebSocket upgrade 時，opencodex 會回傳 `426 upgrade_required`，Codex 隨後在該
-session 中回退到 HTTP。設定 `"websockets": true` 後，同一 endpoint 會接受 upgrade 並使用
-WebSocket bridge。
+`server/index.ts` 在 `/v1/responses` 上提供 HTTP/SSE 與 WebSocket upgrade。`websockets` 設定
+控制路由 catalog/provider row 是否宣告此能力。只要 `openai_base_url` 指向 proxy，Codex 的內建
+OpenAI provider 仍可能嘗試 upgrade，因此關閉宣告時也會接受有效的 upgrade；
+`426 upgrade_required` 僅用於 upgrade 失敗。
 
 Codex context compaction 同樣適用於路由模型。`server/responses/compact.ts` 處理
 `POST /v1/responses/compact`，執行一次內部路由 summarization turn 並回傳壓縮後的歷史；

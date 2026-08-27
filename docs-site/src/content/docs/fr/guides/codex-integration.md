@@ -180,8 +180,8 @@ d'abord depuis le shell d'origine. Définissez ensuite `CODEX_HOME` sur le répe
 En mode fournisseur dédié, `requires_openai_auth = true` maintient les surfaces de l'application et de la TUI
 Codex soumises à un compte, comme dans Codex natif. opencodex sert également `/v1/responses` par WebSocket. Le
 fournisseur dédié n'annonce `supports_websockets = true` que lorsque `"websockets": true`. Sur l'interface de
-bouclage, le fournisseur intégré de Codex peut tenter WebSocket en premier ; si cette fonction est désactivée,
-le proxy renvoie `426` et Codex se rabat sur HTTP/SSE.
+bouclage, le fournisseur intégré de Codex peut tenter WebSocket indépendamment de cette annonce ; le proxy
+accepte donc une mise à niveau valide dans les deux modes.
 
 ## Identité et historique du fil de discussion
 

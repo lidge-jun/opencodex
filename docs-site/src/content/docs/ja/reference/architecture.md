@@ -95,7 +95,7 @@ HTTP の境界は `server/index.ts` が担い、Responses データプレーン�
 
 ## 伝送と compaction
 
-`server/index.ts` はデフォルトで `/v1/responses` を HTTP/SSE で提供します。`websockets` が `false` の状態で Codex が Responses WebSocket アップグレードを試みると、opencodex は `426 upgrade_required` を返し、Codex はそのセッションで HTTP にフォールバックします。`"websockets": true` を設定すると同じエンドポイントがアップグレードを受け入れ WebSocket ブリッジを使います。
+`server/index.ts` は `/v1/responses` で HTTP/SSE と WebSocket アップグレードを提供します。`websockets` 設定は、ルーティングされたカタログおよびプロバイダー行での機能通知を制御します。Codex の組み込み OpenAI プロバイダーは `openai_base_url` がプロキシを指すとアップグレードを試行することがあるため、通知が無効でも有効なアップグレードは受け入れられます。`426 upgrade_required` はアップグレードに失敗した場合にのみ使用されます。
 
 Codex コンテキスト compaction はルーティングされたモデルでも動作します。`server/responses/compact.ts` は
 `POST /v1/responses/compact` を内部ルーティング要約ターンとして扱い、圧縮されたヒストリーを返します。

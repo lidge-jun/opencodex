@@ -66,6 +66,7 @@ import {
   tryAdmitTurn,
 } from "../src/server/lifecycle";
 import type { CodexModelEntitlementSnapshot } from "../src/codex/model-entitlements";
+import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 
 let testDir: string;
 let previousOpencodexHome: string | undefined;
@@ -420,6 +421,42 @@ describe("Codex auth context", () => {
     });
   });
 
+  test("revalidates a persisted synthetic main grant against the request-scoped caller", async () => {
+    const headers = new Headers({
+      authorization: "Bearer caller-native-token",
+      "chatgpt-account-id": "caller-native-account",
+    });
+    const entitlementSnapshot: CodexModelEntitlementSnapshot = {
+      modelsByAccount: new Map([[MAIN_CODEX_ACCOUNT_ID, new Set(["gpt-daybreak-blue-latest"])]]),
+      confirmedAccountIds: new Set([MAIN_CODEX_ACCOUNT_ID]),
+      credentialIdentities: new Map([[MAIN_CODEX_ACCOUNT_ID, "synthetic-cache:test"]]),
+    };
+    let callerEntitled = false;
+    let callerChecks = 0;
+    const options = {
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+      modelId: "gpt-daybreak-blue-latest",
+      isMainAccountTokenLive: () => false,
+      requestScopedMainCredential: true,
+      resolveCodexModelEntitlements: async () => entitlementSnapshot,
+      isRequestScopedMainCallerEntitledToCodexModel: async () => {
+        callerChecks += 1;
+        return callerEntitled;
+      },
+    };
+
+    await expect(resolveCodexAuthContext(headers, config(), "pool", options))
+      .rejects.toThrow("Selected Codex account does not support this model");
+    callerEntitled = true;
+    await expect(resolveCodexAuthContext(headers, config(), "pool", options))
+      .resolves.toMatchObject({
+        kind: "main-pool",
+        accountId: MAIN_CODEX_ACCOUNT_ID,
+        credentialSource: "caller",
+      });
+    expect(callerChecks).toBe(2);
+  });
+
   test("exact account-gated routing fails closed for an unentitled account", async () => {
     const cfg = config();
     saveCodexAccountCredential("pool-a", {
@@ -745,6 +782,72 @@ describe("Codex auth context", () => {
     });
     expect(cfg.activeCodexAccountId).toBe("pool-a");
   });
+
+  test("Pool can use the native caller bearer for main without persisting an override", async () => {
+    const cfg = config();
+    const inbound = new Headers({
+      authorization: "Bearer caller-native-token",
+      "chatgpt-account-id": "caller-native-account",
+      "openai-beta": "responses=experimental",
+    });
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+
+    try {
+      // Merely carrying a bearer is not enough: the server must first classify it as
+      // forwardable rather than one of OpenCodex's own admission secrets.
+      await expect(resolveCodexAuthContext(inbound, cfg, "pool", {
+        accountId: MAIN_CODEX_ACCOUNT_ID,
+        isMainAccountTokenLive: () => false,
+      })).rejects.toBeInstanceOf(CodexPoolAuthenticationError);
+
+      const ctx = await resolveCodexAuthContext(inbound, cfg, "pool", {
+        accountId: MAIN_CODEX_ACCOUNT_ID,
+        isMainAccountTokenLive: () => false,
+        requestScopedMainCredential: true,
+      });
+      expect(ctx).toMatchObject({
+        kind: "main-pool",
+        accountId: MAIN_CODEX_ACCOUNT_ID,
+        credentialSource: "caller",
+        fixedAccount: true,
+      });
+      expect(ctx).not.toHaveProperty("accessToken");
+      expect(ctx).not.toHaveProperty("chatgptAccountId");
+
+      expect(applyCodexAuthContextToProvider(forwardProvider, ctx, "pool"))
+        .not.toHaveProperty("_codexAccountOverride");
+      const upstream = materializeCodexUpstreamAuth(inbound, ctx);
+      expect(upstream.get("authorization")).toBe("Bearer caller-native-token");
+      expect(upstream.get("chatgpt-account-id")).toBe("caller-native-account");
+      expect(upstream.get("openai-beta")).toBe("responses=experimental");
+
+      const jwt = fakeChatGptJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "jwt-native-account" },
+      });
+      const jwtUpstream = materializeCodexUpstreamAuth(new Headers({
+        authorization: `Bearer ${jwt}`,
+      }), ctx);
+      expect(jwtUpstream.get("authorization")).toBe(`Bearer ${jwt}`);
+      expect(jwtUpstream.get("chatgpt-account-id")).toBe("jwt-native-account");
+
+      const selected = await resolveCodexAuthContext(inbound, {
+        ...cfg,
+        codexAccounts: [],
+        activeCodexAccountId: undefined,
+      }, "pool", {
+        isMainAccountTokenLive: () => false,
+        requestScopedMainCredential: true,
+      });
+      expect(selected).toMatchObject({
+        kind: "main-pool",
+        accountId: MAIN_CODEX_ACCOUNT_ID,
+        credentialSource: "caller",
+      });
+    } finally {
+      clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    }
+  });
+
   test("selects pool auth independently of the routed provider", async () => {
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool_token",

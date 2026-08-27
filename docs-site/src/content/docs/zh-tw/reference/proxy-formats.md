@@ -104,7 +104,9 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 `response.created` 後接 `response.completed`，兩者皆有空的回應 id 且無輸出。
 
 :::note
-當 WebSocket 停用時，升級嘗試收到附帶代碼 `upgrade_required` 的 HTTP 426。Codex 將該握手結果視為回退到該 session 的 HTTP 的信號。它不是失敗的模型回合。
+停用 WebSocket 能力宣告時，路由 catalog row 會省略該能力標記。但覆寫 `openai_base_url` 後，
+內建 OpenAI provider 仍可能嘗試 upgrade，因此 proxy 在兩種模式下都會接受有效的 upgrade。
+HTTP 426 僅用於無法完成 upgrade 的情況。
 :::
 
 ## `POST /v1/chat/completions`
@@ -214,7 +216,7 @@ Data-plane 金鑰不是管理憑證。管理 API 使用獨立的管理秘密；�
 | 403 | `origin_rejected` | Responses/OpenAI data-plane 請求或 WebSocket 升級來自不允許的來源 |
 | 503 | `combo_unavailable` | 所選組合中的每個目標都不可用、在冷卻中、停用或因其他原因不合格 |
 | 400 | `unreadable_encrypted_agent_task` | 加密的 v2 worker task 沒有可消耗它的合格原生 ChatGPT 目標 |
-| 426 | `upgrade_required` | Responses WebSocket 傳輸被停用或升級失敗；請使用 HTTP |
+| 426 | `upgrade_required` | 無法完成 Responses WebSocket upgrade；請使用 HTTP |
 
 Anthropic 來源的失敗以 Anthropic 的錯誤封裝渲染，因此該方言上的來源拒絕是 403 `permission_error`，而非 OpenAI 風格的 `origin_rejected` body。
 

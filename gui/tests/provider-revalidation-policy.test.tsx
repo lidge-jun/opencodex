@@ -24,8 +24,45 @@ let testWindow: Window;
 let container: HTMLElement;
 let root: Root | null = null;
 let quotaCalls: string[] = [];
+let apiBase = "";
+let apiBaseSequence = 0;
+let configuredProviders: Record<string, Record<string, unknown>>;
+let codexAccountReads = 0;
+let codexAccountsForRead: (read: number) => unknown;
+let codexAccountDelayMs = 0;
 
 const PROVIDERS = ["anthropic", "cursor", "kimi"];
+const OPENAI_PROVIDER = {
+  adapter: "openai-responses",
+  authMode: "forward",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
+};
+
+function codexMainAccounts(observed: boolean) {
+  return {
+    accounts: [{
+      id: "__main__",
+      email: "Codex App login",
+      isMain: true,
+      paused: false,
+      priority: 0,
+      hasCredential: true,
+      authStatus: "authenticated",
+      credentialSource: "codex-managed",
+      ...(observed
+        ? {
+            plan: "pro",
+            quota: {
+              weeklyPercent: 5,
+              weeklyResetAt: 1_788_369_220,
+              updatedAt: 1_788_000_000,
+            },
+          }
+        : { quota: null }),
+    }],
+    mode: "pool",
+  };
+}
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
@@ -42,6 +79,13 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
   quotaCalls = [];
+  apiBase = `/provider-revalidation-${++apiBaseSequence}`;
+  configuredProviders = Object.fromEntries(
+    PROVIDERS.map(p => [p, { authMode: "oauth", hasApiKey: false }]),
+  );
+  codexAccountReads = 0;
+  codexAccountDelayMs = 0;
+  codexAccountsForRead = () => ({ accounts: [], mode: "single" });
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: string, init?: RequestInit) => {
@@ -76,13 +120,19 @@ beforeEach(() => {
         // `authMode: "oauth"` is what makes the page read account sets for these providers.
         // With an empty provider map no account read happens at all and the churn this test
         // exists to catch never occurs.
-        return ok({
-          providers: Object.fromEntries(PROVIDERS.map(p => [p, { authMode: "oauth", hasApiKey: false }])),
-        });
+        return ok({ providers: configuredProviders });
       }
       if (url.includes("/api/selected-models")) return ok({ models: {} });
       if (url.includes("/api/usage")) return ok({ providers: [] });
       if (url.includes("/api/provider-presets")) return ok({ presets: [] });
+      if (url.includes("/api/codex-auth/accounts")) {
+        codexAccountReads += 1;
+        if (codexAccountDelayMs > 0) {
+          await new Promise(r => setTimeout(r, codexAccountDelayMs));
+        }
+        return ok(codexAccountsForRead(codexAccountReads));
+      }
+      if (url.includes("/api/codex-auth/active")) return ok({ activeCodexAccountId: null });
       if (url.includes("/api/codex-auth")) return ok({ accounts: [], mode: "single" });
       return ok({});
     },
@@ -104,13 +154,13 @@ afterEach(async () => {
   }
 });
 
-async function mount() {
+async function mount(settleMs = 120) {
   await act(async () => {
     root = createRoot(container);
-    root.render(<LanguageProvider><Providers apiBase="" /></LanguageProvider>);
+    root.render(<LanguageProvider><Providers apiBase={apiBase} /></LanguageProvider>);
   });
   // Account responses land across several microtask/macrotask turns.
-  await act(async () => { await new Promise(r => setTimeout(r, 120)); });
+  await act(async () => { await new Promise(r => setTimeout(r, settleMs)); });
 }
 
 test("account data arriving per provider does not re-read the quota endpoint", async () => {
@@ -126,6 +176,42 @@ test("the cold read stays single even after every provider has settled", async (
   await mount();
   await act(async () => { await new Promise(r => setTimeout(r, 250)); });
   expect(quotaCalls.length).toBe(1);
+});
+
+test("a newly observed Codex main account revalidates the overview quota once", async () => {
+  configuredProviders = { openai: OPENAI_PROVIDER };
+  codexAccountsForRead = read => codexMainAccounts(read > 1);
+
+  await mount();
+  expect(quotaCalls.length).toBe(1);
+
+  // The account controller retries a credentialed row whose observation has not landed
+  // yet. Once that retry sees plan/quota, Overview must re-read its separate aggregate;
+  // a second inference or a manual dashboard action must not be necessary.
+  await act(async () => { await new Promise(r => setTimeout(r, 500)); });
+  await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+
+  expect(codexAccountReads).toBeGreaterThanOrEqual(2);
+  expect(quotaCalls.length).toBe(2);
+  expect(quotaCalls.every(url => !url.includes("refresh=1"))).toBe(true);
+
+  await act(async () => { await new Promise(r => setTimeout(r, 500)); });
+  expect(quotaCalls.length).toBe(2);
+});
+
+test("a first observed Codex response closes the initial overview race", async () => {
+  configuredProviders = { openai: OPENAI_PROVIDER };
+  codexAccountDelayMs = 80;
+  codexAccountsForRead = () => codexMainAccounts(true);
+
+  await mount(10);
+  expect(quotaCalls.length).toBe(1);
+  await act(async () => { await new Promise(r => setTimeout(r, 120)); });
+  await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+
+  expect(codexAccountReads).toBe(1);
+  expect(quotaCalls.length).toBe(2);
+  expect(quotaCalls.every(url => !url.includes("refresh=1"))).toBe(true);
 });
 
 // Guard the other half of the contract: the base account read still happens before the quota

@@ -164,11 +164,11 @@ tanılamaları için `usage/` tarafından toplanır.
 
 ## Aktarım ve sıkıştırma
 
-`server/index.ts` varsayılan olarak `/v1/responses` üzerinde HTTP/SSE sunar.
-Codex `websockets` `false` iken bir Responses WebSocket yükseltmesi denerse
-opencodex `426 upgrade_required` döndürür; Codex daha sonra bu oturum için
-HTTP'ye geri döner. `"websockets": true` ayarlandığında aynı uç nokta
-yükseltmeyi kabul eder ve WebSocket köprüsünü kullanır.
+`server/index.ts`, `/v1/responses` üzerinde HTTP/SSE ve WebSocket yükseltmelerini sunar.
+`websockets` ayarı, yönlendirilmiş katalog ve sağlayıcı satırlarındaki yetenek bildirimini denetler.
+Codex'in yerleşik OpenAI sağlayıcısı `openai_base_url` proxy'yi gösterdiğinde yükseltme deneyebilir;
+bu nedenle bildirim kapalıyken de geçerli yükseltmeler kabul edilir. `426 upgrade_required` yalnızca
+yükseltme başarısız olduğunda kullanılır.
 
 Codex bağlam sıkıştırması yönlendirilen modeller için çalışır.
 `server/responses/compact.ts`, dahili bir yönlendirilen özetleme turu
@@ -220,4 +220,3 @@ Dahili model `types.ts` içinde yer alır: `OcxParsedRequest`, `OcxContext`,
 `OcxProviderConfig`). İki yardımcı yaygın olarak kullanılır:
 `namespacedToolName()` ve `modelInList()` (`noVisionModels` /
 `noReasoningModels` için toleranslı `:size` etiketi eşleştirmesi).
-

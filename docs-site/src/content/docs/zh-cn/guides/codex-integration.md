@@ -153,8 +153,8 @@ $CODEX_HOME/models_cache.json
 
 在专用 provider 模式下，`requires_openai_auth = true` 会让 Codex App/TUI 中受账号门控的界面与原生 Codex 保持一致。
 opencodex 也会通过 WebSocket 提供 `/v1/responses`。专用 provider 只有在 `"websockets": true` 时才会声明
-`supports_websockets = true`；在 loopback 情况下，Codex 的内置 provider 可能会先尝试 WebSocket，而关闭的 proxy
-会返回 `426`，从而让 Codex fallback 到 HTTP/SSE。
+`supports_websockets = true`；在 loopback 情况下，Codex 的内置 provider 可能不考虑该声明而尝试 WebSocket，
+因此 proxy 在两种模式下都会接受有效的 upgrade。
 
 ## 线程标识与历史记录
 

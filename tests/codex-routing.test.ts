@@ -45,7 +45,12 @@ import {
   setAccountQuotaFromParsed,
   updateAccountQuota,
 } from "../src/codex/auth-api";
-import { CODEX_UNKNOWN_USAGE_SCORE, isCodexQuotaExhausted } from "../src/codex/quota";
+import {
+  applyAccountQuotaFromRateLimitEvent,
+  CODEX_UNKNOWN_USAGE_SCORE,
+  isCodexQuotaExhausted,
+  parseCodexRateLimitEventQuota,
+} from "../src/codex/quota";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import { routeModel } from "../src/router";
 import { consumeForInspection } from "../src/server/relay";
@@ -1275,6 +1280,83 @@ describe("codex routing", () => {
       shortWindowSeconds: 5 * 60 * 60,
       weeklyPercent: 22,
       weeklyResetAt: 2,
+      customWindows: [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 33, resetAt: 3 }],
+    });
+  });
+
+  test("codex.rate_limits preserves the official burst and weekly window semantics", () => {
+    const event = {
+      type: "codex.rate_limits",
+      plan_type: "plus",
+      rate_limits: {
+        primary: { used_percent: 11, reset_at: 1, window_minutes: 5 * 60 },
+        secondary: { used_percent: 22, reset_at: 2, window_minutes: 7 * 24 * 60 },
+      },
+    };
+
+    expect(parseCodexRateLimitEventQuota(event)).toEqual({
+      shortPercent: 11,
+      shortResetAt: 1,
+      shortWindowSeconds: 5 * 60 * 60,
+      weeklyPercent: 22,
+      weeklyResetAt: 2,
+    });
+
+    applyAccountQuotaFromRateLimitEvent("a", event);
+    expect(getAccountQuota("a")).toMatchObject({
+      shortPercent: 11,
+      weeklyPercent: 22,
+    });
+  });
+
+  test("codex.rate_limits fails closed for unrelated frames and unknown metered buckets", () => {
+    expect(parseCodexRateLimitEventQuota({
+      type: "response.created",
+      rate_limits: { primary: { used_percent: 1 } },
+    })).toBeNull();
+    expect(parseCodexRateLimitEventQuota({
+      type: "codex.rate_limits",
+      metered_limit_name: "future-secret-bucket",
+      rate_limits: { primary: { used_percent: 1 } },
+    })).toBeNull();
+  });
+
+  test("a Spark codex.rate_limits frame cannot overwrite ordinary account quota", () => {
+    setAccountQuotaFromParsed("a", { weeklyPercent: 44, weeklyResetAt: 4 });
+    applyAccountQuotaFromRateLimitEvent("a", {
+      type: "codex.rate_limits",
+      metered_limit_name: "codex_bengalfox",
+      rate_limits: {
+        primary: { used_percent: 33, reset_at: 3, window_minutes: 7 * 24 * 60 },
+      },
+    });
+
+    expect(getAccountQuota("a")).toMatchObject({
+      weeklyPercent: 44,
+      weeklyResetAt: 4,
+      customWindows: [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 33, resetAt: 3 }],
+    });
+  });
+
+  test("an ordinary codex.rate_limits frame cannot overwrite Spark quota", () => {
+    applyAccountQuotaFromRateLimitEvent("a", {
+      type: "codex.rate_limits",
+      metered_limit_name: "codex_bengalfox",
+      rate_limits: {
+        primary: { used_percent: 33, reset_at: 3, window_minutes: 7 * 24 * 60 },
+      },
+    });
+    applyAccountQuotaFromRateLimitEvent("a", {
+      type: "codex.rate_limits",
+      metered_limit_name: "codex",
+      rate_limits: {
+        primary: { used_percent: 44, reset_at: 4, window_minutes: 7 * 24 * 60 },
+      },
+    });
+
+    expect(getAccountQuota("a")).toMatchObject({
+      weeklyPercent: 44,
+      weeklyResetAt: 4,
       customWindows: [{ label: "GPT-5.3-Codex-Spark Weekly", percent: 33, resetAt: 3 }],
     });
   });

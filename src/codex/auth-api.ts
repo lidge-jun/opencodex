@@ -89,11 +89,13 @@ import { reconcileLiveStateStores } from "../lib/state-store-registrations";
 import {
   captureMainAccountIdentityGeneration,
   clearMainAccountInfoCache,
-  getMainAccountCredentialPresence,
+  getMainAccountCredentialState,
   getMainAccountInfoCache,
   isMainAccountIdentityGenerationLive,
-  setMainAccountCredentialPresence,
+  setMainAccountCredentialState,
   setMainAccountInfoCache,
+  type MainAccountAuthStatus,
+  type MainAccountCredentialSource,
   type MainAccountInfo,
 } from "./main-account-cache";
 export { clearMainAccountInfoCache } from "./main-account-cache";
@@ -651,6 +653,10 @@ interface MainAccountInfoFetchResult {
   credentialChecked: boolean;
   /** Meaningful only when credentialChecked is true. */
   hasCredential: boolean;
+  /** Tri-state auth observation; unavailable is never promoted to signed-out. */
+  authStatus: MainAccountAuthStatus;
+  /** Which owner can provide the credential. Omitted unless authenticated. */
+  credentialSource?: MainAccountCredentialSource;
   /** Main identity generation captured while the native-main claim was held. */
   identityGeneration?: number;
   /** Present only when this call freshly parsed a WHAM usage response. */
@@ -689,7 +695,13 @@ async function retryMainAccountInfoIfIdentityChanged(
   reconcileMainCodexAccountRuntimeState();
   return retriesRemaining > 0
     ? fetchMainAccountInfoWhileOwned(true, retriesRemaining - 1, nativeMainLease, explicitRefresh)
-    : { info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
+    : {
+        info: EMPTY_MAIN_ACCOUNT_INFO,
+        credentialChecked: true,
+        hasCredential: true,
+        authStatus: "authenticated",
+        credentialSource: "auth-file",
+      };
 }
 
 async function fetchMainAccountInfoAttempt(
@@ -700,16 +712,19 @@ async function fetchMainAccountInfoAttempt(
 ): Promise<MainAccountInfoFetchResult> {
   const nativeMainLease = existingNativeMainLease ?? tryAcquireNativeMainProfileClaim();
   if (!nativeMainLease) {
+    const cachedCredential = getMainAccountCredentialState() ?? { status: "unavailable" as const };
     return {
       info: EMPTY_MAIN_ACCOUNT_INFO,
       credentialChecked: false,
-      hasCredential: false,
+      hasCredential: cachedCredential.status === "authenticated",
+      authStatus: cachedCredential.status,
+      ...(cachedCredential.status === "authenticated" ? { credentialSource: cachedCredential.source } : {}),
       identityGeneration: captureMainAccountIdentityGeneration(),
     };
   }
   try {
     const operation = async () => ({
-      ...await fetchMainAccountInfoWhileOwned(forceRefresh, retriesRemaining, nativeMainLease),
+      ...await fetchMainAccountInfoWhileOwned(forceRefresh, retriesRemaining, nativeMainLease, forceRefresh),
       identityGeneration: captureMainAccountIdentityGeneration(),
     });
     if (nativeMainSharedClaimHeld) return await operation();
@@ -717,10 +732,13 @@ async function fetchMainAccountInfoAttempt(
       return await withNativeMainCredentialClaim(operation);
     } catch (error) {
       if (isNativeMainClaimUnavailable(error)) {
+        const cachedCredential = getMainAccountCredentialState() ?? { status: "unavailable" as const };
         return {
           info: EMPTY_MAIN_ACCOUNT_INFO,
           credentialChecked: false,
-          hasCredential: false,
+          hasCredential: cachedCredential.status === "authenticated",
+          authStatus: cachedCredential.status,
+          ...(cachedCredential.status === "authenticated" ? { credentialSource: cachedCredential.source } : {}),
           identityGeneration: captureMainAccountIdentityGeneration(),
         };
       }
@@ -746,22 +764,45 @@ async function fetchMainAccountInfoWhileOwned(
   const writerGeneration = captureConfigGeneration();
   reconcileMainCodexAccountRuntimeState();
   const tokenRead = readCodexTokensResult();
-  setMainAccountCredentialPresence(tokenRead.status === "ok");
   if (tokenRead.status !== "ok") {
-    // A local read failure is NOT proof of sign-out: a missing file can be a non-atomic rewrite
-    // gap, and malformed JSON can be a half-written file. Clearing the cache and marking the
-    // account for reauth here destroyed healthy email/plan/quota state and pinned a working
-    // account as unusable. Preserve what we already know and let the caller retry; request
-    // routing stays fail-closed because getMainAccountToken() re-reads the file itself, and the
-    // account DTO still reports hasCredential=false while the file is unreadable.
+    // Modern Codex commonly stores ChatGPT auth in the OS keyring, leaving no auth.json to read.
+    // OpenCodex deliberately does not inspect that keyring or launch Codex merely to infer login
+    // presence. Only a successful request that already carries Codex's caller-owned bearer can
+    // establish managed auth and populate non-secret identity/quota metadata.
+    const cachedCredential = getMainAccountCredentialState();
     const preserved = getMainAccountInfoCache();
-    return { info: preserved ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: false };
+    if (cachedCredential?.status === "authenticated"
+      && cachedCredential.source === "codex-managed") {
+      return {
+        info: preserved ?? EMPTY_MAIN_ACCOUNT_INFO,
+        credentialChecked: true,
+        hasCredential: true,
+        authStatus: "authenticated",
+        credentialSource: "codex-managed",
+      };
+    }
+    // A missing/malformed/unreadable auth.json is not proof of sign-out when the selected Codex
+    // credential store may be the keyring. Preserve display metadata and report uncertainty.
+    setMainAccountCredentialState({ status: "unavailable" });
+    return {
+      info: preserved ?? EMPTY_MAIN_ACCOUNT_INFO,
+      credentialChecked: true,
+      hasCredential: false,
+      authStatus: "unavailable",
+    };
   }
+  setMainAccountCredentialState({ status: "authenticated", source: "auth-file" });
   const tokens = tokenRead.tokens;
   const requestAccountId = extractAccountId(tokens.id_token, tokens.access_token) ?? (tokens.account_id || null);
   const cached = getMainAccountInfoCache();
   if (!forceRefresh && cached && Date.now() - cached.ts < MAIN_CACHE_TTL) {
-    return { info: cached, credentialChecked: true, hasCredential: true };
+    return {
+      info: cached,
+      credentialChecked: true,
+      hasCredential: true,
+      authStatus: "authenticated",
+      credentialSource: "auth-file",
+    };
   }
   try {
     const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
@@ -776,7 +817,13 @@ async function fetchMainAccountInfoWhileOwned(
         clearMainAccountInfoCache();
         markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID, writerGeneration);
       }
-      return { info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
+      return {
+        info: EMPTY_MAIN_ACCOUNT_INFO,
+        credentialChecked: true,
+        hasCredential: true,
+        authStatus: "authenticated",
+        credentialSource: "auth-file",
+      };
     }
     const data = (await resp.json()) as WhamUsageResponse;
     const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
@@ -811,12 +858,20 @@ async function fetchMainAccountInfoWhileOwned(
       info: result,
       credentialChecked: true,
       hasCredential: true,
+      authStatus: "authenticated",
+      credentialSource: "auth-file",
       ...(quota ? { freshQuota: quota } : {}),
       ...(freshResetCredits !== undefined ? { freshResetCredits } : {}),
     };
   } catch {
     const retried = await retryMainAccountInfoIfIdentityChanged(requestAccountId, retriesRemaining, nativeMainLease, explicitRefresh);
-    return retried ?? { info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: true };
+    return retried ?? {
+      info: EMPTY_MAIN_ACCOUNT_INFO,
+      credentialChecked: true,
+      hasCredential: true,
+      authStatus: "authenticated",
+      credentialSource: "auth-file",
+    };
   }
 }
 
@@ -891,6 +946,10 @@ export interface CodexAuthAccountDto {
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
   needsReauth?: boolean;
   hasCredential: boolean;
+  /** Main-account auth observation. Pool rows omit this field. */
+  authStatus?: MainAccountAuthStatus;
+  /** Main credential owner; `codex-managed` means request-scoped passthrough, not extraction. */
+  credentialSource?: MainAccountCredentialSource;
   health: OAuthAccountHealth;
   healthLabel: OAuthHealthLabel;
   healthSummary: string;
@@ -1297,15 +1356,36 @@ export async function listCodexAuthAccountsSnapshot(
   const fetchedMainGeneration = mainResult.identityGeneration ?? captureMainAccountIdentityGeneration();
   const mainSnapshotLive = isMainAccountIdentityGenerationLive(fetchedMainGeneration);
   const mainInfo = mainSnapshotLive ? mainResult.info : EMPTY_MAIN_ACCOUNT_INFO;
-  const hasMainCredential = mainSnapshotLive && mainResult.credentialChecked
-    ? mainResult.hasCredential
-    : getMainAccountCredentialPresence() ?? false;
-  const mainNeedsReauth = (mainSnapshotLive && mainResult.credentialChecked && !hasMainCredential)
-    || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+  const cachedCredential = getMainAccountCredentialState() ?? { status: "unavailable" as const };
+  const mainAuthStatus = mainSnapshotLive && mainResult.credentialChecked
+    ? mainResult.authStatus
+    : cachedCredential.status;
+  const mainCredentialSource = mainSnapshotLive && mainResult.credentialChecked
+    ? mainResult.credentialSource
+    : cachedCredential.status === "authenticated"
+      ? cachedCredential.source
+      : undefined;
+  const hasMainCredential = mainAuthStatus === "authenticated";
+  // A Codex-managed credential can rotate on the next request without OpenCodex seeing or
+  // storing it. A stale proxy-owned quarantine therefore cannot prove that the next caller bearer
+  // needs reauthentication. Only file-backed auth can be quarantined outside a live request.
+  const mainNeedsReauth = mainAuthStatus === "logged-out"
+    || (mainAuthStatus === "authenticated"
+      && mainCredentialSource === "auth-file"
+      && isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID));
   const mainHealth = projectCodexAccountHealth({
     accountId: MAIN_CODEX_ACCOUNT_ID,
     needsReauth: mainNeedsReauth,
   });
+  // A quota row belongs to the identity generation that produced this snapshot. If publication
+  // observed an intervening identity clear/switch, discard it with the rest of the stale main
+  // projection instead of attaching old usage to the replacement account.
+  const storedMainQuota = mainSnapshotLive && mainAuthStatus === "authenticated"
+    ? getAccountQuota(MAIN_CODEX_ACCOUNT_ID)
+    : undefined;
+  const displayedMainQuota = mainInfo.quota
+    ? { ...mainInfo.quota, updatedAt: storedMainQuota?.updatedAt ?? Date.now() }
+    : storedMainQuota;
   const main: CodexAuthAccountDto = {
     id: MAIN_CODEX_ACCOUNT_ID,
     email: maskEmail(mainInfo.email) ?? "Codex App login",
@@ -1315,13 +1395,10 @@ export async function listCodexAuthAccountsSnapshot(
     paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     hasCredential: hasMainCredential,
+    authStatus: mainAuthStatus,
+    ...(mainCredentialSource ? { credentialSource: mainCredentialSource } : {}),
     needsReauth: mainNeedsReauth,
-    quota: mainInfo.quota ? {
-      ...quotaForPlan({
-        ...mainInfo.quota,
-        updatedAt: getAccountQuota(MAIN_CODEX_ACCOUNT_ID)?.updatedAt ?? Date.now(),
-      }, mainInfo.plan),
-    } : null,
+    quota: displayedMainQuota ? { ...quotaForPlan(displayedMainQuota, mainInfo.plan) } : null,
     ...oauthAccountHealthFields("codex", MAIN_CODEX_ACCOUNT_ID, mainHealth),
   };
   return {
@@ -1332,7 +1409,10 @@ export async function listCodexAuthAccountsSnapshot(
   };
 }
 
-export async function listCodexAuthAccounts(config: OcxConfig, forceRefresh = false): Promise<CodexAuthAccountDto[]> {
+export async function listCodexAuthAccounts(
+  config: OcxConfig,
+  forceRefresh = false,
+): Promise<CodexAuthAccountDto[]> {
   return (await listCodexAuthAccountsSnapshot(config, forceRefresh)).accounts;
 }
 

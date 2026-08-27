@@ -85,7 +85,7 @@ Les implémentations OAuth se trouvent dans `oauth/`. Les jetons d’accès sont
 
 ## Transport et compactage
 
-Par défaut, `server/index.ts` sert HTTP/SSE sur `/v1/responses`. Si Codex tente une mise à niveau WebSocket de Responses alors que `websockets` vaut `false`, opencodex renvoie `426 upgrade_required` ; Codex revient alors à HTTP pour cette session. Lorsque `"websockets": true` est défini, le même point de terminaison accepte la mise à niveau et utilise le pont WebSocket.
+`server/index.ts` sert HTTP/SSE et les mises à niveau WebSocket sur `/v1/responses`. Le réglage `websockets` contrôle l’annonce de cette capacité pour les lignes routées du catalogue et des fournisseurs. Le fournisseur OpenAI intégré de Codex peut tenter une mise à niveau dès que `openai_base_url` pointe vers le proxy ; les mises à niveau valides restent donc acceptées lorsque l’annonce est désactivée. `426 upgrade_required` est réservé à un échec de mise à niveau.
 
 Indépendamment de ce réglage côté client, les requêtes canoniques transmises à ChatGPT avec `stream: true` à la racine peuvent utiliser le transport WebSocket en amont de Codex avec une version stable de Bun 1.4.0 ou ultérieure. La version intégrée Bun 1.3.14, les préversions et les identités de runtime impossibles à vérifier utilisent HTTP/SSE. Les réponses WS en amont qui réussissent conservent le contrat SSE en aval et contournent `tee()` au moyen d’un relais borné à lecteur unique et avide (4 MiB par trame brute/enveloppée et une file de production de 8 MiB). Le dépassement de la file ferme la connexion en amont et émet en aval un événement terminal `response.failed`, suivi de `[DONE]`.
 

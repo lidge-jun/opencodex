@@ -108,7 +108,7 @@ provider events → internal adapter events → client dialect
 `generate: false` のウォームアップ フレームはアップストリームを呼び出しません。これは、合成 `response.created` に続いて `response.completed` を返します。両方とも空の応答 ID を持ち、出力はありません。
 
 :::note
-WebSocket が無効になっている場合、アップグレード試行ではコード `upgrade_required` の HTTP 426 を受信します。 Codex は、そのハンドシェイクの結果を、セッションの HTTP にフォールバックする信号として扱います。失敗したモデルターンではありません。
+WebSocket の通知が無効な場合、ルーティングされたカタログ行では機能フラグが省略されます。ただし、`openai_base_url` の上書き後は組み込み OpenAI プロバイダーがアップグレードを試行することがあるため、プロキシはどちらのモードでも有効なアップグレードを受け入れます。HTTP 426 はアップグレードを完了できない場合にのみ使用されます。
 :::
 
 ## `POST /v1/chat/completions`
@@ -214,7 +214,7 @@ Responses-family および Chat リクエストは、プロバイダーまたは
 | 403 | `origin_rejected` | Responses/OpenAI データプレーン リクエストまたは WebSocket アップグレードが、許可されていないオリジンから送信されました。
 | 503 | `combo_unavailable` |選択したコンボ内のすべてのターゲットは使用不可、クールダウン中、無効、またはその他の理由で不適格です。
 | 400 | `unreadable_encrypted_agent_task` |暗号化された v2 ワーカー タスクには、それを使用できる適格なネイティブ ChatGPT ターゲットがありません。
-| 426 | `upgrade_required` |応答 WebSocket トランスポートが無効になっているか、アップグレードが失敗しました。 HTTP を使用する |
+| 426 | `upgrade_required` | Responses WebSocket のアップグレードを完了できませんでした。HTTP を使用してください |
 
 Anthropic オリジンの失敗は Anthropic のエラー エンベロープでレンダリングされるため、オリジンの拒否は OpenAI スタイルの `origin_rejected` 本体ではなく、その方言上の 403 `permission_error` になります。
 

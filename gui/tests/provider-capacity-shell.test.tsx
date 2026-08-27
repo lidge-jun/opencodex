@@ -211,7 +211,8 @@ test("provider quota fetch preserves aggregate capacity through shell state and 
   expect(text).toContain("31% used");
   expect(text).toContain("Current effective account · pro");
   expect(text).toContain("8%");
-  expect(text).toContain("Incomplete coverage: 1 account(s) excluded, including 1 unknown plan(s)");
+  expect(text).toContain("Incomplete coverage: 1 account(s) excluded.");
+  expect(text).toContain("Unknown plan: 1 account(s).");
   expect(text).toContain("Next capacity recovery");
   expect(text).toContain("+19.2% pool capacity");
   const expectedRecoveryAt = new Intl.DateTimeFormat("en", {
@@ -309,6 +310,7 @@ test("all-stale response renders coverage only without a numeric fallback", asyn
         includedAccounts: 0,
         excludedAccounts: 2,
         unknownPlanAccounts: 0,
+        staleQuotaAccounts: 2,
         incomplete: true,
         partialWindowAccounts: 0,
         currentAccount: { isMain: true, plan: "pro", quota: null },
@@ -323,6 +325,7 @@ test("all-stale response renders coverage only without a numeric fallback", asyn
   expect(text).not.toContain("Current effective account");
   expect(text).not.toContain("80% used");
   expect(text).toContain("Incomplete coverage: 2 account(s) excluded");
+  expect(text).toContain("Stale quota data: 2 account(s).");
 });
 
 test("coverage-only API report remains visible in the rate-limit overview", async () => {
@@ -340,6 +343,7 @@ test("coverage-only API report remains visible in the rate-limit overview", asyn
         includedAccounts: 0,
         excludedAccounts: 3,
         unknownPlanAccounts: 1,
+        missingQuotaAccounts: 2,
         partialWindowAccounts: 0,
         incomplete: true,
       },
@@ -350,7 +354,9 @@ test("coverage-only API report remains visible in the rate-limit overview", asyn
 
   const text = host.textContent ?? "";
   expect(text).toContain("OpenAI (Codex login)");
-  expect(text).toContain("Incomplete coverage: 3 account(s) excluded, including 1 unknown plan(s)");
+  expect(text).toContain("Incomplete coverage: 3 account(s) excluded.");
+  expect(text).toContain("No current quota data: 2 account(s).");
+  expect(text).toContain("Unknown plan: 1 account(s).");
   expect(text).not.toContain("No rate-limit data yet");
   expect(text).not.toMatch(/\d+(?:\.\d+)?% used/);
 });

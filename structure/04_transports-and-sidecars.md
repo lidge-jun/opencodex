@@ -502,10 +502,10 @@ The WebSocket endpoint exists at `/v1/responses`, but discovery is opt-in:
 ```
 
 `websocketsEnabled(config)` is true only for an explicit `true`. When false, opencodex removes
-`supports_websockets` from injected provider tables and routed catalog entries, keeping Codex on
-HTTP/SSE. When true, Codex may use Responses WebSocket frames handled by `src/server/ws-bridge.ts`.
-If Codex still attempts a WebSocket upgrade while the feature is disabled, `/v1/responses` rejects
-the upgrade with 426 so Codex falls back to HTTP cleanly.
+`supports_websockets` from injected provider tables and routed catalog entries. Codex's built-in
+`openai` provider nevertheless attempts a Responses WebSocket whenever `openai_base_url` points at
+the proxy, so `/v1/responses` accepts that upgrade for compatibility even when advertising is off.
+When true, routed rows may opt into the same frames handled by `src/server/ws-bridge.ts`.
 
 That setting controls the client-facing upgrade only. The transparent upstream
 ChatGPT WS optimization described above is selected independently and still

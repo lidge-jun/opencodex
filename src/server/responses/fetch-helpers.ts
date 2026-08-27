@@ -56,6 +56,8 @@ export interface ProviderFetchOptions {
   modelId?: string;
   /** One pacing slot was acquired immediately before this fetch wrapper was created. */
   pacingSlotAcquired?: boolean;
+  /** Canonical Codex WS quota observation; the transport never forwards this frame. */
+  onCodexRateLimits?: (event: unknown) => void;
 }
 
 export function providerFetch(
@@ -81,7 +83,9 @@ export function providerFetch(
       // used, protocol pin included: a WS turn that falls back is serving the
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`
       // there would silently negotiate a transport the operator ruled out.
-      return codexWsUpstreamFetch(input, init, httpFetch, runtime);
+      return codexWsUpstreamFetch(input, init, httpFetch, runtime, {
+        onRateLimits: options.onCodexRateLimits,
+      });
     }
     return httpFetch(input, init);
   };

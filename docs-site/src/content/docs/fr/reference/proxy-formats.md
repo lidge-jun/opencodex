@@ -143,9 +143,10 @@ Une trame d'échauffement avec `generate: false` n'appelle pas d'amont. Il renvo
 `response.created` suivi de `response.completed`, tous deux avec un identifiant de réponse vide et aucune sortie.
 
 :::note
-Lorsque les WebSockets sont désactivés, une tentative de mise à niveau reçoit HTTP 426 avec le code
-`upgrade_required`. Codex traite ce résultat de poignée de main comme un signal de retour à HTTP pour le
-session. Il ne s’agit pas d’un échec du modèle routé.
+Lorsque l’annonce WebSocket est désactivée, les lignes routées du catalogue omettent l’indicateur de
+capacité. Le fournisseur OpenAI intégré peut néanmoins tenter une mise à niveau après le remplacement
+de `openai_base_url` ; le proxy accepte donc les mises à niveau valides dans les deux modes. HTTP 426
+est réservé à une mise à niveau qui ne peut pas être effectuée.
 :::
 
 ## `POST /v1/chat/completions`
@@ -295,7 +296,7 @@ Les erreurs utilisent l'enveloppe du dialecte client lorsque cela est nécessair
 | 403 | `origin_rejected` | Une demande de plan de données Réponses/OpenAI ou une mise à niveau WebSocket provient d'une origine non autorisée |
 | 503 | `combo_unavailable` | Chaque cible du combo sélectionné est indisponible, en temps de recharge, désactivée ou autrement inéligible |
 | 400 | `unreadable_encrypted_agent_task` | Une tâche de travail v2 chiffrée n'a pas de cible native éligible pouvant la consommer |
-| 426 | `upgrade_required` | Le transport Réponses WebSocket est désactivé ou la mise à niveau a échoué ; utiliser HTTP |
+| 426 | `upgrade_required` | Une mise à niveau WebSocket de Responses n’a pas pu être effectuée ; utiliser HTTP |
 
 Les échecs d'origine Anthropic sont restitués dans l'enveloppe d'erreur de Anthropic, donc le rejet d'origine est un
 403 `permission_error` sur ce dialecte plutôt que sur le corps `origin_rejected` de style OpenAI.

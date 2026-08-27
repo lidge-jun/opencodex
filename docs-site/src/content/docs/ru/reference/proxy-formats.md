@@ -135,9 +135,10 @@ Warmup-frame с `generate: false` upstream не вызывает. Он возв�
 `response.created` и `response.completed` с пустым response id и без output.
 
 :::note
-Когда WebSocket отключён, попытка upgrade получает HTTP 426 с кодом `upgrade_required`. Codex
-трактует результат такого handshake как сигнал откатиться к HTTP для этой сессии. Это не сбой
-хода модели.
+Когда объявление WebSocket отключено, у маршрутизируемых строк каталога нет флага этой возможности.
+Однако встроенный провайдер OpenAI всё равно может попытаться выполнить upgrade после подмены
+`openai_base_url`, поэтому прокси принимает корректный upgrade в обоих режимах. HTTP 426 используется
+только тогда, когда upgrade невозможно завершить.
 :::
 
 ## `POST /v1/chat/completions`
@@ -275,7 +276,7 @@ Direct, поэтому remote proxy key здесь обязан идти чер�
 | 403 | `origin_rejected` | Data-plane запрос или WebSocket-upgrade Responses/OpenAI пришёл с запрещённого origin |
 | 503 | `combo_unavailable` | Все цели выбранной combo недоступны, в cooldown, отключены или иным образом не подходят |
 | 400 | `unreadable_encrypted_agent_task` | У шифрованной задачи воркера v2 нет подходящей нативной цели ChatGPT, способной её прочитать |
-| 426 | `upgrade_required` | Транспорт Responses WebSocket выключен или upgrade не удался; используйте HTTP |
+| 426 | `upgrade_required` | Не удалось завершить upgrade Responses WebSocket; используйте HTTP |
 
 Сбои, пришедшие с Anthropic-side, отрисовываются в error envelope Anthropic, поэтому отклонение
 origin превращается в 403 `permission_error`, а не в OpenAI-style body `origin_rejected`.

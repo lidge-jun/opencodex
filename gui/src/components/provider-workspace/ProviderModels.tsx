@@ -5,9 +5,15 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
+import { IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { filterModels } from "../../provider-workspace/report";
 import { encodedModelIdCollides } from "../../../../src/providers/slug-codec";
+
+interface ProviderCustomModel {
+  id: string | null;
+  modelId: string;
+}
 
 export default function ProviderModels({
   item,
@@ -40,14 +46,20 @@ export default function ProviderModels({
   const [customSaving, setCustomSaving] = useState(false);
   const [customError, setCustomError] = useState("");
   const [customSuccess, setCustomSuccess] = useState("");
-  const [customModelIds, setCustomModelIds] = useState<string[]>([]);
+  const [customModels, setCustomModels] = useState<ProviderCustomModel[]>([]);
   const [customModelsReady, setCustomModelsReady] = useState(false);
   const [customModelsLoadFailed, setCustomModelsLoadFailed] = useState(false);
   const [customModelsLoadEpoch, setCustomModelsLoadEpoch] = useState(0);
+  const [customDeletingId, setCustomDeletingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyResetRef = useRef<number | null>(null);
   const selectedSet = useMemo(() => new Set(selectedModels), [selectedModels]);
   const configuredModels = useMemo(() => item.models ?? [], [item.models]);
+  const customModelIds = useMemo(() => customModels.map(model => model.modelId), [customModels]);
+  const customModelsById = useMemo(
+    () => new Map(customModels.map(model => [model.modelId, model])),
+    [customModels],
+  );
   const trimmedCustomModelId = customModelId.trim();
   const knownModelIds = [
     ...availableModels,
@@ -76,17 +88,19 @@ export default function ProviderModels({
         const rows: unknown = await response.json();
         if (!Array.isArray(rows)) throw new Error("Invalid custom model list");
         if (!active) return;
-        setCustomModelIds(rows.flatMap(row => {
+        setCustomModels(rows.flatMap(row => {
           if (!row || typeof row !== "object") return [];
-          const model = row as { provider?: unknown; modelId?: unknown };
-          return model.provider === item.name && typeof model.modelId === "string" ? [model.modelId] : [];
+          const model = row as { id?: unknown; provider?: unknown; modelId?: unknown };
+          return model.provider === item.name && typeof model.modelId === "string"
+            ? [{ id: typeof model.id === "string" ? model.id : null, modelId: model.modelId }]
+            : [];
         }));
         setCustomModelsLoadFailed(false);
         setCustomError("");
         setCustomModelsReady(true);
       } catch {
         if (!active) return;
-        setCustomModelIds([]);
+        setCustomModels([]);
         // Without this the component stays permanently unable to add a model: `customModelsReady`
         // never flips back and the effect has no trigger left, so a single transient GET failure
         // disabled Add until the whole panel remounted.
@@ -136,7 +150,14 @@ export default function ProviderModels({
         body: JSON.stringify({ provider: item.name, modelId: trimmedCustomModelId }),
       });
       if (response.ok) {
-        setCustomModelIds(ids => ids.includes(trimmedCustomModelId) ? ids : [...ids, trimmedCustomModelId]);
+        const saved: unknown = await response.json().catch(() => null);
+        const savedId = saved && typeof saved === "object" && typeof (saved as { id?: unknown }).id === "string"
+          ? (saved as { id: string }).id
+          : null;
+        setCustomModels(models => models.some(model => model.modelId === trimmedCustomModelId)
+          ? models
+          : [...models, { id: savedId, modelId: trimmedCustomModelId }]);
+        if (savedId === null) setCustomModelsLoadEpoch(epoch => epoch + 1);
         setCustomModelId("");
         setCustomSuccess(t("models.customAdded"));
         onRetryModels?.();
@@ -147,6 +168,30 @@ export default function ProviderModels({
       setCustomError(t("models.networkError"));
     } finally {
       setCustomSaving(false);
+    }
+  };
+
+  const deleteCustomModel = async (model: ProviderCustomModel) => {
+    if (!model.id || customDeletingId !== null) return;
+    if (!window.confirm(t("models.customDeleteConfirm", { name: model.modelId }))) return;
+    setCustomDeletingId(model.id);
+    setCustomError("");
+    setCustomSuccess("");
+    try {
+      const response = await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(model.id)}`, {
+        method: "DELETE",
+      });
+      if (response.ok) {
+        setCustomModels(models => models.filter(candidate => candidate.id !== model.id));
+        setCustomSuccess(t("models.customDeleted"));
+        onRetryModels?.();
+      } else {
+        setCustomError(t("models.customSaveFailed"));
+      }
+    } catch {
+      setCustomError(t("models.networkError"));
+    } finally {
+      setCustomDeletingId(null);
     }
   };
 
@@ -247,6 +292,7 @@ export default function ProviderModels({
           {visibleModels.map(modelId => {
             const isDefault = modelId === item.defaultModel;
             const isSelected = selectedSet.has(modelId);
+            const customModel = customModelsById.get(modelId);
             const copied = copiedId === modelId;
             return (
               <li key={modelId} className="pws-model-chip">
@@ -261,6 +307,19 @@ export default function ProviderModels({
                 </button>
                 {isDefault ? <span className="badge badge-muted pws-model-flag">{t("prov.defaultBadge")}</span> : null}
                 {isSelected ? <span className="badge badge-accent pws-model-flag">{t("pws.selected")}</span> : null}
+                {customModel ? <span className="badge badge-muted pws-model-flag">{t("models.customBadge")}</span> : null}
+                {customModel?.id ? (
+                  <button
+                    type="button"
+                    className="pws-model-chip-delete"
+                    onClick={() => { void deleteCustomModel(customModel); }}
+                    disabled={customDeletingId !== null}
+                    aria-label={`${t("models.customDelete")}: ${modelId}`}
+                    title={t("models.customDelete")}
+                  >
+                    <IconTrash width={14} height={14} aria-hidden="true" />
+                  </button>
+                ) : null}
               </li>
             );
           })}

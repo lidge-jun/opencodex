@@ -14,6 +14,7 @@ import {
   MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES,
   shouldUseCodexWsUpstream as rawShouldUseCodexWsUpstream,
+  type CodexWsUpstreamOptions,
 } from "../src/server/responses/ws-upstream";
 import type { OcxProviderConfig } from "../src/types";
 import type { OcxConfig } from "../src/types";
@@ -40,8 +41,9 @@ function codexWsUpstreamFetch(
   url: string,
   init: RequestInit,
   fallback: typeof fetch,
+  options: CodexWsUpstreamOptions = {},
 ): Promise<Response> {
-  return rawCodexWsUpstreamFetch(url, init, fallback, BOUNDED_WS_RUNTIME);
+  return rawCodexWsUpstreamFetch(url, init, fallback, BOUNDED_WS_RUNTIME, options);
 }
 
 function streamingInit(body: Record<string, unknown> = {}): RequestInit {
@@ -413,15 +415,22 @@ describe("isWin32EagerRewrite", () => {
 
 describe("codexWsUpstreamFetch", () => {
   test("relays event frames as an SSE response and sends one response.create frame", async () => {
+    const quotaEvent = { type: "codex.rate_limits", rate_limits: { primary: { used_percent: 12 } } };
+    const observedQuotaEvents: unknown[] = [];
     installFake(ws => {
       ws.emit("open", {});
-      ws.emit("message", { data: JSON.stringify({ type: "codex.rate_limits", limits: {} }) });
+      ws.emit("message", { data: JSON.stringify(quotaEvent) });
       ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
       ws.emit("message", { data: JSON.stringify({ type: "response.output_text.delta", delta: "hi" }) });
       ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1" } }) });
     });
     const fallback = () => { throw new Error("fallback must not run"); };
-    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), fallback as unknown as typeof fetch);
+    const response = await codexWsUpstreamFetch(
+      CODEX_URL,
+      streamingInit(),
+      fallback as unknown as typeof fetch,
+      { onRateLimits: event => observedQuotaEvents.push(event) },
+    );
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
@@ -429,6 +438,7 @@ describe("codexWsUpstreamFetch", () => {
     const text = await response.text();
     // WS-only frames are dropped so clients see the exact SSE surface they always got.
     expect(text).not.toContain("codex.rate_limits");
+    expect(observedQuotaEvents).toEqual([quotaEvent]);
     expect(text).toContain("event: response.created");
     expect(text).toContain('data: {"type":"response.output_text.delta","delta":"hi"}');
     expect(text).toContain("event: response.completed");

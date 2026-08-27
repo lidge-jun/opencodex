@@ -21,7 +21,8 @@ describe("reasoning replay scope propagation", () => {
     expect(core).toContain("accountId: refreshed.accountId");
     expect(core).toContain("generation: refreshed.generation");
     expect(core).toContain("reasoningReplayCodexCredentialIdentity({");
-    expect(core).toContain("authorization: poolContext");
+    expect(core).toContain("authorization: storedPoolContext");
+    expect(core).toContain('poolContext.credentialSource === "caller"');
     expect(core).toContain("accountId: poolContext?.accountId");
     expect(core).toContain("credentialGeneration: poolContext?.kind === \"pool\"");
     expect(core).toContain("writerGeneration: poolContext?.writerGeneration");

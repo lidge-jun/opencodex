@@ -1,10 +1,13 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { OcxConfig } from "../types";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import { getValidCodexToken, readCodexAccountRecord } from "./account-store";
 import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
+import { getCodexHome, readRootTomlString } from "./paths";
 
 const CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=0.0.0";
 const MODEL_ROSTER_TTL_MS = 5 * 60_000;
@@ -13,6 +16,8 @@ const MODEL_ROSTER_TIMEOUT_MS = 8_000;
 const MODEL_ROSTER_MAX_BYTES = 2 * 1024 * 1024;
 const MODEL_ROSTER_CACHE_MAX = 64;
 const DIRECT_CALLER_ACCOUNT_PREFIX = "__direct_codex__:";
+const OPEN_CODEX_CACHE_TIMESTAMP = "2000-01-01T00:00:00Z";
+export const SYNTHETIC_MAIN_MODEL_CREDENTIAL_PREFIX = "synthetic-cache:";
 
 export interface CodexModelEntitlementCredentialSnapshot {
   readonly accountId: string;
@@ -44,6 +49,8 @@ export interface CodexModelEntitlementResolveOptions {
   readonly credentialSnapshot?: typeof accountCredentialSnapshot;
   /** Accounts whose credentials must not be read while another lifecycle owns them. */
   readonly excludeAccountIds?: ReadonlySet<string>;
+  /** Focused test seam for Codex's authenticated native models cache. */
+  readonly nativeMainModels?: readonly string[] | null;
 }
 
 const accountModelsCache = new Map<string, CachedAccountModels>();
@@ -85,11 +92,137 @@ function currentCredentialIdentity(accountId: string): string | undefined {
   }
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
     const token = getMainAccountToken();
-    return token ? `main:${token.chatgptAccountId}` : undefined;
+    return token
+      ? `main:${token.chatgptAccountId}`
+      : accountModelsCache.get(MAIN_CODEX_ACCOUNT_ID)?.credentialIdentity;
   }
   const record = readCodexAccountRecord(accountId);
   if (!record?.credential || record.deletedAt != null) return undefined;
   return `pool:${record.generation}:${record.credential.chatgptAccountId}`;
+}
+
+function validatedAccountGatedModels(rows: unknown): ReadonlySet<string> | null {
+  if (!Array.isArray(rows)) return null;
+  return new Set(rows.flatMap(entry => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const row = entry as {
+      slug?: unknown;
+      visibility?: unknown;
+      supported_in_api?: unknown;
+      supported_reasoning_levels?: unknown;
+      model_messages?: unknown;
+    };
+    if (typeof row.slug !== "string"
+      || !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(row.slug)
+      || row.visibility === "hide"
+      || row.supported_in_api !== true
+      || !Array.isArray(row.supported_reasoning_levels)
+      || row.supported_reasoning_levels.length === 0
+      || typeof row.model_messages !== "object"
+      || row.model_messages === null) return [];
+    return [row.slug];
+  }));
+}
+
+function sameModels(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  return left.size === right.size && [...left].every(model => right.has(model));
+}
+
+function configuredCatalogPath(codexHome: string): string {
+  try {
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    const configured = readRootTomlString(config, "model_catalog_json")?.trim();
+    if (configured) return isAbsolute(configured) ? resolve(configured) : resolve(codexHome, configured);
+  } catch { /* A missing or unreadable config uses the managed default catalog. */ }
+  return join(codexHome, "opencodex-catalog.json");
+}
+
+function corroboratedSyntheticMainModels(
+  cacheRaw: string,
+  cacheModels: ReadonlySet<string>,
+  codexHome: string,
+): CachedAccountModels | null {
+  if (cacheModels.size === 0) return null;
+  let catalogRaw: string;
+  try {
+    catalogRaw = readFileSync(configuredCatalogPath(codexHome), "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const catalog = JSON.parse(catalogRaw) as { models?: unknown };
+    const catalogModels = validatedAccountGatedModels(catalog.models);
+    if (!catalogModels || !sameModels(cacheModels, catalogModels)) return null;
+    return {
+      credentialIdentity: `${SYNTHETIC_MAIN_MODEL_CREDENTIAL_PREFIX}${createHash("sha256")
+        .update(cacheRaw)
+        .update("\0")
+        .update(catalogRaw)
+        .digest("hex")}`,
+      expiresAt: 0,
+      models: cacheModels,
+      confirmed: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read model availability that the installed Codex client fetched while authenticated.
+ *
+ * A real Codex cache is direct startup evidence. OpenCodex's `client_version=0.0.0` wrapper is
+ * accepted only when its sentinel timestamp and gated roster match the managed catalog it was
+ * generated from. That preserves a previously verified keyring roster across an OpenCodex restart
+ * without treating an arbitrary synthetic cache as fresh account evidence. Request routing treats
+ * this persisted wrapper as provisional and verifies it against the current caller before use.
+ */
+function nativeCodexMainModelsCache(now: number, codexHome = getCodexHome()): CachedAccountModels | null {
+  let raw: string;
+  try {
+    raw = readFileSync(join(codexHome, "models_cache.json"), "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { fetched_at?: unknown; client_version?: unknown; models?: unknown };
+    if (typeof parsed.client_version !== "string"
+      || parsed.client_version.trim() === ""
+      || !Array.isArray(parsed.models)) return null;
+    const models = validatedAccountGatedModels(parsed.models);
+    if (!models) return null;
+    if (parsed.client_version.trim() === "0.0.0") {
+      if (parsed.fetched_at !== OPEN_CODEX_CACHE_TIMESTAMP) return null;
+      const synthetic = corroboratedSyntheticMainModels(raw, models, codexHome);
+      return synthetic ? { ...synthetic, expiresAt: now + MODEL_ROSTER_TTL_MS } : null;
+    }
+    return {
+      credentialIdentity: `native-cache:${createHash("sha256").update(raw).digest("hex")}`,
+      expiresAt: now + MODEL_ROSTER_TTL_MS,
+      models,
+      confirmed: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Preserve native Codex's authenticated roster before server startup rewrites models_cache.json.
+ * The startup cache rewrite is synchronous and deliberately precedes the later catalog gather;
+ * without this snapshot the gather sees only OpenCodex's synthetic `client_version=0.0.0` cache.
+ */
+export function seedMainCodexModelEntitlementsFromNativeCache(options: {
+  readonly codexHome?: string;
+  readonly now?: number;
+} = {}): boolean {
+  const now = options.now ?? Date.now();
+  const existing = accountModelsCache.get(MAIN_CODEX_ACCOUNT_ID);
+  if (existing && existing.expiresAt > now) return existing.confirmed;
+  const native = nativeCodexMainModelsCache(now, options.codexHome);
+  if (!native) return false;
+  boundedCacheSet(MAIN_CODEX_ACCOUNT_ID, native);
+  return true;
 }
 
 async function accountCredentialSnapshot(accountId: string): Promise<CodexModelEntitlementCredentialSnapshot | null> {
@@ -267,10 +400,32 @@ export async function resolveCodexModelEntitlements(
     credential,
     result: await modelsForCredential(credential, fetcher, now),
   })));
+  const resolved = new Map(results.map(({ credential, result }) => [credential.accountId, result]));
+  // Keyring-managed main auth has no credential snapshot for OpenCodex to read. Reuse a recent
+  // live-request observation, or seed it from Codex's own non-synthetic authenticated cache.
+  if (options.credentials === undefined
+    && allowedAccountIds.includes(MAIN_CODEX_ACCOUNT_ID)
+    && !resolved.has(MAIN_CODEX_ACCOUNT_ID)) {
+    let cached = accountModelsCache.get(MAIN_CODEX_ACCOUNT_ID);
+    if (!cached || cached.expiresAt <= now) {
+      cached = options.nativeMainModels !== undefined
+        ? options.nativeMainModels === null
+          ? undefined
+          : {
+              credentialIdentity: "native-cache:test",
+              expiresAt: now + MODEL_ROSTER_TTL_MS,
+              models: new Set(options.nativeMainModels),
+              confirmed: true,
+            }
+        : nativeCodexMainModelsCache(now) ?? undefined;
+      if (cached) boundedCacheSet(MAIN_CODEX_ACCOUNT_ID, cached);
+    }
+    if (cached && cached.expiresAt > now) resolved.set(MAIN_CODEX_ACCOUNT_ID, cached);
+  }
   return {
-    modelsByAccount: new Map(results.map(({ credential, result }) => [credential.accountId, result.models])),
-    confirmedAccountIds: new Set(results.flatMap(({ credential, result }) => result.confirmed ? [credential.accountId] : [])),
-    credentialIdentities: new Map(results.map(({ credential }) => [credential.accountId, credential.credentialIdentity])),
+    modelsByAccount: new Map([...resolved].map(([accountId, result]) => [accountId, result.models])),
+    confirmedAccountIds: new Set([...resolved].flatMap(([accountId, result]) => result.confirmed ? [accountId] : [])),
+    credentialIdentities: new Map([...resolved].map(([accountId, result]) => [accountId, result.credentialIdentity])),
   };
 }
 
@@ -288,6 +443,29 @@ export async function isDirectCallerEntitledToCodexModel(
     options.fetcher ?? fetch,
     options.now ?? Date.now(),
   );
+  return result.confirmed && result.models.has(modelId);
+}
+
+/** Verify and remember the gated roster carried by a request-scoped keyring credential. */
+export async function isRequestScopedMainCallerEntitledToCodexModel(
+  headers: Headers,
+  modelId: string,
+  options: Pick<CodexModelEntitlementResolveOptions, "fetcher" | "now"> = {},
+): Promise<boolean> {
+  if (!ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(modelId)) return true;
+  const credential = directCallerCredential(headers);
+  if (!credential) return false;
+  const result = await modelsForCredential(
+    credential,
+    options.fetcher ?? fetch,
+    options.now ?? Date.now(),
+  );
+  if (result.confirmed) {
+    boundedCacheSet(MAIN_CODEX_ACCOUNT_ID, {
+      ...result,
+      credentialIdentity: `caller:${credential.credentialIdentity.slice("direct:".length)}`,
+    });
+  }
   return result.confirmed && result.models.has(modelId);
 }
 

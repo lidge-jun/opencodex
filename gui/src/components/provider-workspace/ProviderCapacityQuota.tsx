@@ -117,8 +117,22 @@ export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuo
             <div className="pws-capacity-incomplete">
               {t("pws.capacity.incomplete", {
                 excluded: aggregation.excludedAccounts,
-                unknown: aggregation.unknownPlanAccounts,
               })}
+              {aggregation.missingQuotaAccounts > 0 && (
+                <div>{t("pws.capacity.missingQuota", { count: aggregation.missingQuotaAccounts })}</div>
+              )}
+              {aggregation.unknownPlanAccounts > 0 && (
+                <div>{t("pws.capacity.unknownPlan", { count: aggregation.unknownPlanAccounts })}</div>
+              )}
+              {aggregation.pausedAccounts > 0 && (
+                <div>{t("pws.capacity.pausedAccounts", { count: aggregation.pausedAccounts })}</div>
+              )}
+              {aggregation.reauthAccounts > 0 && (
+                <div>{t("pws.capacity.reauthAccounts", { count: aggregation.reauthAccounts })}</div>
+              )}
+              {aggregation.staleQuotaAccounts > 0 && (
+                <div>{t("pws.capacity.staleQuota", { count: aggregation.staleQuotaAccounts })}</div>
+              )}
             </div>
           )}
           {aggregation && aggregation.partialWindowAccounts > 0 && (

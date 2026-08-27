@@ -9,7 +9,11 @@ import { ToastNotice, type NoticeTone } from "../ui";
 import { IconPlus } from "../icons";
 import { useT } from "../i18n/shared";
 import { useProviderAccountPools } from "../hooks/useProviderAccountPools";
-import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
+import {
+  useCodexAccountPool,
+  type CodexAccountEntry,
+  type CodexAccountLoadState,
+} from "../hooks/useCodexAccountPool";
 import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
 import { useKeyedClientResource } from "../client-resource";
 import { readSessionListCache } from "../session-list-cache";
@@ -20,6 +24,29 @@ import { useProvidersFetch } from "./use-providers-fetch";
 import { ProvidersPageModals } from "./providers-page-modals";
 import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-page-utils";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
+
+function codexCapacitySignature(
+  accounts: readonly CodexAccountEntry[],
+  activeId: string | null,
+): { value: string; hasObservedState: boolean } {
+  const rows = accounts.map(account => JSON.stringify({
+    isMain: account.isMain,
+    active: account.id === activeId || (account.isMain && (activeId === null || activeId === "__main__")),
+    plan: account.plan?.trim().toLowerCase() || null,
+    paused: account.paused,
+    needsReauth: account.needsReauth === true,
+    quota: account.quota,
+  })).sort();
+  return {
+    value: JSON.stringify(rows),
+    hasObservedState: accounts.some(account => (
+      Boolean(account.plan?.trim())
+      || account.quota !== null
+      || account.paused
+      || account.needsReauth === true
+    )),
+  };
+}
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
@@ -54,6 +81,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   // effect and its deferred load is deliberately uncancellable, so the guard lives here.
   const bootstrapKeyRef = useRef<string | null>(null);
   const removeBusyRef = useRef(false);
+  const codexCapacityRef = useRef<{
+    key: string;
+    value: string;
+    hasObservedState: boolean;
+    loadState: CodexAccountLoadState;
+    quotaEpoch: number;
+  } | null>(null);
 
   const notify = useCallback((msg: string, ok: boolean = true) => {
     setStatus(msg);
@@ -130,8 +164,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
    * quota effect re-ran with it. Measured on this checkout: six `/api/provider-quotas` reads
    * inside 15ms where one answers the question.
    *
-   * A counter only moves when something actually invalidates the quotas, so account arrival
-   * is silent while every real mutation path still forces a re-read.
+   * A counter only moves when something actually invalidates the quotas. Generic OAuth
+   * account arrival stays silent; the Codex-only effect below also bumps it when an observed
+   * plan/quota changes the aggregate report.
    */
   const [quotaRefresh, setQuotaRefresh] = useState({ epoch: 0, force: false });
   const invalidateProviderQuotas = useCallback((force = false) => {
@@ -150,13 +185,62 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   // Single source for Codex reauth health: the controller derives it from the same
   // accounts/active pair this page used to poll on its own 30s timer.
   const codexActiveNeedsReauth = codexPool.activeNeedsReauth;
+  const openAiAccountState = config
+    ? openAiAccountProviderState(config.providers.openai)
+    : "absent";
+  const codexCapacity = useMemo(
+    () => codexCapacitySignature(codexPool.accounts, codexPool.activeId),
+    [codexPool.accounts, codexPool.activeId],
+  );
+
+  useEffect(() => {
+    if (openAiAccountState !== "ready") {
+      codexCapacityRef.current = null;
+      return;
+    }
+    const key = apiBase;
+    const previous = codexCapacityRef.current;
+    codexCapacityRef.current = {
+      key,
+      value: codexCapacity.value,
+      hasObservedState: codexCapacity.hasObservedState,
+      loadState: codexPool.loadState,
+      quotaEpoch: quotaRefresh.epoch,
+    };
+
+    // The account list and provider quota report are deliberately separate reads. A
+    // successful proxy request can make the former observe plan/quota after the latter
+    // already returned its coverage-only snapshot. Re-read exactly once when that
+    // presentation-relevant Codex state arrives or changes. This is scoped to the Codex
+    // pool, so staggered OAuth account responses cannot recreate the old fetch storm.
+    const stateChanged = previous?.key === key && previous.value !== codexCapacity.value;
+    const initialUnobservedLoad = previous?.loadState !== "ready"
+      && codexPool.loadState === "ready"
+      && !previous?.hasObservedState
+      && !codexCapacity.hasObservedState;
+    const reportChanged = stateChanged && !initialUnobservedLoad;
+    const alreadyInvalidated = reportChanged && previous.quotaEpoch !== quotaRefresh.epoch;
+    if (codexPool.loadState === "ready" && reportChanged && !alreadyInvalidated) {
+      invalidateProviderQuotas(false);
+    }
+  }, [
+    apiBase,
+    codexCapacity.hasObservedState,
+    codexCapacity.value,
+    codexPool.loadState,
+    invalidateProviderQuotas,
+    openAiAccountState,
+    quotaRefresh.epoch,
+  ]);
 
   // Derive openai login status from the shared Codex controller (no duplicate /accounts).
   const oauthStatusWithCodex = useMemo(() => {
     const accounts = codexPool.accounts;
     if (accounts.length === 0 && codexPool.loadState === "loading") return oauthStatus;
     const main = accounts.find(a => a.isMain) ?? accounts[0];
-    const mainIsReal = !!main && !!main.email && main.email !== "Codex App login";
+    const mainIsReal = main?.authStatus === "authenticated"
+      || Boolean(main?.hasCredential)
+      || (!!main && !!main.email && main.email !== "Codex App login");
     const poolLoggedIn = accounts.some(a => !a.isMain && (a.hasCredential || a.email));
     const codexLoggedIn = mainIsReal || poolLoggedIn;
     const codexEmail = mainIsReal

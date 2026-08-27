@@ -201,8 +201,8 @@ senkronizasyon/geri yüklemeyi yeniden çalıştırın ve servisi tekrar kurun.
 geçişli yüzeylerini yerel Codex ile hizalı tutar. opencodex ayrıca WebSocket
 üzerinden `/v1/responses` sunar. Özel sağlayıcı yalnızca `"websockets": true`
 olduğunda `supports_websockets = true` bildirir; geri döngüde Codex'in yerleşik
-sağlayıcısı önce WebSocket'i deneyebilir ve devre dışı bırakılmış bir proxy
-`426` döndürür, böylece Codex HTTP/SSE'ye geri döner.
+sağlayıcısı bu bildirimden bağımsız olarak WebSocket'i deneyebilir, bu nedenle
+proxy her iki modda da geçerli bir yükseltmeyi kabul eder.
 
 ## İş parçacığı kimliği ve geçmişi
 

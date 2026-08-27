@@ -112,7 +112,7 @@ WSL では、`CODEX_HOME` が設定されておらず、Linux `~/.codex/config.t
 
 Windows では、ChatGPT/Codex アプリが `%USERPROFILE%\\.codex` を読み取りながら、Orca シェルは `CODEX_HOME` と `ORCA_CODEX_HOME` の両方を Orca のバンドルされたランタイム ホームに設定できます。 `ocx status` および `ocx doctor` は、この正確な不一致について警告し、編集されたターゲット パスを出力します。バックグラウンド サービスが Orca シェルからインストールされている場合は、最初に元のシェルからアンインストールし、次に `CODEX_HOME` をアプリ ホームに設定し、`ORCA_CODEX_HOME` の設定を解除し、同期/復元を再実行して、サービスを再度インストールします。
 
-専用プロバイダー モードでは、`requires_openai_auth = true` は Codex App/TUI アカウント ゲート サーフェスをネイティブ Codex と一致させます。 opencodex は WebSocket 経由で `/v1/responses` も提供します。専用プロバイダーは、`"websockets": true` の場合にのみ `supports_websockets = true` をアドバタイズします。ループバック時 Codex の組み込みプロバイダーは最初に WebSocket を試行し、無効になったプロキシが `426` を返すため、Codex は HTTP/SSE にフォールバックします。
+専用プロバイダー モードでは、`requires_openai_auth = true` は Codex App/TUI アカウント ゲート サーフェスをネイティブ Codex と一致させます。opencodex は WebSocket 経由で `/v1/responses` も提供します。専用プロバイダーは、`"websockets": true` の場合にのみ `supports_websockets = true` をアドバタイズしますが、ループバックでは Codex の組み込みプロバイダーがその通知に関係なく WebSocket を試行することがあります。そのため、プロキシはどちらのモードでも有効なアップグレードを受け入れます。
 
 ## スレッドのアイデンティティと履歴
 

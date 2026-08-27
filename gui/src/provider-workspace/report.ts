@@ -27,6 +27,10 @@ export interface ProviderCapacityAggregationView {
   incomplete: boolean;
   excludedAccounts: number;
   unknownPlanAccounts: number;
+  missingQuotaAccounts: number;
+  pausedAccounts: number;
+  reauthAccounts: number;
+  staleQuotaAccounts: number;
   partialWindowAccounts: number;
   fiveHour?: CapacityWindowView;
   weekly?: CapacityWindowView;
@@ -148,6 +152,10 @@ export function capacityAggregationFromReport(report?: ProviderQuotaReportView):
     incomplete: row.incomplete,
     excludedAccounts,
     unknownPlanAccounts,
+    missingQuotaAccounts: finite(row.missingQuotaAccounts) ?? 0,
+    pausedAccounts: finite(row.pausedAccounts) ?? 0,
+    reauthAccounts: finite(row.reauthAccounts) ?? 0,
+    staleQuotaAccounts: finite(row.staleQuotaAccounts) ?? 0,
     partialWindowAccounts: finite(row.partialWindowAccounts) ?? 0,
     ...(fiveHour ? { fiveHour } : {}),
     ...(weekly ? { weekly } : {}),

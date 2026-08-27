@@ -975,6 +975,36 @@
   border-radius: 4px;
 }
 
+.pws-model-chip-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  margin: -4px -4px -4px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--red);
+  cursor: pointer;
+}
+
+.pws-model-chip-delete:hover {
+  background: color-mix(in oklab, var(--red) 12%, transparent);
+}
+
+.pws-model-chip-delete:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 1px;
+}
+
+.pws-model-chip-delete:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .pws-model-id {
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 0.8rem;

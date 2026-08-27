@@ -265,6 +265,57 @@ test("successful quick-add appears immediately when catalog refresh is unavailab
   await act(async () => { root.unmount(); });
 });
 
+test("a custom pill can be deleted without hiding the same live model", async () => {
+  const deleted: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    if (!init?.method || init.method === "GET") {
+      return Response.json([{
+        id: "custom-1",
+        provider: "AiCodeWith",
+        modelId: "claude-opus-5",
+      }]);
+    }
+    if (init.method === "DELETE") {
+      deleted.push(String(input));
+      return Response.json({ ok: true });
+    }
+    return new Response(null, { status: 405 });
+  }) as typeof fetch;
+  Object.defineProperty(testWindow, "confirm", {
+    configurable: true,
+    value: () => true,
+  });
+
+  let refreshes = 0;
+  const { root, container } = await mountProviderModels(
+    ["claude-opus-5"],
+    () => { refreshes += 1; },
+  );
+  await act(async () => { await Promise.resolve(); });
+
+  expect(container.textContent).toContain("Custom");
+  const deleteButton = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Delete: claude-opus-5"]',
+  )!;
+  expect(deleteButton).toBeTruthy();
+
+  await act(async () => {
+    deleteButton.click();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(deleted).toEqual([
+    "http://localhost:10100/api/custom-models/custom-1",
+  ]);
+  expect(refreshes).toBe(1);
+  expect(container.querySelector(".pws-model-id")?.textContent).toBe("claude-opus-5");
+  expect(container.querySelector('button[aria-label="Delete: claude-opus-5"]')).toBeNull();
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Custom model deleted");
+
+  await act(async () => { root.unmount(); });
+});
+
 test("quick-add waits for custom-model duplicate knowledge", async () => {
   let resolveLookup!: (response: Response) => void;
   const lookup = new Promise<Response>(resolve => { resolveLookup = resolve; });

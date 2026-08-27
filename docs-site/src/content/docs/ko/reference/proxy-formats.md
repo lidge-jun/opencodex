@@ -138,8 +138,9 @@ queue overflow 시 downstream에는 terminal `response.failed` 이벤트와 `[DO
 `response.created` 뒤에 `response.completed`를 반환합니다.
 
 :::note
-WebSockets가 비활성화되어 있으면 업그레이드 시도는 `upgrade_required` 코드와 함께 HTTP 426을 받습니다.
-Codex는 그 핸드셰이크 결과를 해당 세션에서 HTTP로 되돌아가라는 신호로 처리합니다. 모델 턴 실패가 아닙니다.
+WebSocket 광고가 비활성화되면 라우팅된 카탈로그 행에서 기능 플래그가 생략됩니다. 하지만
+`openai_base_url`이 재정의된 뒤에는 내장 OpenAI provider가 업그레이드를 시도할 수 있으므로 proxy는
+두 모드 모두에서 유효한 업그레이드를 허용합니다. HTTP 426은 업그레이드를 완료할 수 없을 때만 사용됩니다.
 :::
 
 ## `POST /v1/chat/completions`
@@ -266,7 +267,7 @@ data-plane key는 management credential이 아닙니다. management API는 별�
 | 403 | `origin_rejected` | Responses/OpenAI data-plane 요청 또는 WebSocket 업그레이드가 허용되지 않은 origin에서 들어왔습니다 |
 | 503 | `combo_unavailable` | 선택한 combo의 모든 대상이 사용할 수 없거나, cooldown 중이거나, 비활성화되어 있거나, 다른 이유로 부적합합니다 |
 | 400 | `unreadable_encrypted_agent_task` | 암호화된 v2 worker task를 소비할 수 있는 적격 네이티브 ChatGPT 대상이 없습니다 |
-| 426 | `upgrade_required` | Responses WebSocket transport가 비활성화되어 있거나 업그레이드에 실패했습니다. HTTP를 사용하십시오 |
+| 426 | `upgrade_required` | Responses WebSocket 업그레이드를 완료할 수 없습니다. HTTP를 사용하십시오 |
 
 Anthropic-origin 실패는 Anthropic의 error envelope로 렌더링됩니다. 따라서 해당 방언에서 origin 거부는
 OpenAI 스타일 `origin_rejected` body가 아니라 403 `permission_error`입니다.

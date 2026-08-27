@@ -110,6 +110,9 @@ export async function resolveFirstUsableOpenAiSidecar(
     if (!(error instanceof ForwardAdmissionCredentialError)) throw error;
     callerBearerMayBeForwarded = false;
   }
+  const callerMainHeaders = callerBearerMayBeForwarded
+    ? directSidecarHeaders(incomingHeaders)
+    : undefined;
   for (const candidate of candidates) {
     if (exactAccount) {
       // An account-qualified model is an explicit user choice. Resolve the stored
@@ -118,6 +121,7 @@ export async function resolveFirstUsableOpenAiSidecar(
       const authContext = await resolveCodexAuthContext(incomingHeaders, config, "pool", {
         accountId: exactAccount.accountId,
         modelId: exactAccount.modelId,
+        requestScopedMainCredential: callerMainHeaders !== undefined,
         beginCodexAccountSelection: options.beginCodexAccountSelection,
       });
       if ((authContext.kind !== "pool" && authContext.kind !== "main-pool")
@@ -146,7 +150,7 @@ export async function resolveFirstUsableOpenAiSidecar(
     }
     if (candidate.accountMode === "direct") {
       if (!callerBearerMayBeForwarded || !hasCallerCodexBearer(incomingHeaders)) continue;
-      const headers = directSidecarHeaders(incomingHeaders);
+      const headers = callerMainHeaders;
       if (!headers) continue;
       return {
         ...candidate,
@@ -155,6 +159,7 @@ export async function resolveFirstUsableOpenAiSidecar(
       };
     }
     const authContext = await resolveCodexAuthContext(incomingHeaders, config, candidate.accountMode, {
+      requestScopedMainCredential: callerMainHeaders !== undefined,
       beginCodexAccountSelection: options.beginCodexAccountSelection,
     });
     if (!isCodexAuthContextUsable(authContext, config)) continue;

@@ -103,9 +103,14 @@ import { effectiveModelAliases, MODEL_ALIAS_PATTERN } from "../../providers/defa
 import { comboPublicModelId } from "../../combos/types";
 import { COMBO_NAMESPACE, comboDisabledModelSelectors, comboModelId, preservesPhysicalComboProvider } from "../../combos";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
+import {
+  availableAccountGatedNativeModels,
+  resolveCodexModelEntitlements,
+} from "../../codex/model-entitlements";
+import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -692,18 +697,48 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // Per-provider catalog allowlist (issue #52): when a provider has a non-empty selectedModels list,
   // only those ids ship to Codex's catalog / /v1/models. GET returns the CURRENT selection plus the
   // FULL available set per provider (unfiltered — the picker needs everything to choose from).
+  // Native Codex-login models come from the entitlement-backed catalog rather than provider
+  // discovery, so project that same catalog into the canonical OpenAI provider's dashboard row.
   if (url.pathname === "/api/selected-models" && req.method === "GET") {
-    const models = await fetchAllModels(config);
+    const includeNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
+    const entitlementResolver = deps.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements;
+    const [models, modelEntitlements] = await Promise.all([
+      fetchAllModels(config),
+      includeNativeOpenAi ? entitlementResolver(config) : Promise.resolve(null),
+    ]);
     const available: Record<string, string[]> = {};
     for (const m of models) (available[m.provider] ??= []).push(m.id);
+    const bareEligibleAccountIds = providerCodexAccountMode(
+      OPENAI_CODEX_PROVIDER_ID,
+      config.providers[OPENAI_CODEX_PROVIDER_ID],
+    ) === "direct" ? new Set([MAIN_CODEX_ACCOUNT_ID]) : undefined;
+    const availableGatedModels = modelEntitlements
+      ? availableAccountGatedNativeModels(modelEntitlements, bareEligibleAccountIds)
+      : new Set<string>();
+    const nativeOpenAiModels = includeNativeOpenAi
+      ? nativeModelRows(config, { availableGatedModels }).map(row => row.slug)
+      : [];
+    if (nativeOpenAiModels.length > 0) {
+      available[OPENAI_CODEX_PROVIDER_ID] = [...new Set([
+        ...nativeOpenAiModels,
+        ...(available[OPENAI_CODEX_PROVIDER_ID] ?? []),
+      ])];
+    }
     const selected: Record<string, string[]> = {};
-    // Live-catalog provenance. The GUI cannot infer this by subtracting known custom ids: an id
-    // that is both custom and discovered would make a real live catalog look custom-only.
+    // Authoritative-catalog provenance. The GUI cannot infer this by subtracting known custom
+    // ids: an id that is both custom and discovered would make a real catalog look custom-only.
+    // Native OpenAI rows are equally authoritative even though they are entitlement-derived.
     const liveModelCounts: Record<string, number> = {};
     for (const [name, prov] of Object.entries(config.providers)) {
       if (Array.isArray(prov.selectedModels) && prov.selectedModels.length > 0) selected[name] = [...prov.selectedModels];
       const liveCount = getProviderLiveModelCount(name);
       if (liveCount !== undefined) liveModelCounts[name] = liveCount;
+    }
+    if (nativeOpenAiModels.length > 0) {
+      liveModelCounts[OPENAI_CODEX_PROVIDER_ID] = Math.max(
+        liveModelCounts[OPENAI_CODEX_PROVIDER_ID] ?? 0,
+        nativeOpenAiModels.length,
+      );
     }
     return jsonResponse({ selected, available, liveModelCounts });
   }

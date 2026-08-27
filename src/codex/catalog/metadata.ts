@@ -411,7 +411,10 @@ export function desktopVisibleNativeSlugs(
   ]);
 }
 
-export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "combos" | "providerContextCaps" | "providers">): Array<{ slug: string; disabled: boolean; contextWindow?: number; maxInputTokens?: number; autoCompactTokenLimit?: number }> {
+export function nativeModelRows(
+  config: Pick<OcxConfig, "disabledModels" | "combos" | "providerContextCaps" | "providers">,
+  options: { availableGatedModels?: ReadonlySet<string> } = {},
+): Array<{ slug: string; disabled: boolean; contextWindow?: number; maxInputTokens?: number; autoCompactTokenLimit?: number }> {
   const disabled = disabledNativeSlugs(config);
   const shadowed = configuredNativeAliasSlugs(config);
   // Both user levers, not just the cap: a per-model window set from the dashboard has to show
@@ -421,7 +424,8 @@ export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "comb
     OPENAI_CODEX_PROVIDER_ID,
     config.providers?.[OPENAI_CODEX_PROVIDER_ID],
   ) === "direct" ? new Set([MAIN_CODEX_ACCOUNT_ID]) : undefined;
-  const availableGated = cachedAvailableAccountGatedNativeModels(Date.now(), bareEligibleAccountIds);
+  const availableGated = options.availableGatedModels
+    ?? cachedAvailableAccountGatedNativeModels(Date.now(), bareEligibleAccountIds);
   return NATIVE_OPENAI_MODELS
     .filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableGated.has(slug))
     .filter(slug => !shadowed.has(slug)).map(slug => {

@@ -218,6 +218,44 @@ test("an active unpinned app login keeps the manual pin action", async () => {
   expect(action!.textContent).toContain(en["codexAuth.setAsNext"]);
 });
 
+test("a keyring-backed app login is shown as Codex-managed, not expired", async () => {
+  const managedMain: CodexAccountEntry = {
+    ...mainAccount,
+    plan: "pro",
+    quota: { weeklyPercent: 5, resetCredits: 2, updatedAt: 1 },
+    authStatus: "authenticated",
+    credentialSource: "codex-managed",
+    needsReauth: false,
+  };
+  await mountPool(makeController({ accounts: [managedMain, account] }));
+
+  const main = cardFor("main@example.test");
+  expect(main.textContent).toContain(en["codexAuth.managedByCodex"]);
+  expect(main.textContent).not.toContain(en["codexAuth.needsReauth"]);
+  expect(main.textContent).not.toContain(en["codexAuth.mainTokenExpired"]);
+  expect([...main.querySelectorAll(".badge-green")].some(badge => badge.textContent === "pro")).toBe(true);
+  const resetCredits = main.querySelector('[aria-label="2 reset credit(s)"]');
+  expect(resetCredits?.tagName).toBe("SPAN");
+  expect(main.querySelector('button[aria-label="2 reset credit(s)"]')).toBeNull();
+});
+
+test("an unobserved keyring login explains when account details become available", async () => {
+  const unavailableMain: CodexAccountEntry = {
+    ...mainAccount,
+    hasCredential: false,
+    authStatus: "unavailable",
+    needsReauth: false,
+  };
+  await mountPool(makeController({ accounts: [unavailableMain, account] }));
+
+  const main = cardFor("main@example.test");
+  expect(main.textContent).toContain(en["codexAuth.keyringDetailsPending"]);
+  expect(main.textContent).not.toContain(en["codexAuth.managedByCodex"]);
+  expect(main.textContent).not.toContain(en["codexAuth.needsReauth"]);
+  expect(main.textContent).not.toContain(en["codexAuth.mainTokenExpired"]);
+  expect(main.querySelector(".codex-ticket-badge-slot")).toBeNull();
+});
+
 test("an active account that already owns the pin hides the redundant action", async () => {
   await mountPool(makeController({ activeId: "pool-1", activePinnedId: "pool-1" }));
 

@@ -15,6 +15,7 @@ import type {
   performCodexRestart,
   readCodexAppServerState,
 } from "../../codex/app-server-restart-service";
+import type { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
 
 export interface ManagementApiDeps {
   /** Platform seam for capability projections; does not alter host-level startup behavior. */
@@ -22,6 +23,8 @@ export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
   createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;
+  /** Authenticated native-roster seam; route tests must not inspect the developer's credentials. */
+  resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
   /** Startup-health seam keeps route tests from launching platform probes. */
   getCachedStartupHealth?: (config: Pick<OcxConfig, "codexAutoStart">) => Promise<StartupHealth>;
   /**

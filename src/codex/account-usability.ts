@@ -10,6 +10,8 @@ export interface CodexAccountUsabilityOptions {
   nativeMainSelectionOnly?: boolean;
   /** Test seam for proving whether routing attempted a physical native-token read. */
   isMainAccountTokenLive?: typeof isMainAccountTokenLive;
+  /** A validated native Codex bearer is available for this request only. */
+  requestScopedMainCredential?: boolean;
   /** Confirmed account ids for an account-gated model; omitted for ordinary native models. */
   modelEligibleAccountIds?: ReadonlySet<string>;
 }
@@ -27,6 +29,11 @@ export function isCodexAccountUsable(
     // A legacy pool row with the sentinel makes an active `__main__` ambiguous.
     // Fail closed until the authenticated compatibility-delete path removes it.
     if (hasLegacyMainCodexPoolAccount(config.codexAccounts)) return false;
+    // Codex-managed keyring credentials are intentionally not extractable. Native Codex attaches
+    // the current access token to each request, so that validated request can use main without
+    // turning its bearer into process-global Pool state. It also supersedes a stale proxy-owned
+    // reauth mark: Codex may have rotated the credential since the prior request.
+    if (options.requestScopedMainCredential) return true;
     if (isAccountNeedsReauth(accountId)) return false;
     // A selection-only caller owns the recovery/drain fence and will reject main
     // before reservation or token materialization. Treat cached main as a routing

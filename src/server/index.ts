@@ -65,6 +65,7 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import {
   availableAccountGatedNativeModels,
   resolveCodexModelEntitlements,
+  seedMainCodexModelEntitlementsFromNativeCache,
 } from "../codex/model-entitlements";
 export {
   clearThreadAccountMap,
@@ -586,6 +587,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   if (startupCacheOwnership.ownership === "owned" && startupOwnershipHomes !== null) {
     try {
       const startupCodexHome = startupOwnershipHomes.codexHome;
+      // Preserve the authenticated native roster before the cache invalidator replaces it with
+      // OpenCodex's synthetic 0.0.0 wrapper. The later async catalog gather then has entitlement
+      // evidence for a keyring-owned main account even though no auth.json is readable.
+      seedMainCodexModelEntitlementsFromNativeCache({ codexHome: startupCodexHome });
       // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
       // with the later startup sync and warns ONCE about stale app-servers; warning
       // here instead would read a catalog mtime the sync is about to move.
@@ -924,14 +929,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         if (!isAllowedRequestOrigin(req, policy)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin"), req, policy);
         }
-        // WS transport gate: Codex's built-in `openai` provider hardcodes supports_websockets=true,
-        // so under Design B it always tries the WS transport first. When the feature is off, reject
-        // the upgrade with 426 — codex-rs maps a connect-time UPGRADE_REQUIRED to a clean
-        // session-scoped HTTP fallback (client.rs WebsocketStreamOutcome::FallbackToHttp) instead of
-        // surfacing broken-pipe errors from sockets a "disabled" feature would otherwise accept.
-        if (!websocketsEnabled(config)) {
-          return withCors(formatErrorResponse(426, "upgrade_required", "Responses WebSocket transport is disabled; use HTTP"), req, policy);
-        }
+        // Codex's built-in `openai` provider always attempts WebSocket transport under the
+        // loopback `openai_base_url` override. `config.websockets` controls what OpenCodex
+        // advertises for catalog/provider-table routes; it cannot disable that built-in attempt.
+        // Accept the handshake here so modern Codex does not log two 426 failures before falling
+        // back to HTTP. Routed rows still avoid WS when the catalog flag is off.
         const websocketLease = tryReserveCodexWebSocket();
         if (!websocketLease) return serverBusyResponse(req, "Codex WebSockets", policy);
         // Upgrade on the server that RECEIVED this request, not the captured `server`

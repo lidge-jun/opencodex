@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   availableAccountGatedNativeModels,
   cachedAvailableAccountGatedNativeModels,
   entitledCodexAccountIdsForModel,
   isDirectCallerEntitledToCodexModel,
+  isRequestScopedMainCallerEntitledToCodexModel,
   resetCodexModelEntitlementCacheForTests,
   resolveCodexModelEntitlements,
+  seedMainCodexModelEntitlementsFromNativeCache,
   seedCodexModelEntitlementsForTests,
   type CodexModelEntitlementCredentialSnapshot,
 } from "../src/codex/model-entitlements";
@@ -113,6 +118,121 @@ describe("Codex account model entitlements", () => {
     expect([...supplied.modelsByAccount.keys()]).toEqual(["pool-c"]);
   });
 
+  test("uses Codex's authenticated native cache for a keyring-managed main account", async () => {
+    const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+      credentialSnapshot: async () => null,
+      nativeMainModels: [SOL, TERRA, LUNA, DAYBREAK],
+      now: 1_000,
+    });
+
+    expect(snapshot.confirmedAccountIds.has(MAIN_CODEX_ACCOUNT_ID)).toBe(true);
+    expect([...entitledCodexAccountIdsForModel(snapshot, DAYBREAK)!])
+      .toEqual([MAIN_CODEX_ACCOUNT_ID]);
+  });
+
+  test("reads a real Codex cache shape but rejects OpenCodex's synthetic cache", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-native-model-cache-"));
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    const cachePath = join(home, "models_cache.json");
+    const cache = (clientVersion: string) => ({
+      client_version: clientVersion,
+      models: [SOL, TERRA, LUNA, DAYBREAK].map(slug => ({
+        slug,
+        visibility: "list",
+        supported_in_api: true,
+        supported_reasoning_levels: [{ effort: "high" }],
+        model_messages: {},
+      })),
+    });
+    try {
+      writeFileSync(cachePath, JSON.stringify(cache("0.150.1")));
+      const native = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+        credentialSnapshot: async () => null,
+        now: 1_000,
+      });
+      expect([...availableAccountGatedNativeModels(native)])
+        .toEqual([SOL, TERRA, LUNA, DAYBREAK]);
+
+      resetCodexModelEntitlementCacheForTests();
+      writeFileSync(cachePath, JSON.stringify(cache("0.0.0")));
+      const synthetic = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+        credentialSnapshot: async () => null,
+        now: 2_000,
+      });
+      expect(synthetic.confirmedAccountIds.has(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
+    } finally {
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("restores a generated roster across restart only when cache and catalog corroborate", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-generated-model-cache-"));
+    const rows = [SOL, TERRA, LUNA, DAYBREAK].map(slug => ({
+      slug,
+      visibility: "list",
+      supported_in_api: true,
+      supported_reasoning_levels: [{ effort: "high" }],
+      model_messages: {},
+    }));
+    const writeSyntheticCache = () => writeFileSync(join(home, "models_cache.json"), JSON.stringify({
+      fetched_at: "2000-01-01T00:00:00Z",
+      client_version: "0.0.0",
+      models: rows,
+    }));
+    try {
+      writeFileSync(join(home, "opencodex-catalog.json"), JSON.stringify({ models: rows }));
+      writeSyntheticCache();
+      expect(seedMainCodexModelEntitlementsFromNativeCache({ codexHome: home, now: 1_000 }))
+        .toBe(true);
+      const restored = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+        credentialSnapshot: async () => null,
+        now: 1_001,
+      });
+      expect([...availableAccountGatedNativeModels(restored)])
+        .toEqual([SOL, TERRA, LUNA, DAYBREAK]);
+      expect(restored.credentialIdentities.get(MAIN_CODEX_ACCOUNT_ID)?.startsWith("synthetic-cache:"))
+        .toBe(true);
+
+      resetCodexModelEntitlementCacheForTests();
+      writeFileSync(join(home, "opencodex-catalog.json"), JSON.stringify({ models: rows.slice(0, -1) }));
+      writeSyntheticCache();
+      expect(seedMainCodexModelEntitlementsFromNativeCache({ codexHome: home, now: 2_000 }))
+        .toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("startup preserves the native roster before replacing models_cache", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-native-model-seed-"));
+    const cachePath = join(home, "models_cache.json");
+    const rows = [SOL, TERRA, LUNA, DAYBREAK].map(slug => ({
+      slug,
+      visibility: "list",
+      supported_in_api: true,
+      supported_reasoning_levels: [{ effort: "high" }],
+      model_messages: {},
+    }));
+    try {
+      writeFileSync(cachePath, JSON.stringify({ client_version: "0.150.1", models: rows }));
+      expect(seedMainCodexModelEntitlementsFromNativeCache({ codexHome: home, now: 1_000 }))
+        .toBe(true);
+      writeFileSync(cachePath, JSON.stringify({ client_version: "0.0.0", models: [] }));
+
+      const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+        credentialSnapshot: async () => null,
+        now: 2_000,
+      });
+      expect([...availableAccountGatedNativeModels(snapshot)])
+        .toEqual([SOL, TERRA, LUNA, DAYBREAK]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("checks a Direct caller's own bearer instead of a local Pool account", async () => {
     let seenAuthorization = "";
     let seenAccount = "";
@@ -147,6 +267,19 @@ describe("Codex account model entitlements", () => {
         now: 1_000,
       },
     )).resolves.toBe(false);
+  });
+
+  test("request-scoped keyring roster is promoted to main without retaining its bearer", async () => {
+    await expect(isRequestScopedMainCallerEntitledToCodexModel(
+      new Headers({
+        authorization: "Bearer caller-token",
+        "chatgpt-account-id": "caller-account",
+      }),
+      DAYBREAK,
+      { fetcher: (async () => roster(SOL, DAYBREAK)) as typeof fetch, now: 1_000 },
+    )).resolves.toBe(true);
+
+    expect([...cachedAvailableAccountGatedNativeModels(1_000)]).toContain(DAYBREAK);
   });
 
   test("Direct-caller rosters do not evict main/Pool entitlement evidence", async () => {

@@ -73,6 +73,8 @@ export function CodexAccountPoolMainCard({
     quota: main?.quota ?? null,
   };
   const showReauth = Boolean(main?.needsReauth) || oauthHealthShowsReauth(main?.health?.status);
+  const authUnavailable = main?.authStatus === "unavailable";
+  const codexManaged = main?.credentialSource === "codex-managed";
   const inCooldown = oauthHealthIsCooldown(main?.health?.status);
   const healthLabel = formatOAuthHealthLabel(t, main?.health);
   const healthSummary = main
@@ -82,10 +84,19 @@ export function CodexAccountPoolMainCard({
   return (
     <div className={`card ${isMainActive ? "card-active" : ""}`} style={{ marginBottom: 12 }}>
       <div className="card-head">
-        <span className={`dot ${showReauth ? "dot-amber" : "dot-green"}`} />
+        <span className={`dot ${showReauth ? "dot-amber" : authUnavailable ? "dot-muted" : "dot-green"}`} />
         <strong>{t("codexAuth.mainAccount")}</strong>
         <span className="card-badges">
-          {main && <CodexTicketBadge t={t} account={{ ...main, id: "__main__" } as CodexAccountEntry} onClick={() => onOpenReset({ ...main, id: "__main__" } as CodexAccountEntry)} />}
+          {main?.plan && <span className="badge badge-green">{main.plan}</span>}
+          {main && !authUnavailable && (
+            <CodexTicketBadge
+              t={t}
+              account={{ ...main, id: "__main__" } as CodexAccountEntry}
+              onClick={main.credentialSource === "auth-file"
+                ? () => onOpenReset({ ...main, id: "__main__" } as CodexAccountEntry)
+                : undefined}
+            />
+          )}
           {main?.paused && (
             <span className="badge badge-muted" title={t("codexAuth.pausedHint")}>
               {t("codexAuth.paused")}
@@ -96,6 +107,7 @@ export function CodexAccountPoolMainCard({
           {healthLabel && (
             <span className={oauthHealthBadgeClass(main?.health?.status)}>{healthLabel}</span>
           )}
+          {codexManaged && <span className="badge badge-muted">{t("codexAuth.managedByCodex")}</span>}
           {showReauth && !healthLabel && <span className="badge badge-amber">{t("codexAuth.needsReauth")}</span>}
           {!main?.paused && (
             <span className={`badge ${isMainActive ? "badge-primary" : "badge-muted"}`}>
@@ -155,18 +167,23 @@ export function CodexAccountPoolMainCard({
       {healthSummary && (
         <div className="card-sub faint">{healthSummary}</div>
       )}
+      {authUnavailable && !showReauth && (
+        <div className="card-sub faint">{t("codexAuth.keyringDetailsPending")}</div>
+      )}
       {inCooldown && (
         <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
       )}
       {showReauth
         ? <div className="card-sub faint">{t("codexAuth.mainTokenExpired")}</div>
-        : !inCooldown && (
+        : !inCooldown && !authUnavailable && (
           <QuotaBars
             quota={main?.quota ?? null}
             plan={main?.plan}
             threshold={threshold}
             t={t}
-            pending={main != null && main.quota == null}
+            pending={main != null
+              && main.quota == null
+              && main.credentialSource !== "codex-managed"}
           />
         )}
     </div>

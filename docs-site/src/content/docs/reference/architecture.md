@@ -138,10 +138,10 @@ diagnostics.
 
 ## Transport and compaction
 
-`server/index.ts` serves HTTP/SSE on `/v1/responses` by default. If Codex attempts a Responses
-WebSocket upgrade while `websockets` is `false`, opencodex returns `426 upgrade_required`; Codex then
-falls back to HTTP for that session. When `"websockets": true` is set, the same endpoint accepts the
-upgrade and uses the WebSocket bridge.
+`server/index.ts` serves HTTP/SSE and WebSocket upgrades on `/v1/responses`. The `websockets` setting
+controls capability advertisement for routed catalog/provider rows. Codex's built-in OpenAI
+provider may attempt an upgrade whenever `openai_base_url` points at the proxy, so valid upgrades
+remain accepted when advertisement is off; `426 upgrade_required` is reserved for a failed upgrade.
 
 Independently of that client-facing setting, canonical ChatGPT forward requests with root-level
 `stream: true` may use Codex's upstream WebSocket transport on stable Bun 1.4.0 or newer.

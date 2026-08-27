@@ -120,9 +120,9 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 `response.created`，随后是 `response.completed`，两者都带空的 response id 且没有输出。
 
 :::note
-当 WebSocket 被禁用时，升级尝试会收到 HTTP 426，错误码为
-`upgrade_required`。Codex 会把该握手结果视为会话回退到 HTTP 的信号。
-这不是一次失败的模型轮次。
+关闭 WebSocket 能力声明时，路由 catalog 行会省略该能力标记。但覆盖 `openai_base_url` 后，
+内置 OpenAI provider 仍可能尝试 upgrade，因此 proxy 在两种模式下都会接受有效的 upgrade。
+HTTP 426 仅用于无法完成 upgrade 的情况。
 :::
 
 ## `POST /v1/chat/completions`
@@ -235,7 +235,7 @@ Responses 家族和 Chat 请求会把 `Authorization` 留给提供方或 Codex D
 | 403 | `origin_rejected` | 一条 Responses/OpenAI 数据平面请求或 WebSocket 升级来自不允许的 origin |
 | 503 | `combo_unavailable` | 所选 combo 中的所有目标都不可用、处于冷却、已禁用或以其他方式不具备资格 |
 | 400 | `unreadable_encrypted_agent_task` | 一个加密的 v2 worker task 没有任何可消费它的合格原生 ChatGPT 目标 |
-| 426 | `upgrade_required` | Responses WebSocket 传输被禁用，或升级失败；请改用 HTTP |
+| 426 | `upgrade_required` | 无法完成 Responses WebSocket upgrade；请改用 HTTP |
 
 Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方言中的 origin 拒绝会是
 403 `permission_error`，而不是 OpenAI 风格的 `origin_rejected` body。

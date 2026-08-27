@@ -55,6 +55,11 @@ export type BunRuntimeIdentity = {
 
 export type BunRuntimeGateInput = string | BunRuntimeIdentity;
 
+export interface CodexWsUpstreamOptions {
+  /** Observe quota-only frames without adding them to the downstream SSE surface. */
+  onRateLimits?: (event: unknown) => void;
+}
+
 const codexWsUpstreamResponses = new WeakSet<Response>();
 
 /** True only for a successful Codex WebSocket upgrade, never an HTTP fallback. */
@@ -172,6 +177,7 @@ export function codexWsUpstreamFetch(
   init: RequestInit,
   sseFallback: typeof globalThis.fetch,
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
+  options: CodexWsUpstreamOptions = {},
 ): Promise<Response> {
   if (!bunSupportsBoundedCodexWsRelay(runtime)) {
     return sseFallback(url, init);
@@ -292,17 +298,17 @@ export function codexWsUpstreamFetch(
       }, new ByteLengthQueuingStrategy({ highWaterMark: MAX_CODEX_WS_QUEUE_BYTES }));
       const response = new Response(stream, {
         status: 200,
-        // The 101 response headers (x-codex-*-reset-at quota hints) are not
-        // exposed by Bun's WebSocket; the periodic quota poller covers those.
+        // The 101 response headers are not exposed by Bun's WebSocket. Quota is observed
+        // from the backend's dedicated rate-limit frame instead.
         headers: { "content-type": "text/event-stream; charset=utf-8" },
       });
       codexWsUpstreamResponses.add(response);
       resolve(response);
     });
 
-    ws.addEventListener("message", (event) => {
+    ws.addEventListener("message", (messageEvent) => {
       if (!controller || terminal) return;
-      const text = typeof event.data === "string" ? event.data : "";
+      const text = typeof messageEvent.data === "string" ? messageEvent.data : "";
       if (!text) return;
       // UTF-8 byte length is always at least the JS string length. Reject this
       // cheap lower bound before parsing so an obviously oversized frame does
@@ -316,9 +322,22 @@ export function codexWsUpstreamFetch(
         failStream("codex websocket frame exceeds the response size limit");
         return;
       }
+      let parsedEvent: unknown;
       let type: unknown;
-      try { type = (JSON.parse(text) as { type?: unknown }).type; } catch { return; }
+      try {
+        parsedEvent = JSON.parse(text) as unknown;
+        type = parsedEvent && typeof parsedEvent === "object" && !Array.isArray(parsedEvent)
+          ? (parsedEvent as { type?: unknown }).type
+          : undefined;
+      } catch { return; }
       if (typeof type !== "string") return;
+      if (type === "codex.rate_limits") {
+        // This event is useful to the proxy's account/quota observer but is not part of the
+        // Responses SSE contract exposed to downstream clients. An observer is best-effort:
+        // malformed or future payloads must never break an otherwise healthy inference stream.
+        try { options.onRateLimits?.(parsedEvent); } catch { /* observation failure is non-fatal */ }
+        return;
+      }
       // Relay only the event surface the SSE path produces today. WS-only
       // frames (codex.rate_limits, responsesapi.websocket_timing) are dropped
       // so downstream clients see exactly the stream shape they always got.

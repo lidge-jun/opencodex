@@ -25,7 +25,7 @@ export function CodexCreditItem({ index, grantedAt, expiresAt, isNext, locale, t
   );
 }
 
-export function CodexTicketBadge({ account, onClick, t }: { account: CodexAccountEntry; onClick: () => void; t: TFn }) {
+export function CodexTicketBadge({ account, onClick, t }: { account: CodexAccountEntry; onClick?: () => void; t: TFn }) {
   const credits = account.quota?.resetCredits;
   // Reserve badge width while WHAM quota is still null so the card-head does not grow
   // when resetCredits arrives (0 or N). Quota loaded without resetCredits → no badge.
@@ -38,11 +38,25 @@ export function CodexTicketBadge({ account, onClick, t }: { account: CodexAccoun
   }
   if (credits === undefined) return null;
   const hasCredits = typeof credits === "number" && credits > 0;
+  const label = t("codexAuth.resetCreditsAria", { count: String(credits) });
+  if (!onClick) {
+    return (
+      <span
+        className={`badge ${hasCredits ? "badge-amber" : "badge-muted"}`}
+        role="img"
+        aria-label={label}
+        title={label}
+      >
+        <IconTicket width={12} aria-hidden="true" />
+        {credits}
+      </span>
+    );
+  }
   return (
     <button type="button"
       className={`badge ${hasCredits ? "badge-amber" : "badge-muted"} badge-clickable`}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
-      aria-label={t("codexAuth.resetCreditsAria", { count: String(credits) })}
+      aria-label={label}
     >
       <IconTicket width={12} />
       {credits}

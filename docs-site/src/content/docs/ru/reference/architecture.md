@@ -146,10 +146,11 @@ loopback; настроенные записи `corsAllowOrigins` расширя�
 
 ## Транспорт и compaction
 
-`server/index.ts` по умолчанию обслуживает HTTP/SSE на `/v1/responses`. Если Codex пытается
-выполнить WebSocket-апгрейд Responses, пока `websockets` равно `false`, opencodex возвращает
-`426 upgrade_required`; Codex тогда откатывается на HTTP для этой сессии. Когда установлено
-`"websockets": true`, та же конечная точка принимает апгрейд и использует WebSocket-мост.
+`server/index.ts` обслуживает HTTP/SSE и WebSocket-upgrade на `/v1/responses`. Параметр `websockets`
+управляет объявлением этой возможности для маршрутизируемых строк каталога и провайдеров. Встроенный
+провайдер OpenAI в Codex может попытаться выполнить upgrade, когда `openai_base_url` указывает на
+прокси, поэтому корректные upgrade принимаются и при выключенном объявлении. `426 upgrade_required`
+используется только при неудачном upgrade.
 
 Compaction контекста Codex работает для маршрутизируемых моделей. `server/responses/compact.ts`
 обрабатывает `POST /v1/responses/compact`, выполняя внутренний маршрутизируемый ход суммаризации
