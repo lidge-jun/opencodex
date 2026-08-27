@@ -248,6 +248,14 @@ export function classifyCursorError(message: string, sizeContext?: CursorSizeCon
     lower.includes("server is busy")
   ) return "Cursor server overloaded";
 
+  // gRPC FAILED_PRECONDITION is deterministic and non-retryable (unlike UNAVAILABLE):
+  // the backend rejected the call because the account/plan state does not allow it —
+  // seen live when a plan-gated model (e.g. claude-fable-5) runs on a plan without it.
+  // Leaving it as "Cursor upstream error" (502) made clients retry it as overload.
+  if (lower.includes("failed_precondition") || lower.includes("failed precondition")) {
+    return "Cursor invalid request";
+  }
+
   if (
     lower.includes("invalid") ||
     lower.includes("not found") ||

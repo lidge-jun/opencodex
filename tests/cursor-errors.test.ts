@@ -5,6 +5,7 @@ import {
   isCursorInvalidArgumentError,
   safeCursorErrorMessage,
 } from "../src/adapters/cursor/cursor-errors";
+import { inferHttpStatusFromAdapterMessage } from "../src/lib/errors";
 
 describe("classifyCursorError", () => {
   test("rate limit and resource exhaustion stay distinct", () => {
@@ -57,6 +58,15 @@ describe("classifyCursorError", () => {
   test("invalid request / not found", () => {
     expect(classifyCursorError("model not found: bad-model-id")).toBe("Cursor invalid request");
     expect(classifyCursorError("invalid request: malformed tool schema")).toBe("Cursor invalid request");
+  });
+
+  test("failed_precondition is a deterministic non-retryable rejection, not overload", () => {
+    // Live evidence: a plan-gated model (claude-fable-5) invoked on a plan without it
+    // returns "Cursor Connect error failed_precondition: Error". gRPC FAILED_PRECONDITION
+    // is non-retryable by definition; as "Cursor upstream error" (502) clients retried it
+    // as overload, and the Claude inbound surfaced it as a misleading 529.
+    expect(classifyCursorError("Cursor Connect error failed_precondition: Error")).toBe("Cursor invalid request");
+    expect(inferHttpStatusFromAdapterMessage("Cursor invalid request: Cursor Connect error failed_precondition: Error")).toBe(400);
   });
 
   test("timeout / deadline", () => {
