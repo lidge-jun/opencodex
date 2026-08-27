@@ -1905,6 +1905,7 @@ export async function handleComboResponses(
     });
   };
 
+  const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
   const unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
     (body as { input?: unknown } | undefined)?.input,
   );
@@ -1918,11 +1919,39 @@ export async function handleComboResponses(
       return false;
     }
   };
+  let comboPayloadReadable = false;
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
-    !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
+    comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
 
   if (unreadableEncryptedAgentTask && !combo.targets.some(canDecryptUnreadableAgentTask)) {
-    return unreadableEncryptedAgentTaskResponse();
+    // A ciphertext-only spawn can still be recovered the same way the direct path
+    // recovers it when its final route is non-native. Try recovery once before
+    // failing the combo; every target becomes eligible after a successful pass.
+    const agentTaskRecovery = agentTaskRecoveryConfig(config);
+    if (
+      isThreadSpawnRequest(req.headers)
+      && agentTaskRecovery
+      && !options.comboAttempt
+    ) {
+      let recovered = false;
+      try {
+        recovered = await recoverEncryptedAgentTask(
+          req,
+          (body as { input?: unknown } | undefined)?.input,
+          agentTaskRecovery,
+          config,
+          { parentThreadId, abortSignal: options.abortSignal },
+        );
+      } catch {
+        recovered = false;
+      }
+      if (!recovered || hasUnreadableEncryptedAgentTask((body as { input?: unknown } | undefined)?.input)) {
+        return unreadableEncryptedAgentTaskResponse();
+      }
+      comboPayloadReadable = true;
+    } else {
+      return unreadableEncryptedAgentTaskResponse();
+    }
   }
 
   const initialNow = Date.now();
