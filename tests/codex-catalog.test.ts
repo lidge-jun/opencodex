@@ -3766,7 +3766,12 @@ describe("Codex catalog routed normalization", () => {
         .toMatchObject({
           contextWindow: 1_000_000,
           inputModalities: ["text", "image"],
+          reasoningEfforts: ["low", "medium", "high", "xhigh"],
         });
+      const catalogEntries = buildCatalogEntries(null, [], models);
+      const multiAgentCatalog = catalogEntries.find(entry => entry.slug === "xai/grok-4.20-multi-agent-0309");
+      expect((multiAgentCatalog?.supported_reasoning_levels as { effort: string }[]).map(level => level.effort))
+        .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
       expect(models.find(model => model.provider === "xai" && model.id === "grok-4.20-multi-agent-0309")?.supportsReasoningSummaries)
         .toBeUndefined();
       expect(getModelMetadata("xai", "grok-4.20-multi-agent-0309")).toMatchObject({
