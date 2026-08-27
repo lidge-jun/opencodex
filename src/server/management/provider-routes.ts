@@ -298,7 +298,10 @@ function applyProviderPatchFields(
       delete next.modelDisplayNames;
     } else {
       if (!isPlainRecord(value)) return { error: "modelDisplayNames must be a plain object or null" };
-      const labels: Record<string, string> = { ...(next.modelDisplayNames ?? {}) };
+      const labels: Record<string, string> = Object.assign(
+        Object.create(null) as Record<string, string>,
+        next.modelDisplayNames ?? {},
+      );
       // Collisions have to be caught against the *submitted* fragment. By the time the
       // merged map is validated the duplicate has already collapsed into one key, so the
       // later label wins silently and the check downstream has nothing left to see.
@@ -690,7 +693,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const submitted = isPlainRecord(prov.modelDisplayNames)
         ? normalizeDisplayLabelRecord(prov.modelDisplayNames)
         : undefined;
-      const merged: Record<string, string> = { ...(existing?.modelDisplayNames ?? {}) };
+      const merged: Record<string, string> = Object.assign(
+        Object.create(null) as Record<string, string>,
+        existing?.modelDisplayNames ?? {},
+      );
       for (const [model, label] of Object.entries(submitted ?? {})) {
         if (label === null) delete merged[model];
         else merged[model] = label;

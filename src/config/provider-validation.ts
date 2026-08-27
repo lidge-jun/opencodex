@@ -188,7 +188,11 @@ export function displayLabelRecordConfigError(value: unknown, field = "modelDisp
  * can be checked against the map that will exist rather than the one that was sent.
  */
 export function normalizeDisplayLabelRecord(value: object): Record<string, string | null> {
-  const out: Record<string, string | null> = {};
+  // Null prototype, matching `modelAutoCompactTokenLimits`: `JSON.parse` gives a
+  // `"__proto__"` key as an *own* property, but assigning it on a `{}` literal runs the
+  // setter and creates nothing — so the entry would be counted by the validation above and
+  // then vanish before the store, which is the precise mismatch this change exists to close.
+  const out = Object.create(null) as Record<string, string | null>;
   for (const [key, label] of Object.entries(value)) {
     const id = key.trim();
     if (!id) continue;

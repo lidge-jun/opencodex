@@ -1033,6 +1033,41 @@ describe("provider management validation", () => {
       }
     });
 
+    test("a model id of __proto__ round-trips instead of vanishing between check and store", async () => {
+      // `JSON.parse` puts `"__proto__"` on the object as an *own* property, so it reaches
+      // validation and is counted. Assigning it onto a `{}` literal runs the prototype
+      // setter and creates no own property, so the entry would be accepted and then
+      // silently absent from the store — the same accepted-then-discarded shape this
+      // change exists to remove. Not a pollution vector (the value is a string), but the
+      // two boundaries have to agree on what was saved.
+      freshHome();
+      const server = startServer(0);
+      try {
+        const labels = JSON.parse('{"__proto__":"Proto Label","moonshotai/kimi-k3":"Kimi K3"}') as Record<string, string>;
+        expect((await seedProvider(server.url, { modelDisplayNames: labels })).status).toBe(200);
+
+        const storedPost = loadConfig().providers.labels?.modelDisplayNames ?? {};
+        expect(Object.prototype.hasOwnProperty.call(storedPost, "__proto__")).toBe(true);
+        expect(Object.getOwnPropertyNames(storedPost).sort()).toEqual(["__proto__", "moonshotai/kimi-k3"]);
+        // The prototype chain is untouched — the key is data, not a mutation.
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+
+        const patch = await fetch(new URL("/api/providers?name=labels", server.url), {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ modelDisplayNames: JSON.parse('{"__proto__":"Patched Proto"}') }),
+        });
+        expect(patch.status).toBe(200);
+
+        const storedPatch = loadConfig().providers.labels?.modelDisplayNames ?? {};
+        expect(Object.getOwnPropertyDescriptor(storedPatch, "__proto__")?.value).toBe("Patched Proto");
+        // The sibling label survives the PATCH merge rather than being dropped with it.
+        expect(storedPatch["moonshotai/kimi-k3"]).toBe("Kimi K3");
+      } finally {
+        await server.stop(true);
+      }
+    });
+
     test("a control character PATCH is refused, including the ones trim would hide", async () => {
       freshHome();
       const server = startServer(0);
