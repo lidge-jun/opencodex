@@ -357,9 +357,15 @@ function expandXaiRootObjectSchemas(
  * root `oneOf` rejects and a per-property union would accept, so that property is promoted into
  * `required`.
  *
- * Duplicate branches are the one deliberate widening. A `oneOf` listing the same branch twice
- * accepts nothing at all, which no author intends and no root-object schema can express, so the
- * duplicates collapse and the tool stays usable instead of disappearing over a source-schema bug.
+ * Two deliberate widenings remain, and both widen only from the EMPTY set. A `oneOf` listing the
+ * same branch twice accepts nothing at all. Neither does a root `additionalProperties: false`
+ * placed over branches that declare properties the root itself does not: the restriction cannot
+ * see into an applicator, so it forbids the very keys those branches require (same for a `$ref`
+ * target's restriction against a sibling's properties). No author intends either, no root object
+ * schema can express "accepts nothing", and the emitted schema still carries the restriction — so
+ * the tool stays usable instead of disappearing over a source-schema bug. A union whose branch
+ * properties ARE declared on the root is satisfiable and is normalized losslessly, which is why
+ * the presence of `additionalProperties` alone is not grounds to refuse.
  */
 export function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown> | undefined {
   if (!isSchemaObject(parameters)) return undefined;

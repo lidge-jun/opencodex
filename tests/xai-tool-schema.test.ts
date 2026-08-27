@@ -154,6 +154,75 @@ describe("xAI Grok CLI tool schema normalization", () => {
     });
   });
 
+  test("hoists branch properties past a root additionalProperties:false, and keeps the restriction", async () => {
+    // A root `additionalProperties: false` cannot see into `oneOf` branches, so the source schema
+    // below forbids the very `mode` its branches require: verified with ajv, it validates NOTHING
+    // — not `{}`, not `{mode:"view"}`. Flattening hoists `mode` beside the restriction, which is a
+    // widening in the strict reading but only from the empty set, and the emitted schema still
+    // carries `additionalProperties: false`, so `{other: 1}` and `{mode: "other"}` stay refused.
+    // Same call as the duplicate-branch case: an unsatisfiable schema is a source bug no author
+    // intends, and omitting the tool serves nobody.
+    const request = await xaiAdapter().buildRequest(parsedRequest({
+      name: "Bash",
+      description: "Execute a shell command",
+      parameters: {
+        additionalProperties: false,
+        oneOf: [
+          { properties: { mode: { const: "view" } }, required: ["mode"] },
+          { properties: { mode: { const: "edit" } }, required: ["mode"] },
+        ],
+      },
+    }));
+    const body = JSON.parse(request.body) as {
+      tools?: Array<{ function: { parameters: Record<string, unknown> } }>;
+    };
+
+    expect(body.tools?.[0]?.function.parameters).toEqual({
+      type: "object",
+      properties: { mode: { anyOf: [{ const: "view" }, { const: "edit" }] } },
+      required: ["mode"],
+      additionalProperties: false,
+    });
+  });
+
+  test("a satisfiable additionalProperties:false union keeps its exact accepted set", async () => {
+    // The distinguishing case: `mode` is declared on the ROOT too, so the restriction never
+    // forbade it and the source schema really does accept `view`/`edit`. Verified with ajv, the
+    // original and the emitted schema accept exactly the same instances. Refusing every
+    // composition that carries an explicit `additionalProperties` would drop this one for nothing.
+    const request = await xaiAdapter().buildRequest(parsedRequest({
+      name: "Bash",
+      description: "Execute a shell command",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: { mode: { type: "string" } },
+        required: ["mode"],
+        oneOf: [
+          { properties: { mode: { const: "view" } } },
+          { properties: { mode: { const: "edit" } } },
+        ],
+      },
+    }));
+    const body = JSON.parse(request.body) as {
+      tools?: Array<{ function: { parameters: Record<string, unknown> } }>;
+    };
+
+    expect(body.tools?.[0]?.function.parameters).toEqual({
+      type: "object",
+      properties: {
+        mode: {
+          oneOf: [
+            { allOf: [{ type: "string" }, { const: "view" }] },
+            { allOf: [{ type: "string" }, { const: "edit" }] },
+          ],
+        },
+      },
+      required: ["mode"],
+      additionalProperties: false,
+    });
+  });
+
   test("keeps an overlapping root oneOf exclusive instead of widening it to anyOf", async () => {
     // A root `oneOf` rejects an instance matching several branches. Flattening the differing
     // property to `anyOf` would accept `{ mode: "view" }`, which matches BOTH branches here and
