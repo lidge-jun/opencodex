@@ -1190,9 +1190,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
         // material. Do not encode that as modelSupportsReasoningSummaries:false: through
         // Codex #1100 that suppresses the entire reasoning object, including the effort
         // that controls this model's agent count. An empty summary pane is harmless.
-        // Chat Completions returns 400 for this model, so every inbound uses Responses.
+        // Chat Completions returns 400 for this model, so every inbound uses Responses —
+        // `anthropic` included. Omitting it left providerModelWireDefault returning undefined
+        // for the Claude Messages lane, so resolveWireProtocolOverride kept xAI's provider-wide
+        // openai-chat adapter and sent this model to the wire it 400s on.
         wire: "openai-responses",
-        inbound: ["responses", "chat"],
+        inbound: ["responses", "chat", "anthropic"],
         forwardCallerServiceTier: false,
       },
     },

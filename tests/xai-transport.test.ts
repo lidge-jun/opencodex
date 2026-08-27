@@ -641,6 +641,22 @@ describe("xAI reasoning_content cache preservation", () => {
       provider("key"),
       "chat",
     ).adapter).toBe("openai-responses");
+    // The Claude Messages lane resolves with inbound "anthropic" (src/server/claude-messages.ts).
+    // It is not a spelling of "responses": an inbound missing from the allow-list makes
+    // providerModelWireDefault return undefined, which silently keeps xAI's provider-wide
+    // openai-chat adapter — the one wire this model answers with a 400.
+    expect(resolveWireProtocolOverride(
+      "xai",
+      "grok-4.20-multi-agent-0309",
+      provider("oauth"),
+      "anthropic",
+    ).adapter).toBe("openai-responses");
+    expect(resolveWireProtocolOverride(
+      "xai",
+      "grok-4.20-multi-agent-0309",
+      provider("key"),
+      "anthropic",
+    ).adapter).toBe("openai-responses");
     expect(XAI_RESPONSES_OPT_IN_MODELS).not.toContain("grok-4.20-multi-agent-0309");
     expect(entry?.models).toContain("grok-build-0.1");
     for (const noReasoning of entry?.noReasoningModels ?? []) {
