@@ -10,7 +10,7 @@
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getConfigDir, getConfigPath, readConfigDiagnostics, resolveEnvValue } from "../config";
+import { getConfigDir, getConfigPath, readConfigDiagnostics } from "../config";
 import { readPid } from "../config/process-state";
 import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
@@ -404,6 +404,10 @@ export function collectWslDualInstall(deps: WslDualInstallDeps = {}): WslDualIns
 export type ProxyEnvRow = { key: string; present: boolean };
 export type EnvMap = Record<string, string | undefined>;
 
+function ownEnvValue(env: EnvMap, name: string): string | undefined {
+  return Object.hasOwn(env, name) ? env[name] : undefined;
+}
+
 /** Report only presence/absence of proxy env vars - never the value (it may
  * embed credentials). Checks both upper- and lower-case forms. */
 export function collectProxyEnv(env: EnvMap = process.env): ProxyEnvRow[] {
@@ -439,11 +443,6 @@ export function collectProviderApiKeyDiagnostics(
   providers: Record<string, { authMode?: string; apiKey?: string }> = readConfigDiagnostics().config.providers ?? {},
   env: EnvMap = process.env,
 ): ProviderApiKeyDiagnostic[] {
-  const resolveInEnv = (value: string): string | undefined => {
-    const name = envReferenceName(value);
-    if (!name) return value;
-    return env[name];
-  };
   const rows: ProviderApiKeyDiagnostic[] = [];
   for (const [provider, config] of Object.entries(providers)) {
     if (config.authMode !== "key") continue;
@@ -451,7 +450,7 @@ export function collectProviderApiKeyDiagnostics(
     if (!raw) continue;
     const envName = envReferenceName(raw);
     if (!envName) continue;
-    const resolved = resolveInEnv(raw);
+    const resolved = ownEnvValue(env, envName);
     if (resolved?.trim()) continue;
     rows.push({
       provider,
@@ -478,7 +477,7 @@ export function collectCodexEnvKeyReadiness(
 ): CodexEnvKeyReadinessDiagnostic | null {
   if (!configText || rootTomlString(configText, "model_provider") !== "opencodex") return null;
   const envName = providerTableString(configText, "opencodex", "env_key")?.trim();
-  const envValue = envName && Object.hasOwn(env, envName) ? env[envName] : undefined;
+  const envValue = envName ? ownEnvValue(env, envName) : undefined;
   if (!envName || envValue?.trim() || shim.healthy || !serviceTokenPresent) return null;
   const shimState = shim.installed ? "unhealthy" : "missing";
   return {
@@ -512,7 +511,9 @@ export function collectConfiguredProxy(): ConfiguredProxyDiagnostic {
   }
 
   const envName = envReferenceName(rawProxy);
-  const resolved = resolveEnvValue(rawProxy);
+  const resolved = rawProxy.startsWith("$")
+    ? ownEnvValue(process.env, envName ?? rawProxy.slice(1))
+    : rawProxy;
   if (resolved?.trim()) {
     return {
       key: "config.proxy",
@@ -533,7 +534,7 @@ export function collectConfiguredProxy(): ConfiguredProxyDiagnostic {
 }
 
 export function parseProcessEnvBlock(content: string): EnvMap {
-  const env: EnvMap = {};
+  const env: EnvMap = Object.create(null);
   for (const entry of content.split("\0")) {
     if (!entry) continue;
     const separator = entry.indexOf("=");

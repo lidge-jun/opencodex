@@ -274,6 +274,26 @@ describe("doctor", () => {
     expect(JSON.stringify(rows)).not.toContain("secret");
   });
 
+  test("parseProcessEnvBlock stores prototype-like names as own keys", () => {
+    const names = [
+      "toString",
+      "valueOf",
+      "constructor",
+      "hasOwnProperty",
+      "__proto__",
+      "isPrototypeOf",
+      "propertyIsEnumerable",
+      "toLocaleString",
+    ];
+    const env = parseProcessEnvBlock(names.map(name => `${name}=set-${name}`).join("\0"));
+
+    expect(Object.getPrototypeOf(env)).toBeNull();
+    for (const name of names) {
+      expect(Object.hasOwn(env, name)).toBe(true);
+      expect(env[name]).toBe(`set-${name}`);
+    }
+  });
+
   test("collectRunningProxyEnv separates no pid, unreadable pid env, and pid env presence", () => {
     const none = collectRunningProxyEnv({ readPidFn: () => null });
     expect(none.status).toBe("not_running");
@@ -311,6 +331,18 @@ describe("doctor", () => {
     expect(diagnostic.configured).toBe(true);
     expect(diagnostic.present).toBe(true);
     expect(JSON.stringify(diagnostic)).not.toContain("secret");
+  });
+
+  test("collectConfiguredProxy diagnoses an inherited env reference instead of throwing", () => {
+    writeFileSync(join(TEST_OPENCODEX_HOME, "config.json"), JSON.stringify({ proxy: "$toString" }));
+
+    expect(collectConfiguredProxy()).toEqual({
+      key: "config.proxy",
+      present: false,
+      configured: true,
+      source: "file",
+      detail: "env reference toString is unset",
+    });
   });
 
   test("probeWham classifies ok, http error, timeout, and connect failures", async () => {
