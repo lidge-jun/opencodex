@@ -1062,6 +1062,27 @@ async function* parseKiroAttemptEvents(
       try { yield event; } finally { retention.releaseEvent(event); }
     }
   };
+  // A valid private completion answer supersedes the progress prose staged during the SAME
+  // inference: Kiro emits answer-like text and then calls the completion tool, so releasing both
+  // makes the bridge close the commentary message and open a second one with near-identical text
+  // (#2819 follow-up). Consume the collection instead — drop the redundant text, keep every
+  // non-text event, and release retention either way.
+  //
+  // This is deliberately the ONLY suppression site. The outer drain in `parseKiroAttempt` is also
+  // the leftover flush for early terminal returns (stream, protocol, and provider failures), so
+  // teaching it to discard text would hide the only commentary a failed turn ever produced.
+  // Splicing here leaves that drain empty on the completion path and untouched everywhere else.
+  const consumeSupersededByCompletion = async function* (
+    events: AdapterEvent[],
+  ): AsyncGenerator<AdapterEvent> {
+    for (const event of events.splice(0)) {
+      try {
+        if (event.type !== "text_delta") yield event;
+      } finally {
+        retention.releaseEvent(event);
+      }
+    }
+  };
 
   const providerState = (): { kiro: { conversationId: string } } | undefined =>
     returnedConversationId ? { kiro: { conversationId: returnedConversationId } } : undefined;
@@ -1466,12 +1487,15 @@ async function* parseKiroAttemptEvents(
     });
 
     if (mode === "required") {
-      yield* emitRetained(deferred.splice(0));
+      // A valid completion answer makes this inference's staged prose redundant; anything else
+      // still flushes exactly as before (bounded fallback, explicit stops, real tool calls).
+      if (completionAnswer !== undefined) yield* consumeSupersededByCompletion(deferred);
+      else yield* emitRetained(deferred.splice(0));
     }
 
     if (mode === "text_fallback") {
       if (completionAnswer !== undefined) {
-        yield* emitRetained(fallbackEvents);
+        yield* consumeSupersededByCompletion(fallbackEvents);
         yield { type: "text_delta", text: completionAnswer, phase: "final_answer" };
         return {
           assistantText,

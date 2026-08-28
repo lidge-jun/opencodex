@@ -267,8 +267,9 @@ describe("kiro adapter — parseStream", () => {
       ...completionFrames("Task complete."),
     ))));
 
+    // The completion answer supersedes prose staged in the SAME inference. Releasing both made the
+    // bridge split one turn into two near-identical assistant messages, which is what the user saw.
     expect(events.filter(event => event.type === "text_delta")).toEqual([
-      { type: "text_delta", text: "Checking the result.", phase: "commentary" },
       { type: "text_delta", text: "Task complete.", phase: "final_answer" },
     ]);
     expect(events.some(event => event.type === "tool_call_start" || event.type === "tool_call_delta")).toBe(false);
@@ -742,8 +743,9 @@ describe("kiro adapter — parseStream", () => {
       eventFrame({ stopReason: "END_TURN" }, "metadataEvent"),
     ))));
 
+    // END_TURN still does not promote the prose to a final answer — but the prose is now consumed
+    // rather than released, so the turn renders as one answer instead of two.
     expect(events.filter(event => event.type === "text_delta")).toEqual([
-      { type: "text_delta", text: "Checking the result.", phase: "commentary" },
       { type: "text_delta", text: "Task complete.", phase: "final_answer" },
     ]);
     expect(events.at(-1)).toMatchObject({ type: "done", endTurn: true });
