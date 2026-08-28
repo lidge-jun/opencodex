@@ -16,11 +16,17 @@
 /** Branches that may never be deleted regardless of pull-request state. */
 const PROTECTED_BRANCHES = Object.freeze(["main", "dev", "preview", "gh-pages"]);
 
+/** Branch namespaces explicitly reserved for disposable pull-request work. */
+const DISPOSABLE_BRANCH_PREFIXES = Object.freeze(["codex/", "ingw/"]);
+
 /** Default grace period before a closed PR's head branch becomes eligible. */
 const DEFAULT_GRACE_DAYS = 14;
 
 function normalizeBranchName(value) {
-  return String(value || "").trim();
+  // Git permits non-ASCII whitespace in ref names, while String#trim removes
+  // it. Preserve API-provided branch identity byte-for-byte so two distinct
+  // refs cannot collapse into one deletion candidate.
+  return typeof value === "string" ? value : "";
 }
 
 /**
@@ -59,6 +65,7 @@ const KEEP_REASONS = Object.freeze({
   CROSS_REPOSITORY: "cross-repository-head",
   MISSING_CLOSED_AT: "missing-closed-at",
   WITHIN_GRACE: "within-grace-period",
+  OUTSIDE_DISPOSABLE_NAMESPACE: "outside-disposable-namespace",
   MOVED_SINCE_CLOSE: "branch-moved-since-close",
   UNKNOWN_HEAD_SHA: "unknown-head-sha",
 });
@@ -79,6 +86,11 @@ const KEEP_REASONS = Object.freeze({
  *   contributor's repository and this token has no business there.
  * - A grace period after `closed_at` leaves room to reopen a PR that was
  *   closed by mistake.
+ * - Only branches under namespaces explicitly reserved for disposable pull-
+ *   request work are eligible. Pull-request history alone must not authorize
+ *   deletion of an unrelated persistent branch.
+ * - Branch names are compared and emitted byte-for-byte. Normalizing Unicode
+ *   whitespace can merge distinct valid refs and delete the wrong branch.
  * - The branch must still POINT AT a commit one of those closed pull requests
  *   had as its head. Matching by NAME alone deletes reused work: `codex/`-style
  *   names get picked up again all the time, and a branch recreated for new work
@@ -178,6 +190,11 @@ function planClosedPrBranchDeletions({
       continue;
     }
 
+    if (!DISPOSABLE_BRANCH_PREFIXES.some((prefix) => branch.startsWith(prefix))) {
+      keeps.push({ branch, reason: KEEP_REASONS.OUTSIDE_DISPOSABLE_NAMESPACE });
+      continue;
+    }
+
     // The tip check, last because it is the most expensive claim to satisfy and
     // the cheaper rules above have already excluded most branches.
     //
@@ -219,6 +236,7 @@ function planClosedPrBranchDeletions({
 
 module.exports = {
   DEFAULT_GRACE_DAYS,
+  DISPOSABLE_BRANCH_PREFIXES,
   KEEP_REASONS,
   PROTECTED_BRANCHES,
   isProtectedBranch,

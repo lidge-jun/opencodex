@@ -75,6 +75,55 @@ describe("closed-PR branch cleanup planning", () => {
     expect(result.deletions).toEqual([{ branch: "codex/some-work", pullRequests: [42] }]);
   });
 
+  test("an abandoned ingw branch still at the closed PR tip is deleted", () => {
+    const result = plan(
+      [closedPr({ headRefName: "ingw/some-work" })],
+      [{ name: "ingw/some-work", oid: OLD_TIP }],
+    );
+    expect(result.deletions).toEqual([{ branch: "ingw/some-work", pullRequests: [42] }]);
+  });
+
+  test("a persistent branch outside disposable namespaces is kept", () => {
+    const branch = "release/maintenance";
+    const result = plan(
+      [closedPr({ headRefName: branch })],
+      [{ name: branch, oid: OLD_TIP }],
+    );
+    expect(result.deletions).toEqual([]);
+    expect(keepReason(result, branch)).toBe(KEEP_REASONS.OUTSIDE_DISPOSABLE_NAMESPACE);
+  });
+
+  test("near-miss prefixes do not enter disposable namespaces", () => {
+    for (const branch of ["codexx/some-work", "ingw2/some-work"]) {
+      const result = plan(
+        [closedPr({ headRefName: branch })],
+        [{ name: branch, oid: OLD_TIP }],
+      );
+      expect(result.deletions).toEqual([]);
+      expect(keepReason(result, branch)).toBe(KEEP_REASONS.OUTSIDE_DISPOSABLE_NAMESPACE);
+    }
+  });
+
+  test("Unicode whitespace preserves ref identity and cannot create a namespace match", () => {
+    const trailing = "codex/some-work\u00a0";
+    const collision = plan(
+      [closedPr({ headRefName: trailing })],
+      [
+        { name: "codex/some-work", oid: NEW_TIP },
+        { name: trailing, oid: OLD_TIP },
+      ],
+    );
+    expect(collision.deletions).toEqual([{ branch: trailing, pullRequests: [42] }]);
+
+    const leading = "\u00a0codex/some-work";
+    const outside = plan(
+      [closedPr({ headRefName: leading })],
+      [{ name: leading, oid: OLD_TIP }],
+    );
+    expect(outside.deletions).toEqual([]);
+    expect(keepReason(outside, leading)).toBe(KEEP_REASONS.OUTSIDE_DISPOSABLE_NAMESPACE);
+  });
+
   test("BUG-R4: a branch reused for new work is kept, not deleted", () => {
     // Same NAME, different tip. Before the SHA guard this returned a deletion
     // for a branch carrying commits that had never been in any pull request.
