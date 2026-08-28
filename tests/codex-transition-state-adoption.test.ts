@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdtempSync, openSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -69,3 +69,35 @@ for (const checkpoint of ["temp-created", "temp-committed", "published"] as cons
     }
   });
 }
+
+test("Windows fsync of a coordinator file needs a writable fd", () => {
+  const probe = join(root, "fsync-probe");
+  writeFileSync(probe, "x");
+  const readonlyFd = openSync(probe, "r");
+  try {
+    if (process.platform === "win32") {
+      expect(() => fsyncSync(readonlyFd)).toThrow(/EPERM|operation not permitted/);
+    } else {
+      fsyncSync(readonlyFd);
+    }
+  } finally {
+    closeSync(readonlyFd);
+  }
+  const writableFd = openSync(probe, "r+");
+  try {
+    fsyncSync(writableFd);
+  } finally {
+    closeSync(writableFd);
+  }
+});
+
+test("adoption publishes a coordinator database on this platform", () => {
+  const adopted = openCodexCoordinatorTransaction(coordinatorPath, { direction: "apply" });
+  try {
+    expect(existsSync(coordinatorPath)).toBe(true);
+    expect(adopted.version()).toEqual({ nativeGeneration: 0, currentTxId: null });
+    adopted.commit();
+  } finally {
+    adopted.close();
+  }
+});

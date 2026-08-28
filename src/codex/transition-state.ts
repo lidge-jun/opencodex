@@ -280,7 +280,16 @@ export interface CodexCoordinatorAdoptionOptions {
   readonly onCheckpoint?: (checkpoint: CodexCoordinatorAdoptionCheckpoint) => void;
 }
 
-function fsyncPath(path: string): void {
+function fsyncFile(path: string): void {
+  // Writable fd on purpose. Windows FlushFileBuffers needs GENERIC_WRITE;
+  // openSync(path, "r") is GENERIC_READ only and fails with EPERM (measured on
+  // Windows 11 25H2 / bun 1.3.14). prompt-journal.ts uses the same "r+" open.
+  const fd = openSync(path, "r+");
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+
+function fsyncDir(path: string): void {
+  // POSIX directory fsync is O_RDONLY. O_RDWR ("r+") is EISDIR.
   const fd = openSync(path, "r");
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
@@ -316,12 +325,12 @@ function publishAdoptionDatabase(
     } finally {
       temp.close();
     }
-    fsyncPath(tempPath);
+    fsyncFile(tempPath);
     options.onCheckpoint?.("temp-committed");
 
     linkSync(tempPath, finalDatabasePath);
     options.onCheckpoint?.("published");
-    if (process.platform !== "win32") fsyncPath(parent);
+    if (process.platform !== "win32") fsyncDir(parent);
   } catch (error) {
     if (errorCode(error) !== "EEXIST") throw error;
   } finally {
