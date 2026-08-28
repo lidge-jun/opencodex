@@ -36,3 +36,6 @@ instruction is the maintainer approval for these session-authored PRs.
 - R2 (#2803, successor of #2795): CI 23 ok / 0 fail (CodeRabbit status
   marker non-required); prior audits stand (cherry-pick clean). MERGED
   squash via --admin, branch deleted.
+- R3 (#2769): reviewer PASS (Avicenna; precedence + claude derivation +
+  72 focused tests + clean merge simulation). MERGED squash via --admin,
+  branch deleted.
