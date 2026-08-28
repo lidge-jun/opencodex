@@ -36,7 +36,10 @@ function freePort(): Promise<number> {
  * enforce — a slow-but-live proxy must still pass.
  */
 const UPDATE_SPAWN_TIMEOUT_MS = 30_000;
-const PROXY_READY_TIMEOUT_MS = 45_000;
+// 45s exhausted repeatedly on loaded shared runners (46-47s failures recorded
+// on at least four unrelated PRs; the detached Bun proxy can take >45s to
+// serve /healthz there). 90s keeps the derived case budget honest below.
+const PROXY_READY_TIMEOUT_MS = 90_000;
 /** Spawn + readiness + teardown spawn, plus headroom for fixture IO on a loaded runner. */
 const RECOVERY_CASE_TIMEOUT_MS = UPDATE_SPAWN_TIMEOUT_MS + PROXY_READY_TIMEOUT_MS + UPDATE_SPAWN_TIMEOUT_MS + 15_000;
 
