@@ -189,9 +189,9 @@ Codex uses small helper models for tasks such as titles and commit messages. Ena
 `shadowCallIntercept` to redirect recognized source-model prefixes to another configured model. The
 replacement keeps the request's configured reasoning effort. Set `sourceModels` only when a client
 uses different helper ids.
-Codex 0.145.0+ marks request purpose in `x-codex-turn-metadata`: normal `request_kind: "turn"`
-requests keep the selected model, while recognized maintenance requests can be redirected. Clients
-without that metadata retain the legacy prefix behavior.
+Interception is model-based: every request whose bare model id matches `sourceModels` can be
+redirected, including normal `request_kind: "turn"` requests. `x-codex-turn-metadata` does not exempt
+a matching request.
 
 ```json
 {

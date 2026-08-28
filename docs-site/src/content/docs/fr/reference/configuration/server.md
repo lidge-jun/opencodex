@@ -178,9 +178,9 @@ l'abonnement avec un avertissement lorsque la détection n'est pas concluante. V
 Codex utilise de petits modèles auxiliaires pour des tâches telles que les titres et les messages de commit. Activez
 `shadowCallIntercept` pour rediriger les préfixes de modèle source reconnus vers un autre modèle configuré. Le
 modèle de remplacement conserve l'effort de raisonnement configuré pour la requête. Définissez `sourceModels` uniquement lorsqu'un client utilise d'autres identifiants de modèles auxiliaires.
-Codex 0.145.0+ indique l'objet de la requête dans `x-codex-turn-metadata` : les requêtes normales portant `request_kind: "turn"`
-conservent le modèle sélectionné, tandis que les requêtes de maintenance reconnues peuvent être redirigées. Les clients
-qui ne fournissent pas ces métadonnées conservent le comportement historique fondé sur le préfixe.
+L'interception dépend du modèle : toute requête dont l'identifiant de modèle nu correspond à `sourceModels`
+peut être redirigée, y compris une requête normale portant `request_kind: "turn"`.
+`x-codex-turn-metadata` n'exempte pas une requête correspondante.
 
 ```json
 {

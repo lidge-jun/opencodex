@@ -773,6 +773,48 @@ describe("combo management API", () => {
     ]);
   });
 
+  test("PUT alias changes reject a migrated shadow-call self-target (#2706)", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({
+        defaultProvider: "xai",
+        providers: {
+          xai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.x.ai/v1",
+            apiKey: "test-xai-key",
+            models: ["custom-helper"],
+          },
+        },
+        combos: {
+          helper: {
+            alias: "old-public",
+            targets: [{ provider: "xai", model: "custom-helper" }],
+          },
+        },
+        shadowCallIntercept: {
+          enabled: true,
+          model: "old-public",
+          sourceModels: ["custom-helper"],
+        },
+      });
+      saveConfig(config);
+      const beforeMemory = structuredClone(config);
+      const beforeDisk = readFileSync(getConfigPath(), "utf8");
+
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "helper",
+        combo: {
+          alias: "custom-helper",
+          targets: [{ provider: "xai", model: "custom-helper" }],
+        },
+      });
+
+      expect(response?.status).toBe(400);
+      expect(config).toEqual(beforeMemory);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeDisk);
+    });
+  });
+
   test("PUT clearing an alias deduplicates migrated references in stable order", async () => {
     await withTempHome(async () => {
       const config = baseConfig({

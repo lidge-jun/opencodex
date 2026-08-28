@@ -25,7 +25,7 @@ import {
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { isStreamMode } from "../../lib/bun-stream-caps";
-import { shadowCallTargetsIntersect, shadowSourceModels } from "../../lib/shadow-call";
+import { shadowSourceModels } from "../../lib/shadow-call";
 import {
   configureAppOwnedMemoryBudget,
   enforceAppOwnedMemoryBudget,
@@ -38,7 +38,7 @@ import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
 import {
@@ -88,7 +88,7 @@ import {
   type DebugFlag,
 } from "../../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
-import { routeConcreteModel, routeModel } from "../../router";
+import { shadowCallTargetError } from "./shadow-call-validation";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -869,25 +869,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       : body.enabled === true
         ? config.shadowCallIntercept?.model
         : undefined;
-    if (candidateModel) {
-      let target;
-      try {
-        target = routeModel(config, candidateModel);
-      } catch {
-        return jsonResponse({ error: "model must resolve to a configured provider" }, 400);
-      }
-      const intersectsSource = shadowSourceModels(config.shadowCallIntercept?.sourceModels).some(sourceModel => {
-        let source = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourceModel };
-        try {
-          const resolved = routeConcreteModel(config, sourceModel);
-          source = { providerName: resolved.providerName, modelId: sourceModel };
-        } catch { /* Unconfigured native Codex source models remain OpenAI-owned. */ }
-        return shadowCallTargetsIntersect(source, target);
-      });
-      if (intersectsSource) {
-        return jsonResponse({ error: "shadow-call target must not intersect a source model" }, 400);
-      }
-    }
+    const targetError = shadowCallTargetError(config, candidateModel);
+    if (targetError) return jsonResponse({ error: targetError }, 400);
     config.shadowCallIntercept = { ...config.shadowCallIntercept };
     if (typeof body.enabled === "boolean") config.shadowCallIntercept.enabled = body.enabled;
     if (typeof body.model === "string") {

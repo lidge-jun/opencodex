@@ -33,6 +33,16 @@ test("shadow-call options exclude only source targets on the intersecting provid
   expect(options).toContainEqual({ value: "xai/gpt-5.6-luna", label: "xai/gpt-5.6-luna" });
 });
 
+test("shadow-call options exclude a custom-provider self-target", () => {
+  const options = shadowCallModelOptions([
+    { provider: "xai", id: "custom-helper", namespaced: "xai/custom-helper" },
+    { provider: "xai", id: "grok-4.5", namespaced: "xai/grok-4.5" },
+  ], undefined, ["custom-helper"]);
+
+  expect(options.map(option => option.value)).not.toContain("xai/custom-helper");
+  expect(options).toContainEqual({ value: "xai/grok-4.5", label: "xai/grok-4.5" });
+});
+
 test("shadow-call options do not grandfather a stale self-target", () => {
   const withoutNativeSource = models.filter(model => model.namespaced !== "gpt-5.6-luna");
   const options = shadowCallModelOptions(withoutNativeSource, "openai/gpt-5.6-luna", ["gpt-5.6-luna"]);

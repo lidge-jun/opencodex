@@ -515,6 +515,55 @@ describe("routing profile management editor API", () => {
     expect(saves).toBe(0);
   });
 
+  test("PUT update rejects a migrated shadow-call self-target (#2706)", async () => {
+    const config = baseConfig();
+    config.defaultProvider = "xai";
+    config.providers = {
+      xai: {
+        adapter: "openai-chat",
+        baseUrl: "https://api.x.ai/v1",
+        apiKey: "test-xai-key",
+        models: ["custom-helper"],
+      },
+    };
+    config.routingProfiles!.fast = {
+      alias: "old-public",
+      candidates: [{ provider: "xai", model: "custom-helper" }],
+    };
+    config.shadowCallIntercept = {
+      enabled: true,
+      model: "old-public",
+      sourceModels: ["custom-helper"],
+    };
+    const before = structuredClone(config);
+    let saves = 0;
+    let refreshes = 0;
+    const req = new ManagementRequest("http://localhost/api/routing-profiles", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "fast",
+        mode: "update",
+        profile: {
+          alias: "custom-helper",
+          candidates: [{ provider: "xai", model: "custom-helper" }],
+        },
+      }),
+    });
+
+    const response = await handleManagementAPI(
+      req,
+      new URL(req.url),
+      config,
+      deps(() => { saves += 1; }, () => { refreshes += 1; }),
+    );
+
+    expect(response?.status).toBe(400);
+    expect(config).toEqual(before);
+    expect(saves).toBe(0);
+    expect(refreshes).toBe(0);
+  });
+
   test("DELETE removes a profile, persists, and refreshes the catalog", async () => {
     const config = baseConfig();
     let saves = 0;

@@ -200,10 +200,9 @@ kullanır. Tanınan kaynak model öneklerini yapılandırılmış başka bir mod
 yönlendirmek için `shadowCallIntercept`'i etkinleştirin. Değiştirilen istek, yapılandırılmış
 akıl yürütme çabasını korur.
 `sourceModels`'ı yalnızca bir istemci farklı yardımcı kimlikleri kullandığında
-ayarlayın. Codex 0.145.0+, istek amacını `x-codex-turn-metadata` içinde
-işaretler: normal `request_kind: "turn"` istekleri seçilen modeli tutarken
-tanınan bakım istekleri yeniden yönlendirilebilir. Bu meta verileri içermeyen
-istemciler eski önek davranışını korur.
+ayarlayın. Yakalama model tabanlıdır: çıplak model kimliği `sourceModels` ile
+eşleşen her istek, normal `request_kind: "turn"` istekleri dahil, yeniden
+yönlendirilebilir. `x-codex-turn-metadata` eşleşen bir isteği muaf tutmaz.
 
 ```json
 {

@@ -383,8 +383,13 @@ export function visionModelOptions(
 /** Options for shadow-call replacement models use the proxy's canonical routing id. */
 export function shadowCallModelOptions(models: ModelInfo[], current: string | undefined, sourceModels?: string[]) {
   const sourcePrefixes = shadowSourceModelList(sourceModels);
-  const intersecting = models.filter(model =>
-    sourcePrefixes.some(prefix => model.namespaced.startsWith(prefix)));
+  const sourceIdentities = sourcePrefixes.flatMap(prefix => {
+    const source = models.find(model => model.namespaced.startsWith(prefix))
+      ?? models.find(model => model.id.startsWith(prefix));
+    return source ? [{ provider: source.provider, modelId: prefix }] : [];
+  });
+  const intersecting = models.filter(model => sourceIdentities.some(source =>
+    model.provider === source.provider && model.id.startsWith(source.modelId)));
   const invalidSelectors = new Set([
     ...sourcePrefixes.flatMap(prefix => [prefix, `openai/${prefix}`]),
     ...intersecting.flatMap(model => [model.namespaced, `${model.provider}/${model.id}`]),

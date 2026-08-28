@@ -27,6 +27,7 @@ import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 import type { OcxConfig, OcxRoutingProfileConfig } from "../../types";
+import { shadowCallTargetError } from "./shadow-call-validation";
 
 function profileDto(config: Parameters<typeof getRoutingProfile>[0], id: string): Record<string, unknown> | null {
   const profile = getRoutingProfile(config, id);
@@ -276,10 +277,12 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     }
 
     const previousProfile = mode === "update" ? getRoutingProfile(config, id) : undefined;
+    let aliasMigration: { oldPublicModel: string; newPublicModel: string } | undefined;
     if (mode === "update" && previousProfile) {
       const oldPublicModel = policyPublicModelId(id, previousProfile);
       const newProfile = normalizeRoutingProfile(id, body.profile as OcxRoutingProfileConfig);
       const newPublicModel = policyPublicModelId(id, newProfile);
+      aliasMigration = { oldPublicModel, newPublicModel };
       const collision = modelMapMigrationCollision(config, oldPublicModel, newPublicModel);
       if (collision) {
         return jsonResponse({
@@ -289,6 +292,18 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     }
     const nextProfiles = { ...(config.routingProfiles ?? {}) };
     nextProfiles[id] = storedProfile(id, body.profile as OcxRoutingProfileConfig);
+    const currentShadowTarget = config.shadowCallIntercept?.model;
+    if (aliasMigration && currentShadowTarget === aliasMigration.oldPublicModel) {
+      const targetError = shadowCallTargetError(
+        { ...config, routingProfiles: nextProfiles },
+        aliasMigration.newPublicModel,
+      );
+      if (targetError) {
+        return jsonResponse({
+          error: { code: "invalid_shadow_call_target", message: targetError },
+        }, 400, req, config);
+      }
+    }
     config.routingProfiles = nextProfiles;
     // Creating the first profile on a process started profile-less must install the
     // compatibility provider now; activation is synchronous and idempotent per configDir.

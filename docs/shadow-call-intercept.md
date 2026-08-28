@@ -64,18 +64,15 @@ the defaults rather than extending them:
 
 ### Behavior
 
-- Matching maintenance requests, including `prewarm`, `compaction`, and `memory`, are
-  rewritten to the configured model
-- Normal user turns identified by `x-codex-turn-metadata` with `request_kind: "turn"` are
-  never rewritten
-- Headerless legacy clients retain the original prefix behavior: matching bare model ids are
-  rewritten
-- Missing, malformed, or unrecognized turn metadata retains the legacy prefix behavior
+- Every request whose bare model id matches a configured source prefix is rewritten to the
+  configured model, including normal `request_kind: "turn"` requests and maintenance requests
+  such as `prewarm`, `compaction`, and `memory`
+- `x-codex-turn-metadata` does not exempt a matching request from interception
 - The request's configured reasoning effort is preserved
 - The original model ID is logged as `shadowCallRewrittenFrom` in request logs
 - When disabled (default), no interception occurs
 
 ### Warning
 
-Headerless clients cannot distinguish foreground turns from background helper calls. If such a
-client uses `gpt-5.6-luna` as its main model, narrow `sourceModels` or disable the intercept.
+Interception is model-based and does not distinguish foreground turns from background helper calls.
+If a client uses `gpt-5.6-luna` as its main model, narrow `sourceModels` or disable the intercept.
