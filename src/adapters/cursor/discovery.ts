@@ -5,6 +5,7 @@ import {
   cursorWireModelIdWithEffort,
   CURSOR_THINKING_MODEL_IDS,
 } from "./effort-map";
+import { parseCursorVariantId } from "./catalog";
 
 export interface CursorModelInfo {
   id: string;
@@ -76,9 +77,16 @@ function stripCursorWirePrefix(id: string): string {
  * ordinary `{base}-{effort}` form, or Cursor's current `{base-without-fast}-{effort}-fast` form.
  */
 export function isCursorModelAvailableForAccount(modelId: string, liveIds: readonly string[]): boolean {
+  // Umbrella matching (devlog 260828_cursor_umbrella_catalog): a live suffix
+  // id counts toward its BASE — any variant dimension (thinking/fast/effort)
+  // proves the account can reach the umbrella. Unknown ids fall back to the
+  // legacy exact/suffix comparison so non-cataloged rows keep matching.
+  const parsedTarget = parseCursorVariantId(modelId);
   return liveIds.some(raw => {
     const id = stripCursorWirePrefix(raw);
     if (id === modelId) return true;
+    const parsedLive = parseCursorVariantId(id);
+    if (parsedLive.known && parsedTarget.known && parsedLive.baseId === parsedTarget.baseId) return true;
     for (const effort of CANONICAL_EFFORT_SUFFIXES) {
       if (
         id === `${modelId}-${effort}` ||
@@ -244,15 +252,13 @@ export function filterCursorConfiguredModelsByLiveDiscovery<T extends { id: stri
 
 /**
  * Models GetUsableModels advertises but whose every Run returns not_found (catalog honesty,
- * devlog 260826_cursor_responses_gap 060). Live probes 2026-08-26: cursor/claude-opus-5 failed
- * 100% ("Cursor Connect error not_found") while its -fast and -thinking siblings — separate
- * wire families — succeed. Quarantined here, in the shared filter, so live, cached, stale, and
- * static serving paths all agree. Custom user provider overrides are not routed through this
- * canonical seed and stay untouched.
+ * devlog 260826_cursor_responses_gap 060). The claude-opus-5 REGULAR wire family is the known
+ * case (probes 2026-08-26: 100% not_found while -fast/-thinking succeed) — under the umbrella
+ * catalog (devlog 260828) that quarantine moved to the RESOLVER level: the capability marks the
+ * regular VARIANT quarantined, the bare slug routes the healthy thinking variant, and the base
+ * row stays in the seed. This row-level set stays for future whole-base quarantines.
  */
-export const CURSOR_KNOWN_UNCALLABLE_MODEL_IDS: ReadonlySet<string> = new Set([
-  "claude-opus-5",
-]);
+export const CURSOR_KNOWN_UNCALLABLE_MODEL_IDS: ReadonlySet<string> = new Set([]);
 
 export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorModels([
   // Context windows and the model lineup mirror Cursor's public models/pricing docs plus the jawcode
@@ -265,26 +271,26 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   // gemini/grok/kimi-k2.7/gpt-5-mini are reasoning models in the SOT but are sent bare (no tier picker).
   ...CURSOR_ROUTER_MODEL_IDS.map(id => ({ id, contextWindow: CONTEXT_200K, supportsReasoningEffort: false })),
 
-  { id: "claude-sonnet-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  // Umbrella seed (devlog 260828_cursor_umbrella_catalog): one row per BASE
+  // model. Thinking merges into the base (the resolver routes the thinking
+  // variant); fast / thinking-fast / -1m stay routable as aliases but add no
+  // rows. Windows follow CURSOR_CAPABILITIES where the base is cataloged.
+  { id: "claude-sonnet-5", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
   { id: "claude-4-sonnet", contextWindow: CONTEXT_200K },
   { id: "claude-4-sonnet-1m", contextWindow: CONTEXT_1M },
   { id: "claude-4.5-haiku", contextWindow: CONTEXT_200K },
   { id: "claude-4.5-sonnet", contextWindow: CONTEXT_200K },
   { id: "claude-4.5-opus", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  { id: "claude-4.6-opus", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  { id: "claude-4.6-sonnet", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  { id: "claude-opus-4-7", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  // Opus Fast families: live GetUsableModels (260822) lists ONLY effort-suffixed wire ids
-  // ({base-without-fast}-{effort}-fast; the bare id returns not_found), so every entry
-  // carries a tier picker. Live-verified: claude-opus-4-8-high-fast completed a turn.
-  // Tiers per the 260822 dump (devlog 260822_senpi_cursor_transfer/300).
-  { id: "claude-opus-4-7-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  { id: "claude-opus-4-8-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  { id: "claude-opus-4-8", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  // claude-opus-5 (bare) removed from the seed: GetUsableModels lists it but every Run returns
-  // not_found (quarantined via CURSOR_KNOWN_UNCALLABLE_MODEL_IDS; -fast/-thinking families stay).
-  { id: "claude-opus-5-fast", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
-  { id: "claude-fable-5", contextWindow: CONTEXT_200K, supportsReasoningEffort: true },
+  { id: "claude-4.6-opus", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+  { id: "claude-4.6-sonnet", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+  { id: "claude-opus-4-7", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+  { id: "claude-opus-4-8", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+  // claude-opus-5: regular variant is quarantined (not_found on every Run) but
+  // the umbrella row routes the THINKING variant, which is live — so the base
+  // row returns to the seed under the umbrella (resolver never sends the
+  // quarantined regular wire id for the bare slug).
+  { id: "claude-opus-5", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+  { id: "claude-fable-5", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
 
   { id: "composer-1", contextWindow: CONTEXT_200K },
   { id: "composer-2.5", contextWindow: CONTEXT_200K },
@@ -300,17 +306,6 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   // picker. 3.6 is the only Cursor model with a `minimal` rung.
   { id: "gemini-3.6-flash", contextWindow: CONTEXT_GEMINI, supportsReasoningEffort: true },
   { id: "gemini-3.7-flash", contextWindow: CONTEXT_GEMINI, supportsReasoningEffort: true },
-
-  // Explicit-thinking variants (260825 live roster). Exposed as first-class ids the same way the
-  // Opus Fast families were in 831810c13: `isCursorModelAvailableForAccount` matches a base id
-  // against `{base}`, `{base}-{effort}` and the family's wire form, and none of those ever
-  // matched a `-thinking` id, so every one of these was invisible in the routed catalog.
-  // Suffix ORDER differs per family; `cursorWireModelIdWithEffort` owns that mapping.
-  ...CURSOR_THINKING_MODEL_IDS.map(id => ({
-    id,
-    contextWindow: CONTEXT_200K,
-    supportsReasoningEffort: cursorModelHasEffortTiers(id),
-  })),
 
   { id: "gpt-5-codex", contextWindow: CONTEXT_272K },
   { id: "gpt-5-fast", contextWindow: CONTEXT_272K },
@@ -344,17 +339,15 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   { id: "kimi-k2.7-code", contextWindow: CONTEXT_262K },
   // kimi-k3: cursor.com/docs/models/kimi-k3; account-verified via GetUsableModels (2026-07-28) —
   // ships only as effort-suffixed kimi-k3-{low,high,max}, so the tier picker is exposed.
-  { id: "kimi-k3", contextWindow: CONTEXT_262K, supportsReasoningEffort: true },
-  // kimi-k3-1m: synthetic ultra/Max-Mode picker variant (CURSOR_ULTRA_1M_MODEL_IDS) — wire sends
-  // kimi-k3-<effort> with maxMode=true; 1M context user-verified live on the Ultra plan
-  // (devlog 260826_cursor_responses_gap/025). inferCursorContextWindow maps "1m" ids to 1M.
-  { id: "kimi-k3-1m", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+  // kimi-k3 folds the old synthetic kimi-k3-1m row into the umbrella: the base
+  // is maxModeVerified (user-verified 1M on the Ultra plan, devlog 260826/025),
+  // so the ultra effort rung arms Max Mode on the wire and the separate picker
+  // row is gone. cursor/kimi-k3-1m stays routable as an alias.
+  { id: "kimi-k3", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
 
   { id: "grok-4.5", contextWindow: 500_000, supportsReasoningEffort: true },
-  { id: "grok-4.5-fast", contextWindow: 500_000, supportsReasoningEffort: true },
   // 260813 preemptive: grok-4.6 seeded ahead of Cursor's lineup update (mirrors grok-4.5).
   { id: "grok-4.6", contextWindow: 500_000, supportsReasoningEffort: true },
-  { id: "grok-4.6-fast", contextWindow: 500_000, supportsReasoningEffort: true },
 ]);
 
 export function cursorModelIds(models: readonly CursorModelInfo[] = CURSOR_STATIC_MODELS): string[] {

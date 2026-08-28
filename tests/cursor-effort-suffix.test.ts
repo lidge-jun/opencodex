@@ -47,28 +47,32 @@ function selectionFor(modelId: string, reasoning?: string) {
   return { modelId: request.modelId, parameters: request.requestedModelParameters };
 }
 
+// Umbrella-merge note (devlog 260828_cursor_umbrella_catalog): bare claude
+// base ids now route their THINKING variant — the wire ids below carry the
+// family's thinking marker. Effort semantics (literal-first, rank clamp,
+// #545 none->lowest) are unchanged; only the variant dimension moved.
 describe("Cursor per-model reasoning-effort suffix", () => {
   test("literal requested efforts pass through when the model supports that tier", () => {
-    expect(modelIdFor("cursor/claude-4.6-opus", "high")).toBe("claude-4.6-opus-high");
-    expect(modelIdFor("cursor/claude-4.6-opus", "max")).toBe("claude-4.6-opus-max");
-    expect(modelIdFor("cursor/claude-4.6-opus", "xhigh")).toBe("claude-4.6-opus-max");
+    expect(modelIdFor("cursor/claude-4.6-opus", "high")).toBe("claude-4.6-opus-high-thinking");
+    expect(modelIdFor("cursor/claude-4.6-opus", "max")).toBe("claude-4.6-opus-max-thinking");
+    expect(modelIdFor("cursor/claude-4.6-opus", "xhigh")).toBe("claude-4.6-opus-max-thinking");
     expect(cursorEffortSuffix("claude-4.6-opus", "high")).toBe("high");
   });
 
   test("models with both max and xhigh preserve the exact named tier", () => {
-    expect(modelIdFor("cursor/claude-opus-4-8", "low")).toBe("claude-opus-4-8-low");
-    expect(modelIdFor("cursor/claude-opus-4-8", "medium")).toBe("claude-opus-4-8-medium");
-    expect(modelIdFor("cursor/claude-opus-4-8", "high")).toBe("claude-opus-4-8-high");
-    expect(modelIdFor("cursor/claude-opus-4-8", "max")).toBe("claude-opus-4-8-max");
-    expect(modelIdFor("cursor/claude-opus-4-8", "xhigh")).toBe("claude-opus-4-8-xhigh");
-    expect(modelIdFor("cursor/claude-opus-4-8", "ultra")).toBe("claude-opus-4-8-max");
+    expect(modelIdFor("cursor/claude-opus-4-8", "low")).toBe("claude-opus-4-8-thinking-low");
+    expect(modelIdFor("cursor/claude-opus-4-8", "medium")).toBe("claude-opus-4-8-thinking-medium");
+    expect(modelIdFor("cursor/claude-opus-4-8", "high")).toBe("claude-opus-4-8-thinking-high");
+    expect(modelIdFor("cursor/claude-opus-4-8", "max")).toBe("claude-opus-4-8-thinking-max");
+    expect(modelIdFor("cursor/claude-opus-4-8", "xhigh")).toBe("claude-opus-4-8-thinking-xhigh");
+    expect(modelIdFor("cursor/claude-opus-4-8", "ultra")).toBe("claude-opus-4-8-thinking-max");
   });
 
   test("efforts outside the model tier set clamp by Codex rank", () => {
-    expect(modelIdFor("cursor/claude-4.6-opus", "low")).toBe("claude-4.6-opus-high"); // tiers[0]
-    expect(modelIdFor("cursor/claude-4.6-opus", "medium")).toBe("claude-4.6-opus-high");
-    expect(modelIdFor("cursor/claude-4.6-opus", "none")).toBe("claude-4.6-opus-high");
-    expect(modelIdFor("cursor/claude-4.6-opus")).toBe("claude-4.6-opus-max");
+    expect(modelIdFor("cursor/claude-4.6-opus", "low")).toBe("claude-4.6-opus-high-thinking"); // tiers[0]
+    expect(modelIdFor("cursor/claude-4.6-opus", "medium")).toBe("claude-4.6-opus-high-thinking");
+    expect(modelIdFor("cursor/claude-4.6-opus", "none")).toBe("claude-4.6-opus-high-thinking");
+    expect(modelIdFor("cursor/claude-4.6-opus")).toBe("claude-4.6-opus-max-thinking");
   });
 
   // #545 made Claude Desktop's `thinking:{type:"disabled"}` survive translation as the "none"
@@ -79,14 +83,14 @@ describe("Cursor per-model reasoning-effort suffix", () => {
   // reading of "do not think". Dropping the instruction sent these to the model's TOP tier,
   // which is the opposite of what the caller asked for.
   test("an explicit 'none' picks the lowest tier, not the top one (#545)", () => {
-    expect(modelIdFor("cursor/claude-opus-4-8", "none")).toBe("claude-opus-4-8-low");
-    expect(modelIdFor("cursor/claude-opus-4-8")).toBe("claude-opus-4-8-max");
+    expect(modelIdFor("cursor/claude-opus-4-8", "none")).toBe("claude-opus-4-8-thinking-low");
+    expect(modelIdFor("cursor/claude-opus-4-8")).toBe("claude-opus-4-8-thinking-max");
   });
 
   test("single-tier models always use their one tier", () => {
     expect(modelIdFor("cursor/gpt-5.5-extra", "low")).toBe("gpt-5.5-extra-high");
-    expect(modelIdFor("cursor/claude-4.6-sonnet", "high")).toBe("claude-4.6-sonnet-medium");
-    expect(modelIdFor("cursor/claude-4.5-opus", "low")).toBe("claude-4.5-opus-high");
+    expect(modelIdFor("cursor/claude-4.6-sonnet", "high")).toBe("claude-4.6-sonnet-medium-thinking");
+    expect(modelIdFor("cursor/claude-4.5-opus", "low")).toBe("claude-4.5-opus-high-thinking");
   });
 
   test("non-reasoning models and already-qualified ids are left bare", () => {
@@ -97,9 +101,9 @@ describe("Cursor per-model reasoning-effort suffix", () => {
   });
 
   test("claude-sonnet-5 and glm-5.2 map to live effort suffixes", () => {
-    expect(modelIdFor("cursor/claude-sonnet-5", "low")).toBe("claude-sonnet-5-low");
-    expect(modelIdFor("cursor/claude-sonnet-5", "high")).toBe("claude-sonnet-5-high");
-    expect(modelIdFor("cursor/claude-sonnet-5", "max")).toBe("claude-sonnet-5-max");
+    expect(modelIdFor("cursor/claude-sonnet-5", "low")).toBe("claude-sonnet-5-thinking-low");
+    expect(modelIdFor("cursor/claude-sonnet-5", "high")).toBe("claude-sonnet-5-thinking-high");
+    expect(modelIdFor("cursor/claude-sonnet-5", "max")).toBe("claude-sonnet-5-thinking-max");
     expect(modelIdFor("cursor/glm-5.2", "low")).toBe("glm-5.2-high");
     expect(modelIdFor("cursor/glm-5.2", "medium")).toBe("glm-5.2-high");
     expect(modelIdFor("cursor/glm-5.2", "high")).toBe("glm-5.2-high");
@@ -258,14 +262,16 @@ describe("#2569 Cursor explicit-thinking variants", () => {
     expect(cursorModelEffortLadder("claude-4.5-sonnet-thinking")).toBeUndefined();
   });
 
-  test("every thinking variant is catalogued and survives live-discovery filtering", () => {
+  test("thinking variants folded into umbrella rows but still match live-discovery filtering", () => {
+    // Umbrella merge (devlog 260828): the 13 separate -thinking picker rows are
+    // gone — the BASE row carries the thinking default. Live thinking wire ids
+    // must therefore prove the BASE's availability, and legacy thinking slugs
+    // keep matching too (alias retention).
     const ids = new Set(CURSOR_STATIC_MODELS.map(model => model.id));
-    for (const id of CURSOR_THINKING_MODEL_IDS) expect(ids.has(id)).toBe(true);
-
-    // A base id is kept only when it matches a live wire id; before this change none of the
-    // -thinking forms matched, so every variant was invisible in the routed catalog.
+    for (const id of CURSOR_THINKING_MODEL_IDS) expect(ids.has(id)).toBe(false);
+    expect(isCursorModelAvailableForAccount("claude-opus-5", ["claude-opus-5-thinking-high"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("claude-4.6-opus", ["claude-4.6-opus-max-thinking"])).toBe(true);
     expect(isCursorModelAvailableForAccount("claude-opus-5-thinking", ["claude-opus-5-thinking-high"])).toBe(true);
-    expect(isCursorModelAvailableForAccount("claude-4.6-opus-thinking", ["claude-4.6-opus-max-thinking"])).toBe(true);
     expect(isCursorModelAvailableForAccount("claude-4.5-sonnet-thinking", ["claude-4.5-sonnet-thinking"])).toBe(true);
   });
 
@@ -274,4 +280,3 @@ describe("#2569 Cursor explicit-thinking variants", () => {
     expect(cursorWireModelIdWithEffort("claude-opus-5-fast", "high")).toBe("claude-opus-5-high-fast");
   });
 });
-

@@ -275,10 +275,21 @@ export interface ParsedCursorVariantId {
 }
 
 function stripLevelSuffix(id: string): { stem: string; level?: string } {
+  // Prefer the parse whose stem is a KNOWN capability, and among known stems
+  // the most specific (longest) one: "gpt-5.5-extra-high" must parse as
+  // gpt-5.5-extra + high (its real single-rung wire id), not gpt-5.5 +
+  // extra-high (A-gate blocker 2 family).
+  let fallback: { stem: string; level?: string } | undefined;
+  let best: { stem: string; level?: string } | undefined;
   for (const token of LEVEL_TOKENS) {
-    if (id.endsWith(`-${token}`)) return { stem: id.slice(0, -(token.length + 1)), level: token };
+    if (!id.endsWith(`-${token}`)) continue;
+    const candidate = { stem: id.slice(0, -(token.length + 1)), level: token };
+    fallback ??= candidate;
+    if (CURSOR_CAPABILITIES[candidate.stem] && (best === undefined || candidate.stem.length > best.stem.length)) {
+      best = candidate;
+    }
   }
-  return { stem: id };
+  return best ?? fallback ?? { stem: id };
 }
 
 /**
@@ -287,11 +298,21 @@ function stripLevelSuffix(id: string): { stem: string; level?: string } {
  * `gpt-5.1-codex-max` and `gpt-5.5-extra` — whose tails collide with effort
  * tokens — never mis-parse (A-gate round-1 blocker 2).
  */
+/**
+ * Real wire ids that merely END in "-1m" — they are distinct catalog rows the
+ * wire serves verbatim, never the synthetic ultra marker (A-gate blocker 2:
+ * a real legacy wire identity must not parse as `<base>-1m`).
+ */
+const REAL_1M_WIRE_IDS: ReadonlySet<string> = new Set(["claude-4-sonnet-1m"]);
+
 export function parseCursorVariantId(rawId: string): ParsedCursorVariantId {
   const id = rawId.trim();
   // 1. Exact base identity.
   if (CURSOR_CAPABILITIES[id]) {
     return { baseId: id, kind: defaultKindFor(id), ultra: false, known: true };
+  }
+  if (REAL_1M_WIRE_IDS.has(id)) {
+    return { baseId: id, kind: "regular", ultra: false, known: false };
   }
   // 2. cursor- wire prefix (regular grok wire forms).
   if (id.startsWith("cursor-")) {
@@ -444,8 +465,30 @@ export function resolveCursorSelection(
     ? `${capability.wirePrefix}${canonicalId}`
     : canonicalId;
   const ultraRequested = parsed.ultra || reasoning?.toLowerCase() === "ultra";
-  const maxModeArmed = capability.maxModeVerified === true || liveMaxModeIds?.has(parsed.baseId) === true;
+  const evidence = liveMaxModeIds ?? liveCursorMaxModeBases;
+  const maxModeArmed = capability.maxModeVerified === true || evidence.has(parsed.baseId);
   return { wireId, canonicalId, maxMode: ultraRequested && maxModeArmed, known: true };
+}
+
+/**
+ * Live Max-Mode evidence (GetUsableModels maxModeModels). Provider discovery
+ * records the BASES the live roster flags; the resolver unions this with the
+ * static `maxModeVerified` gate so ultra generalizes automatically as evidence
+ * arrives — never from window size (devlog 260828 blocker-4 fold).
+ */
+let liveCursorMaxModeBases: ReadonlySet<string> = new Set();
+
+export function recordLiveCursorMaxModeModels(liveIds: readonly string[]): void {
+  const bases = new Set<string>();
+  for (const id of liveIds) {
+    const parsed = parseCursorVariantId(id);
+    if (parsed.known) bases.add(parsed.baseId);
+  }
+  liveCursorMaxModeBases = bases;
+}
+
+export function liveCursorMaxModeBasesForTests(): ReadonlySet<string> {
+  return liveCursorMaxModeBases;
 }
 
 export interface CursorUmbrellaRow {
@@ -454,6 +497,27 @@ export interface CursorUmbrellaRow {
   readonly window: number;
   /** Max Mode evidence present: the ultra rung maps to maxMode on the wire. */
   readonly maxModeVerified: boolean;
+}
+
+/**
+ * Grok Fast keeps the parameterized wire shape (base id + effort/fast
+ * parameters) rather than a flattened -fast id — current Cursor clients send
+ * it that way and the flat form is rejected. Returns undefined for every
+ * other id.
+ */
+export function cursorGrokFastSelection(
+  pickedId: string,
+  reasoning: string | undefined,
+): { wireBaseId: string; effort: string } | undefined {
+  const parsed = parseCursorVariantId(pickedId);
+  if (!parsed.known || parsed.kind !== "fast") return undefined;
+  const capability = CURSOR_CAPABILITIES[parsed.baseId];
+  if (capability?.wirePrefix !== "cursor-") return undefined;
+  const spec = capability.variants.fast;
+  if (!spec) return undefined;
+  const effort = cursorVariantEffort(spec, parsed.level ?? reasoning);
+  if (effort === undefined) return undefined;
+  return { wireBaseId: parsed.baseId, effort };
 }
 
 /**

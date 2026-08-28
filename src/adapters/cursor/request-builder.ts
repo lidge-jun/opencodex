@@ -12,7 +12,7 @@ import type { CursorRequestMessage, CursorRequestedModelParameter, CursorRunRequ
 import { cursorCheckpointModelAffinityId, cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
 import { cursorUltraBaseModelId } from "./discovery";
 import { decodeCursorCallId } from "./call-id";
-import { cursorEffortSuffix, cursorRequestWireModelIdWithEffort } from "./effort-map";
+import { cursorGrokFastSelection, resolveCursorSelection } from "./catalog";
 import {
   cursorMcpToolEncodedSize,
   cursorMcpToolsEncodedSize,
@@ -192,25 +192,32 @@ function normalizeCursorModelId(modelId: string, reasoning?: string): {
   routingLevel?: CursorRoutingLevel;
   maxMode?: boolean;
 } {
-  // Synthetic ultra (-1m) picker rows resolve to their wire base with Max Mode on
-  // (devlog 260826 070); the marker never reaches the wire.
-  const ultraBase = cursorUltraBaseModelId(modelId);
-  const selection = cursorWireModelSelection(ultraBase ?? modelId);
-  const maxMode = ultraBase !== undefined ? { maxMode: true } : {};
+  // Router ids (auto / auto-<level>) keep their dedicated wire selection.
+  const selection = cursorWireModelSelection(modelId);
+  if (selection.routingLevel !== undefined || selection.modelId === "default") return selection;
+  // Umbrella catalog resolution (devlog 260828_cursor_umbrella_catalog): one
+  // resolver owns effort composition, variant dimensions, the synthetic -1m
+  // marker (ultra -> Max Mode, evidence-gated), and the cursor- wire prefix.
   const id = selection.modelId;
-  const suffix = cursorEffortSuffix(id, reasoning);
-  if ((id === "grok-4.5-fast" || id === "grok-4.6-fast") && suffix) {
+  // Grok Fast stays parameterized: current Cursor clients send the base id
+  // plus effort/fast parameters instead of the flattened -fast id.
+  const grokFast = cursorGrokFastSelection(id, reasoning);
+  if (grokFast) {
     return {
       ...selection,
-      ...maxMode,
-      modelId: id.slice(0, -"-fast".length),
+      modelId: grokFast.wireBaseId,
       requestedModelParameters: [
-        { id: "effort", value: suffix },
+        { id: "effort", value: grokFast.effort },
         { id: "fast", value: "true" },
       ],
     };
   }
-  return { ...selection, ...maxMode, modelId: suffix ? cursorRequestWireModelIdWithEffort(id, suffix) : id };
+  const resolved = resolveCursorSelection(id, reasoning);
+  return {
+    ...selection,
+    ...(resolved.maxMode ? { maxMode: true } : {}),
+    modelId: resolved.wireId,
+  };
 }
 
 function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): string | undefined {

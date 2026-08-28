@@ -122,12 +122,16 @@ describe("Cursor static Codex catalog", () => {
 });
 
 describe("Opus Fast catalog families (devlog 300, live-verified 260822)", () => {
-  test("all three -fast families are present with tier pickers", async () => {
+  // Umbrella merge (devlog 260828): the -fast rows folded into their bases.
+  // The alias path still resolves them with the exact live-verified ladders.
+  test("fast rows folded into bases; aliases keep resolving with tier semantics", async () => {
     const { CURSOR_STATIC_MODELS } = await import("../src/adapters/cursor/discovery");
+    const { resolveCursorSelection } = await import("../src/adapters/cursor/catalog");
     for (const id of ["claude-opus-4-7-fast", "claude-opus-4-8-fast", "claude-opus-5-fast"]) {
-      const entry = CURSOR_STATIC_MODELS.find(model => model.id === id);
-      expect(entry, `${id} missing from static catalog`).toBeDefined();
-      expect(entry?.supportsReasoningEffort, `${id} must carry a tier picker — the bare wire id is not_found`).toBe(true);
+      expect(CURSOR_STATIC_MODELS.some(model => model.id === id)).toBe(false);
+      // Alias never sends a bare -fast id (not_found on the wire).
+      expect(resolveCursorSelection(id, undefined).wireId.endsWith("-fast")).toBe(true);
+      expect(resolveCursorSelection(id, undefined).wireId).not.toBe(id);
     }
   });
 

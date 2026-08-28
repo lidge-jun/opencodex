@@ -46,6 +46,7 @@ import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
+import { recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -1309,6 +1310,9 @@ async function fetchProviderModelsWithAuth(
     });
     if (liveResult.ok) {
       const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
+      // Live Max-Mode evidence feeds the umbrella resolver's ultra gate
+      // (devlog 260828_cursor_umbrella_catalog; union with static evidence).
+      recordLiveCursorMaxModeModels(liveResult.maxModeModels ?? []);
       const result = available.length > 0 ? available : configured;
       // Cache the discovery-filtered roster without combo retention so a later
       // gather can re-apply the current capture's retain set on read.

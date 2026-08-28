@@ -26,11 +26,15 @@ function parsedFor(modelId: string, reasoning?: string): OcxParsedRequest {
 }
 
 describe("cursor ultra (-1m / Max Mode) toggle (devlog 260826 070)", () => {
-  test("static catalog exposes the kimi-k3-1m picker row with 1M context", () => {
-    const row = CURSOR_STATIC_MODELS.find(model => model.id === "kimi-k3-1m");
+  // Umbrella merge (devlog 260828_cursor_umbrella_catalog): the synthetic
+  // kimi-k3-1m picker row folded into the kimi-k3 base row (1M context,
+  // maxModeVerified). The alias stays routable; the separate row is gone.
+  test("kimi-k3 base row carries the 1M context; the synthetic -1m row is folded in", () => {
+    const row = CURSOR_STATIC_MODELS.find(model => model.id === "kimi-k3");
     expect(row).toBeDefined();
     expect(row?.contextWindow).toBe(1_000_000);
     expect(row?.supportsReasoningEffort).toBe(true);
+    expect(CURSOR_STATIC_MODELS.some(model => model.id === "kimi-k3-1m")).toBe(false);
   });
 
   test("ultra marker resolves to its wire base and never leaks", () => {
@@ -86,9 +90,10 @@ describe("cursor ultra (-1m / Max Mode) toggle (devlog 260826 070)", () => {
     expect(filtered.map(model => model.id)).toEqual(["kimi-k3-1m", "kimi-k3"]);
   });
 
-  test("ultra id set stays narrow and every entry has a static row", () => {
+  test("ultra id set stays narrow and every entry rides its base's static row", () => {
     for (const id of CURSOR_ULTRA_1M_MODEL_IDS) {
-      expect(CURSOR_STATIC_MODELS.some(model => model.id === id)).toBe(true);
+      const base = id.slice(0, -"-1m".length);
+      expect(CURSOR_STATIC_MODELS.some(model => model.id === base)).toBe(true);
     }
   });
 });
