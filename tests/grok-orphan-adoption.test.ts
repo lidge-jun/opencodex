@@ -150,6 +150,9 @@ describe("Grok orphan adoption (#511)", () => {
       "[models]",
       'default = "ocx-retired"',
       "",
+      "[ui]",
+      'fork_secondary_model = "ocx-retired"',
+      "",
       "[model.ocx-retired]",
       'model = "retired/model"',
       'base_url = "http://127.0.0.1:10100/v1"',
@@ -160,6 +163,37 @@ describe("Grok orphan adoption (#511)", () => {
     injectGrokConfig(10100, MODELS, { grokHome });
     const content = readFileSync(configPath, "utf8");
     expect(content).toContain('default = "ocx-retired"');
+    expect(content).toContain('fork_secondary_model = "ocx-retired"');
+    expect(content).toContain("[model.ocx-retired]");
+    expect(content).toContain('model = "retired/model"');
+
+    const second = injectGrokConfig(10100, MODELS, { grokHome });
+    expect(second).toMatchObject({ ok: true, changed: false });
+    expect(readFileSync(configPath, "utf8")).toBe(content);
+  });
+
+  test("keeps an owned-looking orphan whose model id is missing", () => {
+    writeFileSync(configPath, [
+      "[model.ocx-unknown]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      "",
+    ].join("\n"));
+
+    injectGrokConfig(10100, MODELS, { grokHome });
+    const content = readFileSync(configPath, "utf8");
+    expect(content).toContain("[model.ocx-unknown]");
+    expect(content).toContain('api_key = "opencodex-loopback"');
+  });
+
+  test("still removes a catalog orphan when that model is excluded", () => {
+    writeOrphanedConfig();
+
+    injectGrokConfig(10100, MODELS, {
+      grokHome,
+      excluded: new Set(["gpt-5.6-sol"]),
+    });
+    expect(modelTables(readFileSync(configPath, "utf8"))).toEqual([]);
   });
 
   // F7: the sweep must converge, or `changed` is meaningless to callers.
