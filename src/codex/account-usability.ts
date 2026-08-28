@@ -1,6 +1,11 @@
 import { getCodexAccountCredential } from "./account-store";
 import { isAccountNeedsReauth } from "./account-runtime-state";
-import { MAIN_CODEX_ACCOUNT_ID, isMainAccountTokenLive } from "./main-account";
+import {
+  MAIN_CODEX_ACCOUNT_ID,
+  hasMainAccountRefreshGrant,
+  isMainAccountCredentialUsable,
+  isMainAccountTokenLive,
+} from "./main-account";
 import { hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
@@ -27,13 +32,15 @@ export function isCodexAccountUsable(
     // A legacy pool row with the sentinel makes an active `__main__` ambiguous.
     // Fail closed until the authenticated compatibility-delete path removes it.
     if (hasLegacyMainCodexPoolAccount(config.codexAccounts)) return false;
-    if (isAccountNeedsReauth(accountId)) return false;
+    if (isAccountNeedsReauth(accountId) && !hasMainAccountRefreshGrant()) return false;
     // A selection-only caller owns the recovery/drain fence and will reject main
     // before reservation or token materialization. Treat cached main as a routing
     // candidate without touching the credential file so affinity is not rebound.
     if (options.nativeMainSelectionOnly) return true;
-    // Main account: credential is the read-only ~/.codex/auth.json token (Option A).
-    return (options.isMainAccountTokenLive ?? isMainAccountTokenLive)();
+    // Main account: a refresh grant is enough to route; materialization refreshes before I/O.
+    return options.isMainAccountTokenLive
+      ? options.isMainAccountTokenLive()
+      : isMainAccountCredentialUsable();
   }
   const exists = (config.codexAccounts ?? [])
     .some(account => isSelectableCodexPoolAccount(account) && account.id === accountId);

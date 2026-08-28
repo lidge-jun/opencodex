@@ -57,11 +57,13 @@ function runProbe(source: string, env: Record<string, string | undefined>): { co
 }
 
 /** A fake "real home" the guard will protect, so no deny case aims at the true one. */
-function sentinelHome(): { realHome: string; opencodexHome: string } {
+function sentinelHome(): { realHome: string; opencodexHome: string; codexHome: string } {
   const realHome = mkdtempSync(join(tmpdir(), "ocx-sentinel-home-"));
   const opencodexHome = join(realHome, ".opencodex");
+  const codexHome = join(realHome, ".codex");
   mkdirSync(opencodexHome, { recursive: true });
-  return { realHome, opencodexHome };
+  mkdirSync(codexHome, { recursive: true });
+  return { realHome, opencodexHome, codexHome };
 }
 
 describe("real-home write guard", () => {
@@ -109,6 +111,22 @@ const canSymlink = (() => {
     expect(() => readFileSync(join(opencodexHome, "config.json"))).toThrow();
     expect(() => readFileSync(join(opencodexHome, "auth.json"))).toThrow();
     expect(() => readFileSync(join(opencodexHome, "codex-accounts.json"))).toThrow();
+  });
+
+  test("armed native credential writes reject the protected Codex home", () => {
+    const { realHome, codexHome } = sentinelHome();
+    const probe = runProbe(`
+      import { assertNotRealCodexHomeUnderTest } from "${REPO_ROOT_URL}src/lib/test-home-guard";
+      try {
+        assertNotRealCodexHomeUnderTest("${codexHome}");
+        console.log("WRITE_ALLOWED");
+      } catch (err) {
+        console.log(String(err).includes("refusing to write the real Codex home") ? "REFUSED" : "OTHER");
+      }
+    `, { OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: realHome, CODEX_HOME: codexHome });
+
+    expect(probe.stdout).toContain("REFUSED");
+    expect(probe.stdout).not.toContain("WRITE_ALLOWED");
   });
 
   test.skipIf(!canSymlink)("armed + a symlink escaping a temp home into the protected home: refused", () => {

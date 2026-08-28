@@ -44,14 +44,19 @@ import {
   applyCodexAuthContextToProvider,
   CodexMainProfileDrainingError,
   headersForCodexAuthContext,
-  materializeCodexUpstreamAuth,
+  materializeCodexUpstreamAuthAsync,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
   codexProbeLeaseId,
   codexProbeQuotaScope,
   releaseCodexAuthContextProbeLease,
+  stripCodexRuntimeProviderFields,
   type CodexAuthContext,
 } from "../../codex/auth-context";
+import {
+  forceRefreshMainAccountToken,
+  type NativeMainRefreshDependencies,
+} from "../../codex/main-account";
 import {
   formatCodexProviderForLog,
   recordCodexUpstreamOutcome,
@@ -130,9 +135,13 @@ import {
   usesCodexForwardPoolAuth,
 } from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
-import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
+import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
+
+export interface HandleResponsesCompactOptions {
+  nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
+}
 
 export function compactResponseTooLargeError(): Response {
   return new Response(JSON.stringify({
@@ -142,6 +151,60 @@ export function compactResponseTooLargeError(): Response {
       code: "compact_response_too_large",
     },
   }), { status: 502, headers: { "Content-Type": "application/json" } });
+}
+
+async function refreshNativeMainCompactContext(args: {
+  req: Request;
+  authCtx: CodexAuthContext;
+  provider: OcxProviderConfig;
+  codexAccountMode?: CodexAccountMode;
+  substituteMainCredential: boolean;
+  options: HandleResponsesCompactOptions;
+}): Promise<
+  | { ok: true; authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers }
+  | { ok: false; response: Response }
+> {
+  const { req, authCtx, provider, codexAccountMode, substituteMainCredential, options } = args;
+  if (authCtx.kind !== "main-pool") {
+    return { ok: false, response: formatErrorResponse(401, "authentication_error", "No native main credential to refresh") };
+  }
+  try {
+    const refreshed = await forceRefreshMainAccountToken(authCtx.accessToken, {
+      signal: req.signal,
+      ...(options.nativeMainRefreshDependencies ?? {}),
+    });
+    if (!refreshed) {
+      return { ok: false, response: formatErrorResponse(401, "authentication_error", "Codex main account needs reauthentication") };
+    }
+    const refreshedAuthCtx: CodexAuthContext = {
+      ...authCtx,
+      accessToken: refreshed.accessToken,
+      chatgptAccountId: refreshed.chatgptAccountId,
+    };
+    const refreshedProvider = applyCodexAuthContextToProvider(
+      stripCodexRuntimeProviderFields(provider),
+      refreshedAuthCtx,
+      codexAccountMode,
+    );
+    const headers = new Headers({ "content-type": "application/json" });
+    const selected = await materializeCodexUpstreamAuthAsync(req.headers, refreshedAuthCtx, {
+      substituteMainCredential,
+      signal: req.signal,
+      nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+    });
+    for (const name of FORWARD_HEADERS) {
+      const value = selected.get(name);
+      if (value) headers.set(name, value);
+    }
+    const override = (refreshedProvider as { _codexAccountOverride?: { accessToken: string; chatgptAccountId: string } })._codexAccountOverride;
+    if (override) {
+      headers.set("authorization", `Bearer ${override.accessToken}`);
+      headers.set("chatgpt-account-id", override.chatgptAccountId);
+    }
+    return { ok: true, authCtx: refreshedAuthCtx, provider: refreshedProvider, headers };
+  } catch (error) {
+    return { ok: false, response: nativeMainRefreshFailureResponse(error) };
+  }
 }
 
 
@@ -272,6 +335,7 @@ export async function handleResponsesCompact(
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
   admission?: DataPlaneAdmission,
+  options: HandleResponsesCompactOptions = {},
 ): Promise<Response> {
   let body: unknown;
   try {
@@ -373,7 +437,7 @@ export async function handleResponsesCompact(
     // headers would run compaction on the wrong account (or 401) whenever a pool account is
     // active for this thread while normal turns succeed.
     let compactProvider = route.provider;
-    const headers = new Headers({ "content-type": "application/json" });
+    let headers = new Headers({ "content-type": "application/json" });
     try {
       if (route.codexAccountMode) {
         authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
@@ -382,9 +446,15 @@ export async function handleResponsesCompact(
           substituteMainCredentialForDirect: substituteMainCredential,
           requestScopedMainCredential,
           beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+          signal: req.signal,
+          nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
         });
         logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);
-        const selected = materializeCodexUpstreamAuth(req.headers, authCtx, { substituteMainCredential });
+        const selected = await materializeCodexUpstreamAuthAsync(req.headers, authCtx, {
+          substituteMainCredential,
+          signal: req.signal,
+          nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+        });
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
         for (const name of FORWARD_HEADERS) {
           const value = selected.get(name);
@@ -550,6 +620,42 @@ export async function handleResponsesCompact(
       compactHostAdmissionLease = null;
       recordCompactPoolOutcome(outcomeCtx, outcome);
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
+    }
+
+    if (
+      upstream.status === 401
+      && authCtx.kind === "main-pool"
+      && usesCodexForwardPoolAuth(authCtx, compactProvider)
+      && !req.signal.aborted
+    ) {
+      await upstream.body?.cancel().catch(() => undefined);
+      const replay = await refreshNativeMainCompactContext({
+        req,
+        authCtx,
+        provider: compactProvider,
+        codexAccountMode: route.codexAccountMode,
+        substituteMainCredential,
+        options,
+      });
+      if (!replay.ok) {
+        recordCompactPoolOutcome(outcomeCtx, replay.response.status === 401 ? 401 : "connect_neutral");
+        return replay.response;
+      }
+      authCtx = replay.authCtx;
+      outcomeCtx = replay.authCtx;
+      compactProvider = replay.provider;
+      headers = replay.headers;
+      logCtx.accountLogLabel = codexAuthContextLogLabel(replay.authCtx, config);
+      try {
+        upstream = await sendCompactAttempt(compactProvider, headers, "single");
+      } catch (err) {
+        if (req.signal.aborted) {
+          recordCompactPoolOutcome(outcomeCtx, 499);
+          return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+        }
+        recordCompactPoolOutcome(outcomeCtx, classifyTransportFailureKind(err));
+        return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
+      }
     }
 
     // Bounded same-request alternate: the regular /v1/responses path already does this

@@ -3,7 +3,12 @@ import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { OcxConfig } from "../types";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import { getValidCodexToken, readCodexAccountRecord } from "./account-store";
-import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "./main-account";
+import {
+  getMainAccountToken,
+  getValidMainAccountToken,
+  MAIN_CODEX_ACCOUNT_ID,
+  type NativeMainRefreshDependencies,
+} from "./main-account";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 
 const CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=0.0.0";
@@ -37,7 +42,9 @@ export interface CodexModelEntitlementSnapshot {
 
 export interface CodexModelEntitlementResolveOptions {
   readonly fetcher?: typeof fetch;
+  readonly nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
   readonly now?: number;
+  readonly signal?: AbortSignal;
   /** Test-only credential seam; production callers enumerate local main + Pool credentials. */
   readonly credentials?: readonly CodexModelEntitlementCredentialSnapshot[];
   /** Test-only seam for proving lifecycle exclusions happen before credential reads. */
@@ -92,9 +99,15 @@ function currentCredentialIdentity(accountId: string): string | undefined {
   return `pool:${record.generation}:${record.credential.chatgptAccountId}`;
 }
 
-async function accountCredentialSnapshot(accountId: string): Promise<CodexModelEntitlementCredentialSnapshot | null> {
+async function accountCredentialSnapshot(
+  accountId: string,
+  options: Pick<CodexModelEntitlementResolveOptions, "nativeMainRefreshDependencies" | "signal"> = {},
+): Promise<CodexModelEntitlementCredentialSnapshot | null> {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
-    const token = getMainAccountToken();
+    const token = await getValidMainAccountToken({
+      signal: options.signal,
+      ...(options.nativeMainRefreshDependencies ?? {}),
+    });
     return token
       ? {
         accountId,
@@ -261,7 +274,7 @@ export async function resolveCodexModelEntitlements(
   const credentialSnapshot = options.credentialSnapshot ?? accountCredentialSnapshot;
   const credentials = options.credentials
     ? [...options.credentials].filter(credential => !options.excludeAccountIds?.has(credential.accountId))
-    : (await Promise.all(allowedAccountIds.map(credentialSnapshot)))
+    : (await Promise.all(allowedAccountIds.map(accountId => credentialSnapshot(accountId, options))))
       .filter((value): value is CodexModelEntitlementCredentialSnapshot => value !== null);
   const results = await Promise.all(credentials.map(async credential => ({
     credential,

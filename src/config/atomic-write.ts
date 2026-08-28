@@ -42,6 +42,10 @@ export interface AtomicWriteIO {
   unlink: (path: string) => void;
 }
 
+export interface AtomicWriteHooks {
+  beforeRename?: (tempPath: string, targetPath: string) => void;
+}
+
 export class AtomicWriteResidualTempError extends Error {
   constructor(readonly tempPath: string, readonly hardened = true, options?: ErrorOptions) {
     super(`Atomic config write left a ${hardened ? "hardened " : ""}zero-byte temporary file`, options);
@@ -101,7 +105,7 @@ export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO
   rename: renameAtomicFile,
   truncate: target => truncateSync(target, 0),
   unlink: unlinkSync,
-}): void {
+}, hooks: AtomicWriteHooks = {}): void {
   recordOwnedConfigPath(getConfigDir(), path);
   const target = resolveWriteTarget(path);
   assertResolvedTargetAllowed(path, target);
@@ -111,6 +115,7 @@ export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO
     io.write(tmp, content);
     io.harden(tmp);
     hardened = true;
+    hooks.beforeRename?.(tmp, target);
     io.rename(tmp, target);
     forgetEphemeralSecretPath(tmp);
   } catch (cause) {

@@ -19,7 +19,11 @@ import {
 } from "./pool-rotation";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
 import { isThirtyDayOnlyCodexPlan } from "./plan";
-import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "./main-account";
+import {
+  MAIN_CODEX_ACCOUNT_ID,
+  getMainAccountPlan,
+  hasMainAccountRefreshGrant,
+} from "./main-account";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
@@ -1023,7 +1027,7 @@ function getEligiblePoolAccounts(
   if (
     excludeId !== MAIN_CODEX_ACCOUNT_ID
     && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
-    && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
+    && (!isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID) || hasMainAccountRefreshGrant())
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
     && (!skipFailoverReadyCandidates || !shouldFailover(config, MAIN_CODEX_ACCOUNT_ID, now))

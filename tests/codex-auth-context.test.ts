@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -208,6 +208,11 @@ const forwardProvider: OcxProviderConfig = {
 /** A JWT whose `exp` is far in the future, so isMainAccountTokenLive() accepts it. */
 function liveJwt(): string {
   const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 86_400 })).toString("base64url");
+  return `header.${payload}.signature`;
+}
+
+function expiredJwt(): string {
+  const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 60 })).toString("base64url");
   return `header.${payload}.signature`;
 }
 describe("Codex auth context", () => {
@@ -1024,12 +1029,24 @@ describe("Codex auth context", () => {
     const cfg = config();
     cfg.codexAccounts = [];
     cfg.activeCodexAccountId = undefined;
+    const authPath = join(testDir, "auth.json");
+    const originalAuth = JSON.stringify({
+      tokens: {
+        access_token: expiredJwt(),
+        refresh_token: "operator-refresh-token",
+        account_id: "operator-main-account",
+      },
+    });
+    writeFileSync(authPath, originalAuth);
     const inbound = new Headers({
       authorization: "Bearer caller-keyring-token",
       "chatgpt-account-id": "caller-keyring-account",
       "openai-beta": "responses=experimental",
     });
-    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    // This assertion is about request isolation, not config-generation reconciliation.
+    // Use a definitely-current writer so earlier tests cannot make the setup a no-op.
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID, Number.MAX_SAFE_INTEGER);
+    let operatorRefreshes = 0;
 
     try {
       expect(hasForwardableCodexBearer(inbound, cfg)).toBe(true);
@@ -1039,6 +1056,17 @@ describe("Codex auth context", () => {
       }), cfg)).toBe(false);
       const ctx = await resolveCodexAuthContext(inbound, cfg, "pool", {
         requestScopedMainCredential: true,
+        nativeMainRefreshDependencies: {
+          refreshToken: async () => {
+            operatorRefreshes += 1;
+            return {
+              access: "wrong-refreshed-access",
+              refresh: "wrong-rotated-refresh",
+              expires: Date.now() + 3_600_000,
+              accountId: "operator-main-account",
+            };
+          },
+        },
       });
       expect(ctx).toMatchObject({
         kind: "main",
@@ -1054,6 +1082,8 @@ describe("Codex auth context", () => {
       expect(upstream.get("chatgpt-account-id")).toBe("caller-keyring-account");
       expect(upstream.get("openai-beta")).toBe("responses=experimental");
       expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(true);
+      expect(operatorRefreshes).toBe(0);
+      expect(readFileSync(authPath, "utf8")).toBe(originalAuth);
     } finally {
       clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     }
