@@ -13,6 +13,7 @@ param(
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+try { [System.Windows.Forms.Application]::EnableVisualStyles() } catch { }
 
 # Normalize aliases before deriving singleton/event names. Without this,
 # C:\path and C:\path\. create separate tray instances for the same home.
@@ -68,6 +69,7 @@ if (-not $createdNew) {
   $mutex.Dispose()
   exit 0
 }
+[void]$stopEvent.Reset()
 
 $heartbeatPath = Join-Path $OpenCodexHome "tray-heartbeat.json"
 $actionLogPath = Join-Path $OpenCodexHome "tray-actions.log"
@@ -332,11 +334,15 @@ $notify.add_DoubleClick({ Start-OcxCommand @("gui") })
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 3000
 $timer.add_Tick({
-  if ($stopEvent.WaitOne(0)) {
-    [System.Windows.Forms.Application]::Exit()
-    return
+  try {
+    if ($stopEvent.WaitOne(0)) {
+      [System.Windows.Forms.Application]::Exit()
+      return
+    }
+    Update-TrayState
+  } catch {
+    try { Write-ActionLog "timer tick failed: $($_.Exception.GetType().Name)" } catch { }
   }
-  Update-TrayState
 })
 $notify.ContextMenuStrip = $menu
 $notify.Icon = $offlineIcon

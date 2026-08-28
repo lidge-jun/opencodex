@@ -15,6 +15,7 @@ import {
   buildWindowsTrayLauncherScript,
   buildWindowsTrayPowerShellCommand,
   buildWindowsTrayRunCommand,
+  launchInstalledWindowsTray,
   launchWindowsTrayHost,
   parseWindowsTrayRunValue,
   readWindowsTrayRunValueWithAsyncRunner,
@@ -132,6 +133,31 @@ describe("Windows tray packaging and command safety", () => {
     expect(runCommand.toLowerCase()).toContain("wscript.exe");
     expect(runCommand.length).toBeLessThanOrEqual(260);
   });
+
+  test("launches the installed tray through hidden wscript with bounded stdio", () => {
+    const calls: Array<{
+      file: string;
+      args: readonly string[];
+      options: { stdio: "ignore"; windowsHide: true; timeout: number };
+    }> = [];
+    const launcherPath = "C:\\Users\\Test\\.opencodex\\opencodex-tray.vbs";
+
+    launchInstalledWindowsTray(launcherPath, {
+      systemRoot: "C:\\Windows",
+      run: (file, args, options) => { calls.push({ file, args, options }); },
+    });
+
+    expect(calls).toEqual([{
+      file: "C:\\Windows\\System32\\wscript.exe",
+      args: ["//B", "//NoLogo", launcherPath],
+      options: {
+        stdio: "ignore",
+        windowsHide: true,
+        timeout: 15_000,
+      },
+    }]);
+  });
+
   test("keeps UNC backslashes literal in the VBS Run command", () => {
     const uncRoot = "\\\\server\\share";
     const uncEntry: WindowsTrayEntry = {
@@ -306,9 +332,16 @@ describe("Windows tray packaging and command safety", () => {
     const cli = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
     expect(typescript).not.toContain("\u0000");
     expect(typescript).toContain("OCX_TRAY_ENTRY_B64");
-    expect(typescript).toContain("$startInfo.UseShellExecute = $true");
+    expect(typescript).not.toContain("$startInfo.UseShellExecute = $true");
+    expect(typescript).toContain("$startInfo.UseShellExecute = $false");
+    expect(typescript).toContain("$startInfo.CreateNoWindow = $true");
+    expect(typescript).toContain("$startInfo.EnvironmentVariables['OCX_TRAY_ENTRY_B64'] = $env:OCX_TRAY_ENTRY_B64");
     expect(source).toContain("System.Threading.Mutex");
     expect(source).toContain("System.Threading.EventWaitHandle");
+    expect(source).toContain("[System.Windows.Forms.Application]::EnableVisualStyles()");
+    expect(source.indexOf("[void]$stopEvent.Reset()")).toBeGreaterThan(source.indexOf("if (-not $createdNew)"));
+    expect(source).toMatch(/\$timer\.add_Tick\(\{\s*try \{/);
+    expect(source).toContain('Write-ActionLog "timer tick failed: $($_.Exception.GetType().Name)"');
     expect(source).toContain("GetFullPath");
     expect(source).toContain("GetPathRoot");
     expect(source).toContain("$heartbeat.hostPid = $HostPid");
