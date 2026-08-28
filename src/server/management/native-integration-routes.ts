@@ -19,7 +19,7 @@
  */
 import { loadConfig, saveConfigPreservingClaudeCode } from "../../config";
 import { readRuntimePort } from "../../config/process-state";
-import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextWindow, visibleNativeSlugs } from "../../codex/catalog";
+import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextWindow, nativeOpenAiSlugs, visibleNativeSlugs } from "../../codex/catalog";
 import { providerContextCap } from "../../providers/context-cap";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
@@ -503,8 +503,14 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
      */
     const fetchModels = deps.fetchAllModels ?? defaultFetchAllModels;
     let models: GrokInjectModel[];
+    let catalogModelIds: Set<string>;
     try {
-      const routed = filterCatalogVisibleModels(await fetchModels(config), config);
+      const allRouted = await fetchModels(config);
+      const routed = filterCatalogVisibleModels(allRouted, config);
+      catalogModelIds = new Set([
+        ...nativeOpenAiSlugs(),
+        ...allRouted.map(model => model.alias ?? `${model.provider}/${model.id}`),
+      ]);
       models = [
         // Native slugs carry their context window: without it Grok falls back
         // to its own 200k default and understates a 372k model.
@@ -535,6 +541,9 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
       // writer allocates aliases over everything, so a model's alias never
       // depends on its neighbours' switches.
       excluded: new Set(config.grokExcludedModels ?? []),
+      // Visibility filters decide what to emit, not whether an owned pre-fence table is still
+      // current. Otherwise a hidden model is mistaken for retired state and survives outside.
+      catalogModelIds,
     });
 
     if (result.skippedReason === "non-loopback") {

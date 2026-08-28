@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { injectGrokConfig } from "../src/grok/inject";
+import { injectGrokConfig, stripGrokConfig } from "../src/grok/inject";
 
 /**
  * #511 — Grok Build reported 200k for every model.
@@ -180,10 +180,116 @@ describe("Grok orphan adoption (#511)", () => {
       "",
     ].join("\n"));
 
-    injectGrokConfig(10100, MODELS, { grokHome });
+    const result = injectGrokConfig(10100, MODELS, { grokHome });
+    expect(result).toMatchObject({ ok: true, changed: true });
     const content = readFileSync(configPath, "utf8");
     expect(content).toContain("[model.ocx-unknown]");
     expect(content).toContain('api_key = "opencodex-loopback"');
+  });
+
+  test("removes a hidden current orphan but preserves a genuinely retired one", () => {
+    writeFileSync(configPath, [
+      "[model.ocx-hidden]",
+      'model = "hidden/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      "",
+      "[model.ocx-retired]",
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      "",
+    ].join("\n"));
+
+    const result = injectGrokConfig(10100, MODELS, {
+      grokHome,
+      catalogModelIds: new Set(["gpt-5.6-sol", "hidden/model"]),
+    });
+    expect(result).toMatchObject({ ok: true, changed: true });
+    const content = readFileSync(configPath, "utf8");
+    expect(content).not.toContain("[model.ocx-hidden]");
+    expect(content).not.toContain('model = "hidden/model"');
+    expect(content).toContain("[model.ocx-retired]");
+    expect(content).toContain('model = "retired/model"');
+  });
+
+  test("adopts a current orphan whose TOML model id uses literal quotes", () => {
+    writeOrphanedConfig();
+    writeFileSync(
+      configPath,
+      readFileSync(configPath, "utf8").replace('model = "gpt-5.6-sol"', "model = 'gpt-5.6-sol'"),
+    );
+
+    const result = injectGrokConfig(10100, MODELS, { grokHome });
+    expect(result).toMatchObject({ ok: true, changed: true });
+    const content = readFileSync(configPath, "utf8");
+    expect(modelTables(content)).toEqual(["ocx-gpt-5-6-sol"]);
+    expect(content).not.toContain("model = 'gpt-5.6-sol'");
+    expect(content).toContain('model = "gpt-5.6-sol"');
+  });
+
+  test("teardown removes a preserved retired orphan and restores user bytes exactly", () => {
+    for (const eol of ["\n", "\r\n"]) {
+      const userPrefix = [`theme = "${eol === "\n" ? "lf" : "crlf"}"`, "", ""].join(eol);
+      const orphan = [
+        "[model.ocx-retired]",
+        'model = "retired/model"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_key = "opencodex-loopback"',
+        "",
+      ].join(eol);
+      writeFileSync(configPath, userPrefix + orphan);
+      expect(injectGrokConfig(10100, MODELS, { grokHome }))
+        .toMatchObject({ ok: true, changed: true });
+      expect(readFileSync(configPath, "utf8")).toContain("[model.ocx-retired]");
+
+      const stripped = stripGrokConfig({ grokHome });
+      expect(stripped).toMatchObject({ ok: true, changed: true });
+      expect(readFileSync(configPath, "utf8")).toBe(userPrefix);
+    }
+  });
+
+  test("teardown preserves a comment-only tail beyond the fence byte-for-byte", () => {
+    for (const eol of ["\n", "\r\n"]) {
+      const userPrefix = [`theme = "${eol === "\n" ? "lf" : "crlf"}"`, "", ""].join(eol);
+      const orphan = [
+        "[model.ocx-retired]",
+        'model = "retired/model"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_key = "opencodex-loopback"',
+        "",
+      ].join(eol);
+      const tail = ["# keep this post-fence note", "bare_user_key = true", ""].join(eol);
+      writeFileSync(configPath, userPrefix + orphan);
+      expect(injectGrokConfig(10100, MODELS, { grokHome }))
+        .toMatchObject({ ok: true, changed: true });
+      writeFileSync(configPath, readFileSync(configPath, "utf8") + tail);
+
+      expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+      expect(readFileSync(configPath, "utf8")).toBe(userPrefix + tail);
+    }
+  });
+
+  test("markerless teardown removes only ownership-proven orphan tables", () => {
+    const owned = [
+      "[model.ocx-retired]",
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      "",
+    ].join("\n");
+    const userOwned = [
+      "[model.user-owned]",
+      'model = "user/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "not-ours"',
+      "",
+    ].join("\n");
+    writeFileSync(configPath, owned + userOwned);
+
+    const stripped = stripGrokConfig({ grokHome });
+    expect(stripped).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(userOwned);
   });
 
   test("still removes a catalog orphan when that model is excluded", () => {

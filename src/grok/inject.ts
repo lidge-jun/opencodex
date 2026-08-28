@@ -144,9 +144,11 @@ function tableBodyKeys(body: string): Map<string, string> {
     const match = /^[ \t]*([A-Za-z0-9_-]+)[ \t]*=[ \t]*(.*?)[ \t]*$/.exec(line);
     if (!match) continue;
     const raw = match[2]!;
-    const value = raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2
+    const value = raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')
       ? decodeTomlBasicString(raw.slice(1, -1))
-      : raw;
+      : raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")
+        ? raw.slice(1, -1) // TOML literal strings do not process escapes.
+        : raw;
     if (!keys.has(match[1]!)) keys.set(match[1]!, value);
   }
   return keys;
@@ -344,7 +346,13 @@ export function buildGrokManagedBlock(
 export function injectGrokConfig(
   port: number,
   models: GrokInjectModel[],
-  opts: { grokHome?: string; hostname?: string; excluded?: ReadonlySet<string> } = {},
+  opts: {
+    grokHome?: string;
+    hostname?: string;
+    excluded?: ReadonlySet<string>;
+    /** Unfiltered known ids used only to distinguish hidden current models from retired ones. */
+    catalogModelIds?: ReadonlySet<string>;
+  } = {},
 ): GrokInjectResult {
   const grokHome = resolveGrokHome(opts.grokHome);
   if (!isDirectory(grokHome)) {
@@ -395,9 +403,11 @@ export function injectGrokConfig(
     // Adopt our own pre-fence entries (#511) BEFORE reserving user aliases, so the stale
     // duplicate is replaced instead of routed around forever. Runs inside the normalized
     // window so the user's dominant EOL is still restored below.
-    // Use the full catalog, not the emitted subset: an explicitly excluded current model must
-    // still lose its stale unfenced table, or that table would bypass the user's exclusion.
-    const catalogModelIds = new Set(models.map(model => model.id));
+    // Use the full UNFILTERED catalog, not the emitted subset: explicitly excluded and otherwise
+    // hidden current models must still lose stale unfenced tables, or those tables would bypass
+    // the user's visibility choice. Direct callers that do not have a separate catalog keep the
+    // historical `models` behavior.
+    const catalogModelIds = opts.catalogModelIds ?? new Set(models.map(model => model.id));
     const orphans = findOpencodexOrphans(originalContent, originalRegion)
       .filter(orphan => orphan.modelId !== undefined && catalogModelIds.has(orphan.modelId));
     const content = removeOrphanTables(originalContent, orphans);
@@ -481,29 +491,52 @@ export function stripGrokConfig(opts: { grokHome?: string } = {}): GrokInjectRes
     const rawContent = readFileSync(configPath, "utf8");
     const eol = dominantEol(rawContent);
     const content = applyEol(rawContent, "\n");
-    const region = findManagedRegion(content);
-    if (!region) {
-      return { ok: true, changed: false, message: "No opencodex managed block found in Grok config." };
-    }
-    if (region.orphaned) return orphanedMarkerResult("cleanup");
+    const originalRegion = findManagedRegion(content);
+    if (originalRegion?.orphaned) return orphanedMarkerResult("cleanup");
 
-    let removalEnd = region.end;
-    if (content.startsWith("\n", removalEnd)) removalEnd += 1;
-    let prefix = content.slice(0, region.start);
-    const restOfFile = content.slice(removalEnd);
-    // Undo the single separator newline injection added. Two cases, mirroring inject:
-    //   "X\n"  -> "X\n" + "\n" + block  => prefix ends "\n\n", drop one.
-    //   "X"    -> "X"   + "\n" + block  => prefix ends "\n" at EOF, drop it.
-    // A block the user has appended content after is left alone: we never shrink their bytes.
-    if (prefix.endsWith("\n\n")) prefix = prefix.slice(0, -1);
-    else if (restOfFile.length === 0 && prefix.endsWith("\n")) prefix = prefix.slice(0, -1);
-    const stripped = prefix + restOfFile;
+    // Remove the fence against its ORIGINAL offsets first. A pre-fence orphan's span is clamped
+    // at the fence start and can include the separator newline injection added. Sweeping that
+    // orphan first and then applying this separator undo would remove one additional USER newline.
+    let stripped: string;
+    let orphanCount = 0;
+    if (originalRegion) {
+      let removalEnd = originalRegion.end;
+      if (content.startsWith("\n", removalEnd)) removalEnd += 1;
+      let prefix = content.slice(0, originalRegion.start);
+      const restOfFile = content.slice(removalEnd);
+      // Undo the single separator newline injection added. Two cases, mirroring inject:
+      //   "X\n"  -> "X\n" + "\n" + block  => prefix ends "\n\n", drop one.
+      //   "X"    -> "X"   + "\n" + block  => prefix ends "\n" at EOF, drop it.
+      // A block the user has appended content after is left alone: we never shrink their bytes.
+      if (prefix.endsWith("\n\n")) prefix = prefix.slice(0, -1);
+      else if (restOfFile.length === 0 && prefix.endsWith("\n")) prefix = prefix.slice(0, -1);
+      // Keep the old fence boundary while sweeping. Concatenating first would let the last
+      // pre-fence orphan absorb comment-only or bare-key user content appended after the fence.
+      const prefixOrphans = findOpencodexOrphans(prefix, null);
+      const tailOrphans = findOpencodexOrphans(restOfFile, null);
+      orphanCount = prefixOrphans.length + tailOrphans.length;
+      stripped = removeOrphanTables(prefix, prefixOrphans)
+        + removeOrphanTables(restOfFile, tailOrphans);
+    } else {
+      // Retired or otherwise non-emitted OpenCodex tables may intentionally remain outside the
+      // fence while the integration is enabled. Teardown owns those strictly identified tables
+      // even after Grok has re-serialized the file and dropped our marker comments.
+      const orphans = findOpencodexOrphans(content, null);
+      if (orphans.length === 0) {
+        return { ok: true, changed: false, message: "No opencodex managed block found in Grok config." };
+      }
+      orphanCount = orphans.length;
+      stripped = removeOrphanTables(content, orphans);
+    }
+    if (orphanCount > 0) copyBackupOnce(configPath, join(grokHome, "config.toml.bak-opencodex"));
     atomicWriteFile(configPath, applyEol(stripped, eol));
 
     return {
       ok: true,
       changed: true,
-      message: "Removed the opencodex managed block from Grok config.",
+      message: originalRegion
+        ? "Removed the opencodex managed block from Grok config."
+        : "Removed stale opencodex-managed model entries from Grok config.",
     };
   } catch (error) {
     return errorResult("strip", error);

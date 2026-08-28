@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { injectGrokConfig } from "../src/grok/inject";
+import { injectGrokConfig, type GrokInjectModel } from "../src/grok/inject";
 import { syncGrokConfig } from "../src/grok/sync";
-import { nativeOpenAiContextWindow, visibleNativeSlugs } from "../src/codex/catalog";
+import { nativeOpenAiContextWindow, nativeOpenAiSlugs, visibleNativeSlugs } from "../src/codex/catalog";
 import type { CatalogModel } from "../src/codex/catalog";
 import {
   resetCodexModelEntitlementCacheForTests,
@@ -44,6 +44,62 @@ describe("syncGrokConfig", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("classifies provider-hidden models from the unfiltered catalog without emitting them", async () => {
+    const { root, grokHome } = tempGrokHome();
+    try {
+      const config = {
+        ...baseConfig,
+        providers: { stub: { selectedModels: ["visible"] } },
+      } as unknown as OcxConfig;
+      const catalog = [
+        { id: "visible", provider: "stub" } as CatalogModel,
+        { id: "hidden", provider: "stub" } as CatalogModel,
+      ];
+      writeFileSync(join(grokHome, "config.toml"), [
+        "[model.ocx-stub-hidden]",
+        'model = "stub/hidden"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_key = "opencodex-loopback"',
+        "",
+      ].join("\n"));
+
+      const result = await syncGrokConfig(10190, config, { grokHome }, {
+        fetchAllModels: async () => catalog,
+        injectGrokConfig,
+      });
+      expect(result).toMatchObject({ ok: true, changed: true });
+      const content = readFileSync(join(grokHome, "config.toml"), "utf8");
+      expect(content).toContain('model = "stub/visible"');
+      expect(content).not.toContain("[model.ocx-stub-hidden]");
+      expect(content).not.toContain('model = "stub/hidden"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps disabled native ids in the orphan-classification catalog", async () => {
+    const hiddenNative = nativeOpenAiSlugs()[0]!;
+    let emitted: GrokInjectModel[] | undefined;
+    let catalogModelIds: ReadonlySet<string> | undefined;
+    const result = await syncGrokConfig(
+      10190,
+      { ...baseConfig, disabledModels: [hiddenNative] } as OcxConfig,
+      {},
+      {
+        fetchAllModels: async () => [],
+        injectGrokConfig: ((port: number, models: GrokInjectModel[], opts: Parameters<typeof injectGrokConfig>[2]) => {
+          void port;
+          emitted = models;
+          catalogModelIds = opts.catalogModelIds;
+          return { ok: true, changed: false, message: "captured" };
+        }) as typeof injectGrokConfig,
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(emitted?.some(model => model.id === hiddenNative)).toBe(false);
+    expect(catalogModelIds?.has(hiddenNative)).toBe(true);
   });
 
   // Native slugs used to be injected as a bare { id }, so no `context_window` line was written

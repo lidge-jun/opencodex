@@ -6,7 +6,7 @@
  *
  * Deps are injectable (mirrors src/codex/sync.ts) so tests can run without a live proxy.
  */
-import { visibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextWindow, type CatalogModel } from "../codex/catalog";
+import { visibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextWindow, nativeOpenAiSlugs, type CatalogModel } from "../codex/catalog";
 import type { OcxConfig } from "../types";
 import { injectGrokConfig, type GrokInjectModel, type GrokInjectResult } from "./inject";
 
@@ -33,8 +33,14 @@ export async function syncGrokConfig(
   deps: GrokSyncDeps = { fetchAllModels: defaultFetchAllModels, injectGrokConfig },
 ): Promise<GrokInjectResult> {
   let models: GrokInjectModel[];
+  let catalogModelIds: Set<string>;
   try {
-    const routed = filterCatalogVisibleModels(await deps.fetchAllModels(config), config);
+    const allRouted = await deps.fetchAllModels(config);
+    const routed = filterCatalogVisibleModels(allRouted, config);
+    catalogModelIds = new Set([
+      ...nativeOpenAiSlugs(),
+      ...allRouted.map(model => model.alias ?? `${model.provider}/${model.id}`),
+    ]);
     models = [
       // Native slugs carry their context window too. Without it Grok falls back to its own
       // default (200k) and understates models like gpt-5.6-sol, which is 372k. This is the same
@@ -62,5 +68,6 @@ export async function syncGrokConfig(
     ...(opts.hostname !== undefined ? { hostname: opts.hostname } : {}),
     ...(opts.grokHome !== undefined ? { grokHome: opts.grokHome } : {}),
     excluded: new Set(config.grokExcludedModels ?? []),
+    catalogModelIds,
   });
 }

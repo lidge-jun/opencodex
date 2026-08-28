@@ -346,18 +346,24 @@ test("the route never calls syncGrokConfig, and the inspector never re-implement
 
 test("the route's model list is byte-identical to syncGrokConfig's", async () => {
   writeConfig("# user only\n");
-  const config = baseConfig({ grokExcludedModels: ["stub/m2"] });
+  const config = baseConfig({
+    disabledModels: ["stub/m2"],
+    grokExcludedModels: ["stub/m3"],
+  });
   const catalog = [
     { provider: "stub", id: "m1", alias: "fast", contextWindow: 64000 },
     { provider: "stub", id: "m2" },
+    { provider: "stub", id: "m3" },
   ];
   let routeModels: GrokInjectModel[] | null = null;
   let routeExcluded: ReadonlySet<string> | null = null;
+  let routeCatalogModelIds: ReadonlySet<string> | null = null;
   const routeDeps = testDeps({
     fetchAllModels: (async () => catalog) as never,
     injectGrokConfig: ((port: number, models: GrokInjectModel[], opts: Parameters<typeof injectGrokConfig>[2]) => {
       routeModels = models;
       routeExcluded = opts?.excluded ?? null;
+      routeCatalogModelIds = opts?.catalogModelIds ?? null;
       return injectGrokConfig(port, models, opts);
     }) as typeof injectGrokConfig,
   });
@@ -366,29 +372,36 @@ test("the route's model list is byte-identical to syncGrokConfig's", async () =>
 
   let syncModels: GrokInjectModel[] | null = null;
   let syncExcluded: ReadonlySet<string> | null = null;
+  let syncCatalogModelIds: ReadonlySet<string> | null = null;
   await syncGrokConfig(10100, config, { hostname: "127.0.0.1" }, {
     fetchAllModels: (async () => catalog) as never,
     injectGrokConfig: ((port: number, models: GrokInjectModel[], opts: Parameters<typeof injectGrokConfig>[2]) => {
       syncModels = models;
       syncExcluded = opts?.excluded ?? null;
+      syncCatalogModelIds = opts?.catalogModelIds ?? null;
       return injectGrokConfig(port, models, opts);
     }) as typeof injectGrokConfig,
   });
   expect(JSON.stringify(routeModels)).toBe(JSON.stringify(syncModels));
+  expect(routeCatalogModelIds && [...routeCatalogModelIds].sort())
+    .toEqual(syncCatalogModelIds && [...syncCatalogModelIds].sort());
+  expect(routeCatalogModelIds?.has("stub/m2")).toBe(true);
   /*
    * The exclusion half of the clause (C-gate blocker): the FULL list goes to
    * the writer together with the exclusion SET, never a pre-filtered list —
    * dropping `excluded` here would leave the models arrays identical while
    * excluded models silently leaked into the fence.
    */
-  expect(routeExcluded && [...routeExcluded].sort()).toEqual(["stub/m2"]);
-  expect(syncExcluded && [...syncExcluded].sort()).toEqual(["stub/m2"]);
-  // And the exclusion actually reached the fence both times: each write went
-  // through the real writer into the fixture file, and m2 appears in neither.
+  expect(routeExcluded && [...routeExcluded].sort()).toEqual(["stub/m3"]);
+  expect(syncExcluded && [...syncExcluded].sort()).toEqual(["stub/m3"]);
+  // Visibility and Grok-specific exclusion both reached the fence, while the hidden model
+  // stayed in the separate classification catalog for stale-orphan cleanup.
   const fence = readConfig();
   expect(fence).toContain('model = "fast"');
   expect(fence).not.toContain("stub/m2");
   expect(fence).not.toContain("ocx-stub-m2");
+  expect(fence).not.toContain("stub/m3");
+  expect(fence).not.toContain("ocx-stub-m3");
 });
 
 test("a late orphan surfaced by the WRITER still maps to 409, never to absent", () => {
