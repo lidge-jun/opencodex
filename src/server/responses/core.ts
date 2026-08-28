@@ -924,6 +924,29 @@ type CodexPoolAccountRetryResult =
     authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   };
 
+/** Keep retry-stage entitlement snapshots inside the native-main selection fence. */
+async function resolveCodexRetryModelEntitlements(
+  config: OcxConfig,
+  resolver: typeof resolveCodexModelEntitlements,
+  turnAdmissionLease?: AdmissionLease,
+): Promise<Awaited<ReturnType<typeof resolveCodexModelEntitlements>>> {
+  // The initial auth selection has already released its admission before the first
+  // response arrives. Re-enter for every refresh so profile switching cannot overlap
+  // credential discovery, and omit main entirely when a drain or recovery owns it.
+  const selectionAdmission = codexAccountSelectionForTurn(turnAdmissionLease)?.();
+  const nativeMainReadsForbidden = isNativeMainTrafficBlocked()
+    || selectionAdmission?.mainProfileDraining === true;
+  try {
+    return await resolver(config, {
+      excludeAccountIds: nativeMainReadsForbidden
+        ? new Set([MAIN_CODEX_ACCOUNT_ID])
+        : undefined,
+    });
+  } finally {
+    selectionAdmission?.release();
+  }
+}
+
 const CODEX_ACCOUNT_GATED_CANONICAL_WIRE_MODELS: ReadonlyMap<string, string> = new Map([
   // The authenticated catalog currently advertises Daybreak Blue, while successful responses
   // identify the serving model as gpt-5.6-sol. Sending the selector itself is shard-dependent:
@@ -1018,7 +1041,11 @@ async function retryCodexPoolOnAlternateAccount(
     invalidateCodexModelEntitlementsForAccount(firstAuthCtx.accountId);
     let refreshed;
     try {
-      refreshed = await entitlementResolver(config);
+      refreshed = await resolveCodexRetryModelEntitlements(
+        config,
+        entitlementResolver,
+        options.turnAdmissionLease,
+      );
     } catch (error) {
       await firstResponse.body?.cancel().catch(() => undefined);
       releaseCodexAuthContextProbeLease(firstAuthCtx);
@@ -1180,7 +1207,11 @@ async function retryCodexPoolOnAlternateAccount(
       invalidateCodexModelEntitlementsForAccount(retryAuthCtx.accountId);
       let refreshed: Awaited<ReturnType<typeof resolveCodexModelEntitlements>>;
       try {
-        refreshed = await entitlementResolver(config);
+        refreshed = await resolveCodexRetryModelEntitlements(
+          config,
+          entitlementResolver,
+          options.turnAdmissionLease,
+        );
       } catch (error) {
         await upstreamResponse.body?.cancel().catch(() => undefined);
         await firstResponse.body?.cancel().catch(() => undefined);

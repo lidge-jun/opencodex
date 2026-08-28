@@ -1726,6 +1726,54 @@ describe("account-gated retry entitlement boundary", () => {
     });
   }
 
+  test("temporary main drain fences every retry-stage entitlement refresh", async () => {
+    const now = 1_800_000_000_000;
+    Date.now = () => now;
+    installPoolCredential("pool-a", "pool_acc_a", now);
+    const cfg = retryConfig();
+    let selectionReleases = 0;
+    const turnAdmissionLease = {
+      release() {},
+      beginCodexAccountSelection() {
+        return {
+          mainProfileDraining: true,
+          claimMainProfile: () => false,
+          release: () => { selectionReleases += 1; },
+        };
+      },
+    } satisfies Pick<ActiveTurnLease, "release" | "beginCodexAccountSelection">;
+    const mainExclusions: boolean[] = [];
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      if (fetchCalls <= 2) return unsupportedCodexModelResponse(model);
+      return Response.json({
+        id: "resp_retry_fenced",
+        object: "response",
+        status: "completed",
+        model,
+        output: [],
+      });
+    }) as typeof fetch;
+
+    const response = await postDirectCodex(
+      cfg,
+      { model, input: "hello", stream: false },
+      {
+        turnAdmissionLease,
+        resolveCodexModelEntitlements: async (_config, resolveOptions) => {
+          mainExclusions.push(resolveOptions?.excludeAccountIds?.has("__main__") === true);
+          return entitlementSnapshot({ "pool-a": [model] });
+        },
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchCalls).toBe(3);
+    expect(mainExclusions).toEqual([true, true, true]);
+    expect(selectionReleases).toBe(3);
+  });
+
   test("a first-refresh programmer error cancels the 400 and releases its quota probe", async () => {
     const cooldownAt = 1_800_000_000_000;
     const probeAt = cooldownAt + CODEX_QUOTA_PROBE_INTERVAL_MS;
