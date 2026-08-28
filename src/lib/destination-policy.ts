@@ -68,6 +68,45 @@ function classifyIpv4(hostname: string): DestinationAssessment {
   return { kind: "public", detail: "public IP" };
 }
 
+/**
+ * Expand an IPv6 literal into its eight hextets, or null when it is not one this can parse.
+ * `firstIpv6Hextet` below only needs the leading group; prefix matching needs the whole address,
+ * and `::` compression plus the RFC 4291 trailing dotted-quad form both have to be handled.
+ */
+function ipv6Hextets(hostname: string): number[] | null {
+  let text = hostname;
+  const dotted = text.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (dotted?.index !== undefined) {
+    const octets = dotted[1].split(".").map(Number);
+    if (octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)) return null;
+    text = text.slice(0, dotted.index)
+      + ((octets[0]! << 8) | octets[1]!).toString(16)
+      + ":"
+      + ((octets[2]! << 8) | octets[3]!).toString(16);
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const parseGroups = (part: string): number[] | null => {
+    if (!part) return [];
+    const out: number[] = [];
+    for (const piece of part.split(":")) {
+      if (!/^[0-9a-f]{1,4}$/i.test(piece)) return null;
+      out.push(Number.parseInt(piece, 16));
+    }
+    return out;
+  };
+  const head = parseGroups(halves[0] ?? "");
+  const tail = halves.length === 2 ? parseGroups(halves[1] ?? "") : [];
+  if (!head || !tail) return null;
+  if (halves.length === 1) return head.length === 8 ? head : null;
+  const fill = 8 - head.length - tail.length;
+  if (fill < 1) return null;
+  return [...head, ...Array<number>(fill).fill(0), ...tail];
+}
+
+/** RFC 6052 §2.1 well-known NAT64 prefix, 64:ff9b::/96, as its six leading hextets. */
+const NAT64_WELL_KNOWN_PREFIX = [0x64, 0xff9b, 0, 0, 0, 0] as const;
+
 function firstIpv6Hextet(hostname: string): number | null {
   const head = hostname.split(":")[0];
   if (!head) return 0;
@@ -88,6 +127,20 @@ function classifyIpv6(hostname: string): DestinationAssessment {
     const lo = Number.parseInt(hexMapped[2], 16);
     const ipv4 = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
     return classifyIpv4(ipv4);
+  }
+  // NAT64 (RFC 6052): on an IPv6-only/DNS64 network every IPv4-only peer is synthesized into
+  // 64:ff9b::<ipv4>, whose leading hextet (0x64) is below the 2000::/3 global-unicast window and
+  // so fell through to "non-global address". That rejected ordinary public destinations for any
+  // user behind NAT64 — two tests already worked around it with `allowPrivateNetwork: true`.
+  // Classify the EMBEDDED IPv4 instead, exactly as the ::ffff: forms above do, so a wrapped
+  // 127.0.0.1 or 10/8 stays blocked rather than becoming an SSRF bypass. Only the well-known
+  // prefix is decoded; RFC 8215's 64:ff9b:1::/48 is reserved for local-use translation and keeps
+  // its non-global treatment.
+  const hextets = ipv6Hextets(hostname);
+  if (hextets && NAT64_WELL_KNOWN_PREFIX.every((group, index) => hextets[index] === group)) {
+    const hi = hextets[6]!;
+    const lo = hextets[7]!;
+    return classifyIpv4(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
   }
   if (hostname === "::1") return { kind: "loopback", detail: "loopback address" };
   if (hostname === "::") return { kind: "unspecified", detail: "unspecified address" };

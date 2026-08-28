@@ -253,3 +253,46 @@ describe("resolvePublicAddresses — caller-specific diagnostics", () => {
     )).rejects.toThrow("benchmark address (198.19.7.9)");
   });
 });
+
+describe("providerDestinationConfigError — NAT64 well-known prefix (RFC 6052)", () => {
+  // On an IPv6-only/DNS64 network every IPv4-only peer is synthesized into 64:ff9b::<ipv4>.
+  // 0x64 sits below the 2000::/3 global-unicast window, so the wrapper alone read as
+  // "non-global address" and rejected ordinary public destinations for anyone behind NAT64.
+  test("a wrapped public IPv4 is accepted", () => {
+    for (const host of ["64:ff9b::d25:c62c", "64:ff9b::0fe0:7748", "64:ff9b::13.37.198.44"]) {
+      expect(providerDestinationConfigError("p", provider(`https://[${host}]/v1`))).toBeNull();
+    }
+  });
+
+  // The embedded address is what gets classified, so the decode cannot become an SSRF bypass.
+  test("a wrapped private, loopback, or link-local IPv4 stays blocked", () => {
+    const cases: [string, string][] = [
+      ["64:ff9b::7f00:1", "loopback"],
+      ["64:ff9b::a00:1", "private-network"],
+      ["64:ff9b::c0a8:1", "private-network"],
+      ["64:ff9b::ac10:1", "private-network"],
+      // 169.254.169.254 is the cloud metadata IP, so the wrapped form lands on the stronger
+      // metadata blocklist rather than the generic link-local rule.
+      ["64:ff9b::a9fe:a9fe", "blocked metadata endpoint"],
+      ["64:ff9b::127.0.0.1", "loopback"],
+    ];
+    for (const [host, detail] of cases) {
+      expect(providerDestinationConfigError("p", provider(`https://[${host}]/v1`))).toContain(detail);
+    }
+  });
+
+  // RFC 8215 reserves 64:ff9b:1::/48 for local-use translation, which is not the well-known
+  // prefix and keeps its non-global treatment.
+  test("the RFC 8215 local-use prefix is not decoded", () => {
+    expect(providerDestinationConfigError("p", provider("https://[64:ff9b:1::d25:c62c]/v1")))
+      .toContain("non-global");
+  });
+
+  test("unrelated IPv6 classification is unchanged", () => {
+    expect(providerDestinationConfigError("p", provider("https://[2606:4700::6812:1250]/v1"))).toBeNull();
+    expect(providerDestinationConfigError("p", provider("https://[::1]/v1"))).toContain("loopback");
+    expect(providerDestinationConfigError("p", provider("https://[fd00::1]/v1"))).toContain("private-network");
+    expect(providerDestinationConfigError("p", provider("https://[fe80::1]/v1"))).toContain("link-local");
+    expect(providerDestinationConfigError("p", provider("https://[2001:db8::1]/v1"))).toContain("documentation");
+  });
+});
