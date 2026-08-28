@@ -14,6 +14,14 @@
 
 const ECHO_MARKERS = ["[Tool Result]", "[Tool Error]", "[tool_result]"] as const;
 const MAX_SNIFF_BYTES = 40;
+/** Mid-stream observer: max leading whitespace on a line before matching disarms. */
+const MAX_MIDSTREAM_LINE_INDENT = 128;
+/** Mid-stream observer: post-marker window watched for call-id corruption. */
+const MIDSTREAM_CORRUPTION_WINDOW = 512;
+/** Mid-stream observer: cumulative scan cap (UTF-16 code units, checked between feeds). */
+export const MAX_MIDSTREAM_SCAN_LENGTH = 512 * 1024;
+/** Mid-stream observer: findings retained per turn. */
+const MAX_MIDSTREAM_FINDINGS = 8;
 const MAX_ROUTING_COMMENTARY_BYTES = 512;
 /** Aggregate quarantine cap: past this, flush and disarm. */
 const MAX_HOLD_BYTES = 8 * 1024;
@@ -42,6 +50,126 @@ export type EchoSnifferDecision =
   | { kind: "hold" }
   | { kind: "flush" }
   | { kind: "echo"; marker: string };
+
+export interface MidstreamEchoFinding {
+  marker: string;
+  /** UTF-16 offset of the marker's line start within the turn's full text. */
+  offset: number;
+  callIdCorrupt: boolean;
+}
+
+/**
+ * Diagnostic-only mid-stream envelope-echo observer (devlog 260828 F1/F2).
+ *
+ * The prefix sniffer only watches the first ~40 bytes of a turn, but live
+ * probing caught grok-4.6 echoing "[Tool Result]" envelope blocks in the
+ * MIDDLE of an agent message — after legitimate leading text — one of them
+ * carrying a whitespace-spliced call-id ("fc_x mar-y" instead of "fc_x-y").
+ * Deltas at that point have already reached the client, so this observer
+ * never throws and never withholds output: it records findings so the
+ * adapter can emit a structured diagnostic at turn end. Only fixed marker
+ * enums, numeric offsets, and corruption booleans are retained — never
+ * content bytes.
+ */
+export class CursorMidstreamEchoObserver {
+  private lineBuffer = "";
+  private lineStartOffset = 0;
+  private totalLength = 0;
+  private disarmed = false;
+  private lineDisarmed = false;
+  private corruptionWatch: { finding: MidstreamEchoFinding; remaining: number; window: string } | undefined;
+  private readonly recorded: MidstreamEchoFinding[] = [];
+
+  feed(textDelta: string): void {
+    if (this.disarmed && !this.corruptionWatch) return;
+    let index = 0;
+    while (index < textDelta.length) {
+      const newline = textDelta.indexOf("\n", index);
+      const segment = newline === -1 ? textDelta.slice(index) : textDelta.slice(index, newline);
+      if (this.corruptionWatch) this.watchCorruption(segment + (newline === -1 ? "" : "\n"));
+      if (!this.disarmed && !this.lineDisarmed && segment.length > 0) {
+        this.lineBuffer += segment;
+        if (this.lineBuffer.length > MAX_MIDSTREAM_LINE_INDENT + 32) {
+          // Bound per-line work: nothing beyond the indent cap + longest marker can match.
+          this.lineDisarmed = !this.lineMatchesPrefixSoFar();
+          this.lineBuffer = this.lineBuffer.slice(0, MAX_MIDSTREAM_LINE_INDENT + 32);
+        }
+        this.checkLine();
+      }
+      if (newline === -1) break;
+      this.lineBuffer = "";
+      this.lineDisarmed = false;
+      this.lineStartOffset = this.totalLength + newline + 1;
+      index = newline + 1;
+    }
+    this.totalLength += textDelta.length;
+    if (this.totalLength > MAX_MIDSTREAM_SCAN_LENGTH) this.disarmed = true;
+  }
+
+  findings(): readonly MidstreamEchoFinding[] {
+    if (this.corruptionWatch) {
+      this.settleCorruption();
+    }
+    return this.recorded;
+  }
+
+  private lineMatchesPrefixSoFar(): boolean {
+    const probe = this.lineBuffer.replace(/^[ \t]*/, "");
+    return ECHO_MARKERS.some(marker => probe.startsWith(marker) || marker.startsWith(probe));
+  }
+
+  private checkLine(): void {
+    const indentMatch = /^[ \t]*/.exec(this.lineBuffer);
+    const indent = indentMatch ? indentMatch[0].length : 0;
+    if (indent > MAX_MIDSTREAM_LINE_INDENT) {
+      this.lineDisarmed = true;
+      return;
+    }
+    const probe = this.lineBuffer.slice(indent);
+    for (const marker of ECHO_MARKERS) {
+      if (probe.startsWith(marker)) {
+        // The prefix sniffer owns the very start of the turn; only offsets past
+        // its window count as mid-stream.
+        if (this.lineStartOffset === 0) {
+          this.lineDisarmed = true;
+          return;
+        }
+        const finding: MidstreamEchoFinding = {
+          marker,
+          offset: this.lineStartOffset,
+          callIdCorrupt: false,
+        };
+        this.corruptionWatch = { finding, remaining: MIDSTREAM_CORRUPTION_WINDOW, window: "" };
+        this.lineDisarmed = true;
+        return;
+      }
+    }
+    if (!ECHO_MARKERS.some(marker => marker.startsWith(probe)) && probe.length > 0) {
+      this.lineDisarmed = true;
+    }
+  }
+
+  private watchCorruption(text: string): void {
+    const watch = this.corruptionWatch;
+    if (!watch) return;
+    const take = Math.min(watch.remaining, text.length);
+    watch.window += text.slice(0, take);
+    watch.remaining -= take;
+    if (watch.remaining <= 0) this.settleCorruption();
+  }
+
+  private settleCorruption(): void {
+    const watch = this.corruptionWatch;
+    if (!watch) return;
+    const window = watch.window;
+    watch.finding.callIdCorrupt =
+      /fc_[0-9a-f]+[ \t]+mar-/.test(window)
+      || /call_id: \S+[ \t]+\S+_0\b/.test(window);
+    if (this.recorded.length < MAX_MIDSTREAM_FINDINGS) this.recorded.push(watch.finding);
+    // Window text is discarded here; only booleans/offsets survive.
+    this.corruptionWatch = undefined;
+  }
+}
 
 /**
  * Incremental envelope-prefix sniffer. Leading whitespace is tolerated so a

@@ -34,6 +34,7 @@ import {
   CURSOR_ECHO_RETRY_CONTINUATION_TEXT,
   CURSOR_ROUTING_COMMENTARY_RETRY_TEXT,
   CursorEnvelopeEchoSniffer,
+  CursorMidstreamEchoObserver,
   CursorRoutingCommentaryError,
   CursorRoutingCommentarySniffer,
   CursorToolResultEchoError,
@@ -232,6 +233,9 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             isCursorExternalWireModel(activeRequest.modelId)
             && (_parsed.context.messages ?? []).some(message => message.role === "toolResult");
           const echoSniffer = armEchoSniffer ? new CursorEnvelopeEchoSniffer() : undefined;
+          // Mid-stream observer (devlog 260828 F1/F2): diagnostic-only; armed with the
+          // prefix sniffer because both fire on flattened tool-result replay priming.
+          const midstreamObserver = armEchoSniffer ? new CursorMidstreamEchoObserver() : undefined;
           const armRoutingCommentarySniffer =
             isCursorExternalWireModel(activeRequest.modelId)
             && (
@@ -242,10 +246,16 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             ? new CursorRoutingCommentarySniffer()
             : undefined;
           let guardHeld: AdapterEvent[] = [];
+          // Exactly-once observation: every client-bound text delta passes through here
+          // exactly once — held deltas only on release, ordinary deltas at emit time.
+          const emitTextObserved = (event: AdapterEvent): void => {
+            if (event.type === "text_delta") midstreamObserver?.feed(event.text);
+            emit(event);
+          };
           const releaseGuardHeld = () => {
             for (const held of guardHeld) {
               if (held.type !== "heartbeat") emittedOutput = true;
-              emit(held);
+              emitTextObserved(held);
             }
             guardHeld = [];
           };
@@ -323,6 +333,15 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                 }
                 if (event.type !== "heartbeat") emittedOutput = true;
                 if (event.type === "done") {
+                  for (const finding of midstreamObserver?.findings() ?? []) {
+                    debugProviderDiagnostic("cursor", "midstream-envelope-echo", {
+                      wireModel: activeRequest.modelId,
+                      conversationHash: activeRequest.conversationId.slice(0, 16),
+                      marker: finding.marker,
+                      offset: finding.offset,
+                      callIdCorrupt: finding.callIdCorrupt,
+                    });
+                  }
                   commitCapturedCheckpoint(activeRequest);
                   const inheritedCursor = _parsed._providerContinuation?.cursor;
                   const isolatedOrCompaction =
@@ -342,7 +361,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                     : undefined;
                   emit(providerState ? { ...event, providerState } : event);
                 } else {
-                  emit(event);
+                  emitTextObserved(event);
                 }
               }
             },
