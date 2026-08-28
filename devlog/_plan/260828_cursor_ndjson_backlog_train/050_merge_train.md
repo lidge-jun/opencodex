@@ -24,4 +24,12 @@ instruction is the maintainer approval for these session-authored PRs.
 
 ## Round log
 
-(appended as rounds close)
+- R1 (#2774): reviewer PASS (Tesla, sol-tier; coalescing phase-safe, consumers
+  checked). MERGED squash 5511a424c via --admin (user merge instruction =
+  maintainer approval; branch policy requires review). Head branch deleted.
+  SIDE EFFECT: base deletion auto-closed stacked #2795, which GitHub cannot
+  reopen (base ref gone). Recovery: cherry-picked 58ee805/a652f0d/e167311
+  onto origin/dev (990a83f5e; 17 tests + tsc green on rebased head),
+  force-pushed the branch, opened successor PR #2803 vs dev.
+  LESSON for R4/R5: retarget the child to dev BEFORE merging the parent with
+  --delete-branch, or merge parent without branch deletion.
