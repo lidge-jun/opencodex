@@ -436,17 +436,25 @@ export interface OcxConfig {
   * commit messages, skill orchestration) to a user-chosen model. Default intercepted
   * source models: gpt-5.4-mini (older clients) and gpt-5.6-luna (Codex 0.145.0+).
   * Opt-in; disabled by default. Matching requests preserve their configured reasoning effort.
-   * All requests for configured shadow source models are intercepted regardless of request kind,
-   * except when the replacement intersects the same provider+model source set.
+  * All requests for configured shadow source models are intercepted regardless of request kind,
+  * except when the replacement intersects the same provider+model source set.
+  */
+ shadowCallIntercept?: {
+   /** When true, requests for known shadow/helper source models are rewritten to the configured model. */
+   enabled?: boolean;
+   /** Replacement model id (e.g. "gpt-5.5"). */
+   model?: string;
+   /** Optional override of intercepted source-model prefixes (default: gpt-5.4-mini, gpt-5.6-luna). */
+   sourceModels?: string[];
+ };
+  /**
+   * Optional map of blocked model IDs to their replacement model IDs.
+   * When configured, incoming requests targeting a blocked model (including
+   * account-namespaced and concrete routes) are redirected to the replacement
+   * model at the shared routing layer with routeReason "blocked-model-redirect".
+   * Unset or omitted by default.
    */
-  shadowCallIntercept?: {
-    /** When true, requests for known shadow/helper source models are rewritten to the configured model. */
-    enabled?: boolean;
-    /** Replacement model id (e.g. "gpt-5.5"). */
-    model?: string;
-    /** Optional override of intercepted source-model prefixes (default: gpt-5.4-mini, gpt-5.6-luna). */
-    sourceModels?: string[];
-  };
+  blockedModelRedirects?: Record<string, string>;
   /**
    * 3-state multi-agent surface override:
    * - "v1": force ALL models to v1 surface (override upstream pins)

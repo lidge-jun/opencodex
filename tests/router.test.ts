@@ -614,11 +614,35 @@ describe("routeModel backfills google wire mode from the registry", () => {
   });
 });
 
-describe("routeModel hard blocked model redirect", () => {
-  test("hard intercepts gpt-5.6-terra and rewrites to gpt-5.6-luna with blocked-model-redirect reason", () => {
+describe("routeModel blocked model redirect", () => {
+  test("routes gpt-5.6-terra normally when blockedModelRedirects is unset", () => {
     const config: OcxConfig = {
       port: 10100,
       defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+      },
+    };
+
+    const routed = routeModel(config, "gpt-5.6-terra");
+    expect(routed).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-5.6-terra",
+      routeKind: "native",
+      routeReason: "native-family",
+    });
+  });
+
+  test("opt-in intercepts gpt-5.6-terra and rewrites to gpt-5.6-luna with blocked-model-redirect reason", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      blockedModelRedirects: {
+        "gpt-5.6-terra": "gpt-5.6-luna",
+      },
       providers: {
         openai: {
           adapter: "openai-responses",
@@ -641,10 +665,13 @@ describe("routeModel hard blocked model redirect", () => {
     expect(routed.routeDecision?.requestedModel).toBe("gpt-5.6-terra");
   });
 
-  test("hard intercepts account-namespaced gpt-5.6-terra and rewrites to gpt-5.6-luna", () => {
+  test("opt-in intercepts account-namespaced gpt-5.6-terra and rewrites to gpt-5.6-luna", () => {
     const config: OcxConfig = {
       port: 10100,
       defaultProvider: "openai",
+      blockedModelRedirects: {
+        "gpt-5.6-terra": "gpt-5.6-luna",
+      },
       providers: {
         openai: {
           adapter: "openai-responses",

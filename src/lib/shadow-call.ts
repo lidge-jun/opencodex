@@ -10,17 +10,20 @@
 export const DEFAULT_SHADOW_SOURCE_MODELS = ["gpt-5.6-luna"] as const;
 
 /**
- * Hard-blocked models that must be redirected at the shared routing layer.
- * `disabledModels` only hides models from discovery/pickers, but does not stop
- * clients from directly submitting them. Hard redirection ensures requests to
- * blocked models are safely rewritten to approved substitutes across all paths.
+ * Optional blocked model redirects at the shared routing layer.
+ * When `blockedModelRedirects` is configured (e.g. `{ "gpt-5.6-terra": "gpt-5.6-luna" }`),
+ * requests targeting those models are rewritten to the substitute model with
+ * routeReason "blocked-model-redirect".
+ * Returns undefined when not configured or the model is not in the redirect map.
  */
-export const HARD_BLOCKED_MODEL_REDIRECTS: Readonly<Record<string, string>> = {
-  "gpt-5.6-terra": "gpt-5.6-luna",
-};
-
-export function resolveHardBlockedModelRedirect(modelId: string): string | undefined {
-  return HARD_BLOCKED_MODEL_REDIRECTS[modelId];
+export function resolveBlockedModelRedirect(
+  config: { blockedModelRedirects?: Record<string, string> } | undefined,
+  modelId: string,
+): string | undefined {
+  if (!config?.blockedModelRedirects || typeof config.blockedModelRedirects !== "object") {
+    return undefined;
+  }
+  return config.blockedModelRedirects[modelId];
 }
 
 /** Normalize a persisted `sourceModels` override; falls back to the defaults. */
