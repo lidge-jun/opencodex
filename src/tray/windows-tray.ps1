@@ -13,7 +13,7 @@ param(
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-try { [System.Windows.Forms.Application]::EnableVisualStyles() } catch { }
+try { [System.Windows.Forms.Application]::EnableVisualStyles() } catch { $null = $_ }
 
 # Normalize aliases before deriving singleton/event names. Without this,
 # C:\path and C:\path\. create separate tray instances for the same home.
@@ -341,7 +341,7 @@ $timer.add_Tick({
     }
     Update-TrayState
   } catch {
-    try { Write-ActionLog "timer tick failed: $($_.Exception.GetType().Name)" } catch { }
+    try { Write-ActionLog "timer tick failed: $($_.Exception.GetType().Name)" } catch { $null = $_ }
   }
 })
 $notify.ContextMenuStrip = $menu
