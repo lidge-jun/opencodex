@@ -128,6 +128,10 @@ export async function resolveCachedAgentTaskRecovery(
   return flight ? waitForRecoveryFlight(flight, abortSignal) : null;
 }
 
+export function discardCachedAgentTaskRecovery(key: string): void {
+  deleteRecoveryCacheEntry(key);
+}
+
 export function resetAgentTaskRecoveryCache(): void {
   for (const flight of RECOVERY_FLIGHTS.values()) {
     flight.controller.abort(new DOMException("Recovery state reset", "AbortError"));
@@ -140,4 +144,8 @@ export function agentTaskRecoveryWaiterCountForTests(): number {
   let count = 0;
   for (const flight of RECOVERY_FLIGHTS.values()) count += flight.waiters;
   return count;
+}
+
+export function agentTaskRecoveryCacheSnapshotForTests(): { entries: number; bytes: number } {
+  return { entries: RECOVERY_CACHE.size, bytes: recoveryCacheBytes };
 }

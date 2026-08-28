@@ -276,6 +276,7 @@ import {
 } from "../relay";
 import {
   agentTaskRecoveryConfig,
+  discardEncryptedAgentTaskRecovery,
   recoverEncryptedAgentTask,
 } from "./agent-task-recovery";
 import { relaySseEagerBounded } from "../relay-eager";
@@ -2014,44 +2015,71 @@ export async function handleComboResponses(
   let comboPayloadReadable = false;
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
+  const initialNow = Date.now();
+  let pick: ReturnType<typeof pickComboTarget> = null;
 
   if (unreadableEncryptedAgentTask && !combo.targets.some(canDecryptUnreadableAgentTask)) {
     const recovery = agentTaskRecoveryConfig(config);
-    let recovered = false;
     if (
-      (options.inboundWire ?? "responses") === "responses"
-      && isThreadSpawnRequest(req.headers)
-      && recovery
-      && !options.comboAttempt
+      (options.inboundWire ?? "responses") !== "responses"
+      || !isThreadSpawnRequest(req.headers)
+      || !recovery
+      || options.comboAttempt
     ) {
-      try {
-        recovered = await recoverEncryptedAgentTask(
-          req,
-          (body as { input?: unknown } | undefined)?.input,
-          recovery,
-          config,
-          { parentThreadId: inboundClientThreadId, abortSignal: options.abortSignal },
-        );
-      } catch {
-        recovered = false;
-      }
+      discardEncryptedAgentTaskRecovery(
+        req,
+        (body as { input?: unknown } | undefined)?.input,
+        config,
+        { parentThreadId: inboundClientThreadId },
+      );
+      return unreadableEncryptedAgentTaskResponse();
+    }
+    pick = pickComboTarget(config, comboId, {
+      eligible: target => !isComboTargetInCooldown(comboId, target, initialNow),
+    });
+    if (!pick) {
+      discardEncryptedAgentTaskRecovery(
+        req,
+        (body as { input?: unknown } | undefined)?.input,
+        config,
+        { parentThreadId: inboundClientThreadId },
+      );
+      return comboUnavailableResponse(`No available targets for combo: ${comboId}`);
+    }
+    let recovered = false;
+    try {
+      recovered = await recoverEncryptedAgentTask(
+        req,
+        (body as { input?: unknown } | undefined)?.input,
+        recovery,
+        config,
+        { parentThreadId: inboundClientThreadId, abortSignal: options.abortSignal },
+      );
+    } catch {
+      recovered = false;
     }
     // Recovery has the same in-place input mutation contract as the direct routed path.
     if (
       !recovered
       || hasUnreadableEncryptedAgentTask((body as { input?: unknown } | undefined)?.input)
     ) {
+      discardEncryptedAgentTaskRecovery(
+        req,
+        (body as { input?: unknown } | undefined)?.input,
+        config,
+        { parentThreadId: inboundClientThreadId },
+      );
       return unreadableEncryptedAgentTaskResponse();
     }
     comboPayloadReadable = true;
     comboReplaySnapshot.recoveredPlaintext = true;
+  } else {
+    pick = pickComboTarget(config, comboId, {
+      eligible: target => payloadEligible(target)
+        && !isComboTargetInCooldown(comboId, target, initialNow),
+    });
   }
 
-  const initialNow = Date.now();
-  let pick = pickComboTarget(config, comboId, {
-    eligible: target => payloadEligible(target)
-      && !isComboTargetInCooldown(comboId, target, initialNow),
-  });
   if (!pick) {
     return comboUnavailableResponse(`No available targets for combo: ${comboId}`);
   }
