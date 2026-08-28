@@ -21,55 +21,62 @@ history is linear on this chain.
 
 ### 1. MODIFY src/adapters/cursor/envelope-echo.ts — mid-stream detector
 
-ADD class CursorMidstreamEchoSniffer:
-- feed(textDelta) maintains a rolling tail buffer (last 256 chars) of the
-  full turn text and scans for NEWLINE-ANCHORED markers:
-  /(^|\n)\s*\[Tool Result\]/ and likewise for "[tool_result]" and
-  "[Tool Error]" appearing at a line start BEYOND the first-line window
-  the prefix sniffer already owns.
-- Detection returns { kind: "echo", marker } once; the caller treats it
-  exactly like the prefix sniffer's echo verdict (retryable semantic
-  failure). No holding/quarantine: mid-stream detection cannot un-emit
-  already-released deltas, so the value is the RETRY (fresh conversation,
-  corrective continuation text) rather than suppression — the same
-  contract as gap-10's CursorToolResultEchoError but from a later offset.
-  Note emittedOutput will be true by then; the retry gate in cursor.ts
-  currently requires !emittedOutput. See change 2.
-- Bound: scanning stops after MAX_MIDSTREAM_SCAN_BYTES = 512 * 1024 per
-  turn (defensive; a turn that long without an echo is not echo-primed).
+ADD class CursorMidstreamEchoObserver (A-gate blockers 1/3/4 folded):
+- DIAGNOSTIC-ONLY: feed(textDelta) NEVER throws and never withholds
+  output. It returns void; findings are exposed via a findings() getter
+  read by the caller at turn end (and opportunistically after each feed).
+- Detection: maintain lastLineStartBuffer — the text since the most
+  recent newline, capped at 128 chars (indentation beyond that disarms
+  matching for that line; bounds the \s* concern). A marker fires when
+  the post-newline line, after <=128 chars of leading whitespace, starts
+  with "[Tool Result]", "[tool_result]", or "[Tool Error]", at an offset
+  BEYOND the prefix-sniffer window. Marker split across deltas is handled
+  naturally because the line buffer accumulates across feeds.
+- Corruption observation: after a marker fires, the observer enters a
+  post-marker window (next 512 chars) watching for the call-id lines. It
+  records callIdCorrupt=true when the window contains /fc_[0-9a-f]+\s+mar-/
+  (the observed "space + mar-" splice) or a call_id line whose token is
+  split by whitespace (/call_id: \S+\s+\S+_0/). Only booleans and
+  numeric offsets are retained; window text is discarded after the check.
+- findings(): { echoes: Array<{ marker, offset, callIdCorrupt }> } —
+  capped at 8 entries per turn.
+- Bound: scanning disarms after MAX_MIDSTREAM_SCAN_LENGTH = 512 * 1024
+  UTF-16 code units of cumulative fed text. A delta crossing the cap is
+  scanned up to its end (the cap is checked between feeds, not mid-delta),
+  so text before the boundary is never skipped.
 
-### 2. MODIFY src/adapters/cursor.ts — arm + retry policy
+### 2. MODIFY src/adapters/cursor.ts — arm + exactly-once feeding
 
-- Arm CursorMidstreamEchoSniffer alongside the prefix sniffer (same
-  armEchoSniffer condition), feeding every text_delta AFTER guard release.
-- On mid-stream echo: throw CursorToolResultEchoError only when the turn
-  can still be retried safely: replayUnsafe false and NO client tool call
-  emitted yet (emittedClientTool false). Since text deltas HAVE escaped,
-  the retry emits an assistant_boundary continuation instead of silent
-  replacement... NO — simpler audited contract: mid-stream echo does NOT
-  retry; it emits a diagnostic (debugProviderDiagnostic
-  "midstream-envelope-echo" with conversationHash, offset, marker,
-  callIdCorrupt flag) and pushes a text_delta warning? ALSO NO — do not
-  fabricate visible text. FINAL contract (see accept criteria): detection
-  is diagnostic-only in this PR (counter + structured log), giving F2 the
-  wire-side observability 030 asked for; the retry semantics for
-  already-streamed echoes need their own design round with user-visible
-  behavior decisions (NEEDS_HUMAN if pursued).
-- callIdCorrupt detection: within a detected echo block, match
-  /call_id: (\S+)/ and /fc_[0-9a-f]/ tokens; flag when a token matches
-  /\smar-/ (the observed corruption) or call-id fragments split by
-  whitespace. Logged as booleans/offsets only — no content bytes
-  (privacy:scan constraint).
+- Arm CursorMidstreamEchoObserver under the same armEchoSniffer condition.
+- Exactly-once feed (A-gate blocker 2): introduce one helper
+  emitTextObserved(event) that (a) feeds observer.feed(event.text) then
+  (b) emits. BOTH release paths route through it: releaseGuardHeld()'s
+  per-held-event emit for text deltas, and the ordinary post-guard emit at
+  cursor.ts:~324. Held deltas are NOT fed while held — only on release —
+  so no double-feed is possible.
+- At turn end (done event handling, before final emit): read
+  observer.findings(); for each finding emit debugProviderDiagnostic
+  ("cursor", "midstream-envelope-echo", { wireModel, conversationHash:
+  request.conversationId.slice(0,16), offset, marker, callIdCorrupt }).
+  marker stays a fixed enum string; no content bytes logged (audit
+  finding 6 conventions).
 
-### 3. MODIFY tests/cursor-envelope-echo-retry.test.ts
+### 3. MODIFY tests/cursor-envelope-echo-retry.test.ts (named activation
+### tests, A-gate blocker 5 — one per conditional branch)
 
-- NEW: mid-stream echo after legitimate leading text triggers the
-  detector exactly once, diagnostic carries marker + offset,
-  callIdCorrupt=true for a "fc_x mar-y" specimen, false for clean ids.
-- NEW: newline-anchored only — "[Tool Result]" inside a quoted sentence
-  mid-line does NOT trigger (e.g. model legitimately discussing the
-  string in prose after a code fence on the same line).
-- NEW: scan disarms past MAX_MIDSTREAM_SCAN_BYTES.
+- "midstream echo after leading text is recorded with marker and offset"
+  (run-03 specimen block as fixture).
+- "midstream corruption window flags a space-spliced mar call-id"
+  (callIdCorrupt=true) and "clean call-id lines do not flag corruption"
+  (callIdCorrupt=false).
+- "a marker fragmented across delta boundaries still fires" (feed
+  "[Tool Res" then "ult]\n...").
+- "a mid-line marker mention does not fire" (negative).
+- "indentation beyond the 128-char line cap disarms that line" (negative).
+- "scanning disarms past the cumulative cap but keeps prior findings".
+- "held-then-released deltas are fed exactly once" (adapter-level test via
+  the existing transport harness: prefix-guard hold + release, observer
+  offset arithmetic proves single feed).
 - KEEP: all existing prefix-sniffer tests unchanged.
 
 ## Accept criteria + activation
