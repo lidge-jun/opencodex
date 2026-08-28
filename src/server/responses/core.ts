@@ -100,7 +100,6 @@ import type {
 } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
-  getOAuthCredentialApiBaseUrl,
   getValidAccessTokenForAccount,
   getValidAccessTokenSnapshot,
   publicOAuthAuthenticationErrorMessage,
@@ -2836,9 +2835,8 @@ async function handleResponsesInner(
    *   snapshot value is RESOLVED first: `rotatedProvider` is a clone of the FAILED account's
    *   provider, so passing a bare `undefined` origin let the transport resolver fall through its
    *   own `?? validateCopilotApiBaseUrl(provider.baseUrl)` step to the previous account's host —
-   *   pairing B's bearer with A's accepted origin. An account legitimately has no stored origin
-   *   whenever its login response carried no `endpoints.api`, so this was reachable with
-   *   ordinary credentials, and both values were individually valid: the defect was the pairing.
+   *   pairing B's bearer with A's accepted origin. Login and refresh always persist a resolved
+   *   origin, so this fallback protects malformed or manually seeded credentials.
    * - A Cloud Code Assist provider needs an account-matched project. Antigravity's refresh path
    *   tolerates project discovery failing, so a stored account can legitimately have no project;
    *   sending that account's bearer with the FAILED account's project is worse than not rotating.
@@ -2940,7 +2938,9 @@ async function handleResponsesInner(
     route.providerName,
     route.provider,
     parsed.options.promptCacheKey,
-    route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+    route.providerName === "github-copilot" && route.provider.authMode === "oauth"
+      ? resolveCopilotApiBaseUrl(sentOAuthSnapshot?.apiBaseUrl)
+      : undefined,
   );
   let adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   const stripClaudeMainAuth = options.stripClaudeMainAuthForNoncanonicalForward === true
@@ -3562,7 +3562,9 @@ async function handleResponsesInner(
         route.providerName,
         { ...route.provider, apiKey: refreshed.accessToken },
         parsed.options.promptCacheKey,
-        route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+        route.providerName === "github-copilot"
+          ? resolveCopilotApiBaseUrl(refreshed.apiBaseUrl)
+          : undefined,
       );
       route.provider = refreshedProvider;
       const refreshedAdapter = resolveAdapter(
@@ -5149,7 +5151,9 @@ async function handleResponsesInner(
           route.providerName,
           { ...route.provider, apiKey: refreshed.accessToken },
           parsed.options.promptCacheKey,
-          route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+          route.providerName === "github-copilot"
+            ? resolveCopilotApiBaseUrl(refreshed.apiBaseUrl)
+            : undefined,
         );
         route.provider = refreshedProvider;
         invalidateSameTargetRequest();

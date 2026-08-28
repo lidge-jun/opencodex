@@ -62,10 +62,9 @@ export interface OAuthAccessSnapshot {
   /**
    * Allowlisted GitHub Copilot API origin belonging to THIS account.
    *
-   * Copilot pins its bearer to an account-scoped regional host, and the initial route already
-   * pairs the two (`core.ts` resolves transport with `getOAuthCredentialApiBaseUrl`). Account
-   * failover must carry the pairing across the rotation; without it, account B's token is sent to
-   * account A's origin (#2568d).
+   * Copilot pins its bearer to an account-scoped regional host. Initial routing, 401 refresh, and
+   * account failover must resolve transport from this same snapshot; rereading the active account
+   * can pair account A's token with account B's origin during a concurrent switch (#2568d).
    */
   apiBaseUrl?: string;
 }

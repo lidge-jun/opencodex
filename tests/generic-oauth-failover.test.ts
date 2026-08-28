@@ -267,16 +267,15 @@ describe("sidecar on429 wiring", () => {
  *
  * `applyFailoverSnapshot` clones the FAILED account's provider (`{ ...route.provider }`) and then
  * re-resolves Copilot transport with the rotated account's `snapshot.apiBaseUrl`. When the
- * rotated account has no stored origin — an ordinary state, since `apiBaseUrl` is only recorded
- * when the login response carried `endpoints.api` — the resolver's own fallback chain is
+ * rotated account has no stored origin — a malformed or manually seeded state, because login and
+ * refresh always persist a resolved origin — the resolver's own fallback chain is
  *
  *     validateCopilotApiBaseUrl(apiBaseUrl)          // undefined for account B
  *  ?? validateCopilotApiBaseUrl(provider.baseUrl)    // still account A's regional origin
  *  ?? GITHUB_COPILOT_DEFAULT_API_BASE
  *
- * so B's bearer is sent to A's accepted origin. Both values are individually legitimate, which
- * is why every existing test passed: the defect is in the PAIRING, and only a test that supplies
- * one account WITH an origin and one WITHOUT can observe it.
+ * so B's bearer is sent to A's accepted origin. The defense-in-depth defect is in the PAIRING,
+ * and only a test that supplies one account WITH an origin and one WITHOUT can observe it.
  */
 describe("#2807 a 429 rotation pairs the bearer with its OWN origin", () => {
   const REGIONAL = "https://proxy.githubcopilot.com";
