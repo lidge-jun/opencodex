@@ -212,8 +212,10 @@ describe("Grok orphan adoption (#511)", () => {
       "",
     ].join("\n"));
 
-    injectGrokConfig(10100, MODELS, { grokHome });
+    expect(injectGrokConfig(10100, MODELS, { grokHome }))
+      .toMatchObject({ ok: true, changed: true });
     const content = readFileSync(configPath, "utf8");
+    expect(content).toContain(BEGIN_MARKER);
     expect(content).toContain('default = "ocx-retired"');
     expect(content).toContain('fork_secondary_model = "ocx-retired"');
     expect(content).toContain("[model.ocx-retired]");
