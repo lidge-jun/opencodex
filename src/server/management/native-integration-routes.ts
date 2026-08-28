@@ -19,11 +19,12 @@
  */
 import { loadConfig, saveConfigPreservingClaudeCode } from "../../config";
 import { readRuntimePort } from "../../config/process-state";
-import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextWindow, nativeOpenAiSlugs, visibleNativeSlugs } from "../../codex/catalog";
+import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits } from "../../codex/catalog";
 import { providerContextCap } from "../../providers/context-cap";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
-import { injectGrokConfig, stripGrokConfig, type GrokInjectModel } from "../../grok/inject";
+import { projectGrokCatalog } from "../../grok/catalog";
+import { injectGrokConfig, stripGrokConfig } from "../../grok/inject";
 import { inspectGrokConfig } from "../../grok/inspect";
 import { grokConfigPath } from "../../grok/status";
 import { assertNativeTeardownOwned } from "../../integrations/native/ownership-preflight";
@@ -502,27 +503,10 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
      * synchronous from entry (012 §One preflight is not enough).
      */
     const fetchModels = deps.fetchAllModels ?? defaultFetchAllModels;
-    let models: GrokInjectModel[];
-    let catalogModelIds: Set<string>;
+    let projection: ReturnType<typeof projectGrokCatalog>;
     try {
       const allRouted = await fetchModels(config);
-      const routed = filterCatalogVisibleModels(allRouted, config);
-      catalogModelIds = new Set([
-        ...nativeOpenAiSlugs(),
-        ...allRouted.map(model => model.alias ?? `${model.provider}/${model.id}`),
-      ]);
-      models = [
-        // Native slugs carry their context window: without it Grok falls back
-        // to its own 200k default and understates a 372k model.
-        ...visibleNativeSlugs(config).map(id => {
-          const contextWindow = nativeOpenAiContextWindow(id, nativeContextLimits(config));
-          return { id, ...(contextWindow !== undefined ? { contextWindow } : {}) };
-        }),
-        ...routed.map(m => ({
-          id: m.alias ?? `${m.provider}/${m.id}`,
-          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-        })),
-      ];
+      projection = projectGrokCatalog(allRouted, config);
     } catch (error) {
       // A catalog failure must never write an empty fence (syncGrokConfig
       // guards this; the route inherits the rule). Nothing was written.
@@ -535,7 +519,7 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
     if (recheck.kind === "orphaned_marker") return postCommitRefusal(409, "grok", "orphaned_marker", ORPHANED_MARKER_MESSAGE, { desiredEnabled });
 
     const inject = deps.injectGrokConfig ?? injectGrokConfig;
-    const result = inject(port, models, {
+    const result = inject(port, projection.models, {
       ...(hostname !== undefined ? { hostname } : {}),
       // The FULL list plus the exclusion set, never a pre-filtered list: the
       // writer allocates aliases over everything, so a model's alias never
@@ -543,7 +527,9 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
       excluded: new Set(config.grokExcludedModels ?? []),
       // Visibility filters decide what to emit, not whether an owned pre-fence table is still
       // current. Otherwise a hidden model is mistaken for retired state and survives outside.
-      catalogModelIds,
+      catalogModelIds: projection.catalogModelIds,
+      disabledProviderNamespaces: projection.disabledProviderNamespaces,
+      comboPublicModelIds: projection.comboPublicModelIds,
     });
 
     if (result.skippedReason === "non-loopback") {

@@ -347,6 +347,20 @@ test("the route never calls syncGrokConfig, and the inspector never re-implement
 test("the route's model list is byte-identical to syncGrokConfig's", async () => {
   writeConfig("# user only\n");
   const config = baseConfig({
+    providers: {
+      stub: { adapter: "openai-responses", baseUrl: "https://example.invalid/v1" },
+      "disabled-stub": {
+        adapter: "openai-responses",
+        baseUrl: "https://example.invalid/v1",
+        disabled: true,
+      },
+    },
+    combos: {
+      slashy: {
+        alias: "disabled-stub/m4",
+        targets: [{ provider: "stub", model: "m1" }],
+      },
+    },
     disabledModels: ["stub/m2"],
     grokExcludedModels: ["stub/m3"],
   });
@@ -358,12 +372,16 @@ test("the route's model list is byte-identical to syncGrokConfig's", async () =>
   let routeModels: GrokInjectModel[] | null = null;
   let routeExcluded: ReadonlySet<string> | null = null;
   let routeCatalogModelIds: ReadonlySet<string> | null = null;
+  let routeDisabledProviderNamespaces: ReadonlySet<string> | null = null;
+  let routeComboPublicModelIds: ReadonlySet<string> | null = null;
   const routeDeps = testDeps({
     fetchAllModels: (async () => catalog) as never,
     injectGrokConfig: ((port: number, models: GrokInjectModel[], opts: Parameters<typeof injectGrokConfig>[2]) => {
       routeModels = models;
       routeExcluded = opts?.excluded ?? null;
       routeCatalogModelIds = opts?.catalogModelIds ?? null;
+      routeDisabledProviderNamespaces = opts?.disabledProviderNamespaces ?? null;
+      routeComboPublicModelIds = opts?.comboPublicModelIds ?? null;
       return injectGrokConfig(port, models, opts);
     }) as typeof injectGrokConfig,
   });
@@ -373,12 +391,16 @@ test("the route's model list is byte-identical to syncGrokConfig's", async () =>
   let syncModels: GrokInjectModel[] | null = null;
   let syncExcluded: ReadonlySet<string> | null = null;
   let syncCatalogModelIds: ReadonlySet<string> | null = null;
+  let syncDisabledProviderNamespaces: ReadonlySet<string> | null = null;
+  let syncComboPublicModelIds: ReadonlySet<string> | null = null;
   await syncGrokConfig(10100, config, { hostname: "127.0.0.1" }, {
     fetchAllModels: (async () => catalog) as never,
     injectGrokConfig: ((port: number, models: GrokInjectModel[], opts: Parameters<typeof injectGrokConfig>[2]) => {
       syncModels = models;
       syncExcluded = opts?.excluded ?? null;
       syncCatalogModelIds = opts?.catalogModelIds ?? null;
+      syncDisabledProviderNamespaces = opts?.disabledProviderNamespaces ?? null;
+      syncComboPublicModelIds = opts?.comboPublicModelIds ?? null;
       return injectGrokConfig(port, models, opts);
     }) as typeof injectGrokConfig,
   });
@@ -386,6 +408,12 @@ test("the route's model list is byte-identical to syncGrokConfig's", async () =>
   expect(routeCatalogModelIds && [...routeCatalogModelIds].sort())
     .toEqual(syncCatalogModelIds && [...syncCatalogModelIds].sort());
   expect(routeCatalogModelIds?.has("stub/m2")).toBe(true);
+  expect(routeDisabledProviderNamespaces && [...routeDisabledProviderNamespaces].sort())
+    .toEqual(syncDisabledProviderNamespaces && [...syncDisabledProviderNamespaces].sort());
+  expect(routeDisabledProviderNamespaces?.has("disabled-stub")).toBe(true);
+  expect(routeComboPublicModelIds && [...routeComboPublicModelIds].sort())
+    .toEqual(syncComboPublicModelIds && [...syncComboPublicModelIds].sort());
+  expect(routeComboPublicModelIds?.has("disabled-stub/m4")).toBe(true);
   /*
    * The exclusion half of the clause (C-gate blocker): the FULL list goes to
    * the writer together with the exclusion SET, never a pre-filtered list —

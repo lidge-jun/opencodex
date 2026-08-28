@@ -19,6 +19,7 @@ import { injectGrokConfig, stripGrokConfig } from "../src/grok/inject";
 
 const BEGIN_MARKER = "# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>";
 const MODELS = [{ id: "gpt-5.6-sol", contextWindow: 372_000 }];
+const OWNERSHIP_MARKER = 'extra_headers = { "x-opencodex-grok" = "1" }';
 
 describe("Grok orphan adoption (#511)", () => {
   let root: string;
@@ -45,7 +46,7 @@ describe("Grok orphan adoption (#511)", () => {
       "[model.ocx-gpt-5-6-sol]",
       'model = "gpt-5.6-sol"',
       'base_url = "http://127.0.0.1:10100/v1"',
-      'api_backend = "responses"',
+      'api_backend = "chat_completions"',
       'api_key = "opencodex-loopback"',
       'name = "OCX gpt-5.6-sol"',
       "",
@@ -110,6 +111,56 @@ describe("Grok orphan adoption (#511)", () => {
     expect(readFileSync(configPath, "utf8")).toContain("[model.ocx-remote]");
   });
 
+  test("preserves documented and generated-looking markerless manual tables", () => {
+    const fixtures = [
+      [
+        "[model.ocx-opus]",
+        'model = "anthropic/claude-opus-4-8"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_backend = "responses"',
+        'api_key = "opencodex-loopback"',
+        "",
+      ],
+      [
+        "[model.ocx-opus]",
+        'model = "anthropic/claude-opus-4-8"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_backend = "chat_completions"',
+        'api_key = "opencodex-loopback"',
+        "",
+      ],
+      [
+        "[model.ocx-anthropic-claude-opus-4-8]",
+        'model = "anthropic/claude-opus-4-8"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_backend = "responses"',
+        'api_key = "opencodex-loopback"',
+        'name = "OCX anthropic/claude-opus-4-8"',
+        "",
+      ],
+      [
+        "[model.ocx-anthropic-claude-opus-4-8]",
+        'model = "anthropic/claude-opus-4-8"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_backend = "responses"',
+        'api_key = "opencodex-loopback"',
+        'name = "OCX anthropic/claude-opus-4-8"',
+        'extra_headers = { "x-opencodex-grok" = "0" }',
+        "",
+      ],
+    ];
+
+    for (const lines of fixtures) {
+      const original = lines.join("\n");
+      writeFileSync(configPath, original);
+      expect(injectGrokConfig(10100, MODELS, { grokHome }))
+        .toMatchObject({ ok: true, changed: true });
+      expect(readFileSync(configPath, "utf8")).toContain(original);
+      expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+      expect(readFileSync(configPath, "utf8")).toBe(original);
+    }
+  });
+
   // F3: `[[model.x]]` collides with a generated `[model.x]` and makes Grok reject the
   // WHOLE config layer, so that spelling must stay reserved rather than adopted.
   test("leaves an array-of-table model reserved", () => {
@@ -157,6 +208,7 @@ describe("Grok orphan adoption (#511)", () => {
       'model = "retired/model"',
       'base_url = "http://127.0.0.1:10100/v1"',
       'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
       "",
     ].join("\n"));
 
@@ -173,18 +225,57 @@ describe("Grok orphan adoption (#511)", () => {
   });
 
   test("keeps an owned-looking orphan whose model id is missing", () => {
-    writeFileSync(configPath, [
+    const original = [
       "[model.ocx-unknown]",
       'base_url = "http://127.0.0.1:10100/v1"',
       'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
       "",
-    ].join("\n"));
+    ].join("\n");
+    writeFileSync(configPath, original);
 
     const result = injectGrokConfig(10100, MODELS, { grokHome });
     expect(result).toMatchObject({ ok: true, changed: true });
     const content = readFileSync(configPath, "utf8");
     expect(content).toContain("[model.ocx-unknown]");
     expect(content).toContain('api_key = "opencodex-loopback"');
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  test("preserves empty-model and array-child marker lookalikes", () => {
+    const fixtures = [
+      [
+        "[model.ocx-empty]",
+        'model = ""',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_key = "opencodex-loopback"',
+        OWNERSHIP_MARKER,
+        "",
+      ],
+      [
+        "[model.ocx-array-marker]",
+        'model = "gpt-5.6-sol"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_backend = "responses"',
+        'api_key = "opencodex-loopback"',
+        "",
+        "[[model.ocx-array-marker.extra_headers]]",
+        'x-opencodex-grok = "1"',
+        "",
+      ],
+    ];
+
+    for (const lines of fixtures) {
+      const original = lines.join("\n");
+      writeFileSync(configPath, original);
+      expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: false });
+      expect(readFileSync(configPath, "utf8")).toBe(original);
+      expect(injectGrokConfig(10100, MODELS, { grokHome }))
+        .toMatchObject({ ok: true, changed: true });
+      expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+      expect(readFileSync(configPath, "utf8")).toBe(original);
+    }
   });
 
   test("removes a hidden current orphan but preserves a genuinely retired one", () => {
@@ -193,11 +284,13 @@ describe("Grok orphan adoption (#511)", () => {
       'model = "hidden/model"',
       'base_url = "http://127.0.0.1:10100/v1"',
       'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
       "",
       "[model.ocx-retired]",
       'model = "retired/model"',
       'base_url = "http://127.0.0.1:10100/v1"',
       'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
       "",
     ].join("\n"));
 
@@ -236,6 +329,7 @@ describe("Grok orphan adoption (#511)", () => {
         'model = "retired/model"',
         'base_url = "http://127.0.0.1:10100/v1"',
         'api_key = "opencodex-loopback"',
+        OWNERSHIP_MARKER,
         "",
       ].join(eol);
       writeFileSync(configPath, userPrefix + orphan);
@@ -257,6 +351,7 @@ describe("Grok orphan adoption (#511)", () => {
         'model = "retired/model"',
         'base_url = "http://127.0.0.1:10100/v1"',
         'api_key = "opencodex-loopback"',
+        OWNERSHIP_MARKER,
         "",
       ].join(eol);
       const tail = ["# keep this post-fence note", "bare_user_key = true", ""].join(eol);
@@ -276,6 +371,7 @@ describe("Grok orphan adoption (#511)", () => {
       'model = "retired/model"',
       'base_url = "http://127.0.0.1:10100/v1"',
       'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
       "",
     ].join("\n");
     const userOwned = [
@@ -292,8 +388,35 @@ describe("Grok orphan adoption (#511)", () => {
     expect(readFileSync(configPath, "utf8")).toBe(userOwned);
   });
 
+  test("markerless teardown preserves an ambiguous legacy row", () => {
+    const legacy = [
+      "[model.ocx-gpt-5-6-sol]",
+      'model = "gpt-5.6-sol"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "chat_completions"',
+      'api_key = "opencodex-loopback"',
+      'name = "OCX gpt-5.6-sol"',
+      "",
+    ].join("\n");
+    writeFileSync(configPath, legacy);
+
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: false });
+    expect(readFileSync(configPath, "utf8")).toBe(legacy);
+    expect(injectGrokConfig(10100, MODELS, {
+      grokHome,
+      excluded: new Set(["gpt-5.6-sol"]),
+    })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toContain('api_backend = "chat_completions"');
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(legacy);
+    // Injection can migrate the same legacy row because it writes a marked replacement now.
+    expect(injectGrokConfig(10100, MODELS, { grokHome }))
+      .toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).not.toContain('api_backend = "chat_completions"');
+  });
+
   test("still removes a catalog orphan when that model is excluded", () => {
-    writeOrphanedConfig();
+    writeOrphanedConfig(OWNERSHIP_MARKER);
 
     injectGrokConfig(10100, MODELS, {
       grokHome,
@@ -340,7 +463,9 @@ describe("Grok orphan adoption (#511)", () => {
       "[model.ocx-gpt-5-6-sol]",            // stale: no context_window
       'model = "gpt-5.6-sol"',
       'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "chat_completions"',
       'api_key = "opencodex-loopback"',
+      'name = "OCX gpt-5.6-sol"',
       "",
       "[model.ocx-gpt-5-6-sol-2]",          // the correct duplicate, also unfenced now
       'model = "gpt-5.6-sol"',
@@ -477,7 +602,9 @@ describe("Grok orphan adoption — fence boundary (#511 follow-up)", () => {
     `[model.${alias}]`,
     'model = "gpt-5.6-sol"',
     'base_url = "http://127.0.0.1:10100/v1"',
+    'api_backend = "chat_completions"',
     'api_key = "opencodex-loopback"',
+    'name = "OCX gpt-5.6-sol"',
   ];
 
   const fence = (alias: string): string[] => [
@@ -534,7 +661,7 @@ describe("Grok orphan adoption — fence boundary (#511 follow-up)", () => {
       ...orphan("ocx-gpt-5-6-sol"),
       "",
       "[model.ocx-gpt-5-6-sol.extra_headers]",
-      'x-opencodex = "1"',
+      'x-opencodex-grok = "1"',
       "",
     ].join("\n"));
 

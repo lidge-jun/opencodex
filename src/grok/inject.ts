@@ -121,17 +121,17 @@ function userModelAliases(content: string, region: ManagedRegion | null): Set<st
   return aliases;
 }
 
-/**
- * The api_key literal every generated entry carries. It is the STRONG ownership signal:
- * a value we mint, that a human has no reason to type by hand.
- */
+/** The api_key literal every generated entry carries. It is necessary, but not ownership alone. */
 const OPENCODEX_API_KEY = "opencodex-loopback";
+const OPENCODEX_GROK_MARKER = "x-opencodex-grok";
 
 /** A plain `[model.<alias>]` table outside the fence that opencodex itself wrote. */
 interface OrphanTable {
   alias: string;
   /** The model id this entry routes to — used to find its replacement alias. */
-  modelId: string | undefined;
+  modelId: string;
+  /** Explicit markers authorize teardown; legacy fingerprints authorize replacement only. */
+  ownership: "explicit" | "legacy";
   /** Offsets into the NORMALIZED content: header start .. next header start (or EOF). */
   start: number;
   end: number;
@@ -164,6 +164,44 @@ function isLoopbackBaseUrl(value: string | undefined): boolean {
   }
 }
 
+/** Exact marker emitted inside every modern generated model table. */
+function hasInlineOwnershipMarker(value: string | undefined): boolean {
+  return value !== undefined
+    && /^\{[ \t]*["']x-opencodex-grok["'][ \t]*=[ \t]*["']1["'][ \t]*\}$/.test(value);
+}
+
+/** Historical deterministic alias, including collision suffixes allocated by the writer. */
+function isGeneratedAliasForModel(alias: string, modelId: string): boolean {
+  const base = `ocx-${modelId.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+  if (alias === base) return true;
+  if (!alias.startsWith(`${base}-`)) return false;
+  const suffix = alias.slice(base.length + 1);
+  return /^[1-9][0-9]*$/.test(suffix) && Number(suffix) >= 2;
+}
+
+/** Pre-marker auto-generated row shape. Manual rows never carried the generated name. */
+function isLegacyGeneratedTable(alias: string, keys: ReadonlyMap<string, string>): boolean {
+  const modelId = keys.get("model");
+  return modelId !== undefined
+    && modelId.length > 0
+    && keys.get("api_backend") === "chat_completions"
+    && keys.get("name") === `OCX ${modelId}`
+    && isGeneratedAliasForModel(alias, modelId);
+}
+
+/** Classify a direct provider/model id without stealing a slash-shaped configured combo alias. */
+function isDisabledProviderModelId(
+  modelId: string,
+  disabledProviderNamespaces: ReadonlySet<string> | undefined,
+  comboPublicModelIds: ReadonlySet<string> | undefined,
+): boolean {
+  if (!disabledProviderNamespaces || comboPublicModelIds?.has(modelId)) return false;
+  const slash = modelId.indexOf("/");
+  return slash > 0
+    && slash < modelId.length - 1
+    && disabledProviderNamespaces.has(modelId.slice(0, slash));
+}
+
 /**
  * Model tables OUTSIDE the fence that opencodex itself wrote (#511).
  *
@@ -174,12 +212,16 @@ function isLoopbackBaseUrl(value: string | undefined): boolean {
  * resolves the original, finds no `context_window`, and falls back to its own 200k.
  *
  * Ownership is CONJUNCTIVE and deliberately strict, because a false positive deletes a
- * hand-written user model:
+ * hand-written user model. The public manual recipe intentionally uses the same loopback key,
+ * endpoint, and Responses backend, so those fields are not ownership proof. We additionally
+ * require either the durable generated marker or the exact pre-marker legacy fingerprint:
  *   - a plain `[model.x]` header (never `[[model.x]]` / `[model.x.sub]` — those spellings
  *     mark human authorship and stay reserved);
  *   - `api_key` equal to our own literal;
  *   - a loopback `base_url`, so an entry that merely copied our key while pointing at a
  *     remote host is left alone.
+ *   - `x-opencodex-grok = "1"` in generated inline/child extra_headers, OR the historical
+ *     chat_completions + `name = "OCX <model>"` + deterministic generated alias shape.
  * A loopback base_url ALONE is not enough: aiming your own model at the local proxy is a
  * legitimate thing to do.
  */
@@ -213,6 +255,9 @@ function findOpencodexOrphans(content: string, region: ManagedRegion | null): Or
     const keys = tableBodyKeys(content.slice(header.index + header.length, bodyEnd));
     if (keys.get("api_key") !== OPENCODEX_API_KEY) continue;
     if (!isLoopbackBaseUrl(keys.get("base_url"))) continue;
+    const modelId = keys.get("model");
+    if (!modelId) continue;
+    let hasOwnershipMarker = hasInlineOwnershipMarker(keys.get("extra_headers"));
     // Swallow the entry's OWN sub-tables (`[model.<alias>.extra_headers]`). Grok writes
     // them when it re-serializes the file, and leaving one behind keeps the alias
     // reserved by `userModelAliases` — so the sweep would remove the parent and STILL
@@ -226,9 +271,22 @@ function findOpencodexOrphans(content: string, region: ManagedRegion | null): Or
       if (fenceStart >= 0 && header.index < fenceStart && child.index >= fenceStart) break;
       if (child.segments.length <= 2) break;
       if (child.segments[0] !== "model" || child.segments[1] !== header.segments[1]) break;
-      end = clampEnd(header.index, headers[next + 1]?.index ?? content.length);
+      const childEnd = clampEnd(header.index, headers[next + 1]?.index ?? content.length);
+      if (!child.array && child.segments.length === 3 && child.segments[2] === "extra_headers") {
+        const childKeys = tableBodyKeys(content.slice(child.index + child.length, childEnd));
+        if (childKeys.get(OPENCODEX_GROK_MARKER) === "1") hasOwnershipMarker = true;
+      }
+      end = childEnd;
     }
-    orphans.push({ alias: header.segments[1]!, modelId: keys.get("model"), start: header.index, end });
+    const legacyGenerated = isLegacyGeneratedTable(header.segments[1]!, keys);
+    if (!hasOwnershipMarker && !legacyGenerated) continue;
+    orphans.push({
+      alias: header.segments[1]!,
+      modelId,
+      ownership: hasOwnershipMarker ? "explicit" : "legacy",
+      start: header.index,
+      end,
+    });
   }
   return orphans;
 }
@@ -352,6 +410,10 @@ export function injectGrokConfig(
     excluded?: ReadonlySet<string>;
     /** Unfiltered known ids used only to distinguish hidden current models from retired ones. */
     catalogModelIds?: ReadonlySet<string>;
+    /** Canonical provider keys disabled in config and therefore absent from catalog fetching. */
+    disabledProviderNamespaces?: ReadonlySet<string>;
+    /** Configured combo public ids that may syntactically resemble provider/model ids. */
+    comboPublicModelIds?: ReadonlySet<string>;
   } = {},
 ): GrokInjectResult {
   const grokHome = resolveGrokHome(opts.grokHome);
@@ -403,13 +465,25 @@ export function injectGrokConfig(
     // Adopt our own pre-fence entries (#511) BEFORE reserving user aliases, so the stale
     // duplicate is replaced instead of routed around forever. Runs inside the normalized
     // window so the user's dominant EOL is still restored below.
-    // Use the full UNFILTERED catalog, not the emitted subset: explicitly excluded and otherwise
-    // hidden current models must still lose stale unfenced tables, or those tables would bypass
-    // the user's visibility choice. Direct callers that do not have a separate catalog keep the
-    // historical `models` behavior.
+    // Durably marked rows use the full UNFILTERED catalog: explicitly excluded and otherwise
+    // hidden current models must still lose stale generated tables. Ambiguous pre-marker legacy
+    // rows are migrated only when this write emits their replacement. Direct callers that do not
+    // have a separate catalog keep the historical `models` behavior.
     const catalogModelIds = opts.catalogModelIds ?? new Set(models.map(model => model.id));
+    const emittedModelIds = new Set(models
+      .filter(model => !opts.excluded?.has(model.id))
+      .map(model => model.id));
     const orphans = findOpencodexOrphans(originalContent, originalRegion)
-      .filter(orphan => orphan.modelId !== undefined && catalogModelIds.has(orphan.modelId));
+      .filter(orphan => orphan.ownership === "legacy"
+        // A legacy fingerprint is not durable deletion authority. Migrate it only when this
+        // same write will replace the row with a marked managed table.
+        ? emittedModelIds.has(orphan.modelId)
+        : catalogModelIds.has(orphan.modelId)
+          || isDisabledProviderModelId(
+            orphan.modelId,
+            opts.disabledProviderNamespaces,
+            opts.comboPublicModelIds,
+          ));
     const content = removeOrphanTables(originalContent, orphans);
     // Removing bytes above the fence MOVES it: recompute rather than adjust arithmetic,
     // so the splice below cannot cut the file in the wrong place.
@@ -443,7 +517,7 @@ export function injectGrokConfig(
       }
       const renames = new Map<string, string>();
       for (const orphan of orphans) {
-        const replacement = orphan.modelId === undefined ? undefined : survivors.get(orphan.modelId);
+        const replacement = survivors.get(orphan.modelId);
         if (replacement && replacement !== orphan.alias) renames.set(orphan.alias, replacement);
       }
       nextContent = rewriteAliasReferences(nextContent, renames);
@@ -512,8 +586,10 @@ export function stripGrokConfig(opts: { grokHome?: string } = {}): GrokInjectRes
       else if (restOfFile.length === 0 && prefix.endsWith("\n")) prefix = prefix.slice(0, -1);
       // Keep the old fence boundary while sweeping. Concatenating first would let the last
       // pre-fence orphan absorb comment-only or bare-key user content appended after the fence.
-      const prefixOrphans = findOpencodexOrphans(prefix, null);
-      const tailOrphans = findOpencodexOrphans(restOfFile, null);
+      const prefixOrphans = findOpencodexOrphans(prefix, null)
+        .filter(orphan => orphan.ownership === "explicit");
+      const tailOrphans = findOpencodexOrphans(restOfFile, null)
+        .filter(orphan => orphan.ownership === "explicit");
       orphanCount = prefixOrphans.length + tailOrphans.length;
       stripped = removeOrphanTables(prefix, prefixOrphans)
         + removeOrphanTables(restOfFile, tailOrphans);
@@ -521,7 +597,8 @@ export function stripGrokConfig(opts: { grokHome?: string } = {}): GrokInjectRes
       // Retired or otherwise non-emitted OpenCodex tables may intentionally remain outside the
       // fence while the integration is enabled. Teardown owns those strictly identified tables
       // even after Grok has re-serialized the file and dropped our marker comments.
-      const orphans = findOpencodexOrphans(content, null);
+      const orphans = findOpencodexOrphans(content, null)
+        .filter(orphan => orphan.ownership === "explicit");
       if (orphans.length === 0) {
         return { ok: true, changed: false, message: "No opencodex managed block found in Grok config." };
       }

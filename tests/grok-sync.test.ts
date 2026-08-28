@@ -61,7 +61,9 @@ describe("syncGrokConfig", () => {
         "[model.ocx-stub-hidden]",
         'model = "stub/hidden"',
         'base_url = "http://127.0.0.1:10100/v1"',
+        'api_backend = "responses"',
         'api_key = "opencodex-loopback"',
+        'extra_headers = { "x-opencodex-grok" = "1" }',
         "",
       ].join("\n"));
 
@@ -74,6 +76,83 @@ describe("syncGrokConfig", () => {
       expect(content).toContain('model = "stub/visible"');
       expect(content).not.toContain("[model.ocx-stub-hidden]");
       expect(content).not.toContain('model = "stub/hidden"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("removes owned orphans from a disabled provider even without fetched ids", async () => {
+    const { root, grokHome } = tempGrokHome();
+    try {
+      const config = {
+        ...baseConfig,
+        providers: {
+          "disabled-provider": {
+            adapter: "openai-responses",
+            baseUrl: "https://example.invalid/v1",
+            disabled: true,
+          },
+        },
+      } as unknown as OcxConfig;
+      writeFileSync(join(grokHome, "config.toml"), [
+        "[model.ocx-disabled-provider-legacy]",
+        'model = "disabled-provider/legacy"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_backend = "responses"',
+        'api_key = "opencodex-loopback"',
+        'extra_headers = { "x-opencodex-grok" = "1" }',
+        "",
+      ].join("\n"));
+
+      const result = await syncGrokConfig(10190, config, { grokHome }, {
+        fetchAllModels: async () => [],
+        injectGrokConfig,
+      });
+      expect(result).toMatchObject({ ok: true, changed: true });
+      const content = readFileSync(join(grokHome, "config.toml"), "utf8");
+      expect(content).not.toContain("[model.ocx-disabled-provider-legacy]");
+      expect(content).not.toContain('model = "disabled-provider/legacy"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("does not reinterpret a slash-shaped combo alias as a disabled provider model", async () => {
+    const { root, grokHome } = tempGrokHome();
+    try {
+      const config = {
+        ...baseConfig,
+        providers: {
+          "disabled-provider": {
+            adapter: "openai-responses",
+            baseUrl: "https://example.invalid/v1",
+            disabled: true,
+          },
+        },
+        combos: {
+          fallback: {
+            alias: "disabled-provider/legacy",
+            targets: [{ provider: "other", model: "m1" }],
+          },
+        },
+      } as unknown as OcxConfig;
+      const manual = [
+        "[model.ocx-disabled-provider-legacy]",
+        'model = "disabled-provider/legacy"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_backend = "responses"',
+        'api_key = "opencodex-loopback"',
+        'extra_headers = { "x-opencodex-grok" = "1" }',
+        "",
+      ].join("\n");
+      writeFileSync(join(grokHome, "config.toml"), manual);
+
+      const result = await syncGrokConfig(10190, config, { grokHome }, {
+        fetchAllModels: async () => [],
+        injectGrokConfig,
+      });
+      expect(result).toMatchObject({ ok: true, changed: true });
+      expect(readFileSync(join(grokHome, "config.toml"), "utf8")).toContain(manual);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
