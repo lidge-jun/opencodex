@@ -4,6 +4,11 @@ Round 3 returned `VERDICT: FAIL` with one Critical blocker, and it was a genuine
 code I had just written and called a gate. Recording it plainly, because a gate that is
 trusted without being attacked is decoration.
 
+This was not the last correction. A later adversarial pass found seven reachable fail-open
+paths in the gate, including pagination results combined with `jq add` so review objects
+were merged and reviewers disappeared. Those defects were fixed publicly in #2837 and
+covered by mutation checks that made the tests fail when the faulty logic was restored.
+
 ## The blocker (accepted in full)
 
 `scripts/ci/assert-mergeable-review.sh` v1 selected **any historical** `APPROVED` review at
@@ -79,8 +84,10 @@ PRs are back to the state their approvals describe. The lesson is now an orderin
 dependent rebase is pushed only after its base commit is an ancestor of `dev`. Verifying a
 rebase locally in a scratch worktree is free; publishing it early is not.
 
-## Residual, stated rather than closed
+## Governance result at campaign close
 
-GitHub cannot mark an approval as specifically a *security* review. For security-boundary
-PRs the reviewer's own words are read to confirm the approval addressed that surface. The
-script cannot make that judgment and does not pretend to.
+GitHub cannot mark an approval as specifically a security review, and the campaign had a
+more basic identity problem: every available credential authenticated as the repository
+owner, so GitHub rejected formal self-review. Findings were posted as comments and fixed,
+but credential-surface merges still lacked the required non-author approval. The review
+gate work improved enforcement without closing that governance gap.

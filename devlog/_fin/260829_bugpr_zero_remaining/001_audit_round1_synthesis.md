@@ -5,6 +5,12 @@ returned `VERDICT: FAIL` with 8 blockers. Each is recorded below with its dispos
 Two were verified independently before acceptance, because a reviewer claim is evidence to
 check, not a verdict to copy.
 
+This document preserves the first audit round as historical evidence. Later rounds found
+additional defects in the executable review gate and repaired them in #2837. The campaign
+still closed with an open governance gap: credential-surface merges had independent review
+comments, but no formal non-author approval, because every available credential resolved to
+the repository owner and GitHub refused self-review.
+
 ## B1 (Critical) — inventory was stale: 16 bug PRs, not 14. ACCEPTED
 
 Live query returns 16: the 14 triaged, plus **#2744** (missed) and **#2836** (the keystone
