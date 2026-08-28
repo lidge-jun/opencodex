@@ -5,6 +5,7 @@ import {
   AtomicWriteResidualTempError,
   AtomicWriteSecretResidualError,
   atomicWriteFile,
+  getConfigDir,
   resolveWriteTarget,
   type AtomicWriteIO,
 } from "../../config";
@@ -17,6 +18,7 @@ import {
   hardenSecretPath,
 } from "../../lib/windows-secret-acl";
 import { resetCodexAppServerCatalogStateCache } from "../app-server-processes";
+import { recordOwnedConfigPath } from "../../lib/config-ownership";
 
 export interface PreparedCatalogFileWrite {
   readonly path: string;
@@ -211,7 +213,9 @@ export function publishHashedCodexCatalogBackup(
   io?: CatalogBackupWriteIO,
 ): CatalogBackupPublication {
   assertCatalogWritePermit(permit, owningCodexHome);
-  return publishCatalogBackup(prepared, io);
+  const publication = publishCatalogBackup(prepared, io);
+  if (publication === "written" && !io) recordOwnedConfigPath(getConfigDir(), prepared.path);
+  return publication;
 }
 
 /** Atomically publish the legacy immutable backup without clobbering. */
