@@ -343,9 +343,14 @@ describe("Grok orphan adoption (#511)", () => {
     }
   });
 
-  test("teardown preserves a comment-only tail beyond the fence byte-for-byte", () => {
+  test("teardown preserves a headerless tail beyond the fence byte-for-byte", () => {
     for (const eol of ["\n", "\r\n"]) {
-      const userPrefix = [`theme = "${eol === "\n" ? "lf" : "crlf"}"`, "", ""].join(eol);
+      const userPrefix = [
+        "[models]",
+        `keep = "${eol === "\n" ? "lf" : "crlf"}"`,
+        "",
+        "",
+      ].join(eol);
       const orphan = [
         "[model.ocx-retired]",
         'model = "retired/model"',
@@ -354,7 +359,13 @@ describe("Grok orphan adoption (#511)", () => {
         OWNERSHIP_MARKER,
         "",
       ].join(eol);
-      const tail = ["# keep this post-fence note", "bare_user_key = true", ""].join(eol);
+      const tail = [
+        "# keep this post-fence note",
+        'default = "ocx-retired"',
+        'models.default = "ocx-retired"',
+        "bare_user_key = true",
+        "",
+      ].join(eol);
       writeFileSync(configPath, userPrefix + orphan);
       expect(injectGrokConfig(10100, MODELS, { grokHome }))
         .toMatchObject({ ok: true, changed: true });
@@ -386,6 +397,446 @@ describe("Grok orphan adoption (#511)", () => {
     const stripped = stripGrokConfig({ grokHome });
     expect(stripped).toMatchObject({ ok: true, changed: true });
     expect(readFileSync(configPath, "utf8")).toBe(userOwned);
+  });
+
+  test("teardown clears only section-owned references to swept aliases", () => {
+    for (const withFence of [false, true]) {
+      const modelsHeader = withFence ? '["models"]' : "[models]";
+      const defaultKey = withFence ? '"default"' : "default";
+      const uiHeader = withFence ? "['ui']" : "[ui]";
+      const secondaryKey = withFence ? "'fork_secondary_model'" : "fork_secondary_model";
+      const otherHeader = withFence ? '["other]"]' : "[other]";
+      const expected = [
+        modelsHeader,
+        'keep = "models"',
+        "",
+        uiHeader,
+        'keep = "ui"',
+        "",
+        otherHeader,
+        'default = "ocx-retired"',
+        'fork_secondary_model = "ocx-retired"',
+        "",
+        "",
+      ].join("\n");
+      writeFileSync(configPath, [
+        modelsHeader,
+        `${defaultKey} = "ocx-retired"`,
+        'keep = "models"',
+        "",
+        uiHeader,
+        `${secondaryKey} = 'ocx-retired' # removed with its table`,
+        'keep = "ui"',
+        "",
+        otherHeader,
+        'default = "ocx-retired"',
+        'fork_secondary_model = "ocx-retired"',
+        "",
+        "[model.ocx-retired]",
+        'model = "retired/model"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_key = "opencodex-loopback"',
+        OWNERSHIP_MARKER,
+        "",
+      ].join("\n"));
+      if (withFence) {
+        expect(injectGrokConfig(10100, MODELS, { grokHome }))
+          .toMatchObject({ ok: true, changed: true });
+      }
+
+      expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+      expect(readFileSync(configPath, "utf8")).toBe(expected);
+    }
+  });
+
+  test("teardown clears multiline section-owned references to swept aliases", () => {
+    for (const delimiter of ['"""', "'''"]) {
+      const original = [
+        "[models]",
+        `default = ${delimiter}ocx-retired${delimiter}`,
+        'keep = "models"',
+        "",
+        "[ui]",
+        `fork_secondary_model = ${delimiter}`,
+        "ocx-retired" + delimiter,
+        'keep = "ui"',
+        "",
+        "[model.ocx-retired]",
+        'model = "retired/model"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_key = "opencodex-loopback"',
+        OWNERSHIP_MARKER,
+        "",
+      ].join("\n");
+      writeFileSync(configPath, original);
+
+      expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+      const content = readFileSync(configPath, "utf8");
+      expect(content).toBe([
+        "[models]",
+        'keep = "models"',
+        "",
+        "[ui]",
+        'keep = "ui"',
+        "",
+        "",
+      ].join("\n"));
+    }
+  });
+
+  test("teardown preserves an escaped multiline value that is not the swept alias", () => {
+    const reference = [
+      "[models]",
+      'default = """\\\\',
+      'u006Fcx-retired"""',
+      'keep = "models"',
+      "",
+    ].join("\n");
+    writeFileSync(configPath, reference + [
+      "[model.ocx-retired]",
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
+      "",
+    ].join("\n"));
+
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(reference);
+  });
+
+  test("teardown does not reinterpret nested array elements as table headers", () => {
+    const userContent = [
+      "[other]",
+      "model_names = [",
+      '  ["models"],',
+      "]",
+      'default = "ocx-retired"',
+      "ui_names = [",
+      '  ["ui"],',
+      "]",
+      'fork_secondary_model = "ocx-retired"',
+      "",
+      "",
+    ].join("\n");
+    writeFileSync(configPath, userContent + [
+      "[model.ocx-retired]",
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
+      "",
+    ].join("\n"));
+
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(userContent);
+  });
+
+  test("teardown clears quoted root dotted references to swept aliases", () => {
+    writeFileSync(configPath, [
+      '"models".\'default\' = "ocx-retired"',
+      '\'ui\'."fork_secondary_model" = \'ocx-retired\'',
+      'keep = "root"',
+      "",
+      "[model.ocx-retired]",
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
+      "",
+    ].join("\n"));
+
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(['keep = "root"', "", ""].join("\n"));
+  });
+
+  test("adoption rewrites a quoted root dotted reference", () => {
+    const oldAlias = "ocx-gpt-5-6-sol-2";
+    writeFileSync(configPath, [
+      `"models".'default' = '${oldAlias}'`,
+      "",
+      `[model.${oldAlias}]`,
+      'model = "gpt-5.6-sol"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
+      "",
+    ].join("\n"));
+
+    expect(injectGrokConfig(10100, MODELS, { grokHome }))
+      .toMatchObject({ ok: true, changed: true });
+    const content = readFileSync(configPath, "utf8");
+    const defaultAlias = /^"models"\.'default' = "([^"]+)"$/m.exec(content)?.[1];
+    expect(defaultAlias).toBeDefined();
+    expect(defaultAlias).not.toBe(oldAlias);
+    expect(content).toContain(`[model.${defaultAlias}]`);
+    expect(content).not.toContain(`[model.${oldAlias}]`);
+  });
+
+  test("adoption rewrites an inline-table reference", () => {
+    const oldAlias = "ocx-gpt-5-6-sol-2";
+    const decoys = Array.from({ length: 40 }, () => "default = 'not-a-key'").join(", ");
+    writeFileSync(configPath, [
+      `models = { note = "{ ${decoys} }", default = "${oldAlias}", keep = true }`,
+      "",
+      `[model.${oldAlias}]`,
+      'model = "gpt-5.6-sol"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
+      "",
+    ].join("\n"));
+
+    expect(injectGrokConfig(10100, MODELS, { grokHome }))
+      .toMatchObject({ ok: true, changed: true });
+    const content = readFileSync(configPath, "utf8");
+    const defaultAlias = /models = \{ note = .*?, default = "([^"]+)", keep = true \}/.exec(content)?.[1];
+    expect(defaultAlias).toBeDefined();
+    expect(defaultAlias).not.toBe(oldAlias);
+    expect(content).toContain(`[model.${defaultAlias}]`);
+  });
+
+  test("teardown fails closed on an inline-table reference", () => {
+    const original = [
+      'models = { default = "ocx-retired", keep = true }',
+      "",
+      "[model.ocx-retired]",
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
+      "",
+    ].join("\n");
+    writeFileSync(configPath, original);
+
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: false, changed: false });
+    expect(readFileSync(configPath, "utf8")).toBe(original);
+  });
+
+  test("semantic probing cannot confuse an existing sentinel-shaped alias", () => {
+    const unrelated = 'default = "keep"\n';
+    const alias = `__opencodex_reference_probe_0_${unrelated.indexOf('"')}__`;
+    writeFileSync(configPath, unrelated + [
+      `models.default = "${alias}"`,
+      "",
+      `[model.${alias}]`,
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
+      "",
+    ].join("\n"));
+
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe('default = "keep"\n\n');
+  });
+
+  test("adoption prefers the managed survivor over a same-model user table", () => {
+    const oldAlias = "ocx-gpt-5-6-sol-2";
+    writeFileSync(configPath, [
+      "[models]",
+      `default = "${oldAlias}"`,
+      "",
+      "[model.manual]",
+      'model = "gpt-5.6-sol"',
+      'base_url = "https://example.com/v1"',
+      'api_key = "user-secret"',
+      "",
+      `[model.${oldAlias}]`,
+      'model = "gpt-5.6-sol"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
+      "",
+    ].join("\n"));
+
+    expect(injectGrokConfig(10100, MODELS, { grokHome }))
+      .toMatchObject({ ok: true, changed: true });
+    const content = readFileSync(configPath, "utf8");
+    const defaultAlias = /^default = "([^"]+)"$/m.exec(content)?.[1];
+    expect(defaultAlias).toBeDefined();
+    expect(defaultAlias).not.toBe("manual");
+    expect(defaultAlias).not.toBe(oldAlias);
+    expect(content).toContain(`[model.${defaultAlias}]`);
+  });
+
+  test("teardown follows a non-contiguous ownership child table", () => {
+    const alias = "ocx-retired";
+    const preserved = ["[other]", "keep = true", "", ""].join("\n");
+    writeFileSync(configPath, [
+      `[model.${alias}]`,
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      "",
+      "[other]",
+      "keep = true",
+      "",
+      `[model.${alias}.extra_headers]`,
+      'x-opencodex-grok = "1"',
+      "",
+    ].join("\n"));
+
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(preserved);
+  });
+
+  test("teardown follows an ownership child written before its parent", () => {
+    const alias = "ocx-retired";
+    const preserved = ["[other]", "keep = true", "", ""].join("\n");
+    writeFileSync(configPath, [
+      `[model.${alias}.extra_headers]`,
+      'x-opencodex-grok = "1"',
+      "",
+      "[other]",
+      "keep = true",
+      "",
+      `[model.${alias}]`,
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      "",
+    ].join("\n"));
+
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8")).toBe(preserved);
+  });
+
+  test("teardown follows an ownership child re-serialized beyond the fence", () => {
+    const alias = "ocx-retired";
+    writeFileSync(configPath, [
+      `[model.${alias}]`,
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      "",
+    ].join("\n"));
+    expect(injectGrokConfig(10100, MODELS, { grokHome }))
+      .toMatchObject({ ok: true, changed: true });
+    writeFileSync(configPath, readFileSync(configPath, "utf8") + [
+      `[model.${alias}.extra_headers]`,
+      'x-opencodex-grok = "1"',
+      "",
+    ].join("\n"));
+
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8").trim()).toBe("");
+  });
+
+  test("teardown follows a pre-fence ownership child to a post-fence parent", () => {
+    const alias = "ocx-retired";
+    writeFileSync(configPath, [
+      `[model.${alias}.extra_headers]`,
+      'x-opencodex-grok = "1"',
+      "",
+    ].join("\n"));
+    expect(injectGrokConfig(10100, MODELS, { grokHome }))
+      .toMatchObject({ ok: true, changed: true });
+    writeFileSync(configPath, readFileSync(configPath, "utf8") + [
+      `[model.${alias}]`,
+      'model = "retired/model"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      "",
+    ].join("\n"));
+
+    expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+    expect(readFileSync(configPath, "utf8").trim()).toBe("");
+  });
+
+  test("a Unicode line separator inside a comment does not hide a user model header", () => {
+    const alias = "ocx-gpt-5-6-sol";
+    writeFileSync(configPath, [
+      `[model.${alias}] # alpha\u2028omega`,
+      'model = "user/model"',
+      'base_url = "https://example.com/v1"',
+      'api_key = "user-secret"',
+      "",
+    ].join("\n"));
+
+    expect(injectGrokConfig(10100, MODELS, { grokHome }))
+      .toMatchObject({ ok: true, changed: true });
+    const content = readFileSync(configPath, "utf8");
+    expect(content).toContain(`[model.${alias}] # alpha\u2028omega`);
+    expect(content).toContain(`[model.${alias}-2]`);
+  });
+
+  test("teardown ignores generated-looking tables inside multiline TOML strings", () => {
+    for (const delimiter of ['"""', "'''"]) {
+      const original = [
+        `notes = ${delimiter}`,
+        "[model.ocx-retired]",
+        'model = "retired/model"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_key = "opencodex-loopback"',
+        OWNERSHIP_MARKER,
+        delimiter,
+        "",
+        "[model.user-owned]",
+        'model = "user/model"',
+        'base_url = "https://example.com/v1"',
+        'api_key = "user-secret"',
+        "",
+      ].join("\n");
+      writeFileSync(configPath, original);
+
+      expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: false });
+      expect(readFileSync(configPath, "utf8")).toBe(original);
+      expect(injectGrokConfig(10100, MODELS, { grokHome }))
+        .toMatchObject({ ok: true, changed: true });
+      expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+      expect(readFileSync(configPath, "utf8")).toBe(original);
+    }
+  });
+
+  test("ownership keys inside a multiline value do not claim a manual table", () => {
+    for (const delimiter of ['"""', "'''"]) {
+      const original = [
+        "[model.hand-written]",
+        `notes = ${delimiter}`,
+        'model = "retired/model"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_key = "opencodex-loopback"',
+        OWNERSHIP_MARKER,
+        delimiter,
+        'model = "user/model"',
+        'base_url = "https://example.com/v1"',
+        'api_key = "user-secret"',
+        "",
+      ].join("\n");
+      writeFileSync(configPath, original);
+
+      expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: false });
+      expect(readFileSync(configPath, "utf8")).toBe(original);
+    }
+  });
+
+  test("adoption ignores fake survivors and references inside multiline strings", () => {
+    const oldAlias = "ocx-gpt-5-6-sol-2";
+    writeFileSync(configPath, [
+      "[models]",
+      `default = "${oldAlias}"`,
+      'notes = """',
+      "[model.fake-survivor]",
+      'model = "gpt-5.6-sol"',
+      `default = "${oldAlias}"`,
+      '"""',
+      "",
+      `[model.${oldAlias}]`,
+      'model = "gpt-5.6-sol"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "chat_completions"',
+      'api_key = "opencodex-loopback"',
+      'name = "OCX gpt-5.6-sol"',
+      "",
+    ].join("\n"));
+
+    expect(injectGrokConfig(10100, MODELS, { grokHome }))
+      .toMatchObject({ ok: true, changed: true });
+    const content = readFileSync(configPath, "utf8");
+    expect(content).toContain('default = "ocx-gpt-5-6-sol"');
+    expect(content).toContain(`[model.fake-survivor]\nmodel = "gpt-5.6-sol"\ndefault = "${oldAlias}"`);
+    expect(content).not.toContain(`[model.${oldAlias}]`);
   });
 
   test("markerless teardown preserves an ambiguous legacy row", () => {
