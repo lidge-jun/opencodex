@@ -1551,7 +1551,9 @@ describe("native fallback account preview", () => {
     }
 
     // And both must actually forward it into the preview call, not merely accept it.
-    const forwarded = source.match(/\{ \.\.\.(previewSelectionOptions|recoverySelectionOptions), modelEligibleAccountIds \}/g) ?? [];
+    const forwarded = source.match(
+      /\{ \.\.\.(previewSelectionOptions|recoverySelectionOptions), modelEligibleAccountIds \},\s*modelId,\s*\)/g,
+    ) ?? [];
     expect(forwarded).toHaveLength(2);
   });
 

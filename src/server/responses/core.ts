@@ -214,7 +214,13 @@ import {
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import type { WsData } from "../ws-bridge";
-import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn } from "../lifecycle";
+import {
+  codexAccountSelectionForTurn,
+  registerTurn,
+  trackStreamLifetime,
+  tryClaimNativeMainProfileForTurn,
+  unregisterTurn,
+} from "../lifecycle";
 import { redactSecretString, sanitizeLogMetadataString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import type { AdmissionLease } from "../../lib/admission";
@@ -1663,6 +1669,20 @@ async function resolveResponsesCodexAuth(
       });
       options.onCodexAuthContextResolved?.(authCtx);
     } else {
+      // A custom-named canonical-forward provider has no Codex account mode, but an
+      // admission bearer still substitutes the stored main credential below. Claim the
+      // same physical profile before synthesizing the main context so transport-based
+      // substitution cannot bypass a switch drain.
+      if (
+        substituteMainCredential
+        && (
+          isNativeMainTrafficBlocked()
+          || !tryClaimNativeMainProfileForTurn(options.turnAdmissionLease)
+          || isNativeMainTrafficBlocked()
+        )
+      ) {
+        throw new CodexMainProfileDrainingError();
+      }
       authCtx = { kind: "main", accountId: null };
       options.onCodexAuthContextResolved?.(undefined);
     }
@@ -2587,6 +2607,7 @@ async function handleResponsesInner(
       previewNow,
       codexQuotaScopeForModel(modelId),
       { ...previewSelectionOptions, modelEligibleAccountIds },
+      modelId,
     );
     const previewAccountId = route.codexAccountId ?? subagentFallbackAccountPreview(
       route.modelId,
@@ -2708,6 +2729,7 @@ async function handleResponsesInner(
                 previewNow,
                 codexQuotaScopeForModel(modelId),
                 { ...recoverySelectionOptions, modelEligibleAccountIds },
+                modelId,
               );
               const recoveryPreviewAccountId = subagentFallbackAccountPreview(
                 parsed.modelId,
