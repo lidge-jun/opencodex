@@ -25,7 +25,7 @@ import {
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { isStreamMode } from "../../lib/bun-stream-caps";
-import { shadowSourceModels } from "../../lib/shadow-call";
+import { shadowCallTargetsIntersect, shadowSourceModels } from "../../lib/shadow-call";
 import {
   configureAppOwnedMemoryBudget,
   enforceAppOwnedMemoryBudget,
@@ -88,6 +88,7 @@ import {
   type DebugFlag,
 } from "../../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import { routeConcreteModel, routeModel } from "../../router";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -862,6 +863,30 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.model !== undefined && typeof body.model !== "string") {
       return jsonResponse({ error: "model must be a string" }, 400);
+    }
+    const candidateModel = typeof body.model === "string"
+      ? body.model
+      : body.enabled === true
+        ? config.shadowCallIntercept?.model
+        : undefined;
+    if (candidateModel) {
+      let target;
+      try {
+        target = routeModel(config, candidateModel);
+      } catch {
+        return jsonResponse({ error: "model must resolve to a configured provider" }, 400);
+      }
+      const intersectsSource = shadowSourceModels(config.shadowCallIntercept?.sourceModels).some(sourceModel => {
+        let source = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourceModel };
+        try {
+          const resolved = routeConcreteModel(config, sourceModel);
+          source = { providerName: resolved.providerName, modelId: sourceModel };
+        } catch { /* Unconfigured native Codex source models remain OpenAI-owned. */ }
+        return shadowCallTargetsIntersect(source, target);
+      });
+      if (intersectsSource) {
+        return jsonResponse({ error: "shadow-call target must not intersect a source model" }, 400);
+      }
     }
     config.shadowCallIntercept = { ...config.shadowCallIntercept };
     if (typeof body.enabled === "boolean") config.shadowCallIntercept.enabled = body.enabled;

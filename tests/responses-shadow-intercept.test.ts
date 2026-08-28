@@ -60,18 +60,39 @@ describe("isShadowSourceModel", () => {
 
 describe("shouldInterceptShadowCall", () => {
   test("intercepts every shadow source model unconditionally (#1684)", () => {
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined)).toBe(true);
-    expect(shouldInterceptShadowCall("gpt-5.6-luna-2026-08", undefined)).toBe(true);
+    const source = { providerName: "openai", modelId: "gpt-5.6-luna" };
+    const target = { providerName: "xai", modelId: "grok-4.5" };
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, source, target)).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna-2026-08", undefined, source, target)).toBe(true);
   });
 
   test("does not intercept non-source models", () => {
-    expect(shouldInterceptShadowCall("gpt-5.6-terra", undefined)).toBe(false);
-    expect(shouldInterceptShadowCall("gpt-5.5", undefined)).toBe(false);
+    const source = { providerName: "openai", modelId: "gpt-5.6-luna" };
+    const target = { providerName: "xai", modelId: "grok-4.5" };
+    expect(shouldInterceptShadowCall("gpt-5.6-terra", undefined, source, target)).toBe(false);
+    expect(shouldInterceptShadowCall("gpt-5.5", undefined, source, target)).toBe(false);
   });
 
   test("respects configured sourceModels override", () => {
-    expect(shouldInterceptShadowCall("custom-helper-v2", ["custom-helper"])).toBe(true);
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", ["custom-helper"])).toBe(false);
+    const source = { providerName: "openai", modelId: "custom-helper" };
+    const target = { providerName: "xai", modelId: "grok-4.5" };
+    expect(shouldInterceptShadowCall("custom-helper-v2", ["custom-helper"], source, target)).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", ["custom-helper"], source, target)).toBe(false);
+  });
+
+  test("matches source-target intersections by provider and model, not slug alone (#2706)", () => {
+    const source = {
+      providerName: "openai",
+      modelId: "gpt-5.6-luna",
+    };
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, source, {
+      providerName: "openai",
+      modelId: "gpt-5.6-luna",
+    })).toBe(false);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, source, {
+      providerName: "xai",
+      modelId: "gpt-5.6-luna",
+    })).toBe(true);
   });
 });
 
@@ -114,7 +135,7 @@ async function post(
 }
 
 describe("shadow call intercept request path (issue #311)", () => {
-  test("rewrites a gpt-5.6-luna helper call to the configured model with low effort", async () => {
+  test("rewrites a gpt-5.6-luna helper call without overriding configured effort (#2706)", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
@@ -131,7 +152,33 @@ describe("shadow call intercept request path (issue #311)", () => {
     expect(String(bodies[0]?.model ?? "")).toContain("grok-4.5");
     const effort = (bodies[0]?.reasoning as { effort?: string } | undefined)?.effort
       ?? bodies[0]?.reasoning_effort;
-    expect(effort).toBe("low");
+    expect(effort).toBe("high");
+  });
+
+  test("a self-target is a no-op instead of an intercept loop (#2706)", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return Response.json({
+        choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    }) as typeof fetch;
+
+    const config = interceptConfig();
+    config.shadowCallIntercept = {
+      enabled: true,
+      model: "xai/custom-helper",
+      sourceModels: ["custom-helper"],
+    };
+
+    const response = await post(config, "custom-helper", "turn", logCtx);
+
+    expect(response.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]?.model).toBe("custom-helper");
+    expect(logCtx.shadowCallRewrittenFrom).toBeUndefined();
   });
 
   test("rewrites a gpt-5.6-luna turn request too (#1684)", async () => {
@@ -237,6 +284,23 @@ async function shadowApi(config: OcxConfig, method: string, body?: unknown): Pro
   return await res!.json() as Record<string, unknown>;
 }
 
+async function shadowApiResponse(config: OcxConfig, body: unknown): Promise<Response> {
+  const req = new Request("http://localhost/api/shadow-call-settings", {
+    method: "PUT",
+    headers: {
+      origin: "http://127.0.0.1:10100",
+      host: "127.0.0.1:10100",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const res = await handleManagementAPI(req, new URL(req.url), config, {
+    createManagementConvergeCodex: catalogConvergenceFactory(),
+  });
+  expect(res).not.toBeNull();
+  return res!;
+}
+
 describe("shadow-call settings API reports the intercepted source models", () => {
   test("GET reports the 0.145.0+ helper-model default", async () => {
     await withTempHome(async () => {
@@ -250,12 +314,42 @@ describe("shadow-call settings API reports the intercepted source models", () =>
       const config = {
         port: 0,
         defaultProvider: "xai",
-        providers: {},
-        shadowCallIntercept: { enabled: true, model: "gpt-5.5", sourceModels: ["gpt-5.6-luna"] },
+        providers: {
+          xai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.x.ai/v1",
+            authMode: "key",
+            apiKey: "test-xai-key",
+          },
+        },
+        shadowCallIntercept: { enabled: true, model: "xai/grok-4.5", sourceModels: ["gpt-5.6-luna"] },
       } as OcxConfig;
       expect((await shadowApi(config, "GET")).sourceModels).toEqual(["gpt-5.6-luna"]);
       const put = await shadowApi(config, "PUT", { enabled: true });
       expect(put.sourceModels).toEqual(["gpt-5.6-luna"]);
+    });
+  });
+
+  test("PUT rejects an invalid self-target without persisting it (#2706)", async () => {
+    await withTempHome(async () => {
+      const config = {
+        port: 0,
+        defaultProvider: "xai",
+        providers: {
+          xai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.x.ai/v1",
+            authMode: "key",
+            apiKey: "test-xai-key",
+          },
+        },
+        shadowCallIntercept: { sourceModels: ["custom-helper"] },
+      } as OcxConfig;
+
+      const response = await shadowApiResponse(config, { enabled: true, model: "xai/custom-helper" });
+
+      expect(response.status).toBe(400);
+      expect(config.shadowCallIntercept).toEqual({ sourceModels: ["custom-helper"] });
     });
   });
 });

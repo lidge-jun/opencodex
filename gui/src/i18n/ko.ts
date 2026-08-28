@@ -295,7 +295,7 @@ export const ko: Record<TKey, string> = {
   "dash.visionSidecarHint": "텍스트 전용 라우팅 모델이 이미지를 읽을 때 쓸 백엔드와 모델을 고릅니다.",
   "dash.visionOff": "끔",
   "dash.shadowCallIntercept": "쉐도우 호출 가로채기",
-  "dash.shadowCallInterceptHint": "Codex 앱이 제목·커밋 메시지 생성에 쓰는 백그라운드 호출({models})을 가로채 선택한 모델로 바꿉니다. effort는 low로 고정됩니다.",
+  "dash.shadowCallInterceptHint": "Codex 앱이 제목·커밋 메시지 생성에 쓰는 백그라운드 호출({models})을 가로채 선택한 모델로 바꿉니다.",
   "dash.shadowCallWarning": "⚠ 활성화하면 {models} 요청이 모두 선택한 모델로 대체됩니다.",
   "dash.shadowCallOriginal": "원본",
   "dash.shadowCallModel": "대체 모델",

@@ -358,8 +358,12 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   );
   const shadowCallOptions = useMemo(() => {
     const activeNamespaced = new Set(shadowModelOptions.map(option => option.value));
-    return shadowCallModelOptions(models.filter(model => activeNamespaced.has(model.namespaced)), shadowCall?.model);
-  }, [models, shadowCall?.model, shadowModelOptions]);
+    return shadowCallModelOptions(
+      models.filter(model => activeNamespaced.has(model.namespaced)),
+      shadowCall?.model,
+      shadowCall?.sourceModels,
+    );
+  }, [models, shadowCall?.model, shadowCall?.sourceModels, shadowModelOptions]);
 
   const loadShadowCall = useCallback(async () => {
     const bounded = createBoundedFetch(15_000);

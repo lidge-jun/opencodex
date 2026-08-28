@@ -299,7 +299,7 @@ export const fr: Record<TKey, string> = {
   "dash.visionTimeoutInvalid": "Saisissez un entier compris entre {min} et {max} millisecondes.",
   "dash.visionAdvancedPopover": "Paramètres de vision avancés",
   "dash.shadowCallIntercept": "Interception des appels fantômes",
-  "dash.shadowCallInterceptHint": "Intercepte les appels auxiliaires en arrière-plan de l’application Codex ({models}) pour générer les titres et les messages de commit, puis les redirige vers le modèle choisi. L’effort est fixé à faible.",
+  "dash.shadowCallInterceptHint": "Intercepte les appels auxiliaires en arrière-plan de l’application Codex ({models}) pour générer les titres et les messages de commit, puis les redirige vers le modèle choisi.",
   "dash.shadowCallWarning": "⚠ Lorsque cette option est activée, TOUTES les requêtes destinées à {models} sont remplacées par le modèle sélectionné.",
   "dash.shadowCallOriginal": "Original",
   "dash.shadowCallModel": "Modèle de remplacement",

@@ -309,7 +309,7 @@ export const en = {
   "dash.visionTimeoutInvalid": "Enter an integer from {min} to {max} milliseconds.",
   "dash.visionAdvancedPopover": "Advanced vision settings",
   "dash.shadowCallIntercept": "Shadow Call Intercept",
-  "dash.shadowCallInterceptHint": "Intercepts Codex App's background helper calls ({models}) for title generation and commit messages and redirects them to your chosen model. Effort is fixed to low.",
+  "dash.shadowCallInterceptHint": "Intercepts Codex App's background helper calls ({models}) for title generation and commit messages and redirects them to your chosen model.",
   "dash.shadowCallWarning": "⚠ When enabled, ALL requests for {models} will be replaced with the selected model.",
   "dash.shadowCallOriginal": "Original",
   "dash.shadowCallModel": "Replacement model",

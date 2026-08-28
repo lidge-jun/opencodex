@@ -291,7 +291,7 @@ export const de: Record<TKey, string> = {
   "dash.visionSidecarHint": "Backend und Modell zur Bildbeschreibung für reine Textmodelle auswählen.",
   "dash.visionOff": "Aus",
   "dash.shadowCallIntercept": "Shadow-Call-Abfangen",
-  "dash.shadowCallInterceptHint": "Fängt die Hintergrund-Hilfsaufrufe der Codex-App ({models}) ab und leitet sie an das gewählte Modell um. Effort wird auf low fixiert.",
+  "dash.shadowCallInterceptHint": "Fängt die Hintergrund-Hilfsaufrufe der Codex-App ({models}) ab und leitet sie an das gewählte Modell um.",
   "dash.shadowCallWarning": "⚠ Bei Aktivierung werden ALLE Anfragen an {models} durch das gewählte Modell ersetzt.",
   "dash.shadowCallOriginal": "Original",
   "dash.shadowCallModel": "Ersatzmodell",

@@ -435,8 +435,9 @@ export interface OcxConfig {
   * Shadow call intercept: redirect Codex's hard-coded helper calls (title generation,
   * commit messages, skill orchestration) to a user-chosen model. Default intercepted
   * source models: gpt-5.4-mini (older clients) and gpt-5.6-luna (Codex 0.145.0+).
-  * Opt-in; disabled by default. Matching maintenance/helper requests are forced to low.
-   * All requests for configured shadow source models are intercepted unconditionally.
+  * Opt-in; disabled by default. Matching requests preserve their configured reasoning effort.
+   * All requests for configured shadow source models are intercepted regardless of request kind,
+   * except when the replacement intersects the same provider+model source set.
    */
   shadowCallIntercept?: {
     /** When true, requests for known shadow/helper source models are rewritten to the configured model. */

@@ -649,7 +649,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             </button>
             <Select
               value={shadowCall?.model ?? ""}
-              options={shadowCallModelOptions(models, shadowCall?.model).map(option => option.value === "" ? option : { ...option, label: formatNamespacedModelId(option.value, t) })}
+              options={shadowCallModelOptions(models, shadowCall?.model, shadowCall?.sourceModels).map(option => option.value === "" ? option : { ...option, label: formatNamespacedModelId(option.value, t) })}
               onChange={v => { void saveShadowCall({ model: v }); }}
               disabled={!shadowCall || shadowCallSaving || !shadowCall?.enabled}
               label={t("dash.shadowCallModel")}

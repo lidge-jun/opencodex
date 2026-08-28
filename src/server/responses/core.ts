@@ -2417,41 +2417,42 @@ async function handleResponsesInner(
   logCtx.configuredServiceTier = readConfiguredCodexServiceTier();
   logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
 
-  // Shadow call intercept: rewrite Codex 0.145.0+ helper calls (gpt-5.6-luna).
-  // Ancient clients using gpt-5.4-mini remain configurable via sourceModels.
-  const _sci = config.shadowCallIntercept;
-  if (_sci?.enabled && _sci.model && shouldInterceptShadowCall(
-    parsed.modelId,
-    _sci.sourceModels,
-  )) {
-    const _sciOriginal = parsed.modelId;
-    parsed.modelId = _sci.model;
-    if (parsed._rawBody && typeof parsed._rawBody === "object") {
-      (parsed._rawBody as { model?: string }).model = _sci.model;
-    }
-    // Force effort to low for shadow/helper calls (matching upstream behavior)
-    parsed.options.reasoning = "low";
-    if (parsed._rawBody && typeof parsed._rawBody === "object") {
-      (parsed._rawBody as Record<string, unknown>).reasoning = { effort: "low" };
-    }
-    // Record the operator-configured prefix that matched, NOT the caller's raw model string.
-    // Matching is by prefix, so a caller can append arbitrary text and still intercept; that
-    // raw value would then land in usage.jsonl and /api/logs behind a pattern-based redactor
-    // that does not recognize every credential family. The prefix is a value the operator
-    // configured, so no caller-controlled string is persisted.
-    logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(
-      shadowSourceModelPrefix(_sciOriginal, _sci.sourceModels),
-    );
-    // Helpers must not resume/append into the parent thread's Cursor conversation.
-    parsed._cursorIsolateConversation = true;
-  }
-  if (parsed._compactionRequest === true) parsed._cursorIsolateConversation = true;
-
   let route: RouteResult;
   try {
-    route = options.comboAttempt
-      ? routeConcreteModel(config, parsed.modelId)
-      : routeModel(config, parsed.modelId, evidenceFromBody(parsed._rawBody));
+    const resolveRoute = (modelId: string) => options.comboAttempt
+      ? routeConcreteModel(config, modelId)
+      : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
+    const _sci = config.shadowCallIntercept;
+    let shadowRoute: RouteResult | undefined;
+    if (_sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
+      const sourcePrefix = shadowSourceModelPrefix(parsed.modelId, _sci.sourceModels)!;
+      let sourceIdentity = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourcePrefix };
+      try {
+        const resolvedSource = routeConcreteModel(config, parsed.modelId);
+        sourceIdentity = { providerName: resolvedSource.providerName, modelId: sourcePrefix };
+      } catch { /* Native Codex helper calls remain OpenAI-owned without an enabled OpenAI route. */ }
+      const targetRoute = resolveRoute(_sci.model);
+      if (shouldInterceptShadowCall(parsed.modelId, _sci.sourceModels, sourceIdentity, targetRoute)) {
+        const _sciOriginal = parsed.modelId;
+        parsed.modelId = _sci.model;
+        if (parsed._rawBody && typeof parsed._rawBody === "object") {
+          (parsed._rawBody as { model?: string }).model = _sci.model;
+        }
+        // Record the operator-configured prefix that matched, NOT the caller's raw model string.
+        // Matching is by prefix, so a caller can append arbitrary text and still intercept; that
+        // raw value would then land in usage.jsonl and /api/logs behind a pattern-based redactor
+        // that does not recognize every credential family. The prefix is a value the operator
+        // configured, so no caller-controlled string is persisted.
+        logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(
+          shadowSourceModelPrefix(_sciOriginal, _sci.sourceModels),
+        );
+        // Helpers must not resume/append into the parent thread's Cursor conversation.
+        parsed._cursorIsolateConversation = true;
+        shadowRoute = targetRoute;
+      }
+    }
+    if (parsed._compactionRequest === true) parsed._cursorIsolateConversation = true;
+    route = shadowRoute ?? resolveRoute(parsed.modelId);
     logCtx.routeDecision = route.routeDecision;
   } catch (err) {
     if (err instanceof NoAvailableComboTargetsError) {

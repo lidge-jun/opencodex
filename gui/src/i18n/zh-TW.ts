@@ -194,7 +194,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.visionSidecarHint": "選擇純文字路由模型描述圖像時使用的後端和模型。",
   "dash.visionOff": "關閉",
   "dash.shadowCallIntercept": "影子呼叫攔截",
-  "dash.shadowCallInterceptHint": "攔截 Codex 應用的背景 helper 呼叫（{models}）以生成標題與提交訊息，並將它們重定向到您選擇的模型。effort 固定為 low。",
+  "dash.shadowCallInterceptHint": "攔截 Codex 應用的背景 helper 呼叫（{models}）以生成標題與提交訊息，並將它們重定向到您選擇的模型。",
   "dash.shadowCallWarning": "⚠ 啟用後，{models} 的所有請求將被替換為所選模型。",
   "dash.shadowCallOriginal": "原始",
   "dash.shadowCallModel": "替代模型",

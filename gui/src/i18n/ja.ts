@@ -300,7 +300,7 @@ export const ja: Record<TKey, string> = {
   "dash.visionSidecarHint": "テキスト専用ルーティングモデルで画像を説明するために使うバックエンドとモデルを選択します。",
   "dash.visionOff": "オフ",
   "dash.shadowCallIntercept": "シャドウコール傍受",
-  "dash.shadowCallInterceptHint": "Codex App のバックグラウンドヘルパー呼び出し({models}: タイトル生成、コミットメッセージ)を傍受し、選択したモデルにリダイレクトします。負荷は low に固定されます。",
+  "dash.shadowCallInterceptHint": "Codex App のバックグラウンドヘルパー呼び出し({models}: タイトル生成、コミットメッセージ)を傍受し、選択したモデルにリダイレクトします。",
   "dash.shadowCallWarning": "⚠ オンにすると、{models} へのリクエストがすべて選択したモデルに置き換えられます。",
   "dash.shadowCallOriginal": "元のモデル",
   "dash.shadowCallModel": "差し替えモデル",
