@@ -46,7 +46,16 @@ describe("Node launcher context transport", () => {
     if (result.error) throw result.error;
     expect(result.status).toBe(0);
     return JSON.parse(result.stdout) as {
-      context: { anthropicEnvSlots: string[] } | null;
+      context: {
+        anthropicEnvSlots: string[];
+        codexCliInspectionEnv: {
+          codexCliPath: string | null;
+          path: string | null;
+          pathExt: string | null;
+          managerRoots: Record<string, string> | null;
+          configDir: string;
+        } | null;
+      } | null;
       args: string[];
       contextEnv: string | null;
     };
@@ -64,6 +73,44 @@ describe("Node launcher context transport", () => {
     expect(seen.context).toBeNull();
     expect(seen.args).toEqual(["claude"]);
     expect(seen.contextEnv).toBeNull();
+  });
+
+  test("a proof-bound long parent PATH remains trusted for updater inspection", () => {
+    const longPath = Array.from({ length: 300 }, (_, index) => `C:\\Tools\\${index}`).join(";");
+    const payload = JSON.stringify({
+      version: 1,
+      proof,
+      anthropicEnvSlots: [],
+      codexCliInspectionEnv: {
+        codexCliPath: "C:\\npm\\codex.cmd",
+        path: longPath,
+        pathExt: ".EXE;.CMD",
+        managerRoots: { FNM_DIR: "C:\\Tools\\fnm-data" },
+        configDir: "C:\\Users\\person\\.opencodex",
+      },
+    });
+    expect(payload.length).toBeGreaterThan(2048);
+    const seen = run([`--ocx-internal-launch-proof=${proof}`, "system"], payload);
+    expect(seen.context?.codexCliInspectionEnv?.path).toBe(longPath);
+    expect(seen.context?.codexCliInspectionEnv?.managerRoots).toEqual({ FNM_DIR: "C:\\Tools\\fnm-data" });
+    expect(seen.context?.codexCliInspectionEnv?.configDir).toBe("C:\\Users\\person\\.opencodex");
+  });
+
+  test("an unknown manager-root key invalidates the trusted context", () => {
+    const payload = JSON.stringify({
+      version: 1,
+      proof,
+      anthropicEnvSlots: [],
+      codexCliInspectionEnv: {
+        codexCliPath: "C:\\npm\\codex.cmd",
+        path: "C:\\npm",
+        pathExt: ".CMD",
+        managerRoots: { UNBOUNDED_ROOT: "C:\\" },
+        configDir: "C:\\Users\\person\\.opencodex",
+      },
+    });
+    const seen = run([`--ocx-internal-launch-proof=${proof}`, "system"], payload);
+    expect(seen.context).toBeNull();
   });
 
   test("duplicate internal proofs fail closed and are removed from user argv", () => {

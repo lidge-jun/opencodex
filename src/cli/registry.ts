@@ -268,8 +268,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "system",
-    usage: "ocx system <status|settings|startup|diagnostics|sync|update> ...",
-    summary: "Manage headless runtime settings, startup, sync, diagnostics, and updates.",
+    usage: "ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...",
+    summary: "Manage headless runtime settings, startup, sync, diagnostics, OpenCodex updates, and read-only Codex CLI inspection.",
+    details: [
+      "system update manages OpenCodex itself.",
+      "ocx system codex-cli-update check [--json]",
+      "The Codex CLI inspection command makes no package-registry request, does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.",
+    ],
   },
   {
     name: "config",

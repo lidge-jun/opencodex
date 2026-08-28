@@ -296,13 +296,33 @@ the CLI, the API, and the GUI use the same bytes.
 
 ## Runtime and configuration
 
-### `ocx system <status|settings|startup|diagnostics|sync|update> ...`
+### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 Manage headless runtime settings, startup, sync, diagnostics, and updates.
 
 ```bash
 ocx system settings --stream-mode eager-relay
 ```
+
+`ocx system update` updates OpenCodex itself. The separate Codex CLI inspection surface is:
+
+```bash
+ocx system codex-cli-update check --json
+```
+
+`check` makes no package-registry request and inspects bounded configured-candidate provenance evidence,
+including a redacted executable location and ownership evidence. Trusted published-launcher context authenticates
+the candidate snapshot, not successful Codex execution. Because this one-shot command never executes Codex,
+environment and persisted candidates remain report-only (`managed: false`, normally `selection_unattested`);
+`selectionAttested` remains `false`. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
+and `selectionAttested`. Inspecting the configured candidate requires a trusted published-launcher context;
+a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
+`candidate_unavailable`. On Windows this first slice performs no candidate or configuration filesystem I/O:
+only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels;
+every other Windows candidate fails closed. The command does not execute Codex or a package manager, repair a shim,
+write configuration or cache state, stop a process, or install anything. App-bundled, recognized
+version-manager, unverified standalone, and ambiguous shim states are reported as unmanaged or unknown
+and are never classified as managed.
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 

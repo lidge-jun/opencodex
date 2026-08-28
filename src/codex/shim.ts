@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, delimiter, dirname, extname, join, posix } from "node:path";
+import { basename, delimiter, dirname, extname, join, posix, win32 } from "node:path";
 import {
   chmodSync,
   closeSync,
@@ -263,6 +263,28 @@ interface ShimFileState {
   realPath?: string;
   preserveOnly?: boolean;
 }
+
+export type CodexShimBackingForCommand =
+  | Readonly<{ status: "not-tracked" }>
+  | Readonly<{
+      status: "matched";
+      selectedRole: "wrapper" | "backing";
+      backingPath: string;
+      backingKind: "backup" | "real";
+    }>
+  | Readonly<{
+      status: "unknown";
+      reason:
+        | "state_invalid"
+        | "platform_mismatch"
+        | "ambiguous_match"
+        | "preserve_only"
+        | "backing_missing"
+        | "backing_mismatch"
+        | "binding_unavailable"
+        | "wrapper_unhealthy"
+        | "version_manager_refused";
+    }>;
 
 interface ShimPathFingerprint {
   dev: number;
@@ -616,8 +638,13 @@ function backupPathFor(path: string): string {
  * deliberately excluded: a false positive here refuses a restore that would
  * otherwise be correct.
  */
-export function isVersionManagerOwnedCodexPath(path: string): boolean {
-  const normalized = path.replace(/\\/g, "/").toLowerCase();
+export function isVersionManagerOwnedCodexPath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const normalized = (platform === "win32"
+    ? win32.normalize(path).replace(/\\/g, "/")
+    : posix.normalize(path)).toLowerCase();
   return normalized.includes("/mise/installs/")
     || normalized.includes("/mise/shims/")
     || normalized.includes("/.asdf/installs/")
@@ -1078,6 +1105,7 @@ exit $LASTEXITCODE
 
 interface ShimStateReadResult {
   state: ShimState | null;
+  present: boolean;
   warning?: string;
 }
 
@@ -1087,7 +1115,17 @@ function fileErrorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function readBoundedRegularFile(path: string, maxBytes: number): { content: string } | { warning: string } | null {
+function readBoundedRegularFile(path: string, maxBytes: number): { bytes: Buffer; content: string } | { warning: string } | null {
+  let lexicalBefore: Stats;
+  try {
+    lexicalBefore = lstatSync(path);
+    if (lexicalBefore.isSymbolicLink() || !lexicalBefore.isFile()) {
+      return { warning: `Codex shim state is not a direct regular file at ${path}; auto-restore skipped.` };
+    }
+  } catch (error) {
+    if (fileErrorCode(error) === "ENOENT") return null;
+    return { warning: `Codex shim state could not be inspected at ${path}.` };
+  }
   let fd: number;
   try {
     fd = openSync(path, "r");
@@ -1113,25 +1151,33 @@ function readBoundedRegularFile(path: string, maxBytes: number): { content: stri
       return { warning: `Codex shim state exceeds the 1 MiB startup limit at ${path}; auto-restore skipped.` };
     }
     const after = fstatSync(fd);
-    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+    let lexicalAfter: Stats;
+    try {
+      lexicalAfter = lstatSync(path);
+    } catch {
       return { warning: `Codex shim state changed while being read at ${path}; auto-restore skipped.` };
     }
-    return { content: buffer.toString("utf8") };
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+      || lexicalBefore.dev !== before.dev || lexicalBefore.ino !== before.ino
+      || lexicalAfter.isSymbolicLink() || lexicalAfter.dev !== after.dev || lexicalAfter.ino !== after.ino) {
+      return { warning: `Codex shim state changed while being read at ${path}; auto-restore skipped.` };
+    }
+    return { bytes: buffer, content: buffer.toString("utf8") };
   } finally {
     closeSync(fd);
   }
 }
 
-function readStateResult(): ShimStateReadResult {
-  const bounded = readBoundedRegularFile(statePath(), CODEX_SHIM_STATE_MAX_BYTES);
-  if (!bounded) return { state: null };
-  if ("warning" in bounded) return { state: null, warning: bounded.warning };
+function readStateResult(path = statePath()): ShimStateReadResult {
+  const bounded = readBoundedRegularFile(path, CODEX_SHIM_STATE_MAX_BYTES);
+  if (!bounded) return { state: null, present: false };
+  if ("warning" in bounded) return { state: null, present: true, warning: bounded.warning };
   try {
     const value = JSON.parse(bounded.content) as unknown;
-    if (!value || typeof value !== "object") return { state: null };
+    if (!value || typeof value !== "object") return { state: null, present: true };
     const state = value as Record<string, unknown>;
-    if (typeof state.platform !== "string") return { state: null };
+    if (typeof state.platform !== "string") return { state: null, present: true };
     const validFile = (item: unknown): item is ShimFileState => {
       if (!item || typeof item !== "object") return false;
       const file = item as Record<string, unknown>;
@@ -1142,18 +1188,158 @@ function readStateResult(): ShimStateReadResult {
         && (file.preserveOnly === undefined || typeof file.preserveOnly === "boolean");
     };
     if (state.wrappers !== undefined) {
-      if (!Array.isArray(state.wrappers) || state.wrappers.length === 0 || !state.wrappers.every(validFile)) return { state: null };
+      if (!Array.isArray(state.wrappers) || state.wrappers.length === 0 || !state.wrappers.every(validFile)) return { state: null, present: true };
     } else if (!validFile(state)) {
-      return { state: null };
+      return { state: null, present: true };
     }
-    return { state: state as unknown as ShimState };
+    return { state: state as unknown as ShimState, present: true };
   } catch {
-    return { state: null };
+    return { state: null, present: true };
   }
 }
 
 function readState(): ShimState | null {
   return readStateResult().state;
+}
+
+export function isLocalAbsoluteInspectionPath(path: string, platform: NodeJS.Platform): boolean {
+  if (platform !== "win32") return posix.isAbsolute(path);
+  const normalized = path.replace(/\//g, "\\");
+  // UNC and device namespaces can initiate remote I/O while a nominally local
+  // inspection is resolving user-controlled paths. Root-relative paths are
+  // drive-context dependent, so require an explicit local drive as well.
+  return win32.isAbsolute(path)
+    && /^[a-z]:\\/i.test(normalized)
+    && !normalized.startsWith("\\\\");
+}
+
+function windowsShimInspectionIsDeferred(platform: NodeJS.Platform): boolean {
+  return platform === "win32";
+}
+
+/** Resolve one selected command through already-recorded shim state, without repair. */
+export function inspectCodexShimBackingForCommand(
+  selectedCommand: string,
+  platform: NodeJS.Platform = process.platform,
+  configDir: string = getConfigDir(),
+): CodexShimBackingForCommand {
+  // Pathname prechecks cannot prevent a writable Windows ancestor from being
+  // replaced with a remote reparse point before the later state/fingerprint
+  // reads. Keep the exported read-only helper fail-closed until those reads are
+  // performed through a handle-bound Windows provenance layer.
+  if (windowsShimInspectionIsDeferred(platform)) {
+    return Object.freeze({ status: "unknown" as const, reason: "binding_unavailable" as const });
+  }
+  if (!isLocalAbsoluteInspectionPath(configDir, platform)) {
+    return Object.freeze({ status: "unknown" as const, reason: "state_invalid" as const });
+  }
+  const stateFile = join(configDir, "codex-shim.json");
+  try {
+    const stateEntry = lstatSync(stateFile);
+    if (stateEntry.isSymbolicLink()) {
+      return Object.freeze({ status: "unknown" as const, reason: "state_invalid" as const });
+    }
+  } catch (error) {
+    if (fileErrorCode(error) !== "ENOENT") {
+      return Object.freeze({ status: "unknown" as const, reason: "state_invalid" as const });
+    }
+  }
+  const result = readStateResult(stateFile);
+  if (!result.state) {
+    return result.present
+      ? Object.freeze({ status: "unknown" as const, reason: "state_invalid" as const })
+      : Object.freeze({ status: "not-tracked" as const });
+  }
+  const pathApi = platform === "win32" ? win32 : posix;
+  const samePath = (left: string, right: string): boolean => {
+    const normalizedLeft = pathApi.resolve(left);
+    const normalizedRight = pathApi.resolve(right);
+    return platform === "win32"
+      ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+      : normalizedLeft === normalizedRight;
+  };
+  const files = stateFiles(result.state);
+  if (files.some(file => !file.wrapperPath || !file.originalPath || !file.backupPath
+    || ![file.wrapperPath, file.originalPath, file.backupPath, file.realPath]
+      .filter((path): path is string => typeof path === "string")
+      .every(path => isLocalAbsoluteInspectionPath(path, platform)))) {
+    return Object.freeze({ status: "unknown" as const, reason: "state_invalid" as const });
+  }
+  const wrapperKeys = files.map(file => platform === "win32"
+    ? pathApi.resolve(file.wrapperPath).toLowerCase()
+    : pathApi.resolve(file.wrapperPath));
+  if (new Set(wrapperKeys).size !== wrapperKeys.length) {
+    return Object.freeze({ status: "unknown" as const, reason: "state_invalid" as const });
+  }
+  const selectedFingerprint = shimPathFingerprint(selectedCommand);
+  if (!selectedFingerprint) {
+    return Object.freeze({ status: "unknown" as const, reason: "binding_unavailable" as const });
+  }
+  const selectedIdentity = selectedFingerprint.target ?? selectedFingerprint;
+  const sameEffectiveIdentity = (fingerprint: ShimPathFingerprint | null): boolean => {
+    if (!fingerprint) return false;
+    const identity = fingerprint.target ?? fingerprint;
+    return identity.dev === selectedIdentity.dev && identity.ino === selectedIdentity.ino;
+  };
+  const matches = files.flatMap(file => {
+    const backingPath = file.realPath ?? file.backupPath;
+    const roles: Array<"wrapper" | "backing"> = [];
+    if (samePath(file.wrapperPath, selectedCommand)
+      || sameEffectiveIdentity(shimPathFingerprint(file.wrapperPath))) {
+      roles.push("wrapper");
+    }
+    if (samePath(backingPath, selectedCommand)
+      || sameEffectiveIdentity(shimPathFingerprint(backingPath))) {
+      roles.push("backing");
+    }
+    return roles.map(selectedRole => ({ file, backingPath, selectedRole }));
+  });
+  if (matches.length === 0) return Object.freeze({ status: "not-tracked" as const });
+  if (result.state.platform !== platform) {
+    return Object.freeze({ status: "unknown" as const, reason: "platform_mismatch" as const });
+  }
+  if (matches.length !== 1) {
+    return Object.freeze({ status: "unknown" as const, reason: "ambiguous_match" as const });
+  }
+  const { file, backingPath, selectedRole } = matches[0]!;
+  if (file.preserveOnly === true) {
+    return Object.freeze({ status: "unknown" as const, reason: "preserve_only" as const });
+  }
+  const backing = statFingerprint(backingPath, true);
+  if (!backing || backing.size <= 0 || samePath(backingPath, file.wrapperPath)) {
+    return Object.freeze({ status: "unknown" as const, reason: "backing_missing" as const });
+  }
+  const wrapperProbe = stableShimPathProbe(file.wrapperPath);
+  if (!wrapperProbe || !isHealthyShimProbe(wrapperProbe, result.state.platform)) {
+    return Object.freeze({
+      status: "unknown" as const,
+      reason: isVersionManagerOwnedCodexPath(file.wrapperPath)
+        ? "version_manager_refused" as const
+        : "wrapper_unhealthy" as const,
+    });
+  }
+  const wrapperIdentity = wrapperProbe.fingerprint.target ?? wrapperProbe.fingerprint;
+  if (backing.dev === wrapperIdentity.dev && backing.ino === wrapperIdentity.ino) {
+    return Object.freeze({ status: "unknown" as const, reason: "backing_mismatch" as const });
+  }
+  const wrapperExt = extname(file.wrapperPath).toLowerCase();
+  const invokesBacking = platform !== "win32"
+    ? wrapperProbe.prefix.includes(`exec ${shQuote(backingPath)} "$@"`)
+    : wrapperExt === ".cmd" || wrapperExt === ".bat"
+      ? wrapperProbe.prefix.includes(windowsBatchSet("OCX_REAL_CODEX", backingPath))
+        && wrapperProbe.prefix.includes('"%OCX_REAL_CODEX%" %*')
+      : wrapperExt === ".ps1"
+        ? wrapperProbe.prefix.includes(`& ${psString(backingPath)} @args`)
+        : wrapperProbe.prefix.includes(`exec ${shQuote(gitBashPath(backingPath))} "$@"`);
+  if (!invokesBacking) {
+    return Object.freeze({ status: "unknown" as const, reason: "backing_mismatch" as const });
+  }
+  return Object.freeze({
+    status: "matched" as const,
+    selectedRole,
+    backingPath,
+    backingKind: file.realPath !== undefined ? "real" as const : "backup" as const,
+  });
 }
 
 function statePath(): string {
@@ -1283,7 +1469,7 @@ function stateFiles(state: ShimState): ShimFileState[] {
 }
 
 function primaryState(files: ShimFileState[]): ShimState {
-  const first = files[0];
+  const first = files[0]!;
   return { platform: process.platform, ...first, wrappers: files };
 }
 
@@ -2067,7 +2253,7 @@ export function autoRestoreCodexShim(options: {
   const state = stateRead.state;
   if (!state) {
     if (stateRead.warning) return { status: "ineligible", message: stateRead.warning };
-    return { status: existsSync(statePath()) ? "ineligible" : "not-installed" };
+    return { status: stateRead.present ? "ineligible" : "not-installed" };
   }
   if (state.platform !== process.platform) return { status: "ineligible" };
 

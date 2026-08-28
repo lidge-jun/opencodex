@@ -368,7 +368,10 @@ never print proxy values; resolve the reported handoff and run `ocx doctor` befo
 autostart.
 
 If a completed external Codex update overwrites an installed shim, the next ordinary `ocx` command
-backs up the stable new launcher and restores the shim before dispatch. A launcher that is still
+backs up the stable new launcher and restores the shim before dispatch. The zero-effect
+`ocx system codex-cli-update check` inspection command and malformed invocations in its reserved
+`ocx system codex-cli-update` namespace never perform that repair.
+A launcher that is still
 changing is left untouched and retried later. Repair failures warn without failing the requested
 command; manual fallback: `ocx codex-shim install`. Set `codexShimAutoRestore` to `false`, or set
 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` for a process-level opt-out.
@@ -418,6 +421,11 @@ Open the [web dashboard](/guides/web-dashboard/) at `http://localhost:<port>`, a
 if it is not running.
 
 ## Updating
+
+`ocx update` updates OpenCodex itself; it does not update the Codex CLI. Use the
+[system inspection commands](/reference/cli/agents/) to inspect the configured Codex CLI candidate
+with bounded, read-only provenance inspection. `ocx system codex-cli-update check` does not query a
+package registry or install an update.
 
 ### `ocx update [--tag latest|preview]`
 

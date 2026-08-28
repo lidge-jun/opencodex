@@ -193,7 +193,7 @@ ocx service uninstall
 
 在 PATH 上以輕量自動啟動腳本包裝基於腳本的 `codex` 啟動器。真實的 `codex.exe` 目標保持不動，以避免破壞精確的可執行檔呼叫。
 
-若已完成的外部 Codex 更新覆寫了已安裝的 shim，下一個普通 `ocx` 指令會備份穩定的新啟動器並在分派前還原 shim。仍在變動中的啟動器保持不動並稍後重試。修復失敗會發出警告但不會使請求的指令失敗；手動後備：`ocx codex-shim install`。將 `codexShimAutoRestore` 設為 `false`，或設定 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` 以進行行程層級的退出。
+若已完成的外部 Codex 更新覆寫了已安裝的 shim，下一個普通 `ocx` 指令會備份穩定的新啟動器並在分派前還原 shim。零副作用的檢查指令 `ocx system codex-cli-update check` 與保留的 `ocx system codex-cli-update` 命名空間中的無效呼叫都不會執行此修復。仍在變動中的啟動器保持不動並稍後重試。修復失敗會發出警告但不會使請求的指令失敗；手動後備：`ocx codex-shim install`。將 `codexShimAutoRestore` 設為 `false`，或設定 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` 以進行行程層級的退出。
 
 | 子指令 | 動作 |
 | --- | --- |
@@ -223,6 +223,8 @@ ocx codex-shim uninstall
 在 `http://localhost:<port>` 開啟[網頁儀表板](/zh-tw/guides/web-dashboard/)，若代理未執行則自動啟動它。
 
 ## 更新
+
+`ocx update` 更新的是 OpenCodex 本身，而不是 Codex CLI。請使用 [system 檢查指令](/zh-tw/reference/cli/agents/)中的 `ocx system codex-cli-update check`，對已設定的 Codex CLI 候選項進行有界、唯讀的 provenance 檢查。此命令不會查詢 package registry，也不會安裝更新。
 
 ### `ocx update [--tag latest|preview]`
 

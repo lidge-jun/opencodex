@@ -19,6 +19,7 @@ const USAGE = `Usage:
   ocx system sync [--json]
   ocx system codex-app-server [--json]
   ocx system codex-restart --yes [--json]
+  ocx system codex-cli-update check [--json]
   ocx system update check [--channel <latest|preview>] [--json]
   ocx system update run [--channel <latest|preview>] [--restart <on|off>] --yes [--json]
   ocx system update status <job-id> [--json]`;
@@ -95,8 +96,12 @@ async function update(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 }
 
 export async function handleSystemCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
+  const [sub = "status", ...rest] = argv;
+  if (sub === "codex-cli-update") {
+    const { handleCodexCliUpdateCommand } = await import("./codex-cli-update");
+    return await handleCodexCliUpdateCommand(rest);
+  }
   return runCliAction(async () => {
-    const [sub = "status", ...rest] = argv;
     if (sub === "status") await status(rest, deps);
     else if (sub === "settings") await settings(rest, deps);
     else if (sub === "startup") await startup(rest, deps);

@@ -239,13 +239,21 @@ le CLI, l’API, et le GUI utilisent les mêmes octets.
 
 ## Exécution et configuration
 
-### `ocx system <status|settings|startup|diagnostics|sync|update> ...`
+### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 Gérez les paramètres d'exécution sans tête, le démarrage, la synchronisation, les diagnostics et les mises à jour.
 
 ```bash
 ocx system settings --stream-mode eager-relay
 ```
+
+`ocx system update` met à jour OpenCodex lui-même. Utilisez cette commande distincte et en lecture seule pour Codex CLI :
+
+```bash
+ocx system codex-cli-update check --json
+```
+
+`check` n’interroge aucun registre de paquets et inspecte, dans des limites strictes, les éléments de provenance du candidat d’installation configuré, notamment l’emplacement expurgé de l’exécutable et les preuves de propriété. Le contexte de confiance du lanceur publié authentifie uniquement cet instantané du candidat, et non l’exécution réussie de Codex. Comme cette commande ponctuelle n’exécute jamais Codex, les candidats issus de l’environnement ou de l’état persistant restent purement informatifs (`managed: false`, normalement `selection_unattested`) et `selectionAttested` reste `false`. La sortie JSON contient `candidateAvailable`, `candidateVersion`, `candidateSource` et `selectionAttested: false`. Une exécution directe via Bun ou depuis les sources ne fournit pas la preuve du lanceur, ignore les candidats issus de l’environnement ou de l’état persistant et peut signaler `candidate_unavailable`. Sous Windows, cette première étape n’effectue aucune E/S de système de fichiers sur les chemins du candidat ou de configuration. Seul un candidat d’environnement absolu capturé par le lanceur de confiance peut recevoir une étiquette lexicale de bundle d’application ou de gestionnaire de versions ; tous les autres candidats Windows échouent de manière fermée. La commande n’exécute ni Codex ni aucun gestionnaire de paquets, ne répare aucun shim, n’écrit ni dans la configuration ni dans le cache, n’arrête aucun processus et n’installe rien. Les candidats intégrés à une application, issus d’un gestionnaire de versions reconnu, autonomes mais non vérifiés, ou associés à un état de shim ambigu sont signalés comme non gérés ou inconnus et ne sont jamais classés comme gérés.
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 

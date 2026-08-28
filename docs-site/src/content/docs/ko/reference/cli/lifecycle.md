@@ -256,7 +256,7 @@ PATH 항목이 구체적인 실행 파일 또는 런처를 가리키도록 Codex
 런처를 복원합니다.
 
 완료된 외부 Codex 업데이트가 설치된 shim을 덮어쓰면, 다음 일반 `ocx` 명령이 안정적인 새 런처를
-백업하고 명령을 처리하기 전에 shim을 복원합니다. 아직 변경 중인 런처는 건드리지 않고 나중에 다시 시도합니다.
+백업하고 명령을 처리하기 전에 shim을 복원합니다. 부작용 없는 검사 명령 `ocx system codex-cli-update check`와 예약된 `ocx system codex-cli-update` namespace의 잘못된 호출은 이 복구를 수행하지 않습니다. 아직 변경 중인 런처는 건드리지 않고 나중에 다시 시도합니다.
 복구 실패는 요청한 명령을 실패시키지 않고 경고만 표시합니다. 수동 대체 수단은 `ocx codex-shim install`
 입니다. `codexShimAutoRestore`를 `false`로 설정하거나, 프로세스 수준에서 제외하려면
 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`을 설정합니다.
@@ -293,6 +293,8 @@ Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로�
 `http://localhost:<port>`에서 엽니다.
 
 ## 업데이트
+
+`ocx update`는 OpenCodex 자체를 업데이트하며 Codex CLI를 업데이트하지 않습니다. [system 검사 명령](/ko/reference/cli/agents/)의 `ocx system codex-cli-update check`로 설정된 Codex CLI 후보의 provenance를 제한된 읽기 전용 방식으로 확인할 수 있습니다. 이 명령은 package registry를 조회하거나 업데이트를 설치하지 않습니다.
 
 ### `ocx update [--tag latest|preview]`
 

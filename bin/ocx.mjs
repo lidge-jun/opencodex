@@ -23,6 +23,10 @@ import {
 } from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 import { bootRestoreProbe, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
+import {
+  CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
+  isCodexCliUpdateInspectionArgv,
+} from "../src/update/codex-cli-update-launch-policy.mjs";
 
 const PKG = "@bitkyc08/opencodex";
 const require = createRequire(import.meta.url);
@@ -468,7 +472,7 @@ function fail(msg) {
   process.exit(1);
 }
 
-function resolveBun() {
+function resolveBun({ allowInstall = true } = {}) {
   // Keep direct npm-launcher starts aligned with durable service/shim installs:
   // a valid explicit runtime must win even when the bundled dependency exists.
   const override = process.env[BUN_OVERRIDE_ENV]?.trim();
@@ -493,7 +497,7 @@ function resolveBun() {
   // Lazy fallback: --ignore-scripts (or a failed postinstall) leaves the
   // ~450-byte placeholder stub. Run the bun package's own installer once.
   const installJs = join(bunDir, "install.js");
-  if (existsSync(installJs)) {
+  if (allowInstall && existsSync(installJs)) {
     const r = spawnSync(process.execPath, [installJs], { stdio: "inherit" });
     if (r.status === 0) bin = findBunBinary(bunDir);
   }
@@ -512,6 +516,12 @@ if (updateHelpRequested) {
   process.exit(0);
 }
 
+const codexCliUpdateInspection = isCodexCliUpdateInspectionArgv(process.argv);
+if (codexCliUpdateInspection && typeof process.versions.bun === "string") {
+  console.error("opencodex: codex-cli-update inspection must use the published Node launcher.");
+  process.exit(1);
+}
+
 if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstall()) {
   runNpmSelfUpdate();
 }
@@ -519,7 +529,7 @@ if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstal
 // #1849 boot probe: a prior update that lost power (or double-faulted) mid-swap leaves a
 // backup sibling and a broken live tree. Restore before anything tries to run from the
 // broken tree; reap stale backups once the live tree verifies healthy.
-if (isNodeModulesInstall() && !isBunGlobalInstall()) {
+if (!codexCliUpdateInspection && isNodeModulesInstall() && !isBunGlobalInstall()) {
   try {
     const probe = bootRestoreProbe(resolve(here, ".."));
     if (probe.action === "restored") {
@@ -530,7 +540,7 @@ if (isNodeModulesInstall() && !isBunGlobalInstall()) {
   } catch { /* the probe must never block launch */ }
 }
 
-const bunRuntime = resolveBun();
+const bunRuntime = resolveBun({ allowInstall: !codexCliUpdateInspection });
 const bun = bunRuntime.path;
 
 // Run the Bun child asynchronously and FORWARD termination signals to it, then wait
@@ -554,11 +564,29 @@ const bun = bunRuntime.path;
 // interpolation and provider settings legitimately read the project environment.
 const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
   .filter(name => typeof process.env[name] === "string" && process.env[name] !== "");
+const preBunCodexCliPath = typeof process.env.CODEX_CLI_PATH === "string" && process.env.CODEX_CLI_PATH !== ""
+  ? process.env.CODEX_CLI_PATH
+  : null;
+const preBunPath = typeof process.env.PATH === "string" ? process.env.PATH : null;
+const preBunPathExt = typeof process.env.PATHEXT === "string" ? process.env.PATHEXT : null;
+const preBunCodexCliManagerRoots = Object.fromEntries(
+  CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS.flatMap(name => {
+    const value = process.env[name];
+    return typeof value === "string" && value !== "" ? [[name, value]] : [];
+  }),
+);
 const launchProof = randomBytes(32).toString("base64url");
 const launchContext = JSON.stringify({
   version: 1,
   proof: launchProof,
   anthropicEnvSlots: preBunAnthropicSlots,
+  codexCliInspectionEnv: codexCliUpdateInspection ? {
+    codexCliPath: preBunCodexCliPath,
+    path: preBunPath,
+    pathExt: preBunPathExt,
+    managerRoots: preBunCodexCliManagerRoots,
+    configDir: configDir(),
+  } : null,
 });
 const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2)], {
   stdio: "inherit",

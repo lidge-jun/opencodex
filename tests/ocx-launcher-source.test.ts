@@ -28,12 +28,22 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(spawnCall).toContain("[BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source");
 
     // Path and source come from one resolution, so the marker cannot describe another binary.
-    expect(source).toContain("const bunRuntime = resolveBun();");
+    expect(source).toContain("const bunRuntime = resolveBun({ allowInstall: !codexCliUpdateInspection });");
     expect(source).toContain("const bun = bunRuntime.path;");
     expect(source).toContain('return { path: bin, source: "bundled" };');
 
     // The launcher's literal name must match the TypeScript constant it mirrors.
     expect(runtimeSource).toContain('export const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";');
+  });
+
+  test("the updater inspection namespace rejects direct Bun execution of the Node launcher", () => {
+    expect(source).toContain('codexCliUpdateInspection && typeof process.versions.bun === "string"');
+    expect(source).toContain("codex-cli-update inspection must use the published Node launcher");
+  });
+
+  test("the Node launcher proof-binds the bounded version-manager root allowlist", () => {
+    expect(source).toContain("CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS");
+    expect(source).toContain("managerRoots: preBunCodexCliManagerRoots");
   });
 
   test("the long-running Bun child stays hidden under a headless Windows launcher (#1236)", () => {
@@ -84,7 +94,7 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(source).toContain("const overridePath = resolve(override);");
     expect(source).toContain('if (isRealBunBinary(overridePath)) return { path: overridePath, source: "override" };');
 
-    const resolveStart = source.indexOf("function resolveBun() {");
+    const resolveStart = source.indexOf("function resolveBun({ allowInstall = true } = {}) {");
     const overrideCheck = source.indexOf("process.env[BUN_OVERRIDE_ENV]?.trim()", resolveStart);
     const overrideResolve = source.indexOf("resolve(override)", overrideCheck);
     const bundledLookup = source.indexOf("bunDir = bunBinDir()", resolveStart);

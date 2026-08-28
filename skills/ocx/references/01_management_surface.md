@@ -300,6 +300,23 @@ JSON mode: `payload`.
 
 - The GUI reads this state directly; without a verb an agent could not tell whether the Codex app-server was reachable at all.
 
+### `ocx system codex-cli-update check`
+
+Inspect a configured Codex CLI candidate and its ownership provenance.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the redacted provenance report as JSON. |
+
+JSON mode: `envelope`.
+
+- Proof-bound published-launcher context authenticates the configured candidate snapshot, not successful Codex execution; this check does not attest or admit a selected runtime.
+- On Windows this first slice performs no candidate or configuration filesystem I/O: only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels; every other Windows candidate fails closed.
+- Makes no package-registry request.
+- Does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.
+
 ### `ocx claude desktop status`
 
 Applied-vs-desired Claude Desktop state, including staleness, drift, and health.
@@ -530,6 +547,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 29
+- declared capabilities: 30
 - of those, state-changing: 11
 - head-resolved invocations: 2

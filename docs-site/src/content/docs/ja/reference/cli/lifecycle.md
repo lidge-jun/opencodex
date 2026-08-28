@@ -191,7 +191,7 @@ Windows では、タスク スケジューラ エントリを作成するには�
 
 アップグレード時には、現在の検証ガードを持たない既存の Unix shim を再生成して検証します。保存済みランチャーが安全でない場合、OpenCodex は危険な wrapper を残さず、古い shim を削除して元のランチャーを復元します。
 
-完了した外部 Codex アップデートがインストールされている shim を上書きした場合、次の通常の `ocx` コマンドは安定した新しいランチャーをバックアップし、ディスパッチ前に shim を復元します。まだ変更中のランチャーは変更されず、後で再試行されます。修復の失敗は、要求されたコマンドを失敗させることなく警告します。手動フォールバック: `ocx codex-shim install`。 `codexShimAutoRestore` を `false` に設定するか、プロセス レベルのオプトアウトの場合は `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` を設定します。
+完了した外部 Codex アップデートがインストールされている shim を上書きした場合、次の通常の `ocx` コマンドは安定した新しいランチャーをバックアップし、ディスパッチ前に shim を復元します。副作用のない検査コマンド `ocx system codex-cli-update check` と、予約された `ocx system codex-cli-update` 名前空間の不正な呼び出しは、この修復を行いません。まだ変更中のランチャーは変更されず、後で再試行されます。修復の失敗は、要求されたコマンドを失敗させることなく警告します。手動フォールバック: `ocx codex-shim install`。 `codexShimAutoRestore` を `false` に設定するか、プロセス レベルのオプトアウトの場合は `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` を設定します。
 
 |サブコマンド |アクション |
 | --- | --- |
@@ -221,6 +221,8 @@ Windows ステータス トレイ アイコンをインストールして制御�
 `http://localhost:<port>` で [ウェブダッシュボード](/guides/web-dashboard/) を開き、プロキシが実行されていない場合は自動起動します。
 
 ## 更新
+
+`ocx update` は OpenCodex 自体を更新し、Codex CLI は更新しません。[system 検査コマンド](/ja/reference/cli/agents/)の `ocx system codex-cli-update check` を使用すると、設定済みの Codex CLI 候補の provenance を範囲を限定して読み取り専用で確認できます。このコマンドは package registry に問い合わせず、更新をインストールしません。
 
 ### `ocx update [--tag latest|preview]`
 

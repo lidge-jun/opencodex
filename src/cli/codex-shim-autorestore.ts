@@ -19,6 +19,9 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   if (command === "uninstall" || command === "remove") return true;
   // `lab` is read-only inspection; it must not trigger shim side effects.
   if (command === "lab") return true;
+  // The entire updater-inspection namespace is zero-effect, including malformed
+  // or future actions. A later `apply` implementation must own its preflight.
+  if (command === "system" && args[1] === "codex-cli-update") return true;
   return command === "codex-shim" && ["install", "uninstall", "remove"].includes(args[1] ?? "");
 }
 

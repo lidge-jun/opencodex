@@ -179,13 +179,21 @@ opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 
 
 ## 런타임과 설정
 
-### `ocx system <status|settings|startup|diagnostics|sync|update> ...`
+### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 헤드리스 런타임 설정, 시작, 동기화, 진단, 업데이트를 관리합니다.
 
 ```bash
 ocx system settings --stream-mode eager-relay
 ```
+
+`ocx system update`는 OpenCodex 자체를 업데이트합니다. Codex CLI는 다음의 별도 읽기 전용 명령으로 점검합니다.
+
+```bash
+ocx system codex-cli-update check --json
+```
+
+`check`는 패키지 레지스트리를 조회하지 않고, 설정된 설치 후보에 대해 전체 경로를 숨긴 실행 파일 위치와 소유권 근거를 포함한 provenance 정보를 제한된 범위에서 검사합니다. 신뢰할 수 있는 배포 런처 컨텍스트가 인증하는 것은 후보 스냅샷뿐이며, Codex가 성공적으로 실행되었다는 사실은 인증하지 않습니다. 이 단발성 명령은 Codex를 전혀 실행하지 않으므로 환경 또는 저장된 상태에서 얻은 후보는 보고 전용입니다(`managed: false`, 일반적으로 `selection_unattested`). `selectionAttested`는 항상 `false`입니다. JSON 출력에는 `candidateAvailable`, `candidateVersion`, `candidateSource`, `selectionAttested: false`가 포함됩니다. Bun이나 소스에서 직접 실행하면 런처 증거가 없으므로 환경 및 저장된 후보를 무시하고 `candidate_unavailable`을 보고할 수 있습니다. Windows에서는 이 첫 조각이 후보 또는 설정 경로의 파일시스템을 전혀 읽지 않습니다. 배포 런처가 증명한 절대 환경 후보에 한해서 앱 번들 또는 버전 관리자라는 어휘적 표지만 보고하며, 그 밖의 Windows 후보는 모두 실패 닫힘 처리합니다. 이 명령은 Codex나 패키지 관리자를 실행하거나 shim을 복구하지 않고, 설정 또는 캐시 상태를 쓰거나 프로세스를 중지하거나 어떤 것도 설치하지 않습니다. 앱에 포함된 후보, 인식된 버전 관리자의 후보, 검증되지 않은 독립 실행형 후보, shim 상태가 모호한 후보는 관리 대상이 아니거나 알 수 없는 것으로 보고되며, 관리 대상으로 분류되지 않습니다.
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 

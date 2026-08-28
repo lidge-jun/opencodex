@@ -24,7 +24,8 @@ opencodex state.
   authentication, credential pools, quota, custom models, visibility, selected models, and context
   caps.
 - [Agents, routing, and integrations](/reference/cli/agents/) — multi-agent controls, combos,
-  observability, admission keys, client integrations, runtime settings, and validated configuration.
+  observability, admission keys, client integrations, runtime settings, validated configuration, and
+  read-only Codex CLI update inspection.
 
 ## Headless behavior
 
@@ -33,6 +34,19 @@ identity checks rather than maintaining a second configuration path. A stopped o
 is represented as HTTP 503 and produces a nonzero CLI exit. Commands explicitly documented as
 offline configuration operations can instead validate and edit the config file without a live
 proxy.
+
+`ocx system codex-cli-update check` needs no live proxy and makes no package-registry request. It
+inspects bounded provenance metadata for the configured install candidate, including its redacted
+executable location and ownership evidence. Trusted published-launcher context authenticates that candidate snapshot,
+not a successful Codex execution. Because this one-shot command never executes Codex, environment and persisted candidates
+remain report-only (`managed: false`, normally `selection_unattested`) and `selectionAttested` remains `false`.
+The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`, and `selectionAttested`.
+Inspecting the configured candidate requires a trusted published-launcher context;
+a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
+`candidate_unavailable`. On Windows this first slice performs no candidate or configuration filesystem I/O:
+only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels;
+every other Windows candidate fails closed. The command does not install or repair software, execute
+Codex or npm, control a running process, or write configuration/cache state.
 
 List or status is the default where unambiguous. Use `--json` for structured snapshots and
 `ocx observe logs --follow --jsonl` for a streaming request-log feed. Theme, language, navigation,
