@@ -28,6 +28,7 @@ import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
+import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
 function toAnthropicContentPart(p: OcxContentPart): unknown {
@@ -647,57 +648,6 @@ function orphanToolResultText(msg: OcxToolResultMessage): string {
  * user content, so an Anthropic `system` string cannot reach it — the framing has to sit in the
  * first user turn.
  */
-const AGENTROUTER_LANGUAGE_PREAMBLE =
-  "[Instruction: Process the user request below and respond in the appropriate language.]";
-
-/**
- * Exact host match, not a substring.
- *
- * A `hostname.includes("agentrouter")` test also matches `notagentrouter.example` and
- * `agentrouter.org.attacker.example`, which would let an unrelated destination silently
- * receive an injected instruction block. A prompt mutation keyed on a provider's identity
- * must be keyed on that identity exactly.
- */
-function isAgentRouterEndpoint(baseUrl: string): boolean {
-  try {
-    const { hostname } = new URL(baseUrl);
-    return hostname === "agentrouter.org" || hostname.endsWith(".agentrouter.org");
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Prepend the framing as its OWN text block instead of splicing it into the user's string.
- *
- * The distinction matters: rewriting `content` to `${marker}\n\n${original}` edits what the
- * user wrote, and every downstream consumer — logs, retries, an upstream that echoes the turn —
- * then sees a sentence the user never typed as if they had. A separate leading block carries the
- * same signal to the filter while the original text survives byte-for-byte.
- *
- * Only the first user turn is framed, because only the first is what the gateway rejects.
- */
-function applyAgentRouterLanguageFraming(messages: unknown[]): void {
-  const firstUser = messages.find(
-    (m): m is { role: string; content: unknown } =>
-      typeof m === "object" && m !== null && (m as { role?: unknown }).role === "user",
-  );
-  if (!firstUser) return;
-  const preamble = { type: "text", text: AGENTROUTER_LANGUAGE_PREAMBLE };
-  if (typeof firstUser.content === "string") {
-    firstUser.content = firstUser.content === ""
-      ? [preamble]
-      : [preamble, { type: "text", text: firstUser.content }];
-    return;
-  }
-  if (!Array.isArray(firstUser.content)) return;
-  // Idempotence is keyed on the LEADING block being exactly the marker. A substring test would
-  // let a user who quotes the marker later in their own prompt suppress the framing entirely.
-  const [head] = firstUser.content as { type?: unknown; text?: unknown }[];
-  if (head?.type === "text" && head.text === AGENTROUTER_LANGUAGE_PREAMBLE) return;
-  (firstUser.content as unknown[]).unshift(preamble);
-}
-
 function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
