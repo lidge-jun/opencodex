@@ -202,6 +202,35 @@ on Linux, Windows, and macOS.
 
 Do not rerun passing checks on unchanged code merely for additional confidence.
 
+## Cursor Cloud specific instructions
+
+The Cloud Agent image ships Node but not Bun. Install it first:
+
+```bash
+curl -fsSL https://bun.sh/install | bash   # installs ~/.bun/bin/bun
+export PATH="$HOME/.bun/bin:$PATH"
+bun install && (cd gui && bun install)
+```
+
+Run the proxy with `bun run src/cli/index.ts start --port <port>`. `/healthz`
+reports status, `/` serves the dashboard, and the management API requires the
+admin token the server writes to `$OPENCODEX_HOME/admin-api-token` at startup.
+
+`bun run test` has five known environment-only failures in the Cloud Agent
+container. They are not regressions; do not re-investigate them:
+
+- `service diagnostics > status summary exposes the service log path`,
+  `CLI subcommand help > status prints diagnostics without starting the proxy`,
+  and `CLI subcommand help > invalid service and codex-shim usage include
+  remove alias` require a running systemd init; the container's PID 1 is
+  `tini`, so service commands report "systemd not found".
+- `package tree integrity > an in-place rewrite of the same byte length is
+  still a replacement` and `Codex Log Guard inspection > repeat inspection is
+  memoized and invalidated by a write` rely on filesystem mtime granularity
+  the container filesystem does not provide.
+
+Everything else passes (15480 pass / 16 skip / 5 fail as of 2.35.0).
+
 ## Issues and pull requests (agents)
 
 Agent-created issues and PRs must use the repository templates. The gates
