@@ -1906,6 +1906,107 @@ describe("codex account selection order", () => {
     expect(resolveCodexAccountForThread(threadId, config, now + 6, "shared")).toBe("b");
   });
 
+  test("quota detour re-evaluation skips failover-ready cooler candidates", () => {
+    const now = 1_800_000_000_000;
+    const threadId = "quota-detour-failover-candidate";
+    const modelId = "gpt-daybreak-blue-latest";
+    const config = makeConfig({
+      accountPoolStrategy: "quota",
+      activeCodexAccountId: "c",
+      codexAccounts: [
+        { id: "a", email: "a@test", isMain: false },
+        { id: "b", email: "b@test", isMain: false },
+        { id: "c", email: "c@test", isMain: false },
+      ],
+    });
+    saveTestCredential("c");
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 5);
+    updateAccountQuota("c", 10);
+    resetCodexRoutingForManualSelection("c");
+    expect(resolveCodexAccountForThread(threadId, config, now, "shared")).toBe("c");
+    expect(resolveCodexAccountForThreadDetailed(
+      threadId,
+      config,
+      now + 1,
+      "shared",
+      { modelEligibleAccountIds: new Set(["a"]) },
+      modelId,
+    )).toEqual({ status: "selected", accountId: "a" });
+    // B is the highest tier after the detour exists. Filtering only after tier
+    // selection would drop B without ever exposing healthy C to the picker.
+    config.codexAccountPriorities = { b: 2, c: 1 };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      recordCodexUpstreamOutcome(config, "b", 503, {
+        fixedAccount: true,
+        now: now + attempt + 2,
+      });
+    }
+    updateAccountQuota("a", 90);
+    const resolveAt = now + CODEX_TRANSIENT_SOFT_AVOID_MS + 5;
+    const eligible = { modelEligibleAccountIds: new Set(["a", "b", "c"]) };
+
+    expect(previewCodexAccountForRequest(
+      threadId,
+      config,
+      resolveAt,
+      "shared",
+      eligible,
+      modelId,
+    )).toBe("c");
+    expect(resolveCodexAccountForThreadDetailed(
+      threadId,
+      config,
+      resolveAt,
+      "shared",
+      eligible,
+      modelId,
+    )).toEqual({ status: "selected", accountId: "c" });
+    expect(config.activeCodexAccountId).toBe("c");
+    expect(config.activeCodexAccountPinned).toBeUndefined();
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("c");
+  });
+
+  test("ordinary quota affinity re-evaluation skips a failover-ready higher tier", () => {
+    const now = 1_800_000_000_000;
+    const threadId = "ordinary-quota-failover-candidate";
+    const config = makeConfig({
+      accountPoolStrategy: "quota",
+      activeCodexAccountId: "a",
+      codexAccounts: [
+        { id: "a", email: "a@test", isMain: false },
+        { id: "b", email: "b@test", isMain: false },
+        { id: "c", email: "c@test", isMain: false },
+      ],
+    });
+    saveTestCredential("c");
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 5);
+    updateAccountQuota("c", 10);
+    expect(resolveCodexAccountForThread(threadId, config, now, "shared")).toBe("a");
+    config.codexAccountPriorities = { b: 2, c: 1 };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      recordCodexUpstreamOutcome(config, "b", 503, {
+        fixedAccount: true,
+        now: now + attempt + 1,
+      });
+    }
+    updateAccountQuota("a", 90);
+    const resolveAt = now + CODEX_TRANSIENT_SOFT_AVOID_MS + 4;
+
+    expect(previewCodexAccountForRequest(threadId, config, resolveAt, "shared")).toBe("c");
+    expect(resolveCodexAccountForThreadDetailed(
+      threadId,
+      config,
+      resolveAt,
+      "shared",
+    )).toEqual({ status: "selected", accountId: "c" });
+    expect(config.activeCodexAccountId).toBe("c");
+    expect(getEffectiveActiveCodexAccountId(config)).toBe("c");
+  });
+
   test("model preview and final keep a live detour after ordinary affinity cleanup", () => {
     const now = 1_800_000_000_000;
     const threadId = "detour-after-ordinary-cleanup";

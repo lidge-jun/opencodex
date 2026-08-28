@@ -1006,12 +1006,14 @@ function getEligiblePoolAccounts(
   now = Date.now(),
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
+  skipFailoverReadyCandidates = false,
 ): readonly string[] {
   const ids = (config.codexAccounts ?? [])
     .filter(account => isSelectableCodexPoolAccount(account)
       && account.id !== excludeId
       && !isCodexAccountPaused(config, account.id)
-      && !isAccountNeedsReauth(account.id))
+      && !isAccountNeedsReauth(account.id)
+      && (!skipFailoverReadyCandidates || !shouldFailover(config, account.id, now)))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
     .filter(account => !isCodexAccountSoftAvoided(account.id, now))
     .filter(account => isCodexAccountUsable(config, account.id, selectionOptions))
@@ -1024,6 +1026,7 @@ function getEligiblePoolAccounts(
     && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
     && !isCodexAccountSoftAvoided(MAIN_CODEX_ACCOUNT_ID, now)
+    && (!skipFailoverReadyCandidates || !shouldFailover(config, MAIN_CODEX_ACCOUNT_ID, now))
     && isCodexAccountUsable(config, MAIN_CODEX_ACCOUNT_ID, selectionOptions)
   ) {
     ids.unshift(MAIN_CODEX_ACCOUNT_ID);
@@ -1244,10 +1247,18 @@ function pickLowerUsageAccount(
   now: number,
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
+  skipFailoverReadyCandidates = false,
 ): string {
   let best = active;
   let bestUsage = activeUsage;
-  for (const id of getEligiblePoolAccounts(config, active, now, quotaScope, selectionOptions)) {
+  for (const id of getEligiblePoolAccounts(
+    config,
+    active,
+    now,
+    quotaScope,
+    selectionOptions,
+    skipFailoverReadyCandidates,
+  )) {
     const usage = computeCodexUsageScore(
       getAccountQuota(id),
       getPoolAccountPlanForSelection(config, id, selectionOptions),
@@ -1623,6 +1634,7 @@ function previewReusableAffinityAccount(
           now,
           quotaScope,
           selectionOptions,
+          true,
         );
         if (best !== entry.accountId) return best;
       }
@@ -1666,6 +1678,7 @@ function reevaluateAffinityQuota(
     now,
     quotaScope,
     selectionOptions,
+    true,
   );
   return best === entry.accountId ? null : best;
 }
