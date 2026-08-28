@@ -39,3 +39,12 @@ instruction is the maintainer approval for these session-authored PRs.
 - R3 (#2769): reviewer PASS (Avicenna; precedence + claude derivation +
   72 focused tests + clean merge simulation). MERGED squash via --admin,
   branch deleted.
+- R4 (#2801): CI failure root-caused by investigator (Zeno): update-stop-first
+  45s readiness deadline exhausted on loaded runners (46-47s failures on 4+
+  unrelated PRs; catalog diff has no launcher imports, isolated shard).
+  Causal fix 22c073e03 raised the deadline to 90s (derived budget + pinned
+  arithmetic keep it honest). Fresh CI fully green (0F, macos SUCCESS).
+  MERGED squash 7232a60a7. #2802 retargeted to dev BEFORE branch deletion
+  (R1 lesson applied) — but the parent squash still made the old chain
+  CONFLICTING; wire branch cherry-picked onto dev (874f59734, 116 tests +
+  tsc green) and force-pushed; #2802 stayed OPEN base=dev.
