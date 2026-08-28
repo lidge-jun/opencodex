@@ -31,8 +31,9 @@ audit happens first and the disposition follows the evidence.
    - all old blockers fixed and no new ones -> request exact-head maintainer review and merge
      through `scripts/ci/assert-mergeable-review.sh`;
    - some still present -> either the author fixes them, or the PR moves to reimplementation
-     in wp5 with the specific unfixed blockers named;
-   - new blockers -> same, with the new findings recorded.
+     in wp5 with a non-sensitive status recorded;
+   - new blockers -> same disposition. Unresolved security detail stays in gitignored scratch
+     until a public fix ships.
 
 ## Known state to re-verify, not to assume
 
@@ -42,9 +43,9 @@ audit happens first and the disposition follows the evidence.
 - #2638 touches `src/codex/auth-context.ts`, which IS on the hygiene gate's restricted list,
   and its earlier security approval was explicitly scoped to `e06ffbaa8a8e`. Non-author
   security review on the exact final head is mandatory.
-- #2828 touches `src/grok/inject.ts`, whose teardown path can remove config tables; the
-  reviewer's ownership concern must be re-checked against the current parser, since the
-  branch claims to have addressed it.
+- #2828 touches `src/grok/inject.ts` and remains subject to current-head maintainer review.
+  Any unresolved security finding and remediation detail stays in gitignored scratch until
+  a public fix ships.
 - #2828 was earlier assessed as NOT satisfying issue #2830 (excluded-model reference
   clearing). Re-check that claim against the current head before deciding whether #2830 needs
   separate work.

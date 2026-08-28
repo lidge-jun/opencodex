@@ -73,8 +73,8 @@ Two hard constraints on its replacement:
 2. It touches `src/server/responses/core.ts`, so it runs AFTER wp4 and re-verifies against
    the accumulated file.
 
-Its recorded blocker — recovered plaintext persistence — is a credential surface and needs
-non-author security review.
+Its unresolved security finding and remediation notes remain in gitignored scratch until a
+public fix ships. The replacement still requires non-author security review.
 
 ## Ordering constraint for this lane (from the audit)
 
@@ -89,20 +89,19 @@ The verifier for a stale generated surface is `bun run skill:surface:check` (rea
 
 ### #2793 — Codex keyring passthrough (issue #2718)
 
-78 files, +2211/-238, 97 behind, hygiene-blocked as unsponsored_surface, seven unresolved
-current-diff findings including a cache path that overwrites a known managed account id with
-null. This is not a rebase candidate. Extract only the defect issue #2718 actually reports
-(persistent "Needs re-authentication" plus truncated catalog) and implement that narrowly;
-the WebSocket/quota/GUI work is out of scope for a bug campaign.
+78 files, +2211/-238, 97 behind, hygiene-blocked as unsponsored_surface, with seven unresolved
+current-diff findings. This is not a rebase candidate. Extract only the defect issue #2718
+actually reports and implement that narrowly; the WebSocket/quota/GUI work is out of scope
+for a bug campaign. Security-sensitive review detail remains in gitignored scratch until the
+fix ships.
 
 ### #2497 — native main token refresh (issue #2221)
 
-496 behind, CONFLICTING, 20 files across the credential core, with unresolved design
-findings: non-atomic publication (a crash between two writes leaves no auth.json), account-id
-equivalence treated as grant ownership, and one logical replay expanding to as many as nine
-physical sends. The previous campaign already aborted a rebase here on semantic conflicts.
-Reimplement the #2221 refresh defect narrowly on current dev, atomically, with non-author
-security review before merge.
+496 behind, CONFLICTING, and 20 files across the credential core. The previous campaign
+already aborted a rebase here on semantic conflicts, so this is a narrow current-dev
+reimplementation rather than a rebase. Unresolved security findings and remediation notes
+remain in gitignored scratch until a public fix ships. Non-author security review is required
+before merge.
 
 ## Disposition rule for this lane
 

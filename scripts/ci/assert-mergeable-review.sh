@@ -35,14 +35,21 @@ set -euo pipefail
 PR="${1:?usage: assert-mergeable-review.sh <pr-number> [repo]}"
 REPO="${2:-lidge-jun/opencodex}"
 
-meta=$(gh pr view "$PR" --repo "$REPO" --json headRefOid,author,title)
-head=$(printf '%s' "$meta" | jq -r '.headRefOid')
-author=$(printf '%s' "$meta" | jq -r '.author.login')
-
-if [ -z "$head" ] || [ "$head" = "null" ]; then
-  echo "FAIL: could not resolve head SHA for #$PR" >&2
+meta=$(gh pr view "$PR" --repo "$REPO" --json headRefOid,author,title) || {
+  echo "FAIL: could not read required metadata for #$PR" >&2
   exit 2
-fi
+}
+identity=$(printf '%s' "$meta" | jq -er '
+  if (.headRefOid | type) != "string" or (.headRefOid | length) == 0
+    or (.author.login | type) != "string" or (.author.login | length) == 0
+  then error("missing headRefOid or author.login")
+  else [ .headRefOid, (.author.login | ascii_downcase) ] | @tsv
+  end
+') || {
+  echo "FAIL: #$PR metadata is missing headRefOid or author.login" >&2
+  exit 2
+}
+IFS=$'\t' read -r head author <<< "$identity"
 
 # Maintainer roster comes from MAINTAINERS.md itself, not from a hardcoded list here, so
 # the gate cannot drift from the policy document it enforces.
@@ -50,7 +57,8 @@ roster=$(gh api "repos/$REPO/contents/MAINTAINERS.md" --jq .content \
   | base64 -d \
   | sed -n '/^## Current maintainers/,/^## Former maintainers/p' \
   | grep -oE '\[@[A-Za-z0-9-]+\]' \
-  | tr -d '[@]' \
+  | tr -d '@[]' \
+  | jq -Rr 'ascii_downcase' \
   | sort -u)
 
 if [ -z "$roster" ]; then
@@ -64,16 +72,61 @@ reviews=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate --slurp) || {
   exit 2
 }
 
-# Collapse to each reviewer's LATEST substantive review. COMMENTED rows are ignored because
-# they neither approve nor block; APPROVED and CHANGES_REQUESTED are the states that decide.
+# Validate gh's slurped array-of-page-arrays before flattening every review row. Review
+# identity is case-insensitive. COMMENTED is neutral; DISMISSED invalidates an earlier
+# approval; PENDING is not an approval and does not hide a prior submitted blocker.
 latest=$(printf '%s' "$reviews" | jq -c '
-  [ .[] | add? // . ] | flatten
-  | map(select(type == "object" and (.state // "") != ""))
-  | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))
-  | sort_by(.submitted_at // "", .id)
-  | group_by(.user.login)
-  | map(last)
-  | map({login: .user.login, state: .state, commit: .commit_id})
+  def allowed_states: ["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED", "PENDING"];
+  if type != "array" then
+    error("review payload is not a slurped page array")
+  elif any(.[]; type != "array") then
+    error("review payload contains a non-array page")
+  else
+    [ .[][] ]
+    | if any(.[]; type != "object") then
+        error("review payload contains a non-object row")
+      else
+        to_entries
+        | map(
+            .key as $order
+            | .value as $review
+            | if ($review.user.login | type) != "string" or ($review.user.login | length) == 0 then
+                error("review row is missing user.login")
+              elif ($review.state | type) != "string" then
+                error("review row is missing state")
+              else
+                ($review.state | ascii_upcase) as $state
+                | if (allowed_states | index($state)) == null then
+                    error("review row has an unknown state")
+                  else
+                    {
+                      login: ($review.user.login | ascii_downcase),
+                      state: $state,
+                      commit: $review.commit_id,
+                      order: $order
+                    }
+                  end
+              end
+          )
+        | group_by(.login)
+        | map(
+            sort_by(.order) as $rows
+            | ($rows | map(select(.state != "COMMENTED")) | last) as $latest
+            | ($rows | map(select(
+                .state == "APPROVED"
+                or .state == "CHANGES_REQUESTED"
+                or .state == "DISMISSED"
+              )) | last) as $submitted
+            | select($latest != null)
+            | {
+                login: $rows[0].login,
+                state: $latest.state,
+                commit: $latest.commit,
+                submitted_state: ($submitted.state // null)
+              }
+          )
+      end
+  end
 ') || {
   echo "FAIL: could not parse the review payload for #$PR" >&2
   exit 2
@@ -81,7 +134,13 @@ latest=$(printf '%s' "$reviews" | jq -c '
 
 # A maintainer's live objection blocks regardless of anyone else's approval.
 blockers=$(printf '%s' "$latest" | jq -r --argjson roster "$(printf '%s\n' "$roster" | jq -R . | jq -s .)" '
-  .[] | select(.state == "CHANGES_REQUESTED") | select(.login as $l | $roster | index($l)) | .login
+  .[]
+  | select(
+      .state == "CHANGES_REQUESTED"
+      or (.state == "PENDING" and .submitted_state == "CHANGES_REQUESTED")
+    )
+  | select(.login as $l | $roster | index($l))
+  | .login
 ')
 if [ -n "$blockers" ]; then
   echo "FAIL: #$PR has an outstanding maintainer CHANGES_REQUESTED from: $(printf '%s' "$blockers" | tr '\n' ' ')" >&2
@@ -111,6 +170,23 @@ if [ -z "$qualified" ]; then
   echo "  author:            $author" >&2
   echo "  approvals at head: ${approvals:-(none)}" >&2
   echo "  maintainer roster: $(printf '%s' "$roster" | tr '\n' ' ')" >&2
+  exit 1
+fi
+
+# The review work above may race a contributor push. Re-read the head immediately before
+# success so this verdict and the printed --match-head-commit instruction name one SHA.
+final_meta=$(gh pr view "$PR" --repo "$REPO" --json headRefOid) || {
+  echo "FAIL: could not re-read head SHA for #$PR" >&2
+  exit 2
+}
+final_head=$(printf '%s' "$final_meta" | jq -er '
+  .headRefOid | select(type == "string" and length > 0)
+') || {
+  echo "FAIL: could not resolve final head SHA for #$PR" >&2
+  exit 2
+}
+if [ "$final_head" != "$head" ]; then
+  echo "FAIL: #$PR head changed during review validation ($head -> $final_head)" >&2
   exit 1
 fi
 
