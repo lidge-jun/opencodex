@@ -33,3 +33,6 @@ instruction is the maintainer approval for these session-authored PRs.
   force-pushed the branch, opened successor PR #2803 vs dev.
   LESSON for R4/R5: retarget the child to dev BEFORE merging the parent with
   --delete-branch, or merge parent without branch deletion.
+- R2 (#2803, successor of #2795): CI 23 ok / 0 fail (CodeRabbit status
+  marker non-required); prior audits stand (cherry-pick clean). MERGED
+  squash via --admin, branch deleted.
