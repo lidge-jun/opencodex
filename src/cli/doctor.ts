@@ -24,7 +24,9 @@ import { probeNativeProfileRecoveryState, resolveNativeProfileContext } from "..
 import { NativeProfileError } from "../codex/native-profile-types";
 import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
 import { scanCodexAgentRolesWithTomlModelFallback } from "../codex/subagent-model-fallback";
-import { findCodexOnPath, isWindowsInteropDir } from "../codex/shim";
+import { diagnoseCodexShim, findCodexOnPath, isWindowsInteropDir, type CodexShimDiagnostic } from "../codex/shim";
+import { providerTableString, rootTomlString } from "../codex/injected-marker";
+import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
 import {
   inspectCodexCoordinator,
@@ -383,6 +385,32 @@ export function collectProviderApiKeyDiagnostics(
     });
   }
   return rows;
+}
+
+export type CodexEnvKeyReadinessDiagnostic = {
+  envName: string;
+  shimState: "missing" | "unhealthy";
+  detail: string;
+  action: string;
+};
+
+/** Warn when routed Codex cannot obtain its configured admission token at launch. */
+export function collectCodexEnvKeyReadiness(
+  configText: string | null,
+  env: EnvMap,
+  shim: CodexShimDiagnostic,
+  serviceTokenPresent: boolean,
+): CodexEnvKeyReadinessDiagnostic | null {
+  if (!configText || rootTomlString(configText, "model_provider") !== "opencodex") return null;
+  const envName = providerTableString(configText, "opencodex", "env_key")?.trim();
+  if (!envName || env[envName]?.trim() || shim.healthy || !serviceTokenPresent) return null;
+  const shimState = shim.installed ? "unhealthy" : "missing";
+  return {
+    envName,
+    shimState,
+    detail: `Codex uses env_key ${envName}, but that variable is unset and the OpenCodex shim is ${shimState}; the service token file exists but plain Codex does not load it`,
+    action: `Run 'ocx codex-shim install' to repair launch-time token injection, or export ${envName} in the process that starts Codex`,
+  };
 }
 
 export function collectConfiguredProxy(): ConfiguredProxyDiagnostic {
@@ -980,6 +1008,19 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   }
 
   const doctorConfig = readConfigDiagnostics().config;
+  const codexConfigPath = join(resolveCodexHomeDirImpl(), "config.toml");
+  const codexConfigText = (() => {
+    try { return readFileSync(codexConfigPath, "utf8"); } catch { return null; }
+  })();
+  const serviceTokenPresent = (() => {
+    try { return readFileSync(serviceApiTokenFilePath(), "utf8").trim().length > 0; } catch { return false; }
+  })();
+  const codexEnvKeyReadiness = collectCodexEnvKeyReadiness(
+    codexConfigText,
+    process.env,
+    diagnoseCodexShim(),
+    serviceTokenPresent,
+  );
   const startup = collectStartupHealth(doctorConfig);
   console.log("\nCodex restart safety");
   console.log(`  ${startup.rebootSafe ? "ok " : "!! "} ${startupHealthSummary(startup)}`);
@@ -1042,6 +1083,14 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     for (const row of providerApiKeys) {
       console.log(`  !!     ${row.detail}`);
     }
+  }
+
+  console.log("\nCodex env_key launch readiness");
+  if (codexEnvKeyReadiness) {
+    console.log(`  !!     ${codexEnvKeyReadiness.detail}`);
+    console.log(`         Action: ${codexEnvKeyReadiness.action}`);
+  } else {
+    console.log("  ok     no broken OpenCodex env_key launch path detected");
   }
 
   console.log("\nRunning proxy process proxy env (presence only)");
@@ -1175,6 +1224,7 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   for (const row of providerApiKeys) {
     hints.push(`${row.detail}. Set ${row.envName} in the shell that starts the proxy, or store a literal key in config (value hidden here).`);
   }
+  if (codexEnvKeyReadiness) hints.push(`${codexEnvKeyReadiness.detail}. ${codexEnvKeyReadiness.action}.`);
   const anyDrvfs = paths.some(p => detectFsType(p.path, mounts).isDrvfs || detectFsType(p.path, mounts).isMntDrive);
   const noProxy = currentProxyEnv.every(p => !p.present) && !configuredProxy.present;
   if (!startup.rebootSafe) {
