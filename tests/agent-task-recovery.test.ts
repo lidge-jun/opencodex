@@ -551,7 +551,7 @@ describe("agent task recovery (opt-in, default off)", () => {
     expect(forwardedBody).not.toContain("capture_assignment");
   });
 
-  test("does not enable recovery inside combo attempts", async () => {
+  test("fails closed after a single failed combo recovery pass", async () => {
     const config = routedConfig();
     config.combos = {
       routed: {
@@ -559,10 +559,10 @@ describe("agent task recovery (opt-in, default off)", () => {
         targets: [{ provider: "xai", model: "grok-4.5" }],
       },
     };
-    let fetchCalls = 0;
-    globalThis.fetch = (async () => {
-      fetchCalls += 1;
-      throw new Error("combo must fail before dispatch");
+    const fetchedUrls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      fetchedUrls.push(String(input));
+      throw new Error("every upstream call must fail");
     }) as typeof fetch;
 
     const response = await post(
@@ -573,7 +573,8 @@ describe("agent task recovery (opt-in, default off)", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(fetchCalls).toBe(0);
+    expect(fetchedUrls).toHaveLength(1);
+    expect(fetchedUrls[0]).toContain("chatgpt.com/backend-api/codex/responses");
     expect(await response.json()).toMatchObject({
       error: { code: "unreadable_encrypted_agent_task" },
     });
