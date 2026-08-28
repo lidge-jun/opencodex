@@ -1202,6 +1202,13 @@ function canonicalForwardSystemText(item: Record<string, unknown>): string | nul
   return text;
 }
 
+/** Only message items may carry privileged system instructions. */
+function isCanonicalForwardSystemMessage(item: unknown): item is Record<string, unknown> {
+  return isPlainObject(item)
+    && (item.type === undefined || item.type === "message")
+    && item.role === "system";
+}
+
 /**
  * The public Responses API accepts input system messages and `truncation`, but the canonical
  * ChatGPT Codex forward endpoint rejects both. Fold only fully textual system messages into the
@@ -1225,7 +1232,7 @@ function normalizeCanonicalForwardPromptEnvelope(body: unknown): unknown {
   let sawSystemMessage = false;
   let canFoldAllSystemMessages = true;
   for (const item of input) {
-    if (!isPlainObject(item) || item.role !== "system") continue;
+    if (!isCanonicalForwardSystemMessage(item)) continue;
     sawSystemMessage = true;
     const text = canonicalForwardSystemText(item);
     if (text === null) {
@@ -1239,7 +1246,7 @@ function normalizeCanonicalForwardPromptEnvelope(body: unknown): unknown {
   const next: Record<string, unknown> = { ...body };
   if (stripTruncation) delete next.truncation;
   if (sawSystemMessage && canFoldAllSystemMessages) {
-    next.input = input.filter(item => !isPlainObject(item) || item.role !== "system");
+    next.input = input.filter(item => !isCanonicalForwardSystemMessage(item));
     const folded = foldedText.join("\n\n");
     if (folded !== "") {
       const existing = typeof body.instructions === "string" ? body.instructions : "";
