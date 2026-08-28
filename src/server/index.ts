@@ -442,6 +442,18 @@ function attachLiveSidebandUpstream(
 // trackSseForRequestLog(
 // export function relaySseWithHeartbeat
 
+const REQUEST_LOG_ID_RESPONSE_HEADER = "x-opencodex-request-id";
+
+function withRequestLogId(response: Response, requestId: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set(REQUEST_LOG_ID_RESPONSE_HEADER, requestId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export interface StartServerDeps {
   /** Test-only seam; production always initializes its own management credential state. */
   managementAuthState?: ManagementAuthState;
@@ -1426,7 +1438,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               finalizeNativePassthroughLog(499, { closeReason: "client_cancel" });
             },
           });
-          return withCors(responseWithDeferredRequestLog(response, requestId, start, logCtx), req, policy);
+          return withRequestLogId(
+            withCors(responseWithDeferredRequestLog(response, requestId, start, logCtx), req, policy),
+            requestId,
+          );
         });
       }
 
