@@ -100,6 +100,7 @@ import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregi
 import type { AdmissionLease } from "../../lib/admission";
 import { redactSecretString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { isRateLimitOrQuotaFailureMessage } from "../../lib/errors";
 import { supportedLadderFor } from "../effort-policy";
 import {
   beginRequestAttempt,
@@ -136,8 +137,61 @@ import {
 } from "./core";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
+import { sessionLaneIdFromRequest } from "../request-log-conversation";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
+
+const COMPACT_HANDOFF_ROUTE_TTL_MS = 24 * 60 * 60_000;
+const COMPACT_HANDOFF_ROUTE_MAX_ENTRIES = 2_048;
+const COMPACT_HANDOFF_MODEL_MAX_LENGTH = 512;
+
+interface CompactHandoffRoute {
+  model: string;
+  lastUsedAt: number;
+}
+
+/**
+ * The Codex client does not send its newly selected model on an automatic
+ * previous-model compact request. Keep the last route that demonstrably compacted
+ * this same thread so a quota-blocked previous model has one safe fallback target.
+ */
+const compactHandoffRoutes = new Map<string, CompactHandoffRoute>();
+
+function pruneCompactHandoffRoutes(now: number): void {
+  for (const [key, entry] of compactHandoffRoutes) {
+    if (now - entry.lastUsedAt > COMPACT_HANDOFF_ROUTE_TTL_MS) compactHandoffRoutes.delete(key);
+  }
+  while (compactHandoffRoutes.size > COMPACT_HANDOFF_ROUTE_MAX_ENTRIES) {
+    const oldest = compactHandoffRoutes.keys().next().value;
+    if (typeof oldest !== "string") return;
+    compactHandoffRoutes.delete(oldest);
+  }
+}
+
+function rememberCompactHandoffRoute(req: Request, model: string, now = Date.now()): void {
+  const key = sessionLaneIdFromRequest(req.headers);
+  if (!key || model.length > COMPACT_HANDOFF_MODEL_MAX_LENGTH) return;
+  pruneCompactHandoffRoutes(now);
+  compactHandoffRoutes.delete(key);
+  compactHandoffRoutes.set(key, { model, lastUsedAt: now });
+  pruneCompactHandoffRoutes(now);
+}
+
+function forgetCompactHandoffRoute(req: Request): void {
+  const key = sessionLaneIdFromRequest(req.headers);
+  if (key) compactHandoffRoutes.delete(key);
+}
+
+function compactHandoffRoute(req: Request, previousModel: string, now = Date.now()): string | null {
+  const key = sessionLaneIdFromRequest(req.headers);
+  if (!key) return null;
+  pruneCompactHandoffRoutes(now);
+  const entry = compactHandoffRoutes.get(key);
+  if (!entry || entry.model === previousModel) return null;
+  compactHandoffRoutes.delete(key);
+  compactHandoffRoutes.set(key, { ...entry, lastUsedAt: now });
+  return entry.model;
+}
 
 export interface HandleResponsesCompactOptions {
   nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
@@ -750,19 +804,56 @@ export async function handleResponsesCompact(
       upstream.headers.get("x-codex-tertiary-reset-at"),
     ].filter(Boolean);
     const buffered = await bufferCompactResponse(upstream, req.signal);
+    const bufferedErrorText = buffered.ok
+      ? ""
+      : await buffered.clone().text().catch(() => "");
+    const explicitQuotaStatus = buffered.status === 429 || buffered.status === 402;
+    const bodyInferredQuota = !buffered.ok
+      && !explicitQuotaStatus
+      && isRateLimitOrQuotaFailureMessage(bufferedErrorText);
+    const quotaFailure = explicitQuotaStatus || bodyInferredQuota;
     // Record pool health only after the body is fully delivered (or definitively failed).
     // A premature 200 would clear soft-avoid while the client still sees a buffer 502.
     if (buffered.status === 499) {
       recordCompactPoolOutcome(outcomeCtx, 499);
       return buffered;
     }
-    // Always record the real upstream status: a local buffering failure after a
-    // 200 upstream response must not soft-avoid a healthy account or rotate a thread.
-    recordCompactPoolOutcome(outcomeCtx, upstream.status, { retryAfter, resetAt });
+    // A body-confirmed quota failure can arrive behind a generic 5xx. Record it as
+    // quota evidence; otherwise preserve the real upstream status so a local buffering
+    // failure after a 200 cannot soft-avoid a healthy account or rotate a thread.
+    recordCompactPoolOutcome(outcomeCtx, bodyInferredQuota ? 429 : upstream.status, { retryAfter, resetAt });
     // Lift usage and response metadata from the buffered upstream JSON into the
     // request log; the routed branch gets the same through handleResponses. The
     // synthetic buffer errors are not upstream bodies and stay uninspected.
-    if (buffered.ok) inspectResponseLogJson(logCtx, await buffered.clone().text());
+    if (buffered.ok) {
+      inspectResponseLogJson(logCtx, await buffered.clone().text());
+      forgetCompactHandoffRoute(req);
+    } else if (quotaFailure) {
+      const fallbackModel = compactHandoffRoute(req, raw.model);
+      if (fallbackModel && !req.signal.aborted) {
+        const fallbackReq = new Request(req.url, {
+          method: "POST",
+          headers: req.headers,
+          body: JSON.stringify({ ...raw, model: fallbackModel }),
+          signal: req.signal,
+        });
+        try {
+          const fallback = await handleResponsesCompact(
+            fallbackReq,
+            config,
+            logCtx,
+            turnAdmissionLease,
+            admission,
+            options,
+          );
+          if (fallback.ok || fallback.status === 499) return fallback;
+          await fallback.body?.cancel().catch(() => undefined);
+        } catch {
+          // The previous-model rejection is the authoritative failure when the
+          // remembered handoff route can no longer compact this thread.
+        }
+      }
+    }
     return buffered;
     } finally {
       releaseUpstreamHostAdmission(compactHostAdmissionLease);
@@ -855,9 +946,11 @@ export async function handleResponsesCompact(
   // The canonical Responses stream returns a real OpenAI-encrypted compaction item. OCX cannot
   // and should not decrypt it; /responses/compact callers can consume that item directly.
   if (accountGatedCompactWireModel) {
-    return new Response(JSON.stringify({ output: compactionItems }), {
+    const result = new Response(JSON.stringify({ output: compactionItems }), {
       headers: { "Content-Type": "application/json" },
     });
+    rememberCompactHandoffRoute(req, raw.model);
+    return result;
   }
   const encrypted = compactionItems[0]!.encrypted_content;
   const decoded = typeof encrypted === "string" ? decodeCompactionSummary(encrypted) : null;
@@ -867,5 +960,6 @@ export async function handleResponsesCompact(
   }
   const summary = decoded;
   const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
+  rememberCompactHandoffRoute(req, raw.model);
   return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
 }

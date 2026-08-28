@@ -1010,6 +1010,91 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   });
 
+  test("a quota-blocked previous-model compact retries the same thread's successful routed handoff target (#2723)", async () => {
+    await withPoolEnv("ocx-compact-routed-handoff-", async config => {
+      config.providers.deepseek = {
+        adapter: "openai-chat",
+        baseUrl: "https://api.deepseek.com",
+        authMode: "key",
+        apiKey: "deepseek-test-key",
+        models: ["deepseek-v4-flash"],
+      };
+      config.providers["openai-apikey"] = {
+        adapter: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authMode: "key",
+        apiKey: "openai-test-key",
+        models: ["gpt-5.6-sol"],
+      };
+      const headers = { "x-codex-parent-thread-id": "compact-routed-handoff-thread" };
+      const calls: Array<{ model: string; nativeCompact: boolean }> = [];
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+        const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+        const nativeCompact = url.endsWith("/responses/compact");
+        calls.push({ model: body.model ?? "", nativeCompact });
+        if (nativeCompact) {
+          return Response.json({ error: { message: "The usage limit has been reached" } }, {
+            status: 502,
+          });
+        }
+        return jsonResponse(completedPayload("DeepSeek handoff summary"));
+      }) as typeof fetch;
+
+      const manual = await handleResponsesCompact(
+        compactionRequest(
+          baseCompactionBody({ model: "deepseek/deepseek-v4-flash" }),
+          undefined,
+          headers,
+        ),
+        config,
+        { model: "", provider: "" },
+      );
+      expect(manual.status).toBe(200);
+      expect(calls).toEqual([{ model: "deepseek-v4-flash", nativeCompact: false }]);
+      calls.length = 0;
+
+      const unrelated = await handleResponsesCompact(
+        compactionRequest(
+          baseCompactionBody({ model: "openai-apikey/gpt-5.6-sol" }),
+          undefined,
+          { "x-codex-parent-thread-id": "different-compact-thread" },
+        ),
+        config,
+        { model: "", provider: "" },
+      );
+      expect(unrelated.status).toBe(502);
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.every(call => call.model === "gpt-5.6-sol" && call.nativeCompact)).toBe(true);
+      calls.length = 0;
+
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const automatic = await handleResponsesCompact(
+        compactionRequest(
+          baseCompactionBody({ model: "openai-apikey/gpt-5.6-sol" }),
+          undefined,
+          headers,
+        ),
+        config,
+        logCtx,
+      );
+
+      expect(automatic.status).toBe(200);
+      const output = await automatic.json() as { output?: unknown[] };
+      expect(output.output?.length).toBeGreaterThan(0);
+      expect(logCtx.provider).toBe("deepseek");
+      expect(calls.at(-1)).toEqual({ model: "deepseek-v4-flash", nativeCompact: false });
+      expect(calls.slice(0, -1).length).toBeGreaterThan(0);
+      expect(calls.slice(0, -1).every(call => (
+        call.model === "gpt-5.6-sol" && call.nativeCompact
+      ))).toBe(true);
+    });
+  });
+
   test("with no eligible alternate the first rejection is returned with its backoff headers", async () => {
     await withPoolEnv("ocx-compact-alt-none-", async config => {
       // Single-account pool: nothing to fail over to.
