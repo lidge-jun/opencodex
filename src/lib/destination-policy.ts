@@ -82,7 +82,13 @@ function classifyIpv6(hostname: string): DestinationAssessment {
   // Decode hex IPv4-mapped IPv6: ::ffff:7f00:1 → 127.0.0.1
   // The dotted-decimal regex above only matches ::ffff:127.0.0.1; without this,
   // hex form bypasses all private/loopback checks (hextet is 0 → classified "public").
-  const hexMapped = hostname.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  // Resolvers may also emit the equivalent form with an explicit zero group, e.g.
+  // ::ffff:0:c612:1b for 198.18.0.27 (observed from Clash/Surge/Mihomo fake-IP DNS).
+  // Without the optional group that spelling missed this branch and fell through to the
+  // generic "non-global address" tail, which both hid wrapped loopback/private/metadata
+  // addresses from classifyIpv4 and made the benchmark-address opt-in in
+  // resolvePublicAddresses unreachable (issue #2810).
+  const hexMapped = hostname.match(/^::ffff:(?:0{1,4}:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
   if (hexMapped) {
     const hi = Number.parseInt(hexMapped[1], 16);
     const lo = Number.parseInt(hexMapped[2], 16);
@@ -377,4 +383,3 @@ export async function resolvePublicAddresses(
 export async function assertUrlResolvesPublic(url: string): Promise<void> {
   await resolvePublicAddresses(url);
 }
-

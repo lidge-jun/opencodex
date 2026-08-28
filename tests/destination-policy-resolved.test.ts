@@ -253,3 +253,65 @@ describe("resolvePublicAddresses — caller-specific diagnostics", () => {
     )).rejects.toThrow("benchmark address (198.19.7.9)");
   });
 });
+
+describe("classifyIpv6 — IPv4-mapped with an explicit zero group (#2810)", () => {
+  // Resolvers may spell an IPv4-mapped address as ::ffff:0:<hi>:<lo> instead of
+  // ::ffff:<hi>:<lo>. Both decode to the same IPv4, so both must reach classifyIpv4.
+  // Before the fix the zero-group form fell through to the "non-global address" tail,
+  // which hid wrapped loopback/private/metadata addresses from IPv4 classification and
+  // left the benchmark opt-in in resolvePublicAddresses unreachable behind fake-IP DNS.
+
+  test("a wrapped benchmark address is classified as benchmark, not non-global", () => {
+    for (const host of ["::ffff:0:c612:1b", "::ffff:c612:1b"]) {
+      expect(providerDestinationConfigError("p", provider(`https://[${host}]/v1`)))
+        .toContain("benchmark address");
+    }
+  });
+
+  test("a wrapped loopback, private, or metadata IPv4 stays blocked with its precise detail", () => {
+    const cases: [string, string][] = [
+      ["::ffff:0:7f00:1", "loopback address"],
+      ["::ffff:0:a00:1", "private-network address"],
+      ["::ffff:0:c0a8:1", "private-network address"],
+      // 169.254.169.254 is the cloud metadata IP, so it lands on the stronger blocklist
+      // rather than the generic link-local rule.
+      ["::ffff:0:a9fe:a9fe", "blocked metadata endpoint"],
+    ];
+    for (const [host, detail] of cases) {
+      expect(providerDestinationConfigError("p", provider(`https://[${host}]/v1`))).toContain(detail);
+    }
+  });
+
+  test("a wrapped public IPv4 is still accepted", () => {
+    expect(providerDestinationConfigError("p", provider("https://[::ffff:0:5db8:d822]/v1"))).toBeNull();
+  });
+
+  test("more than two hex groups after ::ffff: are not decoded", () => {
+    expect(providerDestinationConfigError("p", provider("https://[::ffff:0:0:c612:1b]/v1")))
+      .toContain("non-global");
+  });
+
+  test("provider discovery admits the zero-group fake-IP answer under the benchmark opt-in", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "::ffff:0:c612:1b", family: 6 }]);
+    const resolved = await resolvePublicAddresses(
+      "https://fakeip.example.com/v1/models",
+      { context: "provider URL", allowBenchmarkAddresses: true },
+    );
+    // Not marked private, so the caller keeps its HTTP(S)_PROXY route (#1748).
+    expect(resolved.privateNetwork).toBe(false);
+  });
+
+  test("without the opt-in the same answer is still rejected", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "::ffff:0:c612:1b", family: 6 }]);
+    await expect(resolvePublicAddresses("https://fakeip.example.com/img.png"))
+      .rejects.toThrow("benchmark address");
+  });
+
+  test("a wrapped loopback answer is never admitted by the benchmark opt-in", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "::ffff:0:7f00:1", family: 6 }]);
+    await expect(resolvePublicAddresses(
+      "https://rebind.example.com/v1/models",
+      { context: "provider URL", allowBenchmarkAddresses: true },
+    )).rejects.toThrow("loopback address");
+  });
+});
