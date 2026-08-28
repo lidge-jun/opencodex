@@ -372,10 +372,10 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
   expect(body).not.toContain("failed writing");
 });
 
-test("the route inventory contains exactly the specified 7 + 13 + 2 + 2 convergence calls", () => {
+test("the route inventory contains exactly the specified 7 + 14 + 2 + 2 convergence calls", () => {
   const counts = Object.fromEntries([
     ["provider-routes.ts", 7],
-    ["model-routes.ts", 13],
+    ["model-routes.ts", 14],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 2],
   ].map(([file, expected]) => {
@@ -387,7 +387,7 @@ test("the route inventory contains exactly the specified 7 + 13 + 2 + 2 converge
   }));
   expect(counts).toEqual({
     "provider-routes.ts": 7,
-    "model-routes.ts": 13,
+    "model-routes.ts": 14,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 2,
   });

@@ -84,6 +84,7 @@ export interface OpencodeProxyModelRow {
   native?: boolean;
   disabled?: boolean;
   displayName?: string;
+  displayNameSource?: "operator" | "provider" | "fallback";
   contextWindow?: number;
 }
 
@@ -314,7 +315,7 @@ export function opencodeCatalogFromProxyRows(
       provider: row.provider,
       id: row.id,
       contextWindow: row.contextWindow,
-      displayName: row.displayName,
+      displayName: row.displayNameSource === "fallback" ? undefined : row.displayName,
     });
   }
   return catalog;
