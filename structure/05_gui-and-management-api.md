@@ -5,6 +5,18 @@
 The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui`
 starts the proxy when needed and opens `http://localhost:<port>`.
 
+Both the browser application and Vite configuration compile with TypeScript `strict` mode.
+Oxlint additionally rejects explicit `any` in maintained GUI source. Boundary data still enters as
+`unknown` and is narrowed by the page/resource owner rather than weakening the project compiler.
+
+[Decision Log]
+- 목적과 의도: Make the GUI enforce the same no-implicit-any baseline already expected by its source and lint rules.
+- 기존 구현 및 제약 조건: GUI code carried no explicit `any` and compiled under a strict diagnostic pass, but both project configs omitted `strict`, so future implicit-any and nullable-flow regressions were not compiler errors.
+- 검토한 주요 대안: Rely on Oxlint alone; enable only `noImplicitAny`; or enable the complete strict family for both the browser and Vite config projects.
+- 선택한 방식: Enable `strict` in `tsconfig.app.json` and `tsconfig.node.json`.
+- 다른 대안 대신 이 방식을 선택한 이유: Lint does not provide full control-flow or nullability analysis, and a partial compiler flag would leave two different type-safety contracts.
+- 장점, 단점 및 영향: New GUI code receives the complete strict checks with no runtime change. Dependency declaration issues now fail the normal GUI build instead of remaining latent.
+
 All ordinary HTTP responses (excluding successful WebSocket upgrades) include `X-Frame-Options: DENY` and
 `Content-Security-Policy: frame-ancestors 'none'`. This prevents another page from framing the local
 dashboard or management responses. Embedding the dashboard in an iframe is intentionally

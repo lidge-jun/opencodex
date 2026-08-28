@@ -145,6 +145,23 @@ function pathForProtocol(protocol: string): string {
   return "/responses";
 }
 
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+/**
+ * JSON property reads historically tolerated scalar and array roots but threw for null.
+ * Preserve that boundary while keeping untrusted payloads out of the type system.
+ */
+function rootJsonFields(value: unknown): Record<string, unknown> {
+  if (value === null || value === undefined) {
+    throw new TypeError("expected a non-null JSON payload");
+  }
+  return jsonRecord(value) ?? {};
+}
+
 /** Upstream HTTP path for a trusted live-route request (CL-03 / CL-08 production dispatch). */
 export function liveUpstreamRequestPath(protocol: string): string {
   return pathForProtocol(protocol);
@@ -163,17 +180,25 @@ function chatObservation(body: string, status: number): NormalizedObservation {
       if (!line) continue;
       const payload = line.slice(5).trim();
       if (!payload || payload === "[DONE]") { if (payload === "[DONE]") terminal = true; continue; }
-      let json: any;
-      try { json = JSON.parse(payload); } catch { continue; }
-      for (const choice of Array.isArray(json.choices) ? json.choices : []) {
-        if (typeof choice?.delta?.content === "string") text += choice.delta.content;
+      let parsedJson: unknown;
+      try { parsedJson = JSON.parse(payload) as unknown; } catch { continue; }
+      const json = rootJsonFields(parsedJson);
+      for (const rawChoice of Array.isArray(json.choices) ? json.choices : []) {
+        const choice = jsonRecord(rawChoice);
+        const delta = jsonRecord(choice?.delta);
+        if (typeof delta?.content === "string") text += delta.content;
         if (choice?.finish_reason != null) terminal = true;
-        for (const call of Array.isArray(choice?.delta?.tool_calls) ? choice.delta.tool_calls : []) {
-          const idx = Number.isInteger(call?.index) ? call.index : toolParts.size;
+        for (const rawCall of Array.isArray(delta?.tool_calls) ? delta.tool_calls : []) {
+          const call = jsonRecord(rawCall);
+          const fn = jsonRecord(call?.function);
+          const rawIndex = call?.index;
+          const idx = typeof rawIndex === "number" && Number.isInteger(rawIndex)
+            ? rawIndex
+            : toolParts.size;
           const prior = toolParts.get(idx) ?? { id: "", name: "", arguments: "" };
           if (typeof call?.id === "string") prior.id = call.id;
-          if (typeof call?.function?.name === "string") prior.name = call.function.name;
-          if (typeof call?.function?.arguments === "string") prior.arguments += call.function.arguments;
+          if (typeof fn?.name === "string") prior.name = fn.name;
+          if (typeof fn?.arguments === "string") prior.arguments += fn.arguments;
           toolParts.set(idx, prior);
         }
       }
@@ -182,12 +207,16 @@ function chatObservation(body: string, status: number): NormalizedObservation {
       output.push({ type: "function_call", call_id: row.id, name: row.name, arguments: row.arguments });
     }
   } else {
-    const json = JSON.parse(body) as any;
-    const choice = Array.isArray(json.choices) ? json.choices[0] : undefined;
-    if (typeof choice?.message?.content === "string") text = choice.message.content;
+    const json = rootJsonFields(JSON.parse(body) as unknown);
+    const choice = jsonRecord(Array.isArray(json.choices) ? json.choices[0] : undefined);
+    const message = jsonRecord(choice?.message);
+    if (typeof message?.content === "string") text = message.content;
     terminal = choice?.finish_reason != null;
-    for (const call of Array.isArray(choice?.message?.tool_calls) ? choice.message.tool_calls : []) {
-      output.push({ type: "function_call", call_id: call.id, name: call.function?.name, arguments: call.function?.arguments });
+    for (const rawCall of Array.isArray(message?.tool_calls) ? message.tool_calls : []) {
+      const call = jsonRecord(rawCall);
+      if (!call) throw new TypeError("expected an OpenAI chat tool call object");
+      const fn = jsonRecord(call?.function);
+      output.push({ type: "function_call", call_id: call.id, name: fn?.name, arguments: fn?.arguments });
     }
   }
   if (text) output.unshift({ type: "message", content: [{ type: "output_text", text }] });

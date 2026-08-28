@@ -173,7 +173,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }, [oauthStatus, codexPool.accounts, codexPool.loadState, codexActiveNeedsReauth]);
 
   const pools = useProviderAccountPools({
-    apiBase, t: t as unknown as Parameters<typeof useProviderAccountPools>[0]["t"],
+    apiBase, t,
     config, oauthStatus: oauthStatusWithCodex, aliveRef,
     notify,
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
@@ -187,7 +187,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     apiBase, config,
     notify,
     fetchConfig, fetchProviderQuotas, onSaved: () => setModelsRefreshToken(n => n + 1),
-    t: t as unknown as Parameters<typeof useJsonConfigEditor>[0]["t"],
+    t,
   });
   const {
     draft, setDraft, jsonEditorOpen, jsonSaving, jsonLeaveOpen,

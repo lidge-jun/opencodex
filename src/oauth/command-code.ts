@@ -79,12 +79,13 @@ export function parseCommandCodeCallback(value: unknown, expectedState: string):
   }
   const body = value as Record<string, unknown>;
   if (body.state !== expectedState) throw new Error("Command Code OAuth state mismatch");
-  for (const field of ["apiKey", "userId", "userName", "keyName"] as const) {
-    if (typeof body[field] !== "string" || body[field].length === 0) {
-      throw new Error(`Command Code callback missing ${field}`);
-    }
-  }
-  return body as unknown as CommandCodeCallback;
+  const { apiKey, state, userId, userName, keyName } = body;
+  if (typeof apiKey !== "string" || apiKey.length === 0) throw new Error("Command Code callback missing apiKey");
+  if (typeof state !== "string" || state.length === 0) throw new Error("Command Code callback missing state");
+  if (typeof userId !== "string" || userId.length === 0) throw new Error("Command Code callback missing userId");
+  if (typeof userName !== "string" || userName.length === 0) throw new Error("Command Code callback missing userName");
+  if (typeof keyName !== "string" || keyName.length === 0) throw new Error("Command Code callback missing keyName");
+  return Object.assign(body, { apiKey, state, userId, userName, keyName });
 }
 
 function createCallbackServer(state: string): {

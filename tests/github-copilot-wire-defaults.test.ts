@@ -11,6 +11,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
+import { routedProviderConfig } from "../src/router";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import { handleResponses } from "../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
@@ -94,6 +95,22 @@ describe("the registry default is isolated to the copilot provider", () => {
     expect(resolved.adapter).toBe("openai-responses");
     expect(resolved.apiKey).toBe("sk-test");
     expect(resolved.baseUrl).toBe("https://api.githubcopilot.com");
+  });
+
+  test("a stale OAuth destination is canonicalized before registry wire defaults apply", () => {
+    const configured: OcxProviderConfig = {
+      ...copilotProvider(),
+      authMode: "oauth",
+      baseUrl: "https://stale.example.test/v1",
+    };
+
+    // Fixed OAuth presets deliberately own their transport. Treating the stale URL as a
+    // custom destination would keep it alive long enough to receive registry-owned auth.
+    const routed = routedProviderConfig("github-copilot", configured);
+    expect(routed.baseUrl).toBe("https://api.githubcopilot.com");
+    expect(routed.adapter).toBe("openai-chat");
+    expect(resolveWireProtocolOverride("github-copilot", "gpt-5.4", routed, "responses").adapter)
+      .toBe("openai-responses");
   });
 });
 

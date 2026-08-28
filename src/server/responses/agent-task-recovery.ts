@@ -322,6 +322,12 @@ function sseDataPayloads(raw: string): string[] {
   return payloads;
 }
 
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
 function assignmentFromRecoverySse(raw: string, envelope: AgentEnvelope): string | null {
   let assignment: string | null = null;
   let completed = false;
@@ -331,17 +337,19 @@ function assignmentFromRecoverySse(raw: string, envelope: AgentEnvelope): string
   let invalidAssignment = false;
   for (const data of sseDataPayloads(raw)) {
     if (!data || data === "[DONE]") continue;
-    let event: any;
-    try { event = JSON.parse(data); } catch {
+    let parsedEvent: unknown;
+    try { parsedEvent = JSON.parse(data) as unknown; } catch {
       malformedEvent = true;
       continue;
     }
+    const event = jsonRecord(parsedEvent);
+    const response = jsonRecord(event?.response);
     if (
       event?.type === "response.failed"
       || event?.type === "response.incomplete"
       || event?.type === "error"
     ) terminalFailure = true;
-    if (event?.type === "response.completed" && event.response?.status === "completed") {
+    if (event?.type === "response.completed" && response?.status === "completed") {
       completed = true;
     }
     const items = event?.type === "response.output_item.done"
@@ -349,11 +357,13 @@ function assignmentFromRecoverySse(raw: string, envelope: AgentEnvelope): string
       : event?.type === "response.function_call_arguments.done"
         ? [{ type: "function_call", name: event.name, arguments: event.arguments }]
       : event?.type === "response.completed"
-        ? (Array.isArray(event.response?.output) ? event.response.output : []).filter((candidate: any) => (
-          candidate?.type === "function_call" && candidate?.name === RECOVERY_TOOL
-        ))
+        ? (Array.isArray(response?.output) ? response.output : []).filter((candidate: unknown) => {
+          const record = jsonRecord(candidate);
+          return record?.type === "function_call" && record.name === RECOVERY_TOOL;
+        })
         : [];
-    for (const item of items) {
+    for (const rawItem of items) {
+      const item = jsonRecord(rawItem);
       if (item?.type !== "function_call" || item.name !== RECOVERY_TOOL) continue;
       let args: unknown = item.arguments;
       if (typeof args === "string") {

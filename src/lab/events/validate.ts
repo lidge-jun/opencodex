@@ -229,13 +229,13 @@ export function validateSubject(raw: unknown, layer: EvidenceLayer): EvidenceSub
   throw new LabValidationError("unknown_layer", String(_exhaustive));
 }
 
-function stripEventId(event: Record<string, unknown>): Record<string, unknown> {
+function stripEventId(event: LabEvent): Omit<LabEvent, "eventId"> {
   const { eventId: _omit, ...rest } = event;
   return rest;
 }
 
 function enforceEventId(event: LabEvent): void {
-  const recomputed = eventIdForPayload(stripEventId(event as unknown as Record<string, unknown>));
+  const recomputed = eventIdForPayload(stripEventId(event));
   if (event.eventId !== recomputed) {
     throw new LabValidationError("event_id_mismatch", `eventId mismatch: got ${event.eventId}, expected ${recomputed}`);
   }

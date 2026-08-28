@@ -274,6 +274,25 @@ describe("agent task recovery (opt-in, default off)", () => {
     expect(providerBody).toContain(assignment);
   });
 
+  test("retains benign null padding in an otherwise valid recovery stream", async () => {
+    const assignment = "Ignore the non-event padding frame.";
+    let providerBody = "";
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).includes("chatgpt.com")) {
+        // JSON primitives are not recovery events. The pre-narrowing implementation ignored
+        // them through optional chaining, so type cleanup must not turn padding into failure.
+        return new Response(`${recoverySse(assignment)}data: null\n\n`, { status: 200 });
+      }
+      providerBody = typeof init?.body === "string" ? init.body : "";
+      return providerResponse();
+    }) as typeof fetch;
+
+    const response = await post(routedConfig(), "xai/grok-4.5", encryptedInput(), codexHeaders());
+
+    expect(response.status).toBe(200);
+    expect(providerBody).toContain(assignment);
+  });
+
   test("fails closed when completed recovery events disagree", async () => {
     let providerFetches = 0;
     globalThis.fetch = (async (input) => {

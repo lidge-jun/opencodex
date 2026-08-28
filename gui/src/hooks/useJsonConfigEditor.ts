@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { TFn } from "../i18n/shared";
 
 export interface Config {
   port: number;
@@ -13,7 +14,7 @@ export function useJsonConfigEditor(deps: {
   fetchConfig: () => Promise<void>;
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
   onSaved: () => void;
-  t: (key: string, values?: Record<string, string>) => string;
+  t: TFn;
 }) {
   const { apiBase, config, notify, fetchConfig, fetchProviderQuotas, onSaved, t } = deps;
   const [editing, setEditing] = useState(false);

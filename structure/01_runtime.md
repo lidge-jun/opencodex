@@ -104,7 +104,9 @@ The server exposes `POST /api/stop` which restores native Codex config, stops an
 
 | Path | Responsibility |
 | --- | --- |
-| `src/providers/registry.ts` | Canonical provider presets for CLI, dashboard, OAuth, key providers, and metadata. |
+| `src/providers/registry.ts` | Stable public facade for provider catalog exports plus validation/query helpers. |
+| `src/providers/registry-catalog.ts` | Canonical ordered provider declarations and their schema; provider facts live here once. |
+| `src/providers/registry-query.ts` | Runtime registry validation, destination matching, and model-wire/capability lookups. |
 | `src/providers/derive.ts` | Enrichment from provider presets into user config. |
 | `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. |
 | `src/adapters/openai-responses.ts` | Native OpenAI/ChatGPT Responses passthrough. |
@@ -132,3 +134,11 @@ destination, and key boundary instead of being silently canonicalized onto the n
 OAuth presets resolve discovery against the same canonical registry transport as normal routing
 before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
 OAuth bearer token.
+
+[Decision Log]
+- 목적과 의도: Keep the large declarative provider catalog separate from runtime lookup behavior without changing the public import path or creating a second provider authority.
+- 기존 구현 및 제약 조건: `src/providers/registry.ts` mixed the ordered provider declarations with validation and query helpers; CLI, GUI, OAuth, catalog, and routing consumers all import that stable path, and row order is observable.
+- 검토한 주요 대안: Split provider families into independent registries; move callers to new files; keep the monolith; or place the ordered declarations behind a facade and move only behavior-neutral query logic.
+- 선택한 방식: `registry-catalog.ts` owns the one ordered array, `registry-query.ts` imports and validates that exact array, and `registry.ts` re-exports both surfaces for compatibility.
+- 다른 대안 대신 이 방식을 선택한 이유: Family registries would make ordering and duplicate authority easier to drift, while caller migration adds churn with no runtime benefit. The facade boundary permits later narrow catalog splits without changing consumers.
+- 장점, 단점 및 영향: Public exports, provider identities, destinations, row object identity, and initialization validation stay unchanged. The catalog file remains intentionally large and declarative; future splits must preserve one assembled ordered array and the parity test.

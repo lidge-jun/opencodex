@@ -13,7 +13,8 @@ import {
   deriveProviderPresets,
   providerConfigSeed,
 } from "../src/providers/derive";
-import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../src/providers/registry";
+import { PROVIDER_REGISTRY as DECLARED_PROVIDER_REGISTRY } from "../src/providers/registry-catalog";
 import { FREE_PROVIDER_DIRECTORY } from "../src/providers/free-directory";
 import { applyProviderConfigHints } from "../src/codex/catalog";
 import { routeModel } from "../src/router";
@@ -40,6 +41,13 @@ const EXPECTED_KEY_PROVIDER_IDS = [
 ];
 
 describe("provider registry parity", () => {
+  test("public facade retains the single ordered catalog authority", () => {
+    expect(PROVIDER_REGISTRY).toBe(DECLARED_PROVIDER_REGISTRY);
+    for (const entry of DECLARED_PROVIDER_REGISTRY) {
+      expect(getProviderRegistryEntry(entry.id)).toBe(entry);
+    }
+  });
+
   test("registry ids are unique", () => {
     const ids = PROVIDER_REGISTRY.map(entry => entry.id);
     expect(new Set(ids).size).toBe(ids.length);

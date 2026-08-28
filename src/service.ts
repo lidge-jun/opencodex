@@ -160,21 +160,25 @@ export interface ServiceInstallState {
   winswSha256?: string;
 }
 
-export function parseServiceInstallState(value: unknown): ServiceInstallState | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+function isServiceInstallState(value: unknown): value is ServiceInstallState {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const state = value as Record<string, unknown>;
-  if (state.version !== 1 && state.version !== 2) return null;
-  if (typeof state.codexHome !== "string" || state.codexHome.length === 0) return null;
-  if (typeof state.opencodexHome !== "string" || state.opencodexHome.length === 0) return null;
+  if (state.version !== 1 && state.version !== 2) return false;
+  if (typeof state.codexHome !== "string" || state.codexHome.length === 0) return false;
+  if (typeof state.opencodexHome !== "string" || state.opencodexHome.length === 0) return false;
   for (const key of ["bunPath", "cliPath", "winswVersion", "winswSha256"] as const) {
-    if (state[key] !== undefined && (typeof state[key] !== "string" || state[key].length === 0)) return null;
+    if (state[key] !== undefined && (typeof state[key] !== "string" || state[key].length === 0)) return false;
   }
   if (state.version === 1) {
-    if (state.backend !== undefined) return null;
+    if (state.backend !== undefined) return false;
   } else if (state.backend !== "scheduler" && state.backend !== "native") {
-    return null;
+    return false;
   }
-  return state as unknown as ServiceInstallState;
+  return true;
+}
+
+export function parseServiceInstallState(value: unknown): ServiceInstallState | null {
+  return isServiceInstallState(value) ? value : null;
 }
 
 function writeServiceInstallState(backend: ServiceBackend = "scheduler"): void {

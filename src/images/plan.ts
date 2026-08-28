@@ -108,8 +108,7 @@ export async function planVideoBridge(
   for (const t of parsed.context?.tools ?? []) {
     // Skip namespaced tools — a namespaced MCP video_gen must not be intercepted.
     if (t.namespace) continue;
-    const fnName = typeof t.name === "string" ? t.name
-      : (t as unknown as { function?: { name?: string } }).function?.name;
+    const fnName = t.name;
     if (typeof fnName === "string" && isVideoGenName(fnName)) {
       toolNames.add(fnName);
     }

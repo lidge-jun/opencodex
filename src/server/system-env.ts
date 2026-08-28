@@ -445,7 +445,7 @@ export function revertSystemEnv(): RevertResult {
     }
 
     // Only unset keys that were actually injected (preserves pre-existing user tokens).
-    const keysToUnset = tracking.injectedKeys ?? SYSTEM_ENV_NAMES as unknown as string[];
+    const keysToUnset: readonly string[] = tracking.injectedKeys ?? SYSTEM_ENV_NAMES;
     for (const name of keysToUnset) {
       try {
         unsetLaunchctlEnv(name);

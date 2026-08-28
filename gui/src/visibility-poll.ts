@@ -32,14 +32,14 @@ function hiddenNow(): boolean {
  */
 function scheduleInterval(fn: () => void, ms: number): ReturnType<typeof setInterval> {
   if (typeof window !== "undefined" && typeof window.setInterval === "function") {
-    return window.setInterval(fn, ms) as unknown as ReturnType<typeof setInterval>;
+    return window.setInterval(fn, ms);
   }
   return setInterval(fn, ms);
 }
 
 function cancelInterval(handle: ReturnType<typeof setInterval>): void {
   if (typeof window !== "undefined" && typeof window.clearInterval === "function") {
-    window.clearInterval(handle as unknown as number);
+    window.clearInterval(handle);
     return;
   }
   clearInterval(handle);

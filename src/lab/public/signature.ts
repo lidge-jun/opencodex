@@ -199,8 +199,6 @@ export type PublicBundleVerificationResult =
 
 export function verifyPublicEvidenceBundle(bundle: PublicEvidenceBundleV1): PublicBundleVerificationResult {
   try {
-    const raw = bundle as unknown as Record<string, unknown>;
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { status: "schema_rejected" };
     const allowed = new Set([
       "schemaVersion",
       "exportPolicyVersion",
@@ -212,7 +210,7 @@ export function verifyPublicEvidenceBundle(bundle: PublicEvidenceBundleV1): Publ
       "bundleDigest",
       "signature",
     ]);
-    if (Object.keys(raw).some((key) => !allowed.has(key))) return { status: "schema_rejected" };
+    if (Object.keys(bundle).some((key) => !allowed.has(key))) return { status: "schema_rejected" };
     if (bundle.schemaVersion !== "public_evidence_bundle_v1" || bundle.exportPolicyVersion !== "public_export_policy_v1") {
       return { status: "schema_rejected" };
     }

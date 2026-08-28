@@ -3,6 +3,7 @@ import type { AccountLoadState } from "../components/provider-workspace/types";
 import { accountNeedsReauth } from "../oauth-health-display";
 import type { AccountQuota } from "../codex-quota-utils";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
+import type { TFn } from "../i18n/shared";
 
 export interface Config {
   port: number;
@@ -45,7 +46,7 @@ export function buildActiveAccountNeedsReauthMap(
 
 export function useProviderAccountPools(deps: {
   apiBase: string;
-  t: (key: string, ...args: unknown[]) => string;
+  t: TFn;
   config: Config | null;
   oauthStatus: Record<string, OAuthStatus>;
   aliveRef: MutableRefObject<boolean>;
