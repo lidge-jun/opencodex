@@ -1632,6 +1632,45 @@ function previewReusableAffinityAccount(
 }
 
 /**
+ * Re-evaluate an affined account under the quota strategy. Returns a strictly
+ * cooler replacement, or null when the current binding should remain.
+ */
+function reevaluateAffinityQuota(
+  entry: ThreadAffinityEntry,
+  config: OcxConfig,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string | null {
+  if (normalizeAccountPoolStrategy(config.accountPoolStrategy) !== "quota") return null;
+  const threshold = config.autoSwitchThreshold ?? 80;
+  const usage = threshold > 0
+    ? computeCodexUsageScore(
+        getAccountQuota(entry.accountId),
+        getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions),
+      )
+    : 0;
+  const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
+  if (
+    !overThreshold
+    && now - entry.lastReevalAt < CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS
+  ) {
+    return null;
+  }
+  entry.lastReevalAt = now;
+  if (!overThreshold) return null;
+  const best = pickLowerUsageAccount(
+    config,
+    entry.accountId,
+    usage,
+    now,
+    quotaScope,
+    selectionOptions,
+  );
+  return best === entry.accountId ? null : best;
+}
+
+/**
  * Side-effect-free preview of the Codex pool account native routing would prefer.
  * Used for subagent fallback quota decisions before final auth.
  *
@@ -1766,35 +1805,16 @@ export function resolveCodexAccountForThreadDetailed(
         // Model detours follow the same affinity policy as ordinary bindings:
         // RR/fill-first stay sticky, while quota strategy may re-evaluate an
         // over-threshold account without changing the ordinary lane.
-        if (normalizeAccountPoolStrategy(config.accountPoolStrategy) === "quota") {
-          const threshold = config.autoSwitchThreshold ?? 80;
-          const usage = threshold > 0
-            ? computeCodexUsageScore(
-                getAccountQuota(detourEntry.accountId),
-                getPoolAccountPlanForSelection(config, detourEntry.accountId, selectionOptions),
-              )
-            : 0;
-          const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
-          if (
-            overThreshold
-            || now - detourEntry.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS
-          ) {
-            detourEntry.lastReevalAt = now;
-            if (overThreshold) {
-              const best = pickLowerUsageAccount(
-                config,
-                detourEntry.accountId,
-                usage,
-                now,
-                quotaScope,
-                selectionOptions,
-              );
-              if (best !== detourEntry.accountId) {
-                bindModelDetourAffinity(threadId, best, now, modelId, quotaScope);
-                return { status: "selected", accountId: best };
-              }
-            }
-          }
+        const cooler = reevaluateAffinityQuota(
+          detourEntry,
+          config,
+          now,
+          quotaScope,
+          selectionOptions,
+        );
+        if (cooler) {
+          bindModelDetourAffinity(threadId, cooler, now, modelId, quotaScope);
+          return { status: "selected", accountId: cooler };
         }
         return { status: "selected", accountId: detourEntry.accountId };
       }
@@ -1834,29 +1854,13 @@ export function resolveCodexAccountForThreadDetailed(
       // serving for up to 60s after a secondary with quota is available (#584).
       // Non-quota strategies (RR / fill-first) keep affinity for ongoing threads —
       // rotation is new-session-only (affinity policy A).
-      const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
-      if (strategy === "quota") {
-        const threshold = config.autoSwitchThreshold ?? 80;
-          const usage = threshold > 0
-            ? computeCodexUsageScore(
-              getAccountQuota(entry.accountId),
-              getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions),
-            )
-          : 0;
-        const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
-        if (overThreshold || now - entry.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS) {
-          entry.lastReevalAt = now;
-          if (overThreshold) {
-            const best = pickLowerUsageAccount(config, entry.accountId, usage, now, quotaScope, selectionOptions);
-            if (best !== entry.accountId) {
-              if (!isIndependentCodexQuotaScope(quotaScope)) {
-                setActiveCodexAccount(config, best);
-              }
-              bindThreadAffinity(threadId, best, now, quotaScope); // rebinds + resets clocks
-              return { status: "selected", accountId: best };
-            }
-          }
+      const cooler = reevaluateAffinityQuota(entry, config, now, quotaScope, selectionOptions);
+      if (cooler) {
+        if (!isIndependentCodexQuotaScope(quotaScope)) {
+          setActiveCodexAccount(config, cooler);
         }
+        bindThreadAffinity(threadId, cooler, now, quotaScope); // rebinds + resets clocks
+        return { status: "selected", accountId: cooler };
       }
       return { status: "selected", accountId: entry.accountId };
     }

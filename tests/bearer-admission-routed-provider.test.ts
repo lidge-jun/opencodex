@@ -278,10 +278,11 @@ describe("an admission bearer never reaches a canonical ChatGPT transport, whate
     );
 
     const server = startServer(0, { inspectNativeCodexOwnership });
-    await waitForNativeMainStartupGate();
-    const drain = acquireNativeMainProfileDrain("custom-forward-substitution");
-    expect(drain).not.toBeNull();
+    let drain: ReturnType<typeof acquireNativeMainProfileDrain> = null;
     try {
+      await waitForNativeMainStartupGate();
+      drain = acquireNativeMainProfileDrain("custom-forward-substitution");
+      expect(drain).not.toBeNull();
       const response = await postResponses(server.url, "mirror/gpt-5.5");
 
       expect(response.status).toBe(503);
@@ -318,21 +319,22 @@ describe("an admission bearer never reaches a canonical ChatGPT transport, whate
     }) as typeof fetch;
 
     const server = startServer(0, { inspectNativeCodexOwnership });
-    await waitForNativeMainStartupGate();
-    const pending = postResponses(server.url, "mirror/gpt-5.5");
-    const switchUrl = new URL("http://localhost/api/native-main-profiles/switch");
-    const switchRequest = () => new Request(switchUrl, {
-      method: "POST",
-      body: JSON.stringify({ target: "target", confirmedStopped: true }),
-    });
-    let switches = 0;
-    const manager = {
-      switch: async () => {
-        switches += 1;
-        return { ok: true };
-      },
-    } as unknown as NativeProfileManager;
+    let pending: Promise<Response> | null = null;
     try {
+      await waitForNativeMainStartupGate();
+      pending = postResponses(server.url, "mirror/gpt-5.5");
+      const switchUrl = new URL("http://localhost/api/native-main-profiles/switch");
+      const switchRequest = () => new Request(switchUrl, {
+        method: "POST",
+        body: JSON.stringify({ target: "target", confirmedStopped: true }),
+      });
+      let switches = 0;
+      const manager = {
+        switch: async () => {
+          switches += 1;
+          return { ok: true };
+        },
+      } as unknown as NativeProfileManager;
       await upstreamStarted;
       expect(getNativeMainProfileRequestCount()).toBe(1);
       const blocked = await handleNativeProfileAPI(
@@ -359,7 +361,7 @@ describe("an admission bearer never reaches a canonical ChatGPT transport, whate
       expect(switches).toBe(1);
     } finally {
       releaseUpstream();
-      await pending.catch(() => {});
+      await pending?.catch(() => {});
       await server.stop(true);
     }
   });
