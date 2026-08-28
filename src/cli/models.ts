@@ -283,9 +283,12 @@ async function handleCustomRemove(args: string[]): Promise<void> {
   // that row while the dash form matched both — the two relations disagreed on the same
   // config. Removal stays exact-or-refuse: an ambiguous selector still aborts below, which is
   // the right default for a destructive command.
+  const separator = target.indexOf("/");
+  const selectedProvider = separator >= 0 ? target.slice(0, separator) : undefined;
   const matchingIndexes = existing.flatMap((model, index) => {
-    if (!target.includes("/")) return model.id === target ? [index] : [];
-    const resolved = resolveSlugSelection(model.provider, target, [model.modelId]);
+    if (selectedProvider === undefined) return model.id === target ? [index] : [];
+    if (model.provider !== selectedProvider) return [];
+    const resolved = resolveSlugSelection(selectedProvider, target, [model.modelId]);
     return resolved.matched.length > 0 ? [index] : [];
   });
   if (matchingIndexes.length === 0) fail(`custom model "${target}" not found`);

@@ -478,5 +478,42 @@ describe("#2491 the removal selector uses the shared equivalence relation", () =
       rmSync(dir, { recursive: true, force: true });
     }
   });
-});
 
+  test("a provider-qualified selector does not match a native id under another provider", () => {
+    const { dir } = freshConfig({
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "openai", modelId: "gpt-5.5" },
+        { id: "22222222-2222-4222-8222-222222222222", provider: "test", modelId: "openai/gpt-5.5" },
+      ],
+    });
+    try {
+      const result = runCli(["models", "remove", "openai/gpt-5.5", "--yes"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+      expect(config.customModels).toEqual([
+        expect.objectContaining({ provider: "test", modelId: "openai/gpt-5.5" }),
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a provider-qualified selector cannot remove a sole row from another provider", () => {
+    const { dir } = freshConfig({
+      customModels: [
+        { id: "22222222-2222-4222-8222-222222222222", provider: "test", modelId: "openai/gpt-5.5" },
+      ],
+    });
+    try {
+      const result = runCli(["models", "remove", "openai/gpt-5.5", "--yes"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("not found");
+      const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+      expect(config.customModels).toEqual([
+        expect.objectContaining({ provider: "test", modelId: "openai/gpt-5.5" }),
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
