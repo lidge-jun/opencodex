@@ -613,3 +613,62 @@ describe("routeModel backfills google wire mode from the registry", () => {
     expect(routed.providerName).toBe("fallbackProvider");
   });
 });
+
+describe("routeModel hard blocked model redirect", () => {
+  test("hard intercepts gpt-5.6-terra and rewrites to gpt-5.6-luna with blocked-model-redirect reason", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+      },
+    };
+
+    const routed = routeModel(config, "gpt-5.6-terra");
+    expect(routed).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-5.6-luna",
+      routeKind: "native",
+      routeReason: "blocked-model-redirect",
+    });
+    expect(routed.routeDecision?.selected).toMatchObject({
+      model: "gpt-5.6-luna",
+      reason: "blocked-model-redirect",
+    });
+    expect(routed.routeDecision?.requestedModel).toBe("gpt-5.6-terra");
+  });
+
+  test("hard intercepts account-namespaced gpt-5.6-terra and rewrites to gpt-5.6-luna", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountMode: "direct",
+        },
+      },
+      codexAccountNamespaces: { side: "side-account-id" },
+    };
+
+    const routed = routeModel(config, "side/gpt-5.6-terra");
+    expect(routed).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-5.6-luna",
+      routeKind: "explicit-account",
+      routeReason: "blocked-model-redirect",
+      codexAccountId: "side-account-id",
+      codexAccountNamespace: "side",
+    });
+    expect(routed.routeDecision?.selected).toMatchObject({
+      model: "gpt-5.6-luna",
+      accountRef: "side",
+      reason: "blocked-model-redirect",
+    });
+    expect(routed.routeDecision?.requestedModel).toBe("side/gpt-5.6-terra");
+  });
+});

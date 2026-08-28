@@ -33,6 +33,7 @@ import {
 } from "./providers/openai-tiers";
 import { decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
 import { resolveModelAlias } from "./providers/default-aliases";
+import { resolveHardBlockedModelRedirect } from "./lib/shadow-call";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 import {
@@ -512,13 +513,16 @@ function routeResult(
   routeKind: RouteDecisionKind,
   routeReason: string,
 ): RouteResult {
+  const redirected = resolveHardBlockedModelRedirect(modelId);
+  const effectiveModelId = redirected ?? modelId;
+  const effectiveRouteReason = redirected ? "blocked-model-redirect" : routeReason;
   const codexAccountMode = providerCodexAccountMode(providerName, provider);
   return {
     providerName,
     provider: routedProviderConfig(providerName, provider),
-    modelId,
+    modelId: effectiveModelId,
     routeKind,
-    routeReason,
+    routeReason: effectiveRouteReason,
     ...(codexAccountMode ? { codexAccountMode } : {}),
   };
 }
