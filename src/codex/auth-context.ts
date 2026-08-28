@@ -362,14 +362,7 @@ export async function resolveCodexAuthContext(
   if (fixedAccountId !== undefined && options.excludeAccountId !== undefined) {
     throw new Error("Codex auth context cannot select and exclude an account simultaneously");
   }
-  const useCallerCredential = (mode === "direct" && fixedAccountId === undefined)
-    || (requestScopedMainCredential
-      && (fixedAccountId === undefined || fixedAccountId === MAIN_CODEX_ACCOUNT_ID));
-  // An explicit namespace binding is stronger than the provider's default mode. It must use the
-  // selected stored credential even while the canonical OpenAI provider is globally Direct.
-  // A request-owned bearer is deliberately not represented as `main-pool`: Pool account ids own
-  // durable health, quota, and affinity state, while this credential exists for one request only.
-  if (useCallerCredential) {
+  const resolveCallerOwnedMainContext = async (): Promise<CodexAuthContext> => {
     if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     const substituteStoredMain = options.substituteMainCredentialForDirect === true;
     if (!substituteStoredMain) {
@@ -415,8 +408,21 @@ export async function resolveCodexAuthContext(
       // the enclosing turn lease until the request or transferred stream settles.
       directSelectionAdmission.release();
     }
+  };
+  // An explicit namespace binding is stronger than the provider's default mode. It must use the
+  // selected stored credential even while the canonical OpenAI provider is globally Direct.
+  // A request-owned bearer is deliberately not represented as `main-pool`: Pool account ids own
+  // durable health, quota, and affinity state, while this credential exists for one request only.
+  if ((mode === "direct" && fixedAccountId === undefined)
+    || (requestScopedMainCredential && fixedAccountId === MAIN_CODEX_ACCOUNT_ID)) {
+    return resolveCallerOwnedMainContext();
   }
-  const affinityKey = fixedAccountId === undefined ? codexPoolAffinityKey(headers) : undefined;
+  // A caller bearer can still accompany a request that selects a configured Pool account. Do not
+  // let that request read, delete, or create a file-main affinity binding while deciding whether a
+  // stored account is available; only the stored credential selected below may own Pool state.
+  const affinityKey = fixedAccountId === undefined && !requestScopedMainCredential
+    ? codexPoolAffinityKey(headers)
+    : undefined;
   // Retained startup recovery makes the physical main identity ineligible. Routing
   // can still preserve service by selecting a healthy configured pool account.
   const nativeMainTrafficBlocked = isNativeMainTrafficBlocked();
@@ -443,7 +449,9 @@ export async function resolveCodexAuthContext(
       // Temporary switch drain keeps the candidate until the atomic claim rejects
       // it. Retained recovery makes main wholly ineligible so pool routing continues.
       nativeMainSelectionOnly,
-      isMainAccountTokenLive: options.isMainAccountTokenLive,
+      isMainAccountTokenLive: requestScopedMainCredential
+        ? () => false
+        : options.isMainAccountTokenLive,
       modelEligibleAccountIds,
     };
     // A pre-drain selector reserves the native identity while reconciliation and
@@ -476,6 +484,9 @@ export async function resolveCodexAuthContext(
     if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
     const selected = resolution.status === "selected" ? resolution.accountId : null;
     if (!selected) {
+      if (requestScopedMainCredential && fixedAccountId === undefined && !options.excludeAccountId) {
+        return await resolveCallerOwnedMainContext();
+      }
       if (fixedAccountId !== undefined) {
         throw new CodexPoolAuthenticationError(
           modelEligibleAccountIds && !modelEligibleAccountIds.has(fixedAccountId)

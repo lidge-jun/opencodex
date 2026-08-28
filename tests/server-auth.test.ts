@@ -1375,7 +1375,9 @@ describe("server local API auth", () => {
               "x-codex-primary-window-minutes": "300",
               "x-codex-primary-reset-at": "1900000000",
             }
-          : undefined;
+          : observed.authorization === "Bearer caller-transient-500"
+            ? { "retry-after": "0" }
+            : undefined;
         return Response.json(
           { id: "resp_tier", object: "response", status: "completed", output: [] },
           { status, headers: quotaHeaders },
