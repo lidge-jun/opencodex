@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import {
@@ -34,6 +34,7 @@ import {
 import * as windowsAcl from "../src/lib/windows-secret-acl";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
 import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
+import { nextAtomicTempSequence } from "../src/config/atomic-write";
 import { providerManagementConfigError } from "../src/server/auth-cors";
 let testDir = "";
 
@@ -2438,6 +2439,47 @@ describe("opencodex config defaults", () => {
 });
 
 describe("config.ts – Windows ACL hardening integration", () => {
+  test("secret temp bytes are private at first observation and a pre-existing temp is refused", () => {
+    const destination = join(testDir, "atomic-private-secret.json");
+    let observedSecret = false;
+    atomicWriteFile(destination, "new-secret", undefined, {
+      afterTempWrite: tempPath => {
+        expect(readFileSync(tempPath, "utf8")).toBe("new-secret");
+        expect(statSync(tempPath).mode & 0o077).toBe(0);
+        observedSecret = true;
+      },
+    });
+    expect(observedSecret).toBe(true);
+
+    const occupiedSequence = nextAtomicTempSequence() + 1;
+    const occupiedTemp = `${destination}.ocx.${process.pid}.${occupiedSequence}.tmp`;
+    writeFileSync(occupiedTemp, "pre-existing", { encoding: "utf8", mode: 0o644 });
+    expect(() => atomicWriteFile(destination, "replacement-secret", undefined, {
+      afterTempWrite: tempPath => {
+        expect(readFileSync(tempPath, "utf8")).not.toBe("replacement-secret");
+        expect(statSync(tempPath).mode & 0o077).toBe(0);
+      },
+    })).toThrow();
+    expect(readFileSync(occupiedTemp, "utf8")).toBe("pre-existing");
+  });
+
+  test("Windows ACL hardening completes before secret temp bytes are observable", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const hardenSpy = spyOn(windowsAcl, "hardenSecretPath").mockReturnValue({ ok: true });
+    try {
+      atomicWriteFile(join(testDir, "atomic-private-windows.json"), "windows-secret", undefined, {
+        afterTempWrite: tempPath => {
+          expect(readFileSync(tempPath, "utf8")).toBe("windows-secret");
+          expect(hardenSpy).toHaveBeenCalled();
+        },
+      });
+    } finally {
+      hardenSpy.mockRestore();
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
   test("successive atomic temps for one destination are each hardened and then forgotten", () => {
     const destination = join(testDir, "atomic-secret.json");
     const previousUsername = process.env.USERNAME;
@@ -2645,8 +2687,20 @@ describe("config.ts – Windows ACL hardening integration", () => {
 
 describe("config.ts – sync writer timeout keying (#840 refinement)", () => {
   test("the production sync harden keys timeouts by destination", () => {
-    const source = readFileSync(join(import.meta.dir, "..", "src", "config", "atomic-write.ts"), "utf-8");
-    expect(source).toContain("hardenSecretPath(target, { required: true, timeoutMemoKey: path })");
+    const destination = join(testDir, "sync-timeout-key.json");
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const hardenSpy = spyOn(windowsAcl, "hardenSecretPath").mockReturnValue({ ok: true });
+    try {
+      atomicWriteFile(destination, "secret");
+      expect(hardenSpy).toHaveBeenCalledWith(
+        expect.stringContaining(".tmp"),
+        { required: true, timeoutMemoKey: destination },
+      );
+    } finally {
+      hardenSpy.mockRestore();
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
   });
 
   test("timed-out write with a RESIDUAL temp retains both memos (fail-closed)", () => {

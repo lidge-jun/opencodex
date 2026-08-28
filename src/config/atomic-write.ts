@@ -1,6 +1,11 @@
 import {
   chmodSync,
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
   lstatSync,
+  openSync,
   realpathSync,
   truncateSync,
   unlinkSync,
@@ -43,7 +48,9 @@ export interface AtomicWriteIO {
 }
 
 export interface AtomicWriteHooks {
+  afterTempWrite?: (tempPath: string, targetPath: string) => void;
   beforeRename?: (tempPath: string, targetPath: string) => void;
+  validateBeforeRename?: (targetPath: string) => void;
 }
 
 export class AtomicWriteResidualTempError extends Error {
@@ -96,53 +103,120 @@ function assertResolvedTargetAllowed(path: string, target: string): void {
   assertNotRealHomeUnderTest(dirname(target));
 }
 
-export function atomicWriteFile(path: string, content: string, io: AtomicWriteIO = {
-  write: (target, value) => writeFileSync(target, value, { encoding: "utf-8", mode: 0o600 }),
-  harden: target => {
-    try { chmodSync(target, 0o600); } catch { /* platform may ignore chmod */ }
-    if (process.platform === "win32") hardenSecretPath(target, { required: true, timeoutMemoKey: path });
-  },
-  rename: renameAtomicFile,
-  truncate: target => truncateSync(target, 0),
-  unlink: unlinkSync,
-}, hooks: AtomicWriteHooks = {}): void {
+function assertPrivateTempDescriptor(path: string, descriptor: number): void {
+  const opened = fstatSync(descriptor);
+  const linked = lstatSync(path);
+  if (!opened.isFile() || !linked.isFile()
+    || opened.dev !== linked.dev || opened.ino !== linked.ino) {
+    throw new Error("atomic temporary file identity changed before write");
+  }
+  if (process.platform !== "win32" && (opened.mode & 0o777) !== 0o600) {
+    throw new Error("atomic temporary file permissions are not owner-only");
+  }
+}
+
+function writePrivateTempFile(
+  path: string,
+  content: string,
+  timeoutMemoKey: string,
+  onCreated: () => void,
+): void {
+  const descriptor = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+  onCreated();
+  try {
+    if (process.platform === "win32") {
+      hardenSecretPath(path, { required: true, timeoutMemoKey });
+    } else {
+      fchmodSync(descriptor, 0o600);
+    }
+    assertPrivateTempDescriptor(path, descriptor);
+    writeFileSync(descriptor, content, { encoding: "utf-8" });
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+async function writePrivateTempFileAsync(
+  path: string,
+  content: string,
+  timeoutMemoKey: string,
+  onCreated: () => void,
+): Promise<void> {
+  const descriptor = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+  onCreated();
+  try {
+    if (process.platform === "win32") {
+      await hardenSecretPathAsync(path, { required: true, timeoutMemoKey });
+    } else {
+      fchmodSync(descriptor, 0o600);
+    }
+    assertPrivateTempDescriptor(path, descriptor);
+    writeFileSync(descriptor, content, { encoding: "utf-8" });
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+export function atomicWriteFile(
+  path: string,
+  content: string,
+  io?: AtomicWriteIO,
+  hooks: AtomicWriteHooks = {},
+): void {
   recordOwnedConfigPath(getConfigDir(), path);
   const target = resolveWriteTarget(path);
   assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
   let hardened = false;
+  let ownsTemp = false;
+  const effective: AtomicWriteIO = io ?? {
+    write: (tempPath, value) => writePrivateTempFile(tempPath, value, path, () => { ownsTemp = true; }),
+    harden: tempPath => {
+      try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
+      if (process.platform === "win32") {
+        hardenSecretPath(tempPath, { required: true, timeoutMemoKey: path });
+      }
+    },
+    rename: renameAtomicFile,
+    truncate: tempPath => truncateSync(tempPath, 0),
+    unlink: unlinkSync,
+  };
   try {
-    io.write(tmp, content);
-    io.harden(tmp);
+    if (io) ownsTemp = true;
+    effective.write(tmp, content);
+    hooks.afterTempWrite?.(tmp, target);
+    effective.harden(tmp);
     hardened = true;
     hooks.beforeRename?.(tmp, target);
-    io.rename(tmp, target);
+    hooks.validateBeforeRename?.(target);
+    effective.rename(tmp, target);
     forgetEphemeralSecretPath(tmp);
   } catch (cause) {
+    if (!ownsTemp) throw cause;
     let scrubbed = false;
     try {
-      io.truncate(tmp);
+      effective.truncate(tmp);
       scrubbed = true;
     } catch (error) {
       if (isMissingPathError(error)) scrubbed = true;
       else {
-        try { io.write(tmp, ""); scrubbed = true; } catch { /* removal may still succeed */ }
+        try { effective.write(tmp, ""); scrubbed = true; } catch { /* removal may still succeed */ }
       }
     }
     let removed = false;
     try {
-      io.unlink(tmp);
+      effective.unlink(tmp);
       removed = true;
     } catch (error) {
       if (isMissingPathError(error)) removed = true;
       else {
-        try { io.unlink(tmp); removed = true; }
+        try { effective.unlink(tmp); removed = true; }
         catch (retryError) { if (isMissingPathError(retryError)) removed = true; }
       }
     }
     if (!removed && !scrubbed) throw new AtomicWriteSecretResidualError(tmp, { cause });
     if (!removed && !hardened) {
-      try { io.harden(tmp); hardened = true; } catch { /* reported below */ }
+      try { effective.harden(tmp); hardened = true; } catch { /* reported below */ }
     }
     if (removed) forgetEphemeralSecretPath(tmp);
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
@@ -168,12 +242,13 @@ export async function atomicWriteFileAsync(
   io?: AtomicWriteAsyncIO,
   testSeam?: AtomicWriteAsyncTestSeam,
 ): Promise<void> {
+  let ownsTemp = false;
   const effective: AtomicWriteAsyncIO = io ?? {
-    write: (target, value) => writeFileSync(target, value, { encoding: "utf-8", mode: 0o600 }),
-    harden: async target => {
-      try { chmodSync(target, 0o600); } catch { /* platform may ignore chmod */ }
+    write: (tempPath, value) => writePrivateTempFileAsync(tempPath, value, path, () => { ownsTemp = true; }),
+    harden: async tempPath => {
+      try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
       if (process.platform === "win32") {
-        await hardenSecretPathAsync(target, { required: true, timeoutMemoKey: path });
+        await hardenSecretPathAsync(tempPath, { required: true, timeoutMemoKey: path });
       }
     },
     rename: renameAtomicFileAsync,
@@ -185,6 +260,7 @@ export async function atomicWriteFileAsync(
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
   let hardened = false;
   try {
+    if (io) ownsTemp = true;
     await effective.write(tmp, content);
     await testSeam?.afterTempWrite?.(tmp);
     await effective.harden(tmp);
@@ -192,6 +268,7 @@ export async function atomicWriteFileAsync(
     await effective.rename(tmp, target);
     forgetEphemeralSecretPath(tmp);
   } catch (cause) {
+    if (!ownsTemp) throw cause;
     let scrubbed = false;
     try {
       await effective.truncate(tmp);

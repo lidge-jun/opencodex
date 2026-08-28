@@ -152,11 +152,12 @@ function persistRefreshedMainAuthJson(
     undefined,
     {
       beforeRename: () => {
+        assertMainAuthJsonSnapshotUnchanged(expected);
         const hook = beforeMainAuthJsonRenameForTests;
         beforeMainAuthJsonRenameForTests = null;
         hook?.();
-        assertMainAuthJsonSnapshotUnchanged(expected);
       },
+      validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
     },
   );
   return { accessToken, chatgptAccountId };

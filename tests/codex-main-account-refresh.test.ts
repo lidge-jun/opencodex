@@ -102,4 +102,19 @@ describe("native main token refresh", () => {
     expect(readFileSync(authPath, "utf8")).toBe(external);
     expect(readdirSync(home).filter(name => name.includes(".tmp"))).toEqual([]);
   });
+
+  test("refresh failure leaves the original auth file byte-identical", async () => {
+    const authPath = join(home, "auth.json");
+    const original = Buffer.from(`{\n  "tokens": {\n    "access_token": "${expiredJwt()}",\n    "refresh_token": "old-refresh",\n    "account_id": "account-main"\n  },\n  "preserve": "spacing"\n}\n`);
+    writeFileSync(authPath, original);
+
+    await expect(getValidMainAccountToken({
+      refreshToken: async () => {
+        throw new Error("simulated refresh transport failure");
+      },
+    })).rejects.toThrow("did not complete");
+
+    expect(readFileSync(authPath)).toEqual(original);
+    expect(readdirSync(home).filter(name => name.includes(".tmp"))).toEqual([]);
+  });
 });
