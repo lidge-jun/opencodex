@@ -107,6 +107,44 @@ function ipv6Hextets(hostname: string): number[] | null {
 /** RFC 6052 §2.1 well-known NAT64 prefix, 64:ff9b::/96, as its six leading hextets. */
 const NAT64_WELL_KNOWN_PREFIX = [0x64, 0xff9b, 0, 0, 0, 0] as const;
 
+/**
+ * `0:0:0:0:ffff:0::/96` — the explicit-zero spelling of a mapped IPv4 that some DNS resolvers
+ * return, e.g. `::ffff:0:c612:1b` for `198.18.0.27`.
+ *
+ * This is deliberately NOT taught to `classifyIpv6`. Under RFC 4291 the mapped prefix is
+ * `::ffff:0:0/96`, so `::ffff:0:c612:1b` is a reserved address whose tail merely LOOKS like an
+ * IPv4 — it is not equivalent to `198.18.0.27`. Treating the two as equal in the general
+ * classifier would admit `::ffff:0:5db8:d822` (tail `93.184.216.34`) as a public destination,
+ * which is the merge blocker a maintainer raised on #2812.
+ *
+ * The reported symptom is narrower than that equivalence: on a fake-IP resolver the answer
+ * assesses as `non-global address`, so the `allowBenchmarkAddresses` exception — which exists
+ * precisely for Clash/Surge/Mihomo fake-IP — could never be reached for this spelling. The fix
+ * therefore lives inside that opt-in, and only for a tail that is itself in `198.18.0.0/15`.
+ */
+const EXPLICIT_ZERO_MAPPED_PREFIX = [0, 0, 0, 0, 0xffff, 0] as const;
+
+/**
+ * True when this DNS answer may pass the `allowBenchmarkAddresses` opt-in.
+ *
+ * Ordinary benchmark answers (IPv4 `198.18/19`, canonical `::ffff:198.18.0.27`, and the NAT64
+ * form) already carry `detail: "benchmark address"` and pass through the first branch. The
+ * second branch adds ONLY the explicit-zero spelling, and only when its embedded quad is itself
+ * a benchmark address — so a public, loopback, private, or metadata-looking tail is refused.
+ */
+function isBenchmarkDnsAnswer(address: string, assessment: DestinationAssessment | null): boolean {
+  if (assessment?.kind === "private" && assessment.detail === "benchmark address") return true;
+  if (isIP(address) !== 6) return false;
+  if (assessment?.kind !== "private" || assessment.detail !== "non-global address") return false;
+  const hextets = ipv6Hextets(normalizeHostname(address));
+  if (!hextets) return false;
+  if (!EXPLICIT_ZERO_MAPPED_PREFIX.every((group, index) => hextets[index] === group)) return false;
+  const hi = hextets[6]!;
+  const lo = hextets[7]!;
+  const embedded = classifyIpv4(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+  return embedded.kind === "private" && embedded.detail === "benchmark address";
+}
+
 function firstIpv6Hextet(hostname: string): number | null {
   const head = hostname.split(":")[0];
   if (!head) return 0;
@@ -303,11 +341,7 @@ export async function providerDestinationResolvedError(
     const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
     if (!assessment || assessment.kind === "public") continue;
     // Clash fake-IP only: 198.18/19 benchmark detail. Mixed dangerous sets still reject.
-    if (
-      options?.allowBenchmarkAddresses
-      && assessment.kind === "private"
-      && assessment.detail === "benchmark address"
-    ) {
+    if (options?.allowBenchmarkAddresses && isBenchmarkDnsAnswer(address, assessment)) {
       continue;
     }
     if (assessment.kind === "metadata") return `baseUrl hostname ${hostname} resolves to a blocked metadata endpoint (${address})`;
@@ -406,7 +440,7 @@ export async function resolvePublicAddresses(
       // fake-IP DNS, not a LAN provider. Accept it without allowPrivateNetwork and
       // do not mark the destination private, so the caller's HTTP(S)_PROXY path
       // still applies (credit #1748).
-      if (benchmarkAllowed && assessment?.kind === "private" && assessment.detail === "benchmark address") {
+      if (benchmarkAllowed && isBenchmarkDnsAnswer(address, assessment)) {
         validatedAddresses.push({ address, family: ipKind === 4 || ipKind === 6 ? ipKind : (family || 4) });
         continue;
       }
@@ -430,4 +464,3 @@ export async function resolvePublicAddresses(
 export async function assertUrlResolvesPublic(url: string): Promise<void> {
   await resolvePublicAddresses(url);
 }
-
