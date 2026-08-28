@@ -488,15 +488,11 @@ function bindRouteReasoningReplayScope(args: {
       || args.codexAuthContext?.kind === "main-pool"
       ? args.codexAuthContext
       : undefined;
-    const storedPoolContext = poolContext?.kind === "main-pool"
-      && poolContext.credentialSource === "caller"
-      ? undefined
-      : poolContext;
     credentialIdentity = reasoningReplayCodexCredentialIdentity({
-      authorization: storedPoolContext
-        ? `Bearer ${storedPoolContext.accessToken}`
+      authorization: poolContext
+        ? `Bearer ${poolContext.accessToken}`
         : args.forwardHeaders?.get("authorization"),
-      chatgptAccountId: storedPoolContext?.chatgptAccountId
+      chatgptAccountId: poolContext?.chatgptAccountId
         ?? args.forwardHeaders?.get("chatgpt-account-id"),
       accountId: poolContext?.accountId,
       credentialGeneration: poolContext?.kind === "pool"
@@ -511,7 +507,7 @@ function bindRouteReasoningReplayScope(args: {
     // refused, so direct-forward turns get no durable scope (fail closed; the in-process
     // cache still covers same-process replay).
     const codexDurableHandle = poolContext?.accountId
-      ?? storedPoolContext?.chatgptAccountId
+      ?? poolContext?.chatgptAccountId
       ?? undefined;
     credentialDurableIdentity = durableReplayCredentialIdentity(
       "codex",

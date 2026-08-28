@@ -1041,17 +1041,19 @@ describe("Codex auth context", () => {
         requestScopedMainCredential: true,
       });
       expect(ctx).toMatchObject({
-        kind: "main-pool",
-        accountId: MAIN_CODEX_ACCOUNT_ID,
-        credentialSource: "caller",
+        kind: "main",
+        accountId: null,
       });
       expect(ctx).not.toHaveProperty("accessToken");
       expect(ctx).not.toHaveProperty("chatgptAccountId");
+      expect(ctx).not.toHaveProperty("affinityKey");
+      expect(ctx).not.toHaveProperty("writerGeneration");
 
       const upstream = materializeCodexUpstreamAuth(inbound, ctx);
       expect(upstream.get("authorization")).toBe("Bearer caller-keyring-token");
       expect(upstream.get("chatgpt-account-id")).toBe("caller-keyring-account");
       expect(upstream.get("openai-beta")).toBe("responses=experimental");
+      expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(true);
     } finally {
       clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     }

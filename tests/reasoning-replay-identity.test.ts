@@ -4,6 +4,7 @@ import {
   bindReasoningReplayScope,
   clearReasoningReplayCacheForTests,
   commitReasoningReplayServingIdentity,
+  durableReplayCredentialIdentity,
   peekReasoningForCall,
   reasoningReplayCodexCredentialIdentity,
   reasoningReplayCredentialIdentity,
@@ -346,6 +347,23 @@ describe("reasoning replay provider and credential identity", () => {
     expect(destination).toBe(reasoningReplayDestinationIdentity("https://provider.example/v1/opaque-secret/"));
     expect(destination).not.toBe(reasoningReplayDestinationIdentity("https://provider.example/v1/other-secret"));
     expect(destination).not.toContain("opaque-secret");
+  });
+
+  test("request-owned Codex bearers are distinct in process and refuse durable replay identity", () => {
+    const callerA = reasoningReplayCodexCredentialIdentity({
+      authorization: "Bearer caller-token-a",
+      chatgptAccountId: "caller-account-a",
+    });
+    const callerB = reasoningReplayCodexCredentialIdentity({
+      authorization: "Bearer caller-token-b",
+      chatgptAccountId: "caller-account-b",
+    });
+
+    expect(callerA).toBeDefined();
+    expect(callerB).toBeDefined();
+    expect(callerA).not.toBe(callerB);
+    expect(durableReplayCredentialIdentity("codex", undefined, undefined, Buffer.alloc(32, 7)))
+      .toBeUndefined();
   });
 
   test("a bridge created before credential rotation writes under the holder's current identity", async () => {

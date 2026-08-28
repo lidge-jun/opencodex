@@ -96,12 +96,14 @@ export type CodexAuthContext =
       /** Scope that owns `probeLeaseId`, when it is a scoped recovery probe. */
       probeQuotaScope?: CodexQuotaScope;
     }
-  | ({
+  | {
       // Main Codex account participating in rotation: token injected from ~/.codex/auth.json
-      // or forwarded from this native Codex request. Distinct from "main" (Direct mode).
+      // (Option A). Distinct from "main" (request-owned passthrough or Direct mode).
       kind: "main-pool";
       accountId: string;
       writerGeneration: number;
+      accessToken: string;
+      chatgptAccountId: string;
       /** Bypass Pool selection and suppress quota/transient failover for an exact selector. */
       fixedAccount?: boolean;
       /** See `pool.affinityKey`. */
@@ -110,16 +112,7 @@ export type CodexAuthContext =
       probeLeaseId?: string;
       quotaScope?: CodexQuotaScope;
       probeQuotaScope?: CodexQuotaScope;
-    } & (
-      | {
-          credentialSource?: "auth-file";
-          accessToken: string;
-          chatgptAccountId: string;
-        }
-      | {
-          credentialSource: "caller";
-        }
-    ));
+    };
 
 /** Probe lease carried by this context, when it holds one. */
 export function codexProbeLeaseId(ctx: CodexAuthContext | undefined): string | undefined {
@@ -344,7 +337,7 @@ export interface ResolveCodexAuthContextOptions {
   resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
   /** Direct requests admitted with a proxy bearer substitute the stored native-main credential. */
   substituteMainCredentialForDirect?: boolean;
-  /** A validated native Codex bearer may serve `__main__` for this request only. */
+  /** A validated native Codex bearer may serve this request without entering Pool state. */
   requestScopedMainCredential?: boolean;
   /** Test seam for a Direct request's own forwarded ChatGPT credential. */
   isDirectCallerEntitledToCodexModel?: (headers: Headers, modelId: string) => Promise<boolean>;
@@ -369,9 +362,14 @@ export async function resolveCodexAuthContext(
   if (fixedAccountId !== undefined && options.excludeAccountId !== undefined) {
     throw new Error("Codex auth context cannot select and exclude an account simultaneously");
   }
+  const useCallerCredential = (mode === "direct" && fixedAccountId === undefined)
+    || (requestScopedMainCredential
+      && (fixedAccountId === undefined || fixedAccountId === MAIN_CODEX_ACCOUNT_ID));
   // An explicit namespace binding is stronger than the provider's default mode. It must use the
   // selected stored credential even while the canonical OpenAI provider is globally Direct.
-  if (mode === "direct" && fixedAccountId === undefined) {
+  // A request-owned bearer is deliberately not represented as `main-pool`: Pool account ids own
+  // durable health, quota, and affinity state, while this credential exists for one request only.
+  if (useCallerCredential) {
     if (!hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     const substituteStoredMain = options.substituteMainCredentialForDirect === true;
     if (!substituteStoredMain) {
@@ -446,7 +444,6 @@ export async function resolveCodexAuthContext(
       // it. Retained recovery makes main wholly ineligible so pool routing continues.
       nativeMainSelectionOnly,
       isMainAccountTokenLive: options.isMainAccountTokenLive,
-      requestScopedMainCredential,
       modelEligibleAccountIds,
     };
     // A pre-drain selector reserves the native identity while reconciliation and
@@ -525,8 +522,7 @@ export async function resolveCodexAuthContext(
       if (isCodexAccountPaused(config, accountId)) {
         throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
       }
-      if (isAccountNeedsReauth(accountId)
-        && !(accountId === MAIN_CODEX_ACCOUNT_ID && requestScopedMainCredential)) {
+      if (isAccountNeedsReauth(accountId)) {
         throw new CodexPoolAuthenticationError("Selected Codex account needs reauthentication");
       }
       if (!isCodexAccountUsable(config, accountId, selectionOptions)) {
@@ -575,19 +571,6 @@ export async function resolveCodexAuthContext(
   }
 
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
-    if (requestScopedMainCredential) {
-      return {
-        kind: "main-pool",
-        accountId,
-        writerGeneration,
-        credentialSource: "caller",
-        ...(fixedAccountId !== undefined ? { fixedAccount: true } : {}),
-        ...(affinityKey ? { affinityKey } : {}),
-        ...(quotaScope ? { quotaScope } : {}),
-        ...(probeLeaseId ? { probeLeaseId } : {}),
-        ...(probeQuotaScope ? { probeQuotaScope } : {}),
-      };
-    }
     // Main account in rotation: inject the read-only auth.json token and fail closed if it vanished.
     const token = (options.getMainAccountToken ?? getMainAccountToken)();
     if (!token) {
@@ -653,7 +636,6 @@ export function applyCodexAuthContextToProvider(
   mode: CodexAccountMode | undefined,
 ): OcxRuntimeProviderConfig {
   if (mode !== "pool" || (ctx.kind !== "pool" && ctx.kind !== "main-pool") || provider.authMode !== "forward") return provider;
-  if (ctx.kind === "main-pool" && ctx.credentialSource === "caller") return provider;
   return {
     ...provider,
     _codexAccountOverride: {
@@ -695,12 +677,12 @@ export function materializeCodexUpstreamAuth(
     const value = headers.get(name);
     if (value) selected.set(name, value);
   }
-  if (ctx.kind === "pool" || (ctx.kind === "main-pool" && ctx.credentialSource !== "caller")) {
+  if (ctx.kind === "pool" || ctx.kind === "main-pool") {
     selected.set("authorization", `Bearer ${ctx.accessToken}`);
     selected.set("chatgpt-account-id", ctx.chatgptAccountId);
     return selected;
   }
-  if (ctx.kind === "main-pool" && ctx.credentialSource === "caller"
+  if (ctx.kind === "main" && options.substituteMainCredential !== true
     && !selected.has("chatgpt-account-id")) {
     const bearer = selected.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
     const accountId = bearer ? extractAccountId(undefined, bearer) : undefined;
@@ -726,7 +708,6 @@ export function headersForCodexAuthContext(headers: Headers, ctx: CodexAuthConte
 
 export function isCodexAuthContextUsable(ctx: CodexAuthContext, config: OcxConfig): boolean {
   if (ctx.kind === "main") return true;
-  if (ctx.kind === "main-pool" && ctx.credentialSource === "caller") return true;
   if (ctx.kind === "main-pool") return isCodexAccountUsable(config, ctx.accountId);
   return isCodexAccountUsable(config, ctx.accountId) && isCodexAccountGenerationLive(ctx.accountId, ctx.generation);
 }

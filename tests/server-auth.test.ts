@@ -1353,12 +1353,33 @@ describe("server local API auth", () => {
     const upstream = Bun.serve({
       port: 0,
       fetch(req) {
-        seen.push({
+        const observed = {
           host: req.headers.get("x-test-original-host") ?? "",
           authorization: req.headers.get("authorization"),
           chatgptAccountId: req.headers.get("chatgpt-account-id"),
-        });
-        return Response.json({ id: "resp_tier", object: "response", status: "completed", output: [] });
+        };
+        seen.push(observed);
+        const status = observed.authorization === "Bearer caller-invalid-401"
+          ? 401
+          : observed.authorization === "Bearer caller-invalid-403"
+            ? 403
+            : observed.authorization === "Bearer caller-quota-429"
+              ? 429
+              : observed.authorization === "Bearer caller-transient-500"
+                ? 500
+                : 200;
+        const quotaHeaders = observed.authorization === "Bearer caller-quota-headers"
+          || observed.authorization === "Bearer caller-quota-429"
+          ? {
+              "x-codex-primary-used-percent": "100",
+              "x-codex-primary-window-minutes": "300",
+              "x-codex-primary-reset-at": "1900000000",
+            }
+          : undefined;
+        return Response.json(
+          { id: "resp_tier", object: "response", status: "completed", output: [] },
+          { status, headers: quotaHeaders },
+        );
       },
     });
     let whamRequests = 0;
@@ -1510,6 +1531,7 @@ describe("server local API auth", () => {
       }
       clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
       clearCodexUpstreamHealth();
+      clearAccountQuota();
       rmSync(join(isolatedCodexHome!.path, "auth.json"), { force: true });
 
       const nativeCallerConfig = {
@@ -1521,28 +1543,70 @@ describe("server local API auth", () => {
       const nativeCaller = startServer(0, { inspectNativeCodexOwnership });
       try {
         await waitForNativeMainStartupGate();
-        markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
 
         expect((await request(nativeCaller, {
           authorization: "Bearer local-secret",
           "chatgpt-account-id": "must-not-forward",
         })).status).toBe(401);
         expect(seen).toHaveLength(beforeNativeCaller);
+        writeMainToken("opaque-file-main-token");
+
+        const fileMainBaseline = {
+          reauth: isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID),
+          quota: structuredClone(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)),
+          health: structuredClone(getCodexUpstreamHealth(MAIN_CODEX_ACCOUNT_ID)),
+          active: loadConfig().activeCodexAccountId,
+        };
+        const expectFileMainUnchanged = () => {
+          expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(fileMainBaseline.reauth);
+          expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toEqual(fileMainBaseline.quota);
+          expect(getCodexUpstreamHealth(MAIN_CODEX_ACCOUNT_ID)).toEqual(fileMainBaseline.health);
+          expect(loadConfig().activeCodexAccountId).toBe(fileMainBaseline.active);
+        };
+        const isolatedCallerFailures = [
+          ["caller-invalid-401", 401],
+          ["caller-invalid-403", 403],
+          ["caller-quota-429", 429],
+          ["caller-transient-500", 500],
+        ] as const;
+        for (const [token, status] of isolatedCallerFailures) {
+          const headers = {
+            authorization: `Bearer ${token}`,
+            "chatgpt-account-id": `${token}-account`,
+          };
+          expect((await request(nativeCaller, headers)).status).toBe(status);
+          expect((await compact(nativeCaller, headers)).status).toBe(status);
+          expect(await wsTurn(nativeCaller, headers)).toContain(String(status));
+          expectFileMainUnchanged();
+        }
+        const quotaOnlyHeaders = {
+          authorization: "Bearer caller-quota-headers",
+          "chatgpt-account-id": "caller-quota-headers-account",
+        };
+        expect((await request(nativeCaller, quotaOnlyHeaders)).status).toBe(200);
+        expect((await compact(nativeCaller, quotaOnlyHeaders)).status).toBe(200);
+        expect(await wsTurn(nativeCaller, quotaOnlyHeaders)).toContain("resp_tier");
+        expectFileMainUnchanged();
+
+        markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
 
         const nativeHeaders = {
           authorization: "Bearer caller-keyring-token",
           "chatgpt-account-id": "caller-keyring-account",
         };
+        const beforeHealthyNativeCaller = seen.length;
         expect((await request(nativeCaller, nativeHeaders)).status).toBe(200);
         expect((await compact(nativeCaller, nativeHeaders)).status).toBe(200);
-        expect(seen.slice(beforeNativeCaller)).toEqual(Array.from({ length: 2 }, () => ({
+        expect(seen.slice(beforeHealthyNativeCaller)).toEqual(Array.from({ length: 2 }, () => ({
           host: "chatgpt.com",
           authorization: "Bearer caller-keyring-token",
           chatgptAccountId: "caller-keyring-account",
         })));
+        expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(true);
       } finally {
         await nativeCaller.stop(true);
         clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+        rmSync(join(isolatedCodexHome!.path, "auth.json"), { force: true });
       }
 
       saveConfig({
