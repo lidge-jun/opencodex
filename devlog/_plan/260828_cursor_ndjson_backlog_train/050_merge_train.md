@@ -21,3 +21,7 @@ instruction is the maintainer approval for these session-authored PRs.
 4. gh pr merge --squash --delete-branch; record merge SHA.
 5. Child retarget (gh pr edit --base dev) + verify checks restart.
 6. Post-merge: origin/dev log + no new cursor-test failures.
+
+## Round log
+
+(appended as rounds close)
