@@ -48,3 +48,14 @@ instruction is the maintainer approval for these session-authored PRs.
   (R1 lesson applied) — but the parent squash still made the old chain
   CONFLICTING; wire branch cherry-picked onto dev (874f59734, 116 tests +
   tsc green) and force-pushed; #2802 stayed OPEN base=dev.
+- R5 (#2802): fresh CI on the rebased head fully green (0F, macos SUCCESS).
+  MERGED squash fbb5b0216, branch deleted.
+
+## Train outcome: DONE
+
+All five cursor PRs landed on dev: #2774 5511a424c -> #2803 922d53424
+(successor of #2795) -> #2769 1e46430e3 -> #2801 7232a60a7 (with causal
+flake fix 22c073e03) -> #2802 fbb5b0216. No open cursor PRs remain; all
+train branches deleted. Squash-merge over a stacked child invalidates the
+child's chain even after retargeting — cherry-pick onto dev is the reliable
+restack (applied twice: R2, R4->R5).
