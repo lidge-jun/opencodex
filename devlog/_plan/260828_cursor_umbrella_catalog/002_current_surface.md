@@ -5,7 +5,7 @@
   discovery.ts + request-builder.ts only.
 - discovery.ts: 69-row static seed (4 router + 52 + 13 thinking);
   inferCursorContextWindow (:27-38) hardcodes per-family windows; synthetic
-  ultra marker = kimi-k3-1m ONLY (:158-174); live merge is a FILTER (never
+  ultra marker = kimi-k3-1m ONLY (:158-174); live merge is a FILTER (45 of 69 rows carry ladders; quarantined opus-5 is a map key but not seeded) (never
   adds rows, provider-fetch.ts:1276); claude-opus-5 quarantined; dead
   CURSOR_REASONING_EFFORTS const.
 - live-models.ts: decode keeps modelId + maxMode only; DISCARDS displayName,

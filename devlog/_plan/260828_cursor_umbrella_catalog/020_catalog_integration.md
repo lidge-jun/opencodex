@@ -15,13 +15,21 @@
 - inferCursorContextWindow: read window from CURSOR_CAPABILITIES first,
   fall through to current heuristics for unknown ids.
 
-### 2. MODIFY src/adapters/cursor/live-models.ts — stop discarding maxMode:
-return maxModeModels and thread into provider-fetch so live maxMode marks
-bigContext on matching bases (union with static flags).
+### 2. MODIFY src/codex/catalog/provider-fetch.ts (~:1276-1310) — consume
+the maxModeModels ALREADY returned by live-models.ts (:123-136; decoder
+needs no change, A-gate finding 6): live maxMode ids union with
+maxModeVerified static flags to arm the ultra->maxMode wire rung per base.
 
-### 3. MODIFY src/providers/registry.ts cursor section — efforts from
-cursorUmbrellaRows(); defaults: keep kimi-k3 max; thinking-merged rows
-default per capability.
+### 3. MODIFY src/providers/registry.ts (~:1092 cursor section) — model ids
+from cursorUmbrellaRows(); modelReasoningEfforts from each row's
+defaultVariant ladder; modelDefaultReasoningEfforts keeps kimi-k3: max.
+
+### 3b. MODIFY src/codex/catalog/effort.ts (:219-226) — POLICY UNCHANGED
+(A-gate blocker 5): synthetic max+ultra stay appended to every
+reasoning-capable row for spawn validation. Add a comment distinguishing
+catalog-synthetic ultra from wire maxMode. Regression test: spawn-validation
+efforts for a cursor row WITHOUT maxModeVerified still include ultra, and
+the adapter clamps it (existing clamp test extended).
 
 ### 4. MODIFY src/adapters/cursor/request-builder.ts — normalizeCursorModelId
 / effort composition delegate to resolveCursorSelection; grok-fast parameter
@@ -31,10 +39,20 @@ path preserved; ultra path generalized (maxMode for any bigContext base).
 request-builder consume catalog.ts; migrate any residual export the tests
 reference.
 
-### 6. Tests — MODIFY tests near existing cursor suites: discovery filter
-with live suffix fixtures; registry efforts snapshot (row count ~34);
-request-builder wire ids unchanged for every legacy fixture (byte-equal
-wire id table test — the back-compat proof); sync row-count before/after.
+### 6. Tests (exact paths, A-gate blocker 7):
+- MODIFY tests/cursor-effort-suffix.test.ts — wire-id oracle table from 010
+  stays green after consumers switch (the byte-equal back-compat proof).
+- MODIFY tests/cursor-hardening.test.ts discovery sections — live filter
+  with suffix + cursor-prefixed fixtures via the new parser.
+- ADD tests/cursor-umbrella-rows.test.ts — cursorUmbrellaRows row count
+  (4 router excluded; ~30 umbrellas), thinking-merged rows list their
+  default-variant ladder, removed slugs absent from rows but RESOLVABLE via
+  resolveCursorSelection (pinned-session survival unit proof), quarantined
+  regular excluded while thinking sibling present.
+- ADD focused catalog sync test: sync output cursor section row count +
+  synthetic max/ultra still appended (spawn validation).
+- Pinned-session integration: request with model cursor/claude-opus-5-thinking
+  (removed row) through request-builder resolves to same wire id as today.
 
 ## Verifiers
 

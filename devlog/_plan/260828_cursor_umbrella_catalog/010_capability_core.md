@@ -4,18 +4,26 @@
 
 ### 1. ADD src/adapters/cursor/catalog.ts
 
-- export interface CursorCapability { levels: readonly CursorEffort[];
-  thinking?: { order: "thinking-then-effort" | "effort-then-thinking" | "bare" };
-  fast?: boolean; bigContext?: boolean; window: number; quarantined?: boolean }
+- export type CursorVariantKind = "regular" | "thinking" | "fast" | "thinkingFast";
+- export interface CursorVariantSpec { levels: readonly string[];
+  order?: "thinking-then-effort" | "effort-then-thinking" | "bare";
+  quarantined?: boolean }
+- export interface CursorCapability { variants: Partial<Record<CursorVariantKind,
+  CursorVariantSpec>>; defaultVariant: CursorVariantKind; window: number;
+  maxModeVerified?: boolean; wirePrefix?: "cursor-" }
+  (A-gate blocker 1: per-variant ladders — claude-opus-5 fast low/med/high
+  vs thinkingFast low..max representable; defaultVariant = thinking when a
+  thinking variant exists, else regular; quarantine per-variant — blocker 3.)
 - export const CURSOR_CAPABILITIES: Record<string, CursorCapability> —
-  seeded from today's CURSOR_MODEL_EFFORT_TIERS (46) + CURSOR_THINKING_FAMILIES
-  (13) + senpi windows (001 table), collapsed to ~30 base entries: thinking
-  variants become thinking:{order} on the base; -fast entries become fast:true;
-  kimi-k3-1m becomes bigContext:true on kimi-k3; claude/gemini/gpt-5.6 windows
-  per senpi (1M) with bigContext on claude+gemini+kimi families.
-- export function parseCursorVariantId(id): { baseId, level?, thinking,
-  fast, ultra } — senpi grammar + our -1m suffix; level tokens
-  minimal|low|medium|high|extra-high|xhigh|max|none.
+  seeded 1:1 from CURSOR_MODEL_EFFORT_TIERS + CURSOR_THINKING_FAMILIES +
+  senpi window table; maxModeVerified only on kimi-k3 (blocker 4);
+  wirePrefix "cursor-" on grok-4.5/grok-4.6 regular.
+- export function parseCursorVariantId(id): { baseId, kind, level?, ultra }
+  with STRICT precedence (blocker 2): (1) exact base-id table hit (covers
+  gpt-5.1-codex-max, gpt-5.5-extra, claude-4-sonnet-1m as real identities);
+  (2) cursor- prefix strip + re-lookup; (3) -1m synthetic suffix; (4) senpi
+  suffix grammar (strip -fast; -thinking-<lvl> | -<lvl>-thinking |
+  -thinking | -<lvl>); tokens minimal|low|medium|high|extra-high|xhigh|max|none.
 - export function resolveCursorSelection(pickedId, codexEffort?):
   { wireId, maxMode, params: [] } — suffix-id-first composition reusing the
   order rules currently in cursorWireModelIdWithEffort; ultra ->
@@ -26,13 +34,18 @@
 
 ### 2. Tests — ADD tests/cursor-catalog.test.ts
 
-Named activation per branch: grammar round-trip for ALL 69 legacy ids
-(fixture list frozen from discovery.ts seed) -> every id parses to a known
-base; thinking merge (claude-opus-5 + high -> claude-opus-5-thinking-high);
-bare-thinking families (claude-4-sonnet) ignore effort; fast alias
-resolution; ultra on bigContext base -> maxMode + top effort; ultra on
-non-bigContext -> clamps to max, no maxMode; quarantine row excluded from
-umbrella rows; unknown id passthrough unchanged.
+Named activation per branch, with a FROZEN fixture table (all 69 seed ids +
+cursor- prefixed wire forms + representative live suffix ids) asserting
+(parsedBase, kind, level) AND resolved wire id byte-equality against the
+CURRENT cursorWireModelIdWithEffort/cursorRequestWireModelIdWithEffort
+output (generated once from the old module while it still exists — the
+back-compat oracle). Plus: precedence cases (gpt-5.1-codex-max stays a base;
+gpt-5.5-extra + any effort -> gpt-5.5-extra-high; cursor-grok-4.6-xhigh
+round-trips); thinking default variant; bare-thinking ignores effort;
+per-variant ladder divergence (opus-5 fast vs thinkingFast); ultra ->
+maxMode ONLY on maxModeVerified; ultra elsewhere clamps to ladder top
+without maxMode; variant-specific quarantine (opus-5 regular excluded,
+thinking present); unknown id passthrough.
 
 ### 3. NO consumer changes in this PR (effort-map untouched) — additive
 module + tests only, so the diff reviews clean.
