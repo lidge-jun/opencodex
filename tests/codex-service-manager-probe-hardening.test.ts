@@ -138,6 +138,61 @@ function taskAbsentRunner(calls: Array<{ file: string; args: readonly string[] }
 }
 
 describe("Windows ownership probe hardening regressions", () => {
+  test("a scheduler registered for another OpenCodex home does not claim the current home (#2800)", () => {
+    const foreignConfigDir = join(home, "foreign-opencodex");
+    const foreignLauncher = join(foreignConfigDir, "opencodex-service-launcher.vbs");
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (file.toLowerCase().endsWith("sc.exe")) return raw(1, "", "1060");
+      if (args.includes("/xml")) return raw(0, schedulerXml(foreignLauncher));
+      return raw(1, "", "unexpected query");
+    };
+
+    const result = inspectNativeCodexOwnership({
+      platform: "win32",
+      home,
+      configDir,
+      runRaw,
+      winswStatus: () => "nonexistent",
+      statePaths: [],
+      currentHomes: {
+        codexHome: join(home, "current-codex"),
+        opencodexHome: configDir,
+      },
+    });
+
+    expect(result).toEqual({
+      ownership: "owned",
+      reason: "no service state and no service manager claim",
+    });
+  });
+
+  test("a current-home scheduler with missing local task XML remains unproven", () => {
+    const localLauncher = join(configDir, "opencodex-service-launcher.vbs");
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (file.toLowerCase().endsWith("sc.exe")) return raw(1, "", "1060");
+      if (args.includes("/xml")) return raw(0, schedulerXml(localLauncher));
+      return raw(1, "", "unexpected query");
+    };
+
+    const result = inspectNativeCodexOwnership({
+      platform: "win32",
+      home,
+      configDir,
+      runRaw,
+      winswStatus: () => "nonexistent",
+      statePaths: [],
+      currentHomes: {
+        codexHome: join(home, "current-codex"),
+        opencodexHome: configDir,
+      },
+    });
+
+    expect(result).toEqual({
+      ownership: "unknown",
+      reason: "Task Scheduler holds opencodex-proxy but its task XML is missing",
+    });
+  });
+
   test("registered CP949 task XML preserves a Korean profile path", () => {
     const koreanConfigDir = join(home, "한글", ".opencodex");
     const codexHome = join(home, "한글", ".codex");
