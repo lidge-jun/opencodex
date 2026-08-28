@@ -250,7 +250,9 @@ function formatTokPerSecond(result: TokPerSecondResult | undefined, localeTag?: 
   return `${result.estimated ? "~" : ""}${value}`;
 }
 
-/** Consecutive failed polls before a stale table is called out. Two seconds each, so ~6s. */
+const LOGS_POLL_INTERVAL_MS = 2000;
+const LOGS_POLL_BACKOFF_MAX_EXPONENT = 4;
+/** Consecutive failed polls before a stale table is called out. */
 const STALE_POLL_FAILURE_LIMIT = 3;
 
 const METRIC_REASON_KEYS = {
@@ -363,12 +365,18 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const resourceKey = logsCacheKey(apiBase);
   const cachedLogs = validCachedLogs(readSessionListCache<LogEntry[]>(resourceKey));
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [failureStreak, setFailureStreak] = useState<{ error: unknown; count: number }>(
+    { error: null, count: 0 },
+  );
   const [detail, setDetail] = useState<LogEntry | null>(null);
   const [surfaceFilter, setSurfaceFilter] = useState<LogSurfaceFilter>("all");
   const [interceptedHelpersOnly, setInterceptedHelpersOnly] = useState(false);
   const [conversationFilter, setConversationFilter] = useState("");
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const logRetryRef = useRef<{ key: string; failures: number; nextAttemptAt: number; error: unknown }>(
+    { key: resourceKey, failures: 0, nextAttemptAt: 0, error: null },
+  );
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   // The proxy's own zone, so timestamps read the same as the server's logs rather than being
   // silently shifted into the viewer's zone (#725). Fetched once: it cannot change while the
@@ -417,18 +425,36 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const selectTab = selectLogsTab;
 
   const loadLogs = useCallback(async (signal: AbortSignal): Promise<LogEntry[]> => {
-    const res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-    const body = await res.json() as LogEntry[] | { logs?: LogEntry[] };
-    const raw = Array.isArray(body) ? body : (body.logs ?? []);
-    const next = raw.map(sanitizeLogEntryRouteDecision);
-    writeSessionListCache(resourceKey, next);
-    return next;
+    let retry = logRetryRef.current;
+    if (retry.key !== resourceKey) {
+      retry = { key: resourceKey, failures: 0, nextAttemptAt: 0, error: null };
+      logRetryRef.current = retry;
+    }
+    if (retry.failures > 0 && Date.now() < retry.nextAttemptAt) throw retry.error;
+    try {
+      const res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
+      const body = await res.json() as LogEntry[] | { logs?: LogEntry[] };
+      const raw = Array.isArray(body) ? body : (body.logs ?? []);
+      const next = raw.map(sanitizeLogEntryRouteDecision);
+      logRetryRef.current = { key: resourceKey, failures: 0, nextAttemptAt: 0, error: null };
+      writeSessionListCache(resourceKey, next);
+      return next;
+    } catch (error) {
+      if (signal.aborted) throw error;
+      const normalized = error ?? new Error("log request failed");
+      const failures = retry.failures + 1;
+      const backoffMs = LOGS_POLL_INTERVAL_MS * (2 ** Math.min(
+        failures,
+        LOGS_POLL_BACKOFF_MAX_EXPONENT,
+      ));
+      logRetryRef.current = { key: resourceKey, failures, nextAttemptAt: Date.now() + backoffMs, error: normalized };
+      throw normalized;
+    }
   }, [apiBase, resourceKey]);
 
-  // The resource layer owns the request and the 2s poll. It keeps held rows through a quiet
-  // poll on its own, which is what the old silent/non-silent split was hand-rolling — and an
-  // empty successful response is now a real empty result rather than a cold load.
+  // The resource layer owns the request and the 2s base poll. loadLogs backs off actual network
+  // attempts after failures while preserving those shared scheduler ticks and held rows.
   const logsResource = useDataSurface<LogEntry[]>(
     resourceKey,
     [apiBase],
@@ -436,13 +462,17 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     {
       isEmpty: rows => rows.length === 0,
       enabled: tab === "logs",
-      pollMs: autoRefresh ? 2000 : undefined,
+      pollMs: autoRefresh ? LOGS_POLL_INTERVAL_MS : undefined,
       initialData: cachedLogs ?? undefined,
     },
   );
   const logsState = logsResource.state;
   const logs = logsState.data ?? cachedLogs ?? [];
   const fetchLogs = logsResource.refresh;
+  const retryLogs = useCallback(() => {
+    logRetryRef.current = { key: resourceKey, failures: 0, nextAttemptAt: 0, error: null };
+    fetchLogs({ forceLoading: true });
+  }, [fetchLogs, resourceKey]);
 
   // A single failed tick on a two-second poll is noise, but an outage that never recovers must not
   // leave the user reading stale rows as if they were current. Count consecutive failures and speak
@@ -453,9 +483,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   // in sync and no frame painted with a stale banner. `streak` counts CONSECUTIVE failed
   // settlements: it is stored keyed by the error identity that produced it, so repeated
   // renders of the same failure do not inflate the count and a success clears it.
-  const [failureStreak, setFailureStreak] = useState<{ error: unknown; count: number }>(
-    { error: null, count: 0 },
-  );
   if (settledSuccess && failureStreak.count !== 0) {
     setFailureStreak({ error: null, count: 0 });
   } else if (settledFailure && failureStreak.error !== logsState.error) {
@@ -646,7 +673,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       {logsState.kind === "failed-cold" && (
         <Notice tone="err">
           {logsState.error instanceof Error ? `${t("logs.loadError")} ${logsState.error.message}` : t("logs.loadError")}{" "}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => fetchLogs({ forceLoading: true })} disabled={logsState.refreshing}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={retryLogs} disabled={logsState.refreshing}>
             {t("common.retry")}
           </button>
         </Notice>
@@ -656,7 +683,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       {pollFailing && logs.length > 0 && (
         <Notice tone="err">
           {t("logs.loadError")}{" "}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => fetchLogs({ forceLoading: true })} disabled={logsResource.refreshing}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={retryLogs} disabled={logsResource.refreshing}>
             {t("common.retry")}
           </button>
         </Notice>

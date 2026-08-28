@@ -127,7 +127,10 @@ export function serveGuiFile(
   const ext = extname(filePath);
   const contentType = MIME_TYPES[ext] || "application/octet-stream";
   if (ext === ".html") return htmlResponse(filePath, session);
-  return new Response(Bun.file(filePath), {
+  // Snapshot bytes before returning the response. Bun.file is lazy: if gui/dist is replaced
+  // after Bun frames the response but before the stream finishes, its Content-Length can
+  // describe the old file while the body comes from the new one (#2792).
+  return new Response(readFileSync(filePath), {
     headers: { "Content-Type": contentType, ...browserSecurityHeaders() },
   });
 }
