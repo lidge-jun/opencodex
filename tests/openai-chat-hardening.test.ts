@@ -953,3 +953,50 @@ test("tool-call deltas emit heartbeats so a long buffering phase is not read as 
   expect(visible.at(-1)).toMatchObject({ type: "done" });
 });
 });
+
+describe("AgentRouter openai-chat compatibility", () => {
+  const preamble = "[Instruction: Process the user request below and respond in the appropriate language.]";
+
+  test("adds a stable Codex originator while preserving operator header precedence", async () => {
+    const automatic = await createOpenAIChatAdapter(provider({ baseUrl: "https://agentrouter.org/v1" })).buildRequest(parsed());
+    expect(automatic.headers.originator).toBe("codex_cli_rs");
+
+    const overridden = await createOpenAIChatAdapter(provider({
+      baseUrl: "https://agentrouter.org/v1",
+      headers: { Originator: "operator-client" },
+    })).buildRequest(parsed());
+    expect(overridden.headers.Originator).toBe("operator-client");
+    expect(overridden.headers.originator).toBeUndefined();
+  });
+
+  test.each([
+    "https://notagentrouter.example/v1",
+    "https://agentrouter.org.attacker.example/v1",
+  ])("does not add compatibility behavior to a lookalike host: %s", async baseUrl => {
+    const request = await createOpenAIChatAdapter(provider({ baseUrl })).buildRequest(parsed());
+    expect(request.headers.originator).toBeUndefined();
+    expect(request.body).not.toContain(preamble);
+  });
+
+  test("frames translated chat without changing the original parsed request", async () => {
+    const source = parsed();
+    source.context.messages[0]!.content = "responda somente: OK";
+    const request = await createOpenAIChatAdapter(provider({ baseUrl: "https://agentrouter.org/v1" })).buildRequest(source);
+    const body = JSON.parse(request.body as string) as { messages: { content: { text: string }[] }[] };
+    expect(body.messages[0]?.content.map(part => part.text)).toEqual([preamble, "responda somente: OK"]);
+    expect(source.context.messages[0]?.content).toBe("responda somente: OK");
+  });
+
+  test("frames passthrough chat without mutating the caller body", () => {
+    const rawBody = { messages: [{ role: "user", content: "responda somente: OK" }] };
+    const request = buildOpenAIChatPassthroughRequest(
+      provider({ baseUrl: "https://agentrouter.org/v1" }),
+      rawBody,
+      "test-model",
+      false,
+    );
+    const body = JSON.parse(request.body as string) as { messages: { content: { text: string }[] }[] };
+    expect(body.messages[0]?.content.map(part => part.text)).toEqual([preamble, "responda somente: OK"]);
+    expect(rawBody.messages[0]?.content).toBe("responda somente: OK");
+  });
+});

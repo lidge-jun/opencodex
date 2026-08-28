@@ -26,6 +26,7 @@ import {
 } from "../providers/fastwire";
 import { openaiChatCompletionsUrl } from "./openai-chat-url";
 import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
+import { agentRouterDefaultHeaders, frameAgentRouterMessages } from "./agentrouter";
 import {
   isXaiSchemaTarget,
   lookupLocalJsonPointer,
@@ -87,7 +88,10 @@ function openAIChatTransport(provider: OcxProviderConfig): {
   if ((provider.authMode === "key" || provider.authMode === "oauth") && !provider.keyOptional && !hasCredential) {
     throw new Error(`${provider.adapter} requires a non-empty credential (authMode: ${provider.authMode})`);
   }
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...agentRouterDefaultHeaders(provider.baseUrl, provider.headers),
+  };
   if (hasCredential) headers.Authorization = `Bearer ${provider.apiKey}`;
   if (provider.headers) Object.assign(headers, provider.headers);
   return { url: openaiChatCompletionsUrl(provider.baseUrl), headers, hasCredential };
@@ -111,7 +115,7 @@ export function buildOpenAIChatPassthroughRequest(
 
   const body: Record<string, unknown> = {
     model: provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(modelId) : modelId,
-    messages: rawBody.messages,
+    messages: frameAgentRouterMessages(provider.baseUrl, rawBody.messages),
     stream,
   };
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
@@ -1379,7 +1383,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
     buildRequest(parsed: OcxParsedRequest) {
       const { url, headers, hasCredential } = openAIChatTransport(provider);
-      const messages = messagesToChatFormat(parsed, provider);
+      const messages = frameAgentRouterMessages(provider.baseUrl, messagesToChatFormat(parsed, provider));
       const tools = toolsToChatFormatForProvider(parsed, provider);
       const toolChoice = toolChoiceToChatFormat(parsed.options.toolChoice, parsed.context.tools, provider);
 
