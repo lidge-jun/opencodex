@@ -18,6 +18,10 @@ let home = "";
 
 type Wire = "chat" | "responses";
 
+function bearer(accessToken: string): string {
+  return ["Bearer", accessToken].join(" ");
+}
+
 function config(wire: Wire): OcxConfig {
   const model = wire === "chat" ? "gpt-4o" : "gpt-5.4";
   return {
@@ -171,7 +175,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
       expect(response.status).toBe(200);
       expect(observed.dispatches).toEqual([{
         origin: ACCOUNT_A_ORIGIN,
-        authorization: "Bearer copilot-access-a-refreshed",
+        authorization: bearer("copilot-access-a-refreshed"),
       }]);
     });
 
@@ -189,8 +193,8 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
 
       expect(response.status).toBe(200);
       expect(observed.dispatches).toEqual([
-        { origin: ACCOUNT_A_ORIGIN, authorization: "Bearer copilot-access-a" },
-        { origin: ACCOUNT_A_ORIGIN, authorization: "Bearer copilot-access-a-refreshed" },
+        { origin: ACCOUNT_A_ORIGIN, authorization: bearer("copilot-access-a") },
+        { origin: ACCOUNT_A_ORIGIN, authorization: bearer("copilot-access-a-refreshed") },
       ]);
     });
   }
@@ -204,8 +208,8 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
 
     expect(response.status).toBe(200);
     expect(observed.dispatches).toEqual([
-      { origin: ACCOUNT_A_ORIGIN, authorization: "Bearer copilot-access-a" },
-      { origin: ACCOUNT_B_ORIGIN, authorization: "Bearer copilot-access-b" },
+      { origin: ACCOUNT_A_ORIGIN, authorization: bearer("copilot-access-a") },
+      { origin: ACCOUNT_B_ORIGIN, authorization: bearer("copilot-access-b") },
     ]);
   });
 });
