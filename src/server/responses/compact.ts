@@ -74,7 +74,11 @@ import {
   upstreamHostHealthKey,
   type UpstreamHostAdmissionLease,
 } from "../../codex/upstream-host-health";
-import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
+import {
+  ForwardAdmissionCredentialError,
+  hasForwardableCodexBearer,
+  validateForwardAdmissionCredential,
+} from "../auth-cors";
 import type { DataPlaneAdmission } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
@@ -165,6 +169,7 @@ async function resolveAlternateCompactContext(args: {
     const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
       ...(selectedModelId ? { modelId: selectedModelId } : {}),
       excludeAccountId,
+      requestScopedMainCredential: hasForwardableCodexBearer(req.headers, config),
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
     });
     if (!authCtx.accountId || authCtx.accountId === excludeAccountId) return null;
@@ -326,6 +331,9 @@ export async function handleResponsesCompact(
   // consume that credential. See the longer note in core.ts resolveResponsesCodexAuth.
   const substituteMainCredential = admission?.source === "bearer"
     && route.codexAccountMode !== undefined;
+  const requestScopedMainCredential = route.codexAccountMode !== undefined
+    && !substituteMainCredential
+    && hasForwardableCodexBearer(req.headers, config);
   if (route.codexAccountMode === "direct" && !substituteMainCredential) {
     try { validateForwardAdmissionCredential(req.headers, config); }
     catch (err) {
@@ -372,6 +380,7 @@ export async function handleResponsesCompact(
           accountId: route.codexAccountId,
           modelId: selectedModelId,
           substituteMainCredentialForDirect: substituteMainCredential,
+          requestScopedMainCredential,
           beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
         });
         logCtx.accountLogLabel = codexAuthContextLogLabel(authCtx, config);

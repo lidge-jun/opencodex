@@ -172,7 +172,11 @@ import {
   fetchWithTransientRetry,
   prepareSameTarget429Wait,
 } from "../../lib/upstream-retry";
-import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
+import {
+  ForwardAdmissionCredentialError,
+  hasForwardableCodexBearer,
+  validateForwardAdmissionCredential,
+} from "../auth-cors";
 import type { DataPlaneAdmission } from "../auth-cors";
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
@@ -484,11 +488,15 @@ function bindRouteReasoningReplayScope(args: {
       || args.codexAuthContext?.kind === "main-pool"
       ? args.codexAuthContext
       : undefined;
+    const storedPoolContext = poolContext?.kind === "main-pool"
+      && poolContext.credentialSource === "caller"
+      ? undefined
+      : poolContext;
     credentialIdentity = reasoningReplayCodexCredentialIdentity({
-      authorization: poolContext
-        ? `Bearer ${poolContext.accessToken}`
+      authorization: storedPoolContext
+        ? `Bearer ${storedPoolContext.accessToken}`
         : args.forwardHeaders?.get("authorization"),
-      chatgptAccountId: poolContext?.chatgptAccountId
+      chatgptAccountId: storedPoolContext?.chatgptAccountId
         ?? args.forwardHeaders?.get("chatgpt-account-id"),
       accountId: poolContext?.accountId,
       credentialGeneration: poolContext?.kind === "pool"
@@ -503,7 +511,7 @@ function bindRouteReasoningReplayScope(args: {
     // refused, so direct-forward turns get no durable scope (fail closed; the in-process
     // cache still covers same-process replay).
     const codexDurableHandle = poolContext?.accountId
-      ?? poolContext?.chatgptAccountId
+      ?? storedPoolContext?.chatgptAccountId
       ?? undefined;
     credentialDurableIdentity = durableReplayCredentialIdentity(
       "codex",
@@ -1075,6 +1083,7 @@ async function retryCodexPoolOnAlternateAccount(
         {
           excludeAccountId: firstAuthCtx.accountId,
           modelId: route.modelId,
+          requestScopedMainCredential: hasForwardableCodexBearer(req.headers, config),
           beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
           resolveCodexModelEntitlements: entitlementResolver,
         },
@@ -1655,6 +1664,9 @@ async function resolveResponsesCodexAuth(
     // no-ChatGPT-login install keeps working.
     const substituteMainCredential = options.admission?.source === "bearer"
       && (route.codexAccountMode !== undefined || isCanonicalOpenAiForwardProvider(route.provider));
+    const requestScopedMainCredential = route.codexAccountMode !== undefined
+      && !substituteMainCredential
+      && hasForwardableCodexBearer(req.headers, config);
     if (route.codexAccountMode === "direct" && !substituteMainCredential) {
       validateForwardAdmissionCredential(req.headers, config);
     }
@@ -1664,6 +1676,7 @@ async function resolveResponsesCodexAuth(
         accountId: route.codexAccountId,
         modelId: route.modelId,
         substituteMainCredentialForDirect: substituteMainCredential,
+        requestScopedMainCredential,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
         resolveCodexModelEntitlements: options.resolveCodexModelEntitlements,
       });

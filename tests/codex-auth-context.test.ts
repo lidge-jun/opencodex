@@ -71,6 +71,7 @@ import {
   tryAdmitTurn,
 } from "../src/server/lifecycle";
 import type { CodexModelEntitlementSnapshot } from "../src/codex/model-entitlements";
+import { hasForwardableCodexBearer } from "../src/server/auth-cors";
 
 let testDir: string;
 let previousOpencodexHome: string | undefined;
@@ -1017,6 +1018,43 @@ describe("Codex auth context", () => {
       fixedAccount: true,
     });
     expect(cfg.activeCodexAccountId).toBe("pool-a");
+  });
+
+  test("uses a validated native caller bearer for main without persisting it", async () => {
+    const cfg = config();
+    cfg.codexAccounts = [];
+    cfg.activeCodexAccountId = undefined;
+    const inbound = new Headers({
+      authorization: "Bearer caller-keyring-token",
+      "chatgpt-account-id": "caller-keyring-account",
+      "openai-beta": "responses=experimental",
+    });
+    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+
+    try {
+      expect(hasForwardableCodexBearer(inbound, cfg)).toBe(true);
+      expect(hasForwardableCodexBearer(new Headers({
+        authorization: ["Bearer ocx", "data", "not-forwardable"].join("_"),
+        "chatgpt-account-id": "caller-keyring-account",
+      }), cfg)).toBe(false);
+      const ctx = await resolveCodexAuthContext(inbound, cfg, "pool", {
+        requestScopedMainCredential: true,
+      });
+      expect(ctx).toMatchObject({
+        kind: "main-pool",
+        accountId: MAIN_CODEX_ACCOUNT_ID,
+        credentialSource: "caller",
+      });
+      expect(ctx).not.toHaveProperty("accessToken");
+      expect(ctx).not.toHaveProperty("chatgptAccountId");
+
+      const upstream = materializeCodexUpstreamAuth(inbound, ctx);
+      expect(upstream.get("authorization")).toBe("Bearer caller-keyring-token");
+      expect(upstream.get("chatgpt-account-id")).toBe("caller-keyring-account");
+      expect(upstream.get("openai-beta")).toBe("responses=experimental");
+    } finally {
+      clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+    }
   });
   test("selects pool auth independently of the routed provider", async () => {
     saveCodexAccountCredential("pool-a", {

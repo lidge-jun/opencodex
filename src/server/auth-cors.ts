@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { extractAccountId } from "../oauth/chatgpt";
 import { formatErrorResponse } from "../bridge";
 import {
   codexAutoStartEnabled,
@@ -429,6 +430,14 @@ export class ForwardAdmissionCredentialError extends Error {
 export function validateForwardAdmissionCredential(headers: Headers, config: OcxConfig): void {
   const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (bearer && isProxyAdmissionSecret(bearer, config)) throw new ForwardAdmissionCredentialError();
+}
+
+/** Whether Authorization carries a caller-owned native Codex credential safe to forward. */
+export function hasForwardableCodexBearer(headers: Headers, config: OcxConfig): boolean {
+  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const accountId = headers.get("chatgpt-account-id")?.trim()
+    || (bearer ? extractAccountId(undefined, bearer) : undefined);
+  return !!bearer && !!accountId && !isProxyAdmissionSecret(bearer, config);
 }
 
 /**
