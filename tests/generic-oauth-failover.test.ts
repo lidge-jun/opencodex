@@ -12,6 +12,8 @@ import {
   rotateGenericOAuthAccountOn429,
 } from "../src/oauth/generic-account-failover";
 import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../src/oauth/store";
+import { resolveCopilotApiBaseUrl } from "../src/oauth/github-copilot";
+import { resolveProviderTransport } from "../src/providers/xai-transport";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 const originalHome = process.env.OPENCODEX_HOME;
@@ -249,9 +251,92 @@ describe("sidecar on429 wiring", () => {
     // re-resolved with the rotated account's own apiBaseUrl.
     expect(body).toContain("github-copilot");
     expect(body).toContain("snapshot.apiBaseUrl");
+    // ...and RESOLVED before it is handed over, so a rotated account with no stored origin
+    // cannot fall through to the previous account's inherited baseUrl. See the behavioral
+    // test below for why asserting the bare expression was not enough.
+    expect(body).toContain("resolveCopilotApiBaseUrl(snapshot.apiBaseUrl)");
     expect(body).toContain("resolveProviderTransport(");
 
     // Kiro routing metadata still travels with its own token.
     expect(body).toContain("_kiroAuthContext");
+  });
+});
+
+/**
+ * The rotation pairing bug that source-text guards could not see.
+ *
+ * `applyFailoverSnapshot` clones the FAILED account's provider (`{ ...route.provider }`) and then
+ * re-resolves Copilot transport with the rotated account's `snapshot.apiBaseUrl`. When the
+ * rotated account has no stored origin — an ordinary state, since `apiBaseUrl` is only recorded
+ * when the login response carried `endpoints.api` — the resolver's own fallback chain is
+ *
+ *     validateCopilotApiBaseUrl(apiBaseUrl)          // undefined for account B
+ *  ?? validateCopilotApiBaseUrl(provider.baseUrl)    // still account A's regional origin
+ *  ?? GITHUB_COPILOT_DEFAULT_API_BASE
+ *
+ * so B's bearer is sent to A's accepted origin. Both values are individually legitimate, which
+ * is why every existing test passed: the defect is in the PAIRING, and only a test that supplies
+ * one account WITH an origin and one WITHOUT can observe it.
+ */
+describe("#2807 a 429 rotation pairs the bearer with its OWN origin", () => {
+  const REGIONAL = "https://proxy.githubcopilot.com";
+  const CANONICAL = "https://api.githubcopilot.com";
+
+  /** The failed account's provider as `applyFailoverSnapshot` receives it: already resolved. */
+  function providerAfterAccountA(): OcxProviderConfig {
+    return {
+      adapter: "openai-chat",
+      authMode: "oauth",
+      baseUrl: REGIONAL,
+      apiKey: "bearer-account-a",
+    } as unknown as OcxProviderConfig;
+  }
+
+  test("an account with its own regional origin keeps it", () => {
+    const rotated = resolveProviderTransport(
+      "github-copilot",
+      { ...providerAfterAccountA(), apiKey: "bearer-account-b" },
+      undefined,
+      resolveCopilotApiBaseUrl("https://other.githubcopilot.com"),
+    ) as OcxProviderConfig;
+    expect(rotated.baseUrl).toBe("https://other.githubcopilot.com");
+    expect(rotated.apiKey).toBe("bearer-account-b");
+  });
+
+  test("an account with NO stored origin falls back to canonical, never to the failed account's", () => {
+    // This is the regression. Before the fix, `undefined` reached the transport resolver and its
+    // second fallback returned the cloned REGIONAL origin — account A's — paired with B's bearer.
+    const rotated = resolveProviderTransport(
+      "github-copilot",
+      { ...providerAfterAccountA(), apiKey: "bearer-account-b" },
+      undefined,
+      resolveCopilotApiBaseUrl(undefined),
+    ) as OcxProviderConfig;
+    expect(rotated.baseUrl).toBe(CANONICAL);
+    expect(rotated.baseUrl).not.toBe(REGIONAL);
+    expect(rotated.apiKey).toBe("bearer-account-b");
+  });
+
+  test("the unresolved form is what made the pairing possible", () => {
+    // Proves the assertion above is not vacuous: hand the resolver the raw snapshot value the
+    // way the code used to, and account A's origin comes back with account B's bearer.
+    const leaked = resolveProviderTransport(
+      "github-copilot",
+      { ...providerAfterAccountA(), apiKey: "bearer-account-b" },
+      undefined,
+      undefined,
+    ) as OcxProviderConfig;
+    expect(leaked.baseUrl).toBe(REGIONAL);
+    expect(leaked.apiKey).toBe("bearer-account-b");
+  });
+
+  test("a crafted non-Copilot origin on the rotated account is refused, not forwarded", () => {
+    const rotated = resolveProviderTransport(
+      "github-copilot",
+      { ...providerAfterAccountA(), apiKey: "bearer-account-b" },
+      undefined,
+      resolveCopilotApiBaseUrl("https://attacker.example.com"),
+    ) as OcxProviderConfig;
+    expect(rotated.baseUrl).toBe(CANONICAL);
   });
 });
