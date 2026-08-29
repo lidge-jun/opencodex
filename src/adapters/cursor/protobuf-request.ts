@@ -218,6 +218,9 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
 
   const externalModel = isCursorExternalWireModel(request.modelId);
   const echoToolResultInRoot = cursorNeedsExternalToolContinuation(request.modelId);
+  // Replayed results name the invocation that produced them; without it the result is orphaned
+  // (devlog 260829 000_rca). Indexed once per request rather than rescanned per result.
+  const replayedCalls = echoToolResultInRoot ? toolCallsByCallId(messages) : undefined;
   const lastRawIsToolResult = messages.at(-1)?.role === "toolResult";
   const activeUserIndex = lastRawIsToolResult ? -1 : lastActionIndex(messages);
   // Repetition breaker (devlog 260826 gap-9): external full-replay flattens history to text,
@@ -287,7 +290,11 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
           text,
         );
       }
-      // Assistant tool CALLS are intentionally NOT replayed as visible "[Tool Call]" text here.
+      // Assistant tool CALLS are NOT replayed as a separate visible "[Tool Call]" entry: a model
+       // few-shot-mimics that marker and emits later tool calls as inert text (363-B guard in
+      // tests/cursor-tool-continuation.test.ts). The invocation is instead named INSIDE the paired
+      // "[Tool Result]" envelope below, which carries the same information without a mimickable
+      // call template (devlog 260829 002_audit_round2).
     } else if (message.role === "toolResult") {
       // Native resume models already receive the paired MCP result through turns[]. Replaying
       // the same payload as assistant-role "[Tool Result]" / "[tool_result]" text teaches Auto
@@ -296,7 +303,7 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       // #1920: the prefix must reflect the NORMALIZED error state (an empty
       // node_repl result is an error even when the runtime said isError=false).
       const prefix = normalizedToolResult(message, contentToText(message.content)).isError ? "[Tool Error]" : "[Tool Result]";
-      const text = `${prefix}\n${toolResultToText(message)}`;
+      const text = `${prefix}\n${toolResultToText(message, replayedCalls?.get(decodeCursorCallId(message.toolCallId)))}`;
       pushDeduped(toolResultRootPayload(text), "toolResult", { messageIndex: i, text }, text);
     }
   }
@@ -660,12 +667,57 @@ function toolResultContentItems(
   return items;
 }
 
-function toolResultToText(message: OcxToolResultMessage): string {
+/**
+ * Serialize tool-call arguments for the replayed transcript. `OcxToolCall.arguments` is always an
+ * object, but it originates in provider JSON, so a cyclic or BigInt-bearing value must degrade to a
+ * marker instead of throwing inside request encoding.
+ */
+function toolCallArgumentsText(args: Record<string, unknown>): string {
+  try {
+    return JSON.stringify(args) ?? "[unserializable arguments]";
+  } catch {
+    return "[unserializable arguments]";
+  }
+}
+
+/**
+ * The invocation that produced a replayed tool result, rendered as ONE descriptive line inside the
+ * result envelope.
+ *
+ * Why not a separate "[Tool Call]" entry: a model few-shot-mimics that marker and starts emitting
+ * later tool calls as inert text instead of real tool frames, which halts multi-tool continuations
+ * (363-B guard, tests/cursor-tool-continuation.test.ts). Why it must exist at all: without any
+ * record of the invocation, the replayed result is orphaned — its `call_id` refers to nothing the
+ * model can see — and live cursor/grok-4.6 turns re-ran commands that had already succeeded while
+ * narrating a phantom interrupt (devlog 260829 000_rca). A prose line inside the result satisfies
+ * both: the invocation is visible, but there is no call-shaped template to copy.
+ */
+function toolInvocationLine(call: Extract<OcxAssistantContentPart, { type: "toolCall" }>): string {
+  return `invoked: ${namespacedToolName(call.namespace, call.name)} with ${toolCallArgumentsText(call.arguments)}`;
+}
+
+/** Index assistant tool calls by decoded call id so a replayed result can name its invocation. */
+function toolCallsByCallId(messages: readonly OcxMessage[]): Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>> {
+  const calls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type === "toolCall") calls.set(decodeCursorCallId(part.id), part);
+    }
+  }
+  return calls;
+}
+
+function toolResultToText(
+  message: OcxToolResultMessage,
+  call?: Extract<OcxAssistantContentPart, { type: "toolCall" }>,
+): string {
   const normalized = normalizedToolResult(message, contentToText(message.content));
   return [
     "[tool_result]",
     `call_id: ${decodeCursorCallId(message.toolCallId)}`,
     `name: ${namespacedToolName(message.toolNamespace, message.toolName)}`,
+    ...(call ? [toolInvocationLine(call)] : []),
     `is_error: ${normalized.isError}`,
     "output:",
     normalized.text,
@@ -806,6 +858,7 @@ function conversationTurns(
   const externalModel = isCursorExternalWireModel(request.modelId);
   const historyEnd = messages.at(-1)?.role === "toolResult" ? messages.length : Math.max(0, end);
   const start = externalModel ? Math.max(0, historyMessageStart) : 0;
+  const turnCalls = externalModel ? toolCallsByCallId(messages) : undefined;
   const turns: Uint8Array[] = [];
   let current: { userMessage: Uint8Array; steps: Uint8Array[] } | undefined;
   const pendingToolCalls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
@@ -857,10 +910,14 @@ function conversationTurns(
         // reported repro path for empty Computer Use results.
         const normalized = normalizedToolResult(message, contentToText(message.content));
         const prefix = normalized.isError ? "[Tool Error]" : "[Tool Result]";
+        // Name the invocation here as well, for the same reason the root replay does: a result with
+        // no visible originating call reads as an interrupted attempt (devlog 260829 000_rca).
+const call = turnCalls?.get(decodeCursorCallId(message.toolCallId));
+        const invocation = call ? `${toolInvocationLine(call)}\n` : "";
         current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
           message: {
             case: "assistantMessage",
-            value: create(AssistantMessageSchema, { text: `${prefix}\n${normalized.text}` }),
+            value: create(AssistantMessageSchema, { text: `${prefix}\n${invocation}${normalized.text}` }),
           },
         })), requestScope));
         continue;
