@@ -22,8 +22,10 @@ interface CostRow {
 
 interface UsageReportInput {
   range?: string;
+  rangeLabel?: string;
   surface?: string;
   since?: number | null;
+  until?: number | null;
   summary?: {
     requests?: number;
     totalTokens?: number;
@@ -180,5 +182,29 @@ export function formatUsageReport(data: UsageReportInput): string[] {
 
   lines.push("");
   lines.push("Not a billing receipt. Subscription usage or provider credits may apply instead.");
+  return lines;
+}
+
+export function formatUsageMarkdownReport(data: UsageReportInput): string[] {
+  const summary = data.summary ?? {};
+  const label = data.rangeLabel || data.range || "custom";
+  const lines = [
+    "### OpenCodex Usage Report (" + label + ")",
+    "",
+    "- **Requests**: " + count(summary.requests),
+    "- **Total Tokens**: " + count(summary.totalTokens),
+    "  - Input Tokens: " + count(summary.inputTokens) + " (Cached: " + count(summary.cachedInputTokens) + ")",
+    "  - Output Tokens: " + count(summary.outputTokens),
+    "- **Estimated API Cost**: " + usd(summary.estimatedCostUsd),
+    ""
+  ];
+  const models = (data.models ?? []).filter(r => r.requests > 0);
+  if (models.length > 0) {
+    lines.push("| Model | Provider | Requests | Total Tokens | Est. Cost |");
+    lines.push("| :--- | :--- | :--- | :--- | :--- |");
+    for (const r of models) {
+      lines.push("| " + (r.model || "-") + " | " + r.provider + " | " + count(r.requests) + " | " + count(r.totalTokens) + " | " + usd(r.estimatedCostUsd) + " |");
+    }
+  }
   return lines;
 }
