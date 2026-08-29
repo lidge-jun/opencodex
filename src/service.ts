@@ -7,16 +7,16 @@
  */
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants as fsConstants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
+import { delimiter, dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "./config";
 import { readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config/process-state";
 import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
 import { isWslRuntime, resolveCodexHomeDir, type CodexHomeDeps } from "./codex/home";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./lib/bun-runtime";
-import type { BunRuntimeSource } from "./lib/bun-runtime";
+import type { BunRuntimeSource, DurableBunRuntime } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
 import { tokenCollidesWithAdmin } from "./lib/admin-secrets";
@@ -56,14 +56,13 @@ const TASK = "opencodex-proxy";
 
 export type ServiceBackend = "scheduler" | "native";
 
-function cliEntry(): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: string } {
+function cliEntry(runtime: DurableBunRuntime = durableBunRuntime()): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: string } {
   // Bake the bundled Bun (npm global prefix, survives `ocx update`) rather than
   // a transient system Bun, so launchd/systemd/schtasks keep resolving even if a
   // standalone Bun is later removed. The CLI entry lives at src/cli/index.ts.
   //
   // Path and provenance come from ONE resolution so the marker can never describe a
   // different binary than the one actually baked.
-  const runtime = durableBunRuntime();
   return { bun: runtime.path, bunRuntimeSource: runtime.source, cli: join(import.meta.dir, "cli", "index.ts") };
 }
 
@@ -86,14 +85,26 @@ function cliEntry(): { bun: string; bunRuntimeSource: BunRuntimeSource; cli: str
  * every restart, which turns a service definition into a PATH-hijacking surface; naming
  * one validated absolute file keeps the target fixed at install time.
  */
-function stableLauncherEntry(deps: { env?: NodeJS.ProcessEnv; exists?: (path: string) => boolean } = {}): string | null {
+export function stableLauncherEntry(deps: {
+  env?: NodeJS.ProcessEnv;
+  isExecutableFile?: (path: string) => boolean;
+  pathDelimiter?: string;
+} = {}): string | null {
   const env = deps.env ?? process.env;
-  const exists = deps.exists ?? existsSync;
-  const entries = (env.PATH ?? "").split(":");
+  const isExecutableFile = deps.isExecutableFile ?? ((path: string): boolean => {
+    try {
+      if (!statSync(path).isFile()) return false;
+      accessSync(path, fsConstants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const entries = (env.PATH ?? "").split(deps.pathDelimiter ?? delimiter);
   for (const entry of entries) {
     if (!entry || !isAbsolute(entry)) continue;
     const candidate = join(entry, "ocx");
-    if (exists(candidate)) return candidate;
+    if (isExecutableFile(candidate)) return candidate;
   }
   return null;
 }
@@ -2588,13 +2599,14 @@ function unitPath(): string {
 
 export function buildUnit(
   proxyEnv: { name: string; value: string }[] = resolvedProxyEnv(),
-  deps: { launcher?: string | null } = {},
+  deps: { launcher?: string | null; runtime?: DurableBunRuntime } = {},
 ): string {
-  const { bun, bunRuntimeSource, cli } = cliEntry();
-  // A stable launcher replaces the versioned pair entirely: baking OCX_BUN_RUNTIME_PATH
-  // alongside it would pin the runtime to the directory the upgrade deletes, which is the
-  // defect being fixed. The launcher resolves the current package's Bun itself.
-  const launcher = deps.launcher !== undefined ? deps.launcher : stableLauncherEntry();
+  const runtime = deps.runtime ?? durableBunRuntime();
+  const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
+  // Discovery belongs to installSystemd(), which resolves once and passes the same value to
+  // both the unit and install state. Keeping this builder explicit makes tests and diagnostics
+  // independent of the host PATH.
+  const launcher = deps.launcher ?? null;
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = systemdEnvironmentAssignment("CODEX_HOME", process.env.CODEX_HOME?.trim());
@@ -2606,6 +2618,12 @@ export function buildUnit(
       systemdEnvironmentAssignment(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource),
       systemdEnvironmentAssignment(BUN_RUNTIME_PATH_ENV, bun),
     ]),
+    // A launcher normally resolves the current package's bundled Bun after every upgrade.
+    // Preserve only a proof-bound shell override; otherwise writing a package-local path here
+    // would recreate the version-manager pin that the launcher mode exists to remove.
+    launcher && runtime.source === "override"
+      ? systemdEnvironmentAssignment(runtime.overrideEnv, runtime.path)
+      : null,
     systemdEnvironmentAssignment("PATH", path),
     codexHome,
     codexSqliteHome,

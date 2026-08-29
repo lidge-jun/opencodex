@@ -17,6 +17,28 @@ existing task. Explicit `ocx service install` remains the operator-owned registr
 - 다른 대안 대신 이 방식을 선택한 이유: Saved state can be stale and unconditional repair breaks first install, while a boolean cannot represent the exact uncertainty that must fail closed.
 - 장점, 단점 및 영향: Existing services avoid UAC and registration churn, invalid input performs no status I/O, and uncertain Windows hosts require one explicit status/installation decision instead of risking a destructive guess.
 
+## Linux stable service launcher
+
+Systemd installation resolves the first absolute `ocx` PATH candidate that is both a regular file
+and executable, keeps that path lexical so a version-manager shim remains an indirection, and
+records the same single resolution in the unit and service state. Unit construction never performs
+PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
+fallback, keeping diagnostics and tests independent of the host PATH.
+
+Launcher mode omits the package-local Bun provenance pair because an upgrade may delete that
+versioned tree. The only runtime path carried through the launcher is a pre-Bun, proof-bound
+`OPENCODEX_BUN_PATH` whose durable runtime source is `override`; bundled and process fallbacks are
+rediscovered by the current launcher. The API-auth token remains file-backed and is loaded only by
+the service shell at start.
+
+[Decision Log]
+- 목적과 의도: Keep systemd services upgrade-stable without losing an explicitly trusted Bun override or accepting a non-executable PATH placeholder.
+- 기존 구현 및 제약 조건: Version managers replace package trees but retain lexical shims; Bun dotenv makes ambient override values untrustworthy unless the Node launcher already stamped matching runtime provenance.
+- 검토한 주요 대안: Bake the package Bun and CLI forever; resolve the shim target; accept the first existing PATH entry; drop every runtime override in launcher mode; or preserve only a proof-bound override.
+- 선택한 방식: Require a regular executable lexical launcher, resolve it once during installation, preserve only `durableBunRuntime().source === "override"`, and keep token loading in the existing file-backed shell preamble.
+- 다른 대안 대신 이 방식을 선택한 이유: Resolving or pinning package paths recreates upgrade restart loops, existence-only selection can name a directory or non-executable file, and dropping a trusted override silently changes an operator's runtime.
+- 장점, 단점 및 영향: Mise/asdf-style upgrades keep working and explicit Bun selection survives; source installs still use the direct pair, while a removed or non-executable launcher requires `ocx service repair`.
+
 ## Provider diagnostic outbound safety
 
 Provider connection tests and live model discovery share the GET-only provider outbound wrapper.

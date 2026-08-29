@@ -231,12 +231,14 @@ interrupted package update removed either file, it logs one `installation is inc
 stops instead of retrying the same missing executable every five seconds. Reinstall opencodex, then
 run `ocx service repair` to refresh the task with the restored package paths.
 
-On Linux, the systemd unit invokes the stable `ocx` executable found on `PATH` at install time
-rather than the Bun and CLI paths inside the installed package tree. Version managers such as
+On Linux, the systemd unit invokes the first regular, executable `ocx` file found on `PATH` at
+install time rather than the Bun and CLI paths inside the installed package tree. Version managers such as
 **mise** and **asdf** install into a versioned directory and delete the old one on upgrade, which
 used to leave the unit pointing at files that no longer existed — systemd then restart-looped while
 still reporting the service as installed. A shim path survives the upgrade, so the unit keeps
-resolving. Source checkouts without an `ocx` launcher keep the previous direct Bun + CLI form.
+resolving. Source checkouts without an `ocx` launcher keep the previous direct Bun + CLI form. A
+trusted `OPENCODEX_BUN_PATH` selected before Bun starts is preserved through the shim; package-local
+bundled Bun paths are deliberately rediscovered after upgrades instead of being pinned in the unit.
 
 Units installed before this change still carry the old versioned paths and cannot migrate
 themselves — once the old executable is deleted, no opencodex code runs to fix it. Run

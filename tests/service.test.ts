@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, posix, win32 } from "node:path";
+import { delimiter, isAbsolute, join, posix, win32 } from "node:path";
 import * as serviceModule from "../src/service";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
 import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
@@ -98,6 +98,41 @@ describe("service listen-port bake", () => {
 });
 
 describe("systemd service unit", () => {
+  test("stable launcher discovery skips invalid PATH candidates and keeps the lexical executable", () => {
+    const first = join(TEST_DIR, "first");
+    const second = join(TEST_DIR, "second");
+    const probes: string[] = [];
+    const result = stableLauncherEntry({
+      env: { PATH: [first, second].join(delimiter) },
+      isExecutableFile: candidate => {
+        probes.push(candidate);
+        return candidate === join(second, "ocx");
+      },
+    });
+
+    expect(probes).toEqual([join(first, "ocx"), join(second, "ocx")]);
+    expect(result).toBe(join(second, "ocx"));
+  });
+
+  test("stable launcher discovery requires a regular executable file", () => {
+    if (process.platform === "win32") return;
+    const root = mkdtempSync(join(tmpdir(), "ocx-launcher-path-"));
+    const directoryEntry = join(root, "directory-entry");
+    const nonExecutableEntry = join(root, "non-executable-entry");
+    const executableEntry = join(root, "executable-entry");
+    for (const entry of [directoryEntry, nonExecutableEntry, executableEntry]) mkdirSync(entry);
+    mkdirSync(join(directoryEntry, "ocx"));
+    writeFileSync(join(nonExecutableEntry, "ocx"), "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+    writeFileSync(join(executableEntry, "ocx"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    try {
+      expect(stableLauncherEntry({
+        env: { PATH: [directoryEntry, nonExecutableEntry, executableEntry].join(delimiter) },
+      })).toBe(join(executableEntry, "ocx"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("bare service installs only when absent and otherwise selects no-admin repair", async () => {
     expect(normalizeServiceSubcommand()).toBe("install");
     expect(normalizeServiceSubcommand("restart")).toBe("repair");
@@ -816,6 +851,8 @@ describe("launchd service plist", () => {
       const launched = buildUnit(resolvedProxyEnv(), { launcher: "/opt/shims/ocx" });
       expect(launched).not.toContain("OCX_BUN_RUNTIME_SOURCE");
       expect(launched).not.toContain("OCX_BUN_RUNTIME_PATH");
+      expectTextToContainPath(launched, process.execPath);
+      expect(launched).toContain("OPENCODEX_BUN_PATH=");
       expect(buildWindowsServiceScript()).toContain('set "OCX_BUN_RUNTIME_SOURCE=override"');
     } finally {
       if (inheritedOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
@@ -884,7 +921,10 @@ describe("launchd service plist", () => {
   // unit has to name the shim and nothing from inside the version directory.
   test("a stable launcher install names the launcher and bakes no versioned path", () => {
     const launcher = "/home/u/.local/share/mise/shims/ocx";
-    const unit = buildUnit(resolvedProxyEnv({}), { launcher });
+    const unit = buildUnit(resolvedProxyEnv({}), {
+      launcher,
+      runtime: { path: "/opt/opencodex/versioned/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
+    });
 
     expect(unit).toContain(launcher);
     expect(unit).toContain("start --port");
@@ -892,6 +932,8 @@ describe("launchd service plist", () => {
     // pins the service to a directory the next upgrade removes.
     expect(unit).not.toContain("OCX_BUN_RUNTIME_PATH");
     expect(unit).not.toContain("OCX_BUN_RUNTIME_SOURCE");
+    expect(unit).not.toContain("OPENCODEX_BUN_PATH");
+    expect(unit).not.toContain("/opt/opencodex/versioned/bun");
     expect(unit).not.toContain("cli/index.ts");
     // The token still comes from the file at start, never from the unit (#2107).
     expectTextToContainPath(unit, serviceApiTokenFilePath());
@@ -908,8 +950,9 @@ describe("launchd service plist", () => {
   test("the generated launcher command follows a retargeted shim after the old version is gone", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-shim-"));
     const shimDir = join(root, "shims");
-    const v1 = join(root, "installs", "2.35.0");
-    const v2 = join(root, "installs", "2.36.0");
+    const v1 = join(root, "installs", "2.35.0 package's");
+    const v2 = join(root, "installs", "2.36.0 package's");
+    const quoteForSh = (value: string): string => `'${value.replaceAll("'", "'\"'\"'")}'`;
     mkdirSync(shimDir, { recursive: true });
     mkdirSync(v1, { recursive: true });
     mkdirSync(v2, { recursive: true });
@@ -917,20 +960,20 @@ describe("launchd service plist", () => {
     writeFileSync(join(v2, "ocx"), "#!/bin/sh\necho V2 \"$@\"\n", { mode: 0o755 });
 
     const shim = join(shimDir, "ocx");
-    writeFileSync(shim, `#!/bin/sh\nexec ${join(v1, "ocx")} "\$@"\n`, { mode: 0o755 });
+    writeFileSync(shim, `#!/bin/sh\nexec ${quoteForSh(join(v1, "ocx"))} "\$@"\n`, { mode: 0o755 });
 
     // stableLauncherEntry finds the shim lexically from PATH — not its versioned target.
     const found = buildUnit(resolvedProxyEnv({}), { launcher: shim });
     expect(found).toContain(shim);
     expect(found).not.toContain(v1);
 
-    expect(execSync(`sh -c ${JSON.stringify(`${shim} start --port 1`)}`, { encoding: "utf8" })).toContain("V1");
+    expect(execFileSync(shim, ["start", "--port", "1"], { encoding: "utf8" })).toContain("V1");
 
     // The upgrade: shim retargeted, old version removed.
-    writeFileSync(shim, `#!/bin/sh\nexec ${join(v2, "ocx")} "\$@"\n`, { mode: 0o755 });
+    writeFileSync(shim, `#!/bin/sh\nexec ${quoteForSh(join(v2, "ocx"))} "\$@"\n`, { mode: 0o755 });
     rmSync(v1, { recursive: true, force: true });
     expect(existsSync(join(v1, "ocx"))).toBe(false);
-    expect(execSync(`sh -c ${JSON.stringify(`${shim} start --port 1`)}`, { encoding: "utf8" })).toContain("V2");
+    expect(execFileSync(shim, ["start", "--port", "1"], { encoding: "utf8" })).toContain("V2");
 
     rmSync(root, { recursive: true, force: true });
   });
