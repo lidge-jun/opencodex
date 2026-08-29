@@ -473,6 +473,15 @@ describe("anthropic account pool quota window scoring", () => {
     expect(resolveAnthropicAccountForSession("weekly-unknown-last", cfg(true, 80, { quotaWindow: "weekly" })).accountId).toBe(aId);
   });
 
+  test("weekly mode ranks known 100% before unknown weekly usage", async () => {
+    const { aId, bId } = await seedTwoAccounts();
+    const updatedAt = Date.now();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 90, weeklyPercent: 100, updatedAt });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 0, updatedAt });
+
+    expect(resolveAnthropicAccountForSession("weekly-known-100-before-unknown", cfg(true, 80, { quotaWindow: "weekly" })).accountId).toBe(aId);
+  });
+
   test("weekly tie breaks by lower five-hour usage", async () => {
     const { aId, bId } = await seedTwoAccounts();
     const updatedAt = Date.now();
@@ -507,6 +516,21 @@ describe("anthropic account pool quota window scoring", () => {
     setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 40, weeklyPercent: 90, updatedAt });
 
     expect(resolveAnthropicAccountForSession("max-five-hour-tie", cfg(true, 80, { quotaWindow: "max-utilization" })).accountId).toBe(bId);
+  });
+
+  test("max-utilization ranks known 100% before fully unknown usage", async () => {
+    const { bId, cId } = await seedThreeAccounts();
+    setCachedProviderAccountQuotaForTests("anthropic", bId, {
+      fiveHourPercent: 100,
+      updatedAt: Date.now(),
+    });
+
+    expect(rotateAnthropicAccountOn429(
+      cfg(true, 80, { quotaWindow: "max-utilization" }),
+      cId,
+      "30",
+      "max-known-100-before-unknown",
+    )).toBe(bId);
   });
 
   test("omitted quotaWindow equals explicit five-hour", async () => {

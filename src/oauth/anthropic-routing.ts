@@ -252,11 +252,13 @@ export function getAnthropicPoolRetryAfterSeconds(now = Date.now()): number | nu
 
 interface ScoredAccount {
   accountId: string;
+  hasKnownUsage: boolean;
   score: number;
   fiveHourTieBreak: number;
 }
 
 function compareScoredAccounts(a: ScoredAccount, b: ScoredAccount): number {
+  if (a.hasKnownUsage !== b.hasKnownUsage) return a.hasKnownUsage ? -1 : 1;
   return a.score - b.score || a.fiveHourTieBreak - b.fiveHourTieBreak;
 }
 
@@ -268,6 +270,7 @@ function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: 
   if (eligible.length === 0) return null;
   const scored: ScoredAccount[] = eligible.map(accountId => ({
     accountId,
+    hasKnownUsage: hasKnownUsage(config, accountId),
     score: usageScore(config, accountId),
     fiveHourTieBreak: window === "five-hour" ? 0 : fiveHourScore(accountId),
   }));
