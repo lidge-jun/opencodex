@@ -62,6 +62,8 @@ interface UsageModel {
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
   shareRatio: number;
 }
 
@@ -72,6 +74,8 @@ interface UsageProvider {
   reportedRequests: number;
   estimatedRequests: number;
   totalTokens: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
   shareRatio: number;
 }
 
@@ -98,6 +102,24 @@ interface UsageResponse {
 
 function formatPct(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
+}
+
+function cacheUtilization(
+  cacheReadInputTokens?: number,
+  cacheCreationInputTokens?: number,
+): number | null {
+  if (cacheReadInputTokens === undefined && cacheCreationInputTokens === undefined) return null;
+  const read = Math.max(0, cacheReadInputTokens ?? 0);
+  const write = Math.max(0, cacheCreationInputTokens ?? 0);
+  return read + write > 0 ? read / (read + write) : null;
+}
+
+function cacheUtilizationLabel(
+  cacheReadInputTokens?: number,
+  cacheCreationInputTokens?: number,
+): string {
+  const ratio = cacheUtilization(cacheReadInputTokens, cacheCreationInputTokens);
+  return ratio === null ? "—" : formatPct(ratio);
 }
 
 // Stable per-model bar color: hash the provider/model id to a hue so the same model keeps its color
@@ -289,10 +311,12 @@ function UsageSummaryCards({
       <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><div className="stat-value">{formatTokens(summary.totalTokens, locale)}</div></div>
       <div className="stat" title={t("usage.card.cachedTokensHint")}>
         <div className="muted">{t("usage.card.cachedTokens")}</div>
-        <div className="stat-value">{formatTokens(summary.cacheReadInputTokens ?? summary.cachedInputTokens, locale)}</div>
-        {(summary.cacheCreationInputTokens ?? 0) > 0 && (
+        <div className="stat-value">
+          {cacheUtilizationLabel(summary.cacheReadInputTokens, summary.cacheCreationInputTokens)}
+        </div>
+        {cacheUtilization(summary.cacheReadInputTokens, summary.cacheCreationInputTokens) !== null && (
           <div className="muted text-caption">
-            {t("usage.card.cacheWriteTokens")}: {formatTokens(summary.cacheCreationInputTokens ?? 0, locale)}
+            {t("logs.tokens.cacheRead")}: {formatTokens(summary.cacheReadInputTokens ?? summary.cachedInputTokens, locale)} · {t("usage.card.cacheWriteTokens")}: {formatTokens(summary.cacheCreationInputTokens ?? 0, locale)}
           </div>
         )}
       </div>
@@ -511,6 +535,7 @@ function UsageModelsTable({
             <th className="num">{t("usage.col.requests")}</th>
             <th className="num">{t("usage.col.measured")}</th>
             <th className="num">{t("usage.col.tokens")}</th>
+            <th className="num" title={t("usage.card.cachedTokensHint")}>{t("usage.card.cachedTokens")}</th>
             <th>{t("usage.col.share")}</th>
           </tr>
         </thead>
@@ -522,6 +547,9 @@ function UsageModelsTable({
               <td className="num">{model.requests}</td>
               <td className="num">{model.measuredRequests}</td>
               <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
+              <td className="num mono">
+                {cacheUtilizationLabel(model.cacheReadInputTokens, model.cacheCreationInputTokens)}
+              </td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(model.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}
@@ -572,6 +600,7 @@ function UsageProvidersTable({
             <th className="num">{t("usage.col.requests")}</th>
             <th className="num">{t("usage.col.measured")}</th>
             <th className="num">{t("usage.col.tokens")}</th>
+            <th className="num" title={t("usage.card.cachedTokensHint")}>{t("usage.card.cachedTokens")}</th>
             <th>{t("usage.col.share")}</th>
           </tr>
         </thead>
@@ -582,6 +611,9 @@ function UsageProvidersTable({
               <td className="num">{provider.requests}</td>
               <td className="num">{provider.measuredRequests}</td>
               <td className="num mono">{formatTokens(provider.totalTokens, locale)}</td>
+              <td className="num mono">
+                {cacheUtilizationLabel(provider.cacheReadInputTokens, provider.cacheCreationInputTokens)}
+              </td>
               <td><div className="usage-bar"><div className="usage-bar-fill" style={{ width: `${Math.round(provider.shareRatio * 100)}%` }} /></div></td>
             </tr>
           ))}

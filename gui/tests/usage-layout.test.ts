@@ -74,7 +74,7 @@ test("usage workspace i18n keys exist in every locale", async () => {
 });
 
 test("Usage renders Available history and a persistent qualification when history is capped", async () => {
-  const globalKeys = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+  const globalKeys = ["document", "window", "navigator", "localStorage", "ResizeObserver", "IS_REACT_ACT_ENVIRONMENT"] as const;
   const previous = Object.fromEntries(globalKeys.map(key => [key, Reflect.get(globalThis, key)]));
   const originalFetch = globalThis.fetch;
   const testWindow = new Window({ url: "http://localhost/" });
@@ -83,6 +83,7 @@ test("Usage renders Available history and a persistent qualification when histor
     window: { configurable: true, value: testWindow },
     navigator: { configurable: true, value: testWindow.navigator },
     localStorage: { configurable: true, value: testWindow.localStorage },
+    ResizeObserver: { configurable: true, value: class { observe() {} disconnect() {} } },
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   clearClientResourceStoresForTests();
@@ -92,22 +93,47 @@ test("Usage renders Available history and a persistent qualification when histor
     since: null,
     generatedAt: Date.now(),
     summary: {
-      requests: 0,
-      measuredRequests: 0,
-      reportedRequests: 0,
+      requests: 1,
+      measuredRequests: 1,
+      reportedRequests: 1,
       unreportedRequests: 0,
       unsupportedRequests: 0,
       estimatedRequests: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cachedInputTokens: 0,
+      inputTokens: 10_000,
+      outputTokens: 100,
+      cachedInputTokens: 800,
+      cacheReadInputTokens: 800,
+      cacheCreationInputTokens: 200,
       reasoningOutputTokens: 0,
-      totalTokens: 0,
+      totalTokens: 10_100,
       coverageRatio: 1,
     },
     days: [],
-    models: [],
-    providers: [],
+    models: [{
+      provider: "anthropic",
+      model: "claude-test",
+      requests: 1,
+      measuredRequests: 1,
+      reportedRequests: 1,
+      estimatedRequests: 0,
+      totalTokens: 10_100,
+      inputTokens: 10_000,
+      outputTokens: 100,
+      cacheReadInputTokens: 800,
+      cacheCreationInputTokens: 200,
+      shareRatio: 1,
+    }],
+    providers: [{
+      provider: "anthropic",
+      requests: 1,
+      measuredRequests: 1,
+      reportedRequests: 1,
+      estimatedRequests: 0,
+      totalTokens: 10_100,
+      cacheReadInputTokens: 800,
+      cacheCreationInputTokens: 200,
+      shareRatio: 1,
+    }],
     historyTruncated: true,
     truncatedPrefixBytes: 1,
     entriesTruncated: false,
@@ -132,6 +158,9 @@ test("Usage renders Available history and a persistent qualification when histor
 
     expect(container.querySelector('button[aria-label="Available history"]')).not.toBeNull();
     expect(container.textContent).toContain("Totals cover available history only because older usage was not loaded.");
+    expect([...container.querySelectorAll("th")].some(th => th.textContent === "Cache utilization")).toBe(true);
+    // Input tokens are deliberately 10x cache traffic: this must stay 800 / (800 + 200), not 800 / input.
+    expect(container.textContent?.match(/80%/g)).toHaveLength(3);
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
