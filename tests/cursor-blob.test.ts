@@ -2218,6 +2218,50 @@ describe("Cursor external replay envelope", () => {
     expect(JSON.stringify(nonSystem[0])).toContain("please read the files");
   });
 
+  // Review probe, reproduced: three ~220 KB results used to emit only the last two — `call_0`
+  // disappeared while its tool call stayed in the transcript, which is exactly the pairing break
+  // #1527 describes. Every result must survive in some form, even a truncated one.
+  test("oversized parallel tool results are all retained, truncated rather than deleted", () => {
+    const results = [0, 1, 2].map(i => ({
+      role: "toolResult" as const,
+      toolCallId: `call_${i}`,
+      toolName: "read_file",
+      content: `UNIQUE_MARKER_${i} ` + "x".repeat(220_000),
+      isError: false,
+      timestamp: i + 3,
+    }));
+
+    const bytes = encodeCursorRunRequest({
+      modelId: "gpt-5.6-sol-xhigh",
+      conversationId: "c-parallel-results",
+      system: ["system"],
+      messages: [{ role: "tool", content: "ignored" }],
+      rawMessages: [
+        { role: "user", content: "read all three", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/gpt-5.6-sol",
+          content: [0, 1, 2].map(i => ({
+            type: "toolCall" as const,
+            id: `call_${i}`,
+            name: "read_file",
+            arguments: { path: `f${i}.txt` },
+          })),
+          timestamp: 2,
+        },
+        ...results,
+      ],
+    });
+
+    const serialized = JSON.stringify(decodeRootMessages(bytes));
+    // Each result is present, identifiable by its own marker. None was silently deleted.
+    expect(serialized).toContain("UNIQUE_MARKER_0");
+    expect(serialized).toContain("UNIQUE_MARKER_1");
+    expect(serialized).toContain("UNIQUE_MARKER_2");
+    // And the whole set still fits the envelope, so retention did not come at the cost of the bound.
+    expect(serialized).toContain("truncated for Cursor external replay budget");
+  });
+
   // The shape the guard was moved for. Review noted that every other new fixture here is an
   // oversized full replay, so a guard that measured only the suffix (or only
   // `rootPromptMessagesState`) would still satisfy them. These two do not: the suffix is tiny and

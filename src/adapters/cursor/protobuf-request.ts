@@ -327,6 +327,23 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       .map(entry => truncateToolResultBlob(entry, historyBudget))
       .filter((entry): entry is RootBlobCandidate => entry !== null);
     let activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
+    // Shrink every active result toward an equal share before dropping any of them. Review found
+    // that the previous `active.shift()` loop DELETED whole results: three ~220 KB results emitted
+    // only the last two, and `call_0` vanished with its tool call still in the transcript. A
+    // missing result is worse than a truncated one — the model sees a call it never got an answer
+    // to, which is the pairing break #1527 reports, and the caller cannot tell it happened.
+    if (active.length > 1 && activeBytes > historyBudget) {
+      const share = Math.floor(historyBudget / active.length);
+      for (let index = 0; index < active.length; index++) {
+        const entry = active[index];
+        if (!entry || entry.byteLength <= share) continue;
+        const shrunk = truncateToolResultBlob(entry, share);
+        if (shrunk) active[index] = shrunk;
+      }
+      activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
+    }
+    // Only when even an equal share cannot fit — the marker alone has a floor, so enough results
+    // still overflow — fall back to dropping the oldest.
     while (active.length > 1 && activeBytes > historyBudget) {
       const dropped = active.shift();
       activeBytes -= dropped?.byteLength ?? 0;
