@@ -289,10 +289,13 @@ describe("sidecar on429 wiring", () => {
     const start = coreSource.indexOf("const preferredAccountId =");
     expect(start).toBeGreaterThan(-1);
     const region = coreSource.slice(start, start + 4000);
-    expect(region).toContain("if (preferredAccountId) {");
-    expect(region).toContain("resolved.projectId");
-    // ...and it fails closed rather than dispatching with no project at all.
-    expect(region).toContain("has no Cloud Code Assist project");
+    expect(region).toContain("usedPreferredAccount && resolved.projectId");
+    // ...and a project-less preferred account falls BACK to the ordinary active-account
+    // resolution rather than erroring: a preference must never turn a working request into
+    // a failure, and Antigravity tolerates project discovery failing, so an account with no
+    // project is an ordinary stored state.
+    expect(region).toContain("usedPreferredAccount = false");
+    expect(region).not.toContain("has no Cloud Code Assist project");
   });
 });
 

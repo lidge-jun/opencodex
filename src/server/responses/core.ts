@@ -3113,9 +3113,19 @@ async function handleResponsesInner(
         // applyFailoverSnapshot's pairing rules. This is initial resolution — the code below
         // already pairs the snapshot's Kiro metadata, Copilot origin and Antigravity project
         // with this same bearer, exactly as it does for the active account.
-        const resolved = preferredAccountId
+        let usedPreferredAccount = preferredAccountId !== null;
+        let resolved = preferredAccountId
           ? await getValidAccessSnapshotForAccount(route.providerName, preferredAccountId)
           : await getValidAccessTokenSnapshot(route.providerName);
+        // A Cloud Code Assist account needs its own project. Antigravity's refresh path
+        // tolerates project discovery failing, so a stored account can legitimately have
+        // none — and a PREFERENCE must never turn a working request into an error. Fall
+        // back to the ordinary active-account resolution instead, which is exactly what
+        // would have happened had the preference never existed.
+        if (usedPreferredAccount && route.provider.googleMode === "cloud-code-assist" && !resolved.projectId) {
+          resolved = await getValidAccessTokenSnapshot(route.providerName);
+          usedPreferredAccount = false;
+        }
         replayOAuthCredentialSnapshot = {
           accountId: resolved.accountId,
           generation: resolved.generation,
@@ -3145,14 +3155,9 @@ async function handleResponsesInner(
           // it — installing B's bearer alongside A's project. That is the #2841 pairing bug
           // in its original shape, so the preferred-account path replaces the project
           // unconditionally and refuses to dispatch at all if the chosen account has none.
-          if (preferredAccountId) {
-            if (!resolved.projectId) {
-              return formatErrorResponse(
-                401,
-                "authentication_error",
-                "Selected OAuth account has no Cloud Code Assist project",
-              );
-            }
+          // A project-less preferred account already fell back above, so by here the
+          // preferred path always has one.
+          if (usedPreferredAccount && resolved.projectId) {
             route.provider = { ...route.provider, project: resolved.projectId };
           } else if (!route.provider.project && resolved.projectId) {
             route.provider = { ...route.provider, project: resolved.projectId };
