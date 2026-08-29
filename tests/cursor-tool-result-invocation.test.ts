@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { create, fromBinary } from "@bufbuild/protobuf";
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT, encodeCursorRunRequest } from "../src/adapters/cursor/protobuf-request";
-import { handleCursorNativeKv } from "../src/adapters/cursor/native-exec";
+import { handleCursorNativeKv, storeCursorBlob } from "../src/adapters/cursor/native-exec";
 import {
   AgentClientMessageSchema,
   ConversationStepSchema,
+  ConversationStateStructureSchema,
   ConversationTurnStructureSchema,
   GetBlobArgsSchema,
   KvServerMessageSchema,
@@ -84,6 +85,34 @@ function encode(messages: OcxMessage[], modelId: string): Uint8Array {
     system: [],
     messages: [],
     rawMessages: messages,
+  });
+}
+
+/**
+ * The checkpoint continuation path. `suffixStart` is how many leading messages the checkpoint
+ * already covers, so only `rawMessages.slice(suffixStart)` is replayed onto the root prompt.
+ *
+ * The checkpoint must carry at least one root: an EMPTY ConversationStateStructure serializes to
+ * zero bytes, which the encoder reads as "no checkpoint" and silently downgrades to full replay —
+ * so a test seeded with an empty state would pass while exercising the wrong branch entirely.
+ */
+function encodeCheckpoint(messages: OcxMessage[], modelId: string, suffixStart: number): Uint8Array {
+  // Stored for real so the decoder helper can read every root back, checkpoint-carried included.
+  const seedRoot = storeCursorBlob(new TextEncoder().encode(JSON.stringify({
+    role: "user",
+    content: [{ type: "text", text: "covered by checkpoint" }],
+  })));
+  return encodeCursorRunRequest({
+    modelId,
+    conversationId: "c_pairing_ckpt",
+    system: [],
+    messages: [],
+    rawMessages: messages,
+    checkpointBytes: toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: [seedRoot],
+    })),
+    continuationMode: "checkpoint",
+    checkpointSuffixStart: suffixStart,
   });
 }
 
@@ -298,5 +327,87 @@ describe("cursor replayed tool results name their invocation", () => {
     const results = roots.filter(text => text.startsWith("[Tool Result]"));
     expect(results.length).toBeGreaterThan(0);
     for (const result of results) expect(result).not.toContain("invoked:");
+  });
+});
+
+/**
+ * The live regression that survived the first fix. Once the invocation line shipped, the defect
+ * still reproduced against merged `dev`: 12 duplicate command_execution items and 5 phantom
+ * "interrupted" mentions. The passing runs had used full replay; the failing run used CHECKPOINT
+ * continuation for 13 of its 14 requests.
+ *
+ * The checkpoint path replays only `rawMessages.slice(suffixStart)`, and it indexed calls from that
+ * SAME slice. When the cut fell between an assistant tool call and its result — the normal case,
+ * since the checkpoint is committed right after the call — the call sat before the cut and the index
+ * was empty, so the result went out orphaned again. The fix indexes from the full history while
+ * still replaying only the suffix.
+ */
+describe("cursor checkpoint continuation names the invocation from covered history", () => {
+  test("a result whose call is BEFORE the checkpoint cut still names its invocation", () => {
+    // suffixStart 2 puts the assistant tool call (index 1) inside the covered checkpoint and leaves
+    // the suffix as just the tool result.
+    const root = resultRoot(encodeCheckpoint(history(), "grok-4.6-high", 2));
+    expect(root).toBeDefined();
+    expect(root).toContain(`call_id: ${CALL_ID}`);
+    expect(root).toContain("invoked: exec_command with");
+    expect(root).toContain("echo AAA");
+  });
+
+  // The turn path needs the same full-history index. A turn only opens on a user message, so a
+  // result-only suffix produces no turns at all (verified: turns=0) and cannot cover this; the
+  // shape that does is a suffix carrying a later user message plus the result of a covered call.
+  test("the invocation line also reaches the checkpoint suffix turn step", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Run echo AAA.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: { cmd: "echo AAA" } }],
+        timestamp: 2,
+      },
+      { role: "user", content: "and note this", timestamp: 3 },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "exec_command", content: "AAA", isError: false, timestamp: 4 },
+    ];
+    const step = turnStepTexts(encodeCheckpoint(messages, "grok-4.6-high", 2))
+      .find(text => text.startsWith("[Tool Result]"));
+    expect(step).toBeDefined();
+    expect(step).toContain("invoked: exec_command with");
+    expect(step).toContain("echo AAA");
+  });
+
+  // Naming a covered call must not drag the covered MESSAGES back into the replay: the checkpoint
+  // already carries them, and re-appending them is the double-replay this path exists to avoid.
+  test("covered history is not replayed a second time", () => {
+    const roots = rootTexts(encodeCheckpoint(history(), "grok-4.6-high", 2));
+    expect(roots.some(text => text.includes("Run echo AAA."))).toBe(false);
+    expect(roots.some(text => text.includes("I will run echo AAA."))).toBe(false);
+  });
+
+  // Ambiguity resolution must also read the full history: a call id reused before the cut cannot be
+  // labelled from the suffix alone, so a suffix-only index would confidently name the wrong command.
+  test("an id reused in covered history yields no invocation line", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Run both.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: { cmd: "echo FIRST" } }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "exec_command", content: "FIRST", isError: false, timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: { cmd: "echo SECOND" } }],
+        timestamp: 4,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "exec_command", content: "SECOND", isError: false, timestamp: 5 },
+    ];
+    const root = resultRoot(encodeCheckpoint(messages, "grok-4.6-high", 4));
+    expect(root).toBeDefined();
+    expect(root).not.toContain("invoked:");
+  });
+
+  test("native composer keeps checkpoint results off the root prompt", () => {
+    const roots = rootTexts(encodeCheckpoint(history(), "composer-2.5-fast", 2));
+    expect(roots.some(text => text.startsWith("[Tool Result]"))).toBe(false);
+    expect(roots.some(text => text.includes("invoked:"))).toBe(false);
   });
 });

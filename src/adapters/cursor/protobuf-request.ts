@@ -204,7 +204,17 @@ function assistantRootText(
 // [Tool Error] marker so Cursor does not wrap them as `<user_query>` (#1992). Native resume models
 // already carry the paired MCP result on turns[], so that marker is omitted from root replay — Auto
 // few-shot-mimics it as chat text otherwise. Each entry is a SHA-256 blob ID.
-function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobRequestScopeToken): {
+function rootPromptMessages(
+  request: CursorRunRequest,
+  requestScope: CursorBlobRequestScopeToken,
+  /**
+   * Calls indexed from the FULL history. The checkpoint path replays only a suffix of
+   * `rawMessages`, so a result in that suffix can have its originating call before the cut; indexing
+   * from the slice alone silently dropped the invocation line for every checkpoint continuation,
+   * which is where the defect this line prevents actually reappeared in live use.
+   */
+  knownCalls?: Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>,
+): {
   ids: Uint8Array[];
   byteLength: number;
   historyMessageStart: number;
@@ -227,7 +237,7 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
   const echoToolResultInRoot = cursorNeedsExternalToolContinuation(request.modelId);
   // Replayed results name the invocation that produced them; without it the result is orphaned
   // (devlog 260829 000_rca). Indexed once per request rather than rescanned per result.
-  const replayedCalls = echoToolResultInRoot ? toolCallsByCallId(messages) : undefined;
+  const replayedCalls = echoToolResultInRoot ? (knownCalls ?? toolCallsByCallId(messages)) : undefined;
   const lastRawIsToolResult = messages.at(-1)?.role === "toolResult";
   const activeUserIndex = lastRawIsToolResult ? -1 : lastActionIndex(messages);
   // Repetition breaker (devlog 260826 gap-9): external full-replay flattens history to text,
@@ -931,6 +941,8 @@ function conversationTurns(
   request: CursorRunRequest,
   requestScope: CursorBlobRequestScopeToken,
   historyMessageStart = 0,
+  /** Calls indexed from the FULL history; see {@link rootPromptMessages}. */
+  knownCalls?: Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>,
 ): Uint8Array[] {
   const messages = request.rawMessages;
   if (!messages?.length) return [];
@@ -938,7 +950,7 @@ function conversationTurns(
   const externalModel = isCursorExternalWireModel(request.modelId);
   const historyEnd = messages.at(-1)?.role === "toolResult" ? messages.length : Math.max(0, end);
   const start = externalModel ? Math.max(0, historyMessageStart) : 0;
-  const turnCalls = externalModel ? toolCallsByCallId(messages) : undefined;
+  const turnCalls = externalModel ? (knownCalls ?? toolCallsByCallId(messages)) : undefined;
   const turns: Uint8Array[] = [];
   let current: { userMessage: Uint8Array; steps: Uint8Array[] } | undefined;
   const pendingToolCalls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
@@ -1155,8 +1167,11 @@ function buildPreparedCursorRunRequest(
           system: [],
           rawMessages: request.rawMessages.slice(suffixStart),
         };
-        const suffixRoots = rootPromptMessages(suffixRequest, requestScope);
-        const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart);
+        // Index calls from the FULL history, not the suffix: the cut can fall between a call and
+        // its result, and a result replayed without its invocation is the orphaned-result defect.
+        const fullHistoryCalls = toolCallsByCallId(request.rawMessages);
+        const suffixRoots = rootPromptMessages(suffixRequest, requestScope, fullHistoryCalls);
+        const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart, fullHistoryCalls);
         const suffixSystemCount = systemPromptBlobs(suffixRequest).length;
         const suffixHistoryIds = suffixRoots.ids.slice(suffixSystemCount);
         const suffixHistorySerialized = suffixRoots.serialized.slice(suffixSystemCount);
