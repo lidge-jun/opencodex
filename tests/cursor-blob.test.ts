@@ -2444,6 +2444,79 @@ describe("Cursor external replay envelope", () => {
   });
 
   /**
+   * Audit r9. The case above and the byte-pressure cases cross COUNT pressure with a SEQUENTIAL suffix
+   * only, where the trailing tool-result run is always length 1 — the single width at which the abandon
+   * test's `carriedRoots.count + suffixSystemCount` happens to predict the suffix exactly. A parallel
+   * tool-call batch makes that run wider than 1, and nothing bounded it: `historyLimit` was consulted by
+   * the prior-history loop alone, and `truncateToolResultBlob` shrinks a result without ever freeing a
+   * root slot. Measured at the head this test was added to: 190 carried roots plus a 3-result batch
+   * assembled 193 roots, 188 carried plus 8 assembled 196, and each threw a NON-RETRYABLE 400 — the exact
+   * failure this unit exists to remove, and reachable by ordinary conversation growth rather than a
+   * crafted fixture. All 188 tests passed with and without the production fix before this case existed.
+   */
+  test.each([
+    [CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 2, 3],
+    [CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 4, 8],
+    [CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 22, 25],
+  ])("a count-pressured parallel result batch stays inside the envelope (carried=%i, results=%i)", (carried, batch) => {
+    const checkpointRoots = Array.from(
+      { length: carried },
+      (_, i) => storeCursorBlob(new TextEncoder().encode(JSON.stringify({ role: "user", content: [{ type: "text", text: `covered ${i}` }] }))),
+    );
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: checkpointRoots,
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    const calls: OcxAssistantContentPart[] = Array.from({ length: batch }, (_, i) => ({
+      type: "toolCall",
+      id: `call_par_${i}`,
+      name: "exec_command",
+      arguments: { cmd: `echo P${i}` },
+    }));
+    const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+      { role: "user", content: "Run every step once.", timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "Running every step." }, ...calls], timestamp: 2 },
+    ];
+    for (let i = 0; i < batch; i++) {
+      rawMessages!.push({
+        role: "toolResult",
+        toolCallId: `call_par_${i}`,
+        toolName: "exec_command",
+        content: `PARALLEL_OUT_${i}`,
+        isError: false,
+        timestamp: 3 + i,
+      });
+    }
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: `cursor_ckpt_count_parallel_${carried}_${batch}`,
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages,
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      checkpointSuffixStart: 1,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    // The envelope bound is the whole point: over it, Cursor answers 400 and the retry path fails closed.
+    expect(roots.length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    // And the newest result still has to reach the model, whether the checkpoint was kept or abandoned —
+    // staying inside the envelope by sending nothing useful is the other half of this defect.
+    const texts = roots.map(id => {
+      try {
+        const parsed = JSON.parse(new TextDecoder().decode(blobData(id))) as { content?: string | [{ text?: string }] };
+        const content = parsed.content;
+        return typeof content === "string" ? content : (content?.[0]?.text ?? "");
+      } catch {
+        return "";
+      }
+    });
+    expect(texts.some(text => text.includes(`PARALLEL_OUT_${batch - 1}`))).toBe(true);
+  });
+
+  /**
    * Audit r8 re-review finding B. The abandon test compared `carriedRoots.byteLength` against the raw byte
    * limit while pruning subtracts the system prompt too, so a ~128-byte band just under the limit kept the
    * checkpoint, gave the suffix a zero budget, and dropped the tool result the model was waiting for —

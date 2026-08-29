@@ -435,6 +435,22 @@ function rootPromptMessages(
         activeBytes = 0;
       }
     }
+    // COUNT-bound the trailing run, not only its bytes. `historyLimit` already subtracts what the
+    // checkpoint carries, but until now it was consulted ONLY by the prior-history loop below, and
+    // `historyEntries` was assembled as `[...keptPrior, ...active]` with no count check at all. The
+    // shrink/drop loops above answer to `historyBudget` alone — `truncateToolResultBlob` makes a
+    // result smaller, it never removes one to free a root SLOT — so a parallel tool-call batch
+    // arrived unbounded: 190 carried roots plus a 3-result batch assembled 193 and threw the
+    // non-retryable 400 this unit exists to remove (audit r9). Sequential pairs hid it, because a
+    // trailing run of length 1 is the one case where the abandon test's `+ 1` is exactly right.
+    //
+    // Drop the OLDEST results first, matching the direction byte pressure already prunes, and keep
+    // at least one: a continuation with no result is worthless, and the abandon decision downstream
+    // reads `historyMessageIndexes` to notice exactly that and fall back to a full replay.
+    while (active.length > 1 && active.length > historyLimit) {
+      const dropped = active.shift();
+      activeBytes -= dropped?.byteLength ?? 0;
+    }
 
     const prior = history.slice(0, activeStart);
     const keptPrior: RootBlobCandidate[] = [];

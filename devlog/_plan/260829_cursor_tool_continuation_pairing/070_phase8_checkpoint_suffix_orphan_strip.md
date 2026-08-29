@@ -313,3 +313,62 @@ four.
 
 Two counts in this document were also wrong and are corrected: the four-suite total is 188, not 187, and
 the three-suite figure is 138 at head rather than the 133 true when it was written.
+
+## Audit round 5: the count budget was computed and never applied to the trailing run
+
+`historyLimit` subtracts `carriedRoots.count`, and every prior round reasoned about that subtraction as if
+it bounded the assembled payload. It did not. It was read by the prior-history `while` loop alone. The
+trailing tool-result block was assembled before that loop under **byte** pressure only, and
+`historyEntries` was then built as `[...keptPrior, ...active]` with no count check anywhere. When
+`keptPrior` is empty — the ordinary checkpoint-continuation shape — `historyEntries.length` equals
+`active.length`, bounded by nothing at all.
+
+`truncateToolResultBlob` cannot save it: shrinking a result frees bytes, never a root slot.
+
+The abandon condition was supposed to catch the overflow, and it tested
+`carriedRoots.count + suffixSystemCount` — carried plus system, asking whether there is room for **one**
+more root. A parallel tool-call batch needs `active.length` of them. With 190 carried roots and a
+3-result batch the test computes `190 + 1 >= 192` → false, keeps the checkpoint, appends 3 to 190, and
+throws `CursorRootEnvelopeLimitError`: status 400, `retryable: false`, and `src/adapters/cursor.ts` fails
+closed on the invalid-argument retry path when the last raw message is a tool result, which is exactly
+this shape.
+
+Measured at `bde5b19dd`, before the fix:
+
+```
+carried=190 parallel=2  -> OK roots=192
+carried=190 parallel=3  -> THROW 193 roots
+carried=189 parallel=4  -> THROW 193 roots
+carried=188 parallel=8  -> THROW 196 roots
+carried=170 parallel=25 -> THROW 195 roots
+```
+
+Reachable by ordinary growth, not a crafted fixture. Feeding each turn's assembled state back as the next
+checkpoint — what `commitCursorCheckpoint` does — a plain conversation of 3-parallel-call turns died at
+turn 48, and 5 calls per turn at turn 32. Both survive 200 turns after the fix, as do 1, 2 and 8 calls
+per turn.
+
+The fix bounds `active` by count where it is assembled, rather than adding a fourth disjunct that has to
+predict the suffix width. Oldest results drop first, matching the direction byte pressure already prunes,
+and at least one always survives; the existing abandon check then reads `historyMessageIndexes`, sees the
+dropped result, and falls back to a coherent full replay. That is why the grid shows the newest result
+delivered at all 78 positions rather than merely "no throw".
+
+### Why the existing 188 could not see it
+
+The three pressure fixtures this document already claims — 50 pairs behind 100 roots, 10 behind 180, 4
+behind 190 — are all **sequential** pairs, and a sequential suffix has a trailing run of exactly 1, the
+single width at which `+ 1` predicts the suffix correctly. The 628-position parallel sweep applied
+**byte** pressure, where the abandon branch fires before the count cliff is reachable. Both axes existed
+in the suite; neither case crossed them. All 188 tests passed identically with and without the production
+fix, which is the sharpest available proof that no assertion covered this path.
+
+`tests/cursor-blob.test.ts` now crosses them: three `test.each` rows (carried 190 × 3 results, 188 × 8,
+170 × 25) assert both halves — inside `CURSOR_EXTERNAL_ROOT_BLOB_LIMIT` **and** the newest output still
+present, because staying inside the envelope by sending nothing useful is the other half of this defect.
+Disabling the new bound reddens exactly those three and nothing else. Four-suite total is 191 pass / 0
+fail, `cursor-blob` alone 105.
+
+The pattern named after round 4 held for a fifth time, one level up: rounds 2 through 4 all reasoned about
+the count budget as a settled fact and argued about the disjuncts consuming it, while the budget itself was
+never applied to the wider of the two things it was supposed to bound.
