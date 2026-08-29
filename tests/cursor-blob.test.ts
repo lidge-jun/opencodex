@@ -2381,6 +2381,116 @@ describe("Cursor external replay envelope", () => {
   // rejected saw rootBytes=0. The guard and the telemetry now read the same measurement, and a
   // root the local store never held is disclosed as `unmeasuredRoots` rather than silently
   // making the total look small.
+  /**
+   * Audit r8 re-review finding D. The two rewritten envelope tests above both exit through the ABANDON
+   * branch — the count case uses unmeasurable checkpoint roots, the byte case a checkpoint large enough to
+   * trip abandonment — so neither exercises the `carriedRoots` subtraction that pruning depends on.
+   * Deleting that subtraction reintroduced every throw the fix removed while the whole suite stayed green.
+   *
+   * This case is built to discriminate: MEASURABLE checkpoint roots, a count just under the limit so
+   * abandonment does not fire, and a suffix that only fits if pruning knows what the checkpoint spends.
+   */
+  test("suffix pruning respects the roots the checkpoint already spends", () => {
+    const carried = CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 3;
+    const checkpointRoots = Array.from(
+      { length: carried },
+      (_, i) => storeCursorBlob(new TextEncoder().encode(JSON.stringify({ role: "user", content: [{ type: "text", text: `covered ${i}` }] }))),
+    );
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: checkpointRoots,
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+      { role: "user", content: "Run each step once.", timestamp: 1 },
+    ];
+    let timestamp = 2;
+    for (let n = 1; n <= 6; n++) {
+      rawMessages!.push({
+        role: "assistant",
+        content: [
+          { type: "text", text: `Running STEP${n}.` },
+          { type: "toolCall", id: `call_${n}`, name: "exec_command", arguments: { cmd: `echo STEP${n}` } },
+        ],
+        timestamp: timestamp++,
+      });
+      rawMessages!.push({
+        role: "toolResult",
+        toolCallId: `call_${n}`,
+        toolName: "exec_command",
+        content: `STEP${n}`,
+        isError: false,
+        timestamp: timestamp++,
+      });
+    }
+    // Without the subtraction this throws CursorRootEnvelopeLimitError: the suffix is legal on its own and
+    // fatal once assembled. The assertion is that it does not throw AND stays inside the bound.
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: "cursor_ckpt_carried_measurable",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages,
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      checkpointSuffixStart: 1,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    expect(roots.length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    // The checkpoint was kept, not abandoned: this is the pruning path, not the fallback path.
+    expect(roots.length).toBeGreaterThan(carried);
+  });
+
+  /**
+   * Audit r8 re-review finding B. The abandon test compared `carriedRoots.byteLength` against the raw byte
+   * limit while pruning subtracts the system prompt too, so a ~128-byte band just under the limit kept the
+   * checkpoint, gave the suffix a zero budget, and dropped the tool result the model was waiting for —
+   * silently, where the old code at least threw.
+   */
+  test("a checkpoint just under the byte limit still lets the latest result through", () => {
+    const systemPrompt = "You are helpful.";
+    // Land inside the old gap: below the limit, but not far enough below to leave the suffix any room once
+    // the system prompt is paid for.
+    const carriedBytes = CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - 200;
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: [storeCursorBlob(new Uint8Array(carriedBytes).fill(65))],
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: "cursor_ckpt_byte_band",
+      system: [systemPrompt],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages: [
+        { role: "user", content: "Run it.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Running." },
+            { type: "toolCall", id: "call_band", name: "exec_command", arguments: { cmd: "echo BAND" } },
+          ],
+          timestamp: 2,
+        },
+        { role: "toolResult", toolCallId: "call_band", toolName: "exec_command", content: "BAND-OUTPUT", isError: false, timestamp: 3 },
+      ],
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      checkpointSuffixStart: 1,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    const serialized = JSON.stringify(roots.map(id => {
+      const data = cursorBlobByteLength(id) === null ? undefined : blobData(id);
+      return data ? JSON.parse(new TextDecoder().decode(data)) : null;
+    }));
+    // The whole point: whatever the pruning decides, the result the model is waiting on must be visible.
+    expect(serialized).toContain("BAND-OUTPUT");
+    const measured = roots.reduce((sum, id) => sum + (cursorBlobByteLength(id) ?? 0), 0);
+    expect(measured).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+  });
+
   test("the run-request diagnostic reports the measured envelope, not zero", () => {
     const previousDebug = process.env.OCX_DEBUG;
     process.env.OCX_DEBUG = "1";

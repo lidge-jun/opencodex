@@ -165,21 +165,65 @@ uncovered message — this unit's own defect, reintroduced at the top of the ran
 hand the caller a 400 it cannot retry. A full replay rebuilds a self-contained prompt and prunes it
 coherently. After the change all three fixtures stay at 191 roots with no throw and no cliff.
 
-Two pre-existing tests asserted the throw. They now assert the bound instead, which is the stronger
-property: the assembled request stays inside the envelope, and the uncovered history is still present.
-Both were mutation-checked — removing the `carriedRoots` subtraction turns them red — so the rewrite is
-not a weakened expectation.
+### The abandon decision reads pruning's result, not a byte threshold
+
+Two threshold attempts both left a live gap, which is why the predicate ended up where it is. Comparing
+carried bytes against the raw limit left a few-hundred-byte band below it where the checkpoint was kept,
+the suffix budget collapsed, and the newest tool result vanished — silently, where the old code at least
+threw. Adding `systemBytes` moved the band instead of closing it, and the surviving positions were the
+instructive ones: pruning kept the assistant narration and dropped the result, then kept the result
+truncated so hard that only the truncation marker remained. Both leave the model looking at a call with no
+answer, which is worse than keeping nothing.
+
+So the condition is not predictive. Pruning runs first, and the checkpoint is abandoned when the message
+the turn continues from did not survive it. Two earlier attempts at that predicate are worth recording
+because each failed differently. Matching the result's own output text against the serialized root broke
+on JSON escaping the moment real output contained a newline, which made every live continuation abandon
+its checkpoint — correct output, checkpointing silently dead. Checking the surviving roots' roles could not
+distinguish the result from the narration beside it. The predicate is now positional: `rootPromptMessages`
+returns the source message index of every root that survived, plus the indexes whose output was elided
+entirely by truncation, and the caller asks whether the last replayed message is in the first set and out
+of the second.
+
+That second set exists because "the result root survived" is not the same as "the result survived".
+Truncation has two ways to leave a root that answers nothing: reduce it to the marker alone, or cut
+mid-envelope before the `output:` line. Both were live in the band, and both now set `outputElided` at the
+single place that produces them, so no threshold has to guess.
+
+Swept across 15 positions from 100 KiB below the byte limit to 100 bytes above it, the newest result is
+present at every one; before, five positions dropped it. Live turns still resume from their checkpoint
+(`mode=checkpoint`, no invalidation reason) — the predicate costs nothing on ordinary conversations.
+
+Scoped out explicitly rather than silently: the abandon branch sits inside the `suffixStart`-valid block,
+so a plain resume turn with an oversized checkpoint still throws as it did before this unit. That path has
+no suffix to lose and no measurement here, so widening it belongs to its own phase.
+
+Two pre-existing tests asserted the throw. They now assert the bound instead: the assembled request stays
+inside the envelope and the uncovered history is still present.
+
+An earlier draft claimed those two rewrites were mutation-checked against the `carriedRoots` subtraction.
+The re-audit measured otherwise and it was wrong: both exit through the abandon branch — the count case
+uses unmeasurable checkpoint roots, the byte case a checkpoint large enough to trip abandonment — so
+neither touched the subtraction. Deleting it reintroduced all three throws with the suite still 97/0
+green. The subtraction now has its own case built to reach it: measurable checkpoint roots, a count three
+below the limit so abandonment does not fire, and a suffix that only fits if pruning knows what the
+checkpoint spends. Removing the subtraction now reddens three tests.
 
 ## Verification (as performed)
 
 - Focused suite: `bun test tests/cursor-blob.test.ts tests/cursor-tool-result-invocation.test.ts
   tests/cursor-tool-continuation.test.ts` — 133 pass / 0 fail.
-- Every new assertion driven red against the code it exists to catch: restoring the unconditional orphan
-  guard reddens the two suffix-growth rows; restoring turn-granular admission reddens the byte-pressure
-  row; removing the `carriedRoots` subtraction reddens the two envelope rows; skipping the orphan guard
+- Every assertion driven red against the implementation it exists to catch, each mutation applied alone:
+  restoring the unconditional orphan guard reddens the two suffix-growth rows; restoring turn-granular
+  admission reddens the byte-pressure row; removing the `carriedRoots` subtraction reddens three rows;
+  neutering the result-survival predicate reddens the byte-band row; skipping the orphan guard
   unconditionally reddens the full-replay orphan row.
-- Live re-measurement on an isolated proxy built from the patched tree, counted after the run exited:
-  3 commands, one execution each, 0 interrupt mentions, terminal `ALLDONE`. Diagnostics show roots
-  tracking history at 4, 6, 8, 10 rather than a pinned constant.
+- Live re-measurement on an isolated proxy built from the final tree, counted after the run exited
+  (`/tmp/ocxv2.ojEUBe/v2.jsonl`): 3 commands, one execution each, 0 interrupt mentions, terminal
+  `ALLDONE`. The run-request diagnostics from that same proxy's debug buffer report `rawMessages`/`rootBlobs`
+  of 3/4, 5/6, 7/8, 9/10 across the four turns, with the last three in `checkpoint` mode and no
+  invalidation reason — roots tracking history instead of pinned to a constant, and checkpointing intact.
+  An earlier draft cited a series read from a snapshot log copied out of the operator's home, which could
+  not be traced to the run it described.
 - The operator's own proxy (port 10100, pid 62773, 2.35.0) was never touched; every probe ran against a
   scratch `OPENCODEX_HOME` on a scratch port.

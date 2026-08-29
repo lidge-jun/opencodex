@@ -125,6 +125,13 @@ type RootBlobCandidate = {
   messageIndex?: number;
   /** Original JSON text payload used when an active tool result must be truncated to fit. */
   text?: string;
+  /**
+   * Set when a tool result was truncated past the point where any of its own output survives — either down
+   * to the truncation marker alone, or mid-envelope before the `output:` line. The model reads both as an
+   * empty answer to its own call, so a caller deciding whether the result "survived" must be able to tell
+   * them apart from a real one (devlog 260829 070).
+   */
+  outputElided?: true;
 };
 
 function rootBlobCandidate(
@@ -163,7 +170,14 @@ function truncateToolResultBlob(entry: RootBlobCandidate, maxBytes: number): Roo
       "toolResult",
       { messageIndex: entry.messageIndex, text: truncated },
     );
-    if (result.byteLength <= maxBytes) return result;
+    if (result.byteLength <= maxBytes) {
+      // `output:` is the last fixed line of the envelope, so a cut landing before it leaves the header
+      // and no answer. Flag it: "a result root survived" would otherwise be true of a root that tells the
+      // model nothing about what its tool returned.
+      const outputStart = truncated.indexOf("\noutput:\n");
+      const keptOutput = outputStart >= 0 && truncated.length > outputStart + "\noutput:\n".length + marker.length;
+      return keptOutput ? result : { ...result, outputElided: true };
+    }
     if (end === 0) break;
     keepBytes = Math.max(0, end - (result.byteLength - maxBytes) - 16);
   }
@@ -172,7 +186,7 @@ function truncateToolResultBlob(entry: RootBlobCandidate, maxBytes: number): Roo
     "toolResult",
     { messageIndex: entry.messageIndex, text: marker.trimStart() },
   );
-  return markerOnly.byteLength <= maxBytes ? markerOnly : null;
+  return markerOnly.byteLength <= maxBytes ? { ...markerOnly, outputElided: true } : null;
 }
 
 function systemPromptBlobs(request: CursorRunRequest): RootBlobCandidate[] {
@@ -235,6 +249,20 @@ function rootPromptMessages(
   historyMessageStart: number;
   /** Serialized text of the roots that survived pruning, in wire order. */
   serialized: string[];
+  /**
+   * Source message index of each HISTORY root that survived pruning (system roots excluded).
+   *
+   * The checkpoint caller needs to know whether the specific message it is continuing from survived.
+   * Neither role nor text can answer that: roles repeat, and matching the result's own output against the
+   * serialized root fails on JSON escaping the moment real output contains a newline or a quote — which
+   * made live continuations abandon their checkpoint on every turn (devlog 260829 070).
+   */
+  historyMessageIndexes: number[];
+  /**
+   * Message indexes whose root survived pruning but lost ALL of its own output to truncation, so only the
+   * truncation marker remains. Aligned with nothing — membership is the whole signal (devlog 260829 070).
+   */
+  historyOutputElided: number[];
 } {
   const entries = systemPromptBlobs(request);
   const systemEntryCount = entries.length;
@@ -245,6 +273,8 @@ function rootPromptMessages(
       byteLength: entries.reduce((sum, entry) => sum + entry.byteLength, 0),
       historyMessageStart: 0,
       serialized: entries.map(entry => entry.serialized),
+      historyMessageIndexes: [],
+      historyOutputElided: [],
     };
   }
 
@@ -534,6 +564,15 @@ function rootPromptMessages(
     byteLength: selected.reduce((sum, entry) => sum + entry.byteLength, 0),
     historyMessageStart,
     serialized: selected.map(entry => entry.serialized),
+    historyMessageIndexes: selected
+      .slice(systemEntryCount)
+      .map(entry => entry.messageIndex)
+      .filter((index): index is number => index !== undefined),
+    historyOutputElided: selected
+      .slice(systemEntryCount)
+      .filter(entry => entry.outputElided === true)
+      .map(entry => entry.messageIndex)
+      .filter((index): index is number => index !== undefined),
   };
 }
 
@@ -1275,25 +1314,42 @@ function buildPreparedCursorRunRequest(
           count: conversationState.rootPromptMessagesJson.length,
           byteLength: carriedBytes,
         };
-        // A checkpoint can be so large that nothing is left for the suffix. Pruning to fit would then
-        // emit the covered prefix and silently drop every uncovered message — the exact failure this
-        // unit exists to remove — while throwing would hand the caller a non-retryable 400. Abandon the
+        // A checkpoint can be so large that nothing useful is left for the suffix. Pruning to fit then
+        // emits the covered prefix and silently drops the uncovered messages — the exact failure this unit
+        // exists to remove — while throwing would hand the caller a non-retryable 400. Abandon the
         // checkpoint instead: full replay rebuilds a self-contained prompt and prunes it coherently
-        // (devlog 260829 070, audit r8 finding 3).
-        const systemRootCount = systemPromptBlobs(suffixRequest).length;
+        // (devlog 260829 070, audit r8).
+        //
+        // The decision is made on the RESULT of pruning, not on a byte threshold. A threshold has to
+        // predict what pruning will do, and the first attempt mispredicted it: comparing carried bytes
+        // against the raw limit left a band of a few hundred bytes below it where the checkpoint was kept,
+        // the suffix budget collapsed, and the newest tool result vanished. Adding `systemBytes` moved the
+        // band without closing it. Asking pruning what survived cannot drift from what pruning does.
+        const suffixRoots = rootPromptMessages(suffixRequest, requestScope, fullHistoryCalls, suffixStart, carriedRoots);
+        const suffixSystemCount = systemPromptBlobs(suffixRequest).length;
+        // A tool continuation whose own result did not survive is worthless: that result is the whole
+        // reason the turn exists. "Kept SOMETHING" is not enough either — inside the band this fix first
+        // missed, pruning kept the assistant narration and dropped the result, which is worse than keeping
+        // nothing because the model then sees a call it never got an answer to. The test is therefore on
+        // the LAST replayed message specifically, identified by its index rather than its content.
+        const suffixMessages = suffixRequest.rawMessages ?? [];
+        const lastSuffixIndex = suffixMessages.length - 1;
+        // Kept, and kept with its output: a root reduced to the truncation marker alone answers the call
+        // with nothing, which is the same failure as dropping it. `outputElided` is set at the one place
+        // that can produce it, so this needs no threshold to guess at.
+        const keptEnough = suffixRoots.historyMessageIndexes.includes(lastSuffixIndex)
+          && !suffixRoots.historyOutputElided.includes(lastSuffixIndex);
+        const suffixKeptItsResult = suffixMessages[lastSuffixIndex]?.role !== "toolResult" || keptEnough;
         if (
-          carriedRoots.count + systemRootCount >= CURSOR_EXTERNAL_ROOT_BLOB_LIMIT
-          || carriedRoots.byteLength >= CURSOR_EXTERNAL_ROOT_BYTE_LIMIT
+          carriedRoots.count + suffixSystemCount >= CURSOR_EXTERNAL_ROOT_BLOB_LIMIT
+          || suffixRoots.ids.length <= suffixSystemCount
+          || !suffixKeptItsResult
         ) {
           conversationState = undefined;
           continuationMode = "full-replay";
           checkpointInvalidationReason = "envelope_exhausted";
         } else {
-        // `suffixStart` re-bases the replayed slice into full-history space, which is the space
-        // `fullHistoryCalls` positions live in. Without it the positional bound compares two origins.
-        const suffixRoots = rootPromptMessages(suffixRequest, requestScope, fullHistoryCalls, suffixStart, carriedRoots);
         const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart, fullHistoryCalls, suffixStart);
-        const suffixSystemCount = systemPromptBlobs(suffixRequest).length;
         const suffixHistoryIds = suffixRoots.ids.slice(suffixSystemCount);
         const suffixHistorySerialized = suffixRoots.serialized.slice(suffixSystemCount);
         conversationState = create(ConversationStateStructureSchema, {
@@ -1312,6 +1368,8 @@ function buildPreparedCursorRunRequest(
           byteLength: suffixRoots.byteLength,
           historyMessageStart: suffixRoots.historyMessageStart,
           serialized: suffixHistorySerialized,
+          historyMessageIndexes: suffixRoots.historyMessageIndexes,
+          historyOutputElided: suffixRoots.historyOutputElided,
         };
         }
       }
