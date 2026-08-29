@@ -452,4 +452,87 @@ describe("entitlement client version (#2886)", () => {
       clientVersion: "0.140.0",
     })).toBe(false);
   });
+
+  test("one caller cycling client_version cannot evict another account's evidence", async () => {
+    // `client_version` arrives on the inbound request, so making it part of the cache key handed
+    // callers a knob on key cardinality. With a flat per-key budget, ONE caller cycling versions
+    // filled its whole eviction class and pushed unrelated accounts' confirmed grants out — the
+    // fail-closed catalog flapping the two-class budget exists to prevent, reached by a new axis.
+    //
+    // Asserted through the Direct path on purpose: a synthetic pool credential never satisfies
+    // `currentCredentialIdentity`, so a resolver call with one writes NOTHING to the cache and an
+    // eviction test built on it passes without ever storing an entry. (That mistake was made and
+    // caught here: the first version of this test was vacuous for exactly that reason.)
+    let fetches = 0;
+    const backend = (async () => { fetches += 1; return roster(SOL); }) as typeof fetch;
+    const ask = (token: string, version: string) => isDirectCallerEntitledToCodexModel(
+      directHeaders(token),
+      SOL,
+      { fetcher: backend, now: 1_000, clientVersion: version },
+    );
+
+    // The victim's entry is genuinely cached: a second identical ask does not refetch.
+    expect(await ask("tok-victim", "0.146.0")).toBe(true);
+    const afterVictim = fetches;
+    expect(await ask("tok-victim", "0.146.0")).toBe(true);
+    expect(fetches).toBe(afterVictim);
+
+    // One noisy caller, far more distinct versions than the per-class account budget.
+    for (let i = 0; i < 90; i += 1) await ask("tok-noisy", `0.${150 + i}.0`);
+
+    // The victim is still inside its TTL, so this must be a cache hit, not a refetch.
+    const beforeRecheck = fetches;
+    expect(await ask("tok-victim", "0.146.0")).toBe(true);
+    expect(fetches).toBe(beforeRecheck);
+  });
+
+  test("a single account retains only a bounded number of versions", async () => {
+    // The per-account bound is what makes the class budget safe. Without it, one account's
+    // versions grow without limit inside its own class.
+    let fetches = 0;
+    const backend = (async () => { fetches += 1; return roster(SOL); }) as typeof fetch;
+    const ask = (version: string) => isDirectCallerEntitledToCodexModel(
+      directHeaders("tok-bounded"),
+      SOL,
+      { fetcher: backend, now: 1_000, clientVersion: version },
+    );
+
+    for (let i = 0; i < 10; i += 1) await ask(`0.${200 + i}.0`);
+    expect(fetches).toBe(10);
+
+    // The most recent version is still cached.
+    const afterFill = fetches;
+    expect(await ask("0.209.0")).toBe(true);
+    expect(fetches).toBe(afterFill);
+
+    // The oldest has been dropped, so it costs a refetch rather than living forever.
+    expect(await ask("0.200.0")).toBe(true);
+    expect(fetches).toBe(afterFill + 1);
+  });
+
+  test("the class budget counts accounts, not cached keys", async () => {
+    // The documented budget is 64 ACCOUNTS per class. Counting keys instead would silently divide
+    // that by the per-account version bound, so a deployment well inside the intended limit would
+    // start losing evidence: 20 accounts holding 4 versions each is 80 keys but only 20 accounts.
+    let fetches = 0;
+    const backend = (async () => { fetches += 1; return roster(SOL); }) as typeof fetch;
+    const ask = (token: string, version: string) => isDirectCallerEntitledToCodexModel(
+      directHeaders(token),
+      SOL,
+      { fetcher: backend, now: 1_000, clientVersion: version },
+    );
+
+    expect(await ask("tok-first", "0.146.0")).toBe(true);
+
+    // Twenty further accounts, each using the full per-account version allowance.
+    for (let account = 0; account < 20; account += 1) {
+      for (let v = 0; v < 4; v += 1) await ask(`tok-${account}`, `0.${300 + v}.0`);
+    }
+
+    // Far more than 64 keys are now live, but far fewer than 64 accounts, so the first account's
+    // entry must still be served from cache.
+    const before = fetches;
+    expect(await ask("tok-first", "0.146.0")).toBe(true);
+    expect(fetches).toBe(before);
+  });
 });

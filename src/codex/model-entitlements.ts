@@ -162,6 +162,19 @@ const MODEL_ROSTER_FAILURE_TTL_MS = 15_000;
 const MODEL_ROSTER_TIMEOUT_MS = 8_000;
 const MODEL_ROSTER_MAX_BYTES = 2 * 1024 * 1024;
 const MODEL_ROSTER_CACHE_MAX = 64;
+
+/**
+ * Versions retained per account.
+ *
+ * `client_version` arrives on the inbound `/v1/models` request, so making it part of the cache
+ * key handed callers a knob on key cardinality. With a flat per-key budget, one account cycling
+ * 64 versions filled its whole class and pushed other accounts' confirmed grants out — the same
+ * fail-closed catalog flapping the two-class budget exists to prevent, reached by a different
+ * axis. A handful of versions per account is all any real deployment needs (a client, a runtime,
+ * the floor), and the budget below counts ACCOUNTS so one noisy account cannot spend another's
+ * share.
+ */
+const MODEL_ROSTER_VERSIONS_PER_ACCOUNT_MAX = 4;
 const DIRECT_CALLER_ACCOUNT_PREFIX = "__direct_codex__:";
 
 export interface CodexModelEntitlementCredentialSnapshot {
@@ -250,17 +263,30 @@ function boundedCacheSet(accountId: string, value: CachedAccountModels): void {
   accountModelsCache.set(key, value);
   const isDirect = (candidate: string): boolean =>
     accountIdOfCacheKey(candidate).startsWith(DIRECT_CALLER_ACCOUNT_PREFIX);
+
+  // First, bound THIS account's versions, so a caller cycling client_version evicts only its
+  // own older entries and never reaches another account's evidence.
+  const ownKeys = [...accountModelsCache.keys()].filter(k => accountIdOfCacheKey(k) === accountId);
+  for (const stale of ownKeys.slice(0, Math.max(0, ownKeys.length - MODEL_ROSTER_VERSIONS_PER_ACCOUNT_MAX))) {
+    accountModelsCache.delete(stale);
+  }
+
+  // Then bound the class by DISTINCT ACCOUNTS. Counting keys would let one account's versions
+  // consume the budget; counting accounts keeps each account's share independent of how many
+  // versions any other account is using.
   const evictClass = (direct: boolean): void => {
-    let count = 0;
-    for (const key of accountModelsCache.keys()) if (isDirect(key) === direct) count += 1;
-    while (count > MODEL_ROSTER_CACHE_MAX) {
-      let oldest: string | undefined;
-      for (const key of accountModelsCache.keys()) {
-        if (isDirect(key) === direct) { oldest = key; break; }
+    const accountsInOrder: string[] = [];
+    for (const key of accountModelsCache.keys()) {
+      if (isDirect(key) !== direct) continue;
+      const account = accountIdOfCacheKey(key);
+      if (!accountsInOrder.includes(account)) accountsInOrder.push(account);
+    }
+    // Never evict the account just written, even if it is the least-recently-inserted.
+    for (const victim of accountsInOrder.slice(0, Math.max(0, accountsInOrder.length - MODEL_ROSTER_CACHE_MAX))) {
+      if (victim === accountId) continue;
+      for (const key of [...accountModelsCache.keys()]) {
+        if (accountIdOfCacheKey(key) === victim) accountModelsCache.delete(key);
       }
-      if (oldest === undefined) break;
-      accountModelsCache.delete(oldest);
-      count -= 1;
     }
   };
   evictClass(accountId.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX));
