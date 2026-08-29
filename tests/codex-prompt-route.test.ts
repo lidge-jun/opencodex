@@ -1030,6 +1030,99 @@ describe("020 coverage completions", () => {
     expect((await beforeDelete).body.layers.skills.text).toBe("created-text");
   });
 
+  /**
+   * Absence and emptiness are different prompt states, and a sentinel STRING cannot
+   * tell them apart: an adversarial review showed the null case colliding with a file
+   * whose bytes were literally NUL + "absent", so deleting such a file left the
+   * admission key unmoved. The framing carries a byte length instead, and -1 is not a
+   * length any content can produce.
+   *
+   * Two single-transition cases rather than one chained walk: each in-flight probe is
+   * observed by its own marker file, so a request that is correctly refused as `busy`
+   * cannot be mistaken for a probe that never started.
+   */
+  for (const transition of [
+    { name: "deleting a file whose content is the old absent sentinel", before: "\u0000absent", after: null },
+    { name: "emptying a file", before: "had-content", after: "" },
+    // The one transition where absent and empty are the ONLY difference. A
+    // fingerprint that measured a missing file as zero bytes would hash these two
+    // states identically and hand the second caller the first one's text.
+    { name: "deleting an already-empty file", before: "", after: null },
+  ]) {
+    test(`32. ${transition.name} moves probe admission`, async () => {
+      const fx = fixture("model = \"x\"\n");
+      const agentsPath = join(fx.decoyHome, "AGENTS.md");
+      writeFileSync(agentsPath, transition.before, "utf8");
+      const startedPath = join(fx.decoyHome, "transition-probe-starts.txt");
+      const source = [
+        `const fs = require("node:fs");`,
+        `const p = ${JSON.stringify(agentsPath)};`,
+        `const doc = fs.existsSync(p) ? "present:" + fs.readFileSync(p, "utf8") : "missing";`,
+        `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+        `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+        "setTimeout(() => process.stdout.write(output), 200);",
+      ].join("");
+      setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+      const beforeTransition = call("GET", "/api/codex-prompt/text", fx);
+      await waitUntil(() => existsSync(startedPath), "transition probe start");
+      if (transition.after === null) rmSync(agentsPath);
+      else writeFileSync(agentsPath, transition.after, "utf8");
+
+      expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+        ok: false,
+        detail: "another prompt probe is still finishing; retry shortly",
+      });
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+      expect((await beforeTransition).body.layers.skills.text).toBe(`present:${transition.before}`);
+
+      const fresh = await call("GET", "/api/codex-prompt/text", fx);
+      expect(fresh.body.layers.skills.text).toBe(transition.after === null ? "missing" : `present:${transition.after}`);
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+    });
+  }
+  /**
+   * A file's own bytes must not be able to imitate the separator that frames the
+   * next field. Without a length prefix these two states hash identically, and the
+   * second request joins the first probe and is served its text.
+   */
+  test("33. instruction-file content cannot imitate a fingerprint field boundary", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const overridePath = join(fx.decoyHome, "AGENTS.override.md");
+    const agentsPath = join(fx.decoyHome, "AGENTS.md");
+    writeFileSync(overridePath, "left", "utf8");
+    writeFileSync(agentsPath, "right\nAGENTS.md:tail", "utf8");
+    const startedPath = join(fx.decoyHome, "framing-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const read = p => fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "\\u0000missing";`,
+      `const doc = read(${JSON.stringify(overridePath)}) + "|" + read(${JSON.stringify(agentsPath)});`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const beforeShift = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "framing probe start");
+
+    // Move the boundary: the concatenation of (name, contents) is byte-identical
+    // across this edit, so only a length-framed field distinguishes the two states.
+    writeFileSync(overridePath, "left\nAGENTS.md:right", "utf8");
+    writeFileSync(agentsPath, "tail", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeShift).body.layers.skills.text).toBe("left|right\nAGENTS.md:tail");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("left\nAGENTS.md:right|tail");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
   test("24. every ownership state is named, not collapsed into a boolean", async () => {
     // developerInstructionsOwned:false covers an ABSENT key and an EXTERNAL one, and
     // a GUI that cannot tell them apart hides its own create affordance from every

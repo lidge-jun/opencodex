@@ -28,7 +28,7 @@
  */
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, type Hash } from "node:crypto";
 import { expandUserPath } from "../config";
 import { CODEX_CONFIG_PATH } from "./paths";
 import { resolveCodexHomeDir } from "./home";
@@ -189,6 +189,30 @@ export function activeBaseVariantDir(opts?: Paths): string {
  * changes the rendered project document without touching a managed file.
  */
 const PROBE_INSTRUCTION_FILES = ["AGENTS.override.md", "AGENTS.md"] as const;
+
+/**
+ * Feed one named field into a fingerprint, framed so that no two distinct states
+ * can produce the same digest.
+ *
+ * Framing is the whole point. Concatenating `name + ":" + contents` is ambiguous:
+ * an adversarial review of the first version of this function showed that
+ * `{override: "left", agents: "right\nAGENTS.md:tail"}` and
+ * `{override: "left\nAGENTS.md:right", agents: "tail"}` hashed identically, because
+ * a file's own bytes can imitate the separator that follows it. That is exactly a
+ * missed invalidation: the fingerprint is the probe's admission key, so two
+ * different prompt states sharing a digest means one caller is served the other's
+ * stale text.
+ *
+ * A byte length cannot be forged by content, so each field carries one. Absence is
+ * a length of -1 rather than a sentinel string, because a sentinel is just more
+ * content: the same review found that `null` collided with a file whose bytes were
+ * literally NUL + "absent".
+ */
+function updateFingerprintField(hash: Hash, name: string, contents: string | null): void {
+  const bytes = contents === null ? -1 : Buffer.byteLength(contents, "utf8");
+  hash.update(`\n${name}:${bytes}:`);
+  if (contents !== null) hash.update(contents);
+}
 
 function journalPathFor(storePath: string): string {
   return `${storePath.replace(/\.json$/, "")}.journal`;
@@ -669,24 +693,17 @@ export function computePromptProbeStateFingerprint(opts?: Paths): string {
   const variants = readBaseVariants(opts);
   const selection = resolveBaseSelection(configBytes, variants, opts);
   const hash = createHash("sha256");
-  hash.update("revision:");
-  hash.update(computeRevision(configBytes, storeBytes));
-  hash.update("\nselected-base:");
-  hash.update(selection.kind);
+  updateFingerprintField(hash, "revision", computeRevision(configBytes, storeBytes));
+  updateFingerprintField(hash, "selected-base", selection.kind === "variant" ? `variant:${selection.id}` : selection.kind);
   if (selection.kind === "variant") {
-    hash.update(":");
-    hash.update(selection.id);
-    hash.update("\nvariant-bytes:");
-    hash.update(readFileOrNull(join(activeBaseVariantDir(opts), `${selection.id}.md`)) ?? "\0absent");
+    updateFingerprintField(hash, "variant-bytes", readFileOrNull(join(activeBaseVariantDir(opts), `${selection.id}.md`)));
   }
   // Codex prefers AGENTS.override.md over AGENTS.md, so both spellings are hashed
   // in that order: an override edit changes the rendered project document exactly
-  // as a plain edit does. A missing file hashes to its own sentinel so that
-  // creating or deleting one moves the key too.
+  // as a plain edit does.
   const probeHome = resolveCodexHomeDir();
   for (const name of PROBE_INSTRUCTION_FILES) {
-    hash.update(`\n${name}:`);
-    hash.update(readFileOrNull(join(probeHome, name)) ?? "\0absent");
+    updateFingerprintField(hash, name, readFileOrNull(join(probeHome, name)));
   }
   return `sha256:${hash.digest("hex")}`;
 }
