@@ -226,3 +226,27 @@ defence-in-depth rather than dropped, because the two guards answer different qu
 belongs to this grant at all — and a future change to either branch would remove the
 overlap. This is recorded rather than presented as proven.
 
+
+## Second review round: both residuals closed
+
+**`invalid_grant` matched too loosely.** The first fix searched the combined
+code-plus-description text, so a transient `server_error` whose description merely
+mentioned the phrase was classified `revoked` and retired a healthy account — the
+same failure mode this whole change exists to remove, reintroduced through the fix
+for it. The match is now on the exact OAuth `error` code, with descriptive text
+classified separately.
+
+**The cross-account test did not reach the branch it claimed to test.** It replaced
+the owner's credential from inside `fetch`, which runs after the lock body has
+already compared grants, so the alias-reuse and CAS paths handled the scenario and
+the test passed with the provenance check removed. It now holds the shared grant's
+file lock directly, replaces the owner's credential while its flight is parked in the
+lock wait, then releases — so the lock body observes a different grant and returns
+that replacement, which is the branch under test. The assertions are positive as well
+as negative: the owner's replacement must survive intact.
+
+With that, the provenance guard has the isolated regression it previously lacked.
+Removing `resolvedGrantFingerprint === refreshGrantFingerprint` on its own now fails
+with the joiner holding `owner-secret` — a real cross-account credential leak, not an
+inferred one.
+

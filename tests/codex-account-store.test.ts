@@ -691,9 +691,13 @@ describe("codex-account-store CRUD", () => {
 
   test("a joined flight cannot copy a sibling account's replacement credential (#2887 review)", async () => {
     // Flights are keyed by refresh GRANT and shared across every account holding it. If the
-    // owner's own credential is externally replaced while it waits for the file lock, the
+    // owner's own credential is externally replaced BEFORE it takes the file lock, the
     // grant-mismatch branch hands back that replacement. Without provenance on the result, a
     // joiner CAS-writes another account's access AND refresh tokens onto itself.
+    //
+    // The replacement has to land before the lock body reads the record, which is why it is
+    // written from the lock-acquisition hook rather than from inside `fetch`: by fetch time
+    // the grant comparison has already happened and a different branch handles the case.
     const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
       await import("../src/codex/account-store");
     const shared = { refreshToken: "shared-grant", expiresAt: Date.now() + 3600_000, chatgptAccountId: "acc" };
@@ -703,35 +707,45 @@ describe("codex-account-store CRUD", () => {
     const joinerGeneration = readCodexAccountRecord("joiner")!.generation;
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      // The owner is re-authenticated onto a DIFFERENT grant mid-flight.
-      saveCodexAccountCredential("owner", {
-        accessToken: "owner-secret",
-        refreshToken: "owner-new-grant",
-        expiresAt: Date.now() + 3600_000,
-        chatgptAccountId: "acc-owner",
-      });
-      return Response.json({ access_token: "unused", expires_in: 3600 });
-    }) as typeof fetch;
+    // Hold the shared grant's file lock so the owner's flight is parked BEFORE its lock body
+    // reads the record. Replacing the owner's credential now means the lock body observes a
+    // different grant and returns that replacement, which is the branch under test.
+    const lockPath = refreshLockPathForToken("shared-grant");
+    writeFileSync(lockPath, JSON.stringify({ acquiredAt: Date.now(), pid: process.pid }) + "\n");
+    globalThis.fetch = (async () => Response.json({ access_token: "unused", expires_in: 3600 })) as typeof fetch;
 
     try {
       const ownerFlight = forceRefreshCodexPoolToken("owner", {
         rejectedGeneration: ownerGeneration,
         rejectedAccessToken: "owner-rejected",
       }).catch(() => undefined);
+      // Let the owner reach the lock wait, then re-authenticate it onto a DIFFERENT grant
+      // and release the lock so its body runs against the replacement.
+      await new Promise(resolve => setTimeout(resolve, 20));
+      saveCodexAccountCredential("owner", {
+        accessToken: "owner-secret",
+        refreshToken: "owner-new-grant",
+        expiresAt: Date.now() + 3600_000,
+        chatgptAccountId: "acc-owner",
+      });
+      unlinkSync(lockPath);
+
       const joiner = await forceRefreshCodexPoolToken("joiner", {
         rejectedGeneration: joinerGeneration,
         rejectedAccessToken: "joiner-rejected",
       }).catch(() => undefined);
       await ownerFlight;
 
-      // The joiner must never end up holding the owner's credential.
-      expect(joiner?.accessToken).not.toBe("owner-secret");
+      // The joiner must never end up holding the owner's credential, and the owner's own
+      // replacement must survive untouched.
       const joinerRecord = readCodexAccountRecord("joiner");
       expect(joinerRecord?.credential?.accessToken).not.toBe("owner-secret");
       expect(joinerRecord?.credential?.refreshToken).not.toBe("owner-new-grant");
+      expect(readCodexAccountRecord("owner")!.credential!.accessToken).toBe("owner-secret");
+      expect(joiner?.accessToken).not.toBe("owner-secret");
     } finally {
       globalThis.fetch = originalFetch;
+      if (existsSync(lockPath)) unlinkSync(lockPath);
     }
   });
 
@@ -880,6 +894,38 @@ describe("codex-account-store CRUD", () => {
       }
       // The replacement survives regardless.
       expect(readCodexAccountRecord("external")!.credential!.accessToken).toBe("external-access");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a transient error merely mentioning invalid_grant stays transient (#2887 review 2)", async () => {
+    // Matching the phrase anywhere in the combined code+description text would retire a
+    // healthy account on an upstream blip — reintroducing the defect this path fixes.
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential, TokenRefreshError } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("blip", {
+      accessToken: "rejected",
+      refreshToken: "grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const generation = readCodexAccountRecord("blip")!.generation;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      error: "server_error",
+      error_description: "upstream failed while validating invalid_grant handling",
+    }, { status: 503 })) as typeof fetch;
+
+    try {
+      await forceRefreshCodexPoolToken("blip", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+      throw new Error("expected a TokenRefreshError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TokenRefreshError);
+      expect((error as InstanceType<typeof TokenRefreshError>).reason).toBe("unknown");
     } finally {
       globalThis.fetch = originalFetch;
     }

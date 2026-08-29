@@ -647,16 +647,22 @@ async function resolveCodexToken(
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
       let errDesc: string;
+      let errCodeExact: string | undefined;
       try {
         const parsed = JSON.parse(errText) as { error?: string; error_description?: string };
+        errCodeExact = typeof parsed.error === "string" ? parsed.error.trim() : undefined;
         errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ") || `HTTP ${res.status}`;
       } catch { errDesc = `HTTP ${res.status}`; }
       // `invalid_grant` is the standard OAuth code for a refresh token that is no longer
       // usable, and upstream sends it bare with no description. Without it here the dead
       // grant is classified "unknown", which callers treat as transient — so the account
       // is never retired and every request repeats the same doomed refresh (#2887).
-      const reason = errDesc.includes("invalidated") || errDesc.includes("revoked")
-          || errDesc.includes("invalid_grant") ? "revoked" as const
+      //
+      // Matched on the exact `error` CODE, not anywhere in the combined text: a transient
+      // `server_error` whose description happens to mention invalid_grant would otherwise
+      // retire a healthy account, which is the failure this whole change exists to remove.
+      const reason = errCodeExact === "invalid_grant"
+          || errDesc.includes("invalidated") || errDesc.includes("revoked") ? "revoked" as const
         : errDesc.includes("expired") ? "expired" as const
         : "unknown" as const;
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`);
