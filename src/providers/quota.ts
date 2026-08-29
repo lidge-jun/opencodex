@@ -45,6 +45,14 @@ import type {
   ProviderQuotaCreditsUsd,
   ProviderQuotaWindow,
 } from "./quota-types";
+import {
+  clearKiroAccountUsageState,
+  commitKiroAccountUsageState,
+  fetchKiroUsageSnapshot,
+  type KiroUsageSnapshot,
+  kiroUsageContextForAccount,
+  reconcileKiroAccountUsageState,
+} from "./kiro-usage";
 
 export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
 
@@ -1325,6 +1333,32 @@ async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaRepor
   return report(provider, "anthropic:oauth-usage", quota);
 }
 
+/**
+ * Provider-level Kiro row: the active account's usage, shown on the Providers page.
+ *
+ * The per-account cache is seeded from the same probe so opening that page does not read
+ * the active account twice, and the account id is captured before the await so a
+ * concurrent account switch cannot file this answer under the wrong account.
+ */
+async function fetchKiroQuota(provider: string): Promise<ProviderQuotaReport | null> {
+  const probedAccountId = getAccountSet("kiro")?.activeAccountId;
+  if (!probedAccountId) return null;
+  const probedAccountKey = accountCacheKey("kiro", probedAccountId);
+  const writerGeneration = captureConfigGeneration();
+  let snapshot: KiroUsageSnapshot | null;
+  try {
+    snapshot = await fetchKiroUsageSnapshot(await kiroUsageContextForAccount(probedAccountId));
+  } catch {
+    return null;
+  }
+  if (!snapshot) return null;
+  if (mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
+    accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota: snapshot.quota });
+    commitKiroAccountUsageState(probedAccountKey, snapshot);
+  }
+  return report(provider, "kiro:usage-limits", snapshot.quota);
+}
+
 // ---------------------------------------------------------------------------
 // Per-account quota (multiauth)
 // ---------------------------------------------------------------------------
@@ -1366,7 +1400,7 @@ export interface ProviderAccountQuota {
 
 /** Providers whose per-account quota can be probed. Extend as other OAuth APIs are covered. */
 export function supportsPerAccountQuota(provider: string): boolean {
-  return provider === "anthropic";
+  return provider === "anthropic" || provider === "kiro";
 }
 
 function accountCacheKey(provider: string, accountId: string): string {
@@ -1414,6 +1448,9 @@ export function reconcileProviderAccountQuotaRows(context: GenerationContext): n
     accountQuotaCache.delete(key);
     removed += 1;
   }
+  // Kiro exhaustion rows are keyed identically, so they retire with their quota row; a
+  // verdict outliving its account would hand the replacement a cooldown it never earned.
+  removed += reconcileKiroAccountUsageState(context.oauthAccountKeys);
   if (cache) {
     const reports = cache.response.reports.filter(report => context.providerNames.has(report.provider));
     removed += cache.response.reports.length - reports.length;
@@ -1437,12 +1474,14 @@ export function clearAccountQuotaCache(provider?: string): void {
   if (!provider) {
     accountQuotaCache.clear();
     accountQuotaInflight.clear();
+    clearKiroAccountUsageState();
     return;
   }
   const prefix = `${provider}\u0000`;
   for (const key of [...accountQuotaCache.keys()]) {
     if (key.startsWith(prefix)) accountQuotaCache.delete(key);
   }
+  clearKiroAccountUsageState(prefix);
   // Drop in-flight probes too so a late resolve cannot repopulate after logout/remove.
   for (const key of [...accountQuotaInflight.keys()]) {
     if (key.startsWith(prefix)) accountQuotaInflight.delete(key);
@@ -1485,8 +1524,21 @@ async function fetchAccountQuota(
 
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
     try {
-      const token = await getTokenForAccountQuotaProbe(provider, accountId);
-      const quota = await fetchAnthropicUsageQuota(token);
+      let quota: ProviderQuota | null;
+      let kiroSnapshot: KiroUsageSnapshot | null = null;
+      if (provider === "kiro") {
+        // Kiro resolves the bearer and its routing metadata from ONE account-scoped
+        // snapshot. It deliberately does not use getTokenForAccountQuotaProbe: that
+        // helper refuses to refresh a background `local-cli` slot because Anthropic's
+        // lock can adopt a mismatched Claude CLI identity, but Kiro marks every
+        // CLI-imported credential `local-cli`, so the same rule would blank the quota of
+        // every inactive pool account the moment its token expired.
+        kiroSnapshot = await fetchKiroUsageSnapshot(await kiroUsageContextForAccount(accountId));
+        quota = kiroSnapshot?.quota ?? null;
+      } else {
+        const token = await getTokenForAccountQuotaProbe(provider, accountId);
+        quota = await fetchAnthropicUsageQuota(token);
+      }
       if (!quota) {
         // Preserve last-good bars and mark unavailable; advance TTL so failures
         // negative-cache instead of re-probing on every GUI poll.
@@ -1497,6 +1549,7 @@ async function fetchAccountQuota(
         };
         if (mayCommitAccountQuotaKey(key, writerGeneration)) {
           accountQuotaCache.set(key, entry);
+          if (provider === "kiro") commitKiroAccountUsageState(key, null);
           sweepExpiredOnWrite(entry.ts);
         }
         return entry;
@@ -1504,6 +1557,9 @@ async function fetchAccountQuota(
       const entry: AccountQuotaCacheEntry = { ts: Date.now(), quota };
       if (mayCommitAccountQuotaKey(key, writerGeneration)) {
         accountQuotaCache.set(key, entry);
+        // Exhaustion state rides the SAME commit guard as the quota row: a probe from a
+        // superseded config generation must not publish either half.
+        if (provider === "kiro") commitKiroAccountUsageState(key, kiroSnapshot);
         sweepExpiredOnWrite(entry.ts);
       }
       return entry;
@@ -2113,6 +2169,7 @@ async function maybeFetchProviderQuota(
     if (provider.authMode === "oauth" && name === "anthropic") return fetchAnthropicQuota(name);
     if (provider.authMode === "oauth" && name === "cursor") return fetchCursorQuota(name);
     if (provider.authMode === "oauth" && name === "google-antigravity") return fetchAntigravityQuota(name, provider);
+    if (provider.authMode === "oauth" && name === "kiro") return fetchKiroQuota(name);
     // Kimi Code `/usages` accepts OAuth or coding-plan API keys, but only on the canonical
     // host and only for real key auth — forward/local modes carry no credential of ours.
     if (provider.authMode === "oauth" && name === "kimi") return fetchKimiQuota(name, provider);
