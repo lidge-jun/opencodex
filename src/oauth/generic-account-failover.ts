@@ -294,20 +294,13 @@ export function preferredInitialAccount(
 
   const best = rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
   // Nothing to do when the ranking agrees with the account we would have used anyway.
-  if (!best || best === active) return null;
-  // The roster above may be up to PRESENCE_CACHE_TTL_MS old, and two kinds of staleness
-  // matter here. A REMOVED account makes resolution throw, which the caller absorbs. An
-  // account newly flagged `needsReauth` does NOT throw — its stored credential is still
-  // readable, so the request would dispatch on an account already known to need a fresh
-  // login while a healthy active account sat unused. Only the winner is re-checked, so
-  // this costs one store read per ACTUAL redirection rather than one per request.
-  const fresh = getAccountSet(providerName)?.accounts.find(account => account.id === best);
-  if (!fresh || fresh.needsReauth === true) {
-    roster.delete(providerName);
-    presence.delete(providerName);
-    return null;
-  }
-  return best;
+  //
+  // The roster may be up to PRESENCE_CACHE_TTL_MS old, so this answer is a PREFERENCE the
+  // caller must be able to abandon: it resolves the account with `requireUsableAccount`,
+  // which rejects a removed or reauth-flagged account inside the store read it was already
+  // performing, and falls back to the active account. Validating here instead would mean a
+  // second uncached read of the credential file on every redirected request.
+  return best && best !== active ? best : null;
 }
 
 /** Earliest remaining cooldown, for a client-facing Retry-After when every account is cooled. */

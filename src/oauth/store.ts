@@ -641,6 +641,22 @@ export function getAccountCredential(provider: string, accountId: string): OAuth
   return loadAuthStore()[provider]?.accounts.find(a => a.id === accountId)?.credential ?? null;
 }
 
+/**
+ * Credential plus the account's reauth flag, from ONE store read.
+ *
+ * A caller that checks `needsReauth` separately pays a second `loadAuthStore`, which
+ * chmods and re-parses the whole credential file. Returning both together lets an
+ * account-scoped resolver reject a revoked account without that extra read.
+ */
+export function getAccountCredentialWithStatus(
+  provider: string,
+  accountId: string,
+): { credential: OAuthCredentials; needsReauth: boolean } | null {
+  const account = loadAuthStore()[provider]?.accounts.find(a => a.id === accountId);
+  if (!account?.credential) return null;
+  return { credential: account.credential, needsReauth: account.needsReauth === true };
+}
+
 /** Persist a refreshed credential for a SPECIFIC account without touching activeAccountId. */
 export async function saveAccountCredential(
   provider: string,

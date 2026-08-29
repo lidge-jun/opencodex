@@ -3118,7 +3118,15 @@ async function handleResponsesInner(
         let resolved: OAuthAccessSnapshot;
         if (preferredAccountId) {
           try {
-            resolved = await getValidAccessSnapshotForAccount(route.providerName, preferredAccountId);
+            // `requireUsableAccount` makes a removed OR reauth-flagged account throw from
+            // inside the resolver's own store read. Without it a revoked account resolves
+            // successfully — its credential is still readable — and the request would
+            // dispatch on an account already known to need a fresh login.
+            resolved = await getValidAccessSnapshotForAccount(
+              route.providerName,
+              preferredAccountId,
+              { requireUsableAccount: true },
+            );
           } catch {
             // The roster is read behind a short TTL, so a preferred account can be removed
             // or flagged for reauth in the window after it was cached. Resolving it then

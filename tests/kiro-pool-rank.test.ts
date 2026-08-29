@@ -260,11 +260,14 @@ describe("pre-dispatch account preference", () => {
     }
   });
 
-  test("a non-redirecting request never touches the credential store", async () => {
+  test("neither a redirecting nor a non-redirecting selection touches the credential store", async () => {
     // loadAuthStore chmods the config dir, chmods the secret, and re-parses the whole
     // credential file on every call — and this runs on the initial resolution of EVERY
-    // request. The common case, where the ranking agrees with the active account, must
-    // answer entirely from cache. Deleting the store proves it: an uncached path could not.
+    // request. The steady state of this feature is a pool where one account consistently
+    // ranks higher, so the REDIRECTING path must be cached too — validating the winner here
+    // would put a second uncached read in front of every such request. Deleting the store
+    // proves it: an uncached path could not answer at all. Staleness is caught at
+    // resolution instead, inside a store read the resolver already performs.
     home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
     process.env.OPENCODEX_HOME = home;
     clearGenericFailoverHealth();
@@ -272,11 +275,16 @@ describe("pre-dispatch account preference", () => {
     try {
       const ids = await seedAccounts(2);
       await setActiveAccount("xai", ids[0]!);
-      // Active already holds the most headroom, so there is nothing to redirect.
+      // Redirecting: the other account holds more headroom on every call.
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+      rmSync(join(home, "auth.json"), { force: true });
+      for (let i = 0; i < 4; i++) expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+
+      // Non-redirecting: the active account already ranks best.
       setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 5, updatedAt: Date.now() });
       setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 95, updatedAt: Date.now() });
-      expect(preferredInitialAccount(config, "xai")).toBeNull();
-      rmSync(join(home, "auth.json"), { force: true });
       for (let i = 0; i < 4; i++) expect(preferredInitialAccount(config, "xai")).toBeNull();
     } finally {
       clearGenericFailoverHealth();
@@ -304,12 +312,13 @@ describe("pre-dispatch account preference", () => {
       expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
 
       await removeAccount("xai", ids[1]!);
-      // A redirection re-checks its winner against the live store, so the removed account
-      // is never named — the request path keeps the healthy active account.
-      expect(preferredInitialAccount(config, "xai")).toBeNull();
-      // ...and had it been named, resolving it would have thrown; the caller absorbs that
-      // too, but this is the layer that stops it happening at all.
-      await expect(getValidAccessSnapshotForAccount("xai", ids[1]!)).rejects.toThrow();
+      // Selection is a cached PREFERENCE, so it may still name the removed account...
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+      // ...and resolution is where that is caught. The request path absorbs this throw and
+      // falls back to the active account.
+      await expect(
+        getValidAccessSnapshotForAccount("xai", ids[1]!, { requireUsableAccount: true }),
+      ).rejects.toThrow();
       expect(getAccountSet("xai")?.accounts.map(a => a.id)).toEqual([ids[0]!]);
     } finally {
       clearGenericFailoverHealth();
@@ -337,9 +346,13 @@ describe("pre-dispatch account preference", () => {
       expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
 
       await markAccountNeedsReauth("xai", ids[1]!, true);
-      expect(preferredInitialAccount(config, "xai")).toBeNull();
-      // Proof the flag alone would not have stopped it: the credential still resolves.
+      // An ordinary resolve SUCCEEDS — the credential is still readable — which is exactly
+      // why the flag must be checked inside the resolver rather than trusted to throw.
       await expect(getValidAccessSnapshotForAccount("xai", ids[1]!)).resolves.toBeDefined();
+      // With the opt-in the request path uses, it is rejected and the caller falls back.
+      await expect(
+        getValidAccessSnapshotForAccount("xai", ids[1]!, { requireUsableAccount: true }),
+      ).rejects.toThrow();
     } finally {
       clearGenericFailoverHealth();
       clearAccountQuotaCache();
