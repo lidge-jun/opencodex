@@ -1752,7 +1752,7 @@ export const ru: Record<TKey, string> = {
   "accountPool.strategyHintFillFirst": "Fill-first использует порог как точку исчерпания для непривязанных задач; здоровые привязанные задачи сохраняют affinity.",
   "accountPool.strategyHintResetWindow": "Окно сброса упорядочивает непривязанные задачи по актуальным срокам сброса; здоровые привязанные задачи сохраняют affinity.",
   "accountPool.resetOrder": "Порядок сброса",
-  "accountPool.resetOrderHelp": "Выберите расходование будущих сбросов quota от ближайшего к дальнему или наоборот.",
+  "accountPool.resetOrderHelp": "Выберите порядок аккаунтов по времени будущего сброса квоты: сначала ближайший или самый дальний.",
   "accountPool.resetOrderSoonest": "Ближайший первым",
   "accountPool.resetOrderLatest": "Самый дальний первым",
   "accountPool.unboundDefinition": "Новая/непривязанная задача — запрос без текущей привязки к аккаунту; видимая существующая задача может стать непривязанной после сброса прокси или affinity.",

@@ -35,7 +35,10 @@ le pool enregistré avant de transmettre la requête en amont. Cette règle dist
 - **Les nouvelles sessions peuvent être rééquilibrées.** Pour un nouveau fil, opencodex choisit parmi les comptes admissibles selon
   `accountPoolStrategy` (`quota` par défaut, ou `round-robin` / `fill-first` / `reset-window`). La stratégie `quota`
   compare l’utilisation connue sur les fenêtres de 5 heures, d’une semaine et de 30 jours. Il peut choisir
-  un compte moins utilisé lorsque le compte actif franchit `autoSwitchThreshold`. Les comptes en délai de
+  un compte moins utilisé lorsque le compte actif franchit `autoSwitchThreshold`. `reset-window` classe plutôt
+  les réinitialisations hebdomadaires futures et encore valides (30 jours pour les offres mensuelles), de la plus
+  proche à la plus éloignée ou inversement ; si ces données sont absentes ou périmées, le routage revient à `quota`.
+  Les comptes en délai de
   récupération ou nécessitant une réauthentification sont ignorés, quelle que soit la stratégie.
 - **Les signaux de quota et d’échec alimentent le routage.** Le tableau de bord peut forcer l’actualisation des quotas avec
   `GET /api/codex-auth/accounts?refresh=1` ; les réponses réussies en amont capturent les en-têtes de quota,

@@ -42,7 +42,10 @@ kasıtlı olarak ikiye ayrılmıştır:
   / `fill-first` / `reset-window`) kullanarak uygun hesaplar arasından seçim yapar. `quota`
   stratejisi, 5 saatlik, haftalık ve 30 günlük pencerelerdeki bilinen kullanımı
   karşılaştırır ve aktif hesap `autoSwitchThreshold` eşiğini aştığında daha
-  düşük kullanımlı bir hesaba geçebilir. Bekleme modunda (cooldown) olan veya
+  düşük kullanımlı bir hesaba geçebilir. `reset-window`, geçerli haftalık sıfırlama
+  zamanlarını (aylık planlarda 30 günlük pencereyi) seçilen en yakın veya en uzak
+  yönünde sıralar; sıfırlama kanıtı eksik ya da eskiyse `quota` yönlendirmesine döner.
+  Bekleme modunda (cooldown) olan veya
   yeniden kimlik doğrulaması gereken hesaplar, stratejiden bağımsız olarak
   atlanır.
 - **Kota ve hata sinyalleri yönlendirmeyi besler.** Kontrol paneli `GET
@@ -138,4 +141,3 @@ sadıktır: akıl yürütme özetleri, MCP araç ad alanları, serbest biçimli
 (`apply_patch`) araçlar ve `tool_search` keşfi doğru şekilde gidiş-dönüş yapar.
 Olay olay eşleme için [Mimari referansı](/tr/reference/architecture/) sayfasına
 bakın.
-

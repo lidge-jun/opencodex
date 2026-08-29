@@ -21,7 +21,7 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 | `activeCodexAccountId?` | `string` | — | 다음 요청에 수동으로 선택한 Pool 계정입니다. 선택하면 thread 결속이 해제되며, 진행 중인 요청은 캡처한 자격 증명을 유지합니다. |
 | `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool의 계정별 선택 순서. 계정 ID → `-100`부터 `100`까지의 정수이며 **값이 클수록 먼저** 쓰이고, 항목이 없으면 `0`입니다. 이는 eligibility 경계가 아니라 순서 경계입니다. 선택은 이미 적격한 계정들을 quota 여유가 남은 최상위 tier로 좁히고, 그 tier 안에서 `accountPoolStrategy`가 계정을 고릅니다. tier를 건너뛰는 경우는 그 구성원 전부가 `autoSwitchThreshold` 초과, cooldown, soft-avoid, 일시 중지 또는 재인증 대기일 때뿐이며, usage를 알 수 없다고 해서 tier가 소진되지는 않습니다. 순서는 부적격 계정을 선택 가능하게 만들지 않고, 이미 계정에 묶인 thread를 다시 bind하지도 않습니다. 메인 `__main__` 계정도 동일한 조건으로 참여하므로 Codex Desktop 로그인을 마지막에 쓰도록 둘 수 있습니다. 항목이 하나도 없으면 동작은 이전과 같습니다. map이 잘못된 경우 경고를 출력하고 순서 지정을 끕니다(config 복구는 하지 않습니다). `ocx account priority`와 Codex Auth 페이지에서 관리합니다. |
 | `autoSwitchThreshold?` | `number` | `80` | 사용량 기반 선제 전환 임계값입니다. `quota`는 바인딩된 작업과 바인딩 없는 작업의 다음 요청을 모두 재평가할 수 있고, `fill-first`와 `reset-window`는 바인딩 없는 작업 배정의 소진 기준으로 사용하며, 기본 `round-robin` 선택은 이 값을 사용하지 않습니다. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`은 사용량 기반 전환만 끄며 바인딩 없는 작업 배정이나 실패 복구는 끄지 않습니다. |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 새 작업/바인딩 없는 Codex 요청의 계정 배정 전략입니다. `(parent thread id, quota scope)`의 live affinity가 없으면 바인딩 없는 요청이며, 프록시 재시작이나 affinity 초기화 뒤에는 기존에 보이던 작업도 바인딩이 없어질 수 있습니다. `quota`는 활성 계정이 없을 때 알려진 usage가 가장 낮은 적격 계정을 선택하고, 적격 활성 계정이 `autoSwitchThreshold` 미만이면 유지합니다. 임계값 도달 뒤에는 바인딩 없는 요청이나 바인딩된 작업의 다음 요청을 usage가 더 낮은 적격 계정으로 옮길 수 있습니다. `round-robin`은 바인딩 없는 요청을 균등 분배하고, `fill-first`는 cooldown, 사용 불가 또는 drain threshold까지 활성 계정에 배정합니다. `reset-window`는 최신 reset 정보를 `accountPoolResetOrder` 방향으로 정렬하며, 정보가 없거나 오래되면 quota 방식으로 돌아갑니다. |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 새 작업/바인딩 없는 Codex 요청의 계정 배정 전략입니다. `(parent thread id, quota scope)`의 live affinity가 없으면 바인딩 없는 요청이며, 프록시 재시작이나 affinity 초기화 뒤에는 기존에 보이던 작업도 바인딩이 없어질 수 있습니다. `quota`는 활성 계정이 없을 때 알려진 usage가 가장 낮은 적격 계정을 선택하고, 적격 활성 계정이 `autoSwitchThreshold` 미만이면 유지합니다. 임계값 도달 뒤에는 바인딩 없는 요청이나 바인딩된 작업의 다음 요청을 usage가 더 낮은 적격 계정으로 옮길 수 있습니다. `round-robin`은 바인딩 없는 요청을 균등 분배하고, `fill-first`는 cooldown, 사용 불가 또는 drain threshold까지 활성 계정에 배정합니다. `reset-window`는 신선하고 유효한 향후 reset 시각을 `accountPoolResetOrder` 방향으로 정렬하며, 정보가 없거나 오래되면 quota 방식으로 돌아갑니다. |
 | `accountPoolResetOrder?` | `"soonest" \| "latest"` | `"soonest"` | `reset-window` 방향입니다. `soonest`는 리셋이 가장 가까운 계정부터, `latest`는 가장 먼 계정부터 소진합니다. 일반 플랜은 주간, 월간 플랜은 30일 리셋을 사용합니다. 이 계정 풀 전략은 모든 quota window 중 가장 가까운 리셋만 고르고 `latest` 방향이 없는 combo `reset-window`와 다릅니다. |
 | `accountPoolStickyLimit?` | `number` | `1` | 한 round-robin 선택이 다음으로 넘어가기 전에 유지하는 새 작업/바인딩 없는 작업 배정 수입니다. 카운터는 업스트림 성공 뒤가 아니라 작업을 바인딩할 때 증가합니다. 범위 1–100이며 `accountPoolStrategy`가 `round-robin`일 때만 적용됩니다. |
 | `upstreamFailoverThreshold?` | `number` | `3` | 연속된 일시적 실패가 이 횟수에 도달하면 이후 새 세션은 failover됩니다. `0`으로 두면 비활성화됩니다. 일반 Responses와 네이티브 compact 전송에서 입증된 연결 전 DNS/TCP 도달 불가 실패는 provider-host 범위로 기록되며 계정 상태, 계정 쿨다운, 스레드/세션 선호도, 활성 계정 선택 또는 Pool 라우팅에 영향을 주지 않고 이 임계값에도 집계되지 않습니다. |
@@ -161,7 +161,9 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 `round-robin`은 바인딩 없는 요청을 균등 분배하며 임계값은 기본 순환에 영향을 주지 않습니다.
 `accountPoolStickyLimit`(기본 `1`, 1–100)은 성공 응답이 아니라 배정/바인딩 횟수를 셉니다.
 `fill-first`는 바인딩 없는 요청을 cooldown, 재인증 또는 drain threshold까지 활성 계정에 배정하고,
-정상적인 바인딩 작업은 affinity를 유지합니다. 이 전략들은 provider enforcement를 우회하지 않으며
+정상적인 바인딩 작업은 affinity를 유지합니다. `reset-window`는 신선하고 유효한 governing reset 시각을
+`accountPoolResetOrder`에 따라 가까운 순서 또는 먼 순서로 정렬하고, 여유가 있는 다른 계정이 있으면 drain threshold 이상인 계정을 건너뜁니다.
+reset 정보가 없거나 오래되면 `quota`로 돌아가며 정상적인 바인딩 작업은 affinity를 유지합니다. 이 전략들은 provider enforcement를 우회하지 않으며
 다계정 사용은 ToS 위반일 수 있습니다.
 
 ### `anthropicAccountPool` (실험적)
@@ -172,7 +174,7 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | sticky 결속과 429 쿨다운 failover를 켭니다. |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 새 세션에서는 활성 계정이 이 임계값에 도달하면 설정된 창의 알려진 캐시 사용량이 가장 낮은 계정을 고릅니다. `0`이면 quota 선택을 끕니다. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 새 세션 전략입니다. `quota`는 `quotaWindow`로 지정한 창으로 계정 순위를 매기고, `fill-first`도 같은 창에서 소진 임계값을 판정하며, `reset-window`는 최신 주간 리셋 정보를 사용합니다. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 새 세션 전략입니다. `quota`는 `quotaWindow`로 지정한 창으로 계정 순위를 매기고, `fill-first`도 같은 창에서 소진 임계값을 판정하며, `reset-window`는 신선하고 유효한 향후 주간 리셋 정보를 사용하고 정보가 없거나 오래되면 quota로 돌아갑니다. |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 사용량 기반 계정 선택에 사용하는, 공급자가 보고한 캐시 사용률 막대입니다. `five-hour`는 기존 동작을 유지합니다. `weekly`는 주간 막대를 사용하며 다른 사용 가능한 계정이 남아 있을 때만 5시간 막대가 소진된 계정을 건너뛰고, 아무 계정도 남지 않으면 해당 계정으로 폴백합니다. `max-utilization`은 알려진 값 중 가장 높은 값을 사용하므로 주간 사용량을 알기 전에도 5시간 사용량을 쓸 수 있고, 둘 다 모르면 unknown 순서를 따릅니다. 알려진 사용량은 unknown보다 앞서지만, 사용 가능한 계정이 모두 unknown이어도 사용 가능한 순서의 계정을 선택합니다. 앞서 설명한 5시간 사용량 동점 판정 뒤에도 완전히 같으면 사용 가능한 순서를 유지합니다. 정상 affinity 세션을 선제적으로 재배치하지 않습니다. 새 세션 배정과 가능한 429 대체 이후 라우팅 복구에서 `quota`는 이 창으로 사용 가능한 후보의 순위를 직접 매기고, `fill-first`는 이 창의 임계값과 소진 규칙에 따라 안정 순서로 이동하며, `round-robin`은 이 설정을 무시합니다. 쿨다운, failover 한도, 재인증 가능 여부는 별도의 로컬 상태로 유지됩니다. 계정별 주간 막대는 대시보드의 프로바이더 페이지에서 조회한 뒤에만 알 수 있습니다. |
 | `anthropicAccountPool.resetOrder?` | `"soonest" \| "latest"` | `"soonest"` | `reset-window`에서 가장 가까운 주간 리셋 또는 가장 먼 주간 리셋부터 선택합니다. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 성공한 새 세션 결속이 한 번의 라운드로빈 선택에 유지되는 횟수입니다. 범위는 1–100입니다. |

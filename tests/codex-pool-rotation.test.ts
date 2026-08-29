@@ -126,10 +126,17 @@ describe("reset-window order parsing", () => {
 
 describe("reset-window quota freshness", () => {
   test("rejects a Codex quota row after the persisted freshness window", () => {
-    const now = Date.now();
+    const now = Date.now() + 1_000;
     updateAccountQuota("freshness", 10, now + 24 * 60 * 60_000);
     expect(getFreshAccountQuota("freshness", now)).not.toBeNull();
     expect(getFreshAccountQuota("freshness", now + 6 * 60 * 60_000 + 1)).toBeNull();
+  });
+
+  test("rejects a Codex quota row whose observation timestamp is in the future", () => {
+    const beforeObservation = Date.now() - 60_000;
+    updateAccountQuota("future-freshness", 10, Date.now() + 24 * 60 * 60_000);
+
+    expect(getFreshAccountQuota("future-freshness", beforeObservation)).toBeNull();
   });
 });
 
@@ -571,7 +578,7 @@ describe("accountPoolStrategy new-session routing", () => {
   });
 
   test("reset-window latest assigns the farthest governing reset first", () => {
-    const now = Date.now();
+    const now = Date.now() + 1_000;
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "reset-window",
       accountPoolResetOrder: "latest",
@@ -585,7 +592,7 @@ describe("accountPoolStrategy new-session routing", () => {
   });
 
   test("reset-window soonest assigns the nearest governing reset first", () => {
-    const now = Date.now();
+    const now = Date.now() + 1_000;
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "reset-window",
       accountPoolResetOrder: "soonest",
@@ -599,7 +606,7 @@ describe("accountPoolStrategy new-session routing", () => {
   });
 
   test("reset-window skips known drained accounts while another reset candidate has headroom", () => {
-    const now = Date.now();
+    const now = Date.now() + 1_000;
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "reset-window",
       accountPoolResetOrder: "latest",
@@ -613,7 +620,7 @@ describe("accountPoolStrategy new-session routing", () => {
   });
 
   test("reset-window falls back to quota selection when every reset is unknown", () => {
-    const now = Date.now();
+    const now = Date.now() + 1_000;
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "reset-window",
       accountPoolResetOrder: "latest",
@@ -628,7 +635,7 @@ describe("accountPoolStrategy new-session routing", () => {
   });
 
   test("reset-window preserves live affinity after reset evidence changes", () => {
-    const now = Date.now();
+    const now = Date.now() + 1_000;
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "reset-window",
       accountPoolResetOrder: "latest",
@@ -643,7 +650,7 @@ describe("accountPoolStrategy new-session routing", () => {
   });
 
   test("selection-order tiers remain authoritative before reset-window ordering", () => {
-    const now = Date.now();
+    const now = Date.now() + 1_000;
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "reset-window",
       accountPoolResetOrder: "latest",
@@ -657,7 +664,7 @@ describe("accountPoolStrategy new-session routing", () => {
   });
 
   test("reset-window failover keeps its direction after excluding the failed account", () => {
-    const now = Date.now();
+    const now = Date.now() + 1_000;
     const config = makeThreeAccountConfig({
       accountPoolStrategy: "reset-window",
       accountPoolResetOrder: "latest",

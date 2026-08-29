@@ -98,7 +98,7 @@ List and switch provider accounts and API-key pools through the running proxy. T
 surface is:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|strategy|reset-order|sticky|login|reauth|code|cancel|remove|add-key|reset-credits> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
@@ -106,6 +106,9 @@ use <provider> <id> Switch the active credential; 'main' selects the Codex App l
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
 priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
+strategy <openai|anthropic> [quota|round-robin|fill-first|reset-window]  Read or set new/unbound assignment.
+reset-order <openai|anthropic> [soonest|latest]  Read or set reset-window direction.
+sticky <openai|anthropic> [1-100]  Read or set round-robin assignment retention.
 remove <provider> <id> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.

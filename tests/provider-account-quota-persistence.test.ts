@@ -46,6 +46,13 @@ describe("provider account quota persistence", () => {
     expect(readPersistedAccountQuotas().size).toBe(0);
   });
 
+  test("a future-dated snapshot is discarded rather than treated as indefinitely fresh", async () => {
+    const now = Date.now();
+    schedulePersistAccountQuotas(() => [[KEY, quota(15, now + 60_000)]]);
+    await settle();
+    expect(readPersistedAccountQuotas(now).size).toBe(0);
+  });
+
   test("a corrupt file is ignored instead of breaking startup", () => {
     writeFileSync(join(home, FILE), "{ not json");
     expect(readPersistedAccountQuotas().size).toBe(0);

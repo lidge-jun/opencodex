@@ -1499,7 +1499,7 @@ export function getFreshCachedProviderAccountQuota(
 ): ProviderQuota | null {
   hydrateAccountQuotaCache();
   const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
-  if (!entry || entry.ts + ACCOUNT_QUOTA_TTL_MS <= now) return null;
+  if (!entry || entry.ts > now || entry.ts + ACCOUNT_QUOTA_TTL_MS <= now) return null;
   return entry.quota;
 }
 

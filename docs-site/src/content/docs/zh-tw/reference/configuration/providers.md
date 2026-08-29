@@ -19,7 +19,7 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 公開模型選擇器命名空間到已儲存 Codex 帳號目標。這會驗證並持久化映射，但不會自行新增 picker 列或變更路由。 |
 | `activeCodexAccountId?` | `string` | — | 為下一個請求手動選擇的池帳號。選擇清除執行緒親和性；進行中的請求保留擷取的憑證。 |
 | `autoSwitchThreshold?` | `number` | `80` | 主動切換的用量閾值。`quota` 可在其下一個請求時重新評估綁定與未綁定任務；`fill-first` 與 `reset-window` 將其用作未綁定指派的排空點；一般 `round-robin` 選擇不使用它。分數使用最熱的已知 5h、週或 30d 配額視窗。`0` 僅停用基於用量的主動切換，而非未綁定指派或失敗復原。 |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 新／未綁定 Codex 請求的指派策略。當請求沒有即時（父執行緒 id、配額 scope）親和性時即為未綁定；可見的既有任務在代理重啟或親和性重置後可變為未綁定。`quota` 在無現用帳號時選擇最低用量的合格帳號，將合格現用帳號保持在 `autoSwitchThreshold` 以下，且在閾值後可將未綁定請求或主動重新綁定綁定任務到較低用量的合格帳號。`round-robin` 均勻分配未綁定請求；`fill-first` 持續將未綁定請求指派到現用帳號直到冷卻、不可用或設定的排空閾值。`reset-window` 依最新 reset 時間排序；reset 資訊缺失或過期時回退到 quota。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 新／未綁定 Codex 請求的指派策略。當請求沒有即時（父執行緒 id、配額 scope）親和性時即為未綁定；可見的既有任務在代理重啟或親和性重置後可變為未綁定。`quota` 在無現用帳號時選擇最低用量的合格帳號，將合格現用帳號保持在 `autoSwitchThreshold` 以下，且在閾值後可將未綁定請求或主動重新綁定綁定任務到較低用量的合格帳號。`round-robin` 均勻分配未綁定請求；`fill-first` 持續將未綁定請求指派到現用帳號直到冷卻、不可用或設定的排空閾值。`reset-window` 依新鮮且有效的未來 reset 時間排序；reset 資訊缺失或過期時回退到 quota。 |
 | `accountPoolResetOrder?` | `"soonest" \| "latest"` | `"soonest"` | `reset-window` 的方向。`soonest` 先耗盡最近重置的帳號，`latest` 先耗盡最晚重置的帳號。一般方案使用週視窗，月度方案使用 30 天視窗。此帳號池策略不同於 combo `reset-window`；後者只選擇所有 quota window 中最近的重置，且沒有 `latest` 方向。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 在前進一個 round-robin 選擇前保留的新／未綁定任務指派；計數器在任務綁定時前進，而非在上游成功後。範圍 1–100。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 未來新 session 容錯移轉前的連續暫時性失敗。設 `0` 停用。 |
@@ -123,6 +123,7 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 | `quota`（預設） | 若無現用帳號，跨 5 小時、週與 30 天視窗選擇最低用量的合格帳號。否則將合格現用帳號保持在 `autoSwitchThreshold` 以下；在超過閾值後，未綁定請求或綁定任務的下一個請求可移至較低用量的合格帳號。`0` 停用此用量驅動的重新評估，而非失敗復原。 |
 | `round-robin` | 在合格帳號間均勻指派未綁定請求。`autoSwitchThreshold` 不變更一般 round-robin 選擇。`accountPoolStickyLimit`（1–100）計數一次選擇上的指派，而非成功的上游回應。 |
 | `fill-first` | 將未綁定請求指派到現用帳號直到冷卻、重新認證或設定的排空閾值；未知用量不強制切換。健康的綁定任務保留親和性。 |
+| `reset-window` | 依新鮮且有效的未來 governing reset 時間排序合格帳號。`accountPoolResetOrder` 可先選最近（`soonest`）或最遠（`latest`）；其他帳號仍有餘量時會跳過達到閾值的帳號，證據缺失或過期時回退到 `quota`。健康的綁定任務保留親和性。 |
 
 輪換不保護免於供應商強制執行；多帳號使用可能違反供應商條款。
 
@@ -134,7 +135,7 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | 啟用 sticky 親和性與 429 冷卻容錯移轉。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 對於新 session，當目前帳號達到此閾值時，選擇設定視窗中最低的已知快取用量。`0` 停用配額挑選。 |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 新 session 策略；`quota` 依 `quotaWindow` 指定的視窗為帳號排序，`fill-first` 在同一視窗中判定排空閾值，`reset-window` 使用最新週重置時間。 |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 新 session 策略；`quota` 依 `quotaWindow` 指定的視窗為帳號排序，`fill-first` 在同一視窗中判定排空閾值，`reset-window` 使用新鮮且有效的未來週重置時間；證據缺失或過期時回退到 quota。 |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 使用量型帳號選擇所採用、由供應商回報並快取的用量列。`five-hour` 保留原有行為。`weekly` 使用每週用量列，並在仍有其他可用帳號時略過 5 小時用量已用盡的帳號；若沒有其他帳號，則退回使用這些帳號。`max-utilization` 使用已知值中的最高值，因此每週用量尚未取得時仍可使用 5 小時用量；兩者都未知時，帳號遵循 unknown 用量排序。已知用量排在 unknown 之前，但若所有可用帳號都是 unknown，仍會依可用順序選出一個。完成前述較低 5 小時用量的同分判定後，完全相同時也保留可用順序。不會主動重新平衡健康且已有 affinity 的 session。在分配新 session 與符合條件的 429 替代後進行路由復原時，`quota` 直接依此視窗排序可用候選帳號；`fill-first` 依此視窗的門檻與用盡規則按穩定順序前進；`round-robin` 忽略此設定。冷卻狀態、容錯移轉上限與重新驗證資格仍是獨立的本機狀態。每個帳號的每週用量只有在 dashboard 的供應商頁面完成查詢後才可得知。 |
 | `anthropicAccountPool.resetOrder?` | `"soonest" \| "latest"` | `"soonest"` | `reset-window` 優先選擇最近或最晚的週重置。 |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 在一次 round-robin 選擇上保留的成功新 session 綁定。範圍 1–100。 |

@@ -43,7 +43,8 @@ const EXTENDED_USAGE = `Usage:
   ocx account pause <provider> <id|main> [--json]
   ocx account resume <provider> <id|main> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-window>] [--json]
+  ocx account reset-order <provider> [<soonest|latest>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account remove <provider> <id|main> --yes [--json]
   ocx account clear-cooldown <provider> <id|main> [--json]
@@ -914,7 +915,10 @@ async function poolSetting(
       // `--json` consumer should not have to branch on which pool answered.
       console.log(JSON.stringify({ ok: true, provider: name, strategy, stickyLimit: sticky, resetOrder }, null, 2));
     } else {
-      console.log(`${name}: ${label} is ${String(field === "strategy" ? strategy : sticky)}`);
+      const applied = field === "strategy"
+        ? strategy
+        : field === "stickyLimit" ? sticky : resetOrder;
+      console.log(`${name}: ${label} is ${String(applied)}`);
     }
     return 0;
   }

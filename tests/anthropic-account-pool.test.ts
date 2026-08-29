@@ -150,6 +150,16 @@ describe("anthropic account pool", () => {
     expect(getFreshCachedProviderAccountQuota("anthropic", "freshness", now + 10 * 60_000)).toBeNull();
   });
 
+  test("reset-window rejects Anthropic quota evidence timestamped after the routing decision", () => {
+    const beforeObservation = Date.now() - 60_000;
+    setCachedProviderAccountQuotaForTests("anthropic", "future-freshness", {
+      fiveHourPercent: 10,
+      weeklyResetAt: Date.now() + 60 * 60_000,
+    });
+
+    expect(getFreshCachedProviderAccountQuota("anthropic", "future-freshness", beforeObservation)).toBeNull();
+  });
+
   test("default off always returns the active account", async () => {
     const { aId, bId } = await seedTwoAccounts();
     expect(isAnthropicAccountPoolEnabled(cfg(false))).toBe(false);

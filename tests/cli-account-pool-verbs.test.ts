@@ -203,6 +203,19 @@ describe("ocx account strategy / sticky", () => {
     expect(out.lines.join("\n")).toContain("latest");
   });
 
+  test("a bare reset-order read prints the reset direction instead of the sticky limit", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      await cmdResetOrder(["openai"], deps(() => ({
+        json: { accountPoolStrategy: "reset-window", accountPoolStickyLimit: 7, accountPoolResetOrder: "latest" },
+      }), calls));
+    } finally { out.restore(); }
+    expect(calls.every(call => call.method === "GET")).toBe(true);
+    expect(out.lines.join("\n")).toContain("latest");
+    expect(out.lines.join("\n")).not.toContain("7");
+  });
+
   test("the APPLIED value is echoed, not the requested one", async () => {
     // The server normalizes. Printing the request would hide a normalization the operator
     // should see.

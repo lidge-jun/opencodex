@@ -46,6 +46,7 @@ export function readPersistedAccountQuotas(now = Date.now()): Map<string, Provid
     if (!parsed || parsed.version !== 1 || !parsed.rows || typeof parsed.rows !== "object") return rows;
     for (const [key, quota] of Object.entries(parsed.rows)) {
       if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
+      if (quota.updatedAt > now) continue;
       if (now - quota.updatedAt > DISK_MAX_AGE_MS) continue;
       rows.set(key, quota);
     }
