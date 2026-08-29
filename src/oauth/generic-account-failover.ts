@@ -311,6 +311,12 @@ export function genericFailoverRetryAfterSeconds(providerName: string, now = Dat
 }
 
 /** Test seam and manual-recovery hook. */
+export function forgetGenericFailoverRoster(providerName: string): void {
+  roster.delete(providerName);
+  presence.delete(providerName);
+}
+
+/** Test seam and manual-recovery hook. */
 export function clearGenericFailoverHealth(providerName?: string): void {
   if (!providerName) {
     health.clear();

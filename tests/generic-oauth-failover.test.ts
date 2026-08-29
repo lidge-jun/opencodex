@@ -288,14 +288,19 @@ describe("sidecar on429 wiring", () => {
     // to the configured account's project — #2841 in its original shape.
     const start = coreSource.indexOf("const preferredAccountId =");
     expect(start).toBeGreaterThan(-1);
-    const region = coreSource.slice(start, start + 4000);
+    const region = coreSource.slice(start, start + 6000);
     expect(region).toContain("usedPreferredAccount && resolved.projectId");
-    // ...and a project-less preferred account falls BACK to the ordinary active-account
-    // resolution rather than erroring: a preference must never turn a working request into
-    // a failure, and Antigravity tolerates project discovery failing, so an account with no
-    // project is an ordinary stored state.
+    // A project-less preferred account falls BACK to the ordinary active-account resolution
+    // rather than erroring: a preference must never turn a working request into a failure,
+    // and Antigravity tolerates project discovery failing, so an account with no project is
+    // an ordinary stored state.
     expect(region).toContain("usedPreferredAccount = false");
     expect(region).not.toContain("has no Cloud Code Assist project");
+    // Both fallbacks — a project-less account and an unresolvable one — must reach the SAME
+    // active-account resolution, so neither can dispatch on a half-applied identity.
+    const fallbacks = region.match(/usedPreferredAccount = false;/g) ?? [];
+    expect(fallbacks.length).toBe(2);
+    expect(region).toContain("forgetGenericFailoverRoster(route.providerName)");
   });
 });
 

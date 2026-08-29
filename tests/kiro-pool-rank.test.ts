@@ -5,10 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   clearGenericFailoverHealth,
+  forgetGenericFailoverRoster,
   preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
 } from "../src/oauth/generic-account-failover";
-import { getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
+import { getAccountSet, removeAccount, saveCredential, setActiveAccount } from "../src/oauth/store";
+import { getValidAccessSnapshotForAccount } from "../src/oauth";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import {
   clearAccountQuotaCache,
@@ -269,6 +271,41 @@ describe("pre-dispatch account preference", () => {
       expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
       rmSync(join(home, "auth.json"), { force: true });
       for (let i = 0; i < 4; i++) expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a preferred account removed inside the TTL degrades to the active account", async () => {
+    // The roster is cached for a short window, so an account can be removed after it was
+    // chosen. Resolving it then throws, and the request path must fall back to the active
+    // account rather than 401 — a preference must never break a request that would have
+    // worked without it.
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+
+      await removeAccount("xai", ids[1]!);
+      // Still returned: the roster read predates the removal.
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+      // ...and resolving it fails, which is the condition the request path must absorb.
+      await expect(getValidAccessSnapshotForAccount("xai", ids[1]!)).rejects.toThrow();
+
+      // After the request path forgets the stale roster, selection stops naming it.
+      forgetGenericFailoverRoster("xai");
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+      expect(getAccountSet("xai")?.accounts.map(a => a.id)).toEqual([ids[0]!]);
     } finally {
       clearGenericFailoverHealth();
       clearAccountQuotaCache();

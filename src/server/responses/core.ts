@@ -122,6 +122,7 @@ import {
 import { stampOAuthAccountLabel } from "../../providers/label";
 import {
   failoverAccountSnapshot,
+  forgetGenericFailoverRoster,
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
@@ -3114,9 +3115,23 @@ async function handleResponsesInner(
         // already pairs the snapshot's Kiro metadata, Copilot origin and Antigravity project
         // with this same bearer, exactly as it does for the active account.
         let usedPreferredAccount = preferredAccountId !== null;
-        let resolved = preferredAccountId
-          ? await getValidAccessSnapshotForAccount(route.providerName, preferredAccountId)
-          : await getValidAccessTokenSnapshot(route.providerName);
+        let resolved: OAuthAccessSnapshot;
+        if (preferredAccountId) {
+          try {
+            resolved = await getValidAccessSnapshotForAccount(route.providerName, preferredAccountId);
+          } catch {
+            // The roster is read behind a short TTL, so a preferred account can be removed
+            // or flagged for reauth in the window after it was cached. Resolving it then
+            // throws, and a PREFERENCE that turns a healthy request into a 401 is worse
+            // than no preference at all — the active account is still perfectly usable.
+            // Drop the stale roster so the next request re-reads it, and carry on.
+            forgetGenericFailoverRoster(route.providerName);
+            usedPreferredAccount = false;
+            resolved = await getValidAccessTokenSnapshot(route.providerName);
+          }
+        } else {
+          resolved = await getValidAccessTokenSnapshot(route.providerName);
+        }
         // A Cloud Code Assist account needs its own project. Antigravity's refresh path
         // tolerates project discovery failing, so a stored account can legitimately have
         // none — and a PREFERENCE must never turn a working request into an error. Fall
