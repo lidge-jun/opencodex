@@ -410,4 +410,39 @@ describe("cursor checkpoint continuation names the invocation from covered histo
     expect(roots.some(text => text.startsWith("[Tool Result]"))).toBe(false);
     expect(roots.some(text => text.includes("invoked:"))).toBe(false);
   });
+
+  /**
+   * An EMPTY `knownCalls` map is a decided answer — "the full history contains no call that can be
+   * named" — not a missing one, so it must be preserved rather than treated as absent.
+   *
+   * `toolCallsByCallId` deliberately DROPS an id that two different invocations claim. Here both
+   * claims sit before the cut, so the full-history index rejects the id and returns nothing for it,
+   * while the suffix alone sees only the second call. Falling back on an empty map (`size > 0`
+   * instead of `??`) makes the result confidently claim `echo SECOND` when it actually came from
+   * `echo FIRST` — a wrong label nothing downstream can detect, which is worse than no label.
+   */
+  test("an ambiguous id resolved from full history is not re-resolved from the suffix", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Run both.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: { cmd: "echo FIRST" } }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: { cmd: "echo SECOND" } }],
+        timestamp: 3,
+      },
+      { role: "user", content: "keep going", timestamp: 4 },
+      // The result belongs to the FIRST invocation.
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "exec_command", content: "FIRST", isError: false, timestamp: 5 },
+    ];
+    // The cut leaves the second call inside the suffix, so a suffix-only index would find exactly
+    // one unambiguous-looking candidate: the wrong one.
+    const root = resultRoot(encodeCheckpoint(messages, "grok-4.6-high", 2));
+    expect(root).toBeDefined();
+    expect(root).not.toContain("invoked:");
+    expect(root).not.toContain("echo SECOND");
+  });
 });

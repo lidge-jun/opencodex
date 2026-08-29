@@ -62,6 +62,32 @@ the fix was restored:
 | covered history is not replayed a second time | no — double-replay guard |
 | an id reused in covered history yields no invocation line | no — ambiguity guard |
 | native composer keeps checkpoint results off the root prompt | no — native-path guard |
+| an ambiguous id resolved from full history is not re-resolved from the suffix | yes — but against `size > 0`, not against the threading |
+
+### Why the lookup uses `??` and not a `size > 0` check
+
+A review asked whether passing an empty `knownCalls` map should fall back to indexing the suffix,
+since `??` keeps the empty map. It should not, and the distinction is load-bearing.
+
+An empty map is a *decided* answer — "the full history holds no call that can be named" — not a
+missing one. `toolCallsByCallId` deliberately **drops** any id that two different invocations claim,
+because a confidently wrong label is worse than none: nothing downstream can detect a mislabel.
+
+Measured, with two calls sharing one id before the cut and the result belonging to the *first*:
+
+| Lookup | Invocation line emitted |
+|--------|-------------------------|
+| `knownCalls ?? …` (shipped) | none — correct, the id is ambiguous |
+| `knownCalls.size > 0 ? … : …` | `invoked: exec_command with {"cmd":"echo SECOND"}` — **wrong command** |
+
+The suffix contains only the second call, so a suffix-only index sees one unambiguous-looking
+candidate and names it. `tests/…` case "an ambiguous id resolved from full history is not
+re-resolved from the suffix" pins this: it fails with the `size > 0` variant and passes with `??`.
+
+Worth recording that the first version of this argument cited the wrong test. "an id reused in
+covered history yields no invocation line" passes under *both* variants, because there the reused id
+is ambiguous within the suffix too. The distinction only shows up when the ambiguity is visible in
+full history but not in the suffix, which is what the added case constructs.
 
 Two assertions fail without the threading and pass with it; the other three are guards that
 must hold either way, and they document what the widened lookup must *not* break.
