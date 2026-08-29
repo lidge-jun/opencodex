@@ -154,6 +154,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "startup.shim",
   "storage.card.home",
   "storage.cleanup.preset",
+  // "{shown} / {total}" is placeholders and punctuation — no words to translate.
+  "logs.bufferCount",
 ]);
 
 test("zh-TW ships no untranslated English placeholders beyond the intentional allowlist", async () => {

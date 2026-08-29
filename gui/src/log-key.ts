@@ -1,14 +1,8 @@
-export interface LogKeyed {
-  requestId?: string;
-  timestamp: number;
-  model: string;
-  provider: string;
-  status: number;
-  durationMs: number;
-}
-
-/** Stable identity key. Uses requestId when present; composite fallback otherwise. */
-export function logKey(log: LogKeyed): string {
-  if (log.requestId) return `logKey:rid:${log.requestId}`;
-  return `logKey:f:${log.timestamp}|${log.model}|${log.provider}|${log.status}|${log.durationMs}`;
+/**
+ * Stable log identity. The server assigns every log entry a unique `requestId`
+ * (`ocx-${randomBytes(16).hex}`), guaranteed present on all entries returned
+ * by the management API. This is the sole clear-view identity key.
+ */
+export function logKey(requestId: string): string {
+  return requestId;
 }

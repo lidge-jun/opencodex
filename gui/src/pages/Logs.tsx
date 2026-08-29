@@ -128,7 +128,7 @@ interface LogAttempt {
 }
 
 export interface LogEntry {
-  requestId?: string;
+  requestId: string;
   timestamp: number;
   model: string;
   provider: string;
@@ -367,9 +367,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const cachedLogs = validCachedLogs(readSessionListCache<LogEntry[]>(resourceKey));
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [clearedCounts, setClearedCounts] = useState<Map<string, number> | null>(null);
+  const [clearedIds, setClearedIds] = useState<Set<string> | null>(null);
 
-  useEffect(() => { setClearedCounts(null); }, [resourceKey]);
+  useEffect(() => { setClearedIds(null); }, [resourceKey]);
   const [failureStreak, setFailureStreak] = useState<{ error: unknown; count: number }>(
     { error: null, count: 0 },
   );
@@ -516,41 +516,13 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const logsRef = useRef(logs);
   logsRef.current = logs;
   const clearView = useCallback(() => {
-    const counts = new Map<string, number>();
-    for (const log of logsRef.current) {
-      const key = logKey(log);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    setClearedCounts(counts);
+    const ids = new Set<string>();
+    for (const log of logsRef.current) { ids.add(logKey(log.requestId)); }
+    setClearedIds(ids);
   }, []);
   const visibleLogs = (() => {
-    if (!clearedCounts) return logs;
-    const remaining = new Map(clearedCounts);
-    // Cap each count to actual occurrences in the current buffer so that
-    // entries evicted by the server don't leave orphaned counts that hide
-    // new arrivals sharing the same composite key.
-    for (const [key, count] of remaining) {
-      let occurrences = 0;
-      for (const log of logs) {
-        if (logKey(log) === key) occurrences++;
-      }
-      if (occurrences < count) remaining.set(key, occurrences);
-    }
-    const visible: LogEntry[] = [];
-    // Iterate oldest-first (reverse) so old occurrences are consumed before new ones.
-    for (let i = logs.length - 1; i >= 0; i--) {
-      const log = logs[i];
-      const key = logKey(log);
-      const count = remaining.get(key) ?? 0;
-      if (count > 0) {
-        remaining.set(key, count - 1);
-      } else {
-        visible.push(log);
-      }
-    }
-    // Restore newest-first order for display.
-    visible.reverse();
-    return visible;
+    if (!clearedIds) return logs;
+    return logs.filter(log => !clearedIds.has(logKey(log.requestId)));
   })();
 
   const filteredLogs = visibleLogs.filter(log => (

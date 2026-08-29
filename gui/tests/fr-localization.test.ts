@@ -159,6 +159,10 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "lab.observationCount",
   "lab.verdictCount",
   "lab.detailObservations",
+  // "Port" is the same word in French.
+  "dash.port",
+  // "{shown} / {total}" is punctuation and two placeholders — no words to translate.
+  "logs.bufferCount",
 ]);
 
 function placeholders(value: string): string[] {

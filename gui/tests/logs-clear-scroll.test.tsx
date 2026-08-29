@@ -342,61 +342,26 @@ test("Logs: clear view after apiBase change resets boundary", async () => {
 
 // ─── New tests: clear + no-requestId, mixed, eviction, surface filter, buffer counts ───
 
-test("Logs: clear works for entries without requestId", async () => {
-  const noId1 = {
-    timestamp: 1_700_000_000_000,
-    model: "gpt-test",
-    provider: "openai",
-    status: 200,
-    durationMs: 42,
-    usageStatus: "reported",
-    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-    displayMetrics: {
-      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
-      cost: { kind: "unavailable", reason: "price_unmatched" },
-    },
-  };
-  const noId2 = {
-    timestamp: 1_700_000_001_000,
-    model: "gpt-test",
-    provider: "openai",
-    status: 200,
-    durationMs: 42,
-    usageStatus: "reported",
-    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-    displayMetrics: {
-      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
-      cost: { kind: "unavailable", reason: "price_unmatched" },
-    },
-  };
-  // New entry after clear: different timestamp → different composite key
-  const noId3 = {
-    timestamp: 1_700_000_005_000,
-    model: "gpt-test",
-    provider: "openai",
-    status: 200,
-    durationMs: 42,
-    usageStatus: "reported",
-    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-    displayMetrics: {
-      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
-      cost: { kind: "unavailable", reason: "price_unmatched" },
-    },
-  };
+test("Logs: clear works for entries with unique requestIds", async () => {
+  // All entries now have required requestId from the server (ocx-${randomBytes(16).hex}).
+  // This replaces the old "entries without requestId" test.
+  const entry1 = makeLog("r-uid-1", 1_700_000_000_000);
+  const entry2 = makeLog("r-uid-2", 1_700_000_001_000);
+  const entry3 = makeLog("r-uid-3", 1_700_000_005_000);
 
   let callCount = 0;
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
     callCount++;
-    if (callCount <= 1) return jsonResponse([noId2, noId1]);
-    return jsonResponse([noId3, noId2, noId1]);
+    if (callCount <= 1) return jsonResponse([entry2, entry1]);
+    return jsonResponse([entry3, entry2, entry1]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
   await flushMicrotasks();
 
-  // Both entries shown (they appear as timestamps in the text)
-  expect(hasLogRow(container, "gpt-test")).toBe(true);
+  expect(hasLogRow(container, "r-uid-1")).toBe(true);
+  expect(hasLogRow(container, "r-uid-2")).toBe(true);
 
   const btn = findClearButton(container)!;
   expect(btn).not.toBeNull();
@@ -404,18 +369,18 @@ test("Logs: clear works for entries without requestId", async () => {
   await flushMicrotasks();
 
   // All old entries hidden
-  expect(hasLogRow(container, "gpt-test")).toBe(false);
+  expect(hasLogRow(container, "r-uid-1")).toBe(false);
+  expect(hasLogRow(container, "r-uid-2")).toBe(false);
 
-  // Advance timer so poll fires and brings back old + new
+  // Advance timer so poll fires and brings back entries
   await act(async () => { jest.advanceTimersByTime(2000); });
   await flushMicrotasks();
   await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
 
-  // New entry (noId3 with timestamp 5000) should be visible;
-  // old entries (noId1 ts=0, noId2 ts=1000) should still be hidden
-  // We verify by checking there are exactly the right number of rows
-  // Since all share "gpt-test" and "openai", we can't disambiguate by text.
-  // Instead, check that the buffer count says 1 shown (only the new one).
+  // entry3 is new (different requestId) → visible; old entries hidden
+  expect(hasLogRow(container, "r-uid-3")).toBe(true);
+  expect(hasLogRow(container, "r-uid-1")).toBe(false);
+  expect(hasLogRow(container, "r-uid-2")).toBe(false);
   expect(container.textContent).toContain("1 / 3");
 
   await act(async () => { root.unmount(); });
@@ -719,32 +684,12 @@ test("Logs: buffer count shows correct shown after new entries arrive post-clear
   await act(async () => { root.unmount(); });
 });
 
-// ─── Occurrence-aware duplicate log tests ───
+// ─── RequestId-based clear view identity tests ───
 
-/** Helper: build a no-requestId log with ALL fallback fields identical. */
-function makeDupLog(ts: number) {
-  return {
-    timestamp: ts,
-    model: "same-model",
-    provider: "same-provider",
-    status: 200,
-    durationMs: 99,
-    usageStatus: "reported",
-    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-    displayMetrics: {
-      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
-      cost: { kind: "unavailable", reason: "price_unmatched" },
-    },
-  };
-}
-
-test("Logs: clear hides two identical no-requestId entries (occurrence=2)", async () => {
-  const dup1 = makeDupLog(1_700_000_000_000);
-  const dup2 = makeDupLog(1_700_000_000_000);
-
+test("Logs: clear hides two entries with different requestIds", async () => {
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
-    return jsonResponse([dup2, dup1]);
+    return jsonResponse([log2, log1]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
@@ -758,21 +703,19 @@ test("Logs: clear hides two identical no-requestId entries (occurrence=2)", asyn
 
   // Both hidden: 0 shown, 2 total
   expect(container.textContent).toContain("0 / 2");
+  expect(hasLogRow(container, "r-aaa")).toBe(false);
+  expect(hasLogRow(container, "r-bbb")).toBe(false);
 
   await act(async () => { root.unmount(); });
 });
 
-test("Logs: after clear, third identical no-requestId entry is visible", async () => {
-  const dup1 = makeDupLog(1_700_000_000_000);
-  const dup2 = makeDupLog(1_700_000_000_000);
-  const dup3 = makeDupLog(1_700_000_000_000);
-
+test("Logs: after clear, new entry with different requestId is visible", async () => {
   let callCount = 0;
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
     callCount++;
-    if (callCount <= 1) return jsonResponse([dup2, dup1]);
-    return jsonResponse([dup3, dup2, dup1]);
+    if (callCount <= 1) return jsonResponse([log2, log1]);
+    return jsonResponse([log5, log2, log1]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
@@ -784,28 +727,27 @@ test("Logs: after clear, third identical no-requestId entry is visible", async (
   await flushMicrotasks();
   expect(container.textContent).toContain("0 / 2");
 
-  // Poll — dup3 is new
+  // Poll — log5 is new (different requestId)
   await act(async () => { jest.advanceTimersByTime(2000); });
   await flushMicrotasks();
   await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
 
-  // 1 visible, 3 total
+  // 1 visible (log5), 3 total
   expect(container.textContent).toContain("1 / 3");
+  expect(hasLogRow(container, "r-eee")).toBe(true);
+  expect(hasLogRow(container, "r-aaa")).toBe(false);
+  expect(hasLogRow(container, "r-bbb")).toBe(false);
 
   await act(async () => { root.unmount(); });
 });
 
-test("Logs: multiple identical new entries arrive at once after clear", async () => {
-  const dup1 = makeDupLog(1_700_000_000_000);
-
+test("Logs: multiple new entries arrive at once after clear — all visible", async () => {
   let callCount = 0;
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
     callCount++;
-    if (callCount <= 1) return jsonResponse([dup1]);
-    const dup2 = makeDupLog(1_700_000_000_000);
-    const dup3 = makeDupLog(1_700_000_000_000);
-    return jsonResponse([dup3, dup2, dup1]);
+    if (callCount <= 1) return jsonResponse([log1]);
+    return jsonResponse([log5, log4, log1]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
@@ -817,34 +759,35 @@ test("Logs: multiple identical new entries arrive at once after clear", async ()
   await flushMicrotasks();
   expect(container.textContent).toContain("0 / 1");
 
-  // Poll — dup2 and dup3 are new occurrences
+  // Poll — log4 and log5 are new
   await act(async () => { jest.advanceTimersByTime(2000); });
   await flushMicrotasks();
   await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
 
-  // 2 visible, 3 total
+  // 2 visible (log4, log5), 3 total
   expect(container.textContent).toContain("2 / 3");
+  expect(hasLogRow(container, "r-ddd")).toBe(true);
+  expect(hasLogRow(container, "r-eee")).toBe(true);
+  expect(hasLogRow(container, "r-aaa")).toBe(false);
 
   await act(async () => { root.unmount(); });
 });
 
-test("Logs: requestId and fallback-key entries clear independently", async () => {
-  const withId = makeLog("r-ind-1", 1_700_000_000_000);
-  const noId = makeDupLog(1_700_000_000_000);
-
+test("Logs: entries with different requestIds are independently cleared", async () => {
   let callCount = 0;
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
     callCount++;
-    if (callCount <= 1) return jsonResponse([withId, noId]);
-    const newId = makeLog("r-ind-new", 1_700_000_005_000);
-    return jsonResponse([newId, withId, noId]);
+    if (callCount <= 1) return jsonResponse([log3, log1]);
+    const newLog = makeLog("r-new-1", 1_700_000_005_000);
+    return jsonResponse([newLog, log3, log1]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
   await flushMicrotasks();
 
-  expect(hasLogRow(container, "r-ind-1")).toBe(true);
+  expect(hasLogRow(container, "r-aaa")).toBe(true);
+  expect(hasLogRow(container, "r-ccc")).toBe(true);
   expect(container.textContent).toContain("2 / 2");
 
   const btn = findClearButton(container)!;
@@ -852,30 +795,27 @@ test("Logs: requestId and fallback-key entries clear independently", async () =>
   await flushMicrotasks();
   expect(container.textContent).toContain("0 / 2");
 
-  // Poll — new requestId entry visible, old ones hidden
+  // Poll — new entry visible, old ones hidden
   await act(async () => { jest.advanceTimersByTime(2000); });
   await flushMicrotasks();
   await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
 
-  expect(hasLogRow(container, "r-ind-new")).toBe(true);
-  expect(hasLogRow(container, "r-ind-1")).toBe(false);
+  expect(hasLogRow(container, "r-new-1")).toBe(true);
+  expect(hasLogRow(container, "r-aaa")).toBe(false);
+  expect(hasLogRow(container, "r-ccc")).toBe(false);
   expect(container.textContent).toContain("1 / 3");
 
   await act(async () => { root.unmount(); });
 });
 
-test("Logs: buffer eviction caps cleared counts to actual occurrences", async () => {
-  const dup1 = makeDupLog(1_700_000_000_000);
-  const dup2 = makeDupLog(1_700_000_000_000);
-
+test("Logs: buffer eviction — old entries stay hidden, new entries visible", async () => {
   let callCount = 0;
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
     callCount++;
-    if (callCount <= 1) return jsonResponse([dup2, dup1]);
-    // Server evicts both old entries, returns one new entry with same composite key
-    const dup3 = makeDupLog(1_700_000_000_000);
-    return jsonResponse([dup3]);
+    if (callCount <= 1) return jsonResponse([log2, log1]);
+    // Server evicted log1 and log2, returns only new log5
+    return jsonResponse([log5]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
@@ -887,31 +827,21 @@ test("Logs: buffer eviction caps cleared counts to actual occurrences", async ()
   await flushMicrotasks();
   expect(container.textContent).toContain("0 / 2");
 
-  // Poll — server evicted both old entries, only dup3 remains
+  // Poll — server evicted old entries, only log5 remains
   await act(async () => { jest.advanceTimersByTime(2000); });
   await flushMicrotasks();
   await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
 
-  // dup3 shares composite key with cleared entries; the count is capped to
-  // the single remaining occurrence, so it is hidden. This is a known limitation
-  // of composite keys: we cannot distinguish "old entry still in buffer" from
-  // "new entry with identical fields". The buffer correctly shows 1 total, 0 shown.
-  expect(container.textContent).toContain("0 / 1");
+  // log5 has a different requestId from cleared entries → visible
+  expect(container.textContent).toContain("1 / 1");
+  expect(hasLogRow(container, "r-eee")).toBe(true);
 
   await act(async () => { root.unmount(); });
 });
 
-test("Logs: same timestamp but different fields stays independent", async () => {
-  const logSameTime1 = {
-    timestamp: 1_700_000_000_000, model: "m1", provider: "p1", status: 200, durationMs: 10,
-    usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-    displayMetrics: { tokPerSecond: { kind: "unavailable" as const, reason: "x" }, cost: { kind: "unavailable" as const, reason: "x" } },
-  };
-  const logSameTime2 = {
-    timestamp: 1_700_000_000_000, model: "m2", provider: "p2", status: 500, durationMs: 99,
-    usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
-    displayMetrics: { tokPerSecond: { kind: "unavailable" as const, reason: "x" }, cost: { kind: "unavailable" as const, reason: "x" } },
-  };
+test("Logs: entries with same timestamp but different requestIds are independent", async () => {
+  const logSameTime1 = makeLog("r-same-ts-1", 1_700_000_000_000);
+  const logSameTime2 = makeLog("r-same-ts-2", 1_700_000_000_000);
 
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
@@ -926,13 +856,14 @@ test("Logs: same timestamp but different fields stays independent", async () => 
   await act(async () => { btn.click(); });
   await flushMicrotasks();
 
-  expect(hasLogRow(container, "m1")).toBe(false);
-  expect(hasLogRow(container, "m2")).toBe(false);
+  // Both have unique requestIds → both hidden independently
+  expect(hasLogRow(container, "r-same-ts-1")).toBe(false);
+  expect(hasLogRow(container, "r-same-ts-2")).toBe(false);
 
   await act(async () => { root.unmount(); });
 });
 
-test("Logs: filter switch does not restore cleared occurrences", async () => {
+test("Logs: filter switch does not restore cleared entries", async () => {
   const logA = {
     requestId: "r-filt-a", timestamp: 1_700_000_000_000, model: "m-a", provider: "p-a",
     surface: "claude" as const, status: 200, durationMs: 10,
@@ -959,7 +890,7 @@ test("Logs: filter switch does not restore cleared occurrences", async () => {
   await flushMicrotasks();
   expect(container.textContent).toContain("0 / 2");
 
-  // Switch to "Claude" surface filter
+  // Switch to "Claude" surface filter — cleared entries stay hidden
   const claudeBtn = [...container.querySelectorAll('button[role="radio"]')].find(
     b => b.textContent?.trim() === "Claude",
   );
@@ -972,7 +903,7 @@ test("Logs: filter switch does not restore cleared occurrences", async () => {
   await act(async () => { root.unmount(); });
 });
 
-test("Logs: resourceKey change resets cleared occurrence counts", async () => {
+test("Logs: resourceKey change resets cleared entries", async () => {
   const logA = makeLog("r-reset-a", 1_700_000_000_000);
 
   globalThis.fetch = (async (input) => {
@@ -1006,7 +937,7 @@ test("Logs: resourceKey change resets cleared occurrence counts", async () => {
   });
   await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
 
-  // Cleared counts reset → log visible again
+  // Cleared ids reset → same requestId entry visible again
   expect(hasLogRow(container2, "r-reset-a")).toBe(true);
 
   await act(async () => { root2.unmount(); });
