@@ -142,7 +142,31 @@ describe("ocx storage trash and policy", () => {
     expect(calls[0]?.method).toBe("PUT");
     // `enabled` is absent, which the server reads as "keep the stored value". Sending
     // `enabled: false` here would silently disable a policy the operator never mentioned.
-    expect(calls[0]?.body).toEqual({ percent: 40 });
+    // The percent travels inside `target`: the PUT contract has no top-level `percent`, so
+    // that shape was accepted, dropped, and left the stored target in place.
+    expect(calls[0]?.body).toEqual({ target: { removeOldestPercent: 40 } });
+  });
+
+  test("--percent reaches the server in the shape the policy target actually reads", async () => {
+    // A top-level `percent` round-trips as HTTP 200 while changing nothing:
+    // `normalizeStorageCleanupPolicy` reads only `target`, so a policy still holding the
+    // default 25% stayed at 25% after `--percent 10` reported success — cleanup remained
+    // authorized to delete more than the operator asked for.
+    const { calls, deps } = harness(() => ({ json: { ok: true, policy: {} } }));
+    const cap = capture();
+    try { await handleStorageCommand(["policy", "set", "--percent", "10"], deps); } finally { cap.restore(); }
+    const body = calls[0]?.body as Record<string, unknown>;
+    expect(body).toEqual({ target: { removeOldestPercent: 10 } });
+    expect(body).not.toHaveProperty("percent");
+  });
+
+  test("an out-of-range percent is still sent so the server can name the rejection", async () => {
+    // Rejecting locally would duplicate the server's 1-100 vocabulary. A named 400 is a
+    // refused write; the defect being fixed here was a silent accepted one.
+    const { calls, deps } = harness(() => ({ json: { ok: true, policy: {} } }));
+    const cap = capture();
+    try { await handleStorageCommand(["policy", "set", "--percent", "0"], deps); } finally { cap.restore(); }
+    expect(calls[0]?.body).toEqual({ target: { removeOldestPercent: 0 } });
   });
 
   test("policy set with no fields is refused rather than sent as an empty write", async () => {
