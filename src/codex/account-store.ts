@@ -638,7 +638,7 @@ async function resolveCodexToken(
   const abort = new AbortController();
   const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]);
   let flight!: RefreshFlight;
-  const refreshPromise = withCodexRefreshFileLock(refreshGrantFingerprint, signal, async (): Promise<CodexRefreshResult> => {
+  const fetchPromise = withCodexRefreshFileLock(refreshGrantFingerprint, signal, async (): Promise<CodexRefreshResult> => {
     const current = readCodexAccountRecord(id);
     const lockedRecord = readCodexAccountRecord(id);
     const lockedCred = lockedRecord?.deletedAt == null ? lockedRecord?.credential : undefined;
@@ -759,6 +759,22 @@ async function resolveCodexToken(
       resolvedGrantFingerprint: refreshGrantFingerprint,
       selfRefreshed: true,
     };
+  });
+  /*
+   * Plan reconciliation belongs to the FLIGHT, not to whichever caller opened it.
+   *
+   * The flight outlives its initiating caller by design (gap 2): an aborted owner stops
+   * waiting while the shared work still runs and still commits the rotated credential.
+   * Reconciling the plan only after the owner's caller-scoped wait therefore dropped it
+   * whenever that owner walked away, and a same-account joiner returning through the
+   * adopt-stored branch does not reconcile either — so a changed `chatgpt_plan_type`
+   * stayed invisible in `codexAccounts[].plan` for the life of the process and skewed
+   * plan-selected quota projection. Attaching it to the flight runs it exactly once per
+   * committed result, for every waiter, including none.
+   */
+  const refreshPromise = fetchPromise.then(async (result): Promise<CodexRefreshResult> => {
+    await notePlanFromRefreshedAccessToken(id, result.accessToken, result.generation);
+    return result;
   }).finally(() => {
     if (refreshLocks.get(refreshGrantFingerprint) === flight) refreshLocks.delete(refreshGrantFingerprint);
   });
@@ -769,7 +785,6 @@ async function resolveCodexToken(
   // registered, so a joiner that arrives after this caller walks away still receives
   // the committed result.
   const result = await awaitOwnCancellation(refreshPromise, callerSignal);
-  await notePlanFromRefreshedAccessToken(id, result.accessToken, result.generation);
   return {
     accessToken: result.accessToken,
     chatgptAccountId: result.chatgptAccountId,

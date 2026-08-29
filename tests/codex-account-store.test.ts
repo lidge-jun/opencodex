@@ -16,6 +16,17 @@ function refreshLockPathForToken(refreshToken: string): string {
   return join(TEST_DIR, `codex-refresh-${digest}.lock`);
 }
 
+/** Minimal unsigned JWT carrying the plan claim the store reconciles from. */
+function planJwt(plan: string, accountId = "acct-plan-flight"): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify({
+    chatgpt_account_id: accountId,
+    chatgpt_plan_type: plan,
+    "https://api.openai.com/auth": { chatgpt_account_id: accountId, chatgpt_plan_type: plan },
+  })).toString("base64url");
+  return `${header}.${body}.sig`;
+}
+
 describe("codex-account-store CRUD", () => {
   beforeEach(() => {
     // These exercises cover credential-store contention, not Windows ACL behavior.
@@ -992,6 +1003,92 @@ describe("codex-account-store CRUD", () => {
       expect((error as InstanceType<typeof TokenRefreshError>).reason).toBe("unknown");
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe("shared refresh flight plan reconciliation (#2892 gap 2 follow-up)", () => {
+  beforeEach(() => {
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+  });
+
+  afterEach(() => {
+    setIcaclsRunnerForTests(null);
+    delete process.env.OPENCODEX_HOME;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  test("an aborted owner still reconciles the refreshed plan for the shared flight", async () => {
+    // The flight deliberately outlives the caller that opened it, so plan reconciliation
+    // must not hang off that caller's wait: a rotated token carrying a NEW
+    // chatgpt_plan_type would otherwise commit while codexAccounts[].plan stayed stale
+    // for the rest of the process, skewing plan-selected quota projection.
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    const { loadConfig, saveConfig } = await import("../src/config");
+    const { resetJwtPlanNotesForTests } = await import("../src/codex/plan-from-token");
+    resetJwtPlanNotesForTests();
+
+    saveConfig({
+      port: 10199,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [{ id: "plan-flight", email: "flight@example.test", plan: "plus", isMain: false }],
+    });
+    saveCodexAccountCredential("plan-flight", {
+      accessToken: planJwt("plus"),
+      refreshToken: "plan-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-plan-flight",
+    });
+    const generation = readCodexAccountRecord("plan-flight")!.generation;
+
+    const originalFetch = globalThis.fetch;
+    let releaseFetch: (() => void) | undefined;
+    const fetchStarted = new Promise<void>(resolve => {
+      globalThis.fetch = (async () => {
+        resolve();
+        await new Promise<void>(release => { releaseFetch = release; });
+        return Response.json({
+          access_token: planJwt("pro"),
+          refresh_token: "plan-grant2",
+          expires_in: 3600,
+        });
+      }) as typeof fetch;
+    });
+
+    try {
+      const owner = new AbortController();
+      const ownerCall = forceRefreshCodexPoolToken("plan-flight", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: planJwt("plus"),
+        signal: owner.signal,
+      });
+      await fetchStarted;
+      owner.abort(new Error("client disconnected"));
+      await expect(ownerCall).rejects.toThrow("client disconnected");
+
+      releaseFetch?.();
+      // The flight is detached from every caller now, so there is nothing to await. Poll
+      // for the persisted outcome under a deadline instead of a fixed delay: a fixed
+      // sleep can pass before the flight commits on a loaded worker and let teardown race
+      // unfinished work, and it never proves the reconciliation actually ran.
+      const deadline = Date.now() + 5_000;
+      let persisted = loadConfig().codexAccounts?.[0];
+      while ((persisted?.plan !== "pro" || persisted?.planSource !== "jwt") && Date.now() < deadline) {
+        await Bun.sleep(10);
+        persisted = loadConfig().codexAccounts?.[0];
+      }
+
+      expect(persisted?.plan).toBe("pro");
+      expect(persisted?.planSource).toBe("jwt");
+      expect(readCodexAccountRecord("plan-flight")!.credential!.accessToken).toBe(planJwt("pro"));
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetJwtPlanNotesForTests();
     }
   });
 });
