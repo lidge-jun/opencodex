@@ -91,6 +91,36 @@ written to fix the previous finding.
    is also the write-path concurrency token, so the collision reached further than
    the probe.
 4. An external base selection was hashed as a bare kind string.
+5. Two more: a relative `model_instructions_file` was resolved against the proxy's
+   own working directory instead of the config file's, so it hashed an unrelated
+   file; and only the two built-in project-document names were considered, so a
+   configured `project_doc_fallback_filenames` entry could be edited unnoticed.
+
+## The pattern, and where it stops
+
+Five rounds is the interesting part of this record. Each fix was reviewed, and four
+of the six findings were in code written to close the previous finding. The reason is
+consistent: a cache key is only as good as its worst-covered input, and "I added the
+input I was told about" is not the same as "the key names everything the output
+depends on". Framing, path resolution, and candidate-set breadth each failed
+separately.
+
+What remains uncovered is now a short and deliberate list, and every item on it has a
+reason that is not "we did not get to it":
+
+- **Ancestor project documents.** Codex walks from a project root to its cwd. The
+  probe runs in `CODEX_HOME` with no checkout around it, so there is no ancestor
+  chain to walk. Hashing a walk that cannot happen would be noise.
+- **Skill and plugin metadata.** Readable, but they are directory trees owned by
+  Codex, not files with a stable enumeration contract here. Hashing them means
+  duplicating a loader we do not own and would have to keep in sync.
+- **Clock, timezone, shell, MCP availability.** Not files. A fingerprint over a clock
+  is not a fingerprint.
+
+The exposure for each is the same and it is small: an external edit landing inside a
+single in-flight probe's window, whose failure mode is a fail-closed `busy` and a
+retry, not corruption. The honest move is to name them here rather than to imply the
+key is total.
 
 ## Verification
 

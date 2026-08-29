@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
 import { LAYER_INVENTORY, readPromptLayers } from "../src/codex/prompt-layers";
 import {
@@ -1166,6 +1166,89 @@ describe("020 coverage completions", () => {
     expect(fresh.body.layers.skills.text).toBe("new-external");
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
   });
+
+  /**
+   * A relative model_instructions_file is resolved against the config file's own
+   * directory, which is what Codex does with its relative path fields. Resolving it
+   * against this process's cwd instead would hash whatever happens to sit beside the
+   * proxy's working directory — a file unrelated to the prompt.
+   *
+   * The fixture root is not the process cwd, so this fails if the base is wrong.
+   */
+  test("35. a relative external base path resolves against the config directory", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const externalPath = join(dirname(fx.configPath), "relative-base.md");
+    writeFileSync(externalPath, "old-relative", "utf8");
+    writeFileSync(fx.configPath, "model_instructions_file = \"relative-base.md\"\n", "utf8");
+
+    const startedPath = join(fx.decoyHome, "relative-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(externalPath)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "relative base probe start");
+    writeFileSync(externalPath, "new-relative", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-relative");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("new-relative");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
+  /**
+   * A user who configures project_doc_fallback_filenames renders those files, so the
+   * admission key has to know about them. Hard-coding AGENTS.md would let an edit to
+   * a configured TEAM.md pass unnoticed and serve a joiner stale text.
+   *
+   * Both TOML spellings are covered: the value is read with the same decoder used for
+   * every other field in this file, not a double-quote-only regex.
+   */
+  for (const spelling of [
+    { label: "double-quoted", literal: "[\"TEAM.md\"]" },
+    { label: "single-quoted", literal: "['TEAM.md']" },
+  ]) {
+    test(`36. a ${spelling.label} fallback project document moves probe admission`, async () => {
+      const fx = fixture(`project_doc_fallback_filenames = ${spelling.literal}\n`);
+      const teamPath = join(fx.decoyHome, "TEAM.md");
+      writeFileSync(teamPath, "old-team", "utf8");
+      const startedPath = join(fx.decoyHome, "team-probe-starts.txt");
+      const source = [
+        `const fs = require("node:fs");`,
+        `const doc = fs.readFileSync(${JSON.stringify(teamPath)}, "utf8");`,
+        `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+        `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+        "setTimeout(() => process.stdout.write(output), 200);",
+      ].join("");
+      setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+      const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+      await waitUntil(() => existsSync(startedPath), "fallback doc probe start");
+      writeFileSync(teamPath, "new-team", "utf8");
+
+      expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+        ok: false,
+        detail: "another prompt probe is still finishing; retry shortly",
+      });
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+      expect((await beforeEdit).body.layers.skills.text).toBe("old-team");
+
+      const fresh = await call("GET", "/api/codex-prompt/text", fx);
+      expect(fresh.body.layers.skills.text).toBe("new-team");
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+    });
+  }
 
   test("24. every ownership state is named, not collapsed into a boolean", async () => {
     // developerInstructionsOwned:false covers an ABSENT key and an EXTERNAL one, and

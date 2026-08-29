@@ -191,6 +191,40 @@ export function activeBaseVariantDir(opts?: Paths): string {
 const PROBE_INSTRUCTION_FILES = ["AGENTS.override.md", "AGENTS.md"] as const;
 
 /**
+ * The project-document filenames Codex would look for in a given home, in its own
+ * order: the two built-ins first, then whatever `project_doc_fallback_filenames`
+ * adds, de-duplicated (`core/src/agents_md.rs` `candidate_filenames`).
+ *
+ * Read from config rather than hard-coded, because a user who configures
+ * `TEAM.md` renders TEAM.md, and a fingerprint that only knew about AGENTS.md
+ * would let an edit to it pass unnoticed.
+ *
+ * Deliberately narrower than upstream in one respect, and it is a real limit: Codex
+ * also walks ancestor directories from the project root to its cwd. The probe runs
+ * in CODEX_HOME with no project checkout around it, so the ancestor walk has nothing
+ * to find; this reads the home's own candidates only.
+ */
+function probeInstructionFilenames(configBytes: string | null): string[] {
+  const names: string[] = [...PROBE_INSTRUCTION_FILES];
+  for (const line of rootLines(configBytes ?? "")) {
+    const m = /^\s*project_doc_fallback_filenames\s*=\s*\[(.*)\]\s*(?:#.*)?$/.exec(line);
+    if (!m) continue;
+    for (const raw of m[1]!.split(",")) {
+      const trimmed = raw.trim();
+      if (trimmed === "") continue;
+      // Reuse the decoder that already backs every other value we read out of this
+      // file, so a single-quoted or escaped filename is not silently skipped.
+      const decoded = trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2
+        ? trimmed.slice(1, -1)
+        : decodeBasicString(trimmed);
+      if (decoded === null || decoded === "") continue;
+      if (!names.includes(decoded)) names.push(decoded);
+    }
+  }
+  return names;
+}
+
+/**
  * Feed one named field into a fingerprint, framed so that no two distinct states
  * can produce the same digest.
  *
@@ -712,7 +746,11 @@ export function computePromptProbeStateFingerprint(opts?: Paths): string {
     updateFingerprintField(hash, "external-path", selection.path);
     let externalBytes: string | null = null;
     try {
-      externalBytes = readFileOrNull(resolve(expandUserPath(selection.path)));
+      // Relative to the CONFIG FILE's directory, which is what Codex does with its
+      // relative path fields. resolve() alone would use this process's cwd — the
+      // proxy's working directory, which has nothing to do with either the config
+      // or the probe child's cwd — and would hash an unrelated file.
+      externalBytes = readFileOrNull(resolve(dirname(activeConfigPath(opts)), expandUserPath(selection.path)));
     } catch {
       // An unresolvable path is a state, not a failure: it hashes as absent, and
       // resolveBaseSelection has already reported the selection as external.
@@ -724,7 +762,7 @@ export function computePromptProbeStateFingerprint(opts?: Paths): string {
   // in that order: an override edit changes the rendered project document exactly
   // as a plain edit does.
   const probeHome = resolveCodexHomeDir();
-  for (const name of PROBE_INSTRUCTION_FILES) {
+  for (const name of probeInstructionFilenames(configBytes)) {
     updateFingerprintField(hash, name, readFileOrNull(join(probeHome, name)));
   }
   return `sha256:${hash.digest("hex")}`;
