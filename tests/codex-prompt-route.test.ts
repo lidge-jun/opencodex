@@ -1349,6 +1349,89 @@ describe("020 coverage completions", () => {
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
   });
 
+  /**
+   * A config Codex reads and this process's TOML parser refuses. `i64` is an ordinary
+   * TOML integer and Rust accepts it; Bun rejects the whole document because the value
+   * exceeds JavaScript's safe range. Reading that as "no keys configured" dropped every
+   * fallback filename at once — worse than the missed spellings the parser was adopted
+   * to fix, and a failure the earlier textual reader did not have.
+   */
+  test("39. a config this parser rejects still contributes its project documents", async () => {
+    const fx = fixture([
+      "project_doc_fallback_filenames = [\"TEAM.md\"]",
+      // Valid i64, outside Number.MAX_SAFE_INTEGER.
+      "model_context_window = 9223372036854775807",
+      "",
+    ].join("\n"));
+    // The premise: this really is unparseable here, so the case cannot silently
+    // degrade into testing the ordinary parsed path.
+    expect(() => Bun.TOML.parse(readFileSync(fx.configPath, "utf8"))).toThrow();
+
+    const teamPath = join(fx.decoyHome, "TEAM.md");
+    writeFileSync(teamPath, "old-unparseable", "utf8");
+    const startedPath = join(fx.decoyHome, "unparseable-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(teamPath)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "unparseable-config probe start");
+    writeFileSync(teamPath, "new-unparseable", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-unparseable");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("new-unparseable");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
+  /**
+   * A skill's SKILL.md frontmatter is rendered into the skills section, so editing a
+   * description changes what the probe returns. This was documented as unobservable
+   * until a review round changed one live and watched the output move while the
+   * fingerprint stood still.
+   */
+  test("40. editing a SKILL.md manifest invalidates an in-flight text probe", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const manifest = join(fx.decoyHome, "skills", "probe-skill", "SKILL.md");
+    mkdirSync(dirname(manifest), { recursive: true });
+    writeFileSync(manifest, "---\nname: probe-skill\ndescription: old-skill-text\n---\n", "utf8");
+    const startedPath = join(fx.decoyHome, "skill-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(manifest)}, "utf8").match(/description: (.*)/)[1];`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "skill manifest probe start");
+    writeFileSync(manifest, "---\nname: probe-skill\ndescription: new-skill-text\n---\n", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-skill-text");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("new-skill-text");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
   test("24. every ownership state is named, not collapsed into a boolean", async () => {
     // developerInstructionsOwned:false covers an ABSENT key and an EXTERNAL one, and
     // a GUI that cannot tell them apart hides its own create affordance from every

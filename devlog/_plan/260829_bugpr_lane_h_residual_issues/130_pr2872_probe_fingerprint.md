@@ -117,20 +117,26 @@ So the walk is now performed rather than argued away: nearest ancestor holding a
 configured marker, then every directory from that root down to the home, with a
 present-but-empty `project_root_markers` disabling detection exactly as upstream does.
 
-What remains uncovered, with a reason that is not "we did not get to it":
+An eighth round then rejected this section a second time. Skill metadata had been
+written off as "a directory tree with no stable enumeration contract"; a live edit to
+one `SKILL.md` description moved the probe's rendered output while the fingerprint
+stood still. It is a directory listing and one file read per skill. The manifests are
+hashed now.
 
-- **Skill and plugin metadata.** Readable, but they are directory trees owned by
-  Codex, not files with a stable enumeration contract here. Hashing them means
-  duplicating a loader we do not own and would have to keep in sync.
-- **Clock, timezone, shell, MCP availability.** Not files. A fingerprint over a clock
-  is not a fingerprint.
+What remains uncovered:
 
-The exposure for both is an external edit landing inside a single in-flight probe's
-window, whose failure mode is a fail-closed `busy` and a retry, not corruption.
+- **Plugin manifests and MCP/app availability.** Availability is a live connector
+  state, not a file this process can stat.
+- **Clock, timezone, shell.** Not files. A fingerprint over a clock is not a
+  fingerprint.
 
-Given that this section has now been wrong once, the standard it should be held to is
-worth stating: an input belongs on this list only when it cannot be read from this
-process, not when reading it looks inconvenient.
+The exposure is an external edit landing inside a single in-flight probe's window,
+whose failure mode is a fail-closed `busy` and a retry, not corruption.
+
+This section has now been wrong twice, in the same direction both times: something was
+called unreadable when it was merely inconvenient to read. The standard that survived
+is narrow — an input belongs on this list only when no file on disk determines it.
+Anything with a path gets hashed.
 
 ## The reader, and why it stopped being a regex
 

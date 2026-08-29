@@ -221,33 +221,78 @@ function probeInstructionFilenames(configBytes: string | null): string[] {
  * moved no admission key. The pattern was the defect: TOML is not a line format, so
  * no regex over lines can enumerate what a parser accepts.
  *
- * The module header forbids trusting a JS TOML parser to VERIFY bytes we write,
- * because Bun and Rust `toml_edit` disagree on escapes and Codex reads what we wrote.
- * That prohibition is about writing. This is a read of two arrays of plain filenames,
- * and the failure modes differ in the safe direction: a parse disagreement here can
- * only cost a redundant probe, never a corrupted config. A missed spelling costs a
- * stale read, which is the defect being fixed.
+ * The module header's warning about JS TOML parsers does apply here, and a review
+ * round proved it against an earlier version of this comment that claimed otherwise.
+ * Bun rejects an entire document containing an integer outside JavaScript's safe
+ * range, such as `model_context_window = 9223372036854775807`, which Rust accepts as
+ * an ordinary `i64`. A whole-document parse turned that into BOTH arrays disappearing
+ * — a worse failure than any single missed spelling, and one the old regex did not
+ * have.
  *
- * An unparseable file yields no entries. Codex could not load it either, so there is
- * no configured value to honour.
+ * So the parse is the preferred reader, not the only one. When it fails, the scan
+ * below runs, and it is deliberately loose: it accepts any spelling it recognises and
+ * over-reports rather than under-reports, because an extra hashed filename costs one
+ * redundant probe while a missing one costs stale text.
  */
 function rootArrayEntries(configBytes: string | null, key: string): string[] {
   const value = rootValue(configBytes, key);
+  if (value === PARSE_FAILED) return scanRootArrayEntries(configBytes, key);
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === "string");
 }
 
-/** A root-scope value, or undefined when the key is absent or the file will not parse. */
+/**
+ * Distinguishes "the parser could not read this file" from "the key is absent".
+ * Collapsing the two is what made an unrelated large integer silently empty the
+ * project-document set.
+ */
+const PARSE_FAILED = Symbol("toml-parse-failed");
+
+/** A root-scope value, `undefined` when the key is absent, `PARSE_FAILED` when the file will not parse. */
 function rootValue(configBytes: string | null, key: string): unknown {
   if (configBytes === null) return undefined;
   let parsed: unknown;
   try {
     parsed = Bun.TOML.parse(configBytes);
   } catch {
-    return undefined;
+    return PARSE_FAILED;
   }
-  if (typeof parsed !== "object" || parsed === null) return undefined;
+  if (typeof parsed !== "object" || parsed === null) return PARSE_FAILED;
   return (parsed as Record<string, unknown>)[key];
+}
+
+/**
+ * Fallback reader for a config this parser will not accept but Codex will.
+ *
+ * Not a second attempt at being a TOML parser — that approach failed three review
+ * rounds. It is a deliberately over-eager scan: it takes the first bracketed group for
+ * the key under either spelling, spans lines, strips comments, and keeps anything that
+ * decodes. Over-reporting is the safe direction here.
+ */
+function scanRootArrayEntries(configBytes: string | null, key: string): string[] {
+  const lines = rootLines(configBytes ?? "");
+  const opener = new RegExp(`^\\s*"?${key}"?\\s*=\\s*\\[(.*)$`);
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = opener.exec(lines[i]!);
+    if (!m) continue;
+    let body = m[1]!.replace(/#.*$/, "");
+    for (let j = i; !body.includes("]"); ) {
+      j += 1;
+      if (j >= lines.length) return [];
+      body += lines[j]!.replace(/#.*$/, "");
+    }
+    const out: string[] = [];
+    for (const raw of body.slice(0, body.indexOf("]")).split(",")) {
+      const trimmed = raw.trim();
+      if (trimmed === "") continue;
+      const decoded = trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2
+        ? trimmed.slice(1, -1)
+        : decodeBasicString(trimmed);
+      if (decoded !== null) out.push(decoded);
+    }
+    return out;
+  }
+  return [];
 }
 
 /**
@@ -299,9 +344,23 @@ function projectRootMarkers(configBytes: string | null): string[] {
   return rootArrayEntries(configBytes, "project_root_markers").filter(m => m !== "");
 }
 
-/** Whether a root-scope key is present at all, regardless of what it holds. */
+/**
+ * Whether a root-scope key is present at all, regardless of what it holds.
+ *
+ * A parse failure is not an answer, so it falls through to the scan rather than
+ * counting as present: reading `PARSE_FAILED` as "present" would report an empty
+ * marker list and disable root detection on a config Codex reads fine.
+ */
 function hasRootKey(configBytes: string | null, key: string): boolean {
-  return rootValue(configBytes, key) !== undefined;
+  const value = rootValue(configBytes, key);
+  if (value === PARSE_FAILED) return scanHasRootKey(configBytes, key);
+  return value !== undefined;
+}
+
+/** Textual presence check, used only when the parser cannot read the file. */
+function scanHasRootKey(configBytes: string | null, key: string): boolean {
+  const probe = new RegExp(`^\\s*"?${key}"?\\s*=`);
+  return rootLines(configBytes ?? "").some(line => probe.test(line));
 }
 
 /**
@@ -854,7 +913,43 @@ export function computePromptProbeStateFingerprint(opts?: Paths): string {
       updateFingerprintField(hash, "doc-bytes", readFileOrNull(path));
     }
   }
+  for (const path of probeSkillManifests(probeHome)) {
+    updateFingerprintField(hash, "skill-path", path);
+    updateFingerprintField(hash, "skill-bytes", readFileOrNull(path));
+  }
   return `sha256:${hash.digest("hex")}`;
+}
+
+/**
+ * `SKILL.md` manifests under the home's skills directory.
+ *
+ * These were written off as unobservable in an earlier version of this function's
+ * comment. They are not: Codex reads each manifest's frontmatter and renders its
+ * description into `<skills_instructions>`, and a review round demonstrated a live
+ * description edit changing the probe's output while the fingerprint stood still.
+ *
+ * One directory listing plus one `readFileOrNull` per skill, beside a subprocess that
+ * costs orders of magnitude more. Sorted, because `readdirSync` order is not a
+ * contract and a digest must not depend on it.
+ *
+ * Only the top-level manifest per skill is read. A skill's bundled scripts and
+ * references do not reach the rendered section, so hashing the whole tree would buy
+ * redundant invalidations at a real cost on large skill sets.
+ */
+function probeSkillManifests(home: string): string[] {
+  const root = join(home, "skills");
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return [];
+  }
+  const manifests: string[] = [];
+  for (const entry of entries.sort()) {
+    const manifest = join(root, entry, "SKILL.md");
+    if (existsSync(manifest)) manifests.push(manifest);
+  }
+  return manifests;
 }
 
 // ---------------------------------------------------------------------------
