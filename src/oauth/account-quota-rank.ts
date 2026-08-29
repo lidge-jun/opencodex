@@ -76,6 +76,19 @@ export function rankAccountsByHeadroom(provider: string, ring: readonly string[]
 }
 
 /**
+ * Do we hold any measurement at all for these accounts?
+ *
+ * Ranking a single candidate is trivially the identity, which makes it useless as an
+ * evidence test: a caller that has already filtered its list down to one account would be
+ * told "ranked" when nothing was measured. Pre-dispatch selection asks this first so it
+ * can decline to act on a roster it knows nothing about.
+ */
+export function hasHeadroomEvidence(provider: string, ids: readonly string[]): boolean {
+  return ids.some(id =>
+    headroomOf(provider, id) !== null
+    || (provider === "kiro" && getKiroAccountExhaustion(`${provider}\u0000${id}`) !== null));
+}
+/**
  * How long to cool an account that just 429'd, when we know its allowance is spent.
  *
  * A monthly-exhausted account retried every minute is pure waste, but an upstream reset

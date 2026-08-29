@@ -3139,9 +3139,24 @@ async function handleResponsesInner(
         // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
         // CCA envelope. Keep it paired with the token snapshot so an account rotation cannot mix
         // a fresh token with project metadata re-read from a different credential generation.
-        if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
-          const projectId = resolved.projectId;
-          if (projectId) route.provider = { ...route.provider, project: projectId };
+        if (route.provider.googleMode === "cloud-code-assist") {
+          // When pre-dispatch chose a DIFFERENT account, the configured project belongs to
+          // the account we did not use, and `!route.provider.project` would skip right past
+          // it — installing B's bearer alongside A's project. That is the #2841 pairing bug
+          // in its original shape, so the preferred-account path replaces the project
+          // unconditionally and refuses to dispatch at all if the chosen account has none.
+          if (preferredAccountId) {
+            if (!resolved.projectId) {
+              return formatErrorResponse(
+                401,
+                "authentication_error",
+                "Selected OAuth account has no Cloud Code Assist project",
+              );
+            }
+            route.provider = { ...route.provider, project: resolved.projectId };
+          } else if (!route.provider.project && resolved.projectId) {
+            route.provider = { ...route.provider, project: resolved.projectId };
+          }
         }
       }
     } catch (err) {

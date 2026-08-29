@@ -228,4 +228,53 @@ describe("pre-dispatch account preference", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("a quota-less provider is never redirected, even when the ACTIVE account is cooled", async () => {
+    // The inverse of the case above, and the one that actually broke the no-op guarantee:
+    // cooling the active account collapses the eligible list to a single candidate, which
+    // any ranking returns unchanged. That looks like a ranked answer but nothing was ever
+    // measured, so evidence has to be checked against the whole roster first.
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      rotateGenericOAuthAccountOn429(config, "xai", ids[0]!, null);
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("repeated calls inside the TTL do not re-read the credential store", async () => {
+    // loadAuthStore chmods the config dir, chmods the secret, and re-parses the whole
+    // credential file on every call — and this runs on the initial resolution of EVERY
+    // request. Rather than measure atime (which noatime mounts make vacuous), remove the
+    // store after one warm call: a cached selection still answers, an uncached one cannot.
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+      rmSync(join(home, "auth.json"), { force: true });
+      for (let i = 0; i < 4; i++) expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

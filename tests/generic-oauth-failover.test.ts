@@ -280,6 +280,20 @@ describe("sidecar on429 wiring", () => {
     // Kiro routing metadata still travels with its own token.
     expect(body).toContain("_kiroAuthContext");
   });
+
+  test("pre-dispatch selection replaces the CCA project instead of inheriting one", () => {
+    // The same pairing rule as the rotation helper, at the OTHER site that can change which
+    // account serves a request. The ordinary path is guarded by `!route.provider.project`,
+    // so without an explicit branch a preferred account would install its own bearer next
+    // to the configured account's project — #2841 in its original shape.
+    const start = coreSource.indexOf("const preferredAccountId =");
+    expect(start).toBeGreaterThan(-1);
+    const region = coreSource.slice(start, start + 4000);
+    expect(region).toContain("if (preferredAccountId) {");
+    expect(region).toContain("resolved.projectId");
+    // ...and it fails closed rather than dispatching with no project at all.
+    expect(region).toContain("has no Cloud Code Assist project");
+  });
 });
 
 /**
