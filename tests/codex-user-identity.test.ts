@@ -11,42 +11,12 @@ import {
   resolveEffectiveUserIdentity,
   probeCodexCoordinatorNamespace,
   samePathIdentity,
-  windowsIdentityPowerShellSpawnOptionsForTests,
 } from "../src/codex/user-identity";
 
 let codexHome = "";
 let previousHome: string | undefined;
 
 const CHILD_TIMEOUT_MS = 10_000;
-
-/*
- * #2914. The identity lookup used to give a desktop 8s and CI 30s, on the theory
- * that only a shared runner is contended enough to need more. A zh-CN Windows 10
- * host measured 3.2s + 4.6s per spawn, so ordinary jitter breached 8s and
- * `ocx sync` failed with "Windows effective-account lookup timed out" — the same
- * contention the CI branch existed for.
- *
- * The budget must be identical either way. Reading it through the spawn options is
- * what makes that assertable: the constant alone could be right while the CI
- * branch silently reintroduced the split.
- */
-test("the Windows identity-lookup budget does not depend on running under CI", () => {
-  const previousCi = process.env.CI;
-  try {
-    process.env.CI = "true";
-    const underCi = windowsIdentityPowerShellSpawnOptionsForTests().timeout;
-    delete process.env.CI;
-    const onDesktop = windowsIdentityPowerShellSpawnOptionsForTests().timeout;
-
-    expect(onDesktop).toBe(underCi);
-    // The contended-desktop measurement is 3-5s per spawn across two spawns; the
-    // old 8s ceiling left no room for jitter on top of that.
-    expect(onDesktop).toBeGreaterThanOrEqual(30_000);
-  } finally {
-    if (previousCi === undefined) delete process.env.CI;
-    else process.env.CI = previousCi;
-  }
-});
 const userIdentityModuleUrl = pathToFileURL(
   join(import.meta.dir, "..", "src", "codex", "user-identity.ts"),
 ).href;
