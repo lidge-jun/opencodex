@@ -20,12 +20,27 @@ beforeEach(() => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  // Windows can still hold a just-closed config file open when the next test's
-  // cleanup runs, and `force` does not cover EBUSY. An unguarded rmSync here
-  // failed the alias-migration case on shard 4/4 -- in `afterEach`, after every
-  // assertion in it had already passed. Reuse the shared retry rather than
-  // growing another local copy of it.
-  if (testDir) removeTreeWithRetry(testDir);
+  // Cleanup must not be able to fail a passing test.
+  //
+  // One case here reads `/api/lab/catalog`, which opens the Lab projection SQLite
+  // under this OPENCODEX_HOME through a cached read connection this suite has no
+  // handle on. Windows refuses to unlink an open file, so the directory is still
+  // busy in a later `afterEach` -- and it stayed busy through all 50 retries of
+  // `removeTreeWithRetry` (2.6s), which is a held handle rather than the release
+  // race that helper is for. It failed the alias-migration case with EBUSY after
+  // every assertion in it had already passed.
+  //
+  // Temp directories under the OS temp root are reclaimed by the runner image, so
+  // leaving one behind costs nothing a CI job can observe. Losing the signal from
+  // a green test does cost something. Best-effort removal keeps the tidy path on
+  // POSIX without letting the untidy one lie about the code under test.
+  if (testDir) {
+    try {
+      removeTreeWithRetry(testDir);
+    } catch {
+      /* a live handle in a shared-process suite is not this test's verdict */
+    }
+  }
 });
 
 function baseConfig(): OcxConfig {

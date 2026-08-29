@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  encodeBasicString,
   MAX_BASE_VARIANTS,
   readBaseVariants,
   readPromptLayers,
@@ -83,7 +84,14 @@ describe("base variant selection", () => {
     expect(selectBaseVariant({ kind: "variant", id }, rev(paths), paths).ok).toBe(true);
     const withVariant = read(paths.configPath)!;
     expect(withVariant).toContain("model_instructions_file = ");
-    expect(withVariant).toContain(resolve(join(paths.baseVariantDir, id + ".md")));
+    // Compare against the ENCODED literal, not the raw path. TOML escapes
+    // backslashes, so on Windows the correct bytes on disk are C:\\Users\\... and a
+    // raw-path substring check fails against a file that is exactly right. What
+    // the assertion is for -- an absolute path, not a relative one -- is unchanged.
+    expect(withVariant).toContain(encodeBasicString(resolve(join(paths.baseVariantDir, id + ".md"))));
+    // And it must read back as the real path, which is the round trip the encoding
+    // exists to survive.
+    expect(readPromptLayers(paths).baseSelection).toEqual({ kind: "variant", id });
     expect(readPromptLayers(paths).baseSelection).toEqual({ kind: "variant", id });
 
     expect(selectBaseVariant({ kind: "default" }, rev(paths), paths).ok).toBe(true);
