@@ -170,3 +170,59 @@ Mid-stream SSE `401`s (`core.ts:1304`, `:4155`) are in scope for the fence but n
 replay: once the stream is committed, a transparent retry would duplicate output the client
 has already seen.
 
+
+## Post-implementation review: six defects, all in the fix
+
+An independent source review of the landed commit returned FAIL and reproduced each
+finding with its own probe. Five were in code written for this fix; two of those
+existed in `getValidCodexToken` before it and the forced path made them reachable.
+
+**A joined flight could copy a sibling account's credential.** Flights are keyed by
+refresh grant and shared by every account holding it. If the owner's own credential is
+externally replaced while it waits for the file lock, the grant-mismatch branch returns
+that replacement — and a joiner, checking only its own current grant, would CAS-write
+another account's access *and* refresh tokens onto itself. Flight results now carry
+`resolvedGrantFingerprint`, tagged with the grant the flight was **opened** for rather
+than the rotated one it produced. Tagging the rotated grant instead broke the existing
+`same refresh grant joins a live flight` test, which is what caught the distinction.
+
+**The lineage check was tautological.** Both callers read `replacedAt` after the refresh
+and passed it to a function that re-read the same record, so the comparison could not
+fail — an external replacement passed it and inherited the rejected credential's
+affinity, the exact case the handoff claimed to refuse. Lineage is now proven by the
+call that performed the CAS: the store reports `selfRefreshed`, and the handoff only
+runs when that is true. The `replacedAt` parameter is gone.
+
+**A same-bearer refresh neither recovered nor quarantined.** Upstream can rotate only
+the refresh grant and return the same access token. The store commits `G+1` regardless,
+so quarantining against `G` was silently suppressed by the new fence — the account was
+neither replayed nor retired, and the next request repeated the refresh. The refresh
+result now reports the generation the credential actually sits at, and both endpoints
+fence on that value.
+
+**An ordinary joiner could bump the generation twice.** With the refresh grant retained,
+an ordinary same-account caller joins the forced caller's flight and CAS-writes the
+identical credential, moving `G+1` to `G+2` and killing the handoff the owner just
+performed. A joiner whose stored credential already equals the flight result now adopts
+the stored state instead of rewriting it.
+
+**The fence covered only two synthetic call sites.** Mid-stream SSE terminals, a
+replay's own second 401, and compact's ordinary recorder were all unfenced, so a stale
+401 could still retire a replacement — which contradicted what the commit message
+claimed. All three now pass `credentialGeneration` for a `pool` context.
+
+**Bare `invalid_grant` was classified transient.** The parser only looked for
+`revoked`, `invalidated`, or `expired` in the description; upstream sends
+`invalid_grant` with no description at all, so a genuinely dead grant read as
+`unknown` and every request retried it forever.
+
+### One guard without an isolated regression
+
+The `resolvedGrantFingerprint` provenance check has no test that fails when only it is
+removed: the adopt-stored branch intercepts the same scenario first, and both must be
+removed together before the cross-account overwrite reappears. It is kept as
+defence-in-depth rather than dropped, because the two guards answer different questions
+— one asks whether the credential is the one already stored, the other whether it
+belongs to this grant at all — and a future change to either branch would remove the
+overlap. This is recorded rather than presented as proven.
+

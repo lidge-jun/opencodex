@@ -286,7 +286,25 @@ function withCredentialMutationLockSync<T>(fn: () => T): T {
 }
 
 type CodexTokenResult = { accessToken: string; chatgptAccountId: string; generation: number };
-type CodexRefreshResult = CodexTokenResult & { credential?: CodexAccountCredentials };
+type CodexRefreshResult = CodexTokenResult & {
+  credential?: CodexAccountCredentials;
+  /**
+   * Grant the returned credential actually belongs to.
+   *
+   * Flights are keyed by refresh grant and shared across every account holding that
+   * grant, but a flight can resolve to a credential from a DIFFERENT grant: the
+   * owner's credential may be externally replaced while it waits for the file lock,
+   * and the grant-mismatch branch then hands back that replacement. A joiner that
+   * only checks its own current grant would CAS-write another account's access and
+   * refresh tokens onto itself. The result therefore carries its own provenance.
+   */
+  resolvedGrantFingerprint?: string;
+  /**
+   * True when this call's own CAS write produced `generation` — the credential is a
+   * refresh of the one the caller was holding, not somebody else's replacement.
+   */
+  selfRefreshed?: boolean;
+};
 const MAX_CODEX_REFRESH_FLIGHTS = 32;
 const CODEX_REFRESH_FLIGHT_STALE_MS = 120_000;
 interface RefreshFlight {
@@ -423,29 +441,47 @@ function forcedFenceSuperseded(recordGeneration: number, forced: ForcedRefreshFe
  * {@link getValidCodexToken}: only a proven rejection justifies spending a refresh.
  *
  * `rotated` is false when the resolved token is byte-identical to the rejected one,
- * which means replaying would earn the same 401 and the caller must not try.
+ * which means replaying would earn the same 401 and the caller must not try. That can
+ * happen even on a SUCCESSFUL token response: upstream may rotate the refresh grant
+ * while returning the same access token. The generation has moved by then, so
+ * `generation` reports where the credential actually is — a caller that quarantines
+ * on `rotated === false` must fence on the returned value, not on the one it rejected.
  */
 export async function forceRefreshCodexPoolToken(
   id: string,
   options: { rejectedGeneration: number; rejectedAccessToken: string; signal?: AbortSignal },
-): Promise<CodexTokenResult & { rotated: boolean }> {
+): Promise<CodexTokenResult & { rotated: boolean; selfRefreshed: boolean }> {
   const result = await resolveCodexToken(
     id,
     { rejectedGeneration: options.rejectedGeneration, rejectedAccessToken: options.rejectedAccessToken },
     options.signal,
   );
-  return { ...result, rotated: result.accessToken !== options.rejectedAccessToken };
+  return {
+    accessToken: result.accessToken,
+    chatgptAccountId: result.chatgptAccountId,
+    generation: result.generation,
+    rotated: result.accessToken !== options.rejectedAccessToken,
+    // Only a CAS this call performed itself proves the new credential descends from the
+    // rejected one; anything else is somebody else's replacement and must not be treated
+    // as this request's own lineage.
+    selfRefreshed: result.selfRefreshed === true,
+  };
 }
 
 export async function getValidCodexToken(id: string): Promise<CodexTokenResult> {
-  return resolveCodexToken(id);
+  const result = await resolveCodexToken(id);
+  return {
+    accessToken: result.accessToken,
+    chatgptAccountId: result.chatgptAccountId,
+    generation: result.generation,
+  };
 }
 
 async function resolveCodexToken(
   id: string,
   forced?: ForcedRefreshFence,
   callerSignal?: AbortSignal,
-): Promise<CodexTokenResult> {
+): Promise<CodexRefreshResult> {
   const record = readCodexAccountRecord(id);
   const cred = record?.deletedAt == null ? record?.credential : undefined;
   if (!record || !cred) throw new Error("Codex account credential is unavailable; reauthenticate the account.");
@@ -470,10 +506,34 @@ async function resolveCodexToken(
       const refreshed = await existing.promise;
       const current = readCodexAccountRecord(id);
       const currentCred = current?.deletedAt == null ? current?.credential : undefined;
+      // The flight owner already committed this credential, and it is the one stored
+      // for this account: adopt the stored state instead of CAS-writing the identical
+      // bytes, which would bump the generation a second time and invalidate the
+      // affinity handoff the owner performed against generation+1.
+      if (current && currentCred && refreshed.credential
+        && currentCred.accessToken === refreshed.credential.accessToken
+        && currentCred.refreshToken === refreshed.credential.refreshToken) {
+        // A forced caller must still not accept the bearer upstream rejected.
+        if (!(forced !== undefined && currentCred.accessToken === forced.rejectedAccessToken)) {
+          return {
+            accessToken: currentCred.accessToken,
+            chatgptAccountId: currentCred.chatgptAccountId,
+            generation: current.generation,
+          };
+        }
+      }
       // Flights are keyed by refresh grant, not by account or generation, so this
       // credential may belong to a flight started for a different generation of the
       // same grant. Writing it onto a replacement would undo that replacement.
-      if (current && currentCred && forcedFenceSuperseded(current.generation, forced)) {
+      //
+      // The rejected-token test comes FIRST: a joined flight that resolved back to the
+      // bearer upstream rejected proves nothing, and reporting the replacement as
+      // "superseded" would hand the caller a token it must not replay.
+      if (
+        current && currentCred
+        && forcedFenceSuperseded(current.generation, forced)
+        && !(forced !== undefined && currentCred.accessToken === forced.rejectedAccessToken)
+      ) {
         return {
           accessToken: currentCred.accessToken,
           chatgptAccountId: currentCred.chatgptAccountId,
@@ -484,6 +544,10 @@ async function resolveCodexToken(
         current &&
         currentCred &&
         refreshed.credential &&
+        // Provenance: a flight can resolve to a credential from a DIFFERENT grant when
+        // the owner's own credential was replaced while it waited for the lock. Adopting
+        // that would copy another account's access and refresh tokens onto this one.
+        refreshed.resolvedGrantFingerprint === refreshGrantFingerprint &&
         // A joined flight that resolved to the rejected token proves nothing; fall
         // through and open a real refresh instead of bumping the generation.
         !(forced !== undefined && refreshed.credential.accessToken === forced.rejectedAccessToken) &&
@@ -498,6 +562,10 @@ async function resolveCodexToken(
           accessToken: refreshed.credential.accessToken,
           chatgptAccountId: refreshed.credential.chatgptAccountId,
           generation,
+          // This joiner performed its own CAS onto its own record, so the resulting
+          // generation is its own lineage even though another caller drove the fetch.
+          selfRefreshed: true,
+          resolvedGrantFingerprint: refreshGrantFingerprint,
         };
       }
       return resolveCodexToken(id, forced, callerSignal);
@@ -525,6 +593,11 @@ async function resolveCodexToken(
           chatgptAccountId: lockedCred.chatgptAccountId,
           generation: startGeneration,
           credential: lockedCred,
+          // This credential belongs to a DIFFERENT grant than the flight was opened
+          // for. Tagging it keeps a joiner from adopting it as its own.
+          ...(lockedRefreshGrantFingerprint !== undefined
+            ? { resolvedGrantFingerprint: lockedRefreshGrantFingerprint }
+            : {}),
         };
       }
       throw new CodexCredentialGenerationConflictError();
@@ -540,6 +613,7 @@ async function resolveCodexToken(
         chatgptAccountId: lockedCred.chatgptAccountId,
         generation: startGeneration,
         credential: lockedCred,
+        resolvedGrantFingerprint: refreshGrantFingerprint,
       };
     }
     const sameGrantFreshCredential = findFreshCredentialForGrant(
@@ -556,6 +630,8 @@ async function resolveCodexToken(
         chatgptAccountId: sameGrantFreshCredential.chatgptAccountId,
         generation: startGeneration + 1,
         credential: sameGrantFreshCredential,
+        resolvedGrantFingerprint: refreshGrantFingerprint,
+        selfRefreshed: true,
       };
     }
     const res = await fetch(CHATGPT_TOKEN_URL, {
@@ -575,7 +651,12 @@ async function resolveCodexToken(
         const parsed = JSON.parse(errText) as { error?: string; error_description?: string };
         errDesc = [parsed.error, parsed.error_description].filter(Boolean).join(": ") || `HTTP ${res.status}`;
       } catch { errDesc = `HTTP ${res.status}`; }
-      const reason = errDesc.includes("invalidated") || errDesc.includes("revoked") ? "revoked" as const
+      // `invalid_grant` is the standard OAuth code for a refresh token that is no longer
+      // usable, and upstream sends it bare with no description. Without it here the dead
+      // grant is classified "unknown", which callers treat as transient — so the account
+      // is never retired and every request repeats the same doomed refresh (#2887).
+      const reason = errDesc.includes("invalidated") || errDesc.includes("revoked")
+          || errDesc.includes("invalid_grant") ? "revoked" as const
         : errDesc.includes("expired") ? "expired" as const
         : "unknown" as const;
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`);
@@ -602,7 +683,17 @@ async function resolveCodexToken(
     if (!saveCodexAccountCredentialIfGeneration(id, startGeneration, updated)) {
       throw new CodexCredentialGenerationConflictError();
     }
-    return { accessToken: updated.accessToken, chatgptAccountId: updated.chatgptAccountId, generation: startGeneration + 1, credential: updated };
+    return {
+      accessToken: updated.accessToken,
+      chatgptAccountId: updated.chatgptAccountId,
+      generation: startGeneration + 1,
+      credential: updated,
+      // The grant this flight was OPENED for, not the rotated one it produced. Joiners
+      // are waiting on that key, and a successful refresh normally rotates the refresh
+      // token — tagging the new grant would make every legitimate joiner look foreign.
+      resolvedGrantFingerprint: refreshGrantFingerprint,
+      selfRefreshed: true,
+    };
   }).finally(() => {
     if (refreshLocks.get(refreshGrantFingerprint) === flight) refreshLocks.delete(refreshGrantFingerprint);
   });
@@ -615,5 +706,12 @@ async function resolveCodexToken(
     accessToken: result.accessToken,
     chatgptAccountId: result.chatgptAccountId,
     generation: result.generation,
+    // Carry the flight's provenance out to the caller: the owner is the one whose CAS
+    // produced this generation, and a forced caller needs that to know whether the new
+    // credential descends from the one it was holding.
+    ...(result.selfRefreshed !== undefined ? { selfRefreshed: result.selfRefreshed } : {}),
+    ...(result.resolvedGrantFingerprint !== undefined
+      ? { resolvedGrantFingerprint: result.resolvedGrantFingerprint }
+      : {}),
   };
 }

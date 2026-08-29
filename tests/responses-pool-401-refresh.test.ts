@@ -320,4 +320,36 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     recordCodexUpstreamOutcome(config(), ACCOUNT_ID, 401, { credentialGeneration: 4 });
     expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(true);
   });
+
+  test("a credential replaced before the request never reaches the 401 path at all", async () => {
+    // Establishes the boundary for the lineage rule: once the replacement is stored, it is
+    // picked up at selection time, so no rejected bearer is ever sent and no rotation is
+    // spent. The interesting case — a replacement landing WHILE the forced refresh runs — is
+    // covered at the store level, where the handoff's `selfRefreshed` gate is observable
+    // without racing the endpoint.
+    const { saveCodexAccountCredential } = await import("../src/codex/account-store");
+    const harness = installHarness({
+      refresh: () => {
+        throw new Error("the token endpoint must not be reached in this scenario");
+      },
+    });
+    saveCodexAccountCredential(ACCOUNT_ID, {
+      accessToken: "externally-replaced",
+      refreshToken: "external-grant",
+      expiresAt: Date.now() + 3_600_000,
+      chatgptAccountId: "acc-work",
+    });
+
+    const response = await handleResponses(
+      request("/v1/responses", { affined: true }),
+      config(),
+      { model: "", provider: "" } as RequestLogContext,
+    );
+
+    expect(response.status).toBe(200);
+    expect(harness.refreshes).toEqual([]);
+    // One send, with the replacement bearer: the rejected token is never used.
+    expect(harness.sends).toEqual(["Bearer externally-replaced"]);
+    expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+  });
 });

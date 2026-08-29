@@ -688,4 +688,200 @@ describe("codex-account-store CRUD", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("a joined flight cannot copy a sibling account's replacement credential (#2887 review)", async () => {
+    // Flights are keyed by refresh GRANT and shared across every account holding it. If the
+    // owner's own credential is externally replaced while it waits for the file lock, the
+    // grant-mismatch branch hands back that replacement. Without provenance on the result, a
+    // joiner CAS-writes another account's access AND refresh tokens onto itself.
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    const shared = { refreshToken: "shared-grant", expiresAt: Date.now() + 3600_000, chatgptAccountId: "acc" };
+    saveCodexAccountCredential("owner", { ...shared, accessToken: "owner-rejected" });
+    saveCodexAccountCredential("joiner", { ...shared, accessToken: "joiner-rejected" });
+    const ownerGeneration = readCodexAccountRecord("owner")!.generation;
+    const joinerGeneration = readCodexAccountRecord("joiner")!.generation;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      // The owner is re-authenticated onto a DIFFERENT grant mid-flight.
+      saveCodexAccountCredential("owner", {
+        accessToken: "owner-secret",
+        refreshToken: "owner-new-grant",
+        expiresAt: Date.now() + 3600_000,
+        chatgptAccountId: "acc-owner",
+      });
+      return Response.json({ access_token: "unused", expires_in: 3600 });
+    }) as typeof fetch;
+
+    try {
+      const ownerFlight = forceRefreshCodexPoolToken("owner", {
+        rejectedGeneration: ownerGeneration,
+        rejectedAccessToken: "owner-rejected",
+      }).catch(() => undefined);
+      const joiner = await forceRefreshCodexPoolToken("joiner", {
+        rejectedGeneration: joinerGeneration,
+        rejectedAccessToken: "joiner-rejected",
+      }).catch(() => undefined);
+      await ownerFlight;
+
+      // The joiner must never end up holding the owner's credential.
+      expect(joiner?.accessToken).not.toBe("owner-secret");
+      const joinerRecord = readCodexAccountRecord("joiner");
+      expect(joinerRecord?.credential?.accessToken).not.toBe("owner-secret");
+      expect(joinerRecord?.credential?.refreshToken).not.toBe("owner-new-grant");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a successful refresh that returns the SAME access token reports rotated=false at its real generation (#2887 review)", async () => {
+    // Upstream may rotate only the refresh grant. The store commits G+1 either way, so a
+    // caller that quarantines on rotated===false must fence on the RETURNED generation —
+    // fencing on the one it rejected silently suppresses its own quarantine.
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("same-bearer", {
+      accessToken: "still-rejected",
+      refreshToken: "grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const generation = readCodexAccountRecord("same-bearer")!.generation;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "still-rejected",
+      refresh_token: "grant-rotated",
+      expires_in: 3600,
+    })) as typeof fetch;
+
+    try {
+      const result = await forceRefreshCodexPoolToken("same-bearer", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "still-rejected",
+      });
+      expect(result.rotated).toBe(false);
+      // The generation reported must be where the credential actually is, not where it was.
+      expect(result.generation).toBe(readCodexAccountRecord("same-bearer")!.generation);
+      expect(result.generation).toBe(generation + 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("an ordinary joiner does not bump the generation a second time (#2887 review)", async () => {
+    // The forced owner commits G+1 and hands its affinity forward to G+1. An ordinary
+    // same-account joiner that re-writes the identical credential would move it to G+2 and
+    // invalidate that handoff.
+    const { forceRefreshCodexPoolToken, getValidCodexToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("double-bump", {
+      accessToken: "rejected",
+      refreshToken: "grant",
+      // Expired, so the ordinary caller actually joins the flight instead of taking the
+      // freshness shortcut — that shortcut is why an ordinary caller normally never sees
+      // a 401-driven refresh at all.
+      expiresAt: 0,
+      chatgptAccountId: "acc",
+    });
+    const generation = readCodexAccountRecord("double-bump")!.generation;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      // Same refresh grant retained, so an ordinary caller joins this very flight.
+      return Response.json({ access_token: "rotated", refresh_token: "grant", expires_in: 3600 });
+    }) as typeof fetch;
+
+    try {
+      const forced = forceRefreshCodexPoolToken("double-bump", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+      await new Promise(resolve => setTimeout(resolve, 2));
+      const ordinary = getValidCodexToken("double-bump");
+      const [forcedResult, ordinaryResult] = await Promise.all([forced, ordinary]);
+
+      expect(calls).toBe(1);
+      expect(forcedResult.generation).toBe(generation + 1);
+      expect(ordinaryResult.generation).toBe(generation + 1);
+      expect(readCodexAccountRecord("double-bump")!.generation).toBe(generation + 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a bare invalid_grant is terminal, not transient (#2887 review)", async () => {
+    // Upstream sends invalid_grant with no description. Classified "unknown" it reads as
+    // transient, so a dead grant is never retired and every request repeats the refresh.
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential, TokenRefreshError } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("dead-grant", {
+      accessToken: "rejected",
+      refreshToken: "grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const generation = readCodexAccountRecord("dead-grant")!.generation;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({ error: "invalid_grant" }, { status: 400 })) as typeof fetch;
+
+    try {
+      await forceRefreshCodexPoolToken("dead-grant", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+      throw new Error("expected a TokenRefreshError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TokenRefreshError);
+      expect((error as InstanceType<typeof TokenRefreshError>).reason).toBe("revoked");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a replacement landing mid-refresh is not reported as this call's own lineage (#2887 review)", async () => {
+    // `selfRefreshed` is what gates the affinity handoff. An external replacement must not
+    // set it: that credential may be a different upstream identity, so inheriting the
+    // rejected credential's thread bindings would silently move traffic onto it. Deriving
+    // lineage from the stored record instead is tautological — the caller reads the same
+    // record the check would re-read.
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("external", {
+      accessToken: "rejected",
+      refreshToken: "grant",
+      expiresAt: 0,
+      chatgptAccountId: "acc",
+    });
+    const rejectedGeneration = readCodexAccountRecord("external")!.generation;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      // An operator re-authenticates while the token call is in flight.
+      saveCodexAccountCredential("external", {
+        accessToken: "external-access",
+        refreshToken: "external-grant",
+        expiresAt: Date.now() + 3600_000,
+        chatgptAccountId: "acc",
+      });
+      return Response.json({ access_token: "rotated", refresh_token: "grant2", expires_in: 3600 });
+    }) as typeof fetch;
+
+    try {
+      const result = await forceRefreshCodexPoolToken("external", {
+        rejectedGeneration,
+        rejectedAccessToken: "rejected",
+      }).catch(error => error as Error);
+      // Either the CAS is refused outright, or the replacement is returned without claiming
+      // this call produced it. What must never happen is selfRefreshed on someone else's write.
+      if (!(result instanceof Error)) {
+        expect(result.selfRefreshed).toBe(false);
+      }
+      // The replacement survives regardless.
+      expect(readCodexAccountRecord("external")!.credential!.accessToken).toBe("external-access");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

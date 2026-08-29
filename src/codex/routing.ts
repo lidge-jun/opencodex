@@ -932,6 +932,17 @@ function isThreadAffinityGenerationLive(entry: ThreadAffinityEntry): boolean {
   return isCodexAccountGenerationLive(entry.accountId, entry.generation);
 }
 
+/** Generations this account's affinity entries are bound at. Test observability only. */
+export function debugCodexAffinityGenerations(accountId: string): number[] {
+  const generations: number[] = [];
+  for (const affinities of threadAccountMap.values()) {
+    for (const entry of affinities.values()) {
+      if (entry.accountId === accountId) generations.push(entry.generation);
+    }
+  }
+  return generations;
+}
+
 /**
  * Advance this account's affinity entries from the generation a rejected credential
  * was bound under to the generation its own refresh produced.
@@ -942,24 +953,23 @@ function isThreadAffinityGenerationLive(entry: ThreadAffinityEntry): boolean {
  * dead on the next request. Not quarantining an account is not the same as keeping
  * its affinity.
  *
- * The lineage test is the one {@link settleCodexQuotaRecoveryProbe} already relies on:
- * a refresh-owned bump advances the generation by exactly one and leaves `replacedAt`
- * untouched, while an external credential replacement stamps a fresh `replacedAt`.
- * An external replacement must still retire the affinity, because that credential may
- * belong to a different upstream identity.
+ * Lineage is proven by the CALLER, which must pass only a generation its own refresh
+ * produced. Re-deriving it here from `replacedAt` cannot work: the caller reads that
+ * field after the refresh and this function would re-read the same record, so the
+ * comparison is tautological and an external replacement passes it. An external
+ * replacement must retire the affinity, because that credential may belong to a
+ * different upstream identity.
  */
 export function handOffThreadAffinityGeneration(
   accountId: string,
   fromGeneration: number,
   toGeneration: number,
-  expectedReplacedAt: number | undefined,
 ): boolean {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) return false;
   if (toGeneration !== fromGeneration + 1) return false;
   const record = readCodexAccountRecord(accountId);
   if (!record?.credential || record.deletedAt != null) return false;
   if (record.generation !== toGeneration) return false;
-  if (record.replacedAt !== expectedReplacedAt) return false;
   let handedOff = false;
   for (const affinities of threadAccountMap.values()) {
     for (const entry of affinities.values()) {
