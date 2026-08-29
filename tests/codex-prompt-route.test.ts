@@ -12,6 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
 import { LAYER_INVENTORY, readPromptLayers } from "../src/codex/prompt-layers";
+import {
+  promptTextProbeSpawnAttemptsForTests,
+  resetPromptTextProbeForTests,
+  setPromptTextProbeCommandForTests,
+} from "../src/codex/prompt-text-probe";
 import type { ManagementPrincipal } from "../src/server/management-auth";
 import type { OcxConfig } from "../src/types";
 
@@ -62,6 +67,23 @@ function ownedConfig(projection: string): string {
 
 function read(path: string): string | null {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+async function waitUntil(predicate: () => boolean, detail: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${detail}`);
+    await Bun.sleep(10);
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -117,7 +139,8 @@ async function revision(fx: Fixture): Promise<string> {
   return res.body.revision as string;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await resetPromptTextProbeForTests();
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
@@ -798,6 +821,46 @@ describe("020 coverage completions", () => {
     expect(probe).toContain("if (settled) return;");
     // Decoding per chunk corrupts UTF-8 that straddles a chunk boundary.
     expect(probe).toContain("Buffer.concat(chunks).toString(\"utf8\")");
+  });
+
+  test("27. the text route forwards live request cancellation to its exact child", async () => {
+    const fx = fixture("");
+    const pidPath = join(fx.decoyHome, "probe-pid.txt");
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", [
+        `require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
+        "setInterval(() => {}, 1_000);",
+      ].join("")],
+    });
+    const controller = new AbortController();
+    const url = new URL("http://127.0.0.1:10100/api/codex-prompt/text");
+    const req = new Request(url, {
+      method: "GET",
+      headers: { host: "127.0.0.1:10100" },
+      signal: controller.signal,
+    });
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = fx.decoyHome;
+    let res: Response | null = null;
+    try {
+      const pending = handleManagementAPI(req, url, config, {
+        codexPromptPaths: { configPath: fx.configPath, storePath: fx.storePath, baseVariantDir: fx.baseVariantDir },
+      }, "gui-session");
+      await waitUntil(() => existsSync(pidPath), "route probe child pid");
+      controller.abort();
+      res = await pending;
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+
+    expect(res?.status).toBe(200);
+    expect(await res?.json()).toMatchObject({ ok: false, detail: "prompt probe cancelled" });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    const pid = Number(readFileSync(pidPath, "utf8"));
+    await waitUntil(() => !isProcessAlive(pid), "route probe child exit");
+    expectDecoyUntouched(fx);
   });
   test("24. every ownership state is named, not collapsed into a boolean", async () => {
     // developerInstructionsOwned:false covers an ABSENT key and an EXTERNAL one, and

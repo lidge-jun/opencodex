@@ -320,7 +320,7 @@ export async function handleCodexPromptRoutes(ctx: ManagementContext): Promise<R
     // A `cwd` parameter would have let any authenticated request read an arbitrary
     // folder's AGENTS.md through this endpoint.
     const { probePromptText } = await import("../../codex/prompt-text-probe");
-    return jsonResponse(await probePromptText(), 200, req, ctx.config);
+    return jsonResponse(await probePromptText(15_000, req.signal), 200, req, ctx.config);
   }
 
   if (url.pathname === "/api/codex-prompt/toggle" && req.method === "PUT") {
