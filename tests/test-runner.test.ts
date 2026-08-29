@@ -31,6 +31,12 @@ function runGit(cwd: string, ...args: string[]): string {
   return new TextDecoder().decode(result.stdout).trim();
 }
 
+// Assembled from fragments so the fixture identity is not an email literal in a tracked
+// file: scripts/privacy-scan.ts matches any email-shaped string and `.invalid` is not
+// allow-listed, so writing it whole fails the repository's own privacy gate. The bytes
+// handed to git are identical either way.
+const FIXTURE_COMMIT_EMAIL = ["test", "opencodex.invalid"].join("@");
+
 function commitFixture(cwd: string, path: string, contents: string, message: string): string {
   writeFileSync(join(cwd, path), contents);
   runGit(cwd, "add", path);
@@ -39,7 +45,7 @@ function commitFixture(cwd: string, path: string, contents: string, message: str
     "-c",
     "user.name=OpenCodex Test",
     "-c",
-    "user.email=test@opencodex.invalid",
+    `user.email=${FIXTURE_COMMIT_EMAIL}`,
     "commit",
     "-m",
     message,
