@@ -17,6 +17,30 @@ describe("cursor call-id codec", () => {
     expect(decodeCursorCallId("call_abc123")).toBe("call_abc123");
   });
 
+  test("reserved-prefix ids are escaped and round-trip", () => {
+    for (const id of ["ocxc1_", "ocxc1_Y2FsbF8x", "ocxc1_!!not-base64url!!", "ocxc1_raw\nwire"]) {
+      const encoded = encodeCursorCallId(id);
+      expect(encoded).not.toBe(id);
+      expect(encoded.startsWith("ocxc1_")).toBe(true);
+      expect(encoded).not.toContain("\n");
+      expect(encoded).not.toContain("\r");
+      expect(decodeCursorCallId(encoded)).toBe(id);
+    }
+  });
+
+  test("reserved-prefix ids resembling legacy newline encodings stay opaque", () => {
+    const id = "ocxc1_YQpi";
+    const encoded = encodeCursorCallId(id);
+    expect(encoded).not.toBe(id);
+    expect(decodeCursorCallId(encoded)).toBe(id);
+  });
+
+  test("legacy encoded line breaks remain decodable", () => {
+    expect(decodeCursorCallId("ocxc1_YQpi")).toBe("a\nb");
+    expect(decodeCursorCallId("ocxc1_DQ")).toBe("\r");
+    expect(decodeCursorCallId("ocxc1_DQo")).toBe("\r\n");
+  });
+
   test("newline composite id round-trips through a single-line form", () => {
     const encoded = encodeCursorCallId(COMPOSITE);
     expect(encoded).not.toContain("\n");
@@ -34,15 +58,18 @@ describe("cursor call-id codec", () => {
     expect(decodeCursorCallId("ocxc1_!!not-base64url!!")).toBe("ocxc1_!!not-base64url!!");
   });
 
-  test("tool_call_start ids are single-line at the adapter boundary", () => {
-    const events = mapCursorServerMessage(
-      { type: "tool_call_start", id: COMPOSITE, name: "get_weather" },
-      mapperState(),
-    );
-    expect(events).toHaveLength(1);
-    const event = events[0]!;
-    if (event.type !== "tool_call_start") throw new Error("expected tool_call_start");
-    expect(event.id).not.toContain("\n");
-    expect(decodeCursorCallId(event.id)).toBe(COMPOSITE);
+  test("tool_call_start ids are reversible and single-line at the adapter boundary", () => {
+    for (const id of [COMPOSITE, "ocxc1_YQpi"]) {
+      const events = mapCursorServerMessage(
+        { type: "tool_call_start", id, name: "get_weather" },
+        mapperState(),
+      );
+      expect(events).toHaveLength(1);
+      const event = events[0]!;
+      if (event.type !== "tool_call_start") throw new Error("expected tool_call_start");
+      expect(event.id).not.toContain("\n");
+      expect(event.id).not.toContain("\r");
+      expect(decodeCursorCallId(event.id)).toBe(id);
+    }
   });
 });
