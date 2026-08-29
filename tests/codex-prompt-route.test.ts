@@ -884,7 +884,10 @@ describe("020 coverage completions", () => {
     writeFileSync(fx.configPath, "include_apps_instructions = true\n", "utf8");
 
     const afterWrite = await call("GET", "/api/codex-prompt/text", fx);
-    expect(afterWrite.body).toMatchObject({ ok: false, detail: "codex debug prompt-input failed" });
+    expect(afterWrite.body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
     expect((await beforeWrite).body.ok).toBe(true);
 

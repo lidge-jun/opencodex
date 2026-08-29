@@ -180,6 +180,7 @@ describe("prompt probe process lifecycle", () => {
     const blockedDuringDrain = await probePromptText(2_000);
 
     expect(blockedDuringDrain.ok).toBe(false);
+    expect(blockedDuringDrain.detail).toBe("another prompt probe is still finishing; retry shortly");
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
     await resetPromptTextProbeForTests();
     setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", replacementSource] });
@@ -213,6 +214,7 @@ describe("prompt probe process lifecycle", () => {
     const blockedBeforeClose = await probePromptText(2_000);
 
     expect(blockedBeforeClose.ok).toBe(false);
+    expect(blockedBeforeClose.detail).toBe("another prompt probe is still finishing; retry shortly");
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
     releaseClose();
     expect((await first).ok).toBe(true);

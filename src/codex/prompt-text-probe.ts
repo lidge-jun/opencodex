@@ -124,6 +124,11 @@ interface PromptProbeExecution {
   closed: Promise<void>;
 }
 
+type SharedPromptProbeOutcome =
+  | { kind: "output"; raw: string }
+  | { kind: "failed" }
+  | { kind: "busy" };
+
 let activePromptProbe: PromptProbeFlight | null = null;
 let probeCommandForTests: { binary: string; args: string[] } | null = null;
 let probeSpawnAttemptsForTests = 0;
@@ -283,17 +288,24 @@ function startPromptProbeFlight(command: ProbeCommand): PromptProbeFlight {
   return flight;
 }
 
-async function runSharedPromptProbe(command: ProbeCommand, signal?: AbortSignal): Promise<string | null> {
+async function runSharedPromptProbe(
+  command: ProbeCommand,
+  signal?: AbortSignal,
+): Promise<SharedPromptProbeOutcome> {
   const key = commandKey(command);
-  if (signal?.aborted) return null;
+  if (signal?.aborted) return { kind: "failed" };
   const active = activePromptProbe;
-  if (!active) return waitForPromptProbeFlight(startPromptProbeFlight(command), signal);
+  if (!active) {
+    const raw = await waitForPromptProbeFlight(startPromptProbeFlight(command), signal);
+    return raw === null ? { kind: "failed" } : { kind: "output", raw };
+  }
   if (active.key === key && active.joinable && !active.controller.signal.aborted) {
-    return waitForPromptProbeFlight(active, signal);
+    const raw = await waitForPromptProbeFlight(active, signal);
+    return raw === null ? { kind: "failed" } : { kind: "output", raw };
   }
   // A different or terminating flight still owns the sole process slot. Never
   // wait unboundedly for an unproven close and never launch beside it.
-  return null;
+  return { kind: "busy" };
 }
 
 async function waitForPromptProbeFlight(flight: PromptProbeFlight, signal?: AbortSignal): Promise<string | null> {
@@ -389,15 +401,20 @@ export async function probePromptText(
     timeoutMs,
     promptRevision,
   };
-  const raw = await runSharedPromptProbe(command, signal);
-  if (raw === null) {
+  const outcome = await runSharedPromptProbe(command, signal);
+  if (outcome.kind !== "output") {
     return {
       ok: false,
       codexHome,
       layers: {},
-      detail: signal?.aborted ? "prompt probe cancelled" : "codex debug prompt-input failed",
+      detail: signal?.aborted
+        ? "prompt probe cancelled"
+        : outcome.kind === "busy"
+          ? "another prompt probe is still finishing; retry shortly"
+          : "codex debug prompt-input failed",
     };
   }
+  const raw = outcome.raw;
   const sections = extractSections(raw);
   if (sections.size === 0) {
     // Zero sections from a zero-exit probe means the output did not parse, which
