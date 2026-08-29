@@ -27,6 +27,7 @@ import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
 import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../service";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import {
+  createWindowsTaskListingCache,
   inspectNativeCodexOwnership,
   type NativeCodexOwnership,
   type OwnershipInspection,
@@ -499,6 +500,7 @@ function inspectStartupOwnership(
   deps: StartServerDeps,
   currentHomes: ReturnType<typeof currentServiceHomes> | null,
   statePaths: readonly string[] | null,
+  windowsTaskListingCache?: ReturnType<typeof createWindowsTaskListingCache>,
 ): OwnershipInspection {
   try {
     if (currentHomes === null || statePaths === null) {
@@ -508,9 +510,9 @@ function inspectStartupOwnership(
       };
     }
     if (deps.inspectNativeCodexOwnership) {
-      return deps.inspectNativeCodexOwnership({ currentHomes, statePaths });
+      return deps.inspectNativeCodexOwnership({ currentHomes, statePaths, windowsTaskListingCache });
     }
-    return inspectNativeCodexOwnership({ currentHomes, statePaths });
+    return inspectNativeCodexOwnership({ currentHomes, statePaths, windowsTaskListingCache });
   } catch {
     return {
       ownership: "unknown",
@@ -600,6 +602,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   const resolveServiceHomes = deps.resolveServiceHomes ?? currentServiceHomes;
   let startupOwnershipHomes: ReturnType<typeof currentServiceHomes> | null = null;
   let startupOwnershipStatePaths: readonly string[] | null = null;
+  // #2923: both synchronous startup ownership decisions keep their fresh,
+  // race-sensitive targeted task query. Only the expensive fallback listing is
+  // shared, and only while that targeted result stays byte-for-byte unchanged.
+  // Runtime ownership retries below intentionally omit this startup-local memo.
+  const startupWindowsTaskListingCache = createWindowsTaskListingCache();
   try {
     const homes = resolveServiceHomes();
     const statePaths = serviceStatePathsForOpenCodexHome(homes.opencodexHome);
@@ -610,6 +617,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     deps,
     startupOwnershipHomes,
     startupOwnershipStatePaths,
+    startupWindowsTaskListingCache,
   );
   // Startup cache invalidation is best-effort and must never block the server from
   // serving. It now takes K so it cannot race a convergence commit. Use the home
@@ -785,7 +793,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // clients; no Codex request can use this lifecycle in that state.
   // Re-probe here instead of trusting the earlier cache decision: startup work
   // between the two sites must not widen the service-install race.
-  const nativeOwnership = inspectStartupOwnership(deps, startupOwnershipHomes, startupOwnershipStatePaths);
+  const nativeOwnership = inspectStartupOwnership(
+    deps,
+    startupOwnershipHomes,
+    startupOwnershipStatePaths,
+    startupWindowsTaskListingCache,
+  );
   const preparedNativeMainLifecycle = nativeOwnership.ownership !== "foreign"
     && startupOwnershipHomes !== null
     ? prepareNativeMainStartupLifecycle(

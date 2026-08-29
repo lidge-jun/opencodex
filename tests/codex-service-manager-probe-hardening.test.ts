@@ -4,11 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  createWindowsTaskListingCache,
   inspectServiceManagerInstallation,
   type RawProbeRunner,
 } from "../src/service-manager-probe";
 import { inspectNativeCodexOwnership } from "../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
+import { getDefaultConfig } from "../src/config";
+import { startServer } from "../src/server";
 
 let home = "";
 let configDir = "";
@@ -206,6 +209,179 @@ describe("Windows ownership probe hardening regressions", () => {
 
     // A wider budget must not become an excuse to guess when it still expires.
     expect(result.kind).toBe("unknown");
+  });
+
+  test("one startup keeps two targeted queries but shares one unchanged full listing (#2923)", async () => {
+    const codexHome = join(home, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = configDir;
+    writeFileSync(join(configDir, "config.json"), JSON.stringify({
+      ...getDefaultConfig(),
+      port: 0,
+      hostname: "127.0.0.1",
+      clientIntegrations: { codex: false },
+      subagentModels: [],
+    }, null, 2));
+
+    let targetedQueries = 0;
+    let fullListings = 0;
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
+      if (args.includes("/xml")) {
+        targetedQueries += 1;
+        return { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false };
+      }
+      if (args.includes("/fo")) {
+        fullListings += 1;
+        return raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n');
+      }
+      return raw(1, "", "unexpected query");
+    };
+    const ownerships: string[] = [];
+    const server = startServer(0, {
+      resolveServiceHomes: () => ({ codexHome, opencodexHome: configDir }),
+      inspectNativeCodexOwnership: scope => {
+        const answer = inspectNativeCodexOwnership({
+          ...scope,
+          platform: "win32",
+          home,
+          configDir,
+          windowsLocale: "zh-CN",
+          runRaw,
+          winswStatus: () => "nonexistent",
+        });
+        ownerships.push(answer.ownership);
+        return answer;
+      },
+    });
+    try {
+      expect(ownerships.slice(0, 2)).toEqual(["owned", "owned"]);
+      expect(targetedQueries).toBe(2);
+      expect(fullListings).toBe(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a task that appears between cached-listing checks is not reported absent (#2923)", () => {
+    const cache = createWindowsTaskListingCache();
+    let targetedQueries = 0;
+    let fullListings = 0;
+    const launcher = join(configDir, "opencodex-service-launcher.vbs");
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
+      if (args.includes("/xml")) {
+        targetedQueries += 1;
+        return targetedQueries === 1
+          ? { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false }
+          : raw(0, schedulerXml(launcher));
+      }
+      if (args.includes("/fo")) {
+        fullListings += 1;
+        return raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n');
+      }
+      return raw(1, "", "unexpected query");
+    };
+
+    const first = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    });
+    const second = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    });
+
+    expect(first.kind).toBe("absent");
+    expect(second.kind).toBe("unknown");
+    expect(targetedQueries).toBe(2);
+    expect(fullListings).toBe(1);
+  });
+
+  test("changed targeted evidence cannot reuse an earlier absence listing (#2923)", () => {
+    const cache = createWindowsTaskListingCache();
+    let targetedQueries = 0;
+    let fullListings = 0;
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
+      if (args.includes("/xml")) {
+        targetedQueries += 1;
+        return targetedQueries === 1
+          ? { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false }
+          : raw(1, "", "ERROR: Access is denied. (0x80070005)");
+      }
+      if (args.includes("/fo")) {
+        fullListings += 1;
+        return fullListings === 1
+          ? raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n')
+          : raw(0, '"\\opencodex-proxy","N/A","Ready"\r\n');
+      }
+      return raw(1, "", "unexpected query");
+    };
+
+    const first = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    });
+    const second = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    });
+
+    expect(first.kind).toBe("absent");
+    expect(second.kind).toBe("unknown");
+    expect(targetedQueries).toBe(2);
+    expect(fullListings).toBe(2);
+  });
+
+  test("a cached listing failure remains fail-closed (#2923)", () => {
+    const cache = createWindowsTaskListingCache();
+    let fullListings = 0;
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
+      if (args.includes("/xml")) {
+        return { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false };
+      }
+      if (args.includes("/fo")) {
+        fullListings += 1;
+        return raw(null, "", "", { timedOut: true });
+      }
+      return raw(1, "", "unexpected query");
+    };
+
+    const answers = [0, 1].map(() => inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    }));
+
+    expect(answers.map(answer => answer.kind)).toEqual(["unknown", "unknown"]);
+    expect(fullListings).toBe(1);
   });
 
   test("a scheduler registered for another OpenCodex home does not claim the current home (#2800)", () => {
