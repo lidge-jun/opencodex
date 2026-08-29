@@ -1093,8 +1093,11 @@ function modelInputModalities(
       .filter(value => value === "text" || value === "image" || value === "audio");
     if (inferred.length > 0) return [...new Set(inferred)];
   }
-  if (capabilityRecord?.vision === false) return ["text"];
-  if (capabilityRecord?.vision === true || capabilities?.some(value => (
+ if (capabilityRecord?.vision === false) return ["text"];
+  // GitHub Copilot nests vision support under capabilities.supports.vision
+  // rather than the flat capabilities.vision that other providers use.
+  const nestedSupports = plainRecord(capabilityRecord?.supports);
+  if (capabilityRecord?.vision === true || nestedSupports?.vision === true || capabilities?.some(value => (
     value === "vision" || value === "image-input" || value === "image_input"
     // llama.cpp and Ollama-compatible servers report vision as "multimodal" —
     // it is the only image signal those servers emit (#1797). Mapped to the
