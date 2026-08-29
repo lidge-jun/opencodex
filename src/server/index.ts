@@ -1,5 +1,6 @@
 import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
 import { AuxiliaryListenerBindError } from "./ports";
+import { redactUrlForLog } from "../lib/redact";
 import {
   buildWarmupCompletionFrames,
   buildWsErrorFrame,
@@ -227,7 +228,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);
   const outbound = process.env.ALL_PROXY?.trim() || process.env.HTTPS_PROXY?.trim() || process.env.HTTP_PROXY?.trim();
-  if (outbound) console.log(`   outbound proxy: ${outbound}`);
+  if (outbound) console.log(`   outbound proxy: ${redactUrlForLog(outbound)}`);
   assertServerAuthConfig(config);
   const managementAuth = deps.managementAuthState ?? initializeManagementAuthState(config);
   const managementSessionControl = createManagementSessionControl(managementAuth);

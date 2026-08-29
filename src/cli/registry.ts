@@ -22,11 +22,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "start",
-    usage: "ocx start [--port <port>] [--socks5 [host:port]]",
+    usage: "ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]",
     summary: "Start the proxy server and sync models to Codex.",
     details: [
       "--socks5 [host:port]  Route outbound provider traffic through SOCKS5 (default 127.0.0.1:10808). Saved as config.proxy.",
-      "--socks5-off          Clear a saved SOCKS5/HTTP outbound proxy from config.proxy.",
+      "--socks5-off          Clear a saved SOCKS5 outbound proxy from config.proxy.",
     ],
   },
   { name: "stop", usage: "ocx stop", summary: "Stop the proxy and restore native Codex config." },

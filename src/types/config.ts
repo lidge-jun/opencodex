@@ -724,8 +724,9 @@ export interface OcxConfig {
   /**
    * Outbound proxy URL for provider requests. HTTP(S) example: "http://user:pass@proxy:8080"
    * or "${HTTPS_PROXY}". SOCKS5 example: "socks5://127.0.0.1:10808" (`ocx start --socks5`).
-   * HTTP URLs are mirrored into HTTP_PROXY/HTTPS_PROXY when unset. SOCKS URLs are mirrored
-   * into ALL_PROXY and clear inherited HTTP(S)_PROXY in this process. Loopback stays in NO_PROXY.
+   * HTTP URLs are mirrored into HTTP_PROXY/HTTPS_PROXY when unset. SOCKS5 URLs are mirrored
+   * into ALL_PROXY, clear inherited HTTP(S)_PROXY, and use OpenCodex's SOCKS5 transport.
+   * Loopback stays in NO_PROXY.
    * The literal `"auto"` reads the Windows WinINET static proxy (`ProxyEnable`/`ProxyServer`)
    * once at process start; on other platforms, or when the system proxy is off, SOCKS-only,
    * or unreadable, it degrades to direct egress with one log line (#1525). PAC/WPAD and live

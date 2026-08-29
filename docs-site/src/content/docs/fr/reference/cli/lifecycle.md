@@ -13,9 +13,15 @@ Assistant de configuration interactif (`setup` est un alias de `init`). Il deman
 
 ## Cycle de vie du proxy
 
-### `ocx start [--port <port>] [--socks5 [host:port]]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
 Démarre le serveur proxy, de préférence sur le port `10100`. Si ce port est occupé, opencodex en choisit un autre qui est disponible et l’enregistre. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`).
+
+`--socks5` (par défaut `127.0.0.1:10808`) enregistre l’URL SOCKS5 dans `config.proxy` et achemine
+les requêtes HTTP(S) sortantes dans un véritable tunnel SOCKS5. `--socks5-off` supprime uniquement
+le proxy SOCKS5 enregistré et ne supprime pas un proxy HTTP. La valeur reste après `ocx update`,
+car elle est stockée dans la configuration. L’URL peut contenir un nom d’utilisateur et un mot de
+passe, mais les journaux de démarrage les masquent.
 
 ```bash
 ocx start

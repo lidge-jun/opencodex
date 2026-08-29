@@ -16,12 +16,17 @@ Codex 자동 시작 shim도 설치합니다.
 
 ## 프록시 수명 주기
 
-### `ocx start [--port <port>] [--socks5 [host:port]]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
 프록시 서버를 시작합니다(권장 포트는 `10100`). 해당 포트가 이미 사용 중이면 opencodex가 다른
 사용 가능한 포트를 골라 기록합니다. PID와 런타임 포트 상태를 기록하고, 두 번째 활성 인스턴스는 시작하지
 않습니다. 시작할 때는 각 공급자의 모델을 Codex 카탈로그로 동기화합니다. 종료할 때는 기본 Codex를
 복원합니다. 단, 관리형 서비스로 실행한 경우(`OCX_SERVICE=1`)는 예외입니다.
+
+`--socks5`(기본값 `127.0.0.1:10808`)는 SOCKS5 URL을 `config.proxy`에 저장하고 실제 SOCKS5
+터널을 통해 송신 HTTP(S) 요청을 전달합니다. `--socks5-off`는 저장된 SOCKS5 프록시만 지우며
+HTTP 프록시는 삭제하지 않습니다. 값은 구성에 저장되므로 `ocx update` 후에도 유지됩니다. URL에
+사용자 이름과 비밀번호를 포함할 수 있지만 시작 로그에서는 숨겨집니다.
 
 ```bash
 ocx start

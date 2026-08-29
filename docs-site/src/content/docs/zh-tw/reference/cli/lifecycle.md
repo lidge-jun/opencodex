@@ -13,9 +13,11 @@ description: 安裝、啟動、停止、服務、診斷、同步與更新指令�
 
 ## 代理生命週期
 
-### `ocx start [--port <port>] [--socks5 [host:port]]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
 啟動代理伺服器（偏好連接埠 `10100`）。若該連接埠被佔用，opencodex 會選擇並記錄另一個可用連接埠。它寫入 PID/runtime-port 狀態，並拒絕啟動第二個即時實例。啟動時它將每個供應商的模型同步到 Codex 目錄。關閉時它還原原生 Codex——除非它是作為受管服務啟動的（`OCX_SERVICE=1`）。
+
+`--socks5`（預設 `127.0.0.1:10808`）會將 SOCKS5 URL 儲存到 `config.proxy`，並透過真正的 SOCKS5 通道轉送對外 HTTP(S) 請求。`--socks5-off` 只會清除已儲存的 SOCKS5 代理，不會刪除 HTTP 代理。此值儲存在設定中，因此會在 `ocx update` 後保留。URL 可以包含使用者名稱和密碼，但啟動記錄會隱藏它們。
 
 ```bash
 ocx start

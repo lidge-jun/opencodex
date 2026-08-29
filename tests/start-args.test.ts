@@ -39,8 +39,13 @@ describe("parseStartOptions", () => {
     });
   });
 
-  test("--socks5-off clears a saved outbound proxy", () => {
-    expect(parseStartOptions(["--socks5-off"])).toEqual({ socks5: null });
+  test("--socks5-off clears a saved SOCKS5 proxy", () => {
+    expect(parseStartOptions(["--socks5-off"])).toEqual({ socks5Off: true });
+  });
+
+  test("rejects conflicting SOCKS5 flags in either order", () => {
+    expect(() => parseStartOptions(["--socks5", "--socks5-off"])).toThrow("cannot be used together");
+    expect(() => parseStartOptions(["--socks5-off", "--socks5"])).toThrow("cannot be used together");
   });
 
   test("rejects unknown flags with the start usage line", () => {
@@ -57,5 +62,15 @@ describe("parseStartOptions", () => {
 describe("normalizeSocks5", () => {
   test("rejects HTTP URLs", () => {
     expect(() => normalizeSocks5("http://127.0.0.1:10808")).toThrow("not an HTTP URL");
+  });
+
+  test("rejects SOCKS4 URLs", () => {
+    expect(() => normalizeSocks5("socks4://127.0.0.1:1080")).toThrow("Only SOCKS5");
+    expect(() => normalizeSocks5("socks4a://127.0.0.1:1080")).toThrow("Only SOCKS5");
+  });
+
+  test("rejects SOCKS5 URLs without a valid host and port", () => {
+    expect(() => normalizeSocks5("socks5://")).toThrow("Invalid SOCKS5 address");
+    expect(() => normalizeSocks5("socks5://127.0.0.1:0")).toThrow("Invalid SOCKS5 address");
   });
 });

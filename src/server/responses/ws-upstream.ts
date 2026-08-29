@@ -13,7 +13,7 @@
 // (passthrough relay, adapter parsers, usage sniffing) is unchanged.
 
 import { compareBunVersions } from "../../lib/bun-stream-caps";
-import { resolveProxyRoute } from "../../lib/proxy-env";
+import { resolveProxyRoute, socks5ProxyFromEnv } from "../../lib/proxy-env";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, prepareCodexHttpInit, prepareCodexWsRequest } from "./codex-ws-request";
 import { codexWsExchange } from "./codex-ws-exchange";
@@ -104,6 +104,7 @@ export function shouldUseCodexWsUpstream(
   upstreamWebsocketConfigured = false,
 ): boolean {
   if (!bunSupportsBoundedCodexWsRelay(runtime)) return false;
+  if (socks5ProxyFromEnv()) return false;
   if (url !== CODEX_RESPONSES_HTTP_URL && !upstreamWebsocketConfigured) return false;
   if (upstreamWebsocketConfigured && !isResponsesWebsocketEligibleUrl(url)) return false;
   if ((init?.method ?? "GET").toUpperCase() !== "POST") return false;

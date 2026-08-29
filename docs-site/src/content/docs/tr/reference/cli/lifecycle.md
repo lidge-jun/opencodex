@@ -19,7 +19,7 @@ otomatik başlatma dolgusunu kurar.
 
 ## Proxy yaşam döngüsü
 
-### `ocx start [--port <port>] [--socks5 [host:port]]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
 Proxy sunucusunu başlatın (tercih edilen port `10100`). Bu port doluysa
 opencodex başka bir kullanılabilir port seçer ve kaydeder. PID/çalışma zamanı
@@ -27,6 +27,11 @@ portu durumunu yazar ve ikinci bir canlı örneği başlatmayı reddeder. Başla
 her sağlayıcının modellerini Codex'in kataloğuna senkronize eder. Kapatıldığında
 — yönetilen bir servis olarak başlatılmadığı sürece (`OCX_SERVICE=1`) — yerel
 Codex'i geri yükler.
+
+`--socks5` (varsayılan `127.0.0.1:10808`) SOCKS5 URL'sini `config.proxy` içine kaydeder ve giden
+HTTP(S) isteklerini gerçek bir SOCKS5 tünelinden yönlendirir. `--socks5-off` yalnızca kaydedilmiş
+SOCKS5 proxy'sini temizler; HTTP proxy'sini silmez. Değer yapılandırmada tutulduğu için `ocx update`
+sonrasında da korunur. URL kullanıcı adı ve parola içerebilir, ancak başlangıç günlüklerinde gizlenir.
 
 ```bash
 ocx start

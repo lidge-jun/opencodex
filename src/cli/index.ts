@@ -63,7 +63,8 @@ import {
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
-import { dispatchCommand , decideStartWithLiveOwner } from "./dispatch";
+import { redactUrlForLog } from "../lib/redact";
+import { dispatchCommand, decideStartWithLiveOwner } from "./dispatch";
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
@@ -302,18 +303,22 @@ async function handleStart(options: { block?: boolean } = {}) {
   const present = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (present) assertNotAdminToken(present);
   const startOpts = parseStartCliOptions();
-  if (startOpts.socks5 !== undefined) {
+  if (startOpts.socks5 !== undefined || startOpts.socks5Off) {
     const proxyConfig = loadConfig();
-    if (startOpts.socks5 === null) {
+    if (startOpts.socks5Off) {
+      if (proxyConfig.proxy && !/^socks5h?:\/\//i.test(proxyConfig.proxy.trim())) {
+        console.error("Cannot use --socks5-off: config.proxy is not a SOCKS5 URL; it was left unchanged.");
+        process.exit(1);
+      }
       if (proxyConfig.proxy) {
         delete proxyConfig.proxy;
         saveConfig(proxyConfig);
-        console.log("Cleared config.proxy (outbound SOCKS5/HTTP proxy off).");
+        console.log("Cleared config.proxy (outbound SOCKS5 proxy off).");
       }
     } else {
-      proxyConfig.proxy = startOpts.socks5;
+      proxyConfig.proxy = startOpts.socks5!;
       saveConfig(proxyConfig);
-      console.log(`Outbound SOCKS5: ${startOpts.socks5} (saved to config.proxy)`);
+      console.log(`Outbound SOCKS5: ${redactUrlForLog(startOpts.socks5!)} (saved to config.proxy)`);
     }
   }
   const requestedPort = startOpts.port;

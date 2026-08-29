@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createServer } from "node:http";
 import { applyProxyEnv } from "../../src/config";
-import { resolveProxyRoute } from "../../src/lib/proxy-env";
+import { resolveProxyRoute, configureSocks5Fetch } from "../../src/lib/proxy-env";
 import type { OcxConfig } from "../../src/types";
 
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "OCX_TEST_PROXY_REF", "OCX_TEST_NO_PROXY_REF"] as const;
@@ -20,6 +20,7 @@ afterEach(() => {
     if (saved[key] === undefined) delete process.env[key];
     else process.env[key] = saved[key];
   }
+  configureSocks5Fetch();
 });
 
 function configWithProxy(proxy?: string, noProxy?: string | string[]): OcxConfig {

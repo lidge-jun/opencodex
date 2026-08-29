@@ -16,16 +16,18 @@ optionally installs the Codex autostart shim.
 
 ## Proxy lifecycle
 
-### `ocx start [--port <port>] [--socks5 [host:port]]`
+### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
 Start the proxy server (preferred port `10100`). If that port is occupied, opencodex selects and
 records another available port. It writes PID/runtime-port state and refuses to start a second live
 instance. On start it syncs each provider's models into Codex's catalog. On shutdown it restores
 native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`).
 
-`--socks5` (default `127.0.0.1:10808`) saves `config.proxy` as a SOCKS URL so outbound provider
-calls use `ALL_PROXY`. `--socks5-off` clears that saved proxy. The value survives `ocx update`
-because it lives in config, not in the installed package.
+`--socks5` (default `127.0.0.1:10808`) saves `config.proxy` as a SOCKS5 URL and routes outbound
+HTTP(S) through a real SOCKS5 tunnel. `--socks5-off` clears only that saved SOCKS5 proxy; it
+does not remove an HTTP proxy. The value survives `ocx update` because it lives in config, not in
+the installed package. A proxy username and password may be included in the URL, but startup
+logs redact them.
 
 ```bash
 ocx start
