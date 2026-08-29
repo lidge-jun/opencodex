@@ -214,6 +214,7 @@ export const ko: Record<TKey, string> = {
   "dash.offline": "오프라인",
   "dash.version": "버전",
   "dash.uptime": "가동 시간",
+  "dash.port": "포트",
   "dash.providers": "프로바이더",
   "dash.tokens30d": "토큰 (30일)",
   "dash.coverage": "커버리지 {pct}",

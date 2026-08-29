@@ -219,6 +219,7 @@ export const ja: Record<TKey, string> = {
   "dash.offline": "オフライン",
   "dash.version": "バージョン",
   "dash.uptime": "稼働時間",
+  "dash.port": "ポート",
   "dash.providers": "プロバイダー",
   "dash.tokens30d": "トークン (30日)",
   "dash.coverage": "{pct} カバレッジ",

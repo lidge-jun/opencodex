@@ -43,7 +43,7 @@ export async function requireJson<T>(res: Response, fallbackMessage?: string): P
   return data;
 }
 
-export interface HealthData { status: string; version: string; uptime: number }
+export interface HealthData { status: string; version: string; uptime: number; port?: number; pid?: number }
 export interface ProviderInfo { name: string; adapter: string; baseUrl: string; defaultModel?: string; hasApiKey: boolean }
 export interface ModelInfo { id: string; provider: string; namespaced: string; owned_by?: string; reasoningEfforts?: string[] }
 export interface SettingsData {

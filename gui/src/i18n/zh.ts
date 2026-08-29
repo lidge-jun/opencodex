@@ -214,6 +214,7 @@ export const zh: Record<TKey, string> = {
   "dash.offline": "离线",
   "dash.version": "版本",
   "dash.uptime": "运行时间",
+  "dash.port": "端口",
   "dash.providers": "提供方",
   "dash.tokens30d": "Token (30 天)",
   "dash.coverage": "覆盖率 {pct}",

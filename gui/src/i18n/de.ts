@@ -210,6 +210,7 @@ export const de: Record<TKey, string> = {
   "dash.offline": "Offline",
   "dash.version": "Version",
   "dash.uptime": "Laufzeit",
+  "dash.port": "Port",
   "dash.providers": "Anbieter",
   "dash.tokens30d": "Tokens (30d)",
   "dash.coverage": "{pct} Abdeckung",

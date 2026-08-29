@@ -221,6 +221,7 @@ export const en = {
   "dash.offline": "Offline",
   "dash.version": "Version",
   "dash.uptime": "Uptime",
+  "dash.port": "Port",
   "dash.providers": "Providers",
   "dash.tokens30d": "Tokens (30d)",
   "dash.coverage": "{pct} coverage",

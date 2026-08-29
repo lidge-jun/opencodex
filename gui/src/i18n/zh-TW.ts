@@ -117,6 +117,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.offline": "離線",
   "dash.version": "版本",
   "dash.uptime": "執行時間",
+  "dash.port": "連接埠",
   "dash.providers": "供應商",
   "dash.tokens30d": "Token (30 天)",
   "dash.coverage": "覆蓋率 {pct}",

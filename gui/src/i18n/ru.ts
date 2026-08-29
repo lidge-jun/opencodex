@@ -219,6 +219,7 @@ export const ru: Record<TKey, string> = {
   "dash.offline": "Не в сети",
   "dash.version": "Версия",
   "dash.uptime": "Время работы",
+  "dash.port": "Порт",
   "dash.providers": "Провайдеры",
   "dash.tokens30d": "Токены (30 дн.)",
   "dash.coverage": "{pct} покрытия",

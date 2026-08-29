@@ -220,6 +220,7 @@ export const tr: Record<TKey, string> = {
   "dash.offline": "Çevrimdışı",
   "dash.version": "Sürüm",
   "dash.uptime": "Çalışma Süresi",
+  "dash.port": "Port",
   "dash.providers": "Sağlayıcılar",
   "dash.tokens30d": "Jetonlar (30 gün)",
   "dash.coverage": "%{pct} kapsam",
