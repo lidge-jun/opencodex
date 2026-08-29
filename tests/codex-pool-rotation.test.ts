@@ -2,9 +2,12 @@ import {
   clearPoolRotationState,
   DEFAULT_ACCOUNT_PRIORITY,
   normalizeAccountPriority,
+  normalizeAccountPoolResetOrder,
   notePoolRotationSuccess,
   parseAccountPriority,
+  parseAccountPoolResetOrder,
   peekRoundRobinAccount,
+  pickResetWindowAccount,
   pickRoundRobinAccount,
   selectPriorityTier,
 } from "../src/codex/pool-rotation";
@@ -30,6 +33,7 @@ import {
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/account-id";
 import { clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
+import { getFreshAccountQuota } from "../src/codex/quota";
 import { getConfigPath } from "../src/config";
 import type { OcxConfig } from "../src/types";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -104,6 +108,83 @@ describe("account selection order parsing", () => {
     expect(normalizeAccountPriority(3)).toBe(3);
     expect(normalizeAccountPriority("3")).toBe(DEFAULT_ACCOUNT_PRIORITY);
     expect(normalizeAccountPriority(undefined)).toBe(DEFAULT_ACCOUNT_PRIORITY);
+  });
+});
+
+describe("reset-window order parsing", () => {
+  test("accepts the two explicit reset directions", () => {
+    expect(parseAccountPoolResetOrder("soonest")).toBe("soonest");
+    expect(parseAccountPoolResetOrder("latest")).toBe("latest");
+  });
+
+  test("defaults malformed or omitted reset order to soonest", () => {
+    for (const raw of [undefined, null, "newest", "", 1]) {
+      expect(normalizeAccountPoolResetOrder(raw)).toBe("soonest");
+    }
+  });
+});
+
+describe("reset-window quota freshness", () => {
+  test("rejects a Codex quota row after the persisted freshness window", () => {
+    const now = Date.now();
+    updateAccountQuota("freshness", 10, now + 24 * 60 * 60_000);
+    expect(getFreshAccountQuota("freshness", now)).not.toBeNull();
+    expect(getFreshAccountQuota("freshness", now + 6 * 60 * 60_000 + 1)).toBeNull();
+  });
+});
+
+describe("pickResetWindowAccount", () => {
+  const now = 1_800_000_000_000;
+  const resets: Record<string, number | undefined> = {
+    a: now + 10_000,
+    b: now + 20_000,
+    c: now + 30_000,
+  };
+
+  test("orders known future reset evidence in either direction", () => {
+    expect(pickResetWindowAccount(["a", "b", "c"], id => resets[id], "soonest", now, () => true)).toBe("a");
+    expect(pickResetWindowAccount(["a", "b", "c"], id => resets[id], "latest", now, () => true)).toBe("c");
+  });
+
+  test("skips drained accounts while another account has headroom", () => {
+    expect(pickResetWindowAccount(
+      ["a", "b", "c"],
+      id => resets[id],
+      "latest",
+      now,
+      id => id !== "c",
+    )).toBe("b");
+  });
+
+  test("threshold-off semantics keep every account in reset ordering", () => {
+    expect(pickResetWindowAccount(["a", "b", "c"], id => resets[id], "latest", now, () => true)).toBe("c");
+  });
+
+  test("treats missing, non-finite, and elapsed resets as unknown evidence", () => {
+    const evidence: Record<string, number | undefined> = {
+      missing: undefined,
+      infinite: Number.POSITIVE_INFINITY,
+      elapsed: now - 1,
+      known: now + 1,
+    };
+    expect(pickResetWindowAccount(
+      ["missing", "infinite", "elapsed", "known"],
+      id => evidence[id],
+      "latest",
+      now,
+      () => true,
+    )).toBe("known");
+    expect(pickResetWindowAccount(
+      ["missing", "infinite", "elapsed"],
+      id => evidence[id],
+      "soonest",
+      now,
+      () => true,
+    )).toBeNull();
+  });
+
+  test("keeps input order as the deterministic tie-break", () => {
+    expect(pickResetWindowAccount(["b", "a"], () => now + 1, "latest", now, () => true)).toBe("b");
   });
 });
 
@@ -487,6 +568,105 @@ describe("accountPoolStrategy new-session routing", () => {
     updateAccountQuota("c", 10);
 
     expect(resolveCodexAccountForThread(null, config)).toBe("c");
+  });
+
+  test("reset-window latest assigns the farthest governing reset first", () => {
+    const now = Date.now();
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "reset-window",
+      accountPoolResetOrder: "latest",
+      activeCodexAccountId: "a",
+    });
+    updateAccountQuota("a", 10, now + 10_000);
+    updateAccountQuota("b", 20, now + 20_000);
+    updateAccountQuota("c", 30, now + 30_000);
+
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("c");
+  });
+
+  test("reset-window soonest assigns the nearest governing reset first", () => {
+    const now = Date.now();
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "reset-window",
+      accountPoolResetOrder: "soonest",
+      activeCodexAccountId: "c",
+    });
+    updateAccountQuota("a", 10, now + 10_000);
+    updateAccountQuota("b", 20, now + 20_000);
+    updateAccountQuota("c", 30, now + 30_000);
+
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("a");
+  });
+
+  test("reset-window skips known drained accounts while another reset candidate has headroom", () => {
+    const now = Date.now();
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "reset-window",
+      accountPoolResetOrder: "latest",
+      autoSwitchThreshold: 80,
+    });
+    updateAccountQuota("a", 10, now + 10_000);
+    updateAccountQuota("b", 20, now + 20_000);
+    updateAccountQuota("c", 95, now + 30_000);
+
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("b");
+  });
+
+  test("reset-window falls back to quota selection when every reset is unknown", () => {
+    const now = Date.now();
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "reset-window",
+      accountPoolResetOrder: "latest",
+      activeCodexAccountId: "a",
+      autoSwitchThreshold: 80,
+    });
+    updateAccountQuota("a", 95);
+    updateAccountQuota("b", 40);
+    updateAccountQuota("c", 5);
+
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("c");
+  });
+
+  test("reset-window preserves live affinity after reset evidence changes", () => {
+    const now = Date.now();
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "reset-window",
+      accountPoolResetOrder: "latest",
+    });
+    updateAccountQuota("a", 10, now + 10_000);
+    updateAccountQuota("b", 10, now + 20_000);
+    updateAccountQuota("c", 10, now + 30_000);
+    expect(resolveCodexAccountForThread("reset-affinity", config, now)).toBe("c");
+
+    updateAccountQuota("a", 10, now + 40_000);
+    expect(resolveCodexAccountForThread("reset-affinity", config, now + 1)).toBe("c");
+  });
+
+  test("selection-order tiers remain authoritative before reset-window ordering", () => {
+    const now = Date.now();
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "reset-window",
+      accountPoolResetOrder: "latest",
+      codexAccountPriorities: { a: 1 },
+    });
+    updateAccountQuota("a", 10, now + 10_000);
+    updateAccountQuota("b", 10, now + 20_000);
+    updateAccountQuota("c", 10, now + 30_000);
+
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("a");
+  });
+
+  test("reset-window failover keeps its direction after excluding the failed account", () => {
+    const now = Date.now();
+    const config = makeThreeAccountConfig({
+      accountPoolStrategy: "reset-window",
+      accountPoolResetOrder: "latest",
+    });
+    updateAccountQuota("a", 10, now + 10_000);
+    updateAccountQuota("b", 10, now + 20_000);
+    updateAccountQuota("c", 10, now + 30_000);
+
+    expect(pickAlternateCodexAccount(config, "c", now)).toBe("b");
   });
 
   test("RR preview(null) matches next resolve(null) without advancing until resolve", () => {

@@ -33,7 +33,7 @@ le pool enregistré avant de transmettre la requête en amont. Cette règle dist
   démarré. Une longue session SSH, tmux ou Codex connectée depuis un appareil mobile conserve donc le
   même compte au lieu d’être rééquilibrée en pleine conversation.
 - **Les nouvelles sessions peuvent être rééquilibrées.** Pour un nouveau fil, opencodex choisit parmi les comptes admissibles selon
-  `accountPoolStrategy` (`quota` par défaut, ou `round-robin` / `fill-first`). La stratégie `quota`
+  `accountPoolStrategy` (`quota` par défaut, ou `round-robin` / `fill-first` / `reset-window`). La stratégie `quota`
   compare l’utilisation connue sur les fenêtres de 5 heures, d’une semaine et de 30 jours. Il peut choisir
   un compte moins utilisé lorsque le compte actif franchit `autoSwitchThreshold`. Les comptes en délai de
   récupération ou nécessitant une réauthentification sont ignorés, quelle que soit la stratégie.

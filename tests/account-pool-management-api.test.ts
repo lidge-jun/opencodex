@@ -41,6 +41,7 @@ describe("Codex account pool strategy management API", () => {
     expect(await resp!.json()).toMatchObject({
       accountPoolStrategy: "quota",
       accountPoolStickyLimit: 1,
+      accountPoolResetOrder: "soonest",
     });
   });
 
@@ -48,12 +49,14 @@ describe("Codex account pool strategy management API", () => {
     const config = makeCodexConfig({
       accountPoolStrategy: "round-robin",
       accountPoolStickyLimit: 3,
+      accountPoolResetOrder: "latest",
     });
     const req = new Request("http://localhost/api/codex-auth/active", { method: "GET" });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
     expect(await resp!.json()).toMatchObject({
       accountPoolStrategy: "round-robin",
       accountPoolStickyLimit: 3,
+      accountPoolResetOrder: "latest",
     });
   });
 
@@ -81,22 +84,36 @@ describe("Codex account pool strategy management API", () => {
     }
   });
 
+  test("PUT /api/codex-auth/pool-strategy rejects invalid resetOrder", async () => {
+    for (const bad of ["newest", "", 1, null, "Soonest"]) {
+      const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resetOrder: bad }),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeCodexConfig());
+      expect(resp!.status).toBe(400);
+    }
+  });
+
   test("PUT /api/codex-auth/pool-strategy accepts valid values and mutates runtime", async () => {
     const config = makeCodexConfig();
     const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ strategy: "fill-first", stickyLimit: 7 }),
+      body: JSON.stringify({ strategy: "reset-window", stickyLimit: 7, resetOrder: "latest" }),
     });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
     expect(resp!.status).toBe(200);
     expect(await resp!.json()).toMatchObject({
       ok: true,
-      accountPoolStrategy: "fill-first",
+      accountPoolStrategy: "reset-window",
       accountPoolStickyLimit: 7,
+      accountPoolResetOrder: "latest",
     });
-    expect(config.accountPoolStrategy).toBe("fill-first");
+    expect(config.accountPoolStrategy).toBe("reset-window");
     expect(config.accountPoolStickyLimit).toBe(7);
+    expect(config.accountPoolResetOrder).toBe("latest");
   });
 
   test("PATCH /api/codex-auth/pool-strategy accepts round-robin", async () => {
@@ -186,6 +203,7 @@ describe("Anthropic account pool strategy management API", () => {
       expect(await res.json()).toMatchObject({
         strategy: "quota",
         stickyLimit: 1,
+        resetOrder: "soonest",
       });
     } finally {
       await server.stop(true);
@@ -247,7 +265,7 @@ describe("Anthropic account pool strategy management API", () => {
     }
   });
 
-  test("PUT /api/oauth/accounts/pool accepts strategy and stickyLimit; GET reflects them", async () => {
+  test("PUT /api/oauth/accounts/pool accepts strategy, stickyLimit, and resetOrder; GET reflects them", async () => {
     const server = startServer(0);
     try {
       const put = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
@@ -257,8 +275,9 @@ describe("Anthropic account pool strategy management API", () => {
           provider: "anthropic",
           enabled: true,
           autoSwitchThreshold: 70,
-          strategy: "round-robin",
+          strategy: "reset-window",
           stickyLimit: 4,
+          resetOrder: "latest",
         }),
       });
       expect(put.status).toBe(200);
@@ -266,16 +285,18 @@ describe("Anthropic account pool strategy management API", () => {
         ok: true,
         enabled: true,
         autoSwitchThreshold: 70,
-        strategy: "round-robin",
+        strategy: "reset-window",
         stickyLimit: 4,
+        resetOrder: "latest",
       });
 
       const get = await fetch(new URL("/api/oauth/accounts/pool?provider=anthropic", server.url));
       expect(await get.json()).toMatchObject({
         enabled: true,
         autoSwitchThreshold: 70,
-        strategy: "round-robin",
+        strategy: "reset-window",
         stickyLimit: 4,
+        resetOrder: "latest",
       });
     } finally {
       await server.stop(true);

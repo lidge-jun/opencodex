@@ -52,10 +52,12 @@ import {
   DEFAULT_ACCOUNT_PRIORITY,
   MAX_ACCOUNT_PRIORITY,
   MIN_ACCOUNT_PRIORITY,
+  normalizeAccountPoolResetOrder,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimit,
   parseAccountPoolStrategy,
+  parseAccountPoolResetOrder,
   parseAccountPriority,
 } from "./pool-rotation";
 import { checkAccountIdCollision, getMainChatgptAccountId, readCodexTokens, readCodexTokensResult } from "./auth-collision";
@@ -1980,6 +1982,7 @@ export async function handleCodexAuthAPI(
       upstreamFailoverThreshold: runtimeConfig.upstreamFailoverThreshold ?? 3,
       accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
       accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
+      accountPoolResetOrder: normalizeAccountPoolResetOrder(runtimeConfig.accountPoolResetOrder),
     });
   }
 
@@ -2004,17 +2007,18 @@ export async function handleCodexAuthAPI(
     if (typeof parsedBody !== "object" || parsedBody === null || Array.isArray(parsedBody)) {
       return jsonResponse({ error: "body must be an object" }, 400);
     }
-    const body = parsedBody as { strategy?: unknown; stickyLimit?: unknown };
-    if (body.strategy === undefined && body.stickyLimit === undefined) {
-      return jsonResponse({ error: "strategy or stickyLimit required" }, 400);
+    const body = parsedBody as { strategy?: unknown; stickyLimit?: unknown; resetOrder?: unknown };
+    if (body.strategy === undefined && body.stickyLimit === undefined && body.resetOrder === undefined) {
+      return jsonResponse({ error: "strategy, stickyLimit, or resetOrder required" }, 400);
     }
     const runtimeConfig = getRuntimeConfig(config);
     let nextStrategy: NonNullable<ReturnType<typeof parseAccountPoolStrategy>> | undefined;
     let nextSticky: NonNullable<ReturnType<typeof parseAccountPoolStickyLimit>> | undefined;
+    let nextResetOrder: NonNullable<ReturnType<typeof parseAccountPoolResetOrder>> | undefined;
     if (body.strategy !== undefined) {
       const parsed = parseAccountPoolStrategy(body.strategy);
       if (parsed === null) {
-        return jsonResponse({ error: 'strategy must be one of: quota, round-robin, fill-first' }, 400);
+        return jsonResponse({ error: 'strategy must be one of: quota, round-robin, fill-first, reset-window' }, 400);
       }
       nextStrategy = parsed;
     }
@@ -2025,13 +2029,22 @@ export async function handleCodexAuthAPI(
       }
       nextSticky = parsed;
     }
+    if (body.resetOrder !== undefined) {
+      const parsed = parseAccountPoolResetOrder(body.resetOrder);
+      if (parsed === null) {
+        return jsonResponse({ error: "resetOrder must be one of: soonest, latest" }, 400);
+      }
+      nextResetOrder = parsed;
+    }
     if (nextStrategy !== undefined) runtimeConfig.accountPoolStrategy = nextStrategy;
     if (nextSticky !== undefined) runtimeConfig.accountPoolStickyLimit = nextSticky;
+    if (nextResetOrder !== undefined) runtimeConfig.accountPoolResetOrder = nextResetOrder;
     saveRuntimeConfig(config, runtimeConfig);
     return jsonResponse({
       ok: true,
       accountPoolStrategy: normalizeAccountPoolStrategy(runtimeConfig.accountPoolStrategy),
       accountPoolStickyLimit: normalizeAccountPoolStickyLimit(runtimeConfig.accountPoolStickyLimit),
+      accountPoolResetOrder: normalizeAccountPoolResetOrder(runtimeConfig.accountPoolResetOrder),
     });
   }
 

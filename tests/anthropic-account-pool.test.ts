@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearPoolRotationState, notePoolRotationFailure, POOL_KEY_ANTHROPIC } from "../src/codex/pool-rotation";
@@ -19,7 +19,7 @@ import {
 } from "../src/oauth/anthropic-routing";
 import { getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../src/providers/quota";
-import type { OcxAccountPoolQuotaWindow, OcxAccountPoolRotationStrategy, OcxConfig } from "../src/types";
+import type { OcxAccountPoolQuotaWindow, OcxAccountPoolResetOrder, OcxAccountPoolRotationStrategy, OcxConfig } from "../src/types";
 
 const originalHome = process.env.OPENCODEX_HOME;
 let home: string;
@@ -72,6 +72,7 @@ function cfg(
     strategy?: OcxAccountPoolRotationStrategy;
     stickyLimit?: number;
     quotaWindow?: OcxAccountPoolQuotaWindow;
+    resetOrder?: OcxAccountPoolResetOrder;
   } = {},
 ): OcxConfig {
   return {
@@ -120,6 +121,35 @@ async function seedThreeAccounts() {
 }
 
 describe("anthropic account pool", () => {
+  test("reset-window hydrates fresh persisted Anthropic reset evidence after restart", () => {
+    const now = Date.now();
+    clearAccountQuotaCache();
+    writeFileSync(join(home, "provider-account-quota-cache.json"), `${JSON.stringify({
+      version: 1,
+      rows: {
+        ["anthropic\u0000persisted"]: {
+          fiveHourPercent: 10,
+          weeklyResetAt: now + 60 * 60_000,
+          updatedAt: now,
+        },
+      },
+    })}\n`);
+
+    expect(getFreshCachedProviderAccountQuota("anthropic", "persisted", now)).toMatchObject({
+      weeklyResetAt: now + 60 * 60_000,
+    });
+  });
+
+  test("reset-window ignores an Anthropic quota row after the account cache TTL", () => {
+    const now = Date.now();
+    setCachedProviderAccountQuotaForTests("anthropic", "freshness", {
+      fiveHourPercent: 10,
+      weeklyResetAt: now + 60 * 60_000,
+    });
+    expect(getFreshCachedProviderAccountQuota("anthropic", "freshness", now)).not.toBeNull();
+    expect(getFreshCachedProviderAccountQuota("anthropic", "freshness", now + 10 * 60_000)).toBeNull();
+  });
+
   test("default off always returns the active account", async () => {
     const { aId, bId } = await seedTwoAccounts();
     expect(isAnthropicAccountPoolEnabled(cfg(false))).toBe(false);
@@ -339,6 +369,65 @@ describe("anthropic account pool", () => {
     await setActiveAccount("anthropic", ordered[0]!);
 
     expect(resolveAnthropicAccountForSession("ff-drain", config).accountId).toBe(ordered[2]);
+  });
+
+  test("reset-window supports latest and soonest governing reset order", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    const now = Date.now();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10, weeklyResetAt: now + 10_000 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 10, weeklyResetAt: now + 20_000 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 10, weeklyResetAt: now + 30_000 });
+
+    expect(resolveAnthropicAccountForSession(
+      "reset-latest",
+      cfg(true, 80, { strategy: "reset-window", resetOrder: "latest" }),
+      now,
+    )).toMatchObject({ accountId: cId, reason: "reset-window" });
+    clearAnthropicAccountPoolState();
+    expect(resolveAnthropicAccountForSession(
+      "reset-soonest",
+      cfg(true, 80, { strategy: "reset-window", resetOrder: "soonest" }),
+      now,
+    )).toMatchObject({ accountId: aId, reason: "reset-window" });
+  });
+
+  test("reset-window skips a drained preferred account and falls back to quota without reset evidence", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    const now = Date.now();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10, weeklyResetAt: now + 10_000 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 20, weeklyResetAt: now + 20_000 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 95, weeklyResetAt: now + 30_000 });
+    expect(resolveAnthropicAccountForSession(
+      "reset-drained",
+      cfg(true, 80, { strategy: "reset-window", resetOrder: "latest" }),
+      now,
+    ).accountId).toBe(bId);
+
+    clearAnthropicAccountPoolState();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 95 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 40 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 5 });
+    expect(resolveAnthropicAccountForSession(
+      "reset-unknown",
+      cfg(true, 80, { strategy: "reset-window", resetOrder: "latest" }),
+      now,
+    ).accountId).toBe(cId);
+  });
+
+  test("reset-window preserves live Anthropic affinity", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    const now = Date.now();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10, weeklyResetAt: now + 10_000 });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 10, weeklyResetAt: now + 20_000 });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 10, weeklyResetAt: now + 30_000 });
+    const config = cfg(true, 80, { strategy: "reset-window", resetOrder: "latest" });
+    expect(resolveAnthropicAccountForSession("reset-affinity", config, now).accountId).toBe(cId);
+
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10, weeklyResetAt: now + 40_000 });
+    expect(resolveAnthropicAccountForSession("reset-affinity", config, now + 1)).toMatchObject({
+      accountId: cId,
+      reason: "affinity",
+    });
   });
 
   test("fill-first 429 advances next in stable order, not lowest usage", async () => {

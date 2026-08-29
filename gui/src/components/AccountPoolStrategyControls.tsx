@@ -1,6 +1,8 @@
 import { useT } from "../i18n/shared";
 import {
+  ACCOUNT_POOL_RESET_ORDERS,
   ACCOUNT_POOL_STRATEGIES,
+  type AccountPoolResetOrder,
   type AccountPoolStrategy,
 } from "../account-pool-strategy";
 import { clampNumberDraft } from "../clamp-draft";
@@ -11,26 +13,36 @@ const STRATEGY_LABEL_KEYS = {
   quota: "accountPool.strategyQuota",
   "round-robin": "accountPool.strategyRoundRobin",
   "fill-first": "accountPool.strategyFillFirst",
+  "reset-window": "accountPool.strategyResetWindow",
 } as const;
 
 const STRATEGY_HINT_KEYS = {
   quota: "accountPool.strategyHintQuota",
   "round-robin": "accountPool.strategyHintRoundRobin",
   "fill-first": "accountPool.strategyHintFillFirst",
+  "reset-window": "accountPool.strategyHintResetWindow",
+} as const;
+
+const RESET_ORDER_LABEL_KEYS = {
+  soonest: "accountPool.resetOrderSoonest",
+  latest: "accountPool.resetOrderLatest",
 } as const;
 
 export interface AccountPoolStrategyControlsProps {
   strategy: AccountPoolStrategy;
+  resetOrder: AccountPoolResetOrder;
   stickyDraft: string;
   disabled?: boolean;
   strategySelectId?: string;
   stickyInputId?: string;
+  resetOrderSelectId?: string;
   /**
    * Hide the visual strategy label when the surrounding card title already reads
    * "Rotation strategy". The select keeps its aria-label, so the accessible name
    * survives while the duplicated on-screen text disappears.
    */
   onStrategyChange(strategy: AccountPoolStrategy): void;
+  onResetOrderChange(order: AccountPoolResetOrder): void;
   onStickyDraftChange(value: string): void;
   /** Optional draft overrides React state when steppers commit in the same tick as a draft change. */
   onStickyCommit(nextDraft?: string): void;
@@ -41,11 +53,14 @@ export interface AccountPoolStrategyControlsProps {
  */
 export default function AccountPoolStrategyControls({
   strategy,
+  resetOrder,
   stickyDraft,
   disabled = false,
   strategySelectId = "account-pool-strategy",
   stickyInputId = "account-pool-sticky-limit",
+  resetOrderSelectId = "account-pool-reset-order",
   onStrategyChange,
+  onResetOrderChange,
   onStickyDraftChange,
   onStickyCommit,
 }: AccountPoolStrategyControlsProps) {
@@ -53,6 +68,10 @@ export default function AccountPoolStrategyControls({
   const strategyOptions = ACCOUNT_POOL_STRATEGIES.map((value) => ({
     value,
     label: t(STRATEGY_LABEL_KEYS[value]),
+  }));
+  const resetOrderOptions = ACCOUNT_POOL_RESET_ORDERS.map((value) => ({
+    value,
+    label: t(RESET_ORDER_LABEL_KEYS[value]),
   }));
 
   return (
@@ -129,6 +148,24 @@ export default function AccountPoolStrategyControls({
               }}
             />
             </span>
+          </div>
+        </div>
+      )}
+      {strategy === "reset-window" && (
+        <div className="setting-row">
+          <div className="setting-label">
+            <span className="title" id={`${resetOrderSelectId}-label`}>{t("accountPool.resetOrder")}</span>
+            <span className="desc">{t("accountPool.resetOrderHelp")}</span>
+          </div>
+          <div className="setting-controls">
+            <Select
+              id={resetOrderSelectId}
+              value={resetOrder}
+              options={resetOrderOptions}
+              disabled={disabled}
+              label={t("accountPool.resetOrder")}
+              onChange={(next) => onResetOrderChange(next as AccountPoolResetOrder)}
+            />
           </div>
         </div>
       )}

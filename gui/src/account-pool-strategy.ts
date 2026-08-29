@@ -1,9 +1,11 @@
-export type AccountPoolStrategy = "quota" | "round-robin" | "fill-first";
+export type AccountPoolStrategy = "quota" | "round-robin" | "fill-first" | "reset-window";
+export type AccountPoolResetOrder = "soonest" | "latest";
 
 export const ACCOUNT_POOL_STRATEGIES: readonly AccountPoolStrategy[] = [
   "quota",
   "round-robin",
   "fill-first",
+  "reset-window",
 ] as const;
 
 /** Which cached usage bar the `quota` strategy scores. Mirrors `OcxAccountPoolQuotaWindow`. */
@@ -14,15 +16,18 @@ export const ACCOUNT_POOL_QUOTA_WINDOWS: readonly AccountPoolQuotaWindow[] = [
   "weekly",
   "max-utilization",
 ] as const;
+export const ACCOUNT_POOL_RESET_ORDERS: readonly AccountPoolResetOrder[] = ["soonest", "latest"] as const;
 
 export const DEFAULT_ACCOUNT_POOL_STRATEGY: AccountPoolStrategy = "quota";
 export const DEFAULT_ACCOUNT_POOL_QUOTA_WINDOW: AccountPoolQuotaWindow = "five-hour";
 export const DEFAULT_ACCOUNT_POOL_STICKY_LIMIT = 1;
+export const DEFAULT_ACCOUNT_POOL_RESET_ORDER: AccountPoolResetOrder = "soonest";
 export const MIN_ACCOUNT_POOL_STICKY_LIMIT = 1;
 export const MAX_ACCOUNT_POOL_STICKY_LIMIT = 100;
 
 const STRATEGY_SET = new Set<string>(ACCOUNT_POOL_STRATEGIES);
 const QUOTA_WINDOW_SET = new Set<string>(ACCOUNT_POOL_QUOTA_WINDOWS);
+const RESET_ORDER_SET = new Set<string>(ACCOUNT_POOL_RESET_ORDERS);
 
 export function normalizeAccountPoolStrategy(value: unknown): AccountPoolStrategy {
   return typeof value === "string" && STRATEGY_SET.has(value)
@@ -34,6 +39,12 @@ export function normalizeAccountPoolQuotaWindow(value: unknown): AccountPoolQuot
   return typeof value === "string" && QUOTA_WINDOW_SET.has(value)
     ? value as AccountPoolQuotaWindow
     : DEFAULT_ACCOUNT_POOL_QUOTA_WINDOW;
+}
+
+export function normalizeAccountPoolResetOrder(value: unknown): AccountPoolResetOrder {
+  return typeof value === "string" && RESET_ORDER_SET.has(value)
+    ? value as AccountPoolResetOrder
+    : DEFAULT_ACCOUNT_POOL_RESET_ORDER;
 }
 
 export function normalizeAccountPoolStickyLimit(value: unknown): number {
@@ -57,10 +68,10 @@ export type PoolStrategyFetch = (input: string, init: RequestInit) => Promise<Re
 
 export async function putCodexPoolStrategy(
   apiBase: string,
-  body: { strategy?: AccountPoolStrategy; stickyLimit?: number },
+  body: { strategy?: AccountPoolStrategy; stickyLimit?: number; resetOrder?: AccountPoolResetOrder },
   fetchImpl: PoolStrategyFetch = (input, init) => fetch(input, init),
-): Promise<{ ok: true; strategy: AccountPoolStrategy; stickyLimit: number } | { ok: false }> {
-  if (body.strategy === undefined && body.stickyLimit === undefined) return { ok: false };
+): Promise<{ ok: true; strategy: AccountPoolStrategy; stickyLimit: number; resetOrder: AccountPoolResetOrder } | { ok: false }> {
+  if (body.strategy === undefined && body.stickyLimit === undefined && body.resetOrder === undefined) return { ok: false };
   try {
     const response = await fetchImpl(`${apiBase}/api/codex-auth/pool-strategy`, {
       method: "PUT",
@@ -68,17 +79,20 @@ export async function putCodexPoolStrategy(
       body: JSON.stringify({
         ...(body.strategy !== undefined ? { strategy: body.strategy } : {}),
         ...(body.stickyLimit !== undefined ? { stickyLimit: body.stickyLimit } : {}),
+        ...(body.resetOrder !== undefined ? { resetOrder: body.resetOrder } : {}),
       }),
     });
     if (!response.ok) return { ok: false };
     const json = await response.json() as {
       accountPoolStrategy?: unknown;
       accountPoolStickyLimit?: unknown;
+      accountPoolResetOrder?: unknown;
     };
     return {
       ok: true,
       strategy: normalizeAccountPoolStrategy(json.accountPoolStrategy ?? body.strategy),
       stickyLimit: normalizeAccountPoolStickyLimit(json.accountPoolStickyLimit ?? body.stickyLimit),
+      resetOrder: normalizeAccountPoolResetOrder(json.accountPoolResetOrder ?? body.resetOrder),
     };
   } catch {
     return { ok: false };

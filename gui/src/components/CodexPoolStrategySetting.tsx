@@ -3,11 +3,14 @@ import { useT } from "../i18n/shared";
 import {
   DEFAULT_ACCOUNT_POOL_STRATEGY,
   DEFAULT_ACCOUNT_POOL_STICKY_LIMIT,
+  DEFAULT_ACCOUNT_POOL_RESET_ORDER,
+  normalizeAccountPoolResetOrder,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimitDraft,
   putCodexPoolStrategy,
   type AccountPoolStrategy,
+  type AccountPoolResetOrder,
 } from "../account-pool-strategy";
 import AccountPoolStrategyControls from "./AccountPoolStrategyControls";
 import type { CodexAccountLoadObserver } from "../hooks/useCodexAccountPool";
@@ -15,13 +18,15 @@ import type { CodexAccountLoadObserver } from "../hooks/useCodexAccountPool";
 function strategyFieldsFromActive(value: unknown): {
   strategy: AccountPoolStrategy;
   stickyLimit: number;
+  resetOrder: AccountPoolResetOrder;
 } | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
-  if (!("accountPoolStrategy" in row) && !("accountPoolStickyLimit" in row)) return null;
+  if (!("accountPoolStrategy" in row) && !("accountPoolStickyLimit" in row) && !("accountPoolResetOrder" in row)) return null;
   return {
     strategy: normalizeAccountPoolStrategy(row.accountPoolStrategy),
     stickyLimit: normalizeAccountPoolStickyLimit(row.accountPoolStickyLimit),
+    resetOrder: normalizeAccountPoolResetOrder(row.accountPoolResetOrder),
   };
 }
 
@@ -45,6 +50,7 @@ export default function CodexPoolStrategySetting({
   // Seed defaults immediately — never gate the control chrome on a network round-trip.
   const [strategy, setStrategy] = useState<AccountPoolStrategy>(DEFAULT_ACCOUNT_POOL_STRATEGY);
   const [stickyLimit, setStickyLimit] = useState(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT);
+  const [resetOrder, setResetOrder] = useState<AccountPoolResetOrder>(DEFAULT_ACCOUNT_POOL_RESET_ORDER);
   const [stickyDraft, setStickyDraft] = useState(String(DEFAULT_ACCOUNT_POOL_STICKY_LIMIT));
   const [hydrated, setHydrated] = useState(false);
   const hydratedRef = useRef(false);
@@ -59,13 +65,16 @@ export default function CodexPoolStrategySetting({
   const applyServer = useCallback((json: {
     accountPoolStrategy?: unknown;
     accountPoolStickyLimit?: unknown;
+    accountPoolResetOrder?: unknown;
   }) => {
     const nextStrategy = normalizeAccountPoolStrategy(json.accountPoolStrategy);
     const nextSticky = normalizeAccountPoolStickyLimit(json.accountPoolStickyLimit);
+    const nextResetOrder = normalizeAccountPoolResetOrder(json.accountPoolResetOrder);
     setStrategy(nextStrategy);
     onStrategyResolved?.(nextStrategy);
     setStickyLimit(nextSticky);
     setStickyDraft(String(nextSticky));
+    setResetOrder(nextResetOrder);
     hydratedRef.current = true;
     setHydrated(true);
     setLoadError(false);
@@ -78,6 +87,7 @@ export default function CodexPoolStrategySetting({
     applyServer({
       accountPoolStrategy: fields.strategy,
       accountPoolStickyLimit: fields.stickyLimit,
+      accountPoolResetOrder: fields.resetOrder,
     });
   }, [applyServer]);
 
@@ -88,6 +98,7 @@ export default function CodexPoolStrategySetting({
       const payload = await res.json() as {
         accountPoolStrategy?: unknown;
         accountPoolStickyLimit?: unknown;
+        accountPoolResetOrder?: unknown;
       };
       // A save started while this GET was in flight — retry once after it settles.
       if (savingRef.current) {
@@ -155,10 +166,12 @@ export default function CodexPoolStrategySetting({
   const save = useCallback(async (next: {
     strategy?: AccountPoolStrategy;
     stickyLimit?: number;
+    resetOrder?: AccountPoolResetOrder;
   }) => {
     if (savingRef.current) return;
     const previousStrategy = strategy;
     const previousSticky = stickyLimit;
+    const previousResetOrder = resetOrder;
     if (next.strategy !== undefined) {
       setStrategy(next.strategy);
       onStrategyResolved?.(next.strategy);
@@ -167,6 +180,7 @@ export default function CodexPoolStrategySetting({
       setStickyLimit(next.stickyLimit);
       setStickyDraft(String(next.stickyLimit));
     }
+    if (next.resetOrder !== undefined) setResetOrder(next.resetOrder);
     savingRef.current = true;
     setSaving(true);
     setError(null);
@@ -178,6 +192,7 @@ export default function CodexPoolStrategySetting({
       onStrategyResolved?.(result.strategy);
       setStickyLimit(result.stickyLimit);
       setStickyDraft(String(result.stickyLimit));
+      setResetOrder(result.resetOrder);
       hydratedRef.current = true;
       setHydrated(true);
     } else {
@@ -186,11 +201,12 @@ export default function CodexPoolStrategySetting({
       onStrategyResolved?.(previousStrategy);
       setStickyLimit(previousSticky);
       setStickyDraft(String(previousSticky));
+      setResetOrder(previousResetOrder);
     }
     savingRef.current = false;
     setSaving(false);
     scheduleDeferredActiveRefresh();
-  }, [apiBase, onStrategyResolved, scheduleDeferredActiveRefresh, stickyLimit, strategy, t]);
+  }, [apiBase, onStrategyResolved, resetOrder, scheduleDeferredActiveRefresh, stickyLimit, strategy, t]);
 
   // Block writes until /active confirms — defaults paint for CLS but must not overwrite server state.
   const controlsDisabled = saving || loadError || !hydrated;
@@ -213,13 +229,19 @@ export default function CodexPoolStrategySetting({
       {!loadError && (
         <AccountPoolStrategyControls
           strategy={strategy}
+          resetOrder={resetOrder}
           stickyDraft={stickyDraft}
           disabled={controlsDisabled}
           strategySelectId="codex-pool-strategy"
           stickyInputId="codex-pool-sticky-limit"
+          resetOrderSelectId="codex-pool-reset-order"
           onStrategyChange={(next) => {
             if (controlsDisabled || next === strategy) return;
             void save({ strategy: next });
+          }}
+          onResetOrderChange={(next) => {
+            if (controlsDisabled || next === resetOrder) return;
+            void save({ resetOrder: next });
           }}
           onStickyDraftChange={setStickyDraft}
           onStickyCommit={(nextDraft) => {

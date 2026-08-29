@@ -15,6 +15,7 @@ import {
   cmdRemove,
   cmdSticky,
   cmdStrategy,
+  cmdResetOrder,
 } from "./account-extended";
 import { apiError, apiJson, classifyAccount, fetchRows, proxyUnreachable, resolveBaseUrl, type AccountDeps, type AccountRow, type AccountType, type ApiResult }
   from "./account-api";
@@ -50,8 +51,9 @@ const ACCOUNT_USAGE = `Usage:
   ocx account pause <provider> <account-id|main> [--json]
   ocx account resume <provider> <account-id|main> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-window>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
+  ocx account reset-order <provider> [<soonest|latest>] [--json]
   ocx account remove <provider> <account-or-key-id|main> --yes [--json]
   ocx account clear-cooldown <provider> <account-id|main> [--json]
   ocx account add-key <provider> [--label <label>] [--json]
@@ -346,6 +348,7 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
     if (sub === "pause-exhausted") return await cmdPauseExhausted(rest, deps);
     if (sub === "strategy") return await cmdStrategy(rest, deps);
     if (sub === "sticky") return await cmdSticky(rest, deps);
+    if (sub === "reset-order") return await cmdResetOrder(rest, deps);
     if (sub === "remove") return await cmdRemove(rest, deps);
     if (sub === "clear-cooldown") return await cmdClearCooldown(rest, deps);
     if (sub === "add-key") return await cmdAddKey(rest, deps);

@@ -1491,6 +1491,18 @@ export function getCachedProviderAccountQuota(provider: string, accountId: strin
   return entry?.quota ?? null;
 }
 
+/** Reset ordering uses only a still-fresh per-account cache row. */
+export function getFreshCachedProviderAccountQuota(
+  provider: string,
+  accountId: string,
+  now = Date.now(),
+): ProviderQuota | null {
+  hydrateAccountQuotaCache();
+  const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  if (!entry || entry.ts + ACCOUNT_QUOTA_TTL_MS <= now) return null;
+  return entry.quota;
+}
+
 /** Test-only: seed or clear the per-account quota cache without probing upstream. */
 export function setCachedProviderAccountQuotaForTests(
   provider: string,

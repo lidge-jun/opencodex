@@ -274,6 +274,24 @@ unknown account id, or a value outside the accepted set exits 1. `--json` return
 { ok: true, provider, id, priority: number, preset: string | null }
 ```
 
+### `ocx account strategy <openai|anthropic> [quota|round-robin|fill-first|reset-window] [--json]`
+
+Reads or sets the new/unbound account assignment strategy. A bare invocation only reads. The
+`reset-window` strategy uses fresh governing reset timestamps and preserves existing affinity,
+priority tiers, pause, cooldown, and reauthentication rules.
+
+### `ocx account reset-order <openai|anthropic> [soonest|latest] [--json]`
+
+Reads or sets the direction used by `reset-window`. `soonest` drains the account whose governing
+reset arrives first. `latest` drains the account whose reset is farthest away. Codex normally uses
+weekly resets and uses 30-day resets for monthly plans; Anthropic uses its weekly reset evidence.
+Missing or stale reset timestamps fall back to quota routing.
+
+### `ocx account sticky <openai|anthropic> [1-100] [--json]`
+
+Reads or sets the number of new/unbound assignments retained on one round-robin selection. A bare
+invocation only reads.
+
 ### `ocx account login|reauth|code|cancel ...`
 
 Run browser-based or manual-code account authentication from a headless shell. Use

@@ -8,16 +8,24 @@ import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./accou
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
   POOL_KEY_CODEX,
+  normalizeAccountPoolResetOrder,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   notePoolRotationFailure,
   notePoolRotationSuccess,
   peekRoundRobinAccount,
+  pickResetWindowAccount,
   pickRoundRobinAccount,
   seedPoolRotationAccount,
   selectPriorityTier,
 } from "./pool-rotation";
-import { CODEX_EXHAUSTED_USAGE_PERCENT, CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
+import {
+  CODEX_EXHAUSTED_USAGE_PERCENT,
+  CODEX_UNKNOWN_USAGE_SCORE,
+  codexQuotaWindowForPlan,
+  getAccountQuota,
+  getFreshAccountQuota,
+} from "./quota";
 import { isThirtyDayOnlyCodexPlan } from "./plan";
 import {
   MAIN_CODEX_ACCOUNT_ID,
@@ -1216,6 +1224,35 @@ function hasCodexQuotaHeadroom(
   return usage < threshold;
 }
 
+function governingCodexResetAt(
+  config: OcxConfig,
+  accountId: string,
+  now: number,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): number | undefined {
+  const quota = getFreshAccountQuota(accountId, now);
+  if (!quota) return undefined;
+  const plan = getPoolAccountPlanForSelection(config, accountId, selectionOptions);
+  if (codexQuotaWindowForPlan(plan) === "monthly") return quota.monthlyResetAt;
+  if (quota.weeklyResetAt !== undefined) return quota.weeklyResetAt;
+  return quota.monthlyIsPrimaryWindow === true ? quota.monthlyResetAt : undefined;
+}
+
+function pickResetWindowCodexAccount(
+  config: OcxConfig,
+  eligible: readonly string[],
+  now: number,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string | null {
+  return pickResetWindowAccount(
+    eligible,
+    accountId => governingCodexResetAt(config, accountId, now, selectionOptions),
+    normalizeAccountPoolResetOrder(config.accountPoolResetOrder),
+    now,
+    accountId => hasCodexQuotaHeadroom(config, accountId, selectionOptions),
+  );
+}
+
 /**
  * Fill-first: keep selectable active under threshold; otherwise advance to the next
  * eligible id in stable sorted order after the current active (wrapping).
@@ -1282,8 +1319,8 @@ function pickNextFillFirstCodexAccount(
 }
 
 /**
- * Unbound new-session pick for round-robin / fill-first. Returns null to fall through
- * to the legacy quota path (or when the strategy is quota).
+ * Unbound new-session pick for round-robin / fill-first / reset-window.
+ * Returns null to fall through to the legacy quota path (or when the strategy is quota).
  *
  * When `commit` is true (resolve path), advances RR state. `commitSharedActive`
  * and `commitAffinity` independently control the two cross-request side effects:
@@ -1329,6 +1366,16 @@ function pickUnboundStrategyAccount(
 
   if (strategy === "fill-first") {
     picked = pickFillFirstCodexAccount(config, now, quotaScope, selectionOptions);
+    if (!picked) return null;
+    if (commitSharedActive) {
+      if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
+    }
+    if (commitAffinity && threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
+    return picked;
+  }
+  if (strategy === "reset-window") {
+    const eligible = listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions);
+    picked = pickResetWindowCodexAccount(config, eligible, now, selectionOptions);
     if (!picked) return null;
     if (commitSharedActive) {
       if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
@@ -1470,6 +1517,11 @@ export function pickAlternateCodexAccount(
   if (strategy === "fill-first") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
     return pickNextFillFirstCodexAccount(config, excludeId, eligible, now, selectionOptions);
+  }
+  if (strategy === "reset-window") {
+    const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
+    return pickResetWindowCodexAccount(config, eligible, now, selectionOptions)
+      ?? pickLowestUsageCodexAccount(config, excludeId, now, quotaScope, selectionOptions);
   }
   return pickLowestUsageCodexAccount(config, excludeId, now, quotaScope, selectionOptions);
 }

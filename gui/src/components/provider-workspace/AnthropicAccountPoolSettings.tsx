@@ -10,11 +10,14 @@ import {
   DEFAULT_ACCOUNT_POOL_STICKY_LIMIT,
   DEFAULT_ACCOUNT_POOL_STRATEGY,
   normalizeAccountPoolQuotaWindow,
+  DEFAULT_ACCOUNT_POOL_RESET_ORDER,
+  normalizeAccountPoolResetOrder,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimitDraft,
   type AccountPoolQuotaWindow,
   type AccountPoolStrategy,
+  type AccountPoolResetOrder,
 } from "../../account-pool-strategy";
 import AccountPoolStrategyControls from "../AccountPoolStrategyControls";
 import { Select } from "../../ui";
@@ -31,6 +34,7 @@ type PoolState = {
   strategy: AccountPoolStrategy;
   stickyLimit: number;
   quotaWindow: AccountPoolQuotaWindow;
+  resetOrder: AccountPoolResetOrder;
 };
 
 export default function AnthropicAccountPoolSettings({
@@ -69,6 +73,7 @@ export default function AnthropicAccountPoolSettings({
           strategy?: unknown;
           stickyLimit?: unknown;
           quotaWindow?: unknown;
+          resetOrder?: unknown;
         }>;
       })
       .then(json => {
@@ -81,6 +86,7 @@ export default function AnthropicAccountPoolSettings({
           strategy: normalizeAccountPoolStrategy(json.strategy),
           stickyLimit: nextSticky,
           quotaWindow: normalizeAccountPoolQuotaWindow(json.quotaWindow),
+          resetOrder: normalizeAccountPoolResetOrder(json.resetOrder),
         });
         setDraft(String(nextThreshold));
         setStickyDraft(String(nextSticky));
@@ -102,6 +108,7 @@ export default function AnthropicAccountPoolSettings({
     strategy: AccountPoolStrategy;
     stickyLimit: number;
     quotaWindow: AccountPoolQuotaWindow;
+    resetOrder: AccountPoolResetOrder;
   }) => {
     const previousState = state;
     setState({
@@ -110,6 +117,7 @@ export default function AnthropicAccountPoolSettings({
       strategy: next.strategy,
       stickyLimit: next.stickyLimit,
       quotaWindow: next.quotaWindow,
+      resetOrder: next.resetOrder,
     });
     setSaving(true);
     setError(null);
@@ -124,6 +132,7 @@ export default function AnthropicAccountPoolSettings({
           strategy: next.strategy,
           stickyLimit: next.stickyLimit,
           quotaWindow: next.quotaWindow,
+          resetOrder: next.resetOrder,
         }),
       });
       if (!res.ok) throw new Error("save");
@@ -131,16 +140,19 @@ export default function AnthropicAccountPoolSettings({
         strategy?: unknown;
         stickyLimit?: unknown;
         quotaWindow?: unknown;
+        resetOrder?: unknown;
       } | null;
       const savedStrategy = normalizeAccountPoolStrategy(json?.strategy ?? next.strategy);
       const savedSticky = normalizeAccountPoolStickyLimit(json?.stickyLimit ?? next.stickyLimit);
       const savedWindow = normalizeAccountPoolQuotaWindow(json?.quotaWindow ?? next.quotaWindow);
+      const savedResetOrder = normalizeAccountPoolResetOrder(json?.resetOrder ?? next.resetOrder);
       setState({
         enabled: next.enabled,
         threshold: next.threshold,
         strategy: savedStrategy,
         stickyLimit: savedSticky,
         quotaWindow: savedWindow,
+        resetOrder: savedResetOrder,
       });
       setDraft(String(next.threshold));
       setStickyDraft(String(savedSticky));
@@ -168,6 +180,7 @@ export default function AnthropicAccountPoolSettings({
   // pickLowestUsage / rotateAnthropicAccountOn429). Treating fill-first + threshold 0 as
   // inert told operators the window had no effect when it still governed two routing stages.
   const quotaWindowInert = strategy === "round-robin";
+  const resetOrder = state?.resetOrder ?? DEFAULT_ACCOUNT_POOL_RESET_ORDER;
   const loading = state === null && !loadError;
   // Always allow turning the pool off; only block enabling when fewer than 2 accounts.
   const toggleDisabled = loading || saving || loadError || (!enabled && accountCount < 2);
@@ -208,6 +221,7 @@ export default function AnthropicAccountPoolSettings({
               strategy,
               stickyLimit,
               quotaWindow,
+              resetOrder,
             });
           }}
         >
@@ -251,6 +265,7 @@ export default function AnthropicAccountPoolSettings({
                     strategy,
                     stickyLimit,
                     quotaWindow,
+                    resetOrder,
                   });
                 }
               }}
@@ -260,10 +275,12 @@ export default function AnthropicAccountPoolSettings({
 
           <AccountPoolStrategyControls
             strategy={strategy}
+            resetOrder={resetOrder}
             stickyDraft={stickyDraft}
             disabled={saving}
             strategySelectId="anthropic-pool-strategy"
             stickyInputId="anthropic-pool-sticky-limit"
+            resetOrderSelectId="anthropic-pool-reset-order"
             onStrategyChange={(next) => {
               if (next === strategy) return;
               void save({
@@ -272,6 +289,18 @@ export default function AnthropicAccountPoolSettings({
                 strategy: next,
                 stickyLimit,
                 quotaWindow,
+                resetOrder,
+              });
+            }}
+            onResetOrderChange={(next) => {
+              if (next === resetOrder) return;
+              void save({
+                enabled: true,
+                threshold,
+                strategy,
+                stickyLimit,
+                quotaWindow,
+                resetOrder: next,
               });
             }}
             onStickyDraftChange={setStickyDraft}
@@ -292,6 +321,7 @@ export default function AnthropicAccountPoolSettings({
                 strategy,
                 stickyLimit: parsed,
                 quotaWindow,
+                resetOrder,
               });
             }}
           />
@@ -316,6 +346,7 @@ export default function AnthropicAccountPoolSettings({
                   strategy,
                   stickyLimit,
                   quotaWindow: parsed,
+                  resetOrder,
                 });
               }}
             />
