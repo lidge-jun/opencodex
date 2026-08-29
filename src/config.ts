@@ -850,6 +850,27 @@ const agentTaskRecoverySchema = z.object({
   cacheEntries: z.number().int().min(1).max(512).optional(),
 }).strict();
 
+/** Whether an address is safe for the authenticated dashboard listener to bind. */
+export function isDashboardListenerBindAddress(hostname: string): boolean {
+  const ipVersion = isIP(hostname);
+  if (ipVersion === 4) {
+    const [first, second] = hostname.split(".").map(Number);
+    return first === 10
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168)
+      || (first === 100 && second >= 64 && second <= 127);
+  }
+  if (ipVersion === 6) {
+    const firstHextet = Number.parseInt(hostname.split(":")[0] || "0", 16);
+    return firstHextet >= 0xfc00 && firstHextet <= 0xfdff;
+  }
+  return false;
+}
+
+const dashboardListenerHostnameSchema = z.string().trim().min(1).refine(isDashboardListenerBindAddress, {
+  message: "must be a literal private or tailnet IP address (RFC1918, 100.64.0.0/10, or IPv6 ULA)",
+});
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024),
@@ -881,13 +902,14 @@ const configSchema = z.object({
   ]).optional().catch(undefined),
   // Same discriminated shape and degradation policy as unauthenticatedLoopbackListener: an
   // opt-in surface whose hand-edit typos must never reset providers/apiKeys through the
-  // backup-and-defaults repair path. Write-time rejection lives in dashboardListenerError().
+  // backup-and-defaults repair path. The address predicate is enforced here too: malformed or
+  // unsafe entries degrade to disabled before startup can bind them.
   dashboardListener: z.union([
     z.object({ enabled: z.literal(false) }),
     z.object({
       enabled: z.literal(true),
       port: z.number().int().min(1).max(65535),
-      hostname: z.string().trim().min(1),
+      hostname: dashboardListenerHostnameSchema,
     }),
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
@@ -2200,64 +2222,43 @@ function loopbackListenerPortError(value: unknown): string | null {
   return null;
 }
 
-export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
-  /**
-   * Write-time relationship checks for the dashboard listener, mirroring
-   * loopbackListenerPortError: the schema validates each field alone, while port collisions
-   * are between fields. A live caller is told; a hand-edited config on the read path
-   * degrades to undefined via the schema catch rather than resetting the file.
-   */
-  function dashboardListenerError(value: unknown): string | null {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-    const listener = (value as Record<string, unknown>).dashboardListener;
-    if (listener === undefined) return null;
-    if (!listener || typeof listener !== "object" || Array.isArray(listener)) {
-      return "schema_invalid: dashboardListener: must be an object or omitted";
-    }
-    const entry = listener as Record<string, unknown>;
-    // Real boolean required, for the same reason as the loopback listener: a "true" string
-    // would otherwise be silently deleted by the schema catch while the operator believes
-    // the listener is on.
-    if (typeof entry.enabled !== "boolean") {
-      return "schema_invalid: dashboardListener.enabled: must be a boolean";
-    }
-    if (entry.enabled !== true) return null;
-    const listenerPort = entry.port;
-    if (typeof listenerPort !== "number" || !Number.isInteger(listenerPort) || listenerPort < 1 || listenerPort > 65535) {
-      return "schema_invalid: dashboardListener.port: must be an integer port when enabled";
-    }
-    const listenerHostname = entry.hostname;
-    if (typeof listenerHostname !== "string" || !listenerHostname.trim()) {
-      return "schema_invalid: dashboardListener.hostname: must be a non-blank bind address when enabled";
-    }
-    const bindAddress = listenerHostname.trim();
-    const ipVersion = isIP(bindAddress);
-    const privateDashboardAddress = ipVersion === 4
-      ? (() => {
-          const [first, second] = bindAddress.split(".").map(Number);
-          return first === 10
-            || (first === 172 && second >= 16 && second <= 31)
-            || (first === 192 && second === 168)
-            || (first === 100 && second >= 64 && second <= 127);
-        })()
-      : ipVersion === 6
-        && (() => {
-          const firstHextet = Number.parseInt(bindAddress.split(":")[0] || "0", 16);
-          return firstHextet >= 0xfc00 && firstHextet <= 0xfdff;
-        })();
-    if (!privateDashboardAddress) {
-      return "schema_invalid: dashboardListener.hostname: must be a literal private or tailnet IP address (RFC1918, 100.64.0.0/10, or IPv6 ULA); DNS names, wildcard, loopback, and public addresses are not allowed";
-    }
-    const proxyPort = (value as Record<string, unknown>).port;
-    if (typeof proxyPort === "number" && proxyPort === listenerPort) {
-      return "schema_invalid: dashboardListener.port: must differ from the proxy port";
-    }
-    const loopback = (value as Record<string, unknown>).unauthenticatedLoopbackListener as Record<string, unknown> | undefined;
-    if (loopback && loopback.enabled === true && loopback.port === listenerPort) {
-      return "schema_invalid: dashboardListener.port: must differ from unauthenticatedLoopbackListener.port";
-    }
-    return null;
+function dashboardListenerError(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const listener = (value as Record<string, unknown>).dashboardListener;
+  if (listener === undefined) return null;
+  if (!listener || typeof listener !== "object" || Array.isArray(listener)) {
+    return "schema_invalid: dashboardListener: must be an object or omitted";
   }
+  const entry = listener as Record<string, unknown>;
+  // A string such as `"true"` would otherwise be silently deleted by the schema catch
+  // while the operator believes the listener is on.
+  if (typeof entry.enabled !== "boolean") {
+    return "schema_invalid: dashboardListener.enabled: must be a boolean";
+  }
+  if (entry.enabled !== true) return null;
+  const listenerPort = entry.port;
+  if (typeof listenerPort !== "number" || !Number.isInteger(listenerPort) || listenerPort < 1 || listenerPort > 65535) {
+    return "schema_invalid: dashboardListener.port: must be an integer port when enabled";
+  }
+  const listenerHostname = entry.hostname;
+  if (typeof listenerHostname !== "string" || !listenerHostname.trim()) {
+    return "schema_invalid: dashboardListener.hostname: must be a non-blank bind address when enabled";
+  }
+  if (!isDashboardListenerBindAddress(listenerHostname.trim())) {
+    return "schema_invalid: dashboardListener.hostname: must be a literal private or tailnet IP address (RFC1918, 100.64.0.0/10, or IPv6 ULA); DNS names, wildcard, loopback, and public addresses are not allowed";
+  }
+  const proxyPort = (value as Record<string, unknown>).port;
+  if (typeof proxyPort === "number" && proxyPort === listenerPort) {
+    return "schema_invalid: dashboardListener.port: must differ from the proxy port";
+  }
+  const loopback = (value as Record<string, unknown>).unauthenticatedLoopbackListener as Record<string, unknown> | undefined;
+  if (loopback && loopback.enabled === true && loopback.port === listenerPort) {
+    return "schema_invalid: dashboardListener.port: must differ from unauthenticatedLoopbackListener.port";
+  }
+  return null;
+}
+
+export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const boundaryError = blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)

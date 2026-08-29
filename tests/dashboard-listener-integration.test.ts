@@ -8,10 +8,10 @@
  * must behave identically with and without the dashboard listener configured.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveConfig } from "../src/config";
+import { isDashboardListenerBindAddress, loadConfig, saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { findAvailablePort } from "../src/server/ports";
 import type { OcxConfig } from "../src/types";
@@ -22,7 +22,7 @@ const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
 let testHome = "";
 
-function baseConfig(dashboardPort: number | null, hostname = "127.0.0.1"): OcxConfig {
+function baseConfig(dashboardPort: number | null, hostname = dashboardHost ?? "127.0.0.1"): OcxConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
@@ -43,12 +43,12 @@ function baseConfig(dashboardPort: number | null, hostname = "127.0.0.1"): OcxCo
 }
 
 /** A free port the way production would choose one, so tests cannot collide on a fixed number. */
-async function freePort(hostname = "127.0.0.1"): Promise<number> {
+async function freePort(hostname = dashboardHost ?? "127.0.0.1"): Promise<number> {
   return await findAvailablePort(0, hostname);
 }
 
 function dashboardUrl(port: number, path: string): string {
-  return `http://127.0.0.1:${port}${path}`;
+  return `http://${dashboardHost ?? "127.0.0.1"}:${port}${path}`;
 }
 
 /**
@@ -57,14 +57,19 @@ function dashboardUrl(port: number, path: string): string {
  * use the host's real interface address the way tests/loopback-listener-integration.test.ts
  * does — the production shape for this listener is a tailnet/LAN bind anyway.
  */
-function firstNonLoopbackIPv4(): string | null {
+function firstDashboardIPv4(): string | null {
   for (const entries of Object.values(networkInterfaces())) {
     for (const entry of entries ?? []) {
-      if (entry.family === "IPv4" && !entry.internal) return entry.address;
+      if (entry.family === "IPv4" && !entry.internal && isDashboardListenerBindAddress(entry.address)) {
+        return entry.address;
+      }
     }
   }
   return null;
 }
+
+const dashboardHost = firstDashboardIPv4();
+const dashboardTest = test.skipIf(!dashboardHost);
 
 beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "ocx-dashboard-listener-"));
@@ -85,7 +90,40 @@ afterEach(() => {
 });
 
 describe("dashboard listener surface", () => {
-  test("serves the SPA root and the management API, and demands the admin token", async () => {
+  test("drops unsafe raw listener bind addresses before startup", async () => {
+    const dashboardPort = await freePort("127.0.0.1");
+    for (const hostname of ["0.0.0.0", "127.0.0.1", "8.8.8.8", "dashboard.example"]) {
+      writeFileSync(
+        join(testHome, "config.json"),
+        JSON.stringify({
+          ...baseConfig(null),
+          dashboardListener: { enabled: true, port: dashboardPort, hostname },
+        }),
+      );
+      expect(loadConfig().dashboardListener).toBeUndefined();
+    }
+
+    // A wildcard used to survive loading and bind this socket. Loading it must leave the
+    // reserved port untouched even though the rest of the server starts normally.
+    writeFileSync(
+      join(testHome, "config.json"),
+      JSON.stringify({
+        ...baseConfig(null),
+        dashboardListener: { enabled: true, port: dashboardPort, hostname: "0.0.0.0" },
+      }),
+    );
+    const server = startServer(0);
+    try {
+      const dashboardBound = await fetch(`http://127.0.0.1:${dashboardPort}/healthz`)
+        .then(() => true)
+        .catch(() => false);
+      expect(dashboardBound).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  dashboardTest("serves the SPA root and the management API, and demands the admin token", async () => {
     const dashboardPort = await freePort();
     saveConfig(baseConfig(dashboardPort));
     const server = startServer(0);
@@ -105,7 +143,7 @@ describe("dashboard listener surface", () => {
     }
   });
 
-  test("refuses the /v1 data plane and /readyz even with the admin token, serves /healthz", async () => {
+  dashboardTest("refuses the /v1 data plane and /readyz even with the admin token, serves /healthz", async () => {
     const dashboardPort = await freePort();
     saveConfig(baseConfig(dashboardPort));
     const server = startServer(0);
@@ -134,7 +172,7 @@ describe("dashboard listener surface", () => {
     }
   });
 
-  test("minting an opaque session keeps the dashboard usable across page refreshes", async () => {
+  dashboardTest("minting an opaque session keeps the dashboard usable across page refreshes", async () => {
     const dashboardPort = await freePort();
     saveConfig(baseConfig(dashboardPort));
     const server = startServer(0);
@@ -188,7 +226,7 @@ describe("dashboard listener surface", () => {
     }
   });
 
-  test("rejects a session mint with a wrong admin token", async () => {
+  dashboardTest("rejects a session mint with a wrong admin token", async () => {
     const dashboardPort = await freePort();
     saveConfig(baseConfig(dashboardPort));
     const server = startServer(0);
@@ -203,7 +241,7 @@ describe("dashboard listener surface", () => {
     }
   });
 
-  test("leaves the public listener unchanged: loopback data plane stays token-free", async () => {
+  dashboardTest("leaves the public listener unchanged: loopback data plane stays token-free", async () => {
     const dashboardPort = await freePort();
     saveConfig(baseConfig(dashboardPort));
     const server = startServer(0);
@@ -226,7 +264,7 @@ describe("dashboard listener surface", () => {
     }
   });
 
-  test("stop closes the dashboard socket too", async () => {
+  dashboardTest("stop closes the dashboard socket too", async () => {
     const dashboardPort = await freePort();
     saveConfig(baseConfig(dashboardPort));
     const server = startServer(0);
@@ -241,20 +279,13 @@ describe("dashboard listener surface", () => {
     expect(stillServing).toBe(false);
   });
 
-  test("management origin gate follows the listener policy when the proxy stays loopback", async () => {
+  dashboardTest("management origin gate follows the listener policy when the proxy stays loopback", async () => {
     // The regression this pins: handleManagementAPI re-derived the request origin
     // from the shared loopback config, so a non-loopback dashboard Host was rejected
     // as cross-origin (403) even after the listener policy had admitted it. The
-    // listener binds the host's real interface address: non-loopback for the origin
-    // check and bindable on Linux, Windows, and macOS alike (127.0.0.2 is not bound
-    // on macOS, which is exactly how this test originally failed there).
-    const dashboardHost = firstNonLoopbackIPv4();
-    if (!dashboardHost) {
-      // A host with no external IPv4 cannot prove this. Say so rather than pass silently.
-      console.warn("[dashboard-listener] no non-loopback IPv4 interface; origin-gate check not run");
-      return;
-    }
-    const dashboardPort = await freePort(dashboardHost);
+    // listener binds a real private/tailnet interface: non-loopback for the origin
+    // check and admissible under the public bind contract.
+    const dashboardPort = await freePort(dashboardHost!);
     saveConfig(baseConfig(dashboardPort, dashboardHost));
     const server = startServer(0);
     try {

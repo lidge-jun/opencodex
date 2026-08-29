@@ -15,6 +15,7 @@ import {
   DEFAULT_SUBAGENT_MODELS,
   applyProxyEnv,
   armClaudeCodeBaseline,
+  isDashboardListenerBindAddress,
   loadConfig,
   saveConfig,
   getConfigDir,
@@ -697,7 +698,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // that listener's non-loopback Host as legitimate without touching the main listener's
   // loopback policy. Data-plane admission never runs here: the route allowlist below
   // refuses /v1/* outright, so no data-plane credential is involved at all.
-  const dashboardListener = config.dashboardListener;
+  // Config loading already drops invalid entries. Keep the startup guard too so a future
+  // in-memory config writer cannot turn an unsafe address into a bound dashboard socket.
+  const dashboardListener = config.dashboardListener?.enabled
+    && isDashboardListenerBindAddress(config.dashboardListener.hostname)
+    ? config.dashboardListener
+    : undefined;
   const dashboardListenerPort = dashboardListener?.enabled ? dashboardListener.port : null;
   const dashboardBindHostname = dashboardListener?.enabled ? dashboardListener.hostname.trim() : null;
   const dashboardPolicy = (): ManagementPolicyView => requestPolicyView(config, dashboardBindHostname ?? "127.0.0.1");
