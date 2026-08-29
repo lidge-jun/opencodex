@@ -2259,11 +2259,30 @@ button.prov-account-row.active { cursor: default; }
 .usage-cards .stat-value { font-size: var(--text-title); font-weight: var(--weight-semibold); margin-top: 4px; }
 /* Top-align with Storage: centering against the taller filter chips dropped the "Usage" title. */
 .usage-head { flex-wrap: wrap; align-items: flex-start; }
+.usage-filters-wrap { position: relative; }
 .usage-filters { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .usage-segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 2px; gap: 2px; background: var(--surface); }
 .usage-segmented-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: var(--radius-pill); cursor: pointer; font: inherit; white-space: nowrap; }
 .usage-segmented-btn.active { background: var(--raised); color: var(--text); font-weight: var(--weight-semibold); }
 .usage-source-mark { width: var(--icon-sm); height: var(--icon-sm); flex: 0 0 auto; object-fit: contain; }
+.usage-custom-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 60;
+  width: min(520px, calc(100vw - 40px));
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+.usage-custom-popover-title { margin-bottom: 10px; font-weight: var(--weight-semibold); color: var(--text); }
+.usage-custom-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.usage-custom-field { display: grid; gap: 5px; color: var(--muted); font-size: var(--text-caption); }
+.usage-custom-field-quick { grid-column: 1 / -1; }
+.usage-custom-field .input { width: 100%; min-width: 0; }
+.usage-custom-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 /* Only monochrome source marks (Grok) are inverted for dark themes. Brand-colored
    marks (Claude, Codex/OpenAI) must keep their brand color; inverting shifts the hue. */
 :root[data-theme="dark"] .usage-source-mark--mono { filter: invert(1); }
@@ -2274,6 +2293,9 @@ button.prov-account-row.active { cursor: default; }
 
 @media (max-width: 760px) {
   .usage-segmented-btn { min-height: var(--control-touch); }
+  .usage-custom-popover { width: min(360px, calc(100vw - 24px)); }
+  .usage-custom-grid { grid-template-columns: minmax(0, 1fr); }
+  .usage-custom-field-quick { grid-column: auto; }
   .openai-mode-row { align-items: stretch; flex-direction: column; gap: 6px; }
   .openai-mode-control { width: 100%; }
   .openai-mode-control .usage-segmented-btn { flex: 1 1 0; min-width: 0; }

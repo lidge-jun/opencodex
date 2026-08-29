@@ -50,7 +50,14 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void
   }
 }
 
-test("usage range controls request yesterday and apply custom bounds only after Apply", async () => {
+function localDateInputValue(date: Date, endOfDay: boolean): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}T${endOfDay ? "23:59" : "00:00"}`;
+}
+
+test("usage keeps quick days inside a floating custom picker and applies them once", async () => {
   const urls: string[] = [];
   globalThis.fetch = (async input => {
     urls.push(String(input));
@@ -68,36 +75,40 @@ test("usage range controls request yesterday and apply custom bounds only after 
   await waitFor(() => urls.length === 1);
 
   const buttons = () => Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-  const yesterday = buttons().find(button => button.textContent?.trim() === "Yesterday");
-  expect(yesterday).toBeTruthy();
-  await act(async () => { yesterday!.click(); });
-  await waitFor(() => urls.length === 2);
-  expect(new URL(urls[1]!).searchParams.get("range")).toBe("yesterday");
+  expect(buttons().some(button => button.textContent?.trim() === "Today")).toBe(false);
+  expect(buttons().some(button => button.textContent?.trim() === "Yesterday")).toBe(false);
+  expect(buttons().some(button => button.textContent?.trim() === "7d")).toBe(true);
+  expect(buttons().some(button => button.textContent?.trim() === "30d")).toBe(true);
 
   const custom = buttons().find(button => button.textContent?.trim() === "Custom...");
   expect(custom).toBeTruthy();
   await act(async () => { custom!.click(); });
   const countAfterOpen = urls.length;
-  const inputs = Array.from(container.querySelectorAll<HTMLInputElement>(".usage-custom-time-picker input"));
-  expect(inputs).toHaveLength(2);
-  const apply = buttons().find(button => button.textContent?.trim() === "Apply");
-  expect(apply).toBeTruthy();
-  expect(apply!.disabled).toBe(true);
-  const valueSetter = Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")?.set;
-  expect(valueSetter).toBeTruthy();
+  const popover = container.querySelector<HTMLElement>('.usage-custom-popover[role="dialog"]');
+  expect(popover).toBeTruthy();
+  const quick = popover!.querySelector<HTMLSelectElement>("#usage-custom-quick");
+  expect(quick).toBeTruthy();
+
+  const today = new Date();
   await act(async () => {
-    valueSetter!.call(inputs[0], "2026-08-29T09:17");
-    inputs[0]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
-    valueSetter!.call(inputs[1], "2026-08-30T04:23");
-    inputs[1]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    quick!.value = "today";
+    quick!.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
   });
   expect(urls).toHaveLength(countAfterOpen);
+
+  const inputs = Array.from(popover!.querySelectorAll<HTMLInputElement>('input[type="datetime-local"]'));
+  expect(inputs).toHaveLength(2);
+  expect(inputs[0]!.value).toBe(localDateInputValue(today, false));
+  expect(inputs[1]!.value).toBe(localDateInputValue(today, true));
+  const apply = buttons().find(button => button.textContent?.trim() === "Apply");
+  expect(apply).toBeTruthy();
   expect(apply!.disabled).toBe(false);
   await act(async () => { apply!.click(); });
   await waitFor(() => urls.length === countAfterOpen + 1);
   const applied = new URL(urls.at(-1)!);
-  expect(applied.searchParams.get("since")).toBe("2026-08-29T09:17");
-  expect(applied.searchParams.get("until")).toBe("2026-08-30T04:23");
+  expect(applied.searchParams.get("since")).toBe(localDateInputValue(today, false));
+  expect(applied.searchParams.get("until")).toBe(localDateInputValue(today, true));
+  expect(container.querySelector(".usage-custom-popover")).toBeNull();
 
   await act(async () => { root.unmount(); });
   container.remove();

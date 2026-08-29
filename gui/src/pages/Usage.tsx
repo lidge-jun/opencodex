@@ -10,16 +10,21 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
+import { quickUsageRangeBounds, type QuickUsageRange } from "../usage-time-range";
 
 type Range = "all" | "30d" | "7d" | "today" | "yesterday" | "custom";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
 
-const RANGE_LABEL_KEYS: Record<Exclude<Range, "all">, TKey> = {
-  today: "usage.range.today",
-  yesterday: "usage.range.yesterday",
+const RANGE_LABEL_KEYS: Record<"7d" | "30d" | "custom", TKey> = {
   "7d": "usage.range.7d",
   "30d": "usage.range.30d",
   custom: "usage.range.custom",
+};
+
+const QUICK_RANGE_LABEL_KEYS: Record<QuickUsageRange, TKey> = {
+  custom: "usage.custom.manual",
+  today: "usage.range.today",
+  yesterday: "usage.range.yesterday",
 };
 
 interface UsageSummaryTotals {
@@ -233,10 +238,39 @@ function UsageFilters({
   onApplyCustom: (since: string, until: string) => void;
   t: TFn;
 }) {
-  const [customOpen, setCustomOpen] = useState(range === "custom");
+  const [customOpen, setCustomOpen] = useState(false);
+  const [quickRange, setQuickRange] = useState<QuickUsageRange>("custom");
   const [sinceVal, setSinceVal] = useState(customSince);
   const [untilVal, setUntilVal] = useState(customUntil);
-  const showCustom = customOpen || range === "custom";
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const quickRef = useRef<HTMLSelectElement | null>(null);
+  const closeCustom = useCallback(() => setCustomOpen(false), []);
+
+  useEffect(() => {
+    if (!customOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (popoverRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      closeCustom();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeCustom();
+      triggerRef.current?.focus();
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [closeCustom, customOpen]);
+
+  useEffect(() => {
+    if (customOpen) quickRef.current?.focus();
+  }, [customOpen]);
 
   return (
     <div className="usage-filters-wrap">
@@ -270,19 +304,22 @@ function UsageFilters({
           })}
         </div>
         <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
-          {(["today", "yesterday", "7d", "30d", "all", "custom"] as Range[]).map(choice => {
+          {(["7d", "30d", "all", "custom"] as const).map(choice => {
             const label = choice === "all" ? t("usage.range.available") : t(RANGE_LABEL_KEYS[choice]);
             return (
               <button
+                ref={choice === "custom" ? triggerRef : undefined}
                 key={choice}
                 type="button"
                 className={`usage-segmented-btn${range === choice ? " active" : ""}`}
                 aria-label={label}
                 aria-pressed={range === choice}
+                aria-haspopup={choice === "custom" ? "dialog" : undefined}
+                aria-expanded={choice === "custom" ? customOpen : undefined}
                 onClick={() => {
-                  if (choice === "custom") setCustomOpen(true);
+                  if (choice === "custom") setCustomOpen(open => !open);
                   else {
-                    setCustomOpen(false);
+                    closeCustom();
                     onRange(choice);
                   }
                 }}
@@ -293,40 +330,83 @@ function UsageFilters({
           })}
         </div>
       </div>
-      {showCustom && (
-        <div className="usage-custom-time-picker panel" style={{ marginTop: 8, padding: "8px 12px", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-          <label className="text-caption muted" htmlFor="usage-custom-since">{t("usage.custom.since")}:</label>
-          <input
-            id="usage-custom-since"
-            type="datetime-local"
-            step={60}
-            className="input"
-            style={{ width: "160px", padding: "4px 8px", fontSize: "12px" }}
-            value={sinceVal}
-            onInput={e => setSinceVal(e.currentTarget.value)}
-          />
-          <label className="text-caption muted" htmlFor="usage-custom-until">{t("usage.custom.until")}:</label>
-          <input
-            id="usage-custom-until"
-            type="datetime-local"
-            step={60}
-            className="input"
-            style={{ width: "160px", padding: "4px 8px", fontSize: "12px" }}
-            value={untilVal}
-            onInput={e => setUntilVal(e.currentTarget.value)}
-          />
-          <button
-            type="button"
-            className="btn btn-sm btn-primary"
-            style={{ padding: "4px 12px", fontSize: "12px" }}
-            disabled={!sinceVal.trim() && !untilVal.trim()}
-            onClick={() => {
-              onRange("custom");
-              onApplyCustom(sinceVal, untilVal);
-            }}
-          >
-            {t("usage.custom.apply")}
-          </button>
+      {customOpen && (
+        <div
+          ref={popoverRef}
+          className="usage-custom-popover"
+          role="dialog"
+          aria-modal="false"
+          aria-label={t("usage.custom.title")}
+        >
+          <div className="usage-custom-popover-title">{t("usage.custom.title")}</div>
+          <div className="usage-custom-grid">
+            <label className="usage-custom-field usage-custom-field-quick" htmlFor="usage-custom-quick">
+              <span>{t("usage.custom.quick")}</span>
+              <select
+                ref={quickRef}
+                id="usage-custom-quick"
+                className="input"
+                value={quickRange}
+                onChange={event => {
+                  const next = event.target.value as QuickUsageRange;
+                  setQuickRange(next);
+                  if (next === "custom") return;
+                  const bounds = quickUsageRangeBounds(next);
+                  setSinceVal(bounds.since);
+                  setUntilVal(bounds.until);
+                }}
+              >
+                {(["today", "yesterday", "custom"] as QuickUsageRange[]).map(option => (
+                  <option key={option} value={option}>{t(QUICK_RANGE_LABEL_KEYS[option])}</option>
+                ))}
+              </select>
+            </label>
+            <label className="usage-custom-field" htmlFor="usage-custom-since">
+              <span>{t("usage.custom.since")}</span>
+              <input
+                id="usage-custom-since"
+                type="datetime-local"
+                step={60}
+                className="input"
+                value={sinceVal}
+                onInput={event => {
+                  setQuickRange("custom");
+                  setSinceVal(event.currentTarget.value);
+                }}
+              />
+            </label>
+            <label className="usage-custom-field" htmlFor="usage-custom-until">
+              <span>{t("usage.custom.until")}</span>
+              <input
+                id="usage-custom-until"
+                type="datetime-local"
+                step={60}
+                className="input"
+                value={untilVal}
+                onInput={event => {
+                  setQuickRange("custom");
+                  setUntilVal(event.currentTarget.value);
+                }}
+              />
+            </label>
+          </div>
+          <div className="usage-custom-actions">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={closeCustom}>
+              {t("usage.custom.cancel")}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={!sinceVal.trim() && !untilVal.trim()}
+              onClick={() => {
+                onRange("custom");
+                onApplyCustom(sinceVal, untilVal);
+                closeCustom();
+              }}
+            >
+              {t("usage.custom.apply")}
+            </button>
+          </div>
         </div>
       )}
     </div>
