@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import * as z from "zod/v4";
@@ -2228,6 +2229,24 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     const listenerHostname = entry.hostname;
     if (typeof listenerHostname !== "string" || !listenerHostname.trim()) {
       return "schema_invalid: dashboardListener.hostname: must be a non-blank bind address when enabled";
+    }
+    const bindAddress = listenerHostname.trim();
+    const ipVersion = isIP(bindAddress);
+    const privateDashboardAddress = ipVersion === 4
+      ? (() => {
+          const [first, second] = bindAddress.split(".").map(Number);
+          return first === 10
+            || (first === 172 && second >= 16 && second <= 31)
+            || (first === 192 && second === 168)
+            || (first === 100 && second >= 64 && second <= 127);
+        })()
+      : ipVersion === 6
+        && (() => {
+          const firstHextet = Number.parseInt(bindAddress.split(":")[0] || "0", 16);
+          return firstHextet >= 0xfc00 && firstHextet <= 0xfdff;
+        })();
+    if (!privateDashboardAddress) {
+      return "schema_invalid: dashboardListener.hostname: must be a literal private or tailnet IP address (RFC1918, 100.64.0.0/10, or IPv6 ULA); DNS names, wildcard, loopback, and public addresses are not allowed";
     }
     const proxyPort = (value as Record<string, unknown>).port;
     if (typeof proxyPort === "number" && proxyPort === listenerPort) {

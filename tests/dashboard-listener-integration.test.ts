@@ -4,7 +4,7 @@
  * These tests start real servers and speak HTTP to both sockets. The point under
  * test is the split surface: the dashboard port admits GUI + management routes with
  * the admin credential, refuses the whole /v1 data plane and the health endpoints,
- * and mints a cookie session whose CSRF arm guards mutations. The public listener
+ * and mints an opaque session whose CSRF arm guards mutations. The public listener
  * must behave identically with and without the dashboard listener configured.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -134,7 +134,7 @@ describe("dashboard listener surface", () => {
     }
   });
 
-  test("minting a cookie session keeps the dashboard usable across page refreshes", async () => {
+  test("minting an opaque session keeps the dashboard usable across page refreshes", async () => {
     const dashboardPort = await freePort();
     saveConfig(baseConfig(dashboardPort));
     const server = startServer(0);
@@ -144,31 +144,26 @@ describe("dashboard listener surface", () => {
         headers: { "x-opencodex-api-key": ADMIN_TOKEN },
       });
       expect(mint.status).toBe(200);
-      const cookieHeader = mint.headers.get("set-cookie") ?? "";
-      const cookie = cookieHeader.split(";")[0] ?? "";
-      expect(cookie).toMatch(/^opencodex_gui_session=/);
-      expect(cookieHeader).toContain("HttpOnly");
-      expect(cookieHeader).toContain("SameSite=Strict");
-      const session = await mint.json() as { csrfToken: string; origin: string };
+      expect(mint.headers.get("set-cookie")).toBeNull();
+      const session = await mint.json() as { token: string; csrfToken: string; origin: string };
+      expect(session.token).toMatch(/^ocx_session_/);
       expect(session.csrfToken).toBeTruthy();
       expect(session.origin).toContain(String(dashboardPort));
 
-      // Refreshed page: no token in script, only the cookie the browser replays.
-      const refreshed = await fetch(dashboardUrl(dashboardPort, "/api/auth/session"), {
-        headers: { Cookie: cookie },
+      // The session endpoint only mints; a refresh uses the opaque browser-stored token.
+      const sessionGet = await fetch(dashboardUrl(dashboardPort, "/api/auth/session"), {
+        headers: { "x-opencodex-api-key": session.token },
       });
-      expect(refreshed.status).toBe(200);
-      const again = await refreshed.json() as { csrfToken: string };
-      expect(again.csrfToken).toBe(session.csrfToken);
+      expect(sessionGet.status).toBe(405);
 
       const read = await fetch(dashboardUrl(dashboardPort, "/api/config"), {
-        headers: { Cookie: cookie },
+        headers: { "x-opencodex-api-key": session.token },
       });
       expect(read.status).toBe(200);
 
-      // Mutations need the CSRF arm: the cookie alone must not pass the gate.
+      // Mutations need the CSRF arm: the session token alone must not pass the gate.
       const mutationHeaders = (csrf?: string) => ({
-        Cookie: cookie,
+        "x-opencodex-api-key": session.token,
         Origin: session.origin,
         "X-OpenCodex-GUI-Origin": session.origin,
         ...(csrf === undefined ? {} : { "x-opencodex-csrf-token": csrf }),
@@ -221,6 +216,11 @@ describe("dashboard listener surface", () => {
       expect(models.status).toBe(200);
       const anon = await fetch(`http://127.0.0.1:${server.port}/api/config`);
       expect(anon.status).toBe(401);
+      const sessionEndpoint = await fetch(`http://127.0.0.1:${server.port}/api/auth/session`, {
+        method: "POST",
+        headers: { "x-opencodex-api-key": ADMIN_TOKEN },
+      });
+      expect(sessionEndpoint.status).toBe(404);
     } finally {
       await server.stop(true);
     }

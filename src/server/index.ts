@@ -191,6 +191,7 @@ import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
   initializeManagementAuthState,
+  GUI_SESSION_ENDPOINT_PATH,
   issueGuiSession,
   handleGuiSessionEndpoint,
   managementPrincipal,
@@ -1099,8 +1100,17 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
 
       if (url.pathname.startsWith("/api/")) {
-        // Session bootstrap runs before the management gate: it is how a credential is
-        // established, so it cannot require one to already exist (beyond the admin token
+        // Remote dashboard session bootstrap must never be exposed on the ordinary proxy
+        // listener. Loopback dashboards receive their short-lived bootstrap in the page.
+        if (url.pathname === GUI_SESSION_ENDPOINT_PATH && requestServer !== dashboardServer) {
+          return withManagementCors(
+            formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`),
+            req,
+            managementPolicy,
+          );
+        }
+        // Session bootstrap runs before the management gate: it is how a remote credential
+        // is established, so it cannot require one to already exist (beyond the admin token
         // the POST carries). All origin checks still apply inside the handler.
         const sessionEndpointResponse = handleGuiSessionEndpoint(req, url, managementAuth, managementPolicy);
         if (sessionEndpointResponse) return withManagementCors(sessionEndpointResponse, req, managementPolicy);

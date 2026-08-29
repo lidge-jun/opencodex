@@ -25,7 +25,7 @@ let requestAdminToken: AdminTokenPrompt = promptForAdminToken;
 const SESSION_REBOOTSTRAP_PATH = "/opencodex-session";
 /** Safe authenticated read used to validate a raw admin token before closing the sign-in form. */
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/settings";
-/** Cookie-session endpoint: GET probes the HttpOnly cookie, POST mints one from an admin token. */
+/** Remote-dashboard session endpoint: POST mints an opaque session from an admin token. */
 const AUTH_SESSION_PATH = "/api/auth/session";
 
 /**
@@ -65,19 +65,14 @@ function needsApiAuth(input: RequestInfo | URL): boolean {
 
 /** Legacy sessionStorage key from pre-memory auth — wiped once on install, never read. */
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
+/** Persistent remote session: origin-scoped and opaque; never contains the raw admin token. */
+const PERSISTENT_GUI_SESSION_KEY = "opencodex-gui-session";
 
-/** In-memory only — never write tokens to web storage (XSS can read sessionStorage/localStorage). */
+/** The raw admin token stays memory-only. Remote GUI sessions are opaque and process-local. */
 let memoryToken: string | null = null;
 let memoryCsrfToken: string | null = null;
 let memorySessionOrigin: string | null = null;
-
-/**
- * Cookie-session arm, fired once at install when no memory credential exists. A returning
- * visitor with a live `opencodex_gui_session` cookie authenticates through the cookie alone;
- * this probe harvests the csrf/origin pair that /api requests must carry alongside it. Any
- * failure (401, bad shape, foreign origin) is a silent no-op — the header paths still work.
- */
-let cookieSessionArm: Promise<void> | null = null;
+let memorySessionPersistent = false;
 
 function readToken(): string | null {
   return memoryToken;
@@ -85,12 +80,17 @@ function readToken(): string | null {
 
 function storeToken(token: string): void {
   memoryToken = token;
+  memoryCsrfToken = null;
+  memorySessionOrigin = null;
+  memorySessionPersistent = false;
 }
 
 function clearToken(): void {
+  if (memorySessionPersistent) clearPersistentGuiSession();
   memoryToken = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
+  memorySessionPersistent = false;
 }
 
 function takeMetaContent(name: string): string | null {
@@ -118,55 +118,76 @@ function storeSession(token: string | null, csrfToken: string | null, origin: st
   memoryToken = token;
   memoryCsrfToken = csrfToken;
   memorySessionOrigin = origin;
+  memorySessionPersistent = false;
   return true;
 }
 
-function startCookieSessionArm(): void {
-  // Holder: lets the async body compare against the installed arm without a
-  // use-before-assignment on its own const initializer (TS2454).
-  const installed: { arm: Promise<void> | null } = { arm: null };
-  installed.arm = (async () => {
-    if (!rawFetch) return;
-    const bounded = createBoundedFetch(rebootstrapTimeoutMs);
-    try {
-      const response = await rawFetch(AUTH_SESSION_PATH, { cache: "no-store", signal: bounded.signal });
-      if (!response.ok) return;
-      const session = await response.json().catch(() => null) as { csrfToken?: unknown; origin?: unknown } | null;
-      if (!session
-        || typeof session.csrfToken !== "string"
-        || !session.csrfToken
-        || session.origin !== window.location.origin) return;
-      // Superseded by a reset/reinstall (tests) or by a memory credential that landed meanwhile.
-      if (cookieSessionArm !== installed.arm || readToken() !== null) return;
-      // memoryToken stays null on purpose: the HttpOnly cookie is the credential here.
-      memoryCsrfToken = session.csrfToken;
-      memorySessionOrigin = session.origin;
-    } catch {
-      /* best-effort */
-    } finally {
-      bounded.clear();
-    }
-  })();
-  cookieSessionArm = installed.arm;
+function clearPersistentGuiSession(): void {
+  try {
+    localStorage.removeItem(PERSISTENT_GUI_SESSION_KEY);
+  } catch {
+    /* browser storage may be disabled */
+  }
 }
 
-/**
- * Mint the HttpOnly cookie alongside a manually entered admin token, so the next page load
- * signs in silently. Best-effort: on failure the header credential still authenticates every
- * request; the cookie is an enhancement, never a dependency.
- */
-async function mintCookieSession(token: string): Promise<void> {
-  if (!rawFetch) return;
+function loadPersistentGuiSession(): void {
+  try {
+    const raw = localStorage.getItem(PERSISTENT_GUI_SESSION_KEY);
+    if (!raw) return;
+    const session = JSON.parse(raw) as { token?: unknown; csrfToken?: unknown; origin?: unknown; expiresAt?: unknown };
+    if (typeof session.expiresAt !== "number"
+      || !Number.isFinite(session.expiresAt)
+      || session.expiresAt <= Date.now()
+      || !storeSession(
+        typeof session.token === "string" ? session.token : null,
+        typeof session.csrfToken === "string" ? session.csrfToken : null,
+        typeof session.origin === "string" ? session.origin : null,
+      )) {
+      clearPersistentGuiSession();
+      return;
+    }
+    memorySessionPersistent = true;
+  } catch {
+    clearPersistentGuiSession();
+  }
+}
+
+function persistGuiSession(token: string, csrfToken: string, origin: string, expiresAt: number): void {
+  try {
+    localStorage.setItem(PERSISTENT_GUI_SESSION_KEY, JSON.stringify({ token, csrfToken, origin, expiresAt }));
+    memorySessionPersistent = true;
+  } catch {
+    /* storage is an enhancement; keep the current page session alive */
+  }
+}
+
+/** Mint an opaque session alongside a manually entered admin token for future page loads. */
+async function mintPersistentGuiSession(token: string): Promise<string | null> {
+  if (!rawFetch) return null;
   const bounded = createBoundedFetch(rebootstrapTimeoutMs);
   try {
-    await rawFetch(AUTH_SESSION_PATH, {
+    const response = await rawFetch(AUTH_SESSION_PATH, {
       method: "POST",
       cache: "no-store",
       signal: bounded.signal,
       headers: { "X-OpenCodex-API-Key": token },
     });
+    if (!response.ok) return null;
+    const session = await response.json().catch(() => null) as {
+      token?: unknown; csrfToken?: unknown; origin?: unknown; expiresAt?: unknown;
+    } | null;
+    if (!session
+      || typeof session.token !== "string"
+      || typeof session.csrfToken !== "string"
+      || typeof session.origin !== "string"
+      || typeof session.expiresAt !== "number"
+      || !Number.isFinite(session.expiresAt)
+      || session.expiresAt <= Date.now()
+      || !storeSession(session.token, session.csrfToken, session.origin)) return null;
+    persistGuiSession(session.token, session.csrfToken, session.origin, session.expiresAt);
+    return session.token;
   } catch {
-    /* best-effort */
+    return null;
   } finally {
     bounded.clear();
   }
@@ -300,8 +321,8 @@ async function resolveTokenAfter401(failedToken: string | null, callerSignal?: A
       if (prompted) {
         storeToken(prompted);
         // Bounded and fast; awaiting keeps the retry wave ordered after the mint.
-        await mintCookieSession(prompted);
-        return prompted;
+        // The raw token remains a current-page fallback if the remote session mint fails.
+        return await mintPersistentGuiSession(prompted) ?? prompted;
       }
       promptCancelled = true;
       return null;
@@ -337,33 +358,12 @@ export function installApiAuthFetch(): void {
   loadInjectedSession();
   const originalFetch = window.fetch.bind(window);
   rawFetch = originalFetch;
-  // No injected meta session (non-loopback or cookie-only visitor): probe the HttpOnly cookie
-  // session so the first /api wave carries origin/CSRF instead of 401-ing into a spurious prompt.
-  if (readToken() === null) startCookieSessionArm();
+  // Remote dashboards restore only an opaque session scoped to this exact browser origin.
+  if (readToken() === null) loadPersistentGuiSession();
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!needsApiAuth(input)) return originalFetch(input, init);
 
     const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
-    // While credential-less, wait once for the cookie arm. Racing it would 401 the first wave
-    // and pop a spurious admin-token prompt. The promise is settle-once; awaiting it again is free.
-    if (!callerSignal?.aborted && readToken() === null && cookieSessionArm) {
-      // An aborted caller must not sit out the arm probe's full timeout: race the signal so
-      // this fetch unwinds immediately while other callers keep waiting for the shared arm.
-      if (callerSignal) {
-        let onAbort: (() => void) | undefined;
-        await Promise.race([
-          cookieSessionArm,
-          new Promise<void>((resolve) => {
-            onAbort = () => resolve();
-            callerSignal.addEventListener("abort", onAbort, { once: true });
-          }),
-        ]).finally(() => {
-          if (onAbort) callerSignal.removeEventListener("abort", onAbort);
-        });
-      } else {
-        await cookieSessionArm;
-      }
-    }
     const token = readToken();
     const [firstInput, firstInit] = withToken(input, init, token);
     const response = await originalFetch(firstInput, firstInit);
@@ -396,7 +396,7 @@ export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = p
   memoryToken = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
-  cookieSessionArm = null;
+  memorySessionPersistent = false;
   resolutionInFlight = null;
   rawFetch = null;
   promptCancelled = false;

@@ -52,13 +52,12 @@ import {
 } from "./auth-cors";
 
 const GUI_SESSION_TTL_MS = 5 * 60_000;
-// Cookie-carried sessions are minted only in exchange for the admin token, so they can
-// outlive the auto-minted loopback sessions without widening trust: same origin binding,
-// same CSRF gate, and the token itself stays HttpOnly (unreadable from script).
-const GUI_COOKIE_SESSION_TTL_MS = 12 * 60 * 60_000;
+// Persistent remote-dashboard sessions are minted only in exchange for the admin token.
+// They remain origin- and CSRF-bound, while the browser keeps the opaque token in
+// origin-scoped storage rather than a hostname-scoped HTTP cookie.
+const GUI_PERSISTENT_SESSION_TTL_MS = 12 * 60 * 60_000;
 const GUI_SESSION_LIMIT = 128;
-export const GUI_SESSION_COOKIE_NAME = "opencodex_gui_session";
-const GUI_SESSION_ENDPOINT_PATH = "/api/auth/session";
+export const GUI_SESSION_ENDPOINT_PATH = "/api/auth/session";
 const LOCAL_READ_REPLAY_LIMIT = 256;
 const consumedLocalReadCapabilities = new Map<string, number>();
 const admittedLocalReadRequests = new WeakSet<Request>();
@@ -284,24 +283,10 @@ export function issueGuiSession(
   return mintGuiSession(state, origin, GUI_SESSION_TTL_MS);
 }
 
-/** Parse the GUI session cookie. Values are opaque base64url tokens, so a plain first-= split is exact. */
-export function readGuiSessionCookie(req: Request): string | null {
-  const header = req.headers.get("cookie");
-  if (!header) return null;
-  for (const part of header.split(";")) {
-    const trimmed = part.trim();
-    if (!trimmed.startsWith(`${GUI_SESSION_COOKIE_NAME}=`)) continue;
-    const value = trimmed.slice(GUI_SESSION_COOKIE_NAME.length + 1);
-    return value || null;
-  }
-  return null;
-}
-
-/** The management credential a request presented: header token first, then the session cookie. */
+/** The management credential a request presented in a header. */
 function managementCredential(req: Request): string | null {
-  const header = req.headers.get("x-opencodex-api-key")?.trim()
+  return req.headers.get("x-opencodex-api-key")?.trim()
     || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-  return header || readGuiSessionCookie(req);
 }
 
 /** The origin/CSRF admission a session credential must pass, shared by every gate that reads one. */
@@ -309,10 +294,8 @@ function guiSessionAdmitted(req: Request, session: GuiSessionRecord, config: Man
   const requestOrigin = managementRequestOrigin(req, config);
   const claimedOrigin = req.headers.get("x-opencodex-gui-origin");
   const browserOrigin = req.headers.get("Origin");
-  // Safe methods include the page-refresh probe: no in-memory origin/CSRF exists yet
-  // (that is what the probe fetches), and a same-origin browser GET sends no Origin
-  // header either. The Host-derived origin binding plus the SameSite=Strict cookie
-  // carry the CSRF burden for reads; mutations below still demand the full arm.
+  // Safe methods need no CSRF token. The opaque session credential is carried in a
+  // header and remains bound to this exact origin; mutations still demand the full arm.
   const sameOrigin = requestOrigin === session.origin
     && (!claimedOrigin || claimedOrigin === session.origin)
     && (!browserOrigin || browserOrigin === session.origin);
@@ -330,10 +313,8 @@ function guiSessionAdmitted(req: Request, session: GuiSessionRecord, config: Man
  * Mint a GUI session in exchange for the raw admin token (POST /api/auth/session).
  *
  * Unlike issueGuiSession this is not loopback-only: the credential, not the transport,
- * carries the trust. The browser receives the token as an HttpOnly SameSite=Strict cookie
- * so a remote dashboard keeps its sign-in across refreshes without the token ever being
- * readable from script. No `Secure` flag: the intended deployment is a plain-http bind on
- * a WireGuard-encrypted tailnet address, where Secure would suppress the cookie entirely.
+ * carries the trust. The browser stores this opaque, process-local token at its exact
+ * dashboard origin, avoiding hostname-scoped cookie replay to another HTTP port.
  */
 export function issueGuiSessionForAdmin(
   req: Request,
@@ -347,35 +328,13 @@ export function issueGuiSessionForAdmin(
   if (!isAllowedManagementOrigin(req, config)) return null;
   const origin = managementRequestOrigin(req, config);
   if (!origin) return null;
-  return mintGuiSession(state, origin, GUI_COOKIE_SESSION_TTL_MS);
-}
-
-export interface GuiSessionInfo {
-  csrfToken: string;
-  origin: string;
-  expiresAt: number;
-}
-
-/** Resolve the current session credential (header session token or cookie) for GET /api/auth/session. */
-export function guiSessionCredentialInfo(
-  req: Request,
-  state: ManagementAuthState,
-  config: ManagementPolicyView,
-): GuiSessionInfo | null {
-  if (!state.available) return null;
-  const credential = managementCredential(req);
-  if (!credential) return null;
-  removeExpiredSessions(state);
-  const session = state.sessions.get(credential);
-  if (!session || !guiSessionAdmitted(req, session, config)) return null;
-  return { csrfToken: session.csrfToken, origin: session.origin, expiresAt: session.expiresAt };
+  return mintGuiSession(state, origin, GUI_PERSISTENT_SESSION_TTL_MS);
 }
 
 /**
- * POST /api/auth/session exchanges the admin token for an HttpOnly cookie session; GET
- * reports the current session's CSRF material so a refreshed page can re-arm its in-memory
- * headers without re-prompting. Returns null for other paths so the caller falls through
- * to the normal management gate.
+ * POST /api/auth/session exchanges the admin token for an opaque browser-stored session.
+ * The route is mounted only on the dedicated remote dashboard listener; ordinary loopback
+ * dashboards use their injected short-lived session instead.
  */
 export function handleGuiSessionEndpoint(
   req: Request,
@@ -387,22 +346,12 @@ export function handleGuiSessionEndpoint(
   if (req.method === "POST") {
     const bootstrap = issueGuiSessionForAdmin(req, config, state);
     if (!bootstrap) return Response.json({ error: "opencodex admin token required" }, { status: 401 });
-    const response = Response.json({
+    return Response.json({
+      token: bootstrap.token,
       csrfToken: bootstrap.csrfToken,
       origin: bootstrap.origin,
       expiresAt: bootstrap.expiresAt,
     });
-    const headers = new Headers(response.headers);
-    headers.append(
-      "Set-Cookie",
-      `${GUI_SESSION_COOKIE_NAME}=${bootstrap.token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(GUI_COOKIE_SESSION_TTL_MS / 1000)}`,
-    );
-    return new Response(response.body, { status: response.status, headers });
-  }
-  if (req.method === "GET") {
-    const info = guiSessionCredentialInfo(req, state, config);
-    if (!info) return Response.json({ error: "opencodex admin token required" }, { status: 401 });
-    return Response.json(info);
   }
   return Response.json({ error: "method not allowed" }, { status: 405 });
 }
