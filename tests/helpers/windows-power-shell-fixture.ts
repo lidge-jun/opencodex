@@ -35,10 +35,17 @@ export async function probeWindowsPowerShellFixture(
     ]);
     if (!completed) {
       try { child.kill(); } catch { /* already exited */ }
-      const reaped = await Promise.race([
+      let reaped = await Promise.race([
         child.exited.then(() => true, () => true),
-        Bun.sleep(1_000).then(() => false),
+        Bun.sleep(500).then(() => false),
       ]);
+      if (!reaped) {
+        try { child.kill(9); } catch { /* already exited */ }
+        reaped = await Promise.race([
+          child.exited.then(() => true, () => true),
+          Bun.sleep(500).then(() => false),
+        ]);
+      }
       void stdoutPromise.catch(() => {});
       void stderrPromise.catch(() => {});
       return { ok: false, detail: `timed out after ${timeoutMs}ms; reaped=${reaped}` };
