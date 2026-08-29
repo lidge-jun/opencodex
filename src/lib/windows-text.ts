@@ -10,10 +10,11 @@
  *   iconv dependency. The former can reinterpret valid text; the latter widens
  *   the install/security surface for two small, already-supported codecs.
  * - Choice: recognize UTF-16 first, accept only strict UTF-8 next, then use the
- *   locale-appropriate WHATWG decoder (CP949 through `euc-kr`, or Windows-1252
- *   only for locales that actually use that family). Unknown/unsupported
- *   locales fail back to the old replacement-preserving UTF-8 result instead
- *   of guessing another code page or throwing in diagnostics.
+ *   locale-appropriate WHATWG decoder (CP949 through `euc-kr`, GBK/Big5 for the
+ *   zh family, Shift_JIS for ja, or Windows-1252 only for locales that actually
+ *   use that family). Unknown/unsupported locales fail back to the old
+ *   replacement-preserving UTF-8 result instead of guessing another code page
+ *   or throwing in diagnostics.
  * - Impact: decoding stays dependency-free and bounded, but this deliberately
  *   does not guess arbitrary OEM code pages that the runtime cannot identify.
  */
@@ -49,14 +50,27 @@ function decodeUtf16Be(buffer: Uint8Array): string {
 }
 
 /**
- * CP949 is exposed by the Encoding Standard under the `euc-kr` label. Keep the
- * Western fallback deliberately narrow: treating CP932, CP1250, or CP1251
- * bytes as Windows-1252 can fabricate a different valid-looking filesystem
- * path, which is worse than the previous replacement-character refusal.
+ * CP949 is exposed by the Encoding Standard under the `euc-kr` label; the zh
+ * family maps to `gbk` (zh-Hans) or `big5` (zh-Hant), and ja maps to
+ * `shift_jis`. Each locale is paired with the exact code page its Windows host
+ * actually emits, never a cross-family guess. Keep the Western fallback
+ * deliberately narrow: treating CP1250 or CP1251 bytes as Windows-1252 can
+ * fabricate a different valid-looking filesystem path, which is worse than the
+ * previous replacement-character refusal.
  */
-function legacyEncodingForLocale(locale: string): "euc-kr" | "windows-1252" | null {
-  const language = locale.trim().split(/[-_]/, 1)[0]?.toLowerCase();
+function legacyEncodingForLocale(
+  locale: string,
+): "euc-kr" | "windows-1252" | "gbk" | "big5" | "shift_jis" | null {
+  const normalized = locale.trim().toLowerCase();
+  const language = normalized.split(/[-_]/, 1)[0]?.toLowerCase();
   if (language === "ko") return "euc-kr";
+  if (language === "ja") return "shift_jis";
+  if (language === "zh") {
+    // zh-Hant hosts (zh-TW / zh-HK / zh-MO, and any explicit -hant tag) emit
+    // Big5; the rest of the zh family (zh-CN and friends) emits GBK.
+    const traditional = normalized.includes("hant") || /[-_](tw|hk|mo)\b/.test(normalized);
+    return traditional ? "big5" : "gbk";
+  }
   if (language && WINDOWS_1252_LANGUAGES.has(language)) return "windows-1252";
   return null;
 }

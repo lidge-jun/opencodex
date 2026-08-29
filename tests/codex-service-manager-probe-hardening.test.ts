@@ -338,6 +338,44 @@ describe("Windows ownership probe hardening regressions", () => {
     expect(calls.some(call => call.args.includes("/fo"))).toBe(true);
   });
 
+  test("zh-CN GBK schtasks task-not-found output is decisive without the full listing", () => {
+    const calls: Array<{ file: string; args: readonly string[] }> = [];
+    const runRaw: RawProbeRunner = (file, args) => {
+      calls.push({ file, args });
+      if (args.includes("/xml")) {
+        // Real zh-CN bytes: 错误: 系统找不到指定的文件。 (GBK/CP936)
+        return {
+          status: 1,
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.from(
+            "B4EDCEF33A20CFB5CDB3D5D2B2BBB5BDD6B8B6A8B5C4CEC4BCFEA1A3",
+            "hex",
+          ),
+          timedOut: false,
+          spawnFailed: false,
+        };
+      }
+      if (args.includes("/fo")) {
+        return raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n');
+      }
+      return raw(1, "", "unexpected query");
+    };
+
+    const result = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsLocale: "zh-CN",
+    });
+
+    // Decisive absence: the /fo full listing is the 2s-budget fallback that
+    // times out on hosts with many scheduled tasks, so it must not be reached.
+    expect(result.kind).toBe("absent");
+    expect(calls.some(call => call.args.includes("/fo"))).toBe(false);
+  });
+
   test("a staged but unregistered WinSW definition remains visible as a present claim", () => {
     const codexHome = "C:\\staged\\.codex";
     writeWinsw(configDir, codexHome, configDir);

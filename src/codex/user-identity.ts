@@ -36,27 +36,21 @@ const SID_PATTERN = /^S-1-(?:\d+-)+\d+$/i;
  * Hard budget for the Windows identity-lookup PowerShell child. These lookups
  * run at startup and on config writes; a hung child must fail the lookup
  * (recoverable — the caller refuses) rather than wedge the proxy indefinitely.
- */
-const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS = 8_000;
-
-/**
- * The same budget, widened for a contended CI runner.
  *
- * 8s is a generous ceiling for `powershell.exe -Command` on a real desktop and is not one
- * on a GitHub Windows runner executing a quarter of this suite: the composed-acceptance
- * cases fail there with "Windows effective-account lookup timed out" while the child is
- * still starting. That is runner contention, not a hung lookup, and the budget exists to
- * bound the latter.
- *
- * Gated on `CI` alone. A user's machine keeps the 8s ceiling exactly as before, so the
- * recoverable-refusal contract this budget protects is unchanged where it matters.
+ * 30s, shared by desktops and CI. On a healthy desktop the child needs well
+ * under a second, but contended desktops are real: antivirus real-time
+ * scanning, a loaded task scheduler, and per-spawn jitter stack up (measured
+ * 3-5s per `powershell.exe -Command` child on a zh-CN Windows 10 host with 401
+ * scheduled tasks), and the old 8s desktop ceiling was breached
+ * intermittently — "Windows effective-account lookup timed out" on an ordinary
+ * sync, the same failure the CI gate was widened for. The budget still bounds
+ * a genuinely hung child; it no longer assumes contention only happens on
+ * runners.
  */
-const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_CI_MS = 30_000;
+const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS = 30_000;
 
 function windowsIdentityLookupTimeoutMs(): number {
-  return process.env.CI === "true"
-    ? WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_CI_MS
-    : WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS;
+  return WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS;
 }
 
 /**

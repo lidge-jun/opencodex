@@ -535,16 +535,21 @@ function windowsTaskListContains(body: string, taskName: string): boolean {
   });
 }
 
-/** English hosts provide a decisive fast path; other locales fall back to a full listing. */
-const SCHTASKS_TASK_NOT_FOUND_EN = /cannot find the file specified/i;
+/**
+ * English hosts provide a decisive fast path; zh/ja hosts emit localized
+ * task-not-found messages that decode through the same legacy codecs, so they
+ * are decisive too. Any other locale still falls back to a full listing.
+ */
+const SCHTASKS_TASK_NOT_FOUND = /cannot find the file specified|找不到指定的文件|指定されたファイルが見つかりません/i;
 
 /**
  * Registration state of the scheduled task.
  *
  * The `/xml` query gives the authoritative registered definition. A nonzero
- * result is locale-dependent. English's task-not-found message is decisive; all
- * other nonzero responses use a bounded full listing as the locale-neutral
- * fallback, and only a successful list without our task proves absence.
+ * result is locale-dependent. English and zh/ja task-not-found messages are
+ * decisive; all other nonzero responses use a bounded full listing as the
+ * locale-neutral fallback, and only a successful list without our task proves
+ * absence.
  */
 function probeWindowsTaskRegistration(
   deps: Required<Pick<ProbeDeps, "runRaw">> & Pick<ProbeDeps, "windowsLocale">,
@@ -570,7 +575,7 @@ function probeWindowsTaskRegistration(
   }
 
   const queryText = `${decodeWindowsTextBytes(queried.stdout, { locale: deps.windowsLocale })}\n${decodeWindowsTextBytes(queried.stderr, { locale: deps.windowsLocale })}`;
-  if (queried.status !== null && SCHTASKS_TASK_NOT_FOUND_EN.test(queryText)) {
+  if (queried.status !== null && SCHTASKS_TASK_NOT_FOUND.test(queryText)) {
     return { registered: "absent", registeredXml: "" };
   }
 

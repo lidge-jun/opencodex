@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { join, parse } from "node:path";
 import { tmpdir } from "node:os";
@@ -11,6 +11,7 @@ import {
   resolveEffectiveUserIdentity,
   probeCodexCoordinatorNamespace,
   samePathIdentity,
+  windowsIdentityPowerShellSpawnOptionsForTests,
 } from "../src/codex/user-identity";
 
 let codexHome = "";
@@ -228,4 +229,23 @@ test("H is keyed by state database identity and is never N's or K's path", () =>
   // A relative state database is refused rather than silently keyed on its text.
   expect(() => resolveCodexHistorySerializationDatabasePath(identity, canonicalHome, "state_5.sqlite"))
     .toThrow();
+});
+
+describe("Windows identity-lookup budget", () => {
+  test("desktop and CI share the 30s budget — contended desktops breached the old 8s ceiling", () => {
+    // Regression: a zh-CN Windows 10 desktop with 401 scheduled tasks and AV
+    // real-time scanning measures 3-5s per powershell.exe child; spawn jitter
+    // pushed the old desktop-only 8s ceiling over intermittently, refusing
+    // every sync with "Windows effective-account lookup timed out" (#2914).
+    const previousCi = process.env.CI;
+    try {
+      delete process.env.CI;
+      expect(windowsIdentityPowerShellSpawnOptionsForTests().timeout).toBe(30_000);
+      process.env.CI = "true";
+      expect(windowsIdentityPowerShellSpawnOptionsForTests().timeout).toBe(30_000);
+    } finally {
+      if (previousCi === undefined) delete process.env.CI;
+      else process.env.CI = previousCi;
+    }
+  });
 });
