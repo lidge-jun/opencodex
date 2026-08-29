@@ -439,10 +439,14 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
       );
 
       expect(response.status).toBe(replayStatus);
-      expect(harness.sends).toHaveLength(3);
+      expect(harness.sends).toEqual([
+        "Bearer seed-test-key",
+        "Bearer rejected-access",
+        "Bearer refreshed-access",
+      ]);
       expect(alternateAccountSends).toBe(0);
       expect(seedModelSends).toBe(1);
-      expect(harness.refreshes).toHaveLength(1);
+      expect(harness.refreshes).toEqual(["refresh-grant"]);
     });
   }
 
