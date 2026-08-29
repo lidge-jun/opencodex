@@ -10,8 +10,60 @@ import {
   type NativeMainRefreshDependencies,
 } from "./main-account";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
+import { loadPersistedCodexRuntime } from "./runtime";
 
-const CODEX_MODELS_URL = "https://chatgpt.com/backend-api/codex/models?client_version=0.0.0";
+const CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models";
+
+/**
+ * Upstream filters this roster by the client version it is told, and `client_version` is a
+ * required parameter — a measured `0.60.0` returns zero models where `0.142.2` returns five
+ * (devlog/_fin/260817_native_gpt56_1m_context/001_measurement_evidence.md). Asking as
+ * `0.0.0` therefore describes what a prehistoric client may use, and treating that as the
+ * account's entitlement hides models the account genuinely owns (#2886).
+ *
+ * A version must be supplied by the caller. There is deliberately no default: inventing one
+ * either manufactures a confirmed negative (the defect) or advertises models the installed
+ * runtime cannot drive (#2548, from the opposite side).
+ */
+function codexModelsUrl(clientVersion: string): string {
+  return `${CODEX_MODELS_ENDPOINT}?client_version=${encodeURIComponent(clientVersion)}`;
+}
+
+/** A version string upstream can filter on. Rejects empty and the `0.0.0` placeholder. */
+export function isUsableCodexClientVersion(value: string | null | undefined): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "0.0.0") return false;
+  return /^\d+(\.\d+)*([-+][0-9A-Za-z.-]+)?$/.test(trimmed);
+}
+
+/**
+ * Version authority, in precedence order:
+ *
+ * 1. the inbound request's own `client_version` — the only value certainly describing the
+ *    client being answered;
+ * 2. the selected Codex runtime version, for background sync where no request exists.
+ *    Retained sync refreshes runtime evidence before discovery, which is what makes this
+ *    usable here; the persisted file itself carries no freshness guarantee.
+ *
+ * Neither available means the roster is not requested at all. Unconfirmed already suppresses
+ * the gated rows and routing already rejects them, so failing closed on ABSENT evidence is
+ * the existing contract; failing closed on INVENTED evidence was the bug.
+ */
+export function resolveCodexEntitlementClientVersion(
+  inbound?: string | null,
+  loadRuntime: () => { selectedVersion?: string | null } | null = loadPersistedCodexRuntime,
+): string | null {
+  if (isUsableCodexClientVersion(inbound)) return inbound.trim();
+  let persisted: { selectedVersion?: string | null } | null = null;
+  try {
+    persisted = loadRuntime();
+  } catch {
+    persisted = null;
+  }
+  const selected = persisted?.selectedVersion;
+  return isUsableCodexClientVersion(selected) ? selected.trim() : null;
+}
 const MODEL_ROSTER_TTL_MS = 5 * 60_000;
 const MODEL_ROSTER_FAILURE_TTL_MS = 15_000;
 const MODEL_ROSTER_TIMEOUT_MS = 8_000;
@@ -29,6 +81,12 @@ export interface CodexModelEntitlementCredentialSnapshot {
 
 interface CachedAccountModels {
   readonly credentialIdentity: string;
+  /**
+   * Client version this roster was fetched under. Upstream filters by it, so a roster is
+   * only an answer for that version — an entry fetched under one must never satisfy a read
+   * for another (#2886).
+   */
+  readonly clientVersion: string;
   readonly expiresAt: number;
   readonly models: ReadonlySet<string>;
   readonly confirmed: boolean;
@@ -42,6 +100,17 @@ export interface CodexModelEntitlementSnapshot {
 
 export interface CodexModelEntitlementResolveOptions {
   readonly fetcher?: typeof fetch;
+  /**
+   * Client version to ask upstream about. Absent means no trustworthy version was
+   * available, and discovery is skipped rather than asked under a placeholder.
+   */
+  readonly clientVersion?: string | null;
+  /**
+   * Test-only seam for the persisted-runtime half of the version precedence chain, so a case
+   * can reach the no-trustworthy-version branch without depending on the host's own runtime
+   * state file.
+   */
+  readonly loadPersistedRuntime?: () => { selectedVersion?: string | null } | null;
   readonly nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
   readonly now?: number;
   readonly signal?: AbortSignal;
@@ -150,6 +219,7 @@ async function fetchAccountModels(
   credential: CodexModelEntitlementCredentialSnapshot,
   fetcher: typeof fetch,
   now: number,
+  clientVersion: string,
 ): Promise<CachedAccountModels> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new DOMException("Codex model discovery timed out", "TimeoutError")), MODEL_ROSTER_TIMEOUT_MS);
@@ -159,7 +229,7 @@ async function fetchAccountModels(
       Accept: "application/json",
     });
     if (credential.chatgptAccountId) headers.set("ChatGPT-Account-Id", credential.chatgptAccountId);
-    const response = await fetcher(CODEX_MODELS_URL, {
+    const response = await fetcher(codexModelsUrl(clientVersion), {
       headers,
       redirect: "error",
       signal: controller.signal,
@@ -174,6 +244,7 @@ async function fetchAccountModels(
       : null;
     return {
       credentialIdentity: credential.credentialIdentity,
+      clientVersion,
       expiresAt: now + (models ? MODEL_ROSTER_TTL_MS : MODEL_ROSTER_FAILURE_TTL_MS),
       models: models ?? new Set(),
       confirmed: models !== null,
@@ -181,6 +252,7 @@ async function fetchAccountModels(
   } catch {
     return {
       credentialIdentity: credential.credentialIdentity,
+      clientVersion,
       expiresAt: now + MODEL_ROSTER_FAILURE_TTL_MS,
       models: new Set(),
       confirmed: false,
@@ -212,18 +284,22 @@ async function modelsForCredential(
   credential: CodexModelEntitlementCredentialSnapshot,
   fetcher: typeof fetch,
   now: number,
+  clientVersion: string,
 ): Promise<CachedAccountModels> {
   const cached = accountModelsCache.get(credential.accountId);
   if (
     cached
     && cached.credentialIdentity === credential.credentialIdentity
+    // Upstream filters by client version, so a roster fetched under a different one is a
+    // different question's answer and must not be reused.
+    && cached.clientVersion === clientVersion
     && cached.expiresAt > now
   ) return cached;
 
-  const flightKey = `${credential.accountId}\u0000${credential.credentialIdentity}`;
+  const flightKey = `${credential.accountId}\u0000${credential.credentialIdentity}\u0000${clientVersion}`;
   const existing = accountModelsFlights.get(flightKey);
   if (existing) return existing;
-  const flight = fetchAccountModels(credential, fetcher, now)
+  const flight = fetchAccountModels(credential, fetcher, now, clientVersion)
     .then(result => {
       if (currentCredentialIdentity(credential.accountId) === credential.credentialIdentity) {
         boundedCacheSet(credential.accountId, result);
@@ -269,6 +345,10 @@ export async function resolveCodexModelEntitlements(
 ): Promise<CodexModelEntitlementSnapshot> {
   const now = options.now ?? Date.now();
   const fetcher = options.fetcher ?? fetch;
+  const clientVersion = resolveCodexEntitlementClientVersion(
+    options.clientVersion,
+    options.loadPersistedRuntime ?? loadPersistedCodexRuntime,
+  );
   const allowedAccountIds = candidateAccountIds(config)
     .filter(accountId => !options.excludeAccountIds?.has(accountId));
   const credentialSnapshot = options.credentialSnapshot ?? accountCredentialSnapshot;
@@ -276,9 +356,19 @@ export async function resolveCodexModelEntitlements(
     ? [...options.credentials].filter(credential => !options.excludeAccountIds?.has(credential.accountId))
     : (await Promise.all(allowedAccountIds.map(accountId => credentialSnapshot(accountId, options))))
       .filter((value): value is CodexModelEntitlementCredentialSnapshot => value !== null);
+  // No trustworthy client version means the roster cannot be asked for meaningfully.
+  // Report every account as UNCONFIRMED rather than fetching under a placeholder that
+  // upstream would answer with an empty or truncated roster (#2886).
+  if (clientVersion === null) {
+    return {
+      modelsByAccount: new Map(credentials.map(credential => [credential.accountId, new Set<string>()])),
+      confirmedAccountIds: new Set<string>(),
+      credentialIdentities: new Map(credentials.map(credential => [credential.accountId, credential.credentialIdentity])),
+    };
+  }
   const results = await Promise.all(credentials.map(async credential => ({
     credential,
-    result: await modelsForCredential(credential, fetcher, now),
+    result: await modelsForCredential(credential, fetcher, now, clientVersion),
   })));
   return {
     modelsByAccount: new Map(results.map(({ credential, result }) => [credential.accountId, result.models])),
@@ -291,15 +381,19 @@ export async function resolveCodexModelEntitlements(
 export async function isDirectCallerEntitledToCodexModel(
   headers: Headers,
   modelId: string,
-  options: Pick<CodexModelEntitlementResolveOptions, "fetcher" | "now"> = {},
+  options: Pick<CodexModelEntitlementResolveOptions, "fetcher" | "now" | "clientVersion"> = {},
 ): Promise<boolean> {
   if (!ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(modelId)) return true;
   const credential = directCallerCredential(headers);
   if (!credential) return false;
+  const clientVersion = resolveCodexEntitlementClientVersion(options.clientVersion);
+  // Fail closed on absent evidence, exactly as an unconfirmed roster does.
+  if (clientVersion === null) return false;
   const result = await modelsForCredential(
     credential,
     options.fetcher ?? fetch,
     options.now ?? Date.now(),
+    clientVersion,
   );
   return result.confirmed && result.models.has(modelId);
 }
@@ -331,11 +425,22 @@ export function availableAccountGatedNativeModels(
 export function cachedAvailableAccountGatedNativeModels(
   now = Date.now(),
   eligibleAccountIds?: ReadonlySet<string>,
+  clientVersion?: string | null,
 ): ReadonlySet<string> {
+  // Entries fetched under a different client version answer a different question, so a caller
+  // that knows which version it is projecting for must say so — otherwise a newer client's
+  // roster leaks into an older client's projection (#2548 from the opposite direction).
+  //
+  // Omitting the argument deliberately does NOT filter. This is a synchronous read of
+  // whatever discovery already proved, and its callers (catalog metadata) are not
+  // request-scoped: resolving a version here would silently discard every entry fetched under
+  // a different one, which is a suppression this function has no evidence to justify.
+  const version = isUsableCodexClientVersion(clientVersion) ? clientVersion.trim() : null;
   return new Set([...ACCOUNT_GATED_NATIVE_OPENAI_MODELS].filter(modelId => (
     [...accountModelsCache].some(([accountId, entry]) => (
       (!eligibleAccountIds || eligibleAccountIds.has(accountId))
       && !accountId.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX)
+      && (version === null || entry.clientVersion === version)
       && entry.confirmed
       && entry.expiresAt > now
       && entry.models.has(modelId)
@@ -363,9 +468,11 @@ export function seedCodexModelEntitlementsForTests(
   accountId: string,
   models: readonly string[],
   now = Date.now(),
+  clientVersion = "0.146.0",
 ): void {
   boundedCacheSet(accountId, {
     credentialIdentity: `test:${accountId}`,
+    clientVersion,
     expiresAt: now + MODEL_ROSTER_TTL_MS,
     models: new Set(models),
     confirmed: true,
