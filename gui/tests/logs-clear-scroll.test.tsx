@@ -718,3 +718,296 @@ test("Logs: buffer count shows correct shown after new entries arrive post-clear
 
   await act(async () => { root.unmount(); });
 });
+
+// ─── Occurrence-aware duplicate log tests ───
+
+/** Helper: build a no-requestId log with ALL fallback fields identical. */
+function makeDupLog(ts: number) {
+  return {
+    timestamp: ts,
+    model: "same-model",
+    provider: "same-provider",
+    status: 200,
+    durationMs: 99,
+    usageStatus: "reported",
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    displayMetrics: {
+      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
+      cost: { kind: "unavailable", reason: "price_unmatched" },
+    },
+  };
+}
+
+test("Logs: clear hides two identical no-requestId entries (occurrence=2)", async () => {
+  const dup1 = makeDupLog(1_700_000_000_000);
+  const dup2 = makeDupLog(1_700_000_000_000);
+
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([dup2, dup1]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  expect(container.textContent).toContain("2 / 2");
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+
+  // Both hidden: 0 shown, 2 total
+  expect(container.textContent).toContain("0 / 2");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: after clear, third identical no-requestId entry is visible", async () => {
+  const dup1 = makeDupLog(1_700_000_000_000);
+  const dup2 = makeDupLog(1_700_000_000_000);
+  const dup3 = makeDupLog(1_700_000_000_000);
+
+  let callCount = 0;
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    callCount++;
+    if (callCount <= 1) return jsonResponse([dup2, dup1]);
+    return jsonResponse([dup3, dup2, dup1]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  expect(container.textContent).toContain("2 / 2");
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+  expect(container.textContent).toContain("0 / 2");
+
+  // Poll — dup3 is new
+  await act(async () => { jest.advanceTimersByTime(2000); });
+  await flushMicrotasks();
+  await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
+
+  // 1 visible, 3 total
+  expect(container.textContent).toContain("1 / 3");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: multiple identical new entries arrive at once after clear", async () => {
+  const dup1 = makeDupLog(1_700_000_000_000);
+
+  let callCount = 0;
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    callCount++;
+    if (callCount <= 1) return jsonResponse([dup1]);
+    const dup2 = makeDupLog(1_700_000_000_000);
+    const dup3 = makeDupLog(1_700_000_000_000);
+    return jsonResponse([dup3, dup2, dup1]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  expect(container.textContent).toContain("1 / 1");
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+  expect(container.textContent).toContain("0 / 1");
+
+  // Poll — dup2 and dup3 are new occurrences
+  await act(async () => { jest.advanceTimersByTime(2000); });
+  await flushMicrotasks();
+  await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
+
+  // 2 visible, 3 total
+  expect(container.textContent).toContain("2 / 3");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: requestId and fallback-key entries clear independently", async () => {
+  const withId = makeLog("r-ind-1", 1_700_000_000_000);
+  const noId = makeDupLog(1_700_000_000_000);
+
+  let callCount = 0;
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    callCount++;
+    if (callCount <= 1) return jsonResponse([withId, noId]);
+    const newId = makeLog("r-ind-new", 1_700_000_005_000);
+    return jsonResponse([newId, withId, noId]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  expect(hasLogRow(container, "r-ind-1")).toBe(true);
+  expect(container.textContent).toContain("2 / 2");
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+  expect(container.textContent).toContain("0 / 2");
+
+  // Poll — new requestId entry visible, old ones hidden
+  await act(async () => { jest.advanceTimersByTime(2000); });
+  await flushMicrotasks();
+  await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
+
+  expect(hasLogRow(container, "r-ind-new")).toBe(true);
+  expect(hasLogRow(container, "r-ind-1")).toBe(false);
+  expect(container.textContent).toContain("1 / 3");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: buffer eviction caps cleared counts to actual occurrences", async () => {
+  const dup1 = makeDupLog(1_700_000_000_000);
+  const dup2 = makeDupLog(1_700_000_000_000);
+
+  let callCount = 0;
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    callCount++;
+    if (callCount <= 1) return jsonResponse([dup2, dup1]);
+    // Server evicts both old entries, returns one new entry with same composite key
+    const dup3 = makeDupLog(1_700_000_000_000);
+    return jsonResponse([dup3]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  expect(container.textContent).toContain("2 / 2");
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+  expect(container.textContent).toContain("0 / 2");
+
+  // Poll — server evicted both old entries, only dup3 remains
+  await act(async () => { jest.advanceTimersByTime(2000); });
+  await flushMicrotasks();
+  await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
+
+  // dup3 shares composite key with cleared entries; the count is capped to
+  // the single remaining occurrence, so it is hidden. This is a known limitation
+  // of composite keys: we cannot distinguish "old entry still in buffer" from
+  // "new entry with identical fields". The buffer correctly shows 1 total, 0 shown.
+  expect(container.textContent).toContain("0 / 1");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: same timestamp but different fields stays independent", async () => {
+  const logSameTime1 = {
+    timestamp: 1_700_000_000_000, model: "m1", provider: "p1", status: 200, durationMs: 10,
+    usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    displayMetrics: { tokPerSecond: { kind: "unavailable" as const, reason: "x" }, cost: { kind: "unavailable" as const, reason: "x" } },
+  };
+  const logSameTime2 = {
+    timestamp: 1_700_000_000_000, model: "m2", provider: "p2", status: 500, durationMs: 99,
+    usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    displayMetrics: { tokPerSecond: { kind: "unavailable" as const, reason: "x" }, cost: { kind: "unavailable" as const, reason: "x" } },
+  };
+
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([logSameTime1, logSameTime2]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+  expect(container.textContent).toContain("2 / 2");
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+
+  expect(hasLogRow(container, "m1")).toBe(false);
+  expect(hasLogRow(container, "m2")).toBe(false);
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: filter switch does not restore cleared occurrences", async () => {
+  const logA = {
+    requestId: "r-filt-a", timestamp: 1_700_000_000_000, model: "m-a", provider: "p-a",
+    surface: "claude" as const, status: 200, durationMs: 10,
+    usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    displayMetrics: { tokPerSecond: { kind: "unavailable" as const, reason: "x" }, cost: { kind: "unavailable" as const, reason: "x" } },
+  };
+  const logB = {
+    requestId: "r-filt-b", timestamp: 1_700_000_001_000, model: "m-b", provider: "p-b",
+    status: 200, durationMs: 10,
+    usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    displayMetrics: { tokPerSecond: { kind: "unavailable" as const, reason: "x" }, cost: { kind: "unavailable" as const, reason: "x" } },
+  };
+
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([logA, logB]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+  expect(container.textContent).toContain("0 / 2");
+
+  // Switch to "Claude" surface filter
+  const claudeBtn = [...container.querySelectorAll('button[role="radio"]')].find(
+    b => b.textContent?.trim() === "Claude",
+  );
+  if (claudeBtn) {
+    await act(async () => { claudeBtn.click(); });
+    await flushMicrotasks();
+    expect(hasLogRow(container, "r-filt-a")).toBe(false);
+  }
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: resourceKey change resets cleared occurrence counts", async () => {
+  const logA = makeLog("r-reset-a", 1_700_000_000_000);
+
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([logA]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+  expect(hasLogRow(container, "r-reset-a")).toBe(false);
+
+  // Remount with different apiBase (different resourceKey)
+  await act(async () => { root.unmount(); });
+  clearClientResourceStoresForTests();
+
+  let root2!: Root;
+  const container2 = document.createElement("div");
+  document.body.append(container2);
+  await act(async () => {
+    const { createRoot } = await import("react-dom/client");
+    root2 = createRoot(container2);
+    root2.render(
+      <LanguageProvider>
+        <Logs apiBase="http://localhost:9999" />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
+
+  // Cleared counts reset → log visible again
+  expect(hasLogRow(container2, "r-reset-a")).toBe(true);
+
+  await act(async () => { root2.unmount(); });
+});
