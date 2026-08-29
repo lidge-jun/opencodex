@@ -818,7 +818,6 @@ export const zh: Record<TKey, string> = {
   "usage.custom.cancel": "取消",
   "usage.custom.title": "自定义时间范围",
   "usage.custom.quick": "快捷日期",
-  "usage.custom.manual": "自定义范围",
   "usage.range.30d": "30 天",
   "usage.range.7d": "7 天",
   "usage.card.requests": "请求数",

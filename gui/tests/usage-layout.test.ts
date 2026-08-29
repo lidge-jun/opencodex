@@ -261,8 +261,10 @@ test("Usage custom range is an anchored floating popover, not an in-flow panel",
 
   expect(page).toContain('className="usage-custom-popover"');
   expect(page).toContain('role="dialog"');
-  expect(page).toContain('id="usage-custom-quick"');
+  expect(page).toContain('className={`usage-custom-quick-btn');
+  expect(page).not.toContain('id="usage-custom-quick"');
   expect(css).toMatch(/\.usage-filters-wrap\s*\{[^}]*position:\s*relative/s);
   expect(css).toMatch(/\.usage-custom-popover\s*\{[^}]*position:\s*absolute/s);
   expect(css).toMatch(/\.usage-custom-popover\s*\{[^}]*z-index:/s);
+  expect(css).toMatch(/\.usage-custom-quick-btn\s*\{[^}]*border-radius:\s*var\(--radius-pill\)/s);
 });

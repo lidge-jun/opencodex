@@ -840,7 +840,6 @@ export const en = {
   "usage.custom.cancel": "Cancel",
   "usage.custom.title": "Custom time range",
   "usage.custom.quick": "Quick date",
-  "usage.custom.manual": "Custom range",
   "usage.range.30d": "30d",
   "usage.range.7d": "7d",
   "usage.card.requests": "Requests",

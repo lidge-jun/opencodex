@@ -10,7 +10,7 @@ import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
-import { quickUsageRangeBounds, type QuickUsageRange } from "../usage-time-range";
+import { quickUsageRangeBounds, type QuickUsagePreset } from "../usage-time-range";
 
 type Range = "all" | "30d" | "7d" | "today" | "yesterday" | "custom";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
@@ -21,8 +21,7 @@ const RANGE_LABEL_KEYS: Record<"7d" | "30d" | "custom", TKey> = {
   custom: "usage.range.custom",
 };
 
-const QUICK_RANGE_LABEL_KEYS: Record<QuickUsageRange, TKey> = {
-  custom: "usage.custom.manual",
+const QUICK_RANGE_LABEL_KEYS: Record<QuickUsagePreset, TKey> = {
   today: "usage.range.today",
   yesterday: "usage.range.yesterday",
 };
@@ -239,12 +238,12 @@ function UsageFilters({
   t: TFn;
 }) {
   const [customOpen, setCustomOpen] = useState(false);
-  const [quickRange, setQuickRange] = useState<QuickUsageRange>("custom");
+  const [quickRange, setQuickRange] = useState<QuickUsagePreset | null>(null);
   const [sinceVal, setSinceVal] = useState(customSince);
   const [untilVal, setUntilVal] = useState(customUntil);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
-  const quickRef = useRef<HTMLSelectElement | null>(null);
+  const quickTodayRef = useRef<HTMLButtonElement | null>(null);
   const closeCustom = useCallback(() => setCustomOpen(false), []);
 
   useEffect(() => {
@@ -269,7 +268,7 @@ function UsageFilters({
   }, [closeCustom, customOpen]);
 
   useEffect(() => {
-    if (customOpen) quickRef.current?.focus();
+    if (customOpen) quickTodayRef.current?.focus();
   }, [customOpen]);
 
   return (
@@ -340,27 +339,28 @@ function UsageFilters({
         >
           <div className="usage-custom-popover-title">{t("usage.custom.title")}</div>
           <div className="usage-custom-grid">
-            <label className="usage-custom-field usage-custom-field-quick" htmlFor="usage-custom-quick">
-              <span>{t("usage.custom.quick")}</span>
-              <select
-                ref={quickRef}
-                id="usage-custom-quick"
-                className="input"
-                value={quickRange}
-                onChange={event => {
-                  const next = event.target.value as QuickUsageRange;
-                  setQuickRange(next);
-                  if (next === "custom") return;
-                  const bounds = quickUsageRangeBounds(next);
-                  setSinceVal(bounds.since);
-                  setUntilVal(bounds.until);
-                }}
-              >
-                {(["today", "yesterday", "custom"] as QuickUsageRange[]).map(option => (
-                  <option key={option} value={option}>{t(QUICK_RANGE_LABEL_KEYS[option])}</option>
+            <div className="usage-custom-field-quick">
+              <span className="usage-custom-field-label">{t("usage.custom.quick")}</span>
+              <div className="usage-custom-quick-buttons" role="group" aria-label={t("usage.custom.quick")}>
+                {(["today", "yesterday"] as QuickUsagePreset[]).map(option => (
+                  <button
+                    ref={option === "today" ? quickTodayRef : undefined}
+                    key={option}
+                    type="button"
+                    className={`usage-custom-quick-btn${quickRange === option ? " active" : ""}`}
+                    aria-pressed={quickRange === option}
+                    onClick={() => {
+                      setQuickRange(option);
+                      const bounds = quickUsageRangeBounds(option);
+                      setSinceVal(bounds.since);
+                      setUntilVal(bounds.until);
+                    }}
+                  >
+                    {t(QUICK_RANGE_LABEL_KEYS[option])}
+                  </button>
                 ))}
-              </select>
-            </label>
+              </div>
+            </div>
             <label className="usage-custom-field" htmlFor="usage-custom-since">
               <span>{t("usage.custom.since")}</span>
               <input
@@ -370,7 +370,7 @@ function UsageFilters({
                 className="input"
                 value={sinceVal}
                 onInput={event => {
-                  setQuickRange("custom");
+                  setQuickRange(null);
                   setSinceVal(event.currentTarget.value);
                 }}
               />
@@ -384,7 +384,7 @@ function UsageFilters({
                 className="input"
                 value={untilVal}
                 onInput={event => {
-                  setQuickRange("custom");
+                  setQuickRange(null);
                   setUntilVal(event.currentTarget.value);
                 }}
               />

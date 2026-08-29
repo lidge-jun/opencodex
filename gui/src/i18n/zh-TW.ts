@@ -650,7 +650,6 @@ export const zhTW: Record<TKey, string> = {
   "usage.custom.cancel": "取消",
   "usage.custom.title": "自訂時間範圍",
   "usage.custom.quick": "快速日期",
-  "usage.custom.manual": "自訂範圍",
   "usage.range.30d": "30 天",
   "usage.range.7d": "7 天",
   "usage.card.requests": "請求數",

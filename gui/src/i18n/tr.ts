@@ -831,7 +831,6 @@ export const tr: Record<TKey, string> = {
   "usage.custom.cancel": "İptal",
   "usage.custom.title": "Özel zaman aralığı",
   "usage.custom.quick": "Hızlı tarih",
-  "usage.custom.manual": "Özel aralık",
   "usage.range.30d": "30 gün",
   "usage.range.7d": "7 gün",
   "usage.card.requests": "İstekler",

@@ -817,7 +817,6 @@ export const fr: Record<TKey, string> = {
   "usage.custom.cancel": "Annuler",
   "usage.custom.title": "Période personnalisée",
   "usage.custom.quick": "Date rapide",
-  "usage.custom.manual": "Période personnalisée",
   "usage.range.30d": "30 j",
   "usage.range.7d": "7 j",
   "usage.card.requests": "Requêtes",

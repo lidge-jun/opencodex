@@ -824,7 +824,6 @@ export const ru: Record<TKey, string> = {
   "usage.custom.cancel": "Отмена",
   "usage.custom.title": "Пользовательский период",
   "usage.custom.quick": "Быстрая дата",
-  "usage.custom.manual": "Свой диапазон",
   "usage.range.30d": "30 дн.",
   "usage.range.7d": "7 дн.",
   "usage.card.requests": "Запросы",

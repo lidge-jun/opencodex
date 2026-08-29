@@ -86,15 +86,19 @@ test("usage keeps quick days inside a floating custom picker and applies them on
   const countAfterOpen = urls.length;
   const popover = container.querySelector<HTMLElement>('.usage-custom-popover[role="dialog"]');
   expect(popover).toBeTruthy();
-  const quick = popover!.querySelector<HTMLSelectElement>("#usage-custom-quick");
-  expect(quick).toBeTruthy();
+  expect(popover!.querySelector("select")).toBeNull();
+  const todayButton = Array.from(popover!.querySelectorAll<HTMLButtonElement>(".usage-custom-quick-btn"))
+    .find(button => button.textContent?.trim() === "Today");
+  const yesterdayButton = Array.from(popover!.querySelectorAll<HTMLButtonElement>(".usage-custom-quick-btn"))
+    .find(button => button.textContent?.trim() === "Yesterday");
+  expect(todayButton).toBeTruthy();
+  expect(yesterdayButton).toBeTruthy();
 
   const today = new Date();
-  await act(async () => {
-    quick!.value = "today";
-    quick!.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-  });
+  await act(async () => { todayButton!.click(); });
   expect(urls).toHaveLength(countAfterOpen);
+  expect(todayButton!.getAttribute("aria-pressed")).toBe("true");
+  expect(yesterdayButton!.getAttribute("aria-pressed")).toBe("false");
 
   const inputs = Array.from(popover!.querySelectorAll<HTMLInputElement>('input[type="datetime-local"]'));
   expect(inputs).toHaveLength(2);

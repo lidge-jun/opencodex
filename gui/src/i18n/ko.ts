@@ -825,7 +825,6 @@ export const ko: Record<TKey, string> = {
   "usage.custom.cancel": "취소",
   "usage.custom.title": "사용자 지정 기간",
   "usage.custom.quick": "빠른 날짜",
-  "usage.custom.manual": "사용자 지정 범위",
   "usage.range.30d": "30일",
   "usage.range.7d": "7일",
   "usage.card.requests": "요청",

@@ -2280,7 +2280,21 @@ button.prov-account-row.active { cursor: default; }
 .usage-custom-popover-title { margin-bottom: 10px; font-weight: var(--weight-semibold); color: var(--text); }
 .usage-custom-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .usage-custom-field { display: grid; gap: 5px; color: var(--muted); font-size: var(--text-caption); }
-.usage-custom-field-quick { grid-column: 1 / -1; }
+.usage-custom-field-quick { display: grid; grid-column: 1 / -1; gap: 6px; }
+.usage-custom-field-label { color: var(--muted); font-size: var(--text-caption); }
+.usage-custom-quick-buttons { display: flex; gap: 8px; }
+.usage-custom-quick-btn {
+  min-width: 72px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--raised);
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+}
+.usage-custom-quick-btn:hover { color: var(--text); border-color: var(--muted); }
+.usage-custom-quick-btn.active { color: var(--text); background: var(--surface); border-color: var(--text); font-weight: var(--weight-semibold); }
 .usage-custom-field .input { width: 100%; min-width: 0; }
 .usage-custom-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 /* Only monochrome source marks (Grok) are inverted for dark themes. Brand-colored

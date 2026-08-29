@@ -1,4 +1,4 @@
-export type QuickUsageRange = "custom" | "today" | "yesterday";
+export type QuickUsagePreset = "today" | "yesterday";
 
 function localDateTimeValue(date: Date, endOfDay: boolean): string {
   const year = date.getFullYear();
@@ -8,7 +8,7 @@ function localDateTimeValue(date: Date, endOfDay: boolean): string {
 }
 
 export function quickUsageRangeBounds(
-  range: Exclude<QuickUsageRange, "custom">,
+  range: QuickUsagePreset,
   now = new Date(),
 ): { since: string; until: string } {
   const date = new Date(now);

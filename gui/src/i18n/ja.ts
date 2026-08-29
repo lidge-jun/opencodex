@@ -783,7 +783,6 @@ export const ja: Record<TKey, string> = {
   "usage.custom.cancel": "キャンセル",
   "usage.custom.title": "カスタム期間",
   "usage.custom.quick": "クイック日付",
-  "usage.custom.manual": "カスタム範囲",
   "usage.range.30d": "30日",
   "usage.range.7d": "7日",
   "usage.card.requests": "リクエスト",

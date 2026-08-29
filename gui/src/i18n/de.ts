@@ -803,7 +803,6 @@ export const de: Record<TKey, string> = {
   "usage.custom.cancel": "Abbrechen",
   "usage.custom.title": "Benutzerdefinierter Zeitraum",
   "usage.custom.quick": "Schnellauswahl",
-  "usage.custom.manual": "Eigener Zeitraum",
   "usage.range.30d": "30d",
   "usage.range.7d": "7d",
   "usage.card.requests": "Anfragen",
