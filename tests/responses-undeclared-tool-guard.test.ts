@@ -96,6 +96,28 @@ describe("collectDeclaredWireToolNames", () => {
     );
   });
 
+  test("withholds the bare alias when only a namespaced exec was declared", () => {
+    // A bare `exec` in the declared set is not just a name: it switches on nested-helper
+    // normalization, so aliasing a namespaced MCP `exec` under the bare name would authorize
+    // `exec_command`/`shell_command`/`apply_patch` this request never declared.
+    const names = collectDeclaredWireToolNames({
+      tools: [{ type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] }],
+    });
+
+    expect([...names]).toEqual(["mcp__exec"]);
+  });
+
+  test("keeps the bare alias when the request also declared a top-level exec", () => {
+    const names = collectDeclaredWireToolNames({
+      tools: [
+        { type: "custom", name: "exec" },
+        { type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] },
+      ],
+    });
+
+    expect([...names].sort()).toEqual(["exec", "mcp__exec"]);
+  });
+
   test("reads tools carried inside input as an additional_tools item", () => {
     // Codex Desktop's responses_lite WS path ships the catalog there instead of body.tools.
     const names = collectDeclaredWireToolNames({
@@ -1359,6 +1381,31 @@ describe("undeclaredToolCallNameInResponse", () => {
       "exec_command",
     );
     expect(undeclaredToolCallNameInResponse(namespaced, new Set(["exec", "mcp__server__exec_command"]))).toBeUndefined();
+  });
+
+  test("a namespaced-only exec declaration does not authorize the nested helper names", () => {
+    // End-to-end over the real collector: declaring `exec` inside an MCP namespace must not
+    // hand the request a bare code-mode shell tool.
+    const declared = collectDeclaredWireToolNames({
+      tools: [{ type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] }],
+    });
+
+    for (const name of ["exec_command", "shell_command", "apply_patch", "exec"]) {
+      expect(undeclaredToolCallNameInResponse(
+        { output: [{ type: "function_call", name, call_id: "call_1" }] },
+        declared,
+      )).toBe(name);
+    }
+
+    // The declared tool itself still answers under either coordinate system.
+    expect(undeclaredToolCallNameInResponse(
+      { output: [{ type: "function_call", name: "exec", namespace: "mcp", call_id: "call_1" }] },
+      declared,
+    )).toBeUndefined();
+    expect(undeclaredToolCallNameInResponse(
+      { output: [{ type: "function_call", name: "mcp__exec", call_id: "call_1" }] },
+      declared,
+    )).toBeUndefined();
   });
 });
 
