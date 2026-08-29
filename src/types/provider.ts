@@ -281,6 +281,15 @@ export interface OcxProviderConfig {
    * full set so the user can pick). See devlog issue_052_provider-model-allowlist.
    */
   selectedModels?: string[];
+  /**
+   * Per-provider retention allowlist for authoritative live discovery. When non-empty, any
+   * model id in this list is preserved in the routed catalog even if the live `/models`
+   * endpoint omits it (ad-hoc / private providers whose live discovery drops callable ids).
+   * Mirrors the built-in `kimi`/`xai` compatibility tables — opt-in for every other provider.
+   * Empty/undefined = no opt-in (default behavior). 404 on the upstream call still emits the
+   * existing one-line diagnostic; the retained row is kept regardless. See #1690.
+   */
+  retainModels?: string[];
   /** Override for newly discovered models. Absent/"inherit" uses the install policy. */
   newModelPolicy?: "on" | "off" | "inherit";
   /**

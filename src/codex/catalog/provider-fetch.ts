@@ -1571,9 +1571,14 @@ export function shouldExposeProviderModel(providerName: string, modelId: string)
   return true;
 }
 
-export function shouldRetainConfiguredProviderModel(providerName: string, modelId: string): boolean {
+export function shouldRetainConfiguredProviderModel(
+  providerName: string,
+  modelId: string,
+  prov?: OcxProviderConfig,
+): boolean {
   if (CALLABLE_CONFIGURED_COMPATIBILITY_MODELS[providerName]?.has(modelId)) return true;
   if (providerName === "opencode-free") return modelId === "big-pickle" || modelId.endsWith("-free");
+  if (modelInList(prov?.retainModels, modelId)) return true;
   return false;
 }
 
@@ -1619,7 +1624,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     }
     if (
       seedVertexDefault === true
-      || shouldRetainConfiguredProviderModel(name, candidate.id)
+      || shouldRetainConfiguredProviderModel(name, candidate.id, prov)
       || (retainComboTargets && retainConfiguredModelIds?.has(candidate.id) === true)
     ) {
       out.push(candidate);
