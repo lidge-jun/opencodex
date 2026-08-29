@@ -177,6 +177,41 @@ specifically not returning `invalid model visibility target`. Named mutation: de
 
 ## What this does not claim
 
+### The floor is an entitlement probe, not client-compatibility evidence
+
+An independent review called this a blocker: tier 3 asks under `0.142.2`, which is a *model
+requirement*, not evidence of the installed client's version, so an entitled account can have
+gated rows published into a catalog that an older externally launched Codex cannot drive — the
+#2548 direction. The reasoning is sound and the risk is real. The fix is still the floor, for
+four reasons that the code and the existing tests support:
+
+1. **The suggested alternative contradicts `dev`.** "Refuse or defer the durable catalog write
+   when no client version is available" is what returning `null` did, and two tests already on
+   `dev` fail under it: `tests/claude-models-discovery.test.ts` and
+   `tests/codex-catalog-sync-hardening.test.ts` ("account sync preserves an observed gated native
+   only after the mapped account confirms it"). Those tests encode the intended behavior — a
+   background sync *should* confirm entitlement and publish. A change that contradicts them is a
+   separate, deliberate decision, not a fix to this bug.
+
+2. **Tier 2 already handles the known-old-client case correctly.** If a Codex runtime has been
+   resolved and it is older than the gated models require, tier 2 supplies *that* version, upstream
+   returns no gated rows, and they stay suppressed — which is exactly right. Tier 3 is reached only
+   when no runtime has ever been resolved, so there is no known client to be wrong about.
+
+3. **The floor is the narrowest probe that can work.** It is the lowest version under which the
+   gated models can be returned at all. Asking under it cannot manufacture a confirmation: an
+   unentitled account still comes back without the rows.
+
+4. **Client-compatibility filtering has never existed here.** No code path in `src/` consults
+   `minimal_client_version`; both catalog sites delete it (`catalog/parsing.ts:486`,
+   `catalog/metadata.ts:502`). The proxy has never enforced client-version compatibility, so this
+   change does not remove a guard — it leaves a pre-existing gap where it was.
+
+The tradeoff, stated plainly: the failure this accepts is a model appearing for a client too old to
+drive it, which surfaces as an upstream error on use. The failure it fixes is an entitled account on
+a current client silently losing GPT-5.6 — the reported bug. Adding a real client-compatibility
+filter is worth doing, and it is its own unit of work with its own decision about those two tests.
+
 The reporter supplied no captured `/codex/models` response, so I cannot prove their
 machine took the confirmed-negative branch rather than a transient failure. Both produce
 the same symptom. The version-filter explanation is what the source, the version boundary,
