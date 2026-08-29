@@ -36,27 +36,29 @@ const SID_PATTERN = /^S-1-(?:\d+-)+\d+$/i;
  * Hard budget for the Windows identity-lookup PowerShell child. These lookups
  * run at startup and on config writes; a hung child must fail the lookup
  * (recoverable — the caller refuses) rather than wedge the proxy indefinitely.
- */
-const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS = 8_000;
-
-/**
- * The same budget, widened for a contended CI runner.
  *
- * 8s is a generous ceiling for `powershell.exe -Command` on a real desktop and is not one
- * on a GitHub Windows runner executing a quarter of this suite: the composed-acceptance
- * cases fail there with "Windows effective-account lookup timed out" while the child is
- * still starting. That is runner contention, not a hung lookup, and the budget exists to
- * bound the latter.
+ * 30s, and the same on a desktop as in CI. The split below used to give desktops
+ * 8s, on the theory that only a shared runner is contended enough to need more.
+ * A zh-CN Windows 10 host measured 3.2s for the SID expression and 4.6s for the
+ * `Add-Type` LocalAppData expression — per spawn, with a bare
+ * `powershell.exe -NoProfile -Command exit` costing ~3s where a typical desktop
+ * pays ~150ms — so ordinary spawn jitter breached 8s intermittently and `ocx sync`
+ * failed with "Windows effective-account lookup timed out" (#2914).
  *
- * Gated on `CI` alone. A user's machine keeps the 8s ceiling exactly as before, so the
- * recoverable-refusal contract this budget protects is unchanged where it matters.
+ * That is the same contention the CI branch was widened for, which is what makes
+ * the split vestigial rather than merely conservative: it encoded an assumption
+ * about WHERE contention happens, and the assumption was wrong. Antivirus
+ * real-time scanning, a loaded Task Scheduler, and cold PowerShell startup do not
+ * care whether the machine is a runner.
+ *
+ * The contract this budget protects is unchanged: a genuinely hung child still
+ * fails the lookup and the caller still refuses rather than writing. Only the
+ * ceiling moved, and it moved for the case where the lookup would have succeeded.
  */
-const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_CI_MS = 30_000;
+const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS = 30_000;
 
 function windowsIdentityLookupTimeoutMs(): number {
-  return process.env.CI === "true"
-    ? WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_CI_MS
-    : WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS;
+  return WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS;
 }
 
 /**
