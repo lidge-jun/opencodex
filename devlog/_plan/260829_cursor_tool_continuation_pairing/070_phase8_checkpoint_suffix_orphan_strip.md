@@ -259,12 +259,21 @@ code's own comment calls worse than keeping nothing. `historyOutputElided` alrea
 read them. The whole trailing run of results is checked now. Swept 628 (carried-bytes, payload-size)
 positions: 10 partial-answer positions before, 0 after.
 
-### The invalidation reason reached nothing
+### The invalidation reason still reaches nothing, and that is now a recorded decision
 
-`envelope_exhausted` was assigned to a local, so it landed in the debug diagnostic and stopped there.
+`envelope_exhausted` is assigned to a local, so it lands in the debug diagnostic and stops there.
 `src/adapters/cursor.ts` drops a dead checkpoint by reading `request.checkpointInvalidationReason`, so an
-exhausted checkpoint was re-decoded and re-abandoned every turn until its TTL. It is written back onto the
-request now, which is what `request-builder.ts` already does for every other reason.
+exhausted checkpoint is re-decoded and re-abandoned every turn until its TTL.
+
+Round 3 asked for it to be propagated and the obvious fix — writing the field back onto the argument, which
+is what `request-builder.ts` does — was implemented and then measured inert. `live-transport.ts` prepares a
+**spread copy** of the request, so the write lands on the copy: the outer object the adapter reads stayed
+`undefined`. A test asserting on the argument would have passed while proving nothing about the real path,
+which is the same vacuous-coverage trap round 2 caught.
+
+Reaching the store means threading the reason back through `PreparedCursorRunRequest`, a signature change
+on the shared prepare path. That belongs to its own phase. The cost of leaving it is bounded and worth
+stating: wasted work each turn, not wrong output — the request assembled is correct either way.
 
 ### Verification of this round
 

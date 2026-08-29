@@ -1371,11 +1371,15 @@ function buildPreparedCursorRunRequest(
           conversationState = undefined;
           continuationMode = "full-replay";
           checkpointInvalidationReason = "envelope_exhausted";
-          // Write it back onto the request, not just the local: `src/adapters/cursor.ts` reads
-          // `request.checkpointInvalidationReason` to drop the dead checkpoint from the store. A local-only
-          // assignment reached the diagnostic and nothing else, so the exhausted checkpoint was re-decoded
-          // and re-abandoned every turn until its TTL (audit r8 round 3).
-          request.checkpointInvalidationReason = "envelope_exhausted";
+          // NOT propagated to the checkpoint store, and deliberately so after measuring the attempt.
+          // `src/adapters/cursor.ts` drops a dead checkpoint by reading
+          // `request.checkpointInvalidationReason`, but `live-transport.ts` prepares a SPREAD COPY of that
+          // request, so writing the field here lands on the copy and the caller never sees it — measured
+          // inert, `outer.checkpointInvalidationReason` stayed undefined. Reaching the store needs the
+          // reason threaded back through `PreparedCursorRunRequest`, which is a signature change on the
+          // shared prepare path and belongs to its own phase. The cost of not doing it is bounded: the
+          // checkpoint is re-decoded and re-abandoned each turn until TTL, which is wasted work rather
+          // than wrong output (audit r8 rounds 3 and 4).
         } else {
         const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart, fullHistoryCalls, suffixStart);
         const suffixHistoryIds = suffixRoots.ids.slice(suffixSystemCount);

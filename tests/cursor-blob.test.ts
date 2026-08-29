@@ -2551,13 +2551,15 @@ describe("Cursor external replay envelope", () => {
    * index was consulted. The whole trailing run is checked now.
    */
   /**
-   * Audit r8 round 3, MINOR. `envelope_exhausted` was assigned to a local only, so it reached the debug
-   * diagnostic and nothing else. `src/adapters/cursor.ts` drops a dead checkpoint by reading
-   * `request.checkpointInvalidationReason`, so the exhausted one was re-decoded and re-abandoned on every
-   * later turn until its TTL expired. Writing it back is the same thing `request-builder.ts` does for every
-   * other invalidation reason.
+   * An exhausted checkpoint must still produce a usable request: the assembled roots stay inside the
+   * envelope and the conversation continues by full replay.
+   *
+   * It does NOT assert that the checkpoint store hears about it. Audit round 3 asked for that and round 4
+   * measured why it cannot be done here: `live-transport.ts` prepares a spread copy of the request, so a
+   * field written on the argument never reaches the caller that would invalidate the stored checkpoint.
+   * Asserting on the argument would have passed while proving nothing about the real path.
    */
-  test("an exhausted checkpoint reports itself as invalidated to the caller", () => {
+  test("an exhausted checkpoint still assembles a legal full-replay request", () => {
     const request = {
       modelId: "grok-4.6",
       conversationId: "cursor_ckpt_exhausted_reason",
@@ -2582,8 +2584,14 @@ describe("Cursor external replay envelope", () => {
       continuationMode: "checkpoint" as const,
       checkpointSuffixStart: 1,
     };
-    prepareCursorRunRequest(request);
-    expect(request.checkpointInvalidationReason).toBe("envelope_exhausted");
+    const prepared = prepareCursorRunRequest(request);
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    expect(roots.length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    // The oversized checkpoint is gone rather than pruned to fit, so the replay carries its own history.
+    const serialized = JSON.stringify(roots.map(id => (cursorBlobByteLength(id) === null ? null : JSON.parse(new TextDecoder().decode(blobData(id))))));
+    expect(serialized).toContain("OUT");
   });
 
   test("parallel results are never delivered as a partial answer set", () => {
