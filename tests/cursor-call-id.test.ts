@@ -33,12 +33,27 @@ describe("cursor call-id codec", () => {
     const encoded = encodeCursorCallId(id);
     expect(encoded).not.toBe(id);
     expect(decodeCursorCallId(encoded)).toBe(id);
+    expect(decodeCursorCallId("ocxc1_Y2FsbF8x")).toBe("ocxc1_Y2FsbF8x");
+  });
+
+  test("adversarial reserved-prefix ids escape one layer at a time", () => {
+    const cases = [
+      ["ocxc1_Y2FsbF8x", "ocxc1_b2N4YzFfWTJGc2JGOHg"],
+      ["ocxc1_Y2FsbF8xCg", "ocxc1_b2N4YzFfWTJGc2JGOHhDZw"],
+      ["ocxc1_b2N4YzFfWTJGc2JGOHhDZw", "ocxc1_b2N4YzFfYjJONFl6RmZXVEpHYzJKR09IaERadw"],
+    ] as const;
+
+    for (const [id, encoded] of cases) {
+      expect(encodeCursorCallId(id)).toBe(encoded);
+      expect(decodeCursorCallId(encoded)).toBe(id);
+    }
   });
 
   test("legacy encoded line breaks remain decodable", () => {
     expect(decodeCursorCallId("ocxc1_YQpi")).toBe("a\nb");
     expect(decodeCursorCallId("ocxc1_DQ")).toBe("\r");
     expect(decodeCursorCallId("ocxc1_DQo")).toBe("\r\n");
+    expect(decodeCursorCallId("ocxc1_Y2FsbF8xCg")).toBe("call_1\n");
   });
 
   test("newline composite id round-trips through a single-line form", () => {
