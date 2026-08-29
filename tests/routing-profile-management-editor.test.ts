@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fallbackCodexAccountLogLabel } from "../src/codex/account-label";
-import { resetLabActivationForTests } from "../src/lib/lab-activation";
 import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest } from "./helpers/management-auth";
 import type { OcxConfig } from "../src/types";
@@ -18,10 +17,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Profile creation activates the Lab runtime for this config directory. Drop
-  // that owner before removing its scratch tree so Windows is not asked to
-  // delete a directory still retained by process-local runtime state.
-  resetLabActivationForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -380,6 +375,10 @@ describe("routing profile management editor API", () => {
     config.shadowCallIntercept = { model: "ocx/fast" };
     config.claudeCode = {
       enabled: true,
+      // This case verifies reference migration, not generated agent files.
+      // Leaving injection enabled starts real provider discovery after the
+      // migration and races Windows cleanup with its still-unwinding handle.
+      injectAgents: false,
       model: "ocx/fast",
       smallFastModel: "a/m1",
       modelMap: { "ocx/fast": "a/m1", "a/m2": "ocx/fast" },
