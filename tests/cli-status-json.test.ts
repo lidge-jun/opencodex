@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { proxyHealthFailureReason, resolveStatusPid, selectListenTarget } from "../src/cli/status";
+import { isUncleanExitEvidence, proxyHealthFailureReason, resolveStatusPid, selectListenTarget } from "../src/cli/status";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -324,5 +324,82 @@ describe("CLI status JSON", () => {
     expect(target.port).toBe(10100);
     expect(target.healthUrl).toBe("http://127.0.0.1:10100/healthz");
     expect(target.dashboardUrl).toBe("http://localhost:10100/");
+  });
+});
+
+/**
+ * #1419: an unsupervised proxy died from a native trap and every later command said
+ * only "not running". The persisted owner records are the one piece of evidence that
+ * separates a crash from a proxy that was never started, and status used to discard
+ * it. These cases pin the predicate, including the two false-positive shapes that a
+ * naive implementation gets wrong.
+ */
+describe("unclean prior exit evidence", () => {
+  const base = {
+    live: false,
+    healthOk: false,
+    healthMessage: "unreachable",
+    ownerPidAlive: false,
+    pidRecordBefore: 4242,
+    pidRecordAfter: 4242,
+    runtimePidBefore: 4242,
+    runtimePidAfter: 4242,
+  };
+
+  test("both records outliving a dead owner is an unclean exit", () => {
+    expect(isUncleanExitEvidence(base)).toBe(true);
+  });
+
+  // Blocker 5 from the plan audit: a fixture that always writes BOTH records cannot
+  // tell an AND from an OR, so each record must be sufficient on its own.
+  test("a pid record alone is sufficient", () => {
+    expect(isUncleanExitEvidence({
+      ...base,
+      runtimePidBefore: null,
+      runtimePidAfter: null,
+    })).toBe(true);
+  });
+
+  test("a runtime-port record alone is sufficient", () => {
+    expect(isUncleanExitEvidence({
+      ...base,
+      pidRecordBefore: null,
+      pidRecordAfter: null,
+    })).toBe(true);
+  });
+
+  test("a clean home reports nothing", () => {
+    expect(isUncleanExitEvidence({
+      ...base,
+      pidRecordBefore: null,
+      pidRecordAfter: null,
+      runtimePidBefore: null,
+      runtimePidAfter: null,
+    })).toBe(false);
+  });
+
+  test("a live proxy or a healthy probe reports nothing", () => {
+    expect(isUncleanExitEvidence({ ...base, live: true })).toBe(false);
+    expect(isUncleanExitEvidence({ ...base, healthOk: true })).toBe(false);
+  });
+
+  // Re-audit blocker 2: without this case the owner-alive clause is never exercised,
+  // because every other fixture names a dead pid.
+  test("a live owner pid is a start in progress, not a crash", () => {
+    expect(isUncleanExitEvidence({ ...base, ownerPidAlive: true })).toBe(false);
+  });
+
+  // Re-audit blocker 1: `handleStart` binds the port before it publishes either
+  // record, so a start caught in that window leaves both snapshots identical. Only a
+  // refused connection proves nothing holds the port.
+  test("a held port is not a crash even when the records look stale", () => {
+    expect(isUncleanExitEvidence({ ...base, healthMessage: "timed out" })).toBe(false);
+    expect(isUncleanExitEvidence({ ...base, healthMessage: "returned HTTP 503" })).toBe(false);
+    expect(isUncleanExitEvidence({ ...base, healthMessage: "responded, but not an opencodex proxy" })).toBe(false);
+  });
+
+  test("records published mid-probe suppress the report", () => {
+    expect(isUncleanExitEvidence({ ...base, pidRecordBefore: null })).toBe(false);
+    expect(isUncleanExitEvidence({ ...base, runtimePidAfter: 9999 })).toBe(false);
   });
 });

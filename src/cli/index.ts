@@ -872,11 +872,20 @@ async function handleStatus() {
   }
   if (!(status.json.proxy.pid || status.json.proxy.health.ok)) {
     console.log("   ↳ Not running — Codex/Claude requests will fail with connection errors.");
+    // #1419: the records outliving the process is the only evidence the user gets that a
+    // proxy died rather than never started. Cause-neutral on purpose: SIGKILL, power loss
+    // and a native trap are indistinguishable from what is persisted.
+    if (status.json.proxy.staleProcessState) {
+      console.log("     Previous proxy process state remains, so it did not shut down cleanly.");
+    }
     // The service summary a few lines below already tells a registered-but-not-serving
     // user to repair. Printing "install the persistent service" unconditionally
     // contradicted it in the same report, and install re-registers: UAC on Windows and a
     // possible WinSW-to-scheduler switch for someone who already has a service.
     const installed = status.json.startup.serviceInstalled && !status.json.startup.serviceConflict;
+    if (status.json.proxy.staleProcessState && !installed) {
+      console.log("     No background service was available to restart it; run 'ocx service install'.");
+    }
     console.log(installed
       ? "     Restart with 'ocx start', or refresh the installed service: 'ocx service repair'."
       : "     Restart with 'ocx start', or install the persistent service: 'ocx service install'.");

@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getConfigDir, getConfigPath, readConfigDiagnostics } from "../config";
 import { readPid } from "../config/process-state";
+import { probeUncleanExitState } from "./status";
 import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
@@ -972,6 +973,11 @@ export function proxyDownRestartHint(input: {
   /** Absent means "unknown"; the hint then keeps its pre-repair wording. */
   serviceInstalled?: boolean;
   serviceConflict?: boolean;
+  /**
+   * Persisted owner records outlived their process (#1419). Cause-neutral: what is on
+   * disk proves an unclean exit, not which signal caused it.
+   */
+  staleProcessState?: boolean;
 }): string | null {
   if (input.proxyRunning) return null;
   // `serviceViable` alone conflates "no service at all" with "registered but stale or
@@ -984,7 +990,10 @@ export function proxyDownRestartHint(input: {
     : installedButBroken
       ? "Restart it with 'ocx start', or refresh the installed service: 'ocx service repair'."
       : "Restart it with 'ocx start', or install the persistent service: 'ocx service install'.";
-  return `The ocx proxy is not running. Codex/Claude clients pinned to 127.0.0.1:${input.port} fail with errors like "error sending request for url (http://127.0.0.1:${input.port}/v1/responses)". ${restart}`;
+  const uncleanExit = input.staleProcessState === true
+    ? "Previous proxy process state remains, so it did not shut down cleanly. "
+    : "";
+  return `The ocx proxy is not running. ${uncleanExit}Codex/Claude clients pinned to 127.0.0.1:${input.port} fail with errors like "error sending request for url (http://127.0.0.1:${input.port}/v1/responses)". ${restart}`;
 }
 
 export async function runDoctor(args: string[] = []): Promise<void> {
@@ -1317,6 +1326,14 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     serviceViable: startup.serviceViable,
     serviceInstalled: startup.serviceInstalled,
     serviceConflict: startup.serviceConflict,
+    // Threaded through the same decision helper `ocx status` uses, so the two
+    // diagnostics cannot drift. A helper-only change would satisfy a unit test while
+    // real `ocx doctor` output never mentioned the crash (#1419).
+    staleProcessState: await probeUncleanExitState({
+      live: Boolean(live),
+      port: doctorConfig.port,
+      hostname: doctorConfig.hostname,
+    }),
   });
   if (proxyDown) hints.push(proxyDown);
   for (const row of providerApiKeys) {

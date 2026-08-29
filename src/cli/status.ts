@@ -1,12 +1,13 @@
 import { durableBunRuntime } from "../lib/bun-runtime";
 import { codexAutoStartEnabled, getConfigPath, readConfigDiagnostics } from "../config";
-import { getPidPath, readPid, readRuntimePort, type RuntimePortState } from "../config/process-state";
+import { getPidPath, readPid, readPidFileValue, readRuntimePort, type RuntimePortState } from "../config/process-state";
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
 import { findLiveProxy, isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
 import { directLocalHttpFetch } from "../server/direct-local-http";
 import type { OcxConfig } from "../types";
 import { diagnoseService, serviceLogPath } from "../service";
 import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
+import { isProcessAlive } from "../lib/process-control";
 import { getCodexRoutingKind } from "../codex/inject";
 import { diagnoseCodexShim } from "../codex/shim";
 import { displayCodexRuntimePath, effortClampAppliesToRuntime, loadLastEffortClamp, resolveCodexRuntime } from "../codex/runtime";
@@ -28,6 +29,8 @@ export type CliStatusJson = {
   proxy: {
     running: boolean;
     pid: number | null;
+    /** Persisted owner records outlived their process: the last proxy did not exit cleanly. */
+    staleProcessState: boolean;
     health: {
       ok: boolean;
       url: string;
@@ -128,6 +131,47 @@ export function proxyHealthFailureReason(error: unknown, signal: AbortSignal): "
 }
 
 /**
+ * A proxy killed by a native trap or SIGKILL never runs the exit cleanup that removes
+ * `ocx.pid` and `runtime-port.json` (only SIGINT/SIGTERM/SIGHUP and normal exit are
+ * wired to it), so both records outlive it. That makes "crashed" and "never started"
+ * distinguishable — and #1419 is what it costs when we discard the distinction: the
+ * reporter's unsupervised `ocx gui` proxy died and every later command said only
+ * "not running", never that a previous process had exited or that a service would
+ * have restarted it.
+ *
+ * Two races have to stay closed, because a false "it crashed" is worse than a missing
+ * hint. `handleStart` binds the port BEFORE it publishes either record, so:
+ *
+ * - a start that publishes between two reads is caught by comparing the raw records
+ *   observed before and after the probes (the same snapshot discipline
+ *   `removePidIfValueIs` uses for deletion);
+ * - a start that has bound but not yet published leaves both snapshots identical, so
+ *   records alone cannot see it. That one is excluded on the port instead: only an
+ *   `unreachable` health failure counts, meaning nothing accepted the connection. A
+ *   dead proxy leaves the port free; an in-flight start holds it and either times out
+ *   or answers non-ok.
+ */
+export function isUncleanExitEvidence(input: {
+  live: boolean;
+  healthOk: boolean;
+  healthMessage: string;
+  ownerPidAlive: boolean;
+  pidRecordBefore: number | null;
+  pidRecordAfter: number | null;
+  runtimePidBefore: number | null;
+  runtimePidAfter: number | null;
+}): boolean {
+  if (input.live || input.healthOk) return false;
+  // Anything other than a refused connection means something is listening: an in-flight
+  // start, or a foreign process on the port. Neither is evidence that we crashed.
+  if (input.healthMessage !== "unreachable") return false;
+  if (input.ownerPidAlive) return false;
+  if (input.pidRecordBefore !== input.pidRecordAfter) return false;
+  if (input.runtimePidBefore !== input.runtimePidAfter) return false;
+  return input.pidRecordAfter !== null || input.runtimePidAfter !== null;
+}
+
+/**
  * `ocx status` greens on process liveness alone, so a proxy that answers
  * /healthz reads healthy even when Codex is not pointed at it and every routed
  * request goes to OpenAI instead (#2411). The proxy line is not wrong — the
@@ -177,9 +221,48 @@ async function checkProxyHealth(target: ListenTarget): Promise<HealthCheck> {
   }
 }
 
+/**
+ * Doctor's gatherer for the same decision. It runs its own health probe because
+ * `runDoctor` has already resolved liveness by the time it needs this and re-running
+ * `collectStatus` would repeat every unrelated diagnostic. The DECISION stays in
+ * `isUncleanExitEvidence` so the two surfaces cannot disagree.
+ */
+export async function probeUncleanExitState(input: {
+  live: boolean;
+  port?: number;
+  hostname?: string | null;
+}): Promise<boolean> {
+  if (input.live) return false;
+  const pidRecordBefore = readPidFileValue();
+  const runtimePidBefore = readRuntimePort()?.pid ?? null;
+  const target = selectListenTarget(
+    { port: input.port, hostname: input.hostname ?? undefined } as OcxConfig,
+    pidRecordBefore,
+    pidRecordBefore ? readRuntimePort(pidRecordBefore) : null,
+  );
+  const health = await checkProxyHealth(target);
+  const pidRecordAfter = readPidFileValue();
+  const runtimePidAfter = readRuntimePort()?.pid ?? null;
+  const ownerPid = pidRecordAfter ?? runtimePidAfter;
+  return isUncleanExitEvidence({
+    live: false,
+    healthOk: health.ok,
+    healthMessage: health.message,
+    ownerPidAlive: ownerPid !== null && isProcessAlive(ownerPid),
+    pidRecordBefore,
+    pidRecordAfter,
+    runtimePidBefore,
+    runtimePidAfter,
+  });
+}
+
 export async function collectStatus(): Promise<CliStatusView> {
   const configDiagnostics = readConfigDiagnostics();
   const config = configDiagnostics.config;
+  // Raw owner records BEFORE any probe. Compared against a re-read afterwards so a
+  // concurrent start that publishes mid-probe cannot be reported as a crash.
+  const pidRecordBefore = readPidFileValue();
+  const runtimePidBefore = readRuntimePort()?.pid ?? null;
   // Prefer identity-verified liveness (runtime-port + /healthz) over ocx.pid alone (#618).
   // Pass the already-resolved diagnostics config so findLiveProxy does not re-load and
   // warn on malformed config.json (status --json must stay stderr-clean).
@@ -210,6 +293,21 @@ export async function collectStatus(): Promise<CliStatusView> {
       label: `${listen.healthUrl} ok (live)`,
     }
     : await checkProxyHealth(listen);
+  // Re-read the raw records after the probes; equality with the pre-probe snapshot is
+  // what rules out a start that published while we were probing.
+  const pidRecordAfter = readPidFileValue();
+  const runtimePidAfter = readRuntimePort()?.pid ?? null;
+  const ownerPid = pidRecordAfter ?? runtimePidAfter;
+  const staleProcessState = isUncleanExitEvidence({
+    live: Boolean(live),
+    healthOk: health.ok,
+    healthMessage: health.message,
+    ownerPidAlive: ownerPid !== null && isProcessAlive(ownerPid),
+    pidRecordBefore,
+    pidRecordAfter,
+    runtimePidBefore,
+    runtimePidAfter,
+  });
   const bunRuntime = durableBunRuntime();
   const service = diagnoseService();
   // A service can be registered and still not serve: the manager reports the job
@@ -326,6 +424,7 @@ export async function collectStatus(): Promise<CliStatusView> {
       proxy: {
         running: Boolean(live) || Boolean(pid && health.ok),
         pid: live?.pid ?? pid,
+        staleProcessState,
         health: {
           ok: health.ok,
           url: health.url,
