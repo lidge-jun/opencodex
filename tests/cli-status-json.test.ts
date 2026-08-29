@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
@@ -438,8 +438,18 @@ describe("status reports stale process records end to end", () => {
     }
   };
 
-  // A port nothing binds, so the probe is refused rather than accepted-then-reset.
-  const freePort = 9;
+  /**
+   * A port that is genuinely free: bind an ephemeral port, read it, release it. The
+   * discard port 9 is conventionally unused but not guaranteed, and if anything answers
+   * on it the probe is accepted rather than refused and these fixtures invert.
+   */
+  let freePort = 9;
+  beforeAll(async () => {
+    const probe = createServer();
+    await new Promise<void>(resolve => { probe.listen(0, "127.0.0.1", () => resolve()); });
+    freePort = (probe.address() as AddressInfo).port;
+    await new Promise<void>(resolve => { probe.close(() => resolve()); });
+  });
 
   test("a dead owner record surfaces in --json and in human output", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-stale-json-"));
