@@ -121,3 +121,44 @@ distinct.
   `ssh lidge` + `ocx-run`; pushes use `--no-verify` only after those gates.
 - Delivery is a stacked PR chain onto `dev`, each PR carrying screenshots
   (`enforce-target` requires a screenshot for GUI PRs).
+
+## Outcome — closed
+
+All three PRs are squash-merged into `dev`. Two defects were fixed; one reported
+defect was withdrawn because measurement said it was not one.
+
+| PR | commit | what shipped |
+|----|--------|--------------|
+| #2905 | `fc74e2026` | sidecar pair alignment: `align-content: start` on the card plus `min-height: 3lh` on the hint, replacing the `3.9375rem` copy band |
+| #2906 | `4d646c494` | `.logs-table-wrap` `100vh` → `100dvh`, and the toast width cap moved onto `.action-toast.notice` so it wins the cascade |
+| #2911 | `e1becb7f9` | record corrections: `020`'s withdrawal backed by the horizontal measurement, `030`'s citations anchored to selectors |
+
+**wp1 (sidecar pair).** The two shipped declarations are both load-bearing, each
+confirmed by removing it from the shipped stylesheet and re-measuring: `3lh` alone
+leaves 27.8px, `align-content: start` alone leaves 19.5px, together 0.0px. The first
+governs how the wrapped flex lines distribute; the second governs the height of
+the copy row they pack against. Subgrid, which `010` proposed, is unavailable here:
+Chrome rejects a child's `grid-template-rows: subgrid` under the `container-type`
+ancestors this surface needs.
+
+**wp2 (phantom track) — withdrawn, not implemented.** The zero-width `auto-fit`
+track is normal collapsed-track behaviour. Measured on the rendered edges rather
+than the computed track list: identical card widths and 0.0px top/bottom spread
+with one 16px gutter and no trailing gap, at 1600/1440/1280/1100/1024. Nothing to
+fix, and the rewrite would have traded `auto-fit` for a hard-coded card count.
+
+**wp3 (dynamic viewport).** Static `vh` resolves against the large viewport, so the
+log cap described more space than a mobile user can see. The toast defect found
+alongside it was a cascade problem, not a unit problem — `.notice` won on source
+order at equal specificity and the toast rendered 542.1px instead of 480px. The
+`vw` → containing-block rewrite was deliberately not shipped: the scrollbar
+divergence could not be reproduced here (`innerWidth == clientWidth`).
+
+Regressions: `gui/tests/sidecar-layout.test.ts` and `gui/tests/viewport-scroll-caps.test.ts`,
+both driven red against the pre-fix stylesheets before being accepted.
+
+Two measurement traps are worth carrying forward, both of which produced a
+confident wrong answer during this unit: a **symmetric** break passes a relative
+alignment gate (the subgrid collapse reported 0.0px while cards rendered 54px
+instead of 215px), and a **leftover injected probe stylesheet** makes a candidate
+look correct on a page that is not the shipped page. `013` records both.
