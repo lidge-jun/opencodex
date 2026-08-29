@@ -372,3 +372,52 @@ fail, `cursor-blob` alone 105.
 The pattern named after round 4 held for a fifth time, one level up: rounds 2 through 4 all reasoned about
 the count budget as a settled fact and argued about the disjuncts consuming it, while the budget itself was
 never applied to the wider of the two things it was supposed to bound.
+
+## Audit round 6: the r5 fix dropped in root space, and the check that guards it read raw space
+
+The count bound from round 5 acts on `active`, a list of ROOT entries. The abandon check derived its
+trailing run by scanning `suffixMessages`, which is RAW messages. The two spaces are not the same, and they
+diverge on the most ordinary assistant shape there is: a bare tool call with no narration emits no root at
+all, so two sequentially-executed results sit ADJACENT as roots while raw space still separates them with an
+assistant message.
+
+Consequence: both results entered the root-space trailing run, the count bound dropped the older one, and
+the raw-space scan — seeing a run of length one, the newest result, which survived — reported "kept". The
+checkpoint was retained and the request went out with a tool call answered by nothing. Measured at 190
+carried roots with bare-call pairs: the first answer was absent from every root and from `turns[]`. No
+throw, no diagnostic, and the model's only sensible response is to re-issue the call — the exact loop this
+unit exists to end, reintroduced by the fix for the previous round's blocker.
+
+`tests/cursor-blob.test.ts` uses that bare-call shape in nine fixtures, so this was not an exotic input.
+
+Two separable defects sat in the same place. The drop was also unnecessary: `historyLimit` subtracted
+`systemEntryCount` on the checkpoint path, where the caller appends only `ids.slice(suffixSystemCount)` and
+the checkpoint's own system roots are already inside `carriedRoots.count`. One free slot was charged twice,
+so at 190 carried roots the limit came out 1 where 2 results fit.
+
+Both are fixed at the origin of the mismatch rather than at the call site. `rootPromptMessages` now returns
+`activeMessageIndexes` — the trailing run as pruning saw it, recorded before pruning can shrink it — and the
+abandon check reads that instead of re-deriving a run it cannot see correctly. It falls back to the
+raw-space scan when the field is empty, which is how the full-replay and native shapes keep their previous
+behaviour. `chargeableSystemCount` is zero on the covered-turn path, closing the double charge.
+
+Measured after the fix: 24 bare-call configurations across carried 170-190 and 2-8 pairs lose no answer at
+all, and the reclaimed slot is visible — 192 roots where the defect emitted 191.
+
+### Mutation evidence, including one gap this caught in its own first attempt
+
+- abandon check re-derives from raw space → 2 red
+- system count charged twice → 1 red
+- the round 5 count bound removed → 5 red
+
+The middle row is worth keeping. The first version of the silent-loss test passed with the double charge
+still in place, because that defect abandons the checkpoint and a full replay carries every answer — correct
+output, reached wastefully, which no assertion about answer presence can distinguish. It took a second case
+asserting the exact root count at exact fit to pin the arithmetic. A test that cannot fail against the
+defect it was written for is the thing five of these six rounds actually kept finding.
+
+Round 6 also found that `outputElided` on the marker-only truncation return had no coverage: removing the
+flag left all 191 tests green, and `tests/` is outside `tsconfig`'s `include`, so nothing else would have
+noticed either. Covered now by asserting the abandonment it is supposed to trigger.
+
+Four-suite total is 197 pass / 0 fail; `cursor-blob` alone 111.

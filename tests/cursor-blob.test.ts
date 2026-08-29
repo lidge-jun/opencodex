@@ -2517,6 +2517,199 @@ describe("Cursor external replay envelope", () => {
   });
 
   /**
+   * Audit r10. The count bound added for r9 acts in ROOT space; the abandon check derived its trailing run
+   * from `rawMessages`. The two disagree exactly when an assistant message emits no root — a bare tool call
+   * with no narration, which is the most common assistant shape in this file's own fixtures. Two
+   * sequentially-executed results then sit adjacent as roots, both enter the trailing run, the count bound
+   * drops the older one, and a raw-space scan that sees a run of one never notices: the request went out
+   * with a tool call answered by nothing, checkpoint retained, no throw, no diagnostic. Measured at 190
+   * carried roots with bare-call pairs, the first answer vanished from the wire entirely — not in a root, not
+   * in `turns[]`.
+   *
+   * Two defects, and this case covers both. The drop was also UNNECESSARY: `historyLimit` subtracted
+   * `systemEntryCount` on a path where the caller appends only history roots and the checkpoint's own
+   * system roots are already inside `carriedRoots`, so the limit came out 1 where 2 results fit.
+   */
+  test.each([
+    [CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 2, 2],
+    [CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 2, 4],
+    [CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 3, 3],
+    [CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 6, 8],
+  ])("a bare-tool-call continuation never answers a call with nothing (carried=%i, pairs=%i)", (carried, pairs) => {
+    const checkpointRoots = Array.from(
+      { length: carried },
+      (_, i) => storeCursorBlob(new TextEncoder().encode(JSON.stringify({ role: "user", content: [{ type: "text", text: `covered ${i}` }] }))),
+    );
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: checkpointRoots,
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+      { role: "user", content: "Read each file once.", timestamp: 1 },
+    ];
+    let timestamp = 2;
+    for (let n = 0; n < pairs; n++) {
+      // No text part: this assistant message emits no root, which is what puts the two results next to
+      // each other in root space while raw space still separates them.
+      rawMessages!.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: `call_bare_${n}`, name: "read_file", arguments: { path: `f${n}.txt` } }],
+        timestamp: timestamp++,
+      });
+      rawMessages!.push({
+        role: "toolResult",
+        toolCallId: `call_bare_${n}`,
+        toolName: "read_file",
+        content: `BARE_ANSWER_${n}`,
+        isError: false,
+        timestamp: timestamp++,
+      });
+    }
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: `cursor_ckpt_bare_call_${carried}_${pairs}`,
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages,
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      checkpointSuffixStart: 1,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    expect(roots.length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    const texts = roots.map(id => {
+      try {
+        const parsed = JSON.parse(new TextDecoder().decode(blobData(id))) as { content?: string | [{ text?: string }] };
+        const content = parsed.content;
+        return typeof content === "string" ? content : (content?.[0]?.text ?? "");
+      } catch {
+        return "";
+      }
+    });
+    // Either the checkpoint was abandoned and the full replay carries every answer, or it was kept and every
+    // replayed call still has its own. What must never happen is a kept checkpoint missing an answer: the
+    // model then sees a call with no result and re-issues it, which is the defect this whole unit exists to
+    // remove. A per-pair assertion states that without having to know which branch was taken.
+    for (let n = 0; n < pairs; n++) {
+      expect(texts.some(text => text.includes(`BARE_ANSWER_${n}`))).toBe(true);
+    }
+  });
+
+  /**
+   * Audit r10, second half. The silent-loss assertion above passes either way — with the double charge the
+   * checkpoint is abandoned and the full replay carries every answer, which is correct output reached
+   * wastefully. This case pins the arithmetic instead: with exactly as many free slots as results, the
+   * checkpoint must be KEPT and every slot used. `historyLimit` subtracted `systemEntryCount` on a path
+   * where the caller appends only `ids.slice(suffixSystemCount)` and the checkpoint's own system roots are
+   * already inside `carriedRoots.count`, so one genuinely free slot was paid for twice: the limit came out 1
+   * where 2 results fit, and a fully answerable continuation was thrown away.
+   */
+  test("a checkpoint continuation uses every root slot the envelope actually leaves free", () => {
+    const carried = CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 2;
+    const checkpointRoots = Array.from(
+      { length: carried },
+      (_, i) => storeCursorBlob(new TextEncoder().encode(JSON.stringify({ role: "user", content: [{ type: "text", text: `covered ${i}` }] }))),
+    );
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: checkpointRoots,
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+      { role: "user", content: "Read each file once.", timestamp: 1 },
+    ];
+    let timestamp = 2;
+    for (let n = 0; n < 2; n++) {
+      rawMessages!.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: `call_fit_${n}`, name: "read_file", arguments: { path: `fit${n}.txt` } }],
+        timestamp: timestamp++,
+      });
+      rawMessages!.push({
+        role: "toolResult",
+        toolCallId: `call_fit_${n}`,
+        toolName: "read_file",
+        content: `FIT_ANSWER_${n}`,
+        isError: false,
+        timestamp: timestamp++,
+      });
+    }
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: "cursor_ckpt_exact_fit",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages,
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      checkpointSuffixStart: 1,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    // Two results, two free slots, and the checkpoint retained: exactly the envelope, not one short of it.
+    expect(roots.length).toBe(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    expect(roots.length).toBeGreaterThan(carried);
+  });
+
+  /**
+   * Audit r10 finding 2. `outputElided` on the marker-only return had no coverage: removing the flag left
+   * all 191 tests green, and `tests/` is not typechecked (`tsconfig` include is `["src"]`), so nothing would
+   * have caught its removal. A result reduced to the truncation marker answers its call with nothing, which
+   * is why the abandon decision reads the flag — so assert the abandonment, not the flag.
+   */
+  test("a result truncated to the bare marker abandons the checkpoint instead of answering with nothing", () => {
+    // A checkpoint that consumes nearly the whole byte budget leaves room for a marker and no output.
+    const carriedBytes = CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - 400;
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: [storeCursorBlob(new Uint8Array(carriedBytes).fill(65))],
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: "cursor_ckpt_marker_only",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages: [
+        { role: "user", content: "Read the file.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_marker", name: "read_file", arguments: { path: "big.txt" } }],
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_marker",
+          toolName: "read_file",
+          content: "MARKER_ONLY_PAYLOAD".repeat(4096),
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      checkpointSuffixStart: 1,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    // Abandoned: the oversized carried root is gone, so the reply is a self-contained full replay.
+    expect(roots.length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    const texts = roots.map(id => {
+      try {
+        const parsed = JSON.parse(new TextDecoder().decode(blobData(id))) as { content?: string | [{ text?: string }] };
+        const content = parsed.content;
+        return typeof content === "string" ? content : (content?.[0]?.text ?? "");
+      } catch {
+        return "";
+      }
+    });
+    // The replay carries the call's own output, not a marker standing in for it.
+    expect(texts.some(text => text.includes("MARKER_ONLY_PAYLOAD"))).toBe(true);
+  });
+
+  /**
    * Audit r8 re-review finding B. The abandon test compared `carriedRoots.byteLength` against the raw byte
    * limit while pruning subtracts the system prompt too, so a ~128-byte band just under the limit kept the
    * checkpoint, gave the suffix a zero budget, and dropped the tool result the model was waiting for —

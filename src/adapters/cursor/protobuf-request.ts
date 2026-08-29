@@ -263,6 +263,14 @@ function rootPromptMessages(
    * truncation marker remains. Aligned with nothing — membership is the whole signal (devlog 260829 070).
    */
   historyOutputElided: number[];
+  /**
+   * Message indexes of the trailing tool-result run as PRUNING saw it — root space, not raw-message space.
+   * The two spaces diverge: a bare tool call with no text emits no root, so two sequentially-executed
+   * results become adjacent roots while a raw-space scan still sees a trailing run of one. A caller that
+   * re-derives the run from `rawMessages` therefore cannot see a result this function dropped for count
+   * (audit r10). Emitted so the abandon decision reads the same set pruning acted on.
+   */
+  activeMessageIndexes: number[];
 } {
   const entries = systemPromptBlobs(request);
   const systemEntryCount = entries.length;
@@ -275,6 +283,7 @@ function rootPromptMessages(
       serialized: entries.map(entry => entry.serialized),
       historyMessageIndexes: [],
       historyOutputElided: [],
+      activeMessageIndexes: [],
     };
   }
 
@@ -381,6 +390,9 @@ function rootPromptMessages(
 
   let selected = entries;
   let historyMessageStart = 0;
+  // The trailing tool-result run in ROOT space, recorded before pruning can drop from it. Empty for a
+  // native model or a non-external one, which never assemble a trailing run here at all.
+  let activeMessageIndexes: number[] = [];
   if (externalModel) {
     // A non-zero offset means `rawMessages[0]` is NOT the conversation start: only the checkpoint
     // path passes one, and it passes `suffixStart`, the count of messages the checkpoint carries.
@@ -391,8 +403,15 @@ function rootPromptMessages(
     const systemEntries = entries.slice(0, systemEntryCount);
     const history = entries.slice(systemEntryCount);
     const systemBytes = systemEntries.reduce((sum, entry) => sum + entry.byteLength, 0);
-    const historyLimit = Math.max(0, CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - systemEntryCount - carriedRoots.count);
-    const historyBudget = Math.max(0, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - systemBytes - carriedRoots.byteLength);
+    // On the checkpoint path the caller appends ONLY the history roots to what the checkpoint already
+    // carries (`suffixHistoryIds` is `ids.slice(suffixSystemCount)`), and the system roots the checkpoint
+    // carries are already inside `carriedRoots`. Subtracting `systemEntryCount` there charges for them
+    // twice, which cost a slot that was genuinely free: at 190 carried roots the limit came out 1 when 2
+    // results fit, and the count bound below then dropped an answered call for no reason (audit r10).
+    const chargeableSystemCount = suffixContinuesCoveredTurn ? 0 : systemEntryCount;
+    const chargeableSystemBytes = suffixContinuesCoveredTurn ? 0 : systemBytes;
+    const historyLimit = Math.max(0, CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - chargeableSystemCount - carriedRoots.count);
+    const historyBudget = Math.max(0, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - chargeableSystemBytes - carriedRoots.byteLength);
 
     // Retain the active trailing tool-result block when it fits (may truncate text).
     // If even a truncation marker cannot fit the remaining budget, omit it rather than
@@ -403,6 +422,13 @@ function rootPromptMessages(
       .slice(activeStart)
       .map(entry => truncateToolResultBlob(entry, historyBudget))
       .filter((entry): entry is RootBlobCandidate => entry !== null);
+    // Record the run BEFORE any pruning below can shrink it, so the abandon decision downstream compares
+    // against what pruning was asked to preserve rather than against a raw-message scan that cannot see
+    // this run's true width (audit r10).
+    activeMessageIndexes = history
+      .slice(activeStart)
+      .map(entry => entry.messageIndex)
+      .filter((index): index is number => index !== undefined);
     let activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
     // Shrink every active result toward an equal share before dropping any of them. Review found
     // that the previous `active.shift()` loop DELETED whole results: three ~220 KB results emitted
@@ -589,6 +615,7 @@ function rootPromptMessages(
       .filter(entry => entry.outputElided === true)
       .map(entry => entry.messageIndex)
       .filter((index): index is number => index !== undefined),
+    activeMessageIndexes,
   };
 }
 
@@ -1367,15 +1394,26 @@ function buildPreparedCursorRunRequest(
         // carrying three calls and one answer, which is the shape this comment calls worse than keeping
         // nothing. `historyOutputElided` already knew; only the last index was being read (audit r8
         // round 3).
+        // The run is read from PRUNING's own report, not re-derived from `suffixMessages`. The two spaces
+        // disagree: root space skips an assistant message that emitted no root — a bare tool call with no
+        // narration, or whitespace-only text — so two sequentially-executed results sit adjacent as roots
+        // while a raw-message scan still sees a trailing run of one. Pruning's count bound acts on the root
+        // run, so a raw-space scan could not see the result it dropped: measured at 190 carried roots with
+        // bare-call pairs, the older answer vanished from the wire entirely while this check reported
+        // "kept" and the checkpoint was retained — an unanswered call, which the comment above rightly
+        // calls worse than keeping nothing (audit r10).
+        //
+        // `activeMessageIndexes` is that run as pruning saw it, recorded before pruning could shrink it.
+        // Falling back to the raw-space scan when it is empty keeps the full-replay and native shapes,
+        // which never populate it, behaving exactly as before.
         let trailingStart = suffixMessages.length;
         while (trailingStart > 0 && suffixMessages[trailingStart - 1]?.role === "toolResult") trailingStart -= 1;
-        const keptEnough = suffixMessages
-          .slice(trailingStart)
-          .every((_, offset) => {
-            const index = trailingStart + offset;
-            return suffixRoots.historyMessageIndexes.includes(index)
-              && !suffixRoots.historyOutputElided.includes(index);
-          });
+        const trailingIndexes = suffixRoots.activeMessageIndexes.length > 0
+          ? suffixRoots.activeMessageIndexes
+          : suffixMessages.slice(trailingStart).map((_, offset) => trailingStart + offset);
+        const keptEnough = trailingIndexes.every(index =>
+          suffixRoots.historyMessageIndexes.includes(index)
+          && !suffixRoots.historyOutputElided.includes(index));
         const suffixKeptItsResult = !resultReplayedAsRoot
           || suffixMessages[lastSuffixIndex]?.role !== "toolResult"
           || keptEnough;
@@ -1423,6 +1461,7 @@ function buildPreparedCursorRunRequest(
           serialized: suffixHistorySerialized,
           historyMessageIndexes: suffixRoots.historyMessageIndexes,
           historyOutputElided: suffixRoots.historyOutputElided,
+          activeMessageIndexes: suffixRoots.activeMessageIndexes,
         };
         }
       }
