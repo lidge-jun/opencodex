@@ -101,6 +101,7 @@ import type {
 import {
   forceRefreshOAuthAccessSnapshot,
   getValidAccessTokenForAccount,
+  getValidAccessSnapshotForAccount,
   getValidAccessTokenSnapshot,
   publicOAuthAuthenticationErrorMessage,
   type OAuthAccessSnapshot,
@@ -121,9 +122,11 @@ import {
 import { stampOAuthAccountLabel } from "../../providers/label";
 import {
   failoverAccountSnapshot,
+  forgetGenericFailoverRoster,
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
+  preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
 } from "../../oauth/generic-account-failover";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
@@ -3099,7 +3102,53 @@ async function handleResponsesInner(
         route.provider = { ...route.provider, apiKey: accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", selection.accountId, config);
       } else {
-        const resolved = await getValidAccessTokenSnapshot(route.providerName);
+        // Prefer the account with known headroom BEFORE the first attempt. Rotation alone
+        // only reacts to a 429, so a turn could open on an account a previous probe already
+        // measured as spent. A null answer means "use the active account", so every provider
+        // without quota evidence keeps the resolution it has today.
+        const preferredAccountId = isGenericFailoverProvider(route.providerName, route.provider)
+          ? preferredInitialAccount(config, route.providerName)
+          : null;
+        // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
+        // rotation site, and rotation sites must apply their credential through
+        // applyFailoverSnapshot's pairing rules. This is initial resolution — the code below
+        // already pairs the snapshot's Kiro metadata, Copilot origin and Antigravity project
+        // with this same bearer, exactly as it does for the active account.
+        let usedPreferredAccount = preferredAccountId !== null;
+        let resolved: OAuthAccessSnapshot;
+        if (preferredAccountId) {
+          try {
+            // `requireUsableAccount` makes a removed OR reauth-flagged account throw from
+            // inside the resolver's own store read. Without it a revoked account resolves
+            // successfully — its credential is still readable — and the request would
+            // dispatch on an account already known to need a fresh login.
+            resolved = await getValidAccessSnapshotForAccount(
+              route.providerName,
+              preferredAccountId,
+              { requireUsableAccount: true },
+            );
+          } catch {
+            // The roster is read behind a short TTL, so a preferred account can be removed
+            // or flagged for reauth in the window after it was cached. Resolving it then
+            // throws, and a PREFERENCE that turns a healthy request into a 401 is worse
+            // than no preference at all — the active account is still perfectly usable.
+            // Drop the stale roster so the next request re-reads it, and carry on.
+            forgetGenericFailoverRoster(route.providerName);
+            usedPreferredAccount = false;
+            resolved = await getValidAccessTokenSnapshot(route.providerName);
+          }
+        } else {
+          resolved = await getValidAccessTokenSnapshot(route.providerName);
+        }
+        // A Cloud Code Assist account needs its own project. Antigravity's refresh path
+        // tolerates project discovery failing, so a stored account can legitimately have
+        // none — and a PREFERENCE must never turn a working request into an error. Fall
+        // back to the ordinary active-account resolution instead, which is exactly what
+        // would have happened had the preference never existed.
+        if (usedPreferredAccount && route.provider.googleMode === "cloud-code-assist" && !resolved.projectId) {
+          resolved = await getValidAccessTokenSnapshot(route.providerName);
+          usedPreferredAccount = false;
+        }
         replayOAuthCredentialSnapshot = {
           accountId: resolved.accountId,
           generation: resolved.generation,
@@ -3123,9 +3172,19 @@ async function handleResponsesInner(
         // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
         // CCA envelope. Keep it paired with the token snapshot so an account rotation cannot mix
         // a fresh token with project metadata re-read from a different credential generation.
-        if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
-          const projectId = resolved.projectId;
-          if (projectId) route.provider = { ...route.provider, project: projectId };
+        if (route.provider.googleMode === "cloud-code-assist") {
+          // When pre-dispatch chose a DIFFERENT account, the configured project belongs to
+          // the account we did not use, and `!route.provider.project` would skip right past
+          // it — installing B's bearer alongside A's project. That is the #2841 pairing bug
+          // in its original shape, so the preferred-account path replaces the project
+          // unconditionally and refuses to dispatch at all if the chosen account has none.
+          // A project-less preferred account already fell back above, so by here the
+          // preferred path always has one.
+          if (usedPreferredAccount && resolved.projectId) {
+            route.provider = { ...route.provider, project: resolved.projectId };
+          } else if (!route.provider.project && resolved.projectId) {
+            route.provider = { ...route.provider, project: resolved.projectId };
+          }
         }
       }
     } catch (err) {

@@ -1,5 +1,23 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { exhaustedCooldownMs, rankAccountsByHeadroom } from "../src/oauth/account-quota-rank";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  clearGenericFailoverHealth,
+  forgetGenericFailoverRoster,
+  preferredInitialAccount,
+  rotateGenericOAuthAccountOn429,
+} from "../src/oauth/generic-account-failover";
+import {
+  getAccountSet,
+  markAccountNeedsReauth,
+  removeAccount,
+  saveCredential,
+  setActiveAccount,
+} from "../src/oauth/store";
+import { getValidAccessSnapshotForAccount } from "../src/oauth";
+import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import {
   clearAccountQuotaCache,
   setCachedProviderAccountQuotaForTests,
@@ -113,5 +131,234 @@ describe("exhaustion cooldown", () => {
 
   test("providers without an exhaustion verdict are unaffected", () => {
     expect(exhaustedCooldownMs("xai", "a")).toBeNull();
+  });
+});
+
+describe("pre-dispatch account preference", () => {
+  const OAUTH_PROVIDER = {
+    adapter: "openai-chat",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "oauth",
+  } as unknown as OcxProviderConfig;
+
+  const config = { providers: { xai: OAUTH_PROVIDER } } as unknown as OcxConfig;
+  const originalHome = process.env.OPENCODEX_HOME;
+  let home: string;
+
+  async function seedAccounts(count: number): Promise<string[]> {
+    for (let i = 0; i < count; i++) {
+      await saveCredential("xai", {
+        access: `access-${i}`,
+        refresh: `refresh-${i}`,
+        expires: Date.now() + 3_600_000,
+        accountId: `uuid-${i}`,
+      } as never, { addAccount: true });
+    }
+    return getAccountSet("xai")?.accounts.map(a => a.id) ?? [];
+  }
+
+  test("the account with more headroom is chosen before the first request", async () => {
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("no quota evidence leaves the active account alone", async () => {
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      // Null means "use the ordinary active-account path", so nothing changes for a
+      // provider that reports no per-account quota.
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a single account is never redirected", async () => {
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(1);
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 99, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("an account cooled by a recent 429 is not chosen to open the next request", async () => {
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      // Cool the roomier account: positive evidence against it outweighs its headroom.
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 50, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 1, updatedAt: Date.now() });
+      rotateGenericOAuthAccountOn429(config, "xai", ids[1]!, null);
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a quota-less provider is never redirected, even when the ACTIVE account is cooled", async () => {
+    // The inverse of the case above, and the one that actually broke the no-op guarantee:
+    // cooling the active account collapses the eligible list to a single candidate, which
+    // any ranking returns unchanged. That looks like a ranked answer but nothing was ever
+    // measured, so evidence has to be checked against the whole roster first.
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      rotateGenericOAuthAccountOn429(config, "xai", ids[0]!, null);
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("neither a redirecting nor a non-redirecting selection touches the credential store", async () => {
+    // loadAuthStore chmods the config dir, chmods the secret, and re-parses the whole
+    // credential file on every call — and this runs on the initial resolution of EVERY
+    // request. The steady state of this feature is a pool where one account consistently
+    // ranks higher, so the REDIRECTING path must be cached too — validating the winner here
+    // would put a second uncached read in front of every such request. Deleting the store
+    // proves it: an uncached path could not answer at all. Staleness is caught at
+    // resolution instead, inside a store read the resolver already performs.
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      // Redirecting: the other account holds more headroom on every call.
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+      rmSync(join(home, "auth.json"), { force: true });
+      for (let i = 0; i < 4; i++) expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+
+      // Non-redirecting: the active account already ranks best.
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      for (let i = 0; i < 4; i++) expect(preferredInitialAccount(config, "xai")).toBeNull();
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a preferred account removed inside the TTL degrades to the active account", async () => {
+    // The roster is cached for a short window, so an account can be removed after it was
+    // chosen. Resolving it then throws, and the request path must fall back to the active
+    // account rather than 401 — a preference must never break a request that would have
+    // worked without it.
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+
+      await removeAccount("xai", ids[1]!);
+      // Selection is a cached PREFERENCE, so it may still name the removed account...
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+      // ...and resolution is where that is caught. The request path absorbs this throw and
+      // falls back to the active account.
+      await expect(
+        getValidAccessSnapshotForAccount("xai", ids[1]!, { requireUsableAccount: true }),
+      ).rejects.toThrow();
+      expect(getAccountSet("xai")?.accounts.map(a => a.id)).toEqual([ids[0]!]);
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a preferred account flagged for reauth inside the TTL is not selected", async () => {
+    // The dangerous variant of stale roster data: unlike a removal, a needsReauth account
+    // still has a readable credential, so resolution SUCCEEDS and no error path fires. The
+    // request would dispatch on an account already known to need a fresh login while a
+    // healthy active account sat unused.
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+
+      await markAccountNeedsReauth("xai", ids[1]!, true);
+      // An ordinary resolve SUCCEEDS — the credential is still readable — which is exactly
+      // why the flag must be checked inside the resolver rather than trusted to throw.
+      await expect(getValidAccessSnapshotForAccount("xai", ids[1]!)).resolves.toBeDefined();
+      // With the opt-in the request path uses, it is rejected and the caller falls back.
+      await expect(
+        getValidAccessSnapshotForAccount("xai", ids[1]!, { requireUsableAccount: true }),
+      ).rejects.toThrow();
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

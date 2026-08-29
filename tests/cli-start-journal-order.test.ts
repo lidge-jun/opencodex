@@ -2,6 +2,21 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { watchdogMs } from "./helpers/ci-watchdog";
+
+// Every wait here is bounded by a real `ocx start` child coming up: spawning Bun,
+// binding a port, and writing its runtime record. That is intrinsic to the
+// assertion, so the bound stays -- but a fixed 10s is a latency assertion on the
+// Windows leg, where four Bun pools share one runner. "timed out waiting for
+// owner runtime record" at 10.2s was that, not a journal-ownership defect.
+const OWNER_WAIT_MS = watchdogMs(10_000);
+
+// The surrounding budget has to clear the internal deadline, or the test dies on a
+// timeout before its own wait can report which step stalled -- the failure mode
+// test-budget.ts warns about. Each case performs up to four sequential bounded
+// waits (owner runtime record, owner health, and two CLI children), so the budget
+// is derived from the deadline rather than pinned next to it.
+const JOURNAL_OWNERSHIP_BUDGET_MS = Math.max(30_000, OWNER_WAIT_MS * 4);
 
 const cliPath = resolve(import.meta.dir, "../src/cli/index.ts");
 const roots: string[] = [];
@@ -80,13 +95,13 @@ async function runCli(fx: Fixture, argv: string[]): Promise<{ exitCode: number; 
   children.push(child);
   const completed = await Promise.race([
     Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]),
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`CLI watchdog: ocx ${argv.join(" ")}`)), 10_000)),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`CLI watchdog: ocx ${argv.join(" ")}`)), OWNER_WAIT_MS)),
   ]);
   return { exitCode: completed[0], stdout: completed[1], stderr: completed[2] };
 }
 
 async function waitFor<T>(read: () => T | null | Promise<T | null>, label: string): Promise<T> {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + OWNER_WAIT_MS;
   while (Date.now() < deadline) {
     const value = await read();
     if (value !== null) return value;
@@ -159,7 +174,7 @@ describe("start and ensure journal ownership (#1230)", () => {
       owner.kill("SIGTERM");
       await owner.exited;
     }
-  }, 30_000);
+  }, JOURNAL_OWNERSHIP_BUDGET_MS);
 
   test("a dead owner is recovered and its stale PID is removed for both start and ensure", async () => {
     for (const command of ["start", "ensure"] as const) {
@@ -192,5 +207,5 @@ describe("start and ensure journal ownership (#1230)", () => {
       expect(existsSync(fx.journalPath)).toBe(false);
       expect(existsSync(fx.pidPath)).toBe(false);
     }
-  }, 30_000);
+  }, JOURNAL_OWNERSHIP_BUDGET_MS);
 });
