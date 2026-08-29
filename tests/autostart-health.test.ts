@@ -4,7 +4,15 @@ import { unusedProxyWarningLines } from "../src/cli/status";
 import { classifyCodexRouting, hasInjectedCodexRouting } from "../src/codex/inject";
 import { handleManagementAPI } from "../src/server/management-api";
 import { invalidateStartupHealthCache, markStartupHealthDiagnosticStale } from "../src/server/startup-health-cache";
+import { startupHealthProbeTimeoutMs } from "../src/server/startup-health-cache";
 import type { OcxConfig } from "../src/types";
+
+// This case deliberately sits out the 30s cache TTL and then reads again, so it
+// pays for TWO probes plus the sleep. Both probes are bounded by the production
+// timeout, which is higher on Windows because the reading shells out to the
+// service-control manager there. A flat budget silently became the shorter of the
+// two limits on that lane.
+const STARTUP_HEALTH_CACHE_BUDGET_MS = 40_000 + startupHealthProbeTimeoutMs() * 2;
 
 const base = {
   routingKind: "opencodex-local" as const,
@@ -229,7 +237,7 @@ describe("Codex startup health", () => {
     );
     const refreshedBody = await refreshed!.json() as Record<string, unknown>;
     expect(refreshedBody.diagnosticStale).toBe(false);
-  }, 40_000);
+  }, STARTUP_HEALTH_CACHE_BUDGET_MS);
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";
 

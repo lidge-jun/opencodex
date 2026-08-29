@@ -3,7 +3,11 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTrustedWindowsElevationExecutablesForTests } from "../src/lib/windows-elevation";
-import { createWindowsPowerShellFixture, type WindowsPowerShellFixture } from "./helpers/windows-power-shell-fixture";
+import {
+  createWindowsPowerShellFixture,
+  probeWindowsPowerShellFixture,
+  type WindowsPowerShellFixture,
+} from "./helpers/windows-power-shell-fixture";
 import {
   afterCatalogWriteHandleAppServers,
   attachStaleAppServerHint,
@@ -32,6 +36,16 @@ beforeAll(async () => {
   stallingFakePowerShell = await createWindowsPowerShellFixture();
 });
 afterAll(() => stallingFakePowerShell?.cleanup());
+
+  // Both #1852 cases below reach the collector through the real execFile path, and
+  // the collector maps any exec failure to `state: "unknown"` with no processes.
+  // So a fixture that cannot run produces exactly the assertion failures a
+  // synchronous implementation would, and the Windows leg reported the design
+  // regression it does not have. This names the real condition instead.
+  test("the PowerShell fixture the #1852 cases depend on actually executes", async () => {
+    const probe = await probeWindowsPowerShellFixture(stallingFakePowerShell);
+    expect(probe.ok, `fake PowerShell fixture at ${stallingFakePowerShell.executable} did not run: ${probe.detail}`).toBe(true);
+  });
 
   test("not_running when no app-server process exists", () => {
     const status = collectCodexAppServerCatalogState({
