@@ -9,17 +9,22 @@ Cursor models "무한 출력" and "툴 출력을 못받고" — the turn never t
 never saw its tool output.
 
 Reproduced on merged `dev` `d882caed5`, isolated proxy, `cursor/grok-4.6`, three sequential `echo`
-commands requested one at a time:
+commands requested one at a time. Counts are from the COMPLETED artifacts, recounted after audit r8
+found the first table had been read from a file that was still being written:
 
-| observed | value |
-|---|---|
-| distinct commands requested | 3 (STEP1, STEP2, STEP3) |
-| `command_execution` items emitted | 14 |
-| STEP1 runs | 7 |
-| STEP2 runs | 7 |
-| STEP3 runs | **0** |
-| "interrupted" narrations | 6 |
-| terminal answer | never (`ALLDONE` absent) |
+| observed | `live3b.jsonl` | `live3.jsonl` |
+|---|---|---|
+| distinct commands requested | 3 | 3 |
+| `command_execution` items emitted | 21 | 133 |
+| STEP1 runs | 10 | 64 |
+| STEP2 runs | 10 | 67 |
+| STEP3 runs | 1 | 2 |
+| "interrupted" mentions | 8 | 134 |
+| terminal answer | reached, after 21 executions | reached, after 133 |
+
+The turn does eventually terminate. The defect is that it burns 21 to 133 tool executions to run three
+commands, repeatedly re-running work that already succeeded. The earlier claim that it never terminates
+was an artifact of counting a file mid-run and is withdrawn.
 
 The narration alternates verbatim: "STEP1 already ran. Next is STEP2." then "STEP1 was interrupted last
 time, so I'll run it now." The model contradicts itself every other turn, which is the signature of a
@@ -60,9 +65,17 @@ the active block, so every earlier pair is discarded no matter how many there ar
 | 3 | 7 | 2 | seed + result **3** only |
 | 4 | 9 | 2 | seed + result **4** only |
 
-The suffix grows and the payload does not. Live diagnostics agree — `rawMessages` 9, 11, 13, 15, 17, 19
-across consecutive tool-continuation turns with `rootBlobs` pinned at 5 and `continuationMode`
-`checkpoint` every time.
+This table needs one qualifier audit r8 supplied: it holds for the shape a real agent produces, where
+the assistant NARRATES before calling a tool. With a bare tool call and no assistant text there is no
+strippable entry at the head of the suffix, `activeStart` walks back over the whole block, and the counts
+grow normally (2, 3, 4, 5). The narration root is what arms the loop — which is why the defect looked
+intermittent rather than universal.
+
+The suffix grows and the payload does not. Live diagnostics agree: one checkpoint series measured
+`rawMessages` 8, 10, 12, 14, 16, 18 across consecutive tool-continuation turns with `rootBlobs` pinned at
+8 and `continuationMode: checkpoint` every time. (An earlier draft cited 9..19 against a pinned 5 and a
+proxy port that no artifact contains; the property is real, those specific figures were not, and they are
+corrected here rather than restated.)
 
 That explains both halves of the report. The model cannot see the output of the command it just ran two
 turns ago ("툴 출력을 못받고"), so it re-runs it; and because every turn presents the same collapsed shape,
@@ -114,3 +127,59 @@ full replay in every respect that matters to the guard.
   zero interrupt narrations, terminal `ALLDONE`.
 - `bun x tsc --noEmit` and `bun run privacy:scan`; full suite on `ssh lidge`, never locally.
 
+## Audit r8 reopened the change: one mechanism was not enough
+
+The first implementation fixed only the orphan-strip loop. An independent audit measured two further
+paths to the same user-visible symptom, both confirmed here before anything was changed.
+
+### The orphan fix is inert under byte pressure
+
+Eight pairs of 64 KiB results still produced 2 roots, with and without the orphan fix. The `keptPrior`
+loop above the guard admits **complete turns**, and a turn starts at a `user` root — which a checkpoint
+suffix does not have, by definition. `turnStart` walks to 0, the whole prior block becomes one
+all-or-nothing pseudo-turn, and the first budget overrun drops every entry. The orphan guard then has
+nothing left to strip, so it never runs and the fix cannot help.
+
+The remedy is to admit entries individually when the suffix continues a covered turn: without a turn
+boundary to respect there is nothing for turn-granularity to protect, and keeping the most recent
+history that fits beats keeping none. Measured 2 → 15 roots on that fixture.
+
+This matters more than a partial loss would, because root replay is the **only** channel carrying suffix
+history. `conversationTurns` walks from `historyMessageStart` and never meets a `user` message in a
+suffix, so `current` is never created and every entry hits `if (!current) continue` — the suffix
+contributes 0 turns both before and after this change. Verified directly rather than assumed.
+
+### Restored growth collided with the cumulative envelope
+
+Suffix pruning measured only its own slice, so it produced suffixes that were individually legal and
+cumulatively fatal. Once replay actually grew, the downstream envelope guard began throwing
+`CursorRootEnvelopeLimitError` — a non-retryable 400 — on conversations that previously degraded
+silently: 50 pairs behind 100 checkpoint roots, 10 behind 180, 4 behind 190. Growth was also
+non-monotonic, with 95 pairs giving 191 roots and 96 collapsing back to 2.
+
+Two things were wrong and both are fixed. Pruning now subtracts the checkpoint's own roots and bytes, so
+the suffix is measured against the room that actually remains. And when a checkpoint leaves no room at
+all, the checkpoint is **abandoned** for a full replay under a new `envelope_exhausted` invalidation
+reason rather than pruned to fit. Pruning to fit would emit the covered prefix and silently drop every
+uncovered message — this unit's own defect, reintroduced at the top of the range — and throwing would
+hand the caller a 400 it cannot retry. A full replay rebuilds a self-contained prompt and prunes it
+coherently. After the change all three fixtures stay at 191 roots with no throw and no cliff.
+
+Two pre-existing tests asserted the throw. They now assert the bound instead, which is the stronger
+property: the assembled request stays inside the envelope, and the uncovered history is still present.
+Both were mutation-checked — removing the `carriedRoots` subtraction turns them red — so the rewrite is
+not a weakened expectation.
+
+## Verification (as performed)
+
+- Focused suite: `bun test tests/cursor-blob.test.ts tests/cursor-tool-result-invocation.test.ts
+  tests/cursor-tool-continuation.test.ts` — 133 pass / 0 fail.
+- Every new assertion driven red against the code it exists to catch: restoring the unconditional orphan
+  guard reddens the two suffix-growth rows; restoring turn-granular admission reddens the byte-pressure
+  row; removing the `carriedRoots` subtraction reddens the two envelope rows; skipping the orphan guard
+  unconditionally reddens the full-replay orphan row.
+- Live re-measurement on an isolated proxy built from the patched tree, counted after the run exited:
+  3 commands, one execution each, 0 interrupt mentions, terminal `ALLDONE`. Diagnostics show roots
+  tracking history at 4, 6, 8, 10 rather than a pinned constant.
+- The operator's own proxy (port 10100, pid 62773, 2.35.0) was never touched; every probe ran against a
+  scratch `OPENCODEX_HOME` on a scratch port.

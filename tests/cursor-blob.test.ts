@@ -5,6 +5,7 @@ import { toBinary } from "@bufbuild/protobuf";
 import {
   createCursorBlobRequestScope,
   cursorBlobMetrics,
+  cursorBlobByteLength,
   cursorBlobRetainedStoreSnapshot,
   cursorBlobStoreDebugSnapshotForTests,
   CursorBlobAdmissionError,
@@ -2297,7 +2298,14 @@ describe("Cursor external replay envelope", () => {
   // oversized full replay, so a guard that measured only the suffix (or only
   // `rootPromptMessagesState`) would still satisfy them. These two do not: the suffix is tiny and
   // legal on its own, and only the checkpoint plus the suffix crosses a limit.
-  test("a checkpoint plus a legal suffix cannot exceed the root count limit cumulatively", () => {
+  //
+  // These two asserted a THROW until devlog 260829 070 (audit r8 finding 3). The throw was reachable
+  // because suffix pruning measured only its own slice, so it happily produced a suffix that was
+  // individually legal and cumulatively fatal — a non-retryable 400 on a long conversation. Pruning now
+  // subtracts the checkpoint's own roots, and a checkpoint with no room left for the suffix is abandoned
+  // for a full replay. The invariant is what matters and it is now stronger: the assembled request stays
+  // inside the envelope. Asserting the throw would pin the old mechanism, so these assert the bound.
+  test("a checkpoint plus a legal suffix stays inside the root count limit cumulatively", () => {
     const checkpointRoots = Array.from(
       { length: CURSOR_EXTERNAL_ROOT_BLOB_LIMIT },
       (_, i) => new Uint8Array(32).fill(i % 251),
@@ -2307,7 +2315,7 @@ describe("Cursor external replay envelope", () => {
       turns: [new Uint8Array(32).fill(8)],
     });
 
-    expect(() => prepareCursorRunRequest({
+    const prepared = prepareCursorRunRequest({
       modelId: "gpt-5.6-sol-xhigh",
       conversationId: "c-ckpt-cumulative",
       system: ["You are helpful."],
@@ -2322,10 +2330,18 @@ describe("Cursor external replay envelope", () => {
       checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
       checkpointSuffixStart: 2,
       continuationMode: "checkpoint",
-    })).toThrow(CursorRootEnvelopeLimitError);
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    expect(roots.length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    // Abandoned rather than pruned-to-fit: a full replay carries the whole conversation, so the
+    // uncovered messages are present instead of silently dropped.
+    const serialized = JSON.stringify(roots.map(id => JSON.parse(new TextDecoder().decode(blobData(id)))));
+    expect(serialized).toContain("mid user");
   });
 
-  test("a checkpoint plus a legal suffix cannot exceed the byte limit cumulatively", () => {
+  test("a checkpoint plus a legal suffix stays inside the byte limit cumulatively", () => {
     // Roots the local store actually holds, so their bytes are measurable: a suffix-only or
     // `rootPromptMessagesState`-only measurement reports far less than the assembled total.
     const big = new Uint8Array(200_000).fill(65);
@@ -2335,7 +2351,7 @@ describe("Cursor external replay envelope", () => {
       turns: [new Uint8Array(32).fill(8)],
     });
 
-    expect(() => prepareCursorRunRequest({
+    const prepared = prepareCursorRunRequest({
       modelId: "gpt-5.6-sol-xhigh",
       conversationId: "c-ckpt-bytes",
       system: ["You are helpful."],
@@ -2350,7 +2366,14 @@ describe("Cursor external replay envelope", () => {
       checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
       checkpointSuffixStart: 2,
       continuationMode: "checkpoint",
-    })).toThrow(CursorRootEnvelopeLimitError);
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    const measured = roots.reduce((sum, id) => sum + (cursorBlobByteLength(id) ?? 0), 0);
+    expect(measured).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+    // The 600 KB of checkpoint roots is gone, not merely trimmed: an exhausted checkpoint is dropped.
+    expect(roots.length).toBeLessThan(checkpointRoots.length + 5);
   });
 
   // The diagnostic used to read `rootPromptMessagesState?.byteLength`, which is undefined for a
@@ -2498,6 +2521,66 @@ describe("Cursor checkpoint suffix keeps its completed pairs", () => {
     expect(counts).toEqual([...counts].sort((a, b) => a - b));
     expect(new Set(counts).size).toBeGreaterThan(1);
     expect(counts.at(-1)!).toBeGreaterThan(counts[0]!);
+  });
+
+  /**
+   * Audit r8 finding 2: the orphan-guard fix alone was INERT under byte pressure, and measurably so —
+   * 8 pairs of 64 KiB results still emitted 2 roots. The `keptPrior` loop admits COMPLETE TURNS, and a
+   * turn starts at a user root; a checkpoint suffix has no user root at all, so `turnStart` walked to 0,
+   * the whole prior block became one all-or-nothing pseudo-turn, and the first budget overrun dropped
+   * every entry — leaving the orphan guard nothing to strip and the model nothing to read.
+   *
+   * Root replay is the only channel carrying suffix history (`conversationTurns` never opens a turn for a
+   * suffix with no user message), so this was a total loss of that history, not a partial one.
+   */
+  test("byte pressure prunes a checkpoint suffix incrementally instead of dropping all of it", () => {
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: [new Uint8Array(32).fill(7)],
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    // Eight pairs whose results together far exceed CURSOR_EXTERNAL_ROOT_BYTE_LIMIT, so pruning must run.
+    const bulky = "X".repeat(64 * 1024);
+    const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+      { role: "user", content: "Run each step once.", timestamp: 1 },
+    ];
+    let timestamp = 2;
+    for (let n = 1; n <= 8; n++) {
+      rawMessages!.push({
+        role: "assistant",
+        content: [
+          { type: "text", text: `Running STEP${n}.` },
+          { type: "toolCall", id: `call_${n}`, name: "exec_command", arguments: { cmd: `echo STEP${n}` } },
+        ],
+        timestamp: timestamp++,
+      });
+      rawMessages!.push({
+        role: "toolResult",
+        toolCallId: `call_${n}`,
+        toolName: "exec_command",
+        content: bulky,
+        isError: false,
+        timestamp: timestamp++,
+      });
+    }
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: "cursor_ckpt_byte_pressure",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages,
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      checkpointSuffixStart: 1,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    // Two roots (checkpoint seed + one active result) is the defect. More than a handful survive now.
+    expect(roots.length).toBeGreaterThan(4);
+    // And the bound still holds: retention did not come at the cost of the envelope.
+    expect(roots.length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    const measured = roots.reduce((sum, id) => sum + (cursorBlobByteLength(id) ?? 0), 0);
+    expect(measured).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
   });
 
   test("a full replay still strips a genuinely orphaned leading entry", () => {

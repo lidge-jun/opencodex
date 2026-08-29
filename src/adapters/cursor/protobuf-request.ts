@@ -220,6 +220,15 @@ function rootPromptMessages(
    * both sides in the same space (devlog 260829 060).
    */
   knownCallsOffset = 0,
+  /**
+   * Roots the decoded checkpoint already carries, which this call's pruning must leave room for.
+   *
+   * The envelope guard downstream measures checkpoint roots PLUS this suffix and throws a
+   * non-retryable 400 when the total exceeds the limit. Pruning against the full limit therefore
+   * emitted a suffix that was individually legal and cumulatively fatal — invisible until suffix
+   * replay actually grew (devlog 260829 070, audit r8 finding 3).
+   */
+  carriedRoots: { count: number; byteLength: number } = { count: 0, byteLength: 0 },
 ): {
   ids: Uint8Array[];
   byteLength: number;
@@ -352,8 +361,8 @@ function rootPromptMessages(
     const systemEntries = entries.slice(0, systemEntryCount);
     const history = entries.slice(systemEntryCount);
     const systemBytes = systemEntries.reduce((sum, entry) => sum + entry.byteLength, 0);
-    const historyLimit = Math.max(0, CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - systemEntryCount);
-    const historyBudget = Math.max(0, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - systemBytes);
+    const historyLimit = Math.max(0, CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - systemEntryCount - carriedRoots.count);
+    const historyBudget = Math.max(0, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - systemBytes - carriedRoots.byteLength);
 
     // Retain the active trailing tool-result block when it fits (may truncate text).
     // If even a truncation marker cannot fit the remaining budget, omit it rather than
@@ -401,13 +410,22 @@ function rootPromptMessages(
     const keptPrior: RootBlobCandidate[] = [];
     let priorBytes = 0;
     // Take complete turns from the end: a turn starts at a user/developer root entry.
+    //
+    // Turn-granular admission needs a turn boundary to exist. A checkpoint suffix has NO user root at
+    // all — its initiating turn is inside the checkpoint — so `turnStart` walks to 0, the entire prior
+    // block becomes one all-or-nothing pseudo-turn, and the first budget overrun drops ALL of it.
+    // Measured on the checkpoint path with 8 pairs of 64 KiB results: 2 roots, unchanged by the orphan
+    // guard fix, because there was nothing left for that guard to strip. Admitting entry-by-entry keeps
+    // as much recent history as fits instead of none (devlog 260829 070, audit r8 finding 2).
     let i = prior.length - 1;
     while (i >= 0 && keptPrior.length + active.length < historyLimit) {
       let turnStart = i;
-      // Root-blob roles are a closed set of four (system, user, assistant, toolResult): a
-      // developer message is normalized to a user root upstream, so "user" IS the turn start.
-      // Review suspected a developer-role gap here; the type says it cannot occur.
-      while (turnStart > 0 && prior[turnStart]?.role !== "user") turnStart -= 1;
+      if (!suffixContinuesCoveredTurn) {
+        // Root-blob roles are a closed set of four (system, user, assistant, toolResult): a
+        // developer message is normalized to a user root upstream, so "user" IS the turn start.
+        // Review suspected a developer-role gap here; the type says it cannot occur.
+        while (turnStart > 0 && prior[turnStart]?.role !== "user") turnStart -= 1;
+      }
       const turn = prior.slice(turnStart, i + 1);
       const turnBytes = turn.reduce((sum, entry) => sum + entry.byteLength, 0);
       if (
@@ -1246,9 +1264,34 @@ function buildPreparedCursorRunRequest(
         // Index calls from the FULL history, not the suffix: the cut can fall between a call and
         // its result, and a result replayed without its invocation is the orphaned-result defect.
         const fullHistoryCalls = toolCallsByCallId(request.rawMessages);
+        // What the checkpoint already spends against the envelope. An id the local store never held
+        // still occupies a root slot, so it counts toward the COUNT budget with a zero byte
+        // contribution rather than being skipped entirely.
+        let carriedBytes = 0;
+        for (const blobId of conversationState.rootPromptMessagesJson) {
+          carriedBytes += cursorBlobByteLength(blobId) ?? 0;
+        }
+        const carriedRoots = {
+          count: conversationState.rootPromptMessagesJson.length,
+          byteLength: carriedBytes,
+        };
+        // A checkpoint can be so large that nothing is left for the suffix. Pruning to fit would then
+        // emit the covered prefix and silently drop every uncovered message — the exact failure this
+        // unit exists to remove — while throwing would hand the caller a non-retryable 400. Abandon the
+        // checkpoint instead: full replay rebuilds a self-contained prompt and prunes it coherently
+        // (devlog 260829 070, audit r8 finding 3).
+        const systemRootCount = systemPromptBlobs(suffixRequest).length;
+        if (
+          carriedRoots.count + systemRootCount >= CURSOR_EXTERNAL_ROOT_BLOB_LIMIT
+          || carriedRoots.byteLength >= CURSOR_EXTERNAL_ROOT_BYTE_LIMIT
+        ) {
+          conversationState = undefined;
+          continuationMode = "full-replay";
+          checkpointInvalidationReason = "envelope_exhausted";
+        } else {
         // `suffixStart` re-bases the replayed slice into full-history space, which is the space
         // `fullHistoryCalls` positions live in. Without it the positional bound compares two origins.
-        const suffixRoots = rootPromptMessages(suffixRequest, requestScope, fullHistoryCalls, suffixStart);
+        const suffixRoots = rootPromptMessages(suffixRequest, requestScope, fullHistoryCalls, suffixStart, carriedRoots);
         const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart, fullHistoryCalls, suffixStart);
         const suffixSystemCount = systemPromptBlobs(suffixRequest).length;
         const suffixHistoryIds = suffixRoots.ids.slice(suffixSystemCount);
@@ -1270,6 +1313,7 @@ function buildPreparedCursorRunRequest(
           historyMessageStart: suffixRoots.historyMessageStart,
           serialized: suffixHistorySerialized,
         };
+        }
       }
     } catch {
       checkpointInvalidationReason = "decode_failed";
