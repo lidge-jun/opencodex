@@ -54,7 +54,7 @@ import { ensureLabDirs, ensureRestrictedDir } from "../src/lab/paths";
 import { verifyExactTreeDiffV1 } from "../src/lab/fabric/verifier";
 import { parseSyntheticPatchV1 } from "../src/lab/fabric/patch";
 import { FABRIC_LIMITS } from "../src/lab/fabric/constants";
-import { setFabricProducerIsolationLimitsForTests } from "../src/lab/fabric/producer-isolate";
+import { minimalFabricChildEnv, setFabricProducerIsolationLimitsForTests } from "../src/lab/fabric/producer-isolate";
 import { taskSubjectApplicableToRequirements } from "../src/lab/projection/verification";
 import { createHostIssuedFabricPatchExecutor } from "../src/lib/fabric-task-host";
 import type { TrustedFabricPatchExecutor } from "../src/lab/fabric/types";
@@ -377,11 +377,10 @@ export async function execute() {
 
     const child = Bun.spawn([process.execPath, "run", childEntry], {
       cwd: REPO_ROOT,
-      env: {
-        TZ: "UTC",
-        NO_COLOR: "1",
-        OCX_FABRIC_SCRATCH_ROOT: home,
-      },
+      // Production's environment, not a literal copy of it. On Windows the
+      // three variables alone cannot start a Bun child at all, so a hardcoded
+      // copy here asserted against an environment production never uses.
+      env: minimalFabricChildEnv(home),
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
@@ -1183,5 +1182,40 @@ export async function execute() {
     const text = readFileSync(join(home, "lab", "compatibility.jsonl"), "utf8");
     expect(text.includes("system prompt")).toBe(false);
     expect(text.includes(CREDENTIAL_CANARY)).toBe(false);
+  });
+
+  // Every producer case above runs a real child process, so all of them turn
+  // "inconclusive" at once when the child cannot start. On Windows that is what
+  // happened: the child env carried three variables, and a CreateProcess child
+  // inherits nothing, so the Bun executable could not resolve its system DLLs
+  // and died before running its entry module. Fourteen cases went red for one
+  // reason, and none of them named it -- they all reported harness_failure.
+  //
+  // This asserts the environment contract directly, so a regression is one
+  // named failure instead of a diffuse cluster. It runs everywhere: the shape
+  // is what matters, and the platform branch is inside the function.
+  test("the isolated producer env carries what a child needs to start on this platform", () => {
+    const home = tempHome();
+    const env = minimalFabricChildEnv(home);
+
+    // The sandbox contract, on every platform: scratch is addressed, and no
+    // ambient credential or config state is forwarded.
+    expect(env.OCX_FABRIC_SCRATCH_ROOT).toBe(home);
+    expect(env.TZ).toBe("UTC");
+    for (const leaked of ["OPENCODEX_HOME", "CODEX_HOME", "PATH", "HOME", "USERPROFILE", "APPDATA"]) {
+      expect(env[leaked]).toBeUndefined();
+    }
+
+    if (process.platform !== "win32") {
+      // POSIX passes the loader an absolute interpreter path and needs nothing else.
+      expect(Object.keys(env).sort()).toEqual(["NO_COLOR", "OCX_FABRIC_SCRATCH_ROOT", "TZ"]);
+      return;
+    }
+
+    // On Windows the loader itself reads the environment. SystemRoot is the one
+    // that decides whether the child runs at all; assert it against the real
+    // parent value rather than a literal, since a wrong path fails identically.
+    expect(env.SystemRoot).toBe(process.env.SystemRoot);
+    expect(env.SystemRoot).toBeTruthy();
   });
 });

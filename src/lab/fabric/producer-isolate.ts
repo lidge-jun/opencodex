@@ -31,12 +31,38 @@ interface IsolateRequest {
   now?: () => number;
 }
 
-function minimalChildEnv(scratchRoot: string): Record<string, string> {
-  return {
+/**
+ * The environment an isolated producer child runs with.
+ *
+ * Exported so a test that spawns `producer-child.ts` directly cannot drift from
+ * the environment production actually uses. The Windows-only additions below
+ * are load-bearing, and a test carrying its own literal copy of this object
+ * silently loses them.
+ */
+export function minimalFabricChildEnv(scratchRoot: string): Record<string, string> {
+  const env: Record<string, string> = {
     TZ: "UTC",
     NO_COLOR: "1",
     OCX_FABRIC_SCRATCH_ROOT: scratchRoot,
   };
+  if (process.platform !== "win32") return env;
+  // Windows has no equivalent of "run with an (almost) empty environment". A
+  // CreateProcess child inherits nothing here, and the loader itself reads the
+  // environment: without SystemRoot it cannot resolve the system DLLs the Bun
+  // executable links against, so the child dies before its entry module runs.
+  // The parent then sees an immediate non-zero close with no protocol line and
+  // reports harness_failure -- which is what turned every CL-07 producer case
+  // into "inconclusive" on the Windows leg while POSIX stayed green.
+  //
+  // These are OS-owned process bootstrap state, not caller-supplied
+  // configuration: the sandbox boundary is the scratch root plus the absent
+  // credential/config variables, and neither is weakened by letting the child
+  // find its own loader and temp directory.
+  for (const name of ["SystemRoot", "windir", "TEMP", "TMP"] as const) {
+    const value = process.env[name];
+    if (value) env[name] = value;
+  }
+  return env;
 }
 
 function killChild(child: ChildProcess): void {
@@ -56,7 +82,7 @@ export async function runIsolatedFabricProducer(request: IsolateRequest): Promis
     let child: ChildProcess;
     try {
       child = spawn(process.execPath, ["run", CHILD_ENTRY], {
-        env: minimalChildEnv(request.scratchRoot),
+        env: minimalFabricChildEnv(request.scratchRoot),
         stdio: ["pipe", "pipe", "pipe"],
       });
     } catch (error) {
