@@ -212,7 +212,8 @@ checkpoint spends. Removing the subtraction now reddens three tests.
 ## Verification (as performed)
 
 - Focused suite: `bun test tests/cursor-blob.test.ts tests/cursor-tool-result-invocation.test.ts
-  tests/cursor-tool-continuation.test.ts` — 133 pass / 0 fail.
+  tests/cursor-tool-continuation.test.ts` — 138 pass / 0 fail at the head of this unit (133 when this line
+  was first written, before the later rounds added assertions).
 - Every assertion driven red against the implementation it exists to catch, each mutation applied alone:
   restoring the unconditional orphan guard reddens the two suffix-growth rows; restoring turn-granular
   admission reddens the byte-pressure row; removing the `carriedRoots` subtraction reddens three rows;
@@ -278,8 +279,8 @@ stating: wasted work each turn, not wrong output — the request assembled is co
 ### Verification of this round
 
 - `bun test` across `cursor-blob`, `cursor-tool-result-invocation`, `cursor-tool-continuation` and
-  `cursor-request-builder`: 187 pass / 0 fail before the three new assertions, 102 / 0 in `cursor-blob`
-  after.
+  `cursor-request-builder`: 188 pass / 0 fail, and 102 / 0 in `cursor-blob` alone. An earlier draft said 187,
+  which matched no commit in the stack — recounted after audit round 4 flagged it.
 - Each new assertion driven red against the implementation it catches: removing the native gate reddens the
   native-checkpoint row; reading only the last index reddens the parallel row. The parallel fixture's
   375-byte offset was derived from the sweep rather than guessed — it is the one position where a
@@ -287,3 +288,28 @@ stating: wasted work each turn, not wrong output — the request assembled is co
 - Sweeps re-run clean after the change: 15/15 band positions deliver the newest result, 222 edge positions
   (multi-byte UTF-8, empty, whitespace-only, error, self-referential `output:` payload) with no loss, 628
   parallel positions with no partial answers and no throws.
+
+## Audit round 4: the gate covered one disjunct out of three
+
+The abandon condition is a three-way disjunction, and round 3 gated only the last term. The middle one —
+"the suffix produced no history roots at all" — is about the same thing, a replayed root going missing, so
+it was equally meaningless for a model whose results never become roots.
+
+It fired whenever a native assistant turn was a **bare tool call with no narration**: no text root, no
+result root, zero history roots, condition true, checkpoint discarded. Measured on the silent shape,
+`readPaths` went 2 → 0 for `auto`, `composer-1`, `composer-2.5-fast` and `composer-3` while
+`composer-2.5` and `grok-4.6` were unaffected — the same split, the same loss, one disjunct over. Both
+survival terms are gated now; the count-full term stays ungated because it is a real envelope fact
+independent of who echoes results.
+
+### Why four rounds each found something
+
+Every fix in this unit was correct for the path it was written against and silent about a sibling path in
+the same condition. The fixture that let round 4's blocker through was round 3's own test: it asserted the
+native path with narration, so the narration-free shape of the same path stayed invisible. The test is now
+a cross product — four model ids by four assistant shapes (narrated, silent, empty text, whitespace text) —
+because that is the axis the bugs kept hiding along, not because sixteen cases are inherently better than
+four.
+
+Two counts in this document were also wrong and are corrected: the four-suite total is 188, not 187, and
+the three-suite figure is 138 at head rather than the 133 true when it was written.

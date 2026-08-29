@@ -1365,7 +1365,12 @@ function buildPreparedCursorRunRequest(
           || keptEnough;
         if (
           carriedRoots.count + suffixSystemCount >= CURSOR_EXTERNAL_ROOT_BLOB_LIMIT
-          || suffixRoots.ids.length <= suffixSystemCount
+          // Both survival disjuncts are about a REPLAYED root going missing, so both are meaningless for a
+          // model whose results never become roots. Gating only the second one still discarded every native
+          // checkpoint whose assistant turn was a bare tool call: no text root, no result root, zero history
+          // roots, condition true (audit r8 round 4). The count-full disjunct above stays ungated — it is a
+          // real envelope fact, independent of who echoes results.
+          || (resultReplayedAsRoot && suffixRoots.ids.length <= suffixSystemCount)
           || !suffixKeptItsResult
         ) {
           conversationState = undefined;

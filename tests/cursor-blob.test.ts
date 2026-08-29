@@ -41,6 +41,7 @@ import {
   prepareCursorRunRequest,
 } from "../src/adapters/cursor/protobuf-request";
 import { estimateTokens } from "../src/lib/token-estimate";
+import type { OcxAssistantContentPart } from "../src/types";
 import { CursorRootEnvelopeLimitError } from "../src/adapters/cursor/cursor-errors";
 import { isRetryableCursorError } from "../src/adapters/cursor/transport-retry";
 import { encodeCursorCallId, resetCursorCallIdProvenanceForTests } from "../src/adapters/cursor/call-id";
@@ -2502,7 +2503,18 @@ describe("Cursor external replay envelope", () => {
    * checkpoint, and a full replay does not rebuild them, so the accumulated state was simply lost.
    */
   test("a native model keeps its checkpoint through a tool continuation", () => {
-    for (const modelId of ["cursor/auto", "cursor/composer-2.5-fast", "cursor/composer-3"]) {
+    // Model class CROSSED with narration shape. Round 3 fixed the narrated shape and round 4 found the
+    // silent one still broken, because a bare tool call produces no assistant root either — so the suffix
+    // has zero history roots and a different disjunct of the same condition fired. Testing one shape per
+    // model class is what let the second path hide; the cross product is the point of this loop.
+    const assistantShapes: Array<{ label: string; content: OcxAssistantContentPart[] }> = [
+      { label: "narrated", content: [{ type: "text", text: "Reading." }, { type: "toolCall", id: "n1", name: "read_file", arguments: { path: "a.txt" } }] },
+      { label: "silent", content: [{ type: "toolCall", id: "n1", name: "read_file", arguments: { path: "a.txt" } }] },
+      { label: "empty-text", content: [{ type: "text", text: "" }, { type: "toolCall", id: "n1", name: "read_file", arguments: { path: "a.txt" } }] },
+      { label: "whitespace-text", content: [{ type: "text", text: "   " }, { type: "toolCall", id: "n1", name: "read_file", arguments: { path: "a.txt" } }] },
+    ];
+    for (const modelId of ["cursor/auto", "cursor/composer-1", "cursor/composer-2.5-fast", "cursor/composer-3"]) {
+    for (const shape of assistantShapes) {
       const carriedRoot = storeCursorBlob(new TextEncoder().encode(JSON.stringify({
         role: "user",
         content: [{ type: "text", text: "covered by checkpoint" }],
@@ -2514,19 +2526,12 @@ describe("Cursor external replay envelope", () => {
       });
       const prepared = prepareCursorRunRequest({
         modelId,
-        conversationId: `cursor_native_ckpt_${modelId}`,
+        conversationId: `cursor_native_ckpt_${modelId}_${shape.label}`,
         system: ["You are helpful."],
         messages: [{ role: "tool", content: "FILE-CONTENTS" }],
         rawMessages: [
           { role: "user", content: "Read the file.", timestamp: 1 },
-          {
-            role: "assistant",
-            content: [
-              { type: "text", text: "Reading." },
-              { type: "toolCall", id: "n1", name: "read_file", arguments: { path: "a.txt" } },
-            ],
-            timestamp: 2,
-          },
+          { role: "assistant", content: shape.content, timestamp: 2 },
           { role: "toolResult", toolCallId: "n1", toolName: "read_file", content: "FILE-CONTENTS", isError: false, timestamp: 3 },
         ],
         checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
@@ -2541,6 +2546,7 @@ describe("Cursor external replay envelope", () => {
       expect(state?.readPaths ?? []).toEqual(["a.txt", "b.txt"]);
       const roots = state?.rootPromptMessagesJson ?? [];
       expect(roots.some(id => Array.from(id).join(",") === Array.from(carriedRoot).join(","))).toBe(true);
+    }
     }
   });
 
