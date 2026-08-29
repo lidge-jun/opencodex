@@ -701,6 +701,25 @@ export function computePromptProbeStateFingerprint(opts?: Paths): string {
   if (selection.kind === "variant") {
     updateFingerprintField(hash, "variant-bytes", readFileOrNull(join(activeBaseVariantDir(opts), `${selection.id}.md`)));
   }
+  if (selection.kind === "external") {
+    // The selected base file is hashed whether or not we manage it. Hashing the
+    // managed variant's bytes while recording an external selection as the bare
+    // word "external" would make the guarantee depend on who authored the file,
+    // which is not a distinction the probe's caller can see.
+    //
+    // Its path is part of the identity as well as its contents: pointing the key
+    // at a different file changes the prompt even when both files read alike.
+    updateFingerprintField(hash, "external-path", selection.path);
+    let externalBytes: string | null = null;
+    try {
+      externalBytes = readFileOrNull(resolve(expandUserPath(selection.path)));
+    } catch {
+      // An unresolvable path is a state, not a failure: it hashes as absent, and
+      // resolveBaseSelection has already reported the selection as external.
+      externalBytes = null;
+    }
+    updateFingerprintField(hash, "external-bytes", externalBytes);
+  }
   // Codex prefers AGENTS.override.md over AGENTS.md, so both spellings are hashed
   // in that order: an override edit changes the rendered project document exactly
   // as a plain edit does.

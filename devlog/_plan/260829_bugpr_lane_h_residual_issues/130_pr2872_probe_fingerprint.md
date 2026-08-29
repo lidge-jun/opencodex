@@ -59,13 +59,38 @@ instead of implying otherwise:
 - Skill metadata, plugin manifests, and MCP/app availability feed
   `<skills_instructions>`, `<plugins_instructions>` and `<apps_instructions>`.
 - Clock, timezone, shell and permission state feed `<environment_context>`.
-- An external `model_instructions_file` target. `codex debug prompt-input` discards
-  base instructions, so it does not currently stale a rendered layer.
 
 None is writable through `/api/codex-prompt`; each needs an external edit
 concurrent with an in-flight probe. A 15-second window bounded by a fail-closed
 `busy` is the exposure, and pretending to fingerprint a clock would be worse than
 documenting it.
+
+The external `model_instructions_file` target was on that list and has been moved
+off it. Listing it there was the wrong call twice over: it is an ordinary file this
+process can read, and leaving it out meant the guarantee depended on whether we
+authored the selected base prompt. A fourth review round found the asymmetry —
+managed variant bytes hashed, an external selection recorded as the bare word
+`external`. Its path and bytes are now hashed like any other field.
+
+One correction to that round's stated impact, because the difference matters for
+anyone reading this later: `base-instructions` is reported `not-exposed`
+unconditionally, since `prompt_debug.rs` discards it. So the stale value was never
+rendered back to a caller. The defect was a real hole in admission identity, not an
+observable stale layer, and it is worth closing on the first ground alone.
+
+## Round-by-round record
+
+Four review rounds, four real defects. Worth keeping because the pattern is the
+point: each fix was itself reviewed, and three of the four findings were in code
+written to fix the previous finding.
+
+1. The fingerprint omitted `AGENTS.md` entirely.
+2. Fields were concatenated unframed, so contents could imitate a separator; the
+   `\0absent` sentinel collided with a file holding those literal bytes.
+3. `computeRevision` still had that same unframed shape inside it — and that value
+   is also the write-path concurrency token, so the collision reached further than
+   the probe.
+4. An external base selection was hashed as a bare kind string.
 
 ## Verification
 

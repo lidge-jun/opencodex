@@ -1123,6 +1123,50 @@ describe("020 coverage completions", () => {
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
   });
 
+  /**
+   * An externally authored base prompt is hashed exactly like a managed variant.
+   * Recording only the word "external" made the admission guarantee depend on who
+   * wrote the file, which is not a distinction the caller can observe. The path is
+   * part of the identity too: repointing the key at a different file changes the
+   * prompt even when both files happen to read alike.
+   */
+  test("34. editing an external base prompt invalidates an in-flight text probe", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const externalPath = join(fx.decoyHome, "external-base.md");
+    writeFileSync(externalPath, "old-external", "utf8");
+    await call("PUT", "/api/codex-prompt/base/select", fx, {
+      kind: "external", path: externalPath, revision: await revision(fx),
+    });
+    // Selection through the route is not assumed: the fixture config is what the
+    // fingerprint reads, so assert the state this case depends on.
+    writeFileSync(fx.configPath, `model_instructions_file = "${externalPath}"\n`, "utf8");
+
+    const startedPath = join(fx.decoyHome, "external-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(externalPath)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "external base probe start");
+    writeFileSync(externalPath, "new-external", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-external");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("new-external");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
   test("24. every ownership state is named, not collapsed into a boolean", async () => {
     // developerInstructionsOwned:false covers an ABSENT key and an EXTERNAL one, and
     // a GUI that cannot tell them apart hides its own create affordance from every
