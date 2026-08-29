@@ -1229,4 +1229,37 @@ describe("shared refresh flight plan reconciliation (#2892 gap 2 follow-up)", ()
       resetJwtPlanNotesForTests();
     }
   });
+
+  test("records with EMPTY account ids are never treated as the same identity (#2892 review)", async () => {
+    const { getValidCodexToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    // Grant fingerprint, access token and expiry all match, and both ids are "". Two empty strings
+    // compare equal but prove nothing about which upstream account either record was meant to use,
+    // so propagation must fail closed rather than write a credential into an unidentified record.
+    const shared = { accessToken: "anon-old", refreshToken: "anon-grant", expiresAt: 0, chatgptAccountId: "" };
+    saveCodexAccountCredential("anon-owner", { ...shared });
+    saveCodexAccountCredential("anon-alias", { ...shared });
+    const aliasGeneration = readCodexAccountRecord("anon-alias")!.generation;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "anon-new",
+      refresh_token: "anon-rotated",
+      expires_in: 3600,
+    })) as typeof fetch;
+    try {
+      await getValidCodexToken("anon-owner");
+
+      // The owner still rotates normally.
+      expect(readCodexAccountRecord("anon-owner")!.credential?.refreshToken).toBe("anon-rotated");
+      // The unidentified record is untouched, generation included.
+      const alias = readCodexAccountRecord("anon-alias")!;
+      expect(alias.credential?.accessToken).toBe("anon-old");
+      expect(alias.credential?.refreshToken).toBe("anon-grant");
+      expect(alias.generation).toBe(aliasGeneration);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
 });

@@ -277,12 +277,20 @@ export function commitRefreshedCodexCredentialWithAliases(
     // reconciliation below is generation-fenced, so an id alone would be reconciled at the wrong fence.
     const propagatedAliases: { id: string; generation: number }[] = [];
     // Nothing to propagate when the grant did not actually rotate: the aliases already hold it.
-    if (priorFingerprint !== undefined && priorCredential.refreshToken !== cred.refreshToken) {
+    // An absent owner identity fails closed: two empty strings compare equal but prove nothing about
+    // which upstream account either record was meant to use, and a matching bearer snapshot only
+    // shows they copied the same token once. Leave those dormant records alone.
+    if (
+      priorFingerprint !== undefined
+      && priorCredential.refreshToken !== cred.refreshToken
+      && !!priorCredential.chatgptAccountId
+    ) {
       for (const [aliasId, alias] of Object.entries(store)) {
         if (aliasId === id || alias.deletedAt != null || !alias.credential) continue;
         if (recordGrantFingerprint(alias) !== priorFingerprint) continue;
         if (alias.credential.accessToken !== priorCredential.accessToken) continue;
         if (alias.credential.expiresAt !== priorCredential.expiresAt) continue;
+        if (!alias.credential.chatgptAccountId) continue;
         if (alias.credential.chatgptAccountId !== priorCredential.chatgptAccountId) continue;
         const aliasGeneration = alias.generation + 1;
         store[aliasId] = {

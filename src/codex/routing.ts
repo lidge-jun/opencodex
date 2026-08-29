@@ -2250,19 +2250,21 @@ export function recordCodexUpstreamOutcome(
      * The pre-check above closes the same-process race, but not a cross-process one (#2892 gap 4).
      * `isCodexAccountGenerationLive` is an unlocked read while credential writers coordinate under
      * the mutation lock, and OS preemption needs no `await` — so another process can replace the
-     * credential between the check and these writes. Health and reauth carry no credential identity
-     * of their own (a health entry has no generation field, reauth is a bare id set), so a stale 401
-     * that lands in that window would quarantine the REPLACEMENT credential.
+     * credential after this check, or at any point after this whole function returns. No re-read here
+     * can close that: a replacement is always free to land one instruction later.
      *
-     * Taking the credential lock here is not an option: it runs with `busy_timeout=0`, so acquiring
-     * it per outcome would turn ordinary contention into thrown request-path errors. Instead the
-     * mutations stay synchronous and are re-validated afterwards, restoring the previous health and
-     * reauth state if the generation stopped being live. The window still exists; what changes is
-     * that its effects do not survive it.
+     * Taking the credential lock is not an option either: it runs with `busy_timeout=0`, so acquiring
+     * it per outcome would turn ordinary contention into thrown request-path errors.
      *
-     * Affinity sweeping is deliberately NOT rolled back: an affinity entry already carries a
-     * credential generation and self-invalidates on the next check, and re-adding swept entries
-     * would be a worse bug than the sweep.
+     * So the evidence is TAGGED with the credential it describes and judged when it is READ. The
+     * health entry carries `credentialFailureGeneration` and the reauth map carries the same
+     * generation; `dropSpentCredentialFailure` and `isAccountNeedsReauth` discard an entry whose
+     * credential is gone. A later transient or quota write replaces the entry along with its tag, and
+     * `preservedCooldownFields` drops the tag explicitly, so this provenance can never be spent
+     * against a failure it did not describe.
+     *
+     * Affinity sweeping needs no tag: an affinity entry already carries a credential generation and
+     * self-invalidates on the next check, and re-adding swept entries would be a worse bug.
      */
     upstreamHealth.set(accountId, {
       consecutiveFailures: 1,

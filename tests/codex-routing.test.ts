@@ -34,6 +34,7 @@ import {
   tryAcquireCodexQuotaProbeLease,
 } from "../src/codex/routing";
 import { clearPoolRotationState } from "../src/codex/pool-rotation";
+import { captureConfigGeneration } from "../src/lib/state-store-sweeper";
 import { readCodexAccountRecord, removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
 import {
   clearAccountNeedsReauth,
@@ -573,13 +574,19 @@ describe("codex routing", () => {
     const record = sidecarOutcomeRecorder(config, {
       kind: "pool",
       accountId: "a",
-      writerGeneration: 0,
+      // Use the CURRENT captured generation, as a production pool auth context does. A hardcoded 0
+      // is below whatever reconciliation state earlier tests advanced to, so
+      // recordCodexUpstreamOutcome could reject the outcome at its writer-generation guard and the
+      // assertion would pass without ever reaching the credential-generation logic under test.
+      writerGeneration: captureConfigGeneration(),
       generation,
       accessToken: "access-a",
       chatgptAccountId: "acct-a",
     });
     expect(record).toBeDefined();
     record!(401);
+    // Guard the guard: if this is false the outcome never applied, so the assertions below would be
+    // vacuous rather than proving the replacement is not quarantined.
     expect(isAccountNeedsReauth("a")).toBe(true);
 
     saveTestCredential("a");
