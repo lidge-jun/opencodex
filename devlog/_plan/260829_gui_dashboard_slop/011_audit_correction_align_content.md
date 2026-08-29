@@ -112,4 +112,3 @@ flow (`position: fixed`, off-canvas at `x=-280`), so `.main-inner` JUMPS from
 526px to 750px. The sidecar grid re-splits into two columns at 349px each and the
 22.5px misalignment returns — on tablet widths, below the width where it was last
 believed fixed. Any fix must be verified at 760/740, not only at desktop widths.
-

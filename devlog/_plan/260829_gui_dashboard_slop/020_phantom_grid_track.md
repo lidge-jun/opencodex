@@ -1,5 +1,10 @@
 # 020 — Phantom zero-width auto-fit track (wp2)
 
+> **WITHDRAWN — nothing in this document ships.** The investigation concluded the
+> reported defect is not a defect: a collapsed zero-width `auto-fit` track is
+> normal behaviour, and no code change was made for it. Kept as the record of why
+> the track is expected, so the next person who measures it does not re-open it.
+
 ## Defect
 
 At vw ≥ 1440 both dashboard grids compute a third, zero-width column:

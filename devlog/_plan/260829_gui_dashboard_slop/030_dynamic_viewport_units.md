@@ -1,5 +1,10 @@
 # 030 — Dynamic viewport units in scroll surfaces (wp3)
 
+> **Implemented by this pull request**, separately from the sidecar alignment fix
+> that the rest of this unit records. It is a different change to a different
+> file (`gui/src/styles.css`), kept in the same unit because one audit pass found
+> both.
+
 ## Defect
 
 `gui/src/styles.css:2003`:

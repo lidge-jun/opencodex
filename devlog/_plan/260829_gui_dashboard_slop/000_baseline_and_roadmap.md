@@ -121,4 +121,3 @@ distinct.
   `ssh lidge` + `ocx-run`; pushes use `--no-verify` only after those gates.
 - Delivery is a stacked PR chain onto `dev`, each PR carrying screenshots
   (`enforce-target` requires a screenshot for GUI PRs).
-
