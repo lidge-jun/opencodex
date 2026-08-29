@@ -98,6 +98,7 @@ both take an explicit client version.
 `accountModelsCache` is keyed by account ID alone, with credential identity stored as a
 discriminator (`:30`, `:216`); the flight key is account plus credential identity
 (`:223`). Version must join both, or a roster fetched under one version keeps answering
+for another until the TTL expires.
 
 The first attempt kept the account-only **cache key** and merely compared the stored version
 on read. Review showed that is not equivalent: with two versions in flight for one account,
@@ -105,7 +106,6 @@ the later-completing one overwrites the earlier, and the *unversioned* projectio
 `src/codex/catalog/metadata.ts:424,514` then publish whichever landed last rather than what
 each client proved. The key itself is now `account\u0000version`, with account-scoped
 invalidation walking every version's entry so a credential change still clears all of them.
-for another until the TTL expires.
 
 `cachedAvailableAccountGatedNativeModels` scans every cache entry (`:331`). Once two
 versions can be retained at once, that scan will leak a newer roster into an older

@@ -546,8 +546,11 @@ test("the request's client_version reaches entitlement discovery (#2886)", async
     return originalFetch(input, init);
   }) as typeof fetch;
 
-  const server = startServer(0);
+  // Started INSIDE the try: if startServer throws, the mocked global fetch must still be
+  // restored, or every later test in this file inherits it.
+  let server: ReturnType<typeof startServer> | null = null;
   try {
+    server = startServer(0);
     await fetch(new URL("/v1/models?client_version=0.151.7", server.url))
       .then(response => response.json());
     expect(askedVersions.length).toBeGreaterThan(0);
@@ -556,6 +559,6 @@ test("the request's client_version reaches entitlement discovery (#2886)", async
     expect(askedVersions).not.toContain("0.0.0");
   } finally {
     globalThis.fetch = originalFetch;
-    await server.stop(true);
+    if (server) await server.stop(true);
   }
 });
