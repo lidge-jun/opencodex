@@ -106,6 +106,13 @@ type RawProbeResult = ReturnType<RawProbeRunner>;
  * the same bytes and status as the query that caused the listing. If the
  * targeted evidence changes, the old absence proof is stale and another
  * listing is required rather than turning uncertainty into absence.
+ *
+ * Only a SUCCESSFUL listing is retained. A stall or spawn failure is not
+ * evidence of anything, and caching it made one transient 20s timeout poison the
+ * rest of the startup: the targeted query is byte-identical on the next
+ * inspection, so the identity check passed, the listing was never retried, and
+ * ownership stayed unprovable for the whole run — refusing the write that #2914
+ * exists to allow.
  */
 export interface WindowsTaskListingCache {
   getOrRun(targetedQuery: RawProbeResult, run: () => RawProbeResult): RawProbeResult;
@@ -130,8 +137,10 @@ export function createWindowsTaskListingCache(): WindowsTaskListingCache {
       const nextIdentity = rawProbeIdentity(targetedQuery);
       if (result !== null && identity === nextIdentity) return result;
       const next = run();
-      identity = nextIdentity;
-      result = next;
+      if (!next.timedOut && !next.spawnFailed && next.status === 0) {
+        identity = nextIdentity;
+        result = next;
+      }
       return next;
     },
   };

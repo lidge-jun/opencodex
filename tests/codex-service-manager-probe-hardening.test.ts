@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   createWindowsTaskListingCache,
   inspectServiceManagerInstallation,
+  type ServiceManagerInstallation,
   type RawProbeRunner,
 } from "../src/service-manager-probe";
 import { inspectNativeCodexOwnership } from "../src/integrations/native/ownership-preflight";
@@ -244,6 +245,10 @@ describe("Windows ownership probe hardening regressions", () => {
       inspectNativeCodexOwnership: scope => {
         const answer = inspectNativeCodexOwnership({
           ...scope,
+          // `startServer` derives statePaths from the sandbox home AND the default
+          // `homedir()` mirror, which no test env moves — so without pinning this the
+          // fixture reads the developer's real installation and calls it foreign.
+          statePaths: [join(configDir, "service-state.json")],
           platform: "win32",
           home,
           configDir,
@@ -381,7 +386,43 @@ describe("Windows ownership probe hardening regressions", () => {
     }));
 
     expect(answers.map(answer => answer.kind)).toEqual(["unknown", "unknown"]);
-    expect(fullListings).toBe(1);
+    // Fail-closed on both passes, and the stall was NOT retained as evidence: a
+    // transient timeout must not make ownership unprovable for the whole startup.
+    expect(fullListings).toBe(2);
+  });
+
+  test("a listing that recovers after a stall is not masked by the failed one (#2923)", () => {
+    const cache = createWindowsTaskListingCache();
+    let stall = true;
+    let fullListings = 0;
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
+      if (args.includes("/xml")) {
+        // Byte-identical on both passes, so the identity check cannot be what
+        // forces the retry — only refusing to cache the stall can.
+        return { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false };
+      }
+      if (args.includes("/fo")) {
+        fullListings += 1;
+        if (stall) return raw(null, "", "", { timedOut: true });
+        return raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n');
+      }
+      return raw(1, "", "unexpected query");
+    };
+    const probe = (): ServiceManagerInstallation => inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    });
+
+    expect(probe().kind).toBe("unknown");
+    stall = false;
+    expect(probe().kind).toBe("absent");
+    expect(fullListings).toBe(2);
   });
 
   test("a scheduler registered for another OpenCodex home does not claim the current home (#2800)", () => {
