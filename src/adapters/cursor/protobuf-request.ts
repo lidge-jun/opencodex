@@ -73,6 +73,13 @@ export const CURSOR_ROUTING_LEVEL_PARAMETER_ID = "optimization";
 export const CURSOR_EXTERNAL_ROOT_BLOB_LIMIT = 192;
 /** Approximate prompt-size guard; tool schemas and protocol framing consume context separately. */
 export const CURSOR_EXTERNAL_ROOT_BYTE_LIMIT = 512 * 1024;
+/**
+ * Byte budget for the serialized arguments named inside ONE replayed tool-result envelope. The
+ * invocation identifies the call; the result is the payload. Without an independent cap, a single
+ * large-but-legitimate argument (a 600 KiB file write) consumed the whole root history budget and
+ * the result output was truncated away instead.
+ */
+export const CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT = 2 * 1024;
 
 /**
  * Action text for external-model tool-result continuations. Native models keep
@@ -668,16 +675,46 @@ function toolResultContentItems(
 }
 
 /**
- * Serialize tool-call arguments for the replayed transcript. `OcxToolCall.arguments` is always an
- * object, but it originates in provider JSON, so a cyclic or BigInt-bearing value must degrade to a
- * marker instead of throwing inside request encoding.
+ * Serialize tool-call arguments for the replayed transcript, or `undefined` when they cannot be
+ * serialized at all. `OcxToolCall.arguments` is always an object, but it originates in provider
+ * JSON, so a cyclic or BigInt-bearing value must degrade instead of throwing inside request
+ * encoding. The failure is reported as `undefined` rather than a marker string so callers can tell
+ * "these two argument sets are equal" apart from "neither could be read" — collapsing both onto one
+ * marker made every unserializable argument set compare equal to every other.
+ */
+function serializeToolCallArguments(args: Record<string, unknown>): string | undefined {
+  try {
+    const serialized = JSON.stringify(args);
+    return typeof serialized === "string" ? serialized : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Truncate to a byte budget without splitting a UTF-8 sequence. */
+function truncateUtf8(text: string, maxBytes: number): string {
+  const encoded = encoder.encode(text);
+  if (encoded.byteLength <= maxBytes) return text;
+  let end = Math.max(0, maxBytes);
+  while (end > 0 && (encoded[end]! & 0xc0) === 0x80) end -= 1;
+  return decoder.decode(encoded.subarray(0, end));
+}
+
+/**
+ * Rendered argument text for one invocation line, bounded independently of the result it describes.
+ *
+ * The invocation is CONTEXT for a replayed result; the result itself is the payload. Serializing
+ * arguments in full inverted that: a legitimate 600 KiB `write_file` argument consumed the entire
+ * `CURSOR_EXTERNAL_ROOT_BYTE_LIMIT` history budget, so `truncateToolResultBlob` kept the invocation
+ * prefix and cut the actual output away — reproducing the very orphaned-result failure this line
+ * exists to prevent. A bounded prefix still identifies the call (tool name plus the head of its
+ * arguments) while leaving the output room to survive.
  */
 function toolCallArgumentsText(args: Record<string, unknown>): string {
-  try {
-    return JSON.stringify(args) ?? "[unserializable arguments]";
-  } catch {
-    return "[unserializable arguments]";
-  }
+  const serialized = serializeToolCallArguments(args);
+  if (serialized === undefined) return "[unserializable arguments]";
+  if (encoder.encode(serialized).byteLength <= CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT) return serialized;
+  return `${truncateUtf8(serialized, CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT)}…[arguments truncated]`;
 }
 
 /**
@@ -722,7 +759,17 @@ function toolCallsByCallId(messages: readonly OcxMessage[]): Map<string, Extract
         continue;
       }
       // Same id, and not the same invocation: neither claim can be trusted for a given result.
-      if (existing.name !== part.name || toolCallArgumentsText(existing.arguments) !== toolCallArgumentsText(part.arguments)) {
+      // Identity is the FULL namespaced name — `one__read` and `two__read` are different tools, and
+      // comparing bare `name` labelled both results with the first namespace. Arguments count as
+      // different whenever either side cannot be serialized: two distinct unserializable argument
+      // sets are not evidence of the same call, so they must not compare equal.
+      const existingArgs = serializeToolCallArguments(existing.arguments);
+      const partArgs = serializeToolCallArguments(part.arguments);
+      const sameInvocation = namespacedToolName(existing.namespace, existing.name) === namespacedToolName(part.namespace, part.name)
+        && existingArgs !== undefined
+        && partArgs !== undefined
+        && existingArgs === partArgs;
+      if (!sameInvocation) {
         calls.delete(callId);
         ambiguous.add(callId);
       }

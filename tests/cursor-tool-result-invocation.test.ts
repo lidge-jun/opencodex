@@ -209,4 +209,74 @@ describe("cursor replayed tool results name their invocation", () => {
     expect(root).toBeDefined();
     expect(root).toContain("[unserializable arguments]");
   });
+
+  // REVIEW BLOCKER PROBE 1: a large legitimate argument must not push the actual output out of the
+  // root byte budget. The invocation line is a convenience; the RESULT is the payload.
+  test("PROBE a huge argument must not evict the result output from root replay", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Write the file.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "write_file", arguments: { contents: "Z".repeat(600 * 1024) } }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "write_file", content: "SENTINEL_OUTPUT", isError: false, timestamp: 3 },
+    ];
+    const root = resultRoot(encode(messages, "grok-4.6-high"));
+    expect(root).toBeDefined();
+    expect(root).toContain("SENTINEL_OUTPUT");
+  });
+
+  // REVIEW BLOCKER PROBE 2: namespace is part of tool identity. Two different tools sharing one
+  // decoded id must be ambiguous, not silently labelled with the first namespace.
+  test("PROBE namespaced collision must not name the wrong tool", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Read both.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, namespace: "one", name: "read", arguments: { p: "a" } }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolNamespace: "one", toolName: "read", content: "A", isError: false, timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, namespace: "two", name: "read", arguments: { p: "a" } }],
+        timestamp: 4,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolNamespace: "two", toolName: "read", content: "B", isError: false, timestamp: 5 },
+    ];
+    const roots = rootTexts(encode(messages, "grok-4.6-high"));
+    const results = roots.filter(text => text.startsWith("[Tool Result]"));
+    expect(results.length).toBeGreaterThan(0);
+    for (const result of results) expect(result).not.toContain("invoked:");
+  });
+
+  // REVIEW BLOCKER PROBE 3: distinct unserializable arguments both render as the same marker, so
+  // the ambiguity check treats two different calls as identical and keeps the first. Same tool name
+  // on both calls, so ONLY the argument comparison can distinguish them.
+  test("PROBE distinct unserializable arguments must be treated as ambiguous", () => {
+    const a: Record<string, unknown> = { tag: "A" };
+    a.self = a;
+    const b: Record<string, unknown> = { tag: "B" };
+    b.self = b;
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Run both.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: a }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "exec_command", content: "A", isError: false, timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: b }],
+        timestamp: 4,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "exec_command", content: "B", isError: false, timestamp: 5 },
+    ];
+    const roots = rootTexts(encode(messages, "grok-4.6-high"));
+    const results = roots.filter(text => text.startsWith("[Tool Result]"));
+    expect(results.length).toBeGreaterThan(0);
+    for (const result of results) expect(result).not.toContain("invoked:");
+  });
 });
