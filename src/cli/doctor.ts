@@ -991,7 +991,7 @@ export function proxyDownRestartHint(input: {
       ? "Restart it with 'ocx start', or refresh the installed service: 'ocx service repair'."
       : "Restart it with 'ocx start', or install the persistent service: 'ocx service install'.";
   const uncleanExit = input.staleProcessState === true
-    ? "Previous proxy process state remains, so it did not shut down cleanly. "
+    ? "Stale process records remain, so the previous run may have exited unexpectedly. "
     : "";
   return `The ocx proxy is not running. ${uncleanExit}Codex/Claude clients pinned to 127.0.0.1:${input.port} fail with errors like "error sending request for url (http://127.0.0.1:${input.port}/v1/responses)". ${restart}`;
 }

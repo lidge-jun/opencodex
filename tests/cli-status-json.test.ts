@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { createServer } from "node:net";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isUncleanExitEvidence, proxyHealthFailureReason, resolveStatusPid, selectListenTarget } from "../src/cli/status";
+import { isConnectionRefused, isUncleanExitEvidence, proxyHealthFailureReason, resolveStatusPid, selectListenTarget } from "../src/cli/status";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -338,7 +340,7 @@ describe("unclean prior exit evidence", () => {
   const base = {
     live: false,
     healthOk: false,
-    healthMessage: "unreachable",
+    healthRefused: true,
     ownerPidAlive: false,
     pidRecordBefore: 4242,
     pidRecordAfter: 4242,
@@ -393,13 +395,130 @@ describe("unclean prior exit evidence", () => {
   // record, so a start caught in that window leaves both snapshots identical. Only a
   // refused connection proves nothing holds the port.
   test("a held port is not a crash even when the records look stale", () => {
-    expect(isUncleanExitEvidence({ ...base, healthMessage: "timed out" })).toBe(false);
-    expect(isUncleanExitEvidence({ ...base, healthMessage: "returned HTTP 503" })).toBe(false);
-    expect(isUncleanExitEvidence({ ...base, healthMessage: "responded, but not an opencodex proxy" })).toBe(false);
+    expect(isUncleanExitEvidence({ ...base, healthRefused: false })).toBe(false);
   });
 
   test("records published mid-probe suppress the report", () => {
     expect(isUncleanExitEvidence({ ...base, pidRecordBefore: null })).toBe(false);
     expect(isUncleanExitEvidence({ ...base, runtimePidAfter: 9999 })).toBe(false);
+  });
+
+  // Review blocker 2: `unreachable` covers every non-abort failure, including a socket
+  // that is ACCEPTED and then reset — which is what an in-flight bind looks like. Only a
+  // connect-phase refusal proves the port is free.
+  test("only a connect-phase refusal counts as nothing listening", () => {
+    const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:9"), { code: "ECONNREFUSED" });
+    expect(isConnectionRefused(refused)).toBe(true);
+
+    const nested = new Error("fetch failed", { cause: refused });
+    expect(isConnectionRefused(nested)).toBe(true);
+
+    const reset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    expect(isConnectionRefused(reset)).toBe(false);
+
+    // A message that merely mentions refusal without the errno is not evidence.
+    expect(isConnectionRefused(new Error("connection refused by policy"))).toBe(false);
+    expect(isConnectionRefused(undefined)).toBe(false);
+  });
+});
+
+/**
+ * Command-level coverage. Review found the unit tests above were satisfiable by an
+ * implementation that never reported anything: replacing the returned
+ * `staleProcessState` with a constant `false` left every predicate test green. These
+ * drive the real CLI, so the field has to travel from disk to output.
+ */
+describe("status reports stale process records end to end", () => {
+  const seed = (home: string, opts: { pid?: number; runtime?: boolean; port: number }): void => {
+    writeFileSync(join(home, "config.json"), JSON.stringify({ port: opts.port, codexAutoStart: false }), "utf8");
+    const pid = opts.pid ?? (process.pid === 4242 ? 4243 : 4242);
+    if (opts.pid !== 0) writeFileSync(join(home, "ocx.pid"), String(pid), "utf8");
+    if (opts.runtime) {
+      writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ pid, port: opts.port, hostname: "127.0.0.1" }), "utf8");
+    }
+  };
+
+  // A port nothing binds, so the probe is refused rather than accepted-then-reset.
+  const freePort = 9;
+
+  test("a dead owner record surfaces in --json and in human output", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-stale-json-"));
+    try {
+      seed(home, { runtime: true, port: freePort });
+
+      const json = runStatusJson(home);
+      expect(json.status).toBe(0);
+      const parsed = JSON.parse(json.stdout) as { proxy?: { staleProcessState?: unknown } };
+      expect(parsed.proxy?.staleProcessState).toBe(true);
+
+      const human = spawnSync(process.execPath, [cliPath, "status"], {
+        cwd: repoRoot,
+        env: { ...process.env, OPENCODEX_HOME: home },
+        encoding: "utf8",
+      });
+      expect(human.stdout).toContain("may have exited unexpectedly");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a clean home reports false and says nothing about a previous run", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-stale-clean-"));
+    try {
+      writeFileSync(join(home, "config.json"), JSON.stringify({ port: freePort, codexAutoStart: false }), "utf8");
+
+      const json = runStatusJson(home);
+      const parsed = JSON.parse(json.stdout) as { proxy?: { staleProcessState?: unknown } };
+      expect(parsed.proxy?.staleProcessState).toBe(false);
+
+      const human = spawnSync(process.execPath, [cliPath, "status"], {
+        cwd: repoRoot,
+        env: { ...process.env, OPENCODEX_HOME: home },
+        encoding: "utf8",
+      });
+      expect(human.stdout).not.toContain("may have exited unexpectedly");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // Review blocker 3: a recycled pid must suppress rather than assert. This process is
+  // certainly alive, so recording it stands in for a reused pid.
+  test("a record naming a live pid is never reported as a stale exit", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-stale-livepid-"));
+    try {
+      seed(home, { pid: process.pid, runtime: true, port: freePort });
+
+      const parsed = JSON.parse(runStatusJson(home).stdout) as { proxy?: { staleProcessState?: unknown } };
+      expect(parsed.proxy?.staleProcessState).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // Review blocker 4: status and doctor disagreed when the recorded port differed from
+  // the configured one. Both now probe the recorded port, so both must agree.
+  //
+  // The configured port must be OCCUPIED for this to discriminate: if both ports are
+  // simply free, probing either one yields the same refusal and the test cannot tell the
+  // two implementations apart. A listener that accepts and resets is what an in-flight
+  // bind looks like, so a run that probed the configured port would suppress the report.
+  test("a fallback-port record is judged on the recorded port, not the configured one", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-stale-fallback-"));
+    const occupied = createServer(socket => { socket.destroy(); });
+    await new Promise<void>(resolve => { occupied.listen(0, "127.0.0.1", () => resolve()); });
+    const occupiedPort = (occupied.address() as AddressInfo).port;
+    try {
+      const pid = process.pid === 4242 ? 4243 : 4242;
+      writeFileSync(join(home, "config.json"), JSON.stringify({ port: occupiedPort, codexAutoStart: false }), "utf8");
+      writeFileSync(join(home, "ocx.pid"), String(pid), "utf8");
+      writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ pid, port: freePort, hostname: "127.0.0.1" }), "utf8");
+
+      const parsed = JSON.parse(runStatusJson(home).stdout) as { proxy?: { staleProcessState?: unknown } };
+      expect(parsed.proxy?.staleProcessState).toBe(true);
+    } finally {
+      await new Promise<void>(resolve => { occupied.close(() => resolve()); });
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

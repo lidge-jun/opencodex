@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -668,7 +669,7 @@ describe("service memory section (#314 WP4)", () => {
       serviceInstalled: false,
       staleProcessState: true,
     });
-    expect(crashed).toContain("did not shut down cleanly");
+    expect(crashed).toContain("may have exited unexpectedly");
     expect(crashed).toContain("ocx service install");
 
     // Absent or false must not invent a crash for a proxy that was never started.
@@ -679,7 +680,7 @@ describe("service memory section (#314 WP4)", () => {
       serviceInstalled: false,
       staleProcessState: false,
     });
-    expect(neverStarted).not.toContain("did not shut down cleanly");
+    expect(neverStarted).not.toContain("may have exited unexpectedly");
   });
 
   test("the unclean-exit wording never asserts a cause", () => {
@@ -858,7 +859,16 @@ describe("doctor reports an unclean prior proxy exit", () => {
     rmSync(tempHome, { recursive: true, force: true });
   });
 
-  const deadPid = (): number => (process.pid === 4242 ? 4243 : 4242);
+  /**
+   * A pid that is certainly dead: spawn a process, wait for it to exit, then reuse its
+   * number. A hardcoded constant can belong to an unrelated live process on a busy
+   * machine, which would silently invert this fixture.
+   */
+  const deadPid = (): number => {
+    const spawned = spawnSync(process.execPath, ["-e", ""], { encoding: "utf8" });
+    const pid = spawned.pid;
+    return typeof pid === "number" && pid > 0 ? pid : (process.pid === 4242 ? 4243 : 4242);
+  };
 
   // Port 9 is the discard port: nothing listens, so the health probe is refused rather
   // than timing out, which is what the predicate requires.
@@ -874,7 +884,7 @@ describe("doctor reports an unclean prior proxy exit", () => {
 
     await runDoctor([]);
 
-    expect(logged.join("\n")).toContain("did not shut down cleanly");
+    expect(logged.join("\n")).toContain("may have exited unexpectedly");
   });
 
   test("a clean home never claims a prior crash", async () => {
@@ -882,6 +892,6 @@ describe("doctor reports an unclean prior proxy exit", () => {
 
     await runDoctor([]);
 
-    expect(logged.join("\n")).not.toContain("did not shut down cleanly");
+    expect(logged.join("\n")).not.toContain("may have exited unexpectedly");
   });
 });
