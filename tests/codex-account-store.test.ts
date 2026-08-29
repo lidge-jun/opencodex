@@ -583,4 +583,109 @@ describe("codex-account-store CRUD", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("a forced refresh rotates a time-valid credential that upstream rejected (#2887)", async () => {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    // Far beyond the refresh skew: getValidCodexToken would return this untouched, which is
+    // exactly why a 401 on it was unrecoverable.
+    saveCodexAccountCredential("forced", {
+      accessToken: "rejected",
+      refreshToken: "grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const generation = readCodexAccountRecord("forced")!.generation;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return Response.json({ access_token: "rotated", refresh_token: "grant2", expires_in: 3600 });
+    }) as typeof fetch;
+
+    try {
+      const result = await forceRefreshCodexPoolToken("forced", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+      expect(calls).toBe(1);
+      expect(result.accessToken).toBe("rotated");
+      expect(result.rotated).toBe(true);
+      expect(result.generation).toBe(generation + 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a forced refresh whose generation was already superseded spends no rotation (#2887)", async () => {
+    const { forceRefreshCodexPoolToken, saveCodexAccountCredential, readCodexAccountRecord } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("forced-stale", {
+      accessToken: "rejected",
+      refreshToken: "grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const rejectedGeneration = readCodexAccountRecord("forced-stale")!.generation;
+    // An operator re-authenticated while the request was in flight.
+    saveCodexAccountCredential("forced-stale", {
+      accessToken: "replacement",
+      refreshToken: "grant-new",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return Response.json({ access_token: "should-not-happen", expires_in: 3600 });
+    }) as typeof fetch;
+
+    try {
+      const result = await forceRefreshCodexPoolToken("forced-stale", {
+        rejectedGeneration,
+        rejectedAccessToken: "rejected",
+      });
+      // The replacement is handed back untouched: no token call, no generation bump.
+      expect(calls).toBe(0);
+      expect(result.accessToken).toBe("replacement");
+      expect(result.generation).toBe(rejectedGeneration + 1);
+      expect(readCodexAccountRecord("forced-stale")!.credential!.accessToken).toBe("replacement");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("concurrent forced refreshes of one rejected generation collapse to a single token call (#2887)", async () => {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("forced-concurrent", {
+      accessToken: "rejected",
+      refreshToken: "grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const generation = readCodexAccountRecord("forced-concurrent")!.generation;
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return Response.json({ access_token: "rotated", refresh_token: "grant2", expires_in: 3600 });
+    }) as typeof fetch;
+
+    try {
+      const both = await Promise.allSettled([
+        forceRefreshCodexPoolToken("forced-concurrent", { rejectedGeneration: generation, rejectedAccessToken: "rejected" }),
+        forceRefreshCodexPoolToken("forced-concurrent", { rejectedGeneration: generation, rejectedAccessToken: "rejected" }),
+      ]);
+      expect(calls).toBe(1);
+      // One generation increment, not two: a second bump would invalidate the affinity the
+      // first caller just handed forward.
+      expect(readCodexAccountRecord("forced-concurrent")!.generation).toBe(generation + 1);
+      expect(both.some(r => r.status === "fulfilled" && r.value.accessToken === "rotated")).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

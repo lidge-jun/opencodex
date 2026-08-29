@@ -375,12 +375,17 @@ export async function withCodexRefreshFileLock<T>(lockKey: string, signal: Abort
 function findFreshCredentialForGrant(
   refreshGrantFingerprint: string,
   excludeId: string,
+  rejectedAccessToken?: string,
 ): CodexAccountCredentials | null {
   const now = Date.now();
   const records = loadCodexAccountRecordStore();
   for (const [candidateId, candidate] of Object.entries(records)) {
     if (candidateId === excludeId || candidate.deletedAt != null || !candidate.credential) continue;
     if (recordGrantFingerprint(candidate) !== refreshGrantFingerprint) continue;
+    // A sibling alias can hold a still-unexpired copy of the exact token upstream
+    // just rejected. Reusing it would bump the generation and replay the identical
+    // bearer — a second 401 dressed up as recovery.
+    if (rejectedAccessToken !== undefined && candidate.credential.accessToken === rejectedAccessToken) continue;
     if (candidate.credential.expiresAt > now + REFRESH_SKEW_MS) return candidate.credential;
   }
   return null;
@@ -399,14 +404,60 @@ async function notePlanFromRefreshedAccessToken(
   }
 }
 
+/**
+ * A forced refresh raised by a rejected bearer. Carries the generation the 401 was
+ * observed under so a credential someone else already replaced is never refreshed
+ * again, and the rejected token so a sibling alias holding that same token cannot
+ * satisfy the refresh.
+ */
+type ForcedRefreshFence = { rejectedGeneration: number; rejectedAccessToken: string };
+
+/** True once the stored credential has moved off the generation the 401 belongs to. */
+function forcedFenceSuperseded(recordGeneration: number, forced: ForcedRefreshFence | undefined): boolean {
+  return forced !== undefined && recordGeneration !== forced.rejectedGeneration;
+}
+
+/**
+ * Refresh a stored pool credential that upstream rejected with a 401, even though its
+ * `expiresAt` still looks valid. Ordinary callers must keep using
+ * {@link getValidCodexToken}: only a proven rejection justifies spending a refresh.
+ *
+ * `rotated` is false when the resolved token is byte-identical to the rejected one,
+ * which means replaying would earn the same 401 and the caller must not try.
+ */
+export async function forceRefreshCodexPoolToken(
+  id: string,
+  options: { rejectedGeneration: number; rejectedAccessToken: string; signal?: AbortSignal },
+): Promise<CodexTokenResult & { rotated: boolean }> {
+  const result = await resolveCodexToken(
+    id,
+    { rejectedGeneration: options.rejectedGeneration, rejectedAccessToken: options.rejectedAccessToken },
+    options.signal,
+  );
+  return { ...result, rotated: result.accessToken !== options.rejectedAccessToken };
+}
+
 export async function getValidCodexToken(id: string): Promise<CodexTokenResult> {
+  return resolveCodexToken(id);
+}
+
+async function resolveCodexToken(
+  id: string,
+  forced?: ForcedRefreshFence,
+  callerSignal?: AbortSignal,
+): Promise<CodexTokenResult> {
   const record = readCodexAccountRecord(id);
   const cred = record?.deletedAt == null ? record?.credential : undefined;
   if (!record || !cred) throw new Error("Codex account credential is unavailable; reauthenticate the account.");
   const refreshGrantFingerprint = recordGrantFingerprint(record);
   if (!refreshGrantFingerprint) throw new Error("Codex account credential is unavailable; reauthenticate the account.");
 
-  if (cred.expiresAt > Date.now() + REFRESH_SKEW_MS) {
+  // The freshness shortcut is exactly what makes a 401 on a time-valid token
+  // unrecoverable, so a forced caller skips it — but only while the stored credential
+  // is still the one that was rejected. Once it has been replaced, the shortcut is
+  // correct again and refreshing would burn a rotation for nothing.
+  const forcedTargetsStoredCredential = forced !== undefined && !forcedFenceSuperseded(record.generation, forced);
+  if (cred.expiresAt > Date.now() + REFRESH_SKEW_MS && !forcedTargetsStoredCredential) {
     return { accessToken: cred.accessToken, chatgptAccountId: cred.chatgptAccountId, generation: record.generation };
   }
 
@@ -419,10 +470,23 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
       const refreshed = await existing.promise;
       const current = readCodexAccountRecord(id);
       const currentCred = current?.deletedAt == null ? current?.credential : undefined;
+      // Flights are keyed by refresh grant, not by account or generation, so this
+      // credential may belong to a flight started for a different generation of the
+      // same grant. Writing it onto a replacement would undo that replacement.
+      if (current && currentCred && forcedFenceSuperseded(current.generation, forced)) {
+        return {
+          accessToken: currentCred.accessToken,
+          chatgptAccountId: currentCred.chatgptAccountId,
+          generation: current.generation,
+        };
+      }
       if (
         current &&
         currentCred &&
         refreshed.credential &&
+        // A joined flight that resolved to the rejected token proves nothing; fall
+        // through and open a real refresh instead of bumping the generation.
+        !(forced !== undefined && refreshed.credential.accessToken === forced.rejectedAccessToken) &&
         recordGrantFingerprint(current) === refreshGrantFingerprint
       ) {
         if (!saveCodexAccountCredentialIfGeneration(id, current.generation, refreshed.credential)) {
@@ -436,14 +500,16 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
           generation,
         };
       }
-      return getValidCodexToken(id);
+      return resolveCodexToken(id, forced, callerSignal);
     }
   }
 
   if (refreshLocks.size >= MAX_CODEX_REFRESH_FLIGHTS) throw new CodexCredentialRefreshBusyError();
 
   const abort = new AbortController();
-  const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]);
+  const signal = AbortSignal.any(
+    callerSignal ? [abort.signal, AbortSignal.timeout(30_000), callerSignal] : [abort.signal, AbortSignal.timeout(30_000)],
+  );
   let flight!: RefreshFlight;
   const refreshPromise = withCodexRefreshFileLock(refreshGrantFingerprint, signal, async (): Promise<CodexRefreshResult> => {
     const current = readCodexAccountRecord(id);
@@ -463,7 +529,12 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
       }
       throw new CodexCredentialGenerationConflictError();
     }
-    if (lockedCred.expiresAt > Date.now() + REFRESH_SKEW_MS) {
+    // Third fence point: waiting for the lock can take long enough for another
+    // writer to replace the credential. Under the lock the stored generation is
+    // authoritative, so a superseded forced refresh stops here rather than
+    // spending a rotation on a credential nobody rejected.
+    const forcedStillTargetsStored = forced !== undefined && !forcedFenceSuperseded(startGeneration, forced);
+    if (lockedCred.expiresAt > Date.now() + REFRESH_SKEW_MS && !forcedStillTargetsStored) {
       return {
         accessToken: lockedCred.accessToken,
         chatgptAccountId: lockedCred.chatgptAccountId,
@@ -471,7 +542,11 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
         credential: lockedCred,
       };
     }
-    const sameGrantFreshCredential = findFreshCredentialForGrant(refreshGrantFingerprint, id);
+    const sameGrantFreshCredential = findFreshCredentialForGrant(
+      refreshGrantFingerprint,
+      id,
+      forced?.rejectedAccessToken,
+    );
     if (sameGrantFreshCredential) {
       if (!saveCodexAccountCredentialIfGeneration(id, startGeneration, sameGrantFreshCredential)) {
         throw new CodexCredentialGenerationConflictError();

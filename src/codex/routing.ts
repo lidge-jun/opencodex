@@ -231,6 +231,15 @@ export type CodexUpstreamOutcomeMeta = {
   promoteAccountId?: string;
   /** Generation captured when this routed account was selected. */
   writerGeneration?: number;
+  /**
+   * Credential generation this request's bearer was read at. Distinct from
+   * `writerGeneration`, which tracks the config store.
+   *
+   * A 401 that arrives after the credential was already replaced is evidence about a
+   * token nobody is using any more, so it must not quarantine the replacement. Absent
+   * means the caller cannot supply lineage and the historical unfenced handling stands.
+   */
+  credentialGeneration?: number;
 };
 
 function hasConfiguredPoolAccount(
@@ -921,6 +930,45 @@ function isThreadAffinityExpired(entry: ThreadAffinityEntry, now: number): boole
 function isThreadAffinityGenerationLive(entry: ThreadAffinityEntry): boolean {
   if (entry.accountId === MAIN_CODEX_ACCOUNT_ID) return entry.generation === 0;
   return isCodexAccountGenerationLive(entry.accountId, entry.generation);
+}
+
+/**
+ * Advance this account's affinity entries from the generation a rejected credential
+ * was bound under to the generation its own refresh produced.
+ *
+ * A 401 refresh-and-replay keeps the request on the same account, but the CAS write
+ * moves the credential from G to G+1, and {@link isThreadAffinityGenerationLive}
+ * demands exact equality — so without this the entry the replay just preserved is
+ * dead on the next request. Not quarantining an account is not the same as keeping
+ * its affinity.
+ *
+ * The lineage test is the one {@link settleCodexQuotaRecoveryProbe} already relies on:
+ * a refresh-owned bump advances the generation by exactly one and leaves `replacedAt`
+ * untouched, while an external credential replacement stamps a fresh `replacedAt`.
+ * An external replacement must still retire the affinity, because that credential may
+ * belong to a different upstream identity.
+ */
+export function handOffThreadAffinityGeneration(
+  accountId: string,
+  fromGeneration: number,
+  toGeneration: number,
+  expectedReplacedAt: number | undefined,
+): boolean {
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) return false;
+  if (toGeneration !== fromGeneration + 1) return false;
+  const record = readCodexAccountRecord(accountId);
+  if (!record?.credential || record.deletedAt != null) return false;
+  if (record.generation !== toGeneration) return false;
+  if (record.replacedAt !== expectedReplacedAt) return false;
+  let handedOff = false;
+  for (const affinities of threadAccountMap.values()) {
+    for (const entry of affinities.values()) {
+      if (entry.accountId !== accountId || entry.generation !== fromGeneration) continue;
+      entry.generation = toGeneration;
+      handedOff = true;
+    }
+  }
+  return handedOff;
 }
 
 function pruneExpiredThreadAffinities(now: number): void {
@@ -2146,6 +2194,15 @@ export function recordCodexUpstreamOutcome(
   if (outcomeClass === "credential") {
     // 401/403 quarantines the account for reauth. That supersedes quota state
     // entirely: a cooldown (and any probe lease) on an unusable account is moot.
+    // Unless the rejected credential is already gone: a stale 401 racing a
+    // replacement would otherwise take the fresh credential out of rotation and
+    // sweep affinities that belong to it (#2887).
+    if (
+      meta.credentialGeneration !== undefined
+      && !isCodexAccountGenerationLive(accountId, meta.credentialGeneration)
+    ) {
+      return;
+    }
     upstreamHealth.set(accountId, {
       consecutiveFailures: 1,
       lastFailureStatus,
