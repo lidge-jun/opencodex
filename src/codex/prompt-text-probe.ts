@@ -105,6 +105,7 @@ interface ProbeCommand {
   args: string[];
   cwd: string;
   timeoutMs: number;
+  promptRevision: string | null;
 }
 
 interface PromptProbeFlight {
@@ -129,7 +130,13 @@ let probeSpawnAttemptsForTests = 0;
 let probeCloseBarrierForTests: Promise<void> | null = null;
 
 function commandKey(command: ProbeCommand): string {
-  return JSON.stringify([command.binary, command.args, command.cwd, command.timeoutMs]);
+  return JSON.stringify([
+    command.binary,
+    command.args,
+    command.cwd,
+    command.timeoutMs,
+    command.promptRevision,
+  ]);
 }
 
 function completedExecution(value: string | null): PromptProbeExecution {
@@ -358,7 +365,11 @@ export const extractSectionsForTests = extractSections;
  * `cwd` matters: AGENTS.md and environment context are directory-dependent, so a
  * probe from the wrong place would describe a prompt the user never sees.
  */
-export async function probePromptText(timeoutMs = 15_000, signal?: AbortSignal): Promise<PromptTextProbe> {
+export async function probePromptText(
+  timeoutMs = 15_000,
+  signal?: AbortSignal,
+  promptRevision: string | null = null,
+): Promise<PromptTextProbe> {
   // The probe runs in CODEX_HOME, never in a caller-supplied directory. A `cwd`
   // parameter let an authenticated request read any readable folder's AGENTS.md,
   // and it also described a prompt that depends on where Codex happened to run.
@@ -376,6 +387,7 @@ export async function probePromptText(timeoutMs = 15_000, signal?: AbortSignal):
     args: probeCommandForTests?.args ?? ["debug", "prompt-input"],
     cwd: codexHome,
     timeoutMs,
+    promptRevision,
   };
   const raw = await runSharedPromptProbe(command, signal);
   if (raw === null) {

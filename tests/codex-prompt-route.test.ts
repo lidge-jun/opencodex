@@ -810,7 +810,7 @@ describe("020 coverage completions", () => {
     const probe = await Bun.file(new URL("../src/codex/prompt-text-probe.ts", import.meta.url)).text();
     // The probe resolves CODEX_HOME itself; it must not accept a directory.
     expect(probe).toContain("resolveCodexHomeDir()");
-    expect(probe).toMatch(/export async function probePromptText\(timeoutMs/);
+    expect(probe).toMatch(/export async function probePromptText\(\s*timeoutMs/);
   });
 
   test("26. the probe is bounded in bytes as well as in time", async () => {
@@ -862,6 +862,37 @@ describe("020 coverage completions", () => {
     await waitUntil(() => !isProcessAlive(pid), "route probe child exit");
     expectDecoyUntouched(fx);
   });
+
+  test("28. a post-write text read never joins a pre-write probe", async () => {
+    const fx = fixture("include_apps_instructions = false\n");
+    const startedPath = join(fx.decoyHome, "revision-probe-started.txt");
+    const probeOutput = JSON.stringify([{
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "<skills_instructions>Skill text.</skills_instructions>" }],
+    }]);
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", [
+        `require("node:fs").writeFileSync(${JSON.stringify(startedPath)}, "started");`,
+        `setTimeout(() => process.stdout.write(${JSON.stringify(probeOutput)}), 200);`,
+      ].join("")],
+    });
+
+    const beforeWrite = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "pre-write probe start");
+    writeFileSync(fx.configPath, "include_apps_instructions = true\n", "utf8");
+
+    const afterWrite = await call("GET", "/api/codex-prompt/text", fx);
+    expect(afterWrite.body).toMatchObject({ ok: false, detail: "codex debug prompt-input failed" });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeWrite).body.ok).toBe(true);
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.ok).toBe(true);
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
   test("24. every ownership state is named, not collapsed into a boolean", async () => {
     // developerInstructionsOwned:false covers an ABSENT key and an EXTERNAL one, and
     // a GUI that cannot tell them apart hides its own create affordance from every
