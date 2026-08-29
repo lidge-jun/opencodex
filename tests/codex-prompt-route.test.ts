@@ -995,8 +995,10 @@ describe("020 coverage completions", () => {
     const startedPath = join(fx.decoyHome, "absent-probe-starts.txt");
     const source = [
       `const fs = require("node:fs");`,
-      `let doc = "\\u0000absent";`,
-      `try { doc = fs.readFileSync(${JSON.stringify(agentsPath)}, "utf8"); } catch {}`,
+      // Absence is a state this case asserts on, so it is tested for rather than
+      // caught: an empty catch here would also swallow a genuinely unreadable file
+      // and report it as absent.
+      `const doc = fs.existsSync(${JSON.stringify(agentsPath)}) ? fs.readFileSync(${JSON.stringify(agentsPath)}, "utf8") : "\\u0000absent";`,
       `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
       `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
       "setTimeout(() => process.stdout.write(output), 200);",
