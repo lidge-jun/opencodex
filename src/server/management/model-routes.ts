@@ -73,6 +73,8 @@ import type { CatalogModel } from "../../codex/catalog";
 import { accountBoundNativeOpenAiSlugsBySelector, catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, shouldIncludeAccountBoundNativeOpenAi, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
 import { clearModelCache, getProviderLiveModelCount } from "../../codex/model-cache";
+import { NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
+
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -542,6 +544,12 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const supportedNative = new Set([
       ...nativeModelRows(config).map(row => row.slug),
       ...accountNativeQualified,
+      // A model suppressed by an unconfirmed entitlement roster is absent from
+      // nativeModelRows, so validating against those rows alone rejected a model this build
+      // knows perfectly well and left the operator with no way to clear its disable key
+      // (#2886). Accepting the target says "this build knows this model", not "this account
+      // may use it" — visibility only writes disabledModels and routing stays gated.
+      ...NATIVE_OPENAI_MODELS,
     ]);
     const targets: Array<{ id: string; native: boolean }> = [];
     const seen = new Set<string>();

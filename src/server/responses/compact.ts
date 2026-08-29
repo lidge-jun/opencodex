@@ -59,9 +59,15 @@ import {
 } from "../../codex/main-account";
 import {
   formatCodexProviderForLog,
+  handOffThreadAffinityGeneration,
   recordCodexUpstreamOutcome,
   type CodexUpstreamOutcome,
 } from "../../codex/routing";
+import {
+  TokenRefreshError,
+  forceRefreshCodexPoolToken,
+  readCodexAccountRecord,
+} from "../../codex/account-store";
 import {
   fetchWithResetRetry,
   fetchWithTransientRetry,
@@ -258,6 +264,89 @@ async function refreshNativeMainCompactContext(args: {
     return { ok: true, authCtx: refreshedAuthCtx, provider: refreshedProvider, headers };
   } catch (error) {
     return { ok: false, response: nativeMainRefreshFailureResponse(error) };
+  }
+}
+
+/** See the core counterpart: only a dead grant is terminal (#2887). */
+function isTerminalCompactPoolRefreshFailure(error: unknown): boolean {
+  return error instanceof TokenRefreshError && (error.reason === "revoked" || error.reason === "expired");
+}
+
+/**
+ * Compact's forced refresh for an ordinary stored pool credential rejected with a
+ * pre-stream 401. Mirrors {@link refreshNativeMainCompactContext} so the two 401
+ * contracts on this endpoint cannot drift.
+ */
+async function refreshPoolCompactContext(args: {
+  req: Request;
+  authCtx: CodexAuthContext & { kind: "pool" };
+  provider: OcxProviderConfig;
+  codexAccountMode?: CodexAccountMode;
+  substituteMainCredential: boolean;
+  options: HandleResponsesCompactOptions;
+}): Promise<
+  | { ok: true; authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers }
+  | { ok: false; response: Response; quarantine: boolean; quarantineGeneration?: number }
+> {
+  const { req, authCtx, provider, codexAccountMode, substituteMainCredential, options } = args;
+  const reauthResponse = () => formatErrorResponse(
+    401,
+    "authentication_error",
+    "Selected Codex account needs reauthentication",
+  );
+  try {
+    const refreshed = await forceRefreshCodexPoolToken(authCtx.accountId, {
+      rejectedGeneration: authCtx.generation,
+      rejectedAccessToken: authCtx.accessToken,
+      signal: req.signal,
+    });
+    // See the core counterpart: a successful response can rotate only the refresh grant,
+    // so the credential may already sit at a later generation than the one we rejected.
+    if (!refreshed.rotated) {
+      return { ok: false, quarantine: true, quarantineGeneration: refreshed.generation, response: reauthResponse() };
+    }
+    if (refreshed.selfRefreshed) {
+      handOffThreadAffinityGeneration(authCtx.accountId, authCtx.generation, refreshed.generation);
+    }
+    const refreshedAuthCtx: CodexAuthContext = {
+      ...authCtx,
+      accessToken: refreshed.accessToken,
+      chatgptAccountId: refreshed.chatgptAccountId,
+      generation: refreshed.generation,
+    };
+    const refreshedProvider = applyCodexAuthContextToProvider(
+      stripCodexRuntimeProviderFields(provider),
+      refreshedAuthCtx,
+      codexAccountMode,
+    );
+    const headers = new Headers({ "content-type": "application/json" });
+    const selected = await materializeCodexUpstreamAuthAsync(req.headers, refreshedAuthCtx, {
+      substituteMainCredential,
+      signal: req.signal,
+      nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+    });
+    for (const name of FORWARD_HEADERS) {
+      const value = selected.get(name);
+      if (value) headers.set(name, value);
+    }
+    const override = (refreshedProvider as { _codexAccountOverride?: { accessToken: string; chatgptAccountId: string } })._codexAccountOverride;
+    if (override) {
+      headers.set("authorization", `Bearer ${override.accessToken}`);
+      headers.set("chatgpt-account-id", override.chatgptAccountId);
+    }
+    return { ok: true, authCtx: refreshedAuthCtx, provider: refreshedProvider, headers };
+  } catch (error) {
+    if (isTerminalCompactPoolRefreshFailure(error)) {
+      return { ok: false, quarantine: true, response: reauthResponse() };
+    }
+    const response = formatErrorResponse(
+      503,
+      "server_busy",
+      "Codex credential refresh did not complete; retry this request",
+    );
+    const headers = new Headers(response.headers);
+    headers.set("Retry-After", "1");
+    return { ok: false, quarantine: false, response: new Response(response.body, { status: response.status, headers }) };
   }
 }
 
@@ -599,6 +688,10 @@ export async function handleResponsesCompact(
         fixedAccount: ctx.fixedAccount,
         modelId: selectedModelId,
         probeLeaseId: codexProbeLeaseId(ctx),
+        // Fence a stored pool account's outcome on the credential the request was
+        // holding, so a 401 that lost a race with re-authentication cannot retire the
+        // replacement (#2887). Also covers the replay's own second 401.
+        ...(ctx.kind === "pool" ? { credentialGeneration: ctx.generation } : {}),
         probeQuotaScope: codexProbeQuotaScope(ctx),
         writerGeneration: ctx.kind === "pool" || ctx.kind === "main-pool"
           ? ctx.writerGeneration
@@ -678,20 +771,46 @@ export async function handleResponsesCompact(
 
     if (
       upstream.status === 401
-      && authCtx.kind === "main-pool"
+      && (authCtx.kind === "main-pool" || authCtx.kind === "pool")
       && usesCodexForwardPoolAuth(authCtx, compactProvider)
       && !req.signal.aborted
     ) {
       await upstream.body?.cancel().catch(() => undefined);
-      const replay = await refreshNativeMainCompactContext({
-        req,
-        authCtx,
-        provider: compactProvider,
-        codexAccountMode: route.codexAccountMode,
-        substituteMainCredential,
-        options,
-      });
+      const poolAuthCtx = authCtx.kind === "pool" ? authCtx : undefined;
+      const poolReplay = poolAuthCtx
+        ? await refreshPoolCompactContext({
+          req,
+          authCtx: poolAuthCtx,
+          provider: compactProvider,
+          codexAccountMode: route.codexAccountMode,
+          substituteMainCredential,
+          options,
+        })
+        : undefined;
+      const replay = poolReplay
+        ?? await refreshNativeMainCompactContext({
+          req,
+          authCtx,
+          provider: compactProvider,
+          codexAccountMode: route.codexAccountMode,
+          substituteMainCredential,
+          options,
+        });
       if (!replay.ok) {
+        // A transient refresh failure must not retire the account; only a dead grant
+        // does, and only while the rejected credential is still the stored one (#2887).
+        if (poolAuthCtx) {
+          if (poolReplay && !poolReplay.ok && poolReplay.quarantine) {
+            recordCodexUpstreamOutcome(config, poolAuthCtx.accountId, 401, {
+              threadId: poolAuthCtx.affinityKey,
+              fixedAccount: poolAuthCtx.fixedAccount,
+              modelId: selectedModelId,
+              writerGeneration: poolAuthCtx.writerGeneration,
+              credentialGeneration: poolReplay.quarantineGeneration ?? poolAuthCtx.generation,
+            });
+          }
+          return replay.response;
+        }
         recordCompactPoolOutcome(outcomeCtx, replay.response.status === 401 ? 401 : "connect_neutral");
         return replay.response;
       }

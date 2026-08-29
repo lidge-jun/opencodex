@@ -435,6 +435,18 @@ export type CodexRuntimeProcessCachePeek =
 let resolveCacheEpoch = 0;
 let resolveCache: ResolveCacheMemo | null = null;
 
+/**
+ * Bumped whenever persisted runtime state is replaced or process authority is cleared.
+ *
+ * Consumers that memoize anything derived from `codex-runtime.json` — entitlement's client
+ * version, for one — read this instead of a timestamp, so a runtime switch invalidates them at
+ * the moment of the write rather than after a delay window. Exposed because the alternative was
+ * a time-based guess that could answer under the previous version after the file had changed.
+ */
+export function codexRuntimeStateEpoch(): number {
+  return resolveCacheEpoch;
+}
+
 function publishResolveCache(key: string, at: number, value: ResolveCodexRuntimeResult): void {
   const epoch = ++resolveCacheEpoch;
   resolveCache = {

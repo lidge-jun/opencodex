@@ -514,3 +514,51 @@ test("disabled canonical OpenAI preserves bare bootstrap rows without advertisin
     await server.stop(true);
   }
 });
+
+test("the request's client_version reaches entitlement discovery (#2886)", async () => {
+  // Codex sends client_version on this route and the value used to be discarded, so upstream
+  // was always asked as 0.0.0 — which it answers with a short roster, and the fail-closed gate
+  // reads that as a confirmed denial. This asserts the forwarding itself: the version observed
+  // on the OUTBOUND /codex/models request must be the one the client sent.
+  const config = configWithStaticModels();
+  config.providers.openai = {
+    adapter: "openai-responses",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    liveModels: false,
+  };
+  saveConfig(config);
+  writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
+    tokens: { access_token: "main-token", account_id: "main-account" },
+  }), "utf8");
+
+  const { resetCatalogRuntimeStateForTests } = await import("../src/codex/catalog");
+  resetCatalogRuntimeStateForTests();
+  resetCodexModelEntitlementCacheForTests();
+
+  const askedVersions: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
+    if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/models")) {
+      askedVersions.push(url.searchParams.get("client_version") ?? "");
+      return Response.json({ models: [{ slug: "gpt-5.5", supported_in_api: true, visibility: "list" }] });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  // Started INSIDE the try: if startServer throws, the mocked global fetch must still be
+  // restored, or every later test in this file inherits it.
+  let server: ReturnType<typeof startServer> | null = null;
+  try {
+    server = startServer(0);
+    await fetch(new URL("/v1/models?client_version=0.151.7", server.url))
+      .then(response => response.json());
+    expect(askedVersions.length).toBeGreaterThan(0);
+    // Forwarded verbatim, and in particular never the placeholder that caused #2886.
+    expect(askedVersions).toEqual(askedVersions.map(() => "0.151.7"));
+    expect(askedVersions).not.toContain("0.0.0");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (server) await server.stop(true);
+  }
+});

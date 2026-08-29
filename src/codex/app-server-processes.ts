@@ -44,9 +44,14 @@ const CODEX_TARGET_TRIPLE_BODY = "[a-z0-9_]+-[a-z0-9_]+-[a-z0-9_]+(?:-[a-z0-9_]+
  * `"C:\Program Files\...\codex.exe" app-server` still reach GetOwner.
  * Also admits official target-triple basenames such as
  * `codex-x86_64-pc-windows-msvc.exe`.
+ *
+ * The optional `.opencodex-real` sits where `backupPathFor` actually puts it — after
+ * the stem and BEFORE the extension — and deliberately not before the triple. Written
+ * the other way it admits `codex.opencodex-real-x86_64-pc-windows-msvc.exe`, a name
+ * nothing produces, and pays GetOwner for it.
  */
 export const WINDOWS_CODEX_BASENAME_CANDIDATE_RE = new RegExp(
-  `(^|[/\\\\\\s'"=])codex(-${CODEX_TARGET_TRIPLE_BODY})?([.]exe|[.]cmd)?['"]?(\\s|$)`,
+  `(^|[/\\\\\\s'"=])codex(-${CODEX_TARGET_TRIPLE_BODY})?([.]opencodex-real)?([.]exe|[.]cmd|[.]ps1)?['"]?(\\s|$)`,
   "i",
 );
 
@@ -56,6 +61,38 @@ export const WINDOWS_CODEX_CODE_MODE_HOST_CANDIDATE_RE = /codex-code-mode-host/i
 const CODEX_TARGET_TRIPLE_BASENAME_RE = new RegExp(
   `^codex-${CODEX_TARGET_TRIPLE_BODY}(?:\\.exe|\\.cmd)?$`,
 );
+
+/**
+ * Launcher basenames a Codex app-server can be started through, including the
+ * `.opencodex-real` backups the autostart shim creates.
+ *
+ * When the shim installs, `backupPathFor` (`src/codex/shim.ts`) renames the original
+ * launcher by inserting `.opencodex-real` before its extension, so a shimmed host runs
+ * `~/.local/bin/codex.opencodex-real app-server`. Reported by a contributor (#2884) with
+ * `ps` output from an affected host: `--restart-codex` matched nothing and left
+ * app-servers alive holding stale in-memory catalogs.
+ *
+ * An EXACT set, kept separate from the target-triple pattern above rather than folded
+ * into it by stripping the suffix first. That shortcut is unsafe: normalising
+ * `codex-report-generator-worker.opencodex-real` yields a syntactically valid triple
+ * and would make an unrelated process a kill target. A triple binary cannot be a shim
+ * target anyway — Unix discovery accepts only a PATH entry named `codex`, and Windows
+ * refuses a real `codex.exe` outright — so the combination is unreachable, not merely
+ * unlisted.
+ *
+ * `.ps1` and `.cmd` are here because `findWindowsCodexTargets` shims both, and the
+ * extensionless form because Unix discovery and the Git-Bash launcher use it. There is
+ * deliberately no `.opencodex-real.exe`: Windows installation REFUSES to rename a native
+ * `codex.exe`, so that backup cannot exist. Matching it looked like free breadth until a
+ * review round put it plainly — this set decides what receives SIGTERM, and a name no
+ * installation can produce only widens what a coincidence can hit.
+ */
+const CODEX_LAUNCHER_BASENAMES = new Set([
+  "codex", "codex.exe", "codex.cmd",
+  "codex.opencodex-real",
+  "codex.opencodex-real.cmd",
+  "codex.opencodex-real.ps1",
+]);
 
 /** True when a Windows CommandLine is worth paying GetOwner for (current-user scoped later). */
 export function isWindowsCodexCandidateCommandLine(commandLine: string): boolean {
@@ -158,7 +195,7 @@ function tokenBasename(token: string): string {
 
 function isCodexExecutableToken(token: string): boolean {
   const base = tokenBasename(token);
-  return base === "codex" || base === "codex.exe" || base === "codex.cmd"
+  return CODEX_LAUNCHER_BASENAMES.has(base)
     || CODEX_TARGET_TRIPLE_BASENAME_RE.test(base);
 }
 
@@ -282,6 +319,10 @@ export function isCodexAppServerCommandLine(commandLine: string, executable?: st
   let i = 1;
   while (i < tokens.length) {
     const token = tokens[i]!;
+    // `--` ends option parsing, so what follows is a prompt for the interactive TUI, not
+    // a subcommand. `codex -- app-server` starts a session whose first prompt word is
+    // "app-server"; treating it as a match sends SIGTERM to somebody's live session.
+    if (token === "--") return false;
     if (token.startsWith("-")) {
       i = advancePastCodexGlobalOption(tokens, i);
       continue;
@@ -418,9 +459,9 @@ function windowsSnapshotPowerShellCommand(): string {
   // Newlines keep -Command as a real script (space-joined statements need ';').
   // Double-quoted format string so `t expands to a real tab.
   // Codex candidates only: basename token codex / codex.exe / codex.cmd /
-  // official target-triple binaries (optional closing quote after the
-  // basename), or code-mode-host — not incidental substrings like a repo
-  // path with "opencodex".
+  // codex.ps1, their .opencodex-real shim backups, official target-triple
+  // binaries (optional closing quote after the basename), or code-mode-host —
+  // not incidental substrings like a repo path with "opencodex".
   const basenameMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source);
   const codeModeMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_CODE_MODE_HOST_CANDIDATE_RE.source);
   return [
