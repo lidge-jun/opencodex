@@ -3,7 +3,7 @@ import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import { fetchWithResetRetry } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
 import { withUpstreamHttpVersion } from "../lib/upstream-http-version";
 import { parseSidecarSSE, type WebSearchResult } from "./parse";
 import type { CodexUpstreamOutcome } from "../codex/routing";
@@ -74,7 +74,11 @@ export async function runWebSearch(
   const t0 = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(url, withUpstreamHttpVersion(url, {
+      // Recovery nests INSIDE the version helper: applyUpstreamRecoveryInit then always receives a
+      // defined init, and withUpstreamHttpVersion spreads the result, so `protocol` and the
+      // recovery fields (`connection: close` + Bun's transport-level `keepalive: false`) survive
+      // together. The reverse order needs a `?? init` fallback to type-check at all.
+      recovery => fetch(url, withUpstreamHttpVersion(url, applyUpstreamRecoveryInit({
         method: "POST",
         headers,
         body: JSON.stringify(body),
@@ -83,7 +87,7 @@ export async function runWebSearch(
         // across origins but forwards nonstandard headers such as `chatgpt-account-id`,
         // `session_id`, and `x-codex-turn-metadata` to the redirect target.
         redirect: "manual",
-      }, forwardProvider)),
+      }, recovery), forwardProvider)),
       { abortSignal: linkedSignal.signal, label: "web-search-sidecar" },
     );
     // Attach the body guard before ANY branch reads it. The success path guarded itself below,

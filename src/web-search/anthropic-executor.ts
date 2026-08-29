@@ -4,7 +4,7 @@ import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/a
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import { fetchWithResetRetry } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
 import type { WebSearchSource } from "./parse";
 import { BASE_INSTRUCTION, IMAGE_INSTRUCTION, type SidecarOutcome, type SidecarSettings } from "./executor";
 
@@ -162,7 +162,14 @@ export async function runAnthropicWebSearch(
   const t0 = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: linkedSignal.signal }),
+      // The replay needs `keepalive: false` to leave the half-closed pooled socket; Bun has
+      // ignored a bare `Connection: close` (oven-sh/bun#20492).
+      recovery => fetch(url, applyUpstreamRecoveryInit({
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: linkedSignal.signal,
+      }, recovery)),
       { abortSignal: linkedSignal.signal, label: "web-search-sidecar-anthropic" },
     );
     // Guard before any branch reads the body: the failure branch's `res.text()` ran ahead of

@@ -10,7 +10,7 @@
  */
 import type { OcxProviderConfig } from "../types";
 import { getValidAccessTokenSnapshot, publicOAuthAuthenticationErrorMessage } from "../oauth";
-import { fetchWithResetRetry } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
 import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { sidecarEnter } from "../lib/sidecar-tracker";
@@ -69,7 +69,7 @@ export async function runGeminiWebSearch(
   const t0 = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(`${base}/v1internal:generateContent`, {
+      recovery => fetch(`${base}/v1internal:generateContent`, applyUpstreamRecoveryInit({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -79,7 +79,7 @@ export async function runGeminiWebSearch(
         body: JSON.stringify(envelope),
         signal: linkedSignal.signal,
         redirect: "manual",
-      }),
+      }, recovery)),
       { abortSignal: linkedSignal.signal, label: "gemini-web-search-sidecar" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);

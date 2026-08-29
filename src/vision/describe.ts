@@ -4,7 +4,7 @@ import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
-import { fetchWithResetRetry } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
 import { parseSidecarSSE } from "../web-search/parse";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 
@@ -90,7 +90,9 @@ export async function describeImage(
   const t0 = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(`${forwardProvider.baseUrl}/responses`, {
+      // The replay needs `keepalive: false` to abandon the half-closed pooled socket; Bun has
+      // ignored a bare `Connection: close` (oven-sh/bun#20492).
+      recovery => fetch(`${forwardProvider.baseUrl}/responses`, applyUpstreamRecoveryInit({
         method: "POST",
         headers,
         body: JSON.stringify(body),
@@ -99,7 +101,7 @@ export async function describeImage(
         // across origins but forwards nonstandard headers such as `chatgpt-account-id`,
         // `session_id`, and `x-codex-turn-metadata` to the redirect target.
         redirect: "manual",
-      }),
+      }, recovery)),
       { abortSignal: linkedSignal.signal, label: "vision-sidecar" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
