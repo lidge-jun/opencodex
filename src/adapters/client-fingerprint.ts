@@ -63,3 +63,21 @@ export function antigravityUserAgent(version = ANTIGRAVITY_IDE_VERSION, authMeth
   const [osType, arch] = ANTIGRAVITY_IDE_PLATFORM.split("/");
   return `antigravity/ide/${version} (os_type=${osType}; arch=${arch}; ${ANTIGRAVITY_IDE_CLIENT_NAME}; auth_method=${authMethod})`;
 }
+
+// ── Gemini CLI ──
+/** Pinned Gemini CLI version used in the CLI User-Agent. */
+export const GEMINI_CLI_VERSION = "0.1.5";
+
+/**
+ * Real Gemini CLI User-Agent: `GeminiCLI/${version} (${os}; ${arch})`.
+ *
+ * Deliberately the CLI family, NOT `antigravity/ide/...`: the Gemini CLI OAuth client and the
+ * Antigravity IDE client are different first-party clients, and the header must match the client
+ * family the token was minted for. That also means this UA does not unlock the IDE-gated agent
+ * models — which is correct, a CLI credential is not entitled to them.
+ */
+export function geminiCliUserAgent(version = GEMINI_CLI_VERSION): string {
+  const ov = process.env.GEMINI_CLI_USER_AGENT?.trim();
+  if (ov) return ov;
+  return `GeminiCLI/${version} (${process.platform}; ${process.arch})`;
+}

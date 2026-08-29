@@ -48,7 +48,7 @@ shipped v1 配置自动迁移到 marker 2 的单一选项行。原配置只保�
 | --- | --- | --- |
 | `key` | 发送你的 API 密钥（`Authorization: Bearer …`，或按 adapter 使用 `x-api-key` / `api-key`）。密钥可以是字面值，也可以是 `${ENV_VAR}` 引用。 | 大多数提供商。 |
 | `forward` | 将**你传入的 Codex 认证请求头**原样转发给提供商——不存储任何密钥。这就是 ChatGPT 登录的透传方式。 | OpenAI（`openai-responses` adapter）。 |
-| `oauth` | 读取已存储的 OAuth 访问令牌（过期前自动刷新），并将其用作 bearer 密钥。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor、Command Code、GitHub Copilot、Nous Portal。 |
+| `oauth` | 读取已存储的 OAuth 访问令牌（过期前自动刷新），并将其用作 bearer 密钥。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Gemini、Cursor、Command Code、GitHub Copilot、Nous Portal。 |
 
 [`retryOn429`](/zh-cn/reference/configuration/)（同 key 的 429 重试）仅适用于 API-key 提供商
 （`authMode: "key"`）。OAuth、forward 与本地预设均被排除——同一 token 绝不可重放，本地运行时
@@ -75,7 +75,7 @@ ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 
 ## 2. 账号登录（OAuth）
 
-有八个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
+有十个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
 opencodex 会把凭据存入 `~/.opencodex/auth.json` 并自动刷新。登录 CLI 也接受 `chatgpt`：
 它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
 
@@ -86,6 +86,8 @@ ocx login kimi         # Moonshot Kimi
 ocx login nous         # Nous Portal（设备授权；免费 + 付费模型）
 ocx login kiro         # 导入 kiro-cli 凭据（支持令牌回退）
 ocx login google-antigravity
+ocx login gemini-cli       # Gemini OAuth（Google 账号）—— Code Assist 子类型
+ocx login gemini-ai-studio # Gemini OAuth（Google 账号）—— AI Studio 子类型
 ocx login cursor       # 独立的 Cursor PKCE 登录
 ocx login command-code # Command Code 浏览器 OAuth（或导入 ~/.commandcode/auth.json）
 ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot Pro/Business）
@@ -101,6 +103,8 @@ ocx logout <provider>
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 订阅网关（与 Hermes Agent 使用同一后端）。通过设备授权登录 `portal.nousresearch.com`；access 令牌是每个请求的 inference JWT。付费 + `:free` 模型混合目录（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` 等）会从已登录账户实时发现。Refresh 令牌是单次使用，每次刷新都会轮换。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
+| `gemini-cli` | `google` | `https://cloudcode-pa.googleapis.com` | Gemini OAuth（Google 账号），**Code Assist** 子类型。适用于 Google One AI Pro/Ultra 套餐。与 Antigravity 使用同一主机，但属于不同的客户端族——参见下方「OAuth 授权（Gemini）」。 |
+| `gemini-ai-studio` | `google` | `https://generativelanguage.googleapis.com` | Gemini OAuth（Google 账号），**AI Studio** 子类型：使用 bearer 令牌而非 API 密钥访问 Generative Language API。需自备已注册的 OAuth 客户端。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、带可选 HTTP/1.1 兼容路径的 HTTP/2 传输，以及按账号筛选的模型发现。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性。GitHub 设备流 + `copilot_internal` 交换（VS Code OAuth 客户端）。需要有效的 Copilot 订阅；不是官方第三方 API。 |
 
@@ -121,6 +125,56 @@ OAuth 凭据中带有稳定账号 id 或邮箱的提供商可以保存多个登�
 当前 active slot；显式 **添加账号** 会保留原有 slot 并激活一个独立的新 slot。Kiro 账户以配置文件 ARN 为键。
 `chatgpt` 始终只有一个 slot，因为 Codex 账号池使用独立存储。令牌仍保存在
 `~/.opencodex/auth.json` 中；`/api/oauth/accounts` 只返回脱敏后的 metadata。
+
+### OAuth 授权（Gemini）
+
+使用 Google 账号授权，并选择 **OAuth 子类型**。两个子类型各自是独立的提供商、拥有各自的账号集合，
+因为 Google 通过不同的 OAuth 客户端与作用域来区分它们——为其中一个签发的凭据不会被另一个接受。
+
+| 子类型 | 提供商 id | 说明 | 何时选择 |
+| --- | --- | --- | --- |
+| **Code Assist** | `gemini-cli` | Cloud Code Assist，即 Google 官方 Gemini CLI 使用的后端。登录时会发现（必要时自动 onboard）一个 Code Assist 项目，之后每个请求都会带上它。 | 默认。普通 Google 账号，包括 Google One AI Pro / Ultra 套餐。 |
+| **AI Studio** | `gemini-ai-studio` | 使用 bearer 令牌而非 `x-goog-api-key` 访问 Generative Language API。 | 你已注册自己的 Google OAuth 客户端，并希望用 OAuth 而不是 API 密钥。 |
+
+**在仪表板中操作。** 打开 **Providers → 添加提供方 → Accounts**。会看到两行——*Gemini (Code Assist)*
+和 *Gemini (AI Studio)*，各自标注了所属子类型。点击需要的一行，在打开的浏览器中完成 Google 授权，
+该行随即会显示已登录账号的邮箱。同一行上的**添加账号**可以在不登出第一个账号的前提下授权第二个
+Google 账号。
+
+**在 CLI 中操作。**
+
+```bash
+ocx login gemini-cli        # Code Assist 子类型
+ocx login gemini-ai-studio  # AI Studio 子类型
+ocx logout gemini-cli
+```
+
+登录会打开浏览器，并在 `http://127.0.0.1:51122/callback` 上监听。如果浏览器无法访问该回环监听端口，
+把重定向 URL（或纯 `code`）粘回提示符即可。
+
+**Code Assist 的项目发现。** 令牌交换完成后，Code Assist 子类型会调用 `loadCodeAssist`；若账号尚无
+项目，则再调用 `onboardUser`。发现到的项目 id 会随凭据一起保存，并在刷新时重新校验。如果无法发现
+任何项目，**登录会直接失败**，而不是保存一份每个请求都会被拒绝的凭据——否则账号会显示为「已登录」
+但实际全部不可用。请确认该 Google 账号确实具备 Gemini Code Assist 权限后重试。
+
+**AI Studio 需要自备 OAuth 客户端。** Google 内置的 Gemini CLI 客户端并未注册 generative-language
+作用域，因此在你提供自己 Google Cloud 项目中的客户端凭据之前，该子类型会带着可操作的提示直接失败
+（OAuth 客户端类型选 *桌面应用*，并把 `http://127.0.0.1:51122/callback` 加为已授权重定向 URI）：
+
+```bash
+export GEMINI_AI_STUDIO_OAUTH_CLIENT_ID="<your-client-id>.apps.googleusercontent.com"
+export GEMINI_AI_STUDIO_OAUTH_CLIENT_SECRET="<your-client-secret>"
+ocx login gemini-ai-studio
+```
+
+Code Assist 子类型无需任何配置：它使用 Google 随 Gemini CLI 一起分发的公开客户端标识。若你希望改用
+自己的客户端，可通过 `GEMINI_CLI_OAUTH_CLIENT_ID` / `GEMINI_CLI_OAUTH_CLIENT_SECRET` 覆盖。
+
+:::caution[服务条款]
+Code Assist 子类型是从代理侧、而非 CLI 本身出示 Google 第一方 Gemini CLI 的客户端标识。与本页其他
+非官方桥接一样，这可能与 Google 的条款冲突，滥用检测也可能导致账号被停用。AI Studio 子类型不存在
+这一风险——它授权的是你自己注册的客户端。
+:::
 
 ### Cockpit Tools Antigravity 导入
 

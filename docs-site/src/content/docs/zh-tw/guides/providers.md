@@ -52,7 +52,7 @@ preset 通常同時省略 `authMode` 與 `apiKey`。
 | --- | --- | --- |
 | `key` | 傳送 API 金鑰（`Authorization: Bearer …`，或依 adapter 使用 `x-api-key` / `api-key`）。金鑰可以是字面值，也可以是 `${ENV_VAR}` 引用。 | 大多數供應商。 |
 | `forward` | 只轉送允許清單中的 incoming Codex 認證標頭，不儲存任何金鑰。這是 ChatGPT 登入的 passthrough。 | OpenAI（`openai-responses` adapter）。 |
-| `oauth` | 讀取已儲存的 OAuth access token（到期前自動 refresh），並把它當成 bearer key 使用。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor、Command Code、GitHub Copilot、Nous Portal。 |
+| `oauth` | 讀取已儲存的 OAuth access token（到期前自動 refresh），並把它當成 bearer key 使用。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Gemini、Cursor、Command Code、GitHub Copilot、Nous Portal。 |
 
 [`retryOn429`](/zh-tw/reference/configuration/) 的 same-key 429 replay 只適用於 API-key provider
 （`authMode: "key"`）。OAuth、forward 與 local preset 都被排除：它們的 credential 絕不能在同一 token
@@ -83,7 +83,7 @@ ChatGPT passthrough catalog 也會加入 GPT-5.6 Sol/Terra/Luna 的裸 slug：`g
 
 ## 2. 帳號登入（OAuth）
 
-有八個 provider preset 使用 OAuth 登入，另加透過實驗性非官方 device-flow bridge 的 GitHub Copilot。
+有十個 provider preset 使用 OAuth 登入，另加透過實驗性非官方 device-flow bridge 的 GitHub Copilot。
 opencodex 會把 credential 存在 `~/.opencodex/auth.json` 並自動 refresh。登入 CLI 也接受 `chatgpt`；
 它會取得 ChatGPT credential，同時建立 `forward` 模式的 provider 條目。
 
@@ -94,6 +94,8 @@ ocx login kimi         # Moonshot Kimi
 ocx login nous         # Nous Portal（device grant；免費 + 付費模型）
 ocx login kiro         # 匯入 kiro-cli credential（或 token fallback）
 ocx login google-antigravity
+ocx login gemini-cli       # Gemini OAuth（Google 帳號）— Code Assist 子類型
+ocx login gemini-ai-studio # Gemini OAuth（Google 帳號）— AI Studio 子類型
 ocx login cursor       # 獨立 Cursor PKCE 登入
 ocx login command-code # Command Code browser OAuth（或匯入 ~/.commandcode/auth.json）
 ocx login github-copilot  # GitHub device flow → Copilot token（Copilot Pro/Business）
@@ -109,6 +111,8 @@ ocx logout <provider>
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 訂閱 gateway（Hermes Agent 使用相同 backend）。透過 `portal.nousresearch.com` 做 device-grant 登入；access token 是每次請求使用的 inference JWT。混合付費與 `:free` 模型 catalog（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` 等）會從已登入帳號即時探索。Refresh token 為單次使用，每次 refresh 都會輪換。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初次登入會匯入已安裝且已登入的 `kiro-cli` session。Unix 可用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` 安裝；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`，再執行 `kiro-cli login`。**Add account** 會先登出 `kiro-cli`、啟動新的 browser login，切換 `kiro-cli` 所使用的帳號並保存 account-scoped profile metadata。既有 OpenCodex 帳號會保留；取消或失敗時會恢復先前的 `kiro-cli` session。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
+| `gemini-cli` | `google` | `https://cloudcode-pa.googleapis.com` | Gemini OAuth（Google 帳號），**Code Assist** 子類型。可搭配 Google One AI Pro/Ultra 方案。與 Antigravity 同一 host，但屬於不同的 client family — 參見下方「OAuth 登入（Gemini）」。 |
+| `gemini-ai-studio` | `google` | `https://generativelanguage.googleapis.com` | Gemini OAuth（Google 帳號），**AI Studio** 子類型：以 bearer token 而非 API key 存取 Generative Language API。需要你自行註冊的 OAuth client。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、即時 HTTP/2 transport 與按帳號篩選的模型探索。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 實驗性。GitHub device flow + `copilot_internal` exchange（VS Code OAuth client）。需要有效 Copilot 訂閱；不是官方第三方 API。 |
 
@@ -129,6 +133,57 @@ Kimi credential 會取代 active slot；明確的 **新增帳號** 會保留原�
 profile ARN 作為 key。`chatgpt` 始終是 single-slot，因為
 Codex pool 帳號使用獨立 ledger。Token 仍存放在 `~/.opencodex/auth.json`；`/api/oauth/accounts` 只回傳
 遮蔽後的 metadata。
+
+### OAuth 登入（Gemini）
+
+使用 Google 帳號授權，並選擇 **OAuth 子類型**。兩個子類型各自是獨立的 provider、擁有各自的帳號集合，
+因為 Google 以不同的 OAuth client 與 scope 區隔它們——為其中一個簽發的 credential 不會被另一個接受。
+
+| 子類型 | Provider id | 說明 | 何時選擇 |
+| --- | --- | --- | --- |
+| **Code Assist** | `gemini-cli` | Cloud Code Assist，也就是 Google 官方 Gemini CLI 使用的後端。登入時會探索（必要時自動 onboard）一個 Code Assist 專案，之後每個請求都會帶上它。 | 預設。一般 Google 帳號，包含 Google One AI Pro / Ultra 方案。 |
+| **AI Studio** | `gemini-ai-studio` | 以 bearer token 而非 `x-goog-api-key` 存取 Generative Language API。 | 你已註冊自己的 Google OAuth client，且想用 OAuth 而不是 API key。 |
+
+**從儀表板操作。** 開啟 **Providers → 新增 provider → Accounts**。會看到兩列——*Gemini (Code
+Assist)* 與 *Gemini (AI Studio)*，各自標註所屬子類型。點擊需要的那一列，在開啟的瀏覽器中完成 Google
+同意畫面，該列隨即顯示已登入帳號的 email。同一列上的**新增帳號**可在不登出第一個帳號的前提下授權
+第二個 Google 帳號。
+
+**從 CLI 操作。**
+
+```bash
+ocx login gemini-cli        # Code Assist 子類型
+ocx login gemini-ai-studio  # AI Studio 子類型
+ocx logout gemini-cli
+```
+
+登入會開啟瀏覽器，並在 `http://127.0.0.1:51122/callback` 上監聽。若瀏覽器無法連到該 loopback
+listener，把 redirect URL（或純 `code`）貼回提示字元即可。
+
+**Code Assist 的專案探索。** token 交換完成後，Code Assist 子類型會呼叫 `loadCodeAssist`；若帳號尚無
+專案，則再呼叫 `onboardUser`。探索到的專案 id 會隨 credential 一起儲存，並在 refresh 時重新檢查。
+若無法探索到任何專案，**登入會直接失敗**，而不是存下一份每個請求都會被拒絕的 credential——否則帳號
+會顯示為「已登入」但實際完全不能用。請先確認該 Google 帳號確實具備 Gemini Code Assist 存取權再重試。
+
+**AI Studio 需要你自己的 OAuth client。** Google 內建的 Gemini CLI client 並未註冊 generative-language
+scope，因此在你提供自己 Google Cloud 專案的 client credential 之前，此子類型會帶著可操作的訊息直接
+fail closed（OAuth client 類型選 *桌面應用程式*，並把 `http://127.0.0.1:51122/callback` 加入已授權的
+redirect URI）：
+
+```bash
+export GEMINI_AI_STUDIO_OAUTH_CLIENT_ID="<your-client-id>.apps.googleusercontent.com"
+export GEMINI_AI_STUDIO_OAUTH_CLIENT_SECRET="<your-client-secret>"
+ocx login gemini-ai-studio
+```
+
+Code Assist 子類型不需要任何設定：它使用 Google 隨 Gemini CLI 一起散布的公開 client 識別碼。若你想改用
+自己的 client，可用 `GEMINI_CLI_OAUTH_CLIENT_ID` / `GEMINI_CLI_OAUTH_CLIENT_SECRET` 覆寫。
+
+:::caution[服務條款]
+Code Assist 子類型是從 proxy、而非 CLI 本身出示 Google 第一方 Gemini CLI 的 client 識別碼。與本頁其他
+非官方橋接一樣，這可能與 Google 的條款衝突，濫用偵測也可能導致存取被停權。AI Studio 子類型沒有這個
+風險——它授權的是你自己註冊的 client。
+:::
 
 ### Cockpit Tools Antigravity 匯入
 

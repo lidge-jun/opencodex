@@ -87,6 +87,7 @@ export type {
 
 export type {
   RefreshPolicy,
+  GoogleAdapterMode,
   OpenRouterProviderRouting,
   ResponsesItemIdRepairConfig,
   RateLimitRetryPolicy,

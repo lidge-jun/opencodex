@@ -71,7 +71,7 @@ etiketler; bunlar normalde hem `authMode` hem de `apiKey`'i atlar.
 | --- | --- | --- |
 | `key` | API anahtarınızı gönderir (`Authorization: Bearer …` veya adaptör başına `x-api-key` / `api-key`). Anahtar bir sabit değer veya bir `${ENV_VAR}` başvurusu olabilir. | Çoğu sağlayıcı. |
 | `forward` | **Gelen Codex kimlik doğrulama başlıklarınızı** birebir sağlayıcıya iletir — hiçbir anahtar saklanmaz. Bu, ChatGPT girişi doğrudan geçişidir. | OpenAI (`openai-responses` adaptörü). |
-| `oauth` | Saklanan bir OAuth erişim belirtecini çözer (süresi dolmadan önce otomatik olarak yenilenir) ve bunu taşıyıcı anahtar olarak kullanır. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Cursor, Command Code, GitHub Copilot, Nous Portal. |
+| `oauth` | Saklanan bir OAuth erişim belirtecini çözer (süresi dolmadan önce otomatik olarak yenilenir) ve bunu taşıyıcı anahtar olarak kullanır. | xAI, Anthropic, Kimi, Kiro, Google Antigravity, Gemini, Cursor, Command Code, GitHub Copilot, Nous Portal. |
 
 [`retryOn429`](/tr/reference/configuration/) aynı anahtarla 429 yeniden oynatma
 özelliği yalnızca API anahtarı sağlayıcıları için geçerlidir (`authMode:
@@ -107,7 +107,7 @@ GPT-5.6 Sol/Terra/Luna slug'larını (`gpt-5.6-sol`, `gpt-5.6-terra`,
 
 ## 2. Hesap girişi (OAuth)
 
-Sekiz sağlayıcı önayarı OAuth girişini kullanır — artı deneysel resmi olmayan
+On sağlayıcı önayarı OAuth girişini kullanır — artı deneysel resmi olmayan
 bir cihaz akışı köprüsü aracılığıyla GitHub Copilot. opencodex bunların kimlik
 bilgilerini `~/.opencodex/auth.json` içinde saklar ve otomatik olarak yeniler.
 `chatgpt` ayrıca oturum açma CLI'sı tarafından kabul edilir; bir `forward` modu
@@ -120,6 +120,8 @@ ocx login kimi         # Moonshot Kimi
 ocx login nous         # Nous Portal (cihaz yetkisi; ücretsiz + ücretli modeller)
 ocx login kiro         # kiro-cli kimlik bilgilerini içe aktarın (veya belirteç geri dönüşü)
 ocx login google-antigravity
+ocx login gemini-cli       # Gemini OAuth (Google hesabı) — Code Assist alt türü
+ocx login gemini-ai-studio # Gemini OAuth (Google hesabı) — AI Studio alt türü
 ocx login cursor       # bağımsız Cursor PKCE girişi
 ocx login command-code # Command Code tarayıcı OAuth (veya ~/.commandcode/auth.json içe aktarma)
 ocx login github-copilot  # GitHub cihaz akışı → Copilot belirteci (Copilot Pro/Business)
@@ -135,6 +137,8 @@ ocx logout <saglayici>
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research abonelik ağ geçidi (Hermes Agent'ın kullandığı aynı arka uç). `portal.nousresearch.com`'a karşı cihaz yetkilendirmesi girişi; erişim belirteci istek başına çıkarım JWT'sidir. Oturum açmış hesaptan canlı olarak keşfedilen karışık ücretli + `:free` model kataloğu (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...). Yenileme belirteçleri tek kullanımlıktır ve her yenilemede döndürülür. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | İlk oturum açma, kurulu ve oturum açılmış `kiro-cli` oturumunu içe aktarır (Unix'te `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` ile kurun; Windows PowerShell'de `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` kullanın; ardından `kiro-cli login` çalıştırın). **Hesap ekle**, `kiro-cli` oturumunu kapatır, `kiro-cli` tarafından kullanılan hesabı değiştiren yeni bir tarayıcı girişi başlatır ve hesap kapsamlı profil meta verilerini saklar. Mevcut OpenCodex hesapları korunur ve iptal veya başarısızlık önceki `kiro-cli` oturumunu geri yükler. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Cloud Code Assist hattı üzerinden Google OAuth. Canlı keşif CCA'nın kimlik doğrulamalı `v1internal:fetchAvailableModels` uç noktasını kullanır ve oturum açmış hesap için kullanılabilir olan ajan modellerini yayınlar; sürdürülen katalog geri dönüş olarak kalır. |
+| `gemini-cli` | `google` | `https://cloudcode-pa.googleapis.com` | Gemini OAuth (Google hesabı), **Code Assist** alt türü. Google One AI Pro/Ultra planlarıyla çalışır. Antigravity ile aynı ana bilgisayar ancak farklı bir istemci ailesi — aşağıdaki “OAuth girişi (Gemini)” bölümüne bakın. |
+| `gemini-ai-studio` | `google` | `https://generativelanguage.googleapis.com` | Gemini OAuth (Google hesabı), **AI Studio** alt türü: API anahtarı yerine bearer belirteciyle Generative Language API. Kendi kayıtlı OAuth istemcinizi gerektirir. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Deneysel PKCE girişi, canlı HTTP/2 aktarımı ve hesap filtreli model keşfi. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Deneysel. GitHub cihaz akışı + `copilot_internal` değişimi (VS Code OAuth istemcisi). Aktif bir Copilot aboneliği gerektirir; resmi bir üçüncü taraf API değildir. |
 
@@ -164,6 +168,65 @@ yuvayı korur ve ayrı yeni yuvayı etkinleştirir. Kiro hesapları profil ARN's
 anahtarlanır. `chatgpt` her zaman tek yuvalıdır çünkü Codex havuz hesaplarının
 ayrı bir defteri vardır. Belirteçler `~/.opencodex/auth.json` içinde kalır;
 `/api/oauth/accounts` yalnızca maskelenmiş meta verileri döndürür.
+
+### OAuth girişi (Gemini)
+
+Bir Google hesabıyla yetkilendirin ve bir **OAuth alt türü** seçin. Google ikisini farklı OAuth
+istemcileri ve kapsamları arkasında sunduğu için her alt tür, kendi hesap kümesine sahip ayrı bir
+sağlayıcıdır — biri için üretilen kimlik bilgisi diğeri tarafından kabul edilmez.
+
+| Alt tür | Sağlayıcı id | Nedir | Ne zaman seçilir |
+| --- | --- | --- | --- |
+| **Code Assist** | `gemini-cli` | Google'ın kendi Gemini CLI'ının kullandığı arka uç olan Cloud Code Assist. Giriş bir Code Assist projesi keşfeder (gerekirse oluşturur) ve bu proje her istekle birlikte gönderilir. | Varsayılan. Google One AI Pro / Ultra planları dahil sıradan bir Google hesabı. |
+| **AI Studio** | `gemini-ai-studio` | `x-goog-api-key` yerine bir bearer belirteciyle erişilen Generative Language API. | Kendi Google OAuth istemcinizi kaydettiniz ve API anahtarı yerine OAuth kullanmak istiyorsunuz. |
+
+**Panelden.** **Providers → Sağlayıcı ekle → Accounts** bölümünü açın. Her biri alt türüyle
+etiketlenmiş iki satır görünür: *Gemini (Code Assist)* ve *Gemini (AI Studio)*. İstediğiniz satıra
+tıklayın, açılan tarayıcıda Google onay ekranını tamamlayın; satır oturum açan hesabın e-posta
+adresine dönüşür. Aynı satırdaki **Hesap ekle**, ilkinden çıkış yapmadan ikinci bir Google hesabını
+yetkilendirir.
+
+**CLI'dan.**
+
+```bash
+ocx login gemini-cli        # Code Assist alt türü
+ocx login gemini-ai-studio  # AI Studio alt türü
+ocx logout gemini-cli
+```
+
+Giriş tarayıcınızı açar ve `http://127.0.0.1:51122/callback` adresini dinler. Tarayıcı geri döngü
+dinleyicisine ulaşamazsa yönlendirme URL'sini (veya yalnızca `code` değerini) istemciye geri
+yapıştırın.
+
+**Code Assist proje keşfi.** Belirteç değişiminden sonra Code Assist alt türü `loadCodeAssist`
+çağrısını, henüz projesi olmayan bir hesap içinse `onboardUser` çağrısını yapar. Keşfedilen proje id
+kimlik bilgisiyle birlikte saklanır ve yenilemede yeniden denetlenir. Hiçbir proje keşfedilemezse,
+her isteği reddedilecek bir kimlik bilgisini kaydetmek yerine **giriş başarısız olur** — aksi halde
+hesap "giriş yapılmış" görünürken hiçbir şey çalışmaz. Google hesabının gerçekten Gemini Code Assist
+erişimine sahip olduğundan emin olup yeniden deneyin.
+
+**AI Studio kendi OAuth istemcinizi gerektirir.** Google'ın yerleşik Gemini CLI istemcisi
+generative-language kapsamları için kayıtlı değildir; bu nedenle kendi Google Cloud projenizden
+istemci kimlik bilgileri sağlayana kadar bu alt tür, eyleme dönüştürülebilir bir mesajla kapalı
+biçimde başarısız olur (OAuth istemci türü *Masaüstü uygulaması*, yetkili yönlendirme URI'si olarak
+`http://127.0.0.1:51122/callback`):
+
+```bash
+export GEMINI_AI_STUDIO_OAUTH_CLIENT_ID="<your-client-id>.apps.googleusercontent.com"
+export GEMINI_AI_STUDIO_OAUTH_CLIENT_SECRET="<your-client-secret>"
+ocx login gemini-ai-studio
+```
+
+Code Assist alt türü yapılandırma gerektirmez: Google'ın Gemini CLI içinde dağıttığı genel istemci
+tanımlayıcılarını kullanır. Kendi istemcinizi tercih ederseniz `GEMINI_CLI_OAUTH_CLIENT_ID` /
+`GEMINI_CLI_OAUTH_CLIENT_SECRET` bunları geçersiz kılar.
+
+:::caution[Hizmet Şartları]
+Code Assist alt türü, Google'ın birinci taraf Gemini CLI istemci tanımlayıcılarını CLI'ın kendisi
+yerine bir proxy üzerinden sunar. Bu sayfadaki diğer resmi olmayan köprüler gibi bu da Google'ın
+şartlarıyla çelişebilir ve kötüye kullanım tespiti erişimi askıya alabilir. AI Studio alt türü bu
+riski taşımaz — kendi kaydettiğiniz bir istemciyi yetkilendirir.
+:::
 
 ### Cockpit Tools Antigravity içe aktarma
 

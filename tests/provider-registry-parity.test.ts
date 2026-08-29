@@ -877,6 +877,10 @@ describe("provider registry parity", () => {
       "google-antigravity": "google",
       "antigravity": "google",
       "gemini-antigravity": "google",
+      // Both Gemini OAuth subtypes serve Google models, so their metadata resolves through the
+      // same bundle. Neither claims the bare "gemini" alias — that stays with the `google` entry.
+      "gemini-cli": "google",
+      "gemini-ai-studio": "google",
       deepseek: "deepseek",
       moonshot: "moonshot",
       minimax: "minimax",

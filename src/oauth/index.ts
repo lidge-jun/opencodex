@@ -11,6 +11,7 @@ import { loginKimi, refreshKimiToken } from "./kimi";
 import { loginNous, NousTokenError, refreshNousToken, clearNousRefreshIntent, RefreshIntentIOError } from "./nous";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
+import { GEMINI_AI_STUDIO_PROVIDER, GEMINI_CODE_ASSIST_PROVIDER, loginGemini, refreshGeminiToken } from "./gemini-cli";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
@@ -230,6 +231,25 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: refreshAntigravityToken,
     providerConfig: oauthConfig("google-antigravity"),
     defaultModel: oauthDefaultModel("google-antigravity"),
+  },
+  // Gemini OAuth (Google account). The two subtypes are modeled as separate providers so each
+  // owns its own account set: a Code Assist credential and an AI Studio credential are minted by
+  // different OAuth clients with different scopes and are not interchangeable.
+  [GEMINI_CODE_ASSIST_PROVIDER]: {
+    login: (ctrl, opts) => loginGemini(ctrl, "code-assist", { forceAccountSelect: opts?.forceLogin === true }),
+    refresh: (rt, signal) => refreshGeminiToken(rt, "code-assist", signal),
+    providerConfig: oauthConfig(GEMINI_CODE_ASSIST_PROVIDER),
+    defaultModel: oauthDefaultModel(GEMINI_CODE_ASSIST_PROVIDER),
+    // Presents Google's first-party Gemini CLI client from a proxy, and each refresh also re-runs
+    // Code Assist project discovery — a proactive policy would multiply that traffic under client
+    // identifiers we do not own. Anchor lazy-only explicitly so it cannot drift to proactive.
+    defaultRefreshPolicy: "lazy-only",
+  },
+  [GEMINI_AI_STUDIO_PROVIDER]: {
+    login: (ctrl, opts) => loginGemini(ctrl, "ai-studio", { forceAccountSelect: opts?.forceLogin === true }),
+    refresh: (rt, signal) => refreshGeminiToken(rt, "ai-studio", signal),
+    providerConfig: oauthConfig(GEMINI_AI_STUDIO_PROVIDER),
+    defaultModel: oauthDefaultModel(GEMINI_AI_STUDIO_PROVIDER),
   },
   cursor: {
     login: (ctrl, opts) => loginCursor(ctrl, undefined, { forceLogin: opts?.forceLogin }),

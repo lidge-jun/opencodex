@@ -1060,6 +1060,8 @@ export const en = {
   "modal.accountCodexPool": "ChatGPT account pool",
   "modal.accountLoggedIn": "Logged in",
   "modal.accountLoggedOut": "Not logged in",
+  "modal.accountGeminiCodeAssist": "Google account · Code Assist subtype",
+  "modal.accountGeminiAiStudio": "Google account · AI Studio subtype (needs your own OAuth client)",
   "quota.fiveHourLimit": "5-hour limit",
   "quota.weeklyLimit": "Weekly limit",
   "quota.monthlyLimit": "30-day limit",
