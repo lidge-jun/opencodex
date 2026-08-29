@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer as createHttpServer } from "node:http";
-import { createConnection, createServer as createTcpServer, type Server as TcpServer } from "node:net";
+import { createConnection, createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import type { AddressInfo } from "node:net";
 import { configureSocks5Fetch } from "../src/lib/proxy-env";
 import { providerOutboundGet } from "../src/lib/provider-outbound";
@@ -122,6 +122,62 @@ describe("socks5Fetch", () => {
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("first second");
     } finally {
+      await Promise.all([close(proxy), close(target)]);
+    }
+  });
+
+  test("closes a keep-alive socket after a fixed-length response completes", async () => {
+    let targetConnection: Socket | undefined;
+    const target = createTcpServer(socket => {
+      targetConnection = socket;
+      socket.once("error", () => undefined);
+      let request = Buffer.alloc(0);
+      socket.on("data", chunk => {
+        request = Buffer.concat([request, chunk]);
+        if (!request.toString("latin1").includes("\r\n\r\n")) return;
+        socket.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok");
+      });
+    });
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+    try {
+      const response = await socks5Fetch(
+        `http://provider.invalid:${targetPort}/keep-alive`,
+        undefined,
+        `socks5://127.0.0.1:${proxyPort}`,
+      );
+      expect(await response.text()).toBe("ok");
+      await Bun.sleep(50);
+      expect(targetConnection?.destroyed).toBe(true);
+    } finally {
+      targetConnection?.destroy();
+      await Promise.all([close(proxy), close(target)]);
+    }
+  });
+
+  test("closes a keep-alive socket for a bodyless response", async () => {
+    let targetConnection: Socket | undefined;
+    const target = createTcpServer(socket => {
+      targetConnection = socket;
+      socket.once("error", () => undefined);
+      socket.on("data", chunk => {
+        if (!chunk.toString("latin1").includes("\r\n\r\n")) return;
+        socket.write("HTTP/1.1 204 No Content\r\nConnection: keep-alive\r\n\r\n");
+      });
+    });
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+    try {
+      const response = await socks5Fetch(
+        `http://provider.invalid:${targetPort}/no-content`,
+        undefined,
+        `socks5://127.0.0.1:${proxyPort}`,
+      );
+      expect(await response.text()).toBe("");
+      await Bun.sleep(50);
+      expect(targetConnection?.destroyed).toBe(true);
+    } finally {
+      targetConnection?.destroy();
       await Promise.all([close(proxy), close(target)]);
     }
   });

@@ -358,6 +358,39 @@ function parseResponseHead(raw: Buffer): { status: number; statusText: string; h
   return { status: Number(match[1]), statusText: match[2] ?? "", headers };
 }
 
+function waitForDrain(socket: Socket, signal: AbortSignal): Promise<void> {
+  if (socket.destroyed) return Promise.reject(new Socks5FetchError("SOCKS5 socket closed while sending the request"));
+  if (signal.aborted) {
+    return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error("The operation was aborted"));
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      socket.removeListener("drain", onDrain);
+      socket.removeListener("error", onError);
+      socket.removeListener("close", onClose);
+      signal.removeEventListener("abort", onAbort);
+    };
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error === undefined) resolve();
+      else reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const onDrain = () => finish();
+    const onError = (error: Error) => finish(error);
+    const onClose = () => finish(new Socks5FetchError("SOCKS5 socket closed while sending the request"));
+    const onAbort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("The operation was aborted"));
+    socket.once("drain", onDrain);
+    socket.once("error", onError);
+    socket.once("close", onClose);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (socket.destroyed) onClose();
+    else if (signal.aborted) onAbort();
+  });
+}
+
 function responseBody(
   reader: SocketReader,
   socket: Socket,
@@ -366,7 +399,13 @@ function responseBody(
   status: number,
   method: string,
 ): ReadableStream<Uint8Array> | null {
-  if (method === "HEAD" || status === 204 || status === 304 || (status >= 100 && status < 200)) return null;
+  const bodyless = method === "HEAD" || status === 204 || status === 304 || (status >= 100 && status < 200);
+  if (bodyless) {
+    reader.dispose();
+    socket.setTimeout(0);
+    socket.destroy();
+    return null;
+  }
   const lengthHeader = headers.get("content-length");
   const contentLength = lengthHeader === null ? undefined : Number(lengthHeader);
   if (contentLength !== undefined && (!Number.isSafeInteger(contentLength) || contentLength < 0)) {
@@ -381,6 +420,8 @@ function responseBody(
     complete = true;
     signal.removeEventListener("abort", onAbort);
     reader.dispose();
+    socket.setTimeout(0);
+    socket.destroy();
   };
   const onAbort = () => socket.destroy(signal.reason instanceof Error ? signal.reason : new Error("The operation was aborted"));
   signal.addEventListener("abort", onAbort, { once: true });
@@ -468,9 +509,9 @@ export async function socks5Fetch(
           const body = headers.chunked
             ? Buffer.concat([Buffer.from(`${next.value.byteLength.toString(16)}\r\n`), Buffer.from(next.value), CRLF])
             : next.value;
-          if (!socket.write(body)) await new Promise<void>(resolve => socket.once("drain", resolve));
+          if (!socket.write(body)) await waitForDrain(socket, request.signal);
         }
-        if (headers.chunked) socket.write("0\r\n\r\n");
+        if (headers.chunked && !socket.write("0\r\n\r\n")) await waitForDrain(socket, request.signal);
       } finally {
         bodyReader.releaseLock();
       }
@@ -482,7 +523,6 @@ export async function socks5Fetch(
     }
     const body = responseBody(reader, socket, request.signal, responseHead.headers, responseHead.status, request.method);
     request.signal.removeEventListener("abort", onAbort);
-    if (body === null) reader.dispose();
     return new Response(body, {
       status: responseHead.status,
       statusText: responseHead.statusText,
