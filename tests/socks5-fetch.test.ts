@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createServer as createHttpServer } from "node:http";
-import { createConnection, createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
+import { createConnection, createServer as createTcpServer, Socket, type Server as TcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { configureSocks5Fetch } from "../src/lib/proxy-env";
 import { providerOutboundGet } from "../src/lib/provider-outbound";
@@ -44,7 +44,12 @@ async function close(server: TcpServer | ReturnType<typeof createHttpServer>): P
   await new Promise<void>(resolve => server.close(() => resolve()));
 }
 
-function socksProxy(options: { username?: string; password?: string } = {}): TcpServer {
+function socksProxy(options: {
+  username?: string;
+  password?: string;
+  holdAfterConnect?: boolean;
+  onHold?: (socket: Socket) => void;
+} = {}): TcpServer {
   const proxy = createTcpServer(socket => {
     let stage: "greeting" | "auth" | "connect" = "greeting";
     let buffer = Buffer.alloc(0);
@@ -87,6 +92,13 @@ function socksProxy(options: { username?: string; password?: string } = {}): Tcp
         if (buffer.length < requestLength) return;
         const port = buffer.readUInt16BE(5 + hostnameLength);
         buffer = buffer.subarray(requestLength);
+        if (options.holdAfterConnect) {
+          socket.removeListener("data", onData);
+          socket.pause();
+          options.onHold?.(socket);
+          socket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 1]));
+          return;
+        }
         const targetSocket = createConnection({ host: "127.0.0.1", port }, () => {
           socket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 1]));
           socket.removeListener("data", onData);
@@ -179,6 +191,75 @@ describe("socks5Fetch", () => {
     } finally {
       targetConnection?.destroy();
       await Promise.all([close(proxy), close(target)]);
+    }
+  });
+
+  test("rejects a request stuck in body backpressure when the socket errors", async () => {
+    let heldSocket: Socket | undefined;
+    const proxy = socksProxy({ holdAfterConnect: true, onHold: socket => { heldSocket = socket; } });
+    const proxyPort = await listen(proxy);
+    let resolveBackpressure: (() => void) | undefined;
+    const backpressure = new Promise<void>(resolve => {
+      resolveBackpressure = resolve;
+    });
+    let clientSocket: Socket | undefined;
+    let backpressureObserved = false;
+    let listenerCountsBeforeWait: { drain: number; error: number; close: number } | undefined;
+    const writeCounts = new Map<Socket, number>();
+    const originalWrite = Socket.prototype.write;
+    Socket.prototype.write = function(this: Socket, ...args: Parameters<typeof originalWrite>): boolean {
+      const result = originalWrite.apply(this, args);
+      const writeCount = (writeCounts.get(this) ?? 0) + 1;
+      writeCounts.set(this, writeCount);
+      if (!backpressureObserved && writeCount === 4) {
+        backpressureObserved = true;
+        clientSocket = this;
+        listenerCountsBeforeWait = {
+          drain: this.listenerCount("drain"),
+          error: this.listenerCount("error"),
+          close: this.listenerCount("close"),
+        };
+        resolveBackpressure?.();
+        queueMicrotask(() => this.destroy(new Error("test write failure")));
+        return false;
+      }
+      return result;
+    };
+    const init = {
+      method: "POST",
+      body: new Uint8Array(8 * 1024 * 1024),
+      duplex: "half",
+    } satisfies RequestInit & { duplex: "half" };
+    const pending = socks5Fetch("http://provider.invalid/", init, `socks5://127.0.0.1:${proxyPort}`);
+    const pendingHandled = pending.catch(() => undefined);
+    try {
+      const backpressureOutcome = await Promise.race([
+        backpressure.then(() => "ready"),
+        Bun.sleep(1_000).then(() => "timed out"),
+      ]);
+      if (backpressureOutcome !== "ready") {
+        throw new Error(`backpressure was not observed; writes=${JSON.stringify([...writeCounts.values()])}`);
+      }
+      expect(backpressureObserved).toBe(true);
+      const outcome = await Promise.race([
+        pending.then(
+          () => "resolved",
+          error => error,
+        ),
+        Bun.sleep(1_000).then(() => "timed out"),
+      ]);
+      expect(outcome).toBeInstanceOf(Error);
+      if (!(outcome instanceof Error)) throw new Error("failed backpressure did not settle");
+      expect(outcome.message).toBe("test write failure");
+      if (!clientSocket || !listenerCountsBeforeWait) throw new Error("backpressure socket was not captured");
+      expect(clientSocket.listenerCount("drain")).toBe(listenerCountsBeforeWait.drain);
+      expect(clientSocket.listenerCount("error")).toBe(listenerCountsBeforeWait.error);
+      expect(clientSocket.listenerCount("close")).toBe(listenerCountsBeforeWait.close);
+    } finally {
+      Socket.prototype.write = originalWrite;
+      heldSocket?.destroy();
+      await Promise.race([pendingHandled, Bun.sleep(250)]);
+      await Promise.race([close(proxy), Bun.sleep(250)]);
     }
   });
 
