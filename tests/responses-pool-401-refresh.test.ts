@@ -738,4 +738,38 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(response.status).toBe(400);
     expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
   });
+
+  test("a combo stops after a stored replay 4xx that is neither quota nor a gated-model 400", async () => {
+    // The contributor's original bound was a single `status >= 400` break in the passthrough loop,
+    // which stopped combo fallback for EVERY stored replay 4xx. Removing it to keep same-account
+    // rescue alive means the outer layers now rely on the dispatch signal instead. This pins that
+    // substitution on the case the break used to cover and the pool-retry site does not: a plain
+    // 403 is not a quota status, so it never reaches the quota bound at all.
+    const cfg = recoveryComboConfig();
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => {
+        if (url.hostname === "backup.example") {
+          return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
+        }
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization === "Bearer refreshed-access") {
+          return Response.json({ error: { message: "forbidden" } }, { status: 403 });
+        }
+        return undefined;
+      },
+    });
+
+    const response = await handleResponses(
+      request("/v1/responses", { model: "combo/recovery" }),
+      cfg,
+      { model: "", provider: "" } as RequestLogContext,
+    );
+
+    expect(response.status).toBe(403);
+    // The backup target is never sent to, and the account is charged exactly twice.
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+  });
 });
