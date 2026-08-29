@@ -159,7 +159,7 @@ affinity。这些策略不能规避 provider enforcement。
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | 启用粘性亲和性和 429 冷却故障转移。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 对于新会话，当活动账户达到此阈值时，选择配置窗口中已知缓存使用率最低的账户。`0` 会禁用配额选择。 |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新会话策略；`quota` 按 `quotaWindow` 指定的窗口（默认是 5 小时条形数据）对账户排序，`fill-first` 也在同一窗口中判定其耗尽阈值。 |
-| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 基于用量选择账户时用于评分的缓存用量条。`five-hour` 保持原有行为。`weekly` 使用每周用量条，但仍会跳过 5 小时用量已耗尽的账户。`max-utilization` 使用两条用量中较高的值。两种模式分数相同时，都优先选择 5 小时用量较低的账户。`round-robin` 会忽略此设置。不会主动重新平衡健康且已建立亲和性的会话；遇到终止性错误进行恢复时（包括 429 故障转移），仍会按此窗口对可用替代账户排序，但不会改变现有冷却或故障转移上限。各账户的每周用量只有在控制面板的提供商页面完成查询后才可用。 |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 基于用量选择账户时用于评分的缓存用量条。`five-hour` 保持原有行为。`weekly` 使用每周用量条，并在仍有其他可用账户时跳过 5 小时用量已耗尽的账户；若没有其他账户，则回退使用这些账户。`max-utilization` 使用两条用量中较高的值。两种模式分数相同时，都优先选择 5 小时用量较低的账户。`round-robin` 会忽略此设置。不会主动重新平衡健康且已建立亲和性的会话；遇到终止性错误进行恢复时（包括 429 故障转移），仍会按此窗口对可用替代账户排序，但不会改变现有冷却或故障转移上限。各账户的每周用量只有在控制面板的提供商页面完成查询后才可用。 |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 在一次轮询选择中保留的成功新会话绑定次数。范围 1–100。 |
 
 启用后，429 会根据 `Retry-After` 记录有界冷却，或者使用默认退避，并且可能在同一请求内轮换。亲和性是进程本地的，并且有大小上限。凭据 401/403 会将账户标记为需要重新认证。如果所有合格账户都在冷却，客户端会在已知时收到带 `Retry-After` 的 429，而不是身份验证错误。

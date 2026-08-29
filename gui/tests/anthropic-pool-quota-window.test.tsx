@@ -169,6 +169,20 @@ describe("Anthropic account pool quota window", () => {
     expect(windowTrigger(drainedHost).disabled).toBe(true);
   });
 
+  test("threshold zero description says quota-based new-session selection is off", async () => {
+    stubPool({
+      enabled: true,
+      autoSwitchThreshold: 0,
+      strategy: "quota",
+      stickyLimit: 1,
+      quotaWindow: "weekly",
+    });
+    const host = await mountPool();
+
+    expect(host.textContent).toContain("Quota-based new-session selection is off");
+    expect(host.textContent).not.toContain("prefer usage under 0%");
+  });
+
   test("quota window help text does not open the selector", async () => {
     stubPool({
       enabled: true,

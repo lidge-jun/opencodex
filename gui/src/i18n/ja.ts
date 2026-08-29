@@ -1658,6 +1658,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.catalogRefreshPending": "変更は保存されましたが、Codex モデルカタログの更新が保留中です。ocx sync を実行して再試行してください。",
   "anthropicPool.title": "Claude アカウントプール（実験的）",
   "anthropicPool.enabledDesc": "429 時にアカウントをクールダウンしてフェイルオーバーします。新規セッションは{window}の使用率が {threshold}% 未満のアカウントを優先します。",
+  "anthropicPool.enabledNoQuotaDesc": "429 時にアカウントをクールダウンしてフェイルオーバーします。クォータに基づく新規セッション選択は無効で、正常な affinity とアクティブアカウントのルーティングを維持します。",
   "anthropicPool.disabledDesc": "アクティブな Claude アカウントのみを使用します。実験的ルーティングを受け入れる場合のみ有効にしてください。",
   "anthropicPool.experimentalWarning": "実験的で十分に検証されていません。自動的な複数アカウント回転に見える行為は Anthropic により制限される可能性があります。同一組織はクォータを共有することがあり、その場合プールしても効果がありません。リスクを理解していない場合はオフのままにしてください。",
   "anthropicPool.needTwoAccounts": "プールを有効にする前に、Claude OAuth アカウントを 2 つ以上追加してください。",
@@ -1689,11 +1690,11 @@ export const ja: Record<TKey, string> = {
   "accountPool.strategyUpdateFailed": "ローテーション戦略を保存できませんでした。",
 
   "accountPool.quotaWindow": "クォータ集計ウィンドウ",
-  "accountPool.quotaWindowDesc": "クォータ戦略が新規セッションのアカウントを選ぶとき、どのキャッシュ済み使用量バーを評価するかを指定します。",
+  "accountPool.quotaWindowDesc": "クォータに基づく新規セッション選択、フィルファーストのしきい値判定、対象となる 429 代替先で使うキャッシュ済み使用量バーを指定します。",
   "accountPool.quotaWindowFiveHour": "5 時間バー",
   "accountPool.quotaWindowWeekly": "週間バー",
   "accountPool.quotaWindowMaxUtilization": "高い方のバー",
-  "accountPool.quotaWindowHint": "週間バーを選んでも 5 時間バーを使い切ったアカウントはスキップされ、週間の使用量が並んだ場合は 5 時間の使用量が少ない方を選びます。アカウントごとの週間バーは、プロバイダーページが取得した後にのみ判明します。",
+  "accountPool.quotaWindowHint": "週間バーでは、他に対象アカウントが残る間だけ 5 時間バーを使い切ったアカウントをスキップし、残らない場合はそれらへフォールバックします。同点では 5 時間使用量が少ない方を優先します。アカウントごとの週間バーはプロバイダーページで取得した後にのみ判明します。",
   "accountPool.quotaWindowInert": "使用量バーを評価するのはクォータ、またはしきい値が 0 を超えるフィルファーストだけです。現在のローテーション戦略では、この設定は何も変えません。",
 
   "accountPool.priority": "選択順序",

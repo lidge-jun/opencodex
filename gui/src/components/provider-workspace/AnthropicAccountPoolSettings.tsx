@@ -179,10 +179,12 @@ export default function AnthropicAccountPoolSettings({
               : loading
                 ? t("common.loading")
                 : enabled
-                  ? t("anthropicPool.enabledDesc", {
-                      threshold,
-                      window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
-                    })
+                  ? threshold === 0
+                    ? t("anthropicPool.enabledNoQuotaDesc")
+                    : t("anthropicPool.enabledDesc", {
+                        threshold,
+                        window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
+                      })
                   : t("anthropicPool.disabledDesc")}
           </div>
         </div>

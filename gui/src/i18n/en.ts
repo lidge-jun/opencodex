@@ -1725,6 +1725,7 @@ export const en = {
 
   "anthropicPool.title": "Claude account pool (experimental)",
   "anthropicPool.enabledDesc": "On 429, cools the account and fails over. New sessions prefer usage under {threshold}% ({window}).",
+  "anthropicPool.enabledNoQuotaDesc": "On 429, cools the account and fails over. Quota-based new-session selection is off, so healthy affinity and active-account routing stay in place.",
   "anthropicPool.disabledDesc": "Uses only the active Claude account. Enable only if you accept experimental routing.",
   "anthropicPool.experimentalWarning": "Experimental and not battle-tested. Anthropic may restrict accounts that look like automated multi-account rotation. Same organization can share quota — pooling those accounts will not help. Keep this off unless you understand the risk.",
   "anthropicPool.needTwoAccounts": "Add at least two Claude OAuth accounts before enabling the pool.",
@@ -1759,11 +1760,11 @@ export const en = {
   // anthropicPool.enabledDesc, so each locale owns its own inline casing instead of the
   // call site lowercasing a translated string (which breaks for Turkish and CJK).
   "accountPool.quotaWindow": "Quota window",
-  "accountPool.quotaWindowDesc": "Which cached usage bar the quota strategy scores when it picks an account for a new session.",
+  "accountPool.quotaWindowDesc": "Which cached usage bar controls quota-based new-session selection, fill-first threshold checks, and eligible 429 replacements.",
   "accountPool.quotaWindowFiveHour": "5-hour bar",
   "accountPool.quotaWindowWeekly": "Weekly bar",
   "accountPool.quotaWindowMaxUtilization": "Higher bar",
-  "accountPool.quotaWindowHint": "Weekly still skips accounts whose 5-hour bar is exhausted, and breaks weekly ties by lower 5-hour usage; per-account weekly bars are only known once the Providers page has polled them.",
+  "accountPool.quotaWindowHint": "Weekly skips accounts whose 5-hour bar is exhausted while another eligible account remains, but falls back to them when none do. Weekly ties prefer lower 5-hour usage; per-account weekly bars are only known once the Providers page has polled them.",
   "accountPool.quotaWindowInert": "Only quota — or fill-first above a 0 threshold — scores a usage bar, so this setting changes nothing for the current rotation strategy.",
 
   // Selection order. User-visible copy stays in sequence words (first/earlier/later/last);

@@ -601,6 +601,20 @@ describe("anthropic account pool quota window scoring", () => {
     ).accountId).toBe(cId);
   });
 
+  test("weekly fill-first fallback prefers a non-exhausted successor above threshold", async () => {
+    const { aId, bId, cId } = await seedThreeAccounts();
+    expect([aId, bId, cId].sort((a, b) => a.localeCompare(b))).toEqual([aId, bId, cId]);
+    const updatedAt = Date.now();
+    setCachedProviderAccountQuotaForTests("anthropic", aId, { fiveHourPercent: 10, weeklyPercent: 90, updatedAt });
+    setCachedProviderAccountQuotaForTests("anthropic", bId, { fiveHourPercent: 100, weeklyPercent: 10, updatedAt });
+    setCachedProviderAccountQuotaForTests("anthropic", cId, { fiveHourPercent: 20, weeklyPercent: 90, updatedAt });
+
+    expect(resolveAnthropicAccountForSession(
+      "fill-first-non-exhausted-fallback",
+      cfg(true, 80, { strategy: "fill-first", quotaWindow: "weekly" }),
+    ).accountId).toBe(cId);
+  });
+
   test("weekly mode with empty quota cache falls back to stable order", async () => {
     const { aId, bId } = await seedTwoAccounts();
     const config = cfg(true, 80, { quotaWindow: "weekly" });

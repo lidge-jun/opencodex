@@ -1247,6 +1247,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.catalogRefreshPending": "更改已保存，但 Codex 模型目录仍待刷新。请运行 ocx sync 重试。",
   "anthropicPool.title": "Claude 账户池（实验性）",
   "anthropicPool.enabledDesc": "遇到 429 时冷却该账户并故障转移。新会话优先使用{window}低于 {threshold}% 的账户。",
+  "anthropicPool.enabledNoQuotaDesc": "遇到 429 时冷却该账户并故障转移。按配额选择新会话的功能已关闭，健康的会话亲和性和当前活跃账户路由保持不变。",
   "anthropicPool.disabledDesc": "仅使用当前活跃的 Claude 账户。仅在接受实验性路由时启用。",
   "anthropicPool.experimentalWarning": "实验性功能，尚未充分验证。看起来像自动多账户轮换的行为可能导致 Anthropic 限制账户。同一组织可能共享配额——对这些账户做池化没有帮助。除非了解风险，否则请保持关闭。",
   "anthropicPool.needTwoAccounts": "启用账户池前请至少添加两个 Claude OAuth 账户。",
@@ -1278,11 +1279,11 @@ export const zh: Record<TKey, string> = {
   "accountPool.strategyUpdateFailed": "无法保存轮换策略。",
 
   "accountPool.quotaWindow": "配额统计窗口",
-  "accountPool.quotaWindowDesc": "配额策略为新会话挑选账号时，按哪条缓存的用量打分。",
+  "accountPool.quotaWindowDesc": "指定按配额选择新会话、填满优先阈值判断以及可用 429 替代账户所使用的缓存用量。",
   "accountPool.quotaWindowFiveHour": "5 小时用量",
   "accountPool.quotaWindowWeekly": "每周用量",
   "accountPool.quotaWindowMaxUtilization": "较高的用量",
-  "accountPool.quotaWindowHint": "选择每周用量时，仍会跳过 5 小时用量已耗尽的账号；每周用量相同时，优先挑选 5 小时用量更低的账号。各账号的每周用量要等提供商页面轮询过之后才能获知。",
+  "accountPool.quotaWindowHint": "每周用量会在仍有其他可用账户时跳过 5 小时用量已耗尽的账户；若没有其他账户，则回退使用这些账户。每周用量相同时优先选择 5 小时用量更低者；各账户的每周用量要等提供商页面轮询后才能获知。",
   "accountPool.quotaWindowInert": "只有配额策略，或阈值大于 0 的填满优先策略，才会按用量打分；在当前轮换策略下这项设置不起作用。",
 
   "accountPool.priority": "选择顺序",

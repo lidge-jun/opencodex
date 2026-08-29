@@ -286,8 +286,11 @@ function pickNextFillFirstAnthropicAccount(
   afterId: string,
   eligible: string[],
 ): string | null {
-  if (eligible.length === 0) return null;
-  const ordered = [...eligible].sort((a, b) => a.localeCompare(b));
+  const window = anthropicQuotaWindow(anthropicAccountPoolConfig(config));
+  const available = window === "weekly" ? eligible.filter(id => !exhausted5h(id)) : eligible;
+  const candidates = available.length > 0 ? available : eligible;
+  if (candidates.length === 0) return null;
+  const ordered = [...candidates].sort((a, b) => a.localeCompare(b));
   const set = getAccountSet(PROVIDER);
   const stableAll = set
     ? [...set.accounts.map(a => a.id)].sort((a, b) => a.localeCompare(b))
@@ -303,7 +306,7 @@ function pickNextFillFirstAnthropicAccount(
   let fallback: string | null = null;
   for (let step = 1; step <= stableAll.length; step++) {
     const candidate = stableAll[(startIdx + step) % stableAll.length]!;
-    if (!eligible.includes(candidate)) continue;
+    if (!candidates.includes(candidate)) continue;
     if (!fallback) fallback = candidate;
     if (isActiveUnderFillFirstThreshold(config, candidate)) return candidate;
   }

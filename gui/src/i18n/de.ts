@@ -1230,6 +1230,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.catalogRefreshPending": "Die Änderung wurde gespeichert, aber die Aktualisierung des Codex-Modellkatalogs steht noch aus. Führe ocx sync aus, um es erneut zu versuchen.",
   "anthropicPool.title": "Claude-Kontenpool (experimentell)",
   "anthropicPool.enabledDesc": "Bei 429 wird das Konto gekühlt und umgeschaltet. Neue Sitzungen bevorzugen Nutzung unter {threshold}% ({window}).",
+  "anthropicPool.enabledNoQuotaDesc": "Bei 429 wird das Konto gekühlt und umgeschaltet. Die kontingentbasierte Auswahl neuer Sitzungen ist deaktiviert; gesunde Affinitäten und das aktive Konto bleiben bestehen.",
   "anthropicPool.disabledDesc": "Nutzt nur das aktive Claude-Konto. Nur aktivieren, wenn experimentelles Routing akzeptabel ist.",
   "anthropicPool.experimentalWarning": "Experimentell und nicht kampferprobt. Anthropic kann Konten einschränken, die wie automatische Multi-Konto-Rotation wirken. Dieselbe Organisation kann Kontingent teilen — Pooling hilft dann nicht. Ausgeschaltet lassen, sofern das Risiko unklar ist.",
   "anthropicPool.needTwoAccounts": "Füge mindestens zwei Claude-OAuth-Konten hinzu, bevor du den Pool aktivierst.",
@@ -1261,11 +1262,11 @@ export const de: Record<TKey, string> = {
   "accountPool.strategyUpdateFailed": "Rotationsstrategie konnte nicht gespeichert werden.",
 
   "accountPool.quotaWindow": "Kontingentfenster",
-  "accountPool.quotaWindowDesc": "Welchen zwischengespeicherten Nutzungsbalken die Kontingentstrategie bewertet, wenn sie ein Konto für eine neue Sitzung auswählt.",
+  "accountPool.quotaWindowDesc": "Welcher zwischengespeicherte Nutzungsbalken die kontingentbasierte Auswahl neuer Sitzungen, Fill-first-Schwellenprüfungen und geeignete 429-Ersatzkonten steuert.",
   "accountPool.quotaWindowFiveHour": "5-Stunden-Balken",
   "accountPool.quotaWindowWeekly": "Wochenbalken",
   "accountPool.quotaWindowMaxUtilization": "Höherer Balken",
-  "accountPool.quotaWindowHint": "Der Wochenbalken überspringt weiterhin Konten, deren 5-Stunden-Balken erschöpft ist, und löst Gleichstände über die geringere 5-Stunden-Nutzung auf; die Wochenbalken einzelner Konten sind erst bekannt, sobald die Anbieterseite sie abgefragt hat.",
+  "accountPool.quotaWindowHint": "Der Wochenbalken überspringt Konten mit erschöpftem 5-Stunden-Balken, solange ein anderes geeignetes Konto verbleibt, greift aber auf sie zurück, wenn keines verbleibt. Gleichstände bevorzugen die geringere 5-Stunden-Nutzung; einzelne Wochenbalken sind erst nach der Abfrage auf der Anbieterseite bekannt.",
   "accountPool.quotaWindowInert": "Nur Kontingent — oder Fill-first mit einem Schwellenwert über 0 — bewertet einen Nutzungsbalken; für die aktuelle Rotationsstrategie ändert diese Einstellung daher nichts.",
 
   "accountPool.priority": "Auswahlreihenfolge",

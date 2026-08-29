@@ -1254,6 +1254,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.catalogRefreshPending": "변경 사항은 저장되었지만 Codex 모델 카탈로그 새로 고침이 보류 중입니다. ocx sync를 실행해 다시 시도하세요.",
   "anthropicPool.title": "Claude 계정 풀(실험적)",
   "anthropicPool.enabledDesc": "429 시 계정을 쿨다운하고 장애 조치합니다. 새 세션은 {window}이 {threshold}% 미만인 계정을 우선합니다.",
+  "anthropicPool.enabledNoQuotaDesc": "429 시 계정을 쿨다운하고 장애 조치합니다. 할당량 기반 새 세션 선택은 꺼지고, 정상 어피니티와 활성 계정 라우팅은 유지됩니다.",
   "anthropicPool.disabledDesc": "활성 Claude 계정만 사용합니다. 실험적 라우팅을 감수할 때만 켜세요.",
   "anthropicPool.experimentalWarning": "실험적이며 충분히 검증되지 않았습니다. 자동 다중 계정 로테이션처럼 보이는 동작은 Anthropic이 계정을 제한할 수 있습니다. 같은 조직은 할당량을 공유할 수 있어 풀링이 도움이 되지 않을 수 있습니다. 위험을 이해하지 못하면 꺼 두세요.",
   "anthropicPool.needTwoAccounts": "풀을 켜기 전에 Claude OAuth 계정을 두 개 이상 추가하세요.",
@@ -1285,11 +1286,11 @@ export const ko: Record<TKey, string> = {
   "accountPool.strategyUpdateFailed": "로테이션 전략을 저장하지 못했습니다.",
 
   "accountPool.quotaWindow": "할당량 기준 구간",
-  "accountPool.quotaWindowDesc": "할당량 전략이 새 세션에 계정을 배정할 때 어떤 캐시된 사용량을 기준으로 점수를 매길지 정합니다.",
+  "accountPool.quotaWindowDesc": "할당량 기반 새 세션 선택, 필 퍼스트 임계값 판정, 가능한 429 대체 계정에 사용할 캐시 사용량 기준을 정합니다.",
   "accountPool.quotaWindowFiveHour": "5시간 사용량",
   "accountPool.quotaWindowWeekly": "주간 사용량",
   "accountPool.quotaWindowMaxUtilization": "더 높은 사용량",
-  "accountPool.quotaWindowHint": "주간을 선택해도 5시간 사용량이 소진된 계정은 계속 건너뛰며, 주간 사용량이 같으면 5시간 사용량이 더 낮은 계정을 고릅니다. 계정별 주간 사용량은 공급자 페이지에서 한 번 조회한 뒤에야 알 수 있습니다.",
+  "accountPool.quotaWindowHint": "주간은 다른 사용 가능한 계정이 남아 있을 때만 5시간 사용량이 소진된 계정을 건너뛰고, 아무 계정도 남지 않으면 해당 계정으로 폴백합니다. 주간 사용량이 같으면 5시간 사용량이 더 낮은 계정을 고르며, 계정별 주간 사용량은 공급자 페이지에서 조회한 뒤에만 알 수 있습니다.",
   "accountPool.quotaWindowInert": "할당량 전략, 또는 임계값이 0보다 큰 필 퍼스트만 사용량을 기준으로 점수를 매깁니다. 현재 로테이션 전략에서는 이 설정이 아무 영향을 주지 않습니다.",
 
   "accountPool.priority": "선택 순서",
