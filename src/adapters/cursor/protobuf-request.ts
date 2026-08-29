@@ -1334,12 +1334,35 @@ function buildPreparedCursorRunRequest(
         // the LAST replayed message specifically, identified by its index rather than its content.
         const suffixMessages = suffixRequest.rawMessages ?? [];
         const lastSuffixIndex = suffixMessages.length - 1;
+        // Only models whose results are replayed as root text can answer this question. A native resume
+        // model gets its result through server-side turn state, so `rootPromptMessages` never emits a
+        // toolResult root for it (`echoToolResultInRoot` is false) — asking whether that root survived
+        // returns "no" every single time, and an unguarded check therefore threw away the checkpoint of
+        // every native continuation, including the default `cursor/auto`. The checkpoint is the only place
+        // pendingToolCalls, readPaths and previousWorkspaceUris live, and full replay does not rebuild
+        // them, so that was this unit's own defect relocated to the native path (audit r8 round 3).
+        const resultReplayedAsRoot = cursorNeedsExternalToolContinuation(request.modelId);
         // Kept, and kept with its output: a root reduced to the truncation marker alone answers the call
         // with nothing, which is the same failure as dropping it. `outputElided` is set at the one place
         // that can produce it, so this needs no threshold to guess at.
-        const keptEnough = suffixRoots.historyMessageIndexes.includes(lastSuffixIndex)
-          && !suffixRoots.historyOutputElided.includes(lastSuffixIndex);
-        const suffixKeptItsResult = suffixMessages[lastSuffixIndex]?.role !== "toolResult" || keptEnough;
+        //
+        // Every trailing result is checked, not just the last one. Parallel tool calls land as a run of
+        // results, and under byte pressure the older ones were the ones getting emptied: measured a prompt
+        // carrying three calls and one answer, which is the shape this comment calls worse than keeping
+        // nothing. `historyOutputElided` already knew; only the last index was being read (audit r8
+        // round 3).
+        let trailingStart = suffixMessages.length;
+        while (trailingStart > 0 && suffixMessages[trailingStart - 1]?.role === "toolResult") trailingStart -= 1;
+        const keptEnough = suffixMessages
+          .slice(trailingStart)
+          .every((_, offset) => {
+            const index = trailingStart + offset;
+            return suffixRoots.historyMessageIndexes.includes(index)
+              && !suffixRoots.historyOutputElided.includes(index);
+          });
+        const suffixKeptItsResult = !resultReplayedAsRoot
+          || suffixMessages[lastSuffixIndex]?.role !== "toolResult"
+          || keptEnough;
         if (
           carriedRoots.count + suffixSystemCount >= CURSOR_EXTERNAL_ROOT_BLOB_LIMIT
           || suffixRoots.ids.length <= suffixSystemCount
@@ -1348,6 +1371,11 @@ function buildPreparedCursorRunRequest(
           conversationState = undefined;
           continuationMode = "full-replay";
           checkpointInvalidationReason = "envelope_exhausted";
+          // Write it back onto the request, not just the local: `src/adapters/cursor.ts` reads
+          // `request.checkpointInvalidationReason` to drop the dead checkpoint from the store. A local-only
+          // assignment reached the diagnostic and nothing else, so the exhausted checkpoint was re-decoded
+          // and re-abandoned every turn until its TTL (audit r8 round 3).
+          request.checkpointInvalidationReason = "envelope_exhausted";
         } else {
         const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart, fullHistoryCalls, suffixStart);
         const suffixHistoryIds = suffixRoots.ids.slice(suffixSystemCount);

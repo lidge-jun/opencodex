@@ -2491,6 +2491,146 @@ describe("Cursor external replay envelope", () => {
     expect(measured).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
   });
 
+  /**
+   * Audit r8 round 3, BLOCKER. The result-survival check asks whether the replayed result root survived
+   * pruning. A native resume model never HAS one: its result travels in server-side turn state, so
+   * `echoToolResultInRoot` is false and `rootPromptMessages` skips the root entirely. Unguarded, the check
+   * answered "no" on every native continuation and discarded the checkpoint 100% of the time — including
+   * `cursor/auto`, the default id.
+   *
+   * That is not cosmetic. `pendingToolCalls`, `readPaths` and `previousWorkspaceUris` exist only inside the
+   * checkpoint, and a full replay does not rebuild them, so the accumulated state was simply lost.
+   */
+  test("a native model keeps its checkpoint through a tool continuation", () => {
+    for (const modelId of ["cursor/auto", "cursor/composer-2.5-fast", "cursor/composer-3"]) {
+      const carriedRoot = storeCursorBlob(new TextEncoder().encode(JSON.stringify({
+        role: "user",
+        content: [{ type: "text", text: "covered by checkpoint" }],
+      })));
+      const checkpoint = create(ConversationStateStructureSchema, {
+        rootPromptMessagesJson: [carriedRoot],
+        turns: [new Uint8Array(32).fill(8)],
+        readPaths: ["a.txt", "b.txt"],
+      });
+      const prepared = prepareCursorRunRequest({
+        modelId,
+        conversationId: `cursor_native_ckpt_${modelId}`,
+        system: ["You are helpful."],
+        messages: [{ role: "tool", content: "FILE-CONTENTS" }],
+        rawMessages: [
+          { role: "user", content: "Read the file.", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Reading." },
+              { type: "toolCall", id: "n1", name: "read_file", arguments: { path: "a.txt" } },
+            ],
+            timestamp: 2,
+          },
+          { role: "toolResult", toolCallId: "n1", toolName: "read_file", content: "FILE-CONTENTS", isError: false, timestamp: 3 },
+        ],
+        checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+        continuationMode: "checkpoint",
+        checkpointSuffixStart: 1,
+      });
+      const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+      const run = message.message.case === "runRequest" ? message.message.value : undefined;
+      const state = run?.conversationState;
+      // readPaths only ever comes from the decoded checkpoint, so it is the load-bearing assertion:
+      // it is empty exactly when the checkpoint was thrown away.
+      expect(state?.readPaths ?? []).toEqual(["a.txt", "b.txt"]);
+      const roots = state?.rootPromptMessagesJson ?? [];
+      expect(roots.some(id => Array.from(id).join(",") === Array.from(carriedRoot).join(","))).toBe(true);
+    }
+  });
+
+  /**
+   * Audit r8 round 3, MAJOR. The survival check read only the LAST replayed message. Parallel tool calls
+   * land as a run of results, and under byte pressure the older ones were the ones being emptied — measured
+   * a prompt carrying three calls and one answer. `historyOutputElided` already recorded them; only one
+   * index was consulted. The whole trailing run is checked now.
+   */
+  /**
+   * Audit r8 round 3, MINOR. `envelope_exhausted` was assigned to a local only, so it reached the debug
+   * diagnostic and nothing else. `src/adapters/cursor.ts` drops a dead checkpoint by reading
+   * `request.checkpointInvalidationReason`, so the exhausted one was re-decoded and re-abandoned on every
+   * later turn until its TTL expired. Writing it back is the same thing `request-builder.ts` does for every
+   * other invalidation reason.
+   */
+  test("an exhausted checkpoint reports itself as invalidated to the caller", () => {
+    const request = {
+      modelId: "grok-4.6",
+      conversationId: "cursor_ckpt_exhausted_reason",
+      system: ["You are helpful."],
+      messages: [{ role: "tool" as const, content: "x" }],
+      rawMessages: [
+        { role: "user" as const, content: "Run it.", timestamp: 1 },
+        {
+          role: "assistant" as const,
+          content: [
+            { type: "text" as const, text: "Running." },
+            { type: "toolCall" as const, id: "p1", name: "exec_command", arguments: { cmd: "echo X" } },
+          ],
+          timestamp: 2,
+        },
+        { role: "toolResult" as const, toolCallId: "p1", toolName: "exec_command", content: "OUT", isError: false, timestamp: 3 },
+      ],
+      checkpointBytes: toBinary(ConversationStateStructureSchema, create(ConversationStateStructureSchema, {
+        // A checkpoint that fills the root budget on its own: nothing is left for the suffix.
+        rootPromptMessagesJson: Array.from({ length: CURSOR_EXTERNAL_ROOT_BLOB_LIMIT }, (_, i) => new Uint8Array(32).fill(i % 251)),
+      })),
+      continuationMode: "checkpoint" as const,
+      checkpointSuffixStart: 1,
+    };
+    prepareCursorRunRequest(request);
+    expect(request.checkpointInvalidationReason).toBe("envelope_exhausted");
+  });
+
+  test("parallel results are never delivered as a partial answer set", () => {
+    const filler = "Q".repeat(40 * 1024);
+    // 375 bytes below the limit is where a last-index-only check leaves exactly one answer standing: any
+    // further down and pruning keeps all three, any further up and it keeps none. Derived by sweeping 628
+    // (delta, payload) positions against the last-index-only implementation, not guessed.
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: [storeCursorBlob(new Uint8Array(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - 375).fill(65))],
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: "cursor_ckpt_parallel_partial",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "x" }],
+      rawMessages: [
+        { role: "user", content: "Run three at once.", timestamp: 1 },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Running three." },
+            { type: "toolCall", id: "r1", name: "exec_command", arguments: { cmd: "echo A" } },
+            { type: "toolCall", id: "r2", name: "exec_command", arguments: { cmd: "echo B" } },
+            { type: "toolCall", id: "r3", name: "exec_command", arguments: { cmd: "echo C" } },
+          ],
+          timestamp: 2,
+        },
+        { role: "toolResult", toolCallId: "r1", toolName: "exec_command", content: `SENTINEL-ONE${filler}`, isError: false, timestamp: 3 },
+        { role: "toolResult", toolCallId: "r2", toolName: "exec_command", content: `SENTINEL-TWO${filler}`, isError: false, timestamp: 4 },
+        { role: "toolResult", toolCallId: "r3", toolName: "exec_command", content: `SENTINEL-THREE${filler}`, isError: false, timestamp: 5 },
+      ],
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      checkpointSuffixStart: 1,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    const serialized = roots
+      .map(id => (cursorBlobByteLength(id) === null ? "" : new TextDecoder().decode(blobData(id))))
+      .join("||");
+    const present = ["SENTINEL-ONE", "SENTINEL-TWO", "SENTINEL-THREE"].filter(s => serialized.includes(s));
+    // All three or none — a subset is a prompt with three calls and fewer answers.
+    expect(present.length === 0 || present.length === 3).toBe(true);
+  });
+
   test("the run-request diagnostic reports the measured envelope, not zero", () => {
     const previousDebug = process.env.OCX_DEBUG;
     process.env.OCX_DEBUG = "1";

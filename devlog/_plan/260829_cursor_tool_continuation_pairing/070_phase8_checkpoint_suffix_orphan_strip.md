@@ -227,3 +227,54 @@ checkpoint spends. Removing the subtraction now reddens three tests.
   not be traced to the run it described.
 - The operator's own proxy (port 10100, pid 62773, 2.35.0) was never touched; every probe ran against a
   scratch `OPENCODEX_HOME` on a scratch port.
+
+## Audit round 3: the predicate had to learn which path it applies to
+
+The positional predicate was correct for the path it was written against and wrong for two others. Both
+were measured before being changed.
+
+### Native models were losing their checkpoint on every continuation
+
+`suffixKeptItsResult` asked whether the replayed result root survived pruning. A native resume model has
+no such root: its result travels in server-side turn state, so `echoToolResultInRoot` is false and
+`rootPromptMessages` skips it. The question answered "no" unconditionally, which meant the checkpoint was
+discarded on **every** native tool continuation — including `cursor/auto`, the default id — regardless of
+size or byte pressure.
+
+That is not a cosmetic loss. `pendingToolCalls`, `readPaths` and `previousWorkspaceUris` exist only inside
+the checkpoint, and a full replay does not rebuild them, so this unit's own defect had been relocated to
+the native path. Measured through the real builder: `readPaths` went 2 → 0 for `auto`,
+`composer-2.5-fast` and `composer-3`, while `composer-2.5` and `grok-4.6` were unaffected — exactly the
+split `cursorNeedsExternalToolContinuation` draws. The predicate is now gated on it.
+
+Worth stating plainly: this was introduced by the fix for the previous round's finding, not by the original
+defect. Three rounds of audit each found one, which is the argument for the rounds rather than against
+them.
+
+### Parallel results were protected one at a time
+
+The check read the last replayed index only. Parallel tool calls arrive as a run of results, and under byte
+pressure the older ones were the ones being emptied — a prompt with three calls and one answer, which the
+code's own comment calls worse than keeping nothing. `historyOutputElided` already recorded them; nothing
+read them. The whole trailing run of results is checked now. Swept 628 (carried-bytes, payload-size)
+positions: 10 partial-answer positions before, 0 after.
+
+### The invalidation reason reached nothing
+
+`envelope_exhausted` was assigned to a local, so it landed in the debug diagnostic and stopped there.
+`src/adapters/cursor.ts` drops a dead checkpoint by reading `request.checkpointInvalidationReason`, so an
+exhausted checkpoint was re-decoded and re-abandoned every turn until its TTL. It is written back onto the
+request now, which is what `request-builder.ts` already does for every other reason.
+
+### Verification of this round
+
+- `bun test` across `cursor-blob`, `cursor-tool-result-invocation`, `cursor-tool-continuation` and
+  `cursor-request-builder`: 187 pass / 0 fail before the three new assertions, 102 / 0 in `cursor-blob`
+  after.
+- Each new assertion driven red against the implementation it catches: removing the native gate reddens the
+  native-checkpoint row; reading only the last index reddens the parallel row. The parallel fixture's
+  375-byte offset was derived from the sweep rather than guessed — it is the one position where a
+  last-index-only check leaves exactly one answer standing.
+- Sweeps re-run clean after the change: 15/15 band positions deliver the newest result, 222 edge positions
+  (multi-byte UTF-8, empty, whitespace-only, error, self-referential `output:` payload) with no loss, 628
+  parallel positions with no partial answers and no throws.
