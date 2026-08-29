@@ -319,10 +319,13 @@ function readFileOrNull(path: string): string | null {
 
 export function computeRevision(configBytes: string | null, storeBytes: string | null): string {
   const hash = createHash("sha256");
-  hash.update("cfg:");
-  hash.update(configBytes ?? "\0absent");
-  hash.update("\nstore:");
-  hash.update(storeBytes ?? "\0absent");
+  // Length-framed for the reason given on updateFingerprintField: with a bare
+  // separator, config bytes ending in "\nstore:" shift the boundary and two
+  // different pairs hash alike. That matters twice over — this value is both the
+  // probe's admission input and the optimistic-concurrency token compared in
+  // commit(), where a collision would let a write built on stale bytes through.
+  updateFingerprintField(hash, "cfg", configBytes);
+  updateFingerprintField(hash, "store", storeBytes);
   return `sha256:${hash.digest("hex")}`;
 }
 
