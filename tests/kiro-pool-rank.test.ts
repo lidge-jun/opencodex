@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { exhaustedCooldownMs, rankAccountsByHeadroom } from "../src/oauth/account-quota-rank";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  clearGenericFailoverHealth,
+  preferredInitialAccount,
+  rotateGenericOAuthAccountOn429,
+} from "../src/oauth/generic-account-failover";
+import { getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
+import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import {
   clearAccountQuotaCache,
   setCachedProviderAccountQuotaForTests,
@@ -113,5 +123,109 @@ describe("exhaustion cooldown", () => {
 
   test("providers without an exhaustion verdict are unaffected", () => {
     expect(exhaustedCooldownMs("xai", "a")).toBeNull();
+  });
+});
+
+describe("pre-dispatch account preference", () => {
+  const OAUTH_PROVIDER = {
+    adapter: "openai-chat",
+    baseUrl: "https://api.x.ai/v1",
+    authMode: "oauth",
+  } as unknown as OcxProviderConfig;
+
+  const config = { providers: { xai: OAUTH_PROVIDER } } as unknown as OcxConfig;
+  const originalHome = process.env.OPENCODEX_HOME;
+  let home: string;
+
+  async function seedAccounts(count: number): Promise<string[]> {
+    for (let i = 0; i < count; i++) {
+      await saveCredential("xai", {
+        access: `access-${i}`,
+        refresh: `refresh-${i}`,
+        expires: Date.now() + 3_600_000,
+        accountId: `uuid-${i}`,
+      } as never, { addAccount: true });
+    }
+    return getAccountSet("xai")?.accounts.map(a => a.id) ?? [];
+  }
+
+  test("the account with more headroom is chosen before the first request", async () => {
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("no quota evidence leaves the active account alone", async () => {
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      // Null means "use the ordinary active-account path", so nothing changes for a
+      // provider that reports no per-account quota.
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a single account is never redirected", async () => {
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(1);
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 99, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("an account cooled by a recent 429 is not chosen to open the next request", async () => {
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      // Cool the roomier account: positive evidence against it outweighs its headroom.
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 50, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 1, updatedAt: Date.now() });
+      rotateGenericOAuthAccountOn429(config, "xai", ids[1]!, null);
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

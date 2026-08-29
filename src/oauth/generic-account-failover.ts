@@ -211,6 +211,46 @@ export async function failoverAccountSnapshot(
   return getValidAccessSnapshotForAccount(providerName, accountId);
 }
 
+/**
+ * Which account should serve the FIRST attempt of a request.
+ *
+ * Rotation only ever ran after a 429, so a turn still opened on whichever account happened
+ * to be active — including one a previous probe already measured as spent. That costs a
+ * full upstream round trip and one of three rotations to rediscover what the cache knew.
+ *
+ * Returns null whenever the ordinary active-account path should be used unchanged: no
+ * quorum, rotation disabled, a single account, or no quota evidence to act on. This is a
+ * preference, never a gate — a cooled or unmeasured account is still perfectly usable, so
+ * an empty answer means "carry on", not "refuse".
+ */
+export function preferredInitialAccount(
+  config: OcxConfig,
+  providerName: string,
+  now = Date.now(),
+): string | null {
+  if (!isGenericOAuthFailoverEnabled(config, providerName)) return null;
+  const set = getAccountSet(providerName);
+  if (!set || set.accounts.length < 2) return null;
+
+  const active = set.activeAccountId;
+  // Cooldowns are respected here, unlike in the presence count: this picks the account to
+  // send to right now, and one inside its 429 window is the single candidate we hold
+  // positive evidence against.
+  const eligible = eligibleFailoverAccounts(providerName, now);
+  if (eligible.length === 0) return null;
+
+  // Start the ring at the active account so an unranked outcome reproduces today's choice.
+  const order = set.accounts.map(account => account.id);
+  const start = active ? order.indexOf(active) : -1;
+  const ring = start >= 0 ? [...order.slice(start), ...order.slice(0, start)] : order;
+  const candidates = ring.filter(id => eligible.includes(id));
+  if (candidates.length === 0) return null;
+
+  const best = rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
+  // Nothing to do when the ranking agrees with the account we would have used anyway.
+  return best && best !== active ? best : null;
+}
+
 /** Earliest remaining cooldown, for a client-facing Retry-After when every account is cooled. */
 export function genericFailoverRetryAfterSeconds(providerName: string, now = Date.now()): number | null {
   const set = getAccountSet(providerName);
