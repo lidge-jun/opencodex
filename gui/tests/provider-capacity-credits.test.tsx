@@ -39,3 +39,13 @@ test("credits with an expiry render the localized billing-period end date", () =
   expect(markup).toContain("Credits balance");
   expect(markup).toContain("Billing period ends 26 Aug 2026");
 });
+
+// Rendering is the failure point, not just the value: Intl.DateTimeFormat.format() throws a
+// RangeError on a time value outside ±8.64e15 ms, so an unrepresentable expiry took down the
+// whole capacity panel rather than showing a wrong date.
+test("credits with an unrepresentable expiry still render the balance", () => {
+  const markup = renderCredits(1e20);
+  expect(markup).toContain("Credits balance");
+  expect(markup).toContain("US$37.50");
+  expect(markup).not.toContain("Billing period ends");
+});
