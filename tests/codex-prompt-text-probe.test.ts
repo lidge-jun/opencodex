@@ -171,7 +171,9 @@ describe("prompt probe process lifecycle", () => {
 
     const replacementSource = [
       `const fs = require("node:fs"); const pid = Number(fs.readFileSync(${JSON.stringify(pidPath)}, "utf8"));`,
-      `try { process.kill(pid, 0); fs.writeFileSync(${JSON.stringify(overlapPath)}, "overlap"); } catch {}`,
+      "let priorProbeAlive = true;",
+      "try { process.kill(pid, 0); } catch { priorProbeAlive = false; }",
+      `if (priorProbeAlive) fs.writeFileSync(${JSON.stringify(overlapPath)}, "overlap");`,
       `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)});`,
     ].join("");
     setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", replacementSource] });
