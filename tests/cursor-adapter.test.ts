@@ -133,8 +133,7 @@ describe("Cursor adapter live transport", () => {
     // tests/cursor-blob.test.ts.
     const adapter = createCursorAdapter(provider, {
       createTransport: () => ({
-        // eslint-disable-next-line require-yield
-        async *run() {
+        async *run(): AsyncGenerator<CursorServerMessage> {
           throw new CursorRootEnvelopeLimitError(194, 600_000, 192, 524_288);
         },
         writeClient() {},
