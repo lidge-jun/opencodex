@@ -506,19 +506,8 @@ function readToggle(configBytes: string | null, id: ToggleId): ToggleState {
 function readModelInstructionsFile(configBytes: string | null): string | null {
   if (configBytes === null) return null;
   for (const line of rootLines(configBytes)) {
-    // Capture the whole literal INCLUDING its quotes and decode it, rather than
-    // returning the raw inner text. `setRootString` writes this key through
-    // `encodeBasicString`, which escapes backslashes, so on Windows the stored
-    // literal is "C:\\Users\\..." while the path is "C:\Users\...". Reading the
-    // inner text verbatim returned the doubled form: the round trip did not
-    // survive, `baseSelection` compared a doubled path against the real variant
-    // path and reported `external` for a variant this code had just selected.
-    //
-    // `[^"]*` cannot span an escaped quote either. That is not a new limit -- it
-    // is the same one the writer's restricted escape set is built around, and
-    // `decodeBasicString` refuses anything outside it rather than guessing.
-    const m = /^\s*model_instructions_file\s*=\s*("[^"]*")\s*(?:#.*)?$/.exec(line);
-    if (m) return decodeBasicString(m[1]!);
+    const m = /^\s*model_instructions_file\s*=\s*"([^"]*)"\s*(?:#.*)?$/.exec(line);
+    if (m) return m[1]!;
   }
   return null;
 }

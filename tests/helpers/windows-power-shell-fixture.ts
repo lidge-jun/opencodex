@@ -19,17 +19,31 @@ export interface WindowsPowerShellFixture {
  */
 export async function probeWindowsPowerShellFixture(
   fixture: WindowsPowerShellFixture,
+  timeoutMs = 5_000,
 ): Promise<{ ok: boolean; detail: string }> {
   try {
     const child = Bun.spawn([fixture.executable, "-NoProfile", "-NoLogo", "-NonInteractive", "-Command", "probe"], {
       stdout: "pipe",
       stderr: "pipe",
     });
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
+    const stdoutPromise = new Response(child.stdout).text();
+    const stderrPromise = new Response(child.stderr).text();
+    const completed = await Promise.race([
+      Promise.all([stdoutPromise, stderrPromise, child.exited])
+        .then(([stdout, stderr, exitCode]) => ({ stdout, stderr, exitCode })),
+      Bun.sleep(timeoutMs).then(() => null),
     ]);
+    if (!completed) {
+      try { child.kill(); } catch { /* already exited */ }
+      const reaped = await Promise.race([
+        child.exited.then(() => true, () => true),
+        Bun.sleep(1_000).then(() => false),
+      ]);
+      void stdoutPromise.catch(() => {});
+      void stderrPromise.catch(() => {});
+      return { ok: false, detail: `timed out after ${timeoutMs}ms; reaped=${reaped}` };
+    }
+    const { stdout, stderr, exitCode } = completed;
     if (exitCode === 0 && stdout.includes("codex app-server")) {
       return { ok: true, detail: `exit=0 stdout=${JSON.stringify(stdout)}` };
     }

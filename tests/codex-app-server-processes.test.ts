@@ -47,6 +47,14 @@ afterAll(() => stallingFakePowerShell?.cleanup());
     expect(probe.ok, `fake PowerShell fixture at ${stallingFakePowerShell.executable} did not run: ${probe.detail}`).toBe(true);
   });
 
+  test("a hung PowerShell fixture probe is killed at its local deadline", async () => {
+    const startedAt = Date.now();
+    const probe = await probeWindowsPowerShellFixture(stallingFakePowerShell, 25);
+    expect(probe.ok).toBe(false);
+    expect(probe.detail).toContain("timed out after 25ms");
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
   test("not_running when no app-server process exists", () => {
     const status = collectCodexAppServerCatalogState({
       listSnapshots: () => [],

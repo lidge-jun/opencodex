@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fallbackCodexAccountLogLabel } from "../src/codex/account-label";
+import { resetLabActivationForTests } from "../src/lib/lab-activation";
 import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest } from "./helpers/management-auth";
-import { removeTreeWithRetry } from "./helpers/remove-tree";
 import type { OcxConfig } from "../src/types";
 
 let testDir = "";
@@ -18,14 +18,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Profile creation activates the Lab runtime for this config directory. Drop
+  // that owner before removing its scratch tree so Windows is not asked to
+  // delete a directory still retained by process-local runtime state.
+  resetLabActivationForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  // Windows can still hold a just-closed config file open when the next test's
-  // cleanup runs, and `force` does not cover EBUSY. An unguarded rmSync here
-  // failed the alias-migration case on shard 4/4 -- in `afterEach`, after every
-  // assertion in it had already passed. Reuse the shared retry rather than
-  // growing another local copy of it.
-  if (testDir) removeTreeWithRetry(testDir);
+  if (testDir) rmSync(testDir, { recursive: true, force: true });
 });
 
 function baseConfig(): OcxConfig {

@@ -208,6 +208,32 @@ export async function execute(_input: FabricPatchExecutorInput): Promise<Synthet
   return createHostIssuedFabricPatchExecutor(modulePath, async () => correctSyntheticPatch());
 }
 
+function fabricTmpdirProbeExecutor(home: string): TrustedFabricPatchExecutor {
+  const dir = join(home, "fabric-executors");
+  mkdirSync(dir, { recursive: true });
+  const modulePath = join(dir, "tmpdir-probe.ts");
+  writeFileSync(modulePath, `
+import { tmpdir } from "node:os";
+import { isAbsolute, relative, resolve } from "node:path";
+import type { FabricPatchExecutorInput, SyntheticPatchV1 } from "${repoImport("src/lab/fabric/types")}";
+import { SYNTHETIC_AFTER_UTF8, SYNTHETIC_VALUE_PATH } from "${repoImport("src/lab/fabric/constants")}";
+
+export async function execute(input: FabricPatchExecutorInput): Promise<SyntheticPatchV1> {
+  const scratchRoot = resolve(input.scratchRoot);
+  const observedTmpdir = resolve(tmpdir());
+  const fromScratch = relative(scratchRoot, observedTmpdir);
+  if (fromScratch === "" || fromScratch.startsWith("..") || isAbsolute(fromScratch)) {
+    throw new Error(\`tmpdir escaped fabric scratch: \${observedTmpdir}\`);
+  }
+  return {
+    schemaVersion: 1,
+    operations: [{ op: "replace", path: SYNTHETIC_VALUE_PATH, contentUtf8: SYNTHETIC_AFTER_UTF8 }],
+  };
+}
+`);
+  return createHostIssuedFabricPatchExecutor(modulePath, async () => correctSyntheticPatch());
+}
+
 function fabricSymlinkSandboxExecutor(home: string): TrustedFabricPatchExecutor {
   const dir = join(home, "fabric-executors");
   mkdirSync(dir, { recursive: true });
@@ -795,6 +821,18 @@ export async function execute() {
     }, { configDir: home })).toThrow(FabricTaskError);
   });
 
+  test("isolated executors resolve tmpdir inside their scratch tree", async () => {
+    const home = tempHome();
+    process.env.OPENCODEX_HOME = home;
+    const result = await runFabricSyntheticPatchTaskForRoute({
+      routeContext: fabricMockRoute(),
+      destination: await fabricDestination(home),
+      patchExecutor: fabricTmpdirProbeExecutor(home),
+      configDir: home,
+    });
+    expect(result.outcome.outcome).toBe("pass");
+  });
+
   test("user repository cannot host the scratch root", () => {
     const home = tempHome();
     const repo = join(home, "user-repo");
@@ -1206,9 +1244,22 @@ export async function execute() {
       expect(env[leaked]).toBeUndefined();
     }
 
+    const childTempDir = join(home, ".tmp");
+    expect(env.TEMP).toBe(childTempDir);
+    expect(env.TMP).toBe(childTempDir);
+    expect(env.TMPDIR).toBe(childTempDir);
+    expect(existsSync(childTempDir)).toBe(true);
+
     if (process.platform !== "win32") {
-      // POSIX passes the loader an absolute interpreter path and needs nothing else.
-      expect(Object.keys(env).sort()).toEqual(["NO_COLOR", "OCX_FABRIC_SCRATCH_ROOT", "TZ"]);
+      // POSIX needs no ambient loader state; only scratch-owned temp state is added.
+      expect(Object.keys(env).sort()).toEqual([
+        "NO_COLOR",
+        "OCX_FABRIC_SCRATCH_ROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+      ]);
       return;
     }
 
