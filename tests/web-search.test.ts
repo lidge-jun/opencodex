@@ -6,6 +6,8 @@ import { runWebSearch as runOpenAiWebSearch } from "../src/web-search/executor";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../src/providers/openai-sidecar";
+import { handleResponses } from "../src/server/responses/core";
+import { providerFetch } from "../src/server/responses/fetch-helpers";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
 import type { AdapterFetchContext, ProviderAdapter } from "../src/adapters/base";
 import type { OcxMessage, OcxParsedRequest } from "../src/types";
@@ -382,6 +384,117 @@ describe("web-search sidecar planning", () => {
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
+test("issue #2885 — Zhipu-shaped web-search routing preserves the provider HTTP version pin", async () => {
+  let routedProtocol: string | undefined;
+  let routedBody: Record<string, unknown> | undefined;
+  const zhipuProvider = {
+    adapter: "openai-chat",
+    baseUrl: "https://zhipu.test/v4",
+    apiKey: "zhipu-key",
+    upstreamHttpVersion: "http1.1",
+    models: ["glm-4.7"],
+    liveModels: false,
+    fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      routedProtocol = (init as RequestInit & { protocol?: string } | undefined)?.protocol;
+      routedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        'data: {"choices":[{"delta":{"content":"done"},"finish_reason":null}]}\n\n'
+          + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+          + "data: [DONE]\n\n",
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    }) as typeof fetch,
+  } satisfies OcxProviderConfig & { fetch: typeof fetch };
+  const cfg: OcxConfig = {
+    port: 10100,
+    defaultProvider: "zhipu",
+    providers: {
+      zhipu: zhipuProvider,
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+  };
+  globalThis.fetch = (async () => {
+    throw new Error("the routed web-search leg must use the provider fetch");
+  }) as typeof fetch;
+
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-zhipu-search" })}`,
+      "chatgpt-account-id": "acct-zhipu-search",
+    },
+    body: JSON.stringify({
+      model: "zhipu/glm-4.7",
+      input: "Search current docs",
+      stream: true,
+      tools: [{ type: "web_search" }],
+    }),
+  }), cfg, { model: "", provider: "" });
+
+  expect(response.status).toBe(200);
+  const frames = await collectSse(response.body!);
+  expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+  expect((routedBody?.tools as { function?: { name?: string } }[] | undefined)
+    ?.some(tool => tool.function?.name === "web_search")).toBe(true);
+  expect(routedProtocol).toBe("http1.1");
+});
+
+test("web-search adapters receive the provider-scoped fetch executor", async () => {
+  let routedProtocol: string | undefined;
+  const pinnedProvider = {
+    adapter: "openai-chat",
+    baseUrl: "https://routed.test/v1",
+    apiKey: "routed-key",
+    upstreamHttpVersion: "http1.1",
+    fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      routedProtocol = (init as RequestInit & { protocol?: string } | undefined)?.protocol;
+      return new Response("wire", { status: 200 });
+    }) as typeof fetch,
+  } satisfies OcxProviderConfig & { fetch: typeof fetch };
+  const adapter: ProviderAdapter = {
+    name: "executor-aware",
+    buildRequest: (_parsed, incoming) => {
+      expect(incoming.providerFetch).toBeDefined();
+      return { url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
+    },
+    fetchResponse: (request, ctx) => ctx!.executor!(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+      signal: ctx?.abortSignal,
+    }),
+    async *parseStream() {
+      yield { type: "text_delta", text: "done" };
+      yield { type: "done" };
+    },
+  };
+
+  const response = await runWithWebSearch({
+    parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+    adapter,
+    incomingMeta: {
+      headers: new Headers(),
+      translatorBudget: createTestTranslatorBudget(),
+      providerFetch: providerFetch(pinnedProvider),
+    },
+    forwardProvider,
+    hostedTool: { type: "web_search" },
+    selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+    settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+    maxSearches: 1,
+  });
+
+  expect(response.status).toBe(200);
+  await collectSse(response.body!);
+  expect(routedProtocol).toBe("http1.1");
+});
+
 test("OpenAI web-search execution uses the pinned canonical URL and selected credentials", async () => {
   const cfg = config({
     providers: {
@@ -397,16 +510,18 @@ test("OpenAI web-search execution uses the pinned canonical URL and selected cre
   const candidate = listOpenAiForwardSidecarCandidates(cfg)[0]!;
   let observedUrl = "";
   let observedHeaders = new Headers();
+  let observedProtocol: string | undefined;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     observedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     observedHeaders = new Headers(init?.headers);
+    observedProtocol = (init as RequestInit & { protocol?: string } | undefined)?.protocol;
     return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
   }) as typeof fetch;
 
   await runOpenAiWebSearch(
     "current docs",
     { type: "web_search" },
-    candidate.provider,
+    { ...candidate.provider, upstreamHttpVersion: "http1.1" },
     new Headers({ authorization: "Bearer selected-token", "chatgpt-account-id": "selected-account" }),
     { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 1_000 },
   );
@@ -414,6 +529,7 @@ test("OpenAI web-search execution uses the pinned canonical URL and selected cre
   expect(observedUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
   expect(observedHeaders.get("authorization")).toBe("Bearer selected-token");
   expect(observedHeaders.get("chatgpt-account-id")).toBe("selected-account");
+  expect(observedProtocol).toBe("http1.1");
 });
 
 async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?: string; data: Record<string, unknown> }[]> {
