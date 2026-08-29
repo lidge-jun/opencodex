@@ -433,6 +433,20 @@ describe("headless GUI parity CLI", () => {
     });
   });
 
+  test("combo set rejects --sticky outside round-robin instead of dropping it", async () => {
+    const runtime = fakeRuntime();
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await handleComboCommand([
+        "set", "demo", "--targets", "a/m1", "--strategy", "random", "--sticky", "5",
+      ], runtime.deps);
+      expect(code).toBe(2);
+      expect(runtime.requests).toEqual([]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test("combo set forwards the explicit native-alias compatibility contract", async () => {
     const runtime = fakeRuntime();
     const code = await handleComboCommand([
@@ -770,6 +784,19 @@ describe("#2566 per-account quota in ocx account list", () => {
   test("a provider without per-account quota is blank, not zero", () => {
     // Blank means "not probed"; 0% would claim the account is fully drained.
     expect(formatAccountTable([row({ provider: "xai" })] as never, true)).toContain("-");
+  });
+
+  test("a Kiro account's monthly allowance renders instead of a bare dash", () => {
+    // Kiro bills a monthly window and reports no shorter one. Without the monthly arm a
+    // healthy account rendered "-", which is the same output as "never probed".
+    expect(formatAccountTable([row({ provider: "kiro", quota: { monthlyPercent: 15 } })] as never, true))
+      .toContain("mo 15%");
+  });
+
+  test("a fractional monthly percentage is rounded for the column", () => {
+    // The column is a glance surface; the exact figure stays in --json.
+    expect(formatAccountTable([row({ provider: "kiro", quota: { monthlyPercent: 14.782 } })] as never, true))
+      .toContain("mo 15%");
   });
 
   test("an account whose probe failed says so instead of reading as empty", () => {

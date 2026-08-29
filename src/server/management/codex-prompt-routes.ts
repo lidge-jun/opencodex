@@ -28,6 +28,7 @@ import {
   MAX_BASE_VARIANTS,
   adoptDeveloperInstructions,
   composeProjection,
+  computePromptProbeStateFingerprint,
   findInvalidCharacter,
   inspectOwnership,
   normalizeBody,
@@ -320,7 +321,12 @@ export async function handleCodexPromptRoutes(ctx: ManagementContext): Promise<R
     // A `cwd` parameter would have let any authenticated request read an arbitrary
     // folder's AGENTS.md through this endpoint.
     const { probePromptText } = await import("../../codex/prompt-text-probe");
-    return jsonResponse(await probePromptText(), 200, req, ctx.config);
+    // A write can complete while an older probe is still running. Admission uses
+    // a prompt-state fingerprint rather than the transaction revision: editing
+    // the selected base variant changes its separate .md file without moving the
+    // optimistic-concurrency revision.
+    const promptStateFingerprint = computePromptProbeStateFingerprint(paths(ctx));
+    return jsonResponse(await probePromptText(15_000, req.signal, promptStateFingerprint), 200, req, ctx.config);
   }
 
   if (url.pathname === "/api/codex-prompt/toggle" && req.method === "PUT") {

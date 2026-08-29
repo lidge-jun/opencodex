@@ -17,7 +17,18 @@ base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
-# ... one [model.ocx-*] table per visible model ...
+extra_headers = { "x-opencodex-grok" = "1" }
+context_window = 272000
+supports_reasoning_effort = true
+reasoning_effort = "low"
+
+[[model.ocx-gpt-5-6-sol.reasoning_efforts]]
+id = "low"
+value = "low"
+label = "Low"
+description = "Quick, fast implementations"
+default = true
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
 # <<< opencodex managed block <<<
 ```
 
@@ -33,6 +44,31 @@ grok models          # lists ocx-* entries alongside native grok models
 grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 # or in the TUI: /model ocx-anthropic-claude-opus-4-8
 ```
+
+## 추론 강도
+
+Grok Build의 `/effort`(및 `--effort`)는 카탈로그 항목이 추론 단계 목록을 제공하는
+모델에서 동작합니다. 모델 목록은 원시 `GET /v1/models` 응답을 읽으며, 항목에는
+`supports_reasoning_effort`와 `reasoning_efforts` 메뉴 선택지가 있어야 합니다. 단계 목록을
+Grok 호환 형태로 투영한 결과가 각 관리형 `[model.*]` 테이블에도
+`supports_reasoning_effort`, 기본
+`reasoning_effort`, `[[model.<alias>.reasoning_efforts]]` 선택 행으로 기록됩니다.
+라우팅 모델의 경우 opencodex는 설정된 공급자 단계(`reasoningEfforts` /
+`modelReasoningEfforts`와 `modelDefaultReasoningEfforts`의 기본값)를 반영합니다. 이
+메타데이터는 프록시에 설정된 라우팅 단계를 설명하며, 어댑터는 추론을 에뮬레이션하거나
+단계를 공급자 전용 필드로 매핑할 수 있습니다. 단계 목록이 비어 있는 모델은 effort
+컨트롤을 표시하지 않습니다. 네이티브 GPT-5.6 항목은 고정된 업스트림 추론 단계를
+유지합니다. 모델이 제공하는 유효한 Grok 단계는 `none`과 `minimal`을 포함해 유지됩니다.
+Codex 전용 `ultra`를 포함해 지원되지 않거나 중복된 단계는 파일에서 제외되어 기록된
+모든 선택지는 실행 가능합니다.
+
+Grok Build는 Chat Completions를 통해 opencodex와 통신하고 단계 목록이 제공되면
+`reasoning_effort`를 보냅니다. 이 경우 Chat Completions 입력 변환기는 내부 Responses의
+`reasoning.summary` 기본값을 `auto`로 설정하므로 추론 트레이스가
+`delta.reasoning_content`로 Grok에 전달됩니다. 모델은 추론하되 트레이스를 반환하지
+않도록 하려는 클라이언트는 `include_reasoning: false`(또는
+`reasoning.summary: "none"`)를 설정할 수 있습니다. 두 값이 함께 있으면 명시적인
+`reasoning.summary`가 우선합니다.
 
 ## 인증 참고
 
@@ -73,5 +109,5 @@ api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 ## 알려진 제한
 
 - **서비스 설치된 `ocx restart`:** 실행 중인 프록시는 재시작 권한 확인과 드레인 조정을 담당하고, 기존 프로세스가 종료된 뒤 설치된 서비스 관리자가 교체 프로세스를 시작합니다. 서비스 감독은 그대로 유지됩니다. 루프백 자동 등록을 사용하는 경우에만 관리 블록도 핸드오프 동안 유지되며, 비루프백 배포에서는 Grok 설정을 수동으로 관리합니다. 같은 포트에서 신원이 확인된 다른 프로세스가 정상 상태가 된 뒤에만 명령이 성공합니다.
-- **설정 읽기 시점:** 가장 예측 가능한 결과를 얻으려면 opencodex를 먼저 시작하고 그다음 `grok`를 실행합니다. Grok Build는 `~/.grok/config.toml`을 감시하다가 `[model]` 테이블이 실제로 바뀔 때 다시 불러옵니다(내용을 기준으로 비교하는 약 1초 디바운스). 그래서 새로 고친 블록은 재시작 없이 열린 세션에도 들어갑니다. Grok가 무엇을 파싱했는지 확인하려면 `grok inspect`를 실행합니다. 이 명령은 로드한 설정 원본을 나열하고 거부한 필드가 있으면 경고합니다. 해석된 모델 목록은 출력하지 않습니다. TOML 오류 하나만으로도 사용자 설정 레이어 전체가 무효가 되므로, opencodex가 파일을 원자적으로 쓰는 이유도 여기에 있습니다. Grok는 절반만 써진 설정을 보지 않습니다.
+- **설정 읽기 시점:** 가장 예측 가능한 결과를 얻으려면 opencodex를 먼저 시작하고 그다음 `grok`를 실행합니다. Grok Build는 `~/.grok/config.toml`을 감시하다가 `[model]` 테이블이 실제로 바뀔 때 다시 불러옵니다(내용을 기준으로 비교하는 약 1초 디바운스). 그래서 새로 고친 블록은 재시작 없이 열린 세션에도 들어갑니다. Grok가 무엇을 파싱했는지 확인하려면 `grok inspect`를 실행합니다. 이 명령은 로드한 설정 원본을 나열하고 거부한 필드가 있으면 경고합니다. 해석된 모델 목록은 출력하지 않습니다. 현재 Grok Build는 잘못된 모델 필드를 경고와 함께 건너뛰고 나머지 모델 항목을 유지합니다. TOML 구문 오류가 있으면 파일을 불러올 수 없습니다. opencodex는 파일을 원자적으로 기록하므로 Grok는 다시 읽을 때마다 완전한 문서를 봅니다.
 - **카탈로그 업데이트:** 펜스 블록은 주입 시점의 카탈로그를 반영합니다. 공급자나 모델을 추가한 뒤에는 `ocx ensure`를 실행하거나 프록시를 재시작해 갱신합니다.

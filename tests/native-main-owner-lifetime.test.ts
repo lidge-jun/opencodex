@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { watchdogMs } from "./helpers/ci-watchdog";
 
 import { saveConfig } from "../src/config";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
@@ -131,7 +132,20 @@ function fixture(configName = "opencodex", includePool = true): Fixture {
   return { root, codexHome, configDir, key, manager };
 }
 
-async function waitUntil<T>(probe: () => T | null, timeoutMs = 10_000): Promise<T> {
+// Each wait bounds a real child proxy doing real work: spawning Bun, opening the
+// owner SQLite database, and acquiring or releasing the lease. On the Windows
+// shards four Bun pools share one runner, so the fixed 10s bounds were reporting
+// contention. `watchdogMs` is the repository's existing answer to exactly this.
+const OWNER_EVENT_WAIT_MS = watchdogMs(10_000);
+
+// The lease cases perform several of those waits back to back. The multi-server
+// case spawns two children and walks four ownership transitions, and it was
+// CANCELLED at 30,172ms against a flat 30s budget -- the budget expired mid-test,
+// so no assertion ever reported. Derive it from the deadline so the two cannot
+// drift apart again.
+const OWNER_LEASE_BUDGET_MS = Math.max(30_000, OWNER_EVENT_WAIT_MS * 4);
+
+async function waitUntil<T>(probe: () => T | null, timeoutMs = OWNER_EVENT_WAIT_MS): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = probe();
@@ -191,7 +205,7 @@ class ChildHarness {
     })();
   }
 
-  async waitFor(predicate: (event: Event) => boolean, timeoutMs = 10_000): Promise<Event> {
+  async waitFor(predicate: (event: Event) => boolean, timeoutMs = OWNER_EVENT_WAIT_MS): Promise<Event> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const found = this.events.find(predicate);
@@ -213,7 +227,7 @@ class ChildHarness {
     return this.waitFor(event => event.event === "reply" && event.id === id);
   }
 
-  async snapshot(predicate: (event: Event) => boolean, timeoutMs = 10_000): Promise<Event> {
+  async snapshot(predicate: (event: Event) => boolean, timeoutMs = OWNER_EVENT_WAIT_MS): Promise<Event> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const event = await this.command("snapshot");
@@ -227,7 +241,7 @@ class ChildHarness {
     if (this.child.exitCode !== null) return null;
     const reply = await this.command("stop");
     expect(reply.ok).toBe(true);
-    const exit = await Promise.race([this.child.exited, Bun.sleep(10_000).then(() => null)]);
+    const exit = await Promise.race([this.child.exited, Bun.sleep(OWNER_EVENT_WAIT_MS).then(() => null)]);
     if (exit === null) throw new Error("child did not stop");
     if (exit !== 0) throw new Error(await this.stderr);
     return reply;
@@ -419,7 +433,7 @@ describe("native-main process owner lease", () => {
       if (second) await second.stop().catch(() => second!.hardKill());
       if (support) await support.stop().catch(() => support!.hardKill());
     }
-  }, 30_000);
+  }, OWNER_LEASE_BUDGET_MS);
 
   test("a hard-killed owner releases the OS lease and the successor recovers before opening main", async () => {
     const f = fixture("crash-a", false);
@@ -463,7 +477,7 @@ describe("native-main process owner lease", () => {
       await owner.stop().catch(() => owner.hardKill());
       if (successor) await successor.stop().catch(() => successor!.hardKill());
     }
-  }, 30_000);
+  }, OWNER_LEASE_BUDGET_MS);
 
   test("a successor scrubs a hard-killed production auth write before recovery or main admission", async () => {
     const f = fixture("temp-crash", false);
@@ -544,7 +558,7 @@ describe("native-main process owner lease", () => {
     } finally {
       await child.stop().catch(() => child.hardKill());
     }
-  }, 30_000);
+  }, OWNER_LEASE_BUDGET_MS);
 
   test("same-process server references retain ownership until the last server stops", async () => {
     const f = fixture("refs-a");
@@ -573,5 +587,5 @@ describe("native-main process owner lease", () => {
       await owner.stop().catch(() => owner.hardKill());
       if (contender) await contender.stop().catch(() => contender!.hardKill());
     }
-  }, 30_000);
+  }, OWNER_LEASE_BUDGET_MS);
 });

@@ -323,7 +323,7 @@ function inspectLaunchd(deps: Required<Pick<ProbeDeps, "run" | "uid" | "home">>)
   };
 }
 
-function systemdProperty(out: string, key: string): string | null {
+export function systemdProperty(out: string, key: string): string | null {
   for (const line of out.split("\n")) {
     const match = line.match(new RegExp(`^${key}=(.*)$`));
     if (match) return match[1].trim();

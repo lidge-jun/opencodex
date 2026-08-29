@@ -35,6 +35,7 @@ import {
   startServer,
 } from "../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../src/server/request-log";
+import { readUsageEntries } from "../src/usage/log";
 import { handleManagementAPI } from "../src/server/management-api";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
@@ -167,6 +168,7 @@ type PoolRetryHarness = {
     model?: string;
     path?: "/v1/responses" | "/v1/responses/compact";
     callerBearer?: boolean;
+    headers?: Record<string, string>;
     extraBody?: Record<string, unknown>;
   }) => Promise<Response>;
   restoreFetch: () => void;
@@ -314,12 +316,14 @@ async function startPoolRetryHarness(
       model = POOL_RETRY_MODEL,
       path = "/v1/responses",
       callerBearer = true,
+      headers = {},
       extraBody = {},
     } = {}) => originalGlobalFetch(new URL(path, server.url), {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
+        ...headers,
       },
       body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream, ...extraBody }),
       signal,
@@ -346,6 +350,172 @@ async function expectOriginal400(response: Response, body: string): Promise<void
   expect(response.headers.get("x-pool-retry-test")).toBe("original");
   expect(await response.text()).toBe(body);
 }
+
+describe("Responses request identity handoff", () => {
+  test("returns the generated request id and overwrites an upstream value", async () => {
+    const harness = await startPoolRetryHarness(() => Response.json({
+      id: "resp_request_identity",
+      object: "response",
+      status: "completed",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    }, {
+      headers: { "x-opencodex-request-id": "upstream-spoofed-value" },
+    }), { secondAccount: false });
+    try {
+      const response = await harness.request({
+        headers: { "x-opencodex-request-id": "caller-injected-value" },
+      });
+      const requestId = response.headers.get("x-opencodex-request-id");
+      expect(requestId).toMatch(/^ocx-[a-f0-9]{32}$/);
+      expect(requestId).not.toBe("upstream-spoofed-value");
+      expect(requestId).not.toBe("caller-injected-value");
+      await response.text();
+      expect(getRequestLogEntries().filter(entry => entry.requestId === requestId)).toHaveLength(1);
+      expect(readUsageEntries().filter(entry => entry.requestId === requestId)).toHaveLength(1);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
+  test("names the request id in Access-Control-Expose-Headers so browser JS can read it", async () => {
+    const harness = await startPoolRetryHarness(() => Response.json({
+      id: "resp_request_identity_expose",
+      object: "response",
+      status: "completed",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    }), { secondAccount: false });
+    try {
+      const response = await harness.request();
+      const requestId = response.headers.get("x-opencodex-request-id");
+      expect(requestId).toMatch(/^ocx-[a-f0-9]{32}$/);
+
+      // The header being present above is not enough: cross-origin JavaScript may read only
+      // the CORS-safelisted response headers plus whatever the expose-list names, so without
+      // this the id ships on every response and no browser caller can ever see it.
+      const exposed = (response.headers.get("Access-Control-Expose-Headers") ?? "")
+        .split(",")
+        .map(name => name.trim().toLowerCase());
+      expect(exposed).toContain("x-opencodex-request-id");
+      await response.text();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
+  test("binds the same generated request id on a streaming terminal", async () => {
+    let releaseTerminal!: () => void;
+    let terminalReleased = false;
+    const terminalGate = new Promise<void>(resolve => {
+      releaseTerminal = () => {
+        terminalReleased = true;
+        resolve();
+      };
+    });
+    const createdPayload = JSON.stringify({
+      type: "response.created",
+      response: { id: "resp_request_identity_sse", object: "response", status: "in_progress", output: [] },
+    });
+    const completedPayload = JSON.stringify({
+      type: "response.completed",
+      response: {
+        id: "resp_request_identity_sse",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      },
+    });
+    const encoder = new TextEncoder();
+    const harness = await startPoolRetryHarness(() => new Response(
+      new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(encoder.encode(`event: response.created\ndata: ${createdPayload}\n\n`));
+          await terminalGate;
+          controller.enqueue(encoder.encode(`event: response.completed\ndata: ${completedPayload}\n\n`));
+          controller.close();
+        },
+      }),
+      { headers: { "content-type": "text/event-stream", "x-opencodex-request-id": "upstream-spoofed-value" } },
+    ), { secondAccount: false });
+    try {
+      const response = await harness.request({ stream: true });
+      const requestId = response.headers.get("x-opencodex-request-id");
+      expect(requestId).toMatch(/^ocx-[a-f0-9]{32}$/);
+      expect(requestId).not.toBe("upstream-spoofed-value");
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toContain("response.created");
+      expect(terminalReleased).toBe(false);
+      releaseTerminal();
+      while (!(await reader.read()).done) { /* drain */ }
+      expect(getRequestLogEntries().filter(entry => entry.requestId === requestId)).toHaveLength(1);
+      expect(readUsageEntries().filter(entry => entry.requestId === requestId)).toHaveLength(1);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
+  test("binds the same generated request id on an upstream error", async () => {
+    const harness = await startPoolRetryHarness(() => Response.json(
+      { error: { type: "upstream_error", message: "bounded test error" } },
+      {
+        status: 503,
+        headers: { "x-opencodex-request-id": "upstream-spoofed-value" },
+      },
+    ), { secondAccount: false });
+    try {
+      const response = await harness.request();
+      const requestId = response.headers.get("x-opencodex-request-id");
+      expect(requestId).toMatch(/^ocx-[a-f0-9]{32}$/);
+      expect(requestId).not.toBe("upstream-spoofed-value");
+      await response.text();
+      expect(getRequestLogEntries().filter(entry => entry.requestId === requestId)).toHaveLength(1);
+      expect(readUsageEntries().filter(entry => entry.requestId === requestId)).toHaveLength(1);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
+  test("does not issue a request id before authentication and origin admission", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+    clearRequestLogsForTests();
+    saveConfig({ ...config("0.0.0.0"), port: 0 });
+
+    const server = startServer(0);
+    const url = `http://127.0.0.1:${server.port}/v1/responses`;
+    const body = JSON.stringify({ model: "gpt-test", input: "hello" });
+    try {
+      const missingAuth = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      expect(missingAuth.status).toBe(401);
+      expect(missingAuth.headers.get("x-opencodex-request-id")).toBeNull();
+
+      const rejectedOrigin = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-opencodex-api-key": "local-secret",
+          origin: "https://attacker.test",
+        },
+        body,
+      });
+      expect(rejectedOrigin.status).toBe(403);
+      expect(rejectedOrigin.headers.get("x-opencodex-request-id")).toBeNull();
+      expect(getRequestLogEntries()).toHaveLength(0);
+      expect(readUsageEntries()).toHaveLength(0);
+    } finally {
+      await server.stop(true);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+});
 
 describe("server local API auth", () => {
   test("responses timeout helper disables Bun request timeout when available", () => {

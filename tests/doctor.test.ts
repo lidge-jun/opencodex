@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import {
@@ -656,6 +657,43 @@ describe("service memory section (#314 WP4)", () => {
     const conflict = proxyDownRestartHint({ proxyRunning: false, port: 10100, serviceViable: false, serviceInstalled: true, serviceConflict: true });
     expect(conflict).toContain("ocx service install");
   });
+
+  // #1419: the records outliving the process is the only signal the user gets that a
+  // proxy died rather than never started. Cause-neutral by design — SIGKILL, power
+  // loss and a native trap leave identical evidence.
+  test("an unclean prior exit is named before the restart path", () => {
+    const crashed = proxyDownRestartHint({
+      proxyRunning: false,
+      port: 10100,
+      serviceViable: false,
+      serviceInstalled: false,
+      staleProcessState: true,
+    });
+    expect(crashed).toContain("may have exited unexpectedly");
+    expect(crashed).toContain("ocx service install");
+
+    // Absent or false must not invent a crash for a proxy that was never started.
+    const neverStarted = proxyDownRestartHint({
+      proxyRunning: false,
+      port: 10100,
+      serviceViable: false,
+      serviceInstalled: false,
+      staleProcessState: false,
+    });
+    expect(neverStarted).not.toContain("may have exited unexpectedly");
+  });
+
+  test("the unclean-exit wording never asserts a cause", () => {
+    const hint = proxyDownRestartHint({
+      proxyRunning: false,
+      port: 10100,
+      serviceViable: false,
+      staleProcessState: true,
+    }) ?? "";
+    for (const forbidden of ["SIGTRAP", "SIGKILL", "Bun", "crash", "detached"]) {
+      expect(hint).not.toContain(forbidden);
+    }
+  });
 });
 
 describe("doctor abandoned response-state temps", () => {
@@ -791,5 +829,69 @@ describe("doctor reclaim wiring (end to end)", () => {
     await runDoctor(["--reclaim-response-temp"]);
     expect(existsSync(path)).toBe(true);
     expect(logged.join("\n")).toContain("Unrecognized flag");
+  });
+});
+
+/**
+ * The wiring test, and the reason a helper-only assertion was rejected during plan
+ * review: `proxyDownRestartHint` can accept `staleProcessState` and stay green while
+ * `runDoctor` never passes it, leaving real `ocx doctor` output unchanged. This drives
+ * the actual command against a home holding a dead owner record.
+ */
+describe("doctor reports an unclean prior proxy exit", () => {
+  let tempHome: string;
+  let previousHome: string | undefined;
+  let logged: string[];
+  const realLog = console.log;
+
+  beforeEach(() => {
+    tempHome = mkdtempSync(join(tmpdir(), "ocx-doctor-unclean-"));
+    previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = tempHome;
+    logged = [];
+    console.log = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+  });
+
+  afterEach(() => {
+    console.log = realLog;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  /**
+   * A pid that is certainly dead: spawn a process, wait for it to exit, then reuse its
+   * number. A hardcoded constant can belong to an unrelated live process on a busy
+   * machine, which would silently invert this fixture.
+   */
+  const deadPid = (): number => {
+    const spawned = spawnSync(process.execPath, ["-e", ""], { encoding: "utf8" });
+    const pid = spawned.pid;
+    return typeof pid === "number" && pid > 0 ? pid : (process.pid === 4242 ? 4243 : 4242);
+  };
+
+  // Port 9 is the discard port: nothing listens, so the health probe is refused rather
+  // than timing out, which is what the predicate requires.
+  const seedConfig = (): void => {
+    writeFileSync(join(tempHome, "config.json"), JSON.stringify({ port: 9, codexAutoStart: false }), "utf8");
+  };
+
+  test("a dead owner record surfaces the unclean-exit diagnosis", async () => {
+    seedConfig();
+    const pid = deadPid();
+    writeFileSync(join(tempHome, "ocx.pid"), String(pid), "utf8");
+    writeFileSync(join(tempHome, "runtime-port.json"), JSON.stringify({ pid, port: 9, hostname: "127.0.0.1" }), "utf8");
+
+    await runDoctor([]);
+
+    expect(logged.join("\n")).toContain("may have exited unexpectedly");
+  });
+
+  test("a clean home never claims a prior crash", async () => {
+    seedConfig();
+
+    await runDoctor([]);
+
+    expect(logged.join("\n")).not.toContain("may have exited unexpectedly");
   });
 });

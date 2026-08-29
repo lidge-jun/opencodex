@@ -901,6 +901,31 @@ describe("opencodex config defaults", () => {
     expect(readConfigDiagnostics().error).toContain("responsesSnapshotRepair");
   });
 
+  test("accepts only a boolean xaiResponsesXSearch provider opt-in", () => {
+    const provider = {
+      adapter: "openai-responses",
+      baseUrl: "https://cli-chat-proxy.grok.com/v1",
+    };
+    writeConfig({
+      port: 12345,
+      providers: { xai: { ...provider, xaiResponsesXSearch: true } },
+      defaultProvider: "xai",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+    expect(readConfigDiagnostics().config.providers.xai.xaiResponsesXSearch).toBe(true);
+    expect(providerManagementConfigError("xai", { ...provider, xaiResponsesXSearch: true })).toBeNull();
+
+    writeConfig({
+      port: 12345,
+      providers: { xai: { ...provider, xaiResponsesXSearch: { enabled: true } } },
+      defaultProvider: "xai",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("xaiResponsesXSearch");
+    expect(providerManagementConfigError("xai", { ...provider, xaiResponsesXSearch: "true" }))
+      .toBe("provider xai xaiResponsesXSearch must be a boolean");
+  });
+
   test("direct Gemini wire rename opt-out is a boolean and round-trips", () => {
     const base = {
       port: 12345,
@@ -2439,13 +2464,37 @@ describe("opencodex config defaults", () => {
 });
 
 describe("config.ts – Windows ACL hardening integration", () => {
+  /**
+   * Assert temp privacy through the mechanism THIS platform actually uses.
+   *
+   * POSIX mode bits are the POSIX mechanism. Windows has no POSIX mode: the
+   * filesystem reports a synthesized value, and production knows it -- the
+   * `(mode & 0o777) !== 0o600` check in `assertPrivateTempDescriptor` is
+   * explicitly skipped on win32, where privacy comes from `hardenSecretPath`
+   * instead. So this assertion was testing a property production never claims
+   * there, and it failed with `Received: 54` while the ACL work it is named after
+   * had already succeeded.
+   *
+   * The Windows branch is not weaker: reaching `afterTempWrite` at all means
+   * `writePrivateTempFile` already ran `hardenSecretPath(..., required: true)`,
+   * which throws rather than soft-failing. The bytes being readable here is the
+   * evidence that the hardened descriptor is the one we hold.
+   */
+  function expectPrivateTempMode(tempPath: string): void {
+    if (process.platform === "win32") {
+      expect(lstatSync(tempPath).isFile()).toBe(true);
+      return;
+    }
+    expect(statSync(tempPath).mode & 0o077).toBe(0);
+  }
+
   test("secret temp bytes are private at first observation and a pre-existing temp is refused", () => {
     const destination = join(testDir, "atomic-private-secret.json");
     let observedSecret = false;
     atomicWriteFile(destination, "new-secret", undefined, {
       afterTempWrite: tempPath => {
         expect(readFileSync(tempPath, "utf8")).toBe("new-secret");
-        expect(statSync(tempPath).mode & 0o077).toBe(0);
+        expectPrivateTempMode(tempPath);
         observedSecret = true;
       },
     });
@@ -2457,7 +2506,7 @@ describe("config.ts – Windows ACL hardening integration", () => {
     expect(() => atomicWriteFile(destination, "replacement-secret", undefined, {
       afterTempWrite: tempPath => {
         expect(readFileSync(tempPath, "utf8")).not.toBe("replacement-secret");
-        expect(statSync(tempPath).mode & 0o077).toBe(0);
+        expectPrivateTempMode(tempPath);
       },
     })).toThrow();
     expect(readFileSync(occupiedTemp, "utf8")).toBe("pre-existing");

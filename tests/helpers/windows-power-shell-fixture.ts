@@ -8,6 +8,62 @@ export interface WindowsPowerShellFixture {
 }
 
 /**
+ * Run the fixture the way production runs PowerShell and return what happened.
+ *
+ * The collector under test swallows an enumeration error into `state: "unknown"`
+ * with no processes, so a fixture that cannot execute is indistinguishable from
+ * a machine with no Codex process running. That ambiguity is what made the two
+ * #1852 cases read as behavioural failures on the Windows leg. Asserting this
+ * first turns "the fixture is broken" into its own named, self-describing
+ * failure.
+ */
+export async function probeWindowsPowerShellFixture(
+  fixture: WindowsPowerShellFixture,
+  timeoutMs = 5_000,
+): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const child = Bun.spawn([fixture.executable, "-NoProfile", "-NoLogo", "-NonInteractive", "-Command", "probe"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdoutPromise = new Response(child.stdout).text();
+    const stderrPromise = new Response(child.stderr).text();
+    const completed = await Promise.race([
+      Promise.all([stdoutPromise, stderrPromise, child.exited])
+        .then(([stdout, stderr, exitCode]) => ({ stdout, stderr, exitCode })),
+      Bun.sleep(timeoutMs).then(() => null),
+    ]);
+    if (!completed) {
+      try { child.kill(); } catch { /* already exited */ }
+      let reaped = await Promise.race([
+        child.exited.then(() => true, () => true),
+        Bun.sleep(500).then(() => false),
+      ]);
+      if (!reaped) {
+        try { child.kill(9); } catch { /* already exited */ }
+        reaped = await Promise.race([
+          child.exited.then(() => true, () => true),
+          Bun.sleep(500).then(() => false),
+        ]);
+      }
+      void stdoutPromise.catch(() => {});
+      void stderrPromise.catch(() => {});
+      return { ok: false, detail: `timed out after ${timeoutMs}ms; reaped=${reaped}` };
+    }
+    const { stdout, stderr, exitCode } = completed;
+    if (exitCode === 0 && stdout.includes("codex app-server")) {
+      return { ok: true, detail: `exit=0 stdout=${JSON.stringify(stdout)}` };
+    }
+    return {
+      ok: false,
+      detail: `exit=${exitCode} stdout=${JSON.stringify(stdout)} stderr=${JSON.stringify(stderr.slice(0, 400))}`,
+    };
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? `${error.name}: ${error.message}` : String(error) };
+  }
+}
+
+/**
  * Build a real Windows executable for tests that exercise the default execFile path.
  *
  * A .cmd file is not a CreateProcess target, so Node/Bun's shell-free execFile rejects

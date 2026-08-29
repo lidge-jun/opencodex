@@ -15,7 +15,9 @@ bun install
 bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
 bun run typecheck    # bun x tsc --noEmit
-bun run test         # bun test ./tests/
+bun run test:changed              # routine import-graph test selection
+bun test tests/router.test.ts     # routine focused test
+bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
 `bun run dev` reste un alias pour `bun run dev:proxy`. Le serveur de développement du tableau de bord est `bun run dev:gui` ;
@@ -28,7 +30,8 @@ distincte. Utilisez les scripts enregistrés afin que les commandes locales corr
 
 ```bash
 bun run typecheck                 # strict TypeScript check
-bun run test                      # complete tests/ suite
+bun run test:changed              # import-graph tests against the resolved dev merge base
+bun run test                      # complete tests/ suite (PR-ready / explicit ask)
 bun test tests/router.test.ts     # focused test file
 bun run build:gui                 # Vite GUI build + package preparation
 bun run privacy:scan              # credential/privacy scan used by CI

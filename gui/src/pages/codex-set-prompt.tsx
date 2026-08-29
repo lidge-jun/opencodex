@@ -426,10 +426,16 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
     // DECIDE with, and a prompt-budget page that hides which layer costs 15 KB is
     // asking them to guess.
     if (layerText !== null) return;
+    const controller = new AbortController();
+    // Two mechanisms, two jobs. The controller aborts the in-flight request so the server can
+    // cancel the probe child it spawned for us; the flag is what guards `setState` after an
+    // await. `signal.aborted` would read the same at runtime, but the lint rule that catches
+    // post-await state updates does not follow it, and losing that check on this effect is a
+    // worse trade than carrying one extra variable.
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch(apiBase + "/api/codex-prompt/text");
+        const res = await fetch(apiBase + "/api/codex-prompt/text", { signal: controller.signal });
         // Status first. A 500 body still parses as JSON, and `{}` deserialized
         // into this shape reads as a probe that succeeded and found no layers -
         // so every row would silently lose its byte count and every dialog would
@@ -441,11 +447,12 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
         const body = await res.json() as { ok: boolean; layers?: Record<string, { text: string | null; reason: string; bytes: number }> };
         if (!cancelled) setLayerText(body);
       } catch {
-        // A failed probe is a missing body, not a broken page.
+        // A failed probe is a missing body, not a broken page. An abort lands here too, and the
+        // flag is what keeps it from writing state into an unmounted panel.
         if (!cancelled) setLayerText({ ok: false });
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [layerText, apiBase]);
 
   return (

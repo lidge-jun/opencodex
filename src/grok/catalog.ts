@@ -2,8 +2,10 @@ import { comboPublicModelId } from "../combos";
 import {
   filterCatalogVisibleModels,
   nativeContextLimits,
+  nativeDefaultReasoningEffort,
   nativeOpenAiContextWindow,
   nativeOpenAiSlugs,
+  nativeReasoningEfforts,
   visibleNativeSlugs,
   type CatalogModel,
 } from "../codex/catalog";
@@ -44,12 +46,26 @@ export function projectGrokCatalog(
     models: [
       ...visibleNativeSlugs(config).map(id => {
         const contextWindow = nativeOpenAiContextWindow(id, limits);
-        return { id, ...(contextWindow !== undefined ? { contextWindow } : {}) };
+        const reasoningEfforts = nativeReasoningEfforts(id);
+        const defaultReasoningEffort = nativeDefaultReasoningEffort(id);
+        return {
+          id,
+          ...(contextWindow !== undefined ? { contextWindow } : {}),
+          ...(reasoningEfforts.length > 0 ? { reasoningEfforts } : {}),
+          ...(defaultReasoningEffort !== undefined ? { defaultReasoningEffort } : {}),
+        };
       }),
-      ...routed.map(model => ({
-        id: model.alias ?? `${model.provider}/${model.id}`,
-        ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
-      })),
+      ...routed.map(model => {
+        const efforts = model.reasoningEfforts ?? [];
+        return {
+          id: model.alias ?? `${model.provider}/${model.id}`,
+          ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+          ...(efforts.length > 0 ? { reasoningEfforts: efforts } : {}),
+          ...(model.defaultReasoningEffort !== undefined
+            ? { defaultReasoningEffort: model.defaultReasoningEffort }
+            : {}),
+        };
+      }),
     ],
   };
 }

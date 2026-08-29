@@ -21,7 +21,18 @@ base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
-# ... one [model.ocx-*] table per visible model ...
+extra_headers = { "x-opencodex-grok" = "1" }
+context_window = 272000
+supports_reasoning_effort = true
+reasoning_effort = "low"
+
+[[model.ocx-gpt-5-6-sol.reasoning_efforts]]
+id = "low"
+value = "low"
+label = "Low"
+description = "Quick, fast implementations"
+default = true
+# ... autres niveaux de ce modèle, puis une table [model.ocx-*] par modèle visible ...
 # <<< opencodex managed block <<<
 ```
 
@@ -33,7 +44,7 @@ name = "OCX gpt-5.6-sol"
 - **Supprimé à l’arrêt :** `ocx stop`, `ocx eject`, `ocx uninstall` et l’arrêt normal
   du démon hors service suppriment le bloc délimité et restaurent votre fichier
   octet pour octet. Sous un gestionnaire de service, le démontage passe par `ocx stop`/`ocx
-  uninstall` (les processus en mode service maintiennent intentionnellement le blocage lors des réapparitions).
+  uninstall` (les processus en mode service conservent intentionnellement le bloc lors des relancements).
 - **Les alias en conflit** déjà définis dans vos propres tables `[model.*]` sont respectés
   (opencodex ajoute un suffixe à ses propres entrées) ; un bloc délimité endommagé (marqueur de début sans marqueur de fin)
   refuse tout changement automatique et demande une réparation manuelle.
@@ -51,15 +62,20 @@ grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 Les commandes `/effort` et `--effort` de Grok Build ne fonctionnent que pour les modèles dont l’entrée de catalogue
 annonce une échelle d’effort : la récupération de la liste des modèles lit la réponse brute de `GET /v1/models`, et
 les entrées doivent contenir `supports_reasoning_effort` ainsi que les choix du menu
-`reasoning_efforts`. Pour les entrées de modèles routés, opencodex reflète les niveaux configurés pour le fournisseur
+`reasoning_efforts`. Une projection compatible avec Grok de cette échelle est également écrite dans chaque table
+`[model.*]` gérée, avec `supports_reasoning_effort`, la valeur par défaut `reasoning_effort` et les lignes
+`[[model.<alias>.reasoning_efforts]]`, afin que le menu soit présent lorsque Grok lit le modèle depuis
+`config.toml`. Pour les entrées de modèles routés, opencodex reflète les niveaux configurés pour le fournisseur
 (`reasoningEfforts` / `modelReasoningEfforts`, et la valeur par défaut de
-`modelDefaultReasoningEfforts`) dans cette réponse. Ces métadonnées décrivent l’échelle des modèles routés
-configurée dans le proxy ; elles ne prétendent pas que le fournisseur prend nativement en charge ces niveaux.
+`modelDefaultReasoningEfforts`). Ces métadonnées décrivent l’échelle des modèles routés configurée dans le proxy ;
+elles ne prétendent pas que le fournisseur prend nativement en charge ces niveaux.
 Les adaptateurs peuvent émuler le raisonnement ou mapper les niveaux sur des champs propres au fournisseur.
 Les modèles routés qui possèdent une échelle configurée affichent le contrôle de l’effort dans Grok Build comme
 dans Codex. Ceux dont la liste de niveaux est vide n’affichent aucun contrôle d’effort, conformément au comportement
 de Codex. Les entrées GPT-5.6 natives sont distinctes : elles conservent et exposent leurs échelles de raisonnement
-en amont fixes, et non les métadonnées configurées pour les modèles routés.
+en amont fixes, et non les métadonnées configurées pour les modèles routés. Les niveaux Grok valides, notamment
+`none` et `minimal`, sont conservés lorsqu’ils sont annoncés. Les niveaux non pris en charge ou en double,
+notamment `ultra`, propre à Codex, sont omis du fichier afin que chaque option générée reste sélectionnable.
 
 Grok Build communique avec opencodex au moyen de Chat Completions et envoie `reasoning_effort` lorsque
 l’échelle est annoncée. Dans ce cas, le traducteur Chat Completions entrant définit par défaut le champ Responses
@@ -74,26 +90,25 @@ Grok Build exige une clé API non vide pour les modèles personnalisés, même s
 injectées contiennent une valeur fictive (`opencodex-loopback`) ; opencodex ignore les clés d’admission pour les
 connexions de bouclage, de sorte qu’aucun véritable secret n’est utilisé.
 
-**L’enregistrement automatique est réservé au bouclage.** Lorsque opencodex se lie à un hôte hors bouclage, y compris
-les caractères génériques `0.0.0.0` et `::`, qui exposent chaque interface — les requêtes ont besoin de votre réel
-jeton d’admission, et un bloc géré ne peut pas en transporter un en toute sécurité. Écrire le jeton littéral
-mettez votre secret dans `~/.grok/config.toml` et écrasez tout ce que vous y avez défini lors du prochain
-`ocx start`/`ensure`/`restart`. Donc opencodex n’écrit rien du tout dans ce cas (et supprime
-tout bloc restant d'une liaison de bouclage précédente), et vous configurez les modèles vous-même
-en dehors des marqueurs gérés, où rien de ce que opencodex fait ne peut les écraser. Voir
-[Recette manuelle](#recette-manuelle-sans-enregistrement-automatique) pour le tableau exact et réglez les deux
-`base_url` (un hôte réellement accessible à partir de l'endroit où vous exécutez `grok`) et `api_key`
-(votre `OPENCODEX_API_AUTH_TOKEN`).
+**L’enregistrement automatique est réservé au bouclage.** Lorsque opencodex écoute sur une adresse qui n’est pas
+de bouclage — y compris les caractères génériques `0.0.0.0` et `::`, qui exposent toutes les interfaces — les
+requêtes doivent présenter votre véritable jeton d’admission, qu’un bloc géré ne peut pas transporter en toute
+sécurité. Inscrire ce jeton en clair stockerait votre secret dans `~/.grok/config.toml` et écraserait toute valeur
+que vous y auriez définie lors du prochain `ocx start`/`ensure`/`restart`. Dans ce cas, opencodex n’écrit donc rien
+(et supprime tout bloc laissé par une ancienne liaison de bouclage) ; vous configurez vous-même les modèles en
+dehors des marqueurs gérés, où aucune opération opencodex ne peut les écraser. Consultez la
+[recette manuelle](#recette-manuelle-sans-enregistrement-automatique) pour obtenir la table exacte, puis définissez
+`base_url` (une adresse réellement accessible depuis l’endroit où vous exécutez `grok`) et `api_key` (votre
+`OPENCODEX_API_AUTH_TOKEN`).
 
-Ne remplacez pas `api_key` par `env_key` ici. Sans `model_provider` défini, un `env_key`
-qui ne parvient pas à résoudre n'arrête pas la demande — Grok passe à votre xAI session
-et l'envoie à n'importe quel `base_url` nom d'entrée, ce qui pour un LAN déploiement est un
-texte en clair HTTP point de terminaison qui n'est pas xAI.
+Ne remplacez pas `api_key` par `env_key` ici. En l’absence de `model_provider`, un `env_key` qui ne peut pas être
+résolu n’interrompt pas la requête : Grok utilise alors votre jeton de session xAI et l’envoie à l’adresse
+`base_url` indiquée par l’entrée. Pour un déploiement sur le réseau local, cette adresse est un point de terminaison
+HTTP en clair qui n’appartient pas à xAI.
 
-Le modèle injecté `api_key` se trouve en premier dans la chaîne d'informations d'identification de Grok pour ces modèles,
-donc les tours contre opencodex n'ont pas besoin de connexion Grok supplémentaire. Gardez votre `grok login` /
-`XAI_API_KEY` configuration pour les modèles Grok natifs et toutes les fonctionnalités de harnais qui contactent xAI
-directement.
+La valeur `api_key` injectée pour chaque modèle se trouve en tête de la chaîne d’identifiants de Grok. Les requêtes
+adressées à opencodex ne nécessitent donc aucune connexion Grok supplémentaire. Conservez votre configuration
+habituelle `grok login` / `XAI_API_KEY` pour les modèles Grok natifs et les fonctions qui contactent directement xAI.
 
 ## Recette manuelle (sans enregistrement automatique)
 
@@ -139,9 +154,10 @@ l'identifiant `grok-4.5`. Les alias générés évitent entièrement les points 
   prévisibles. Grok Build surveille `~/.grok/config.toml` et recharge la configuration lorsque la table
   `[model]` change réellement (temporisation d’environ une seconde, avec comparaison du contenu) ;
   un bloc actualisé atteint une session ouverte sans redémarrage. Pour confirmer ce que Grok a analysé,
-  run `grok inspect` : il répertorie les sources de configuration qu'il a chargées et avertit de tout champ qu'il a chargé
-  rejeté. Il n'imprime pas la liste des modèles résolus. Notez qu’une seule erreur TOML
-  invalide *l'intégralité* de la couche de configuration utilisateur, c'est pourquoi opencodex écrit le fichier
-  atomiquement - Grok ne voit jamais une configuration à moitié écrite.
+  exécutez `grok inspect` : il répertorie les sources de configuration chargées et signale les champs
+  rejetés. Il n'affiche pas la liste des modèles résolus. La version actuelle de Grok Build signale et
+  ignore les champs de modèle invalides tout en conservant le reste de l'entrée. Une erreur de syntaxe
+  TOML empêche toujours le chargement du fichier. opencodex écrit de manière atomique, de sorte que
+  Grok observe un document complet à chaque rechargement.
 - **Mises à jour du catalogue :** le bloc délimité reflète le catalogue au moment de l’injection. Après
   l’ajout de fournisseurs ou de modèles, exécutez `ocx ensure` (ou redémarrez le proxy) pour l’actualiser.

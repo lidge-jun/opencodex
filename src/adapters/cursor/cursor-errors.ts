@@ -71,6 +71,50 @@ export class CursorUnexpectedCancelError extends Error {
   }
 }
 
+/**
+ * The assembled root-blob envelope exceeded what Cursor's external workers accept.
+ *
+ * Raised locally, BEFORE the request is sent. Cursor rejects an oversized replay set with a late
+ * `invalid_argument` only after hydrating every blob, so the upstream failure arrives with no
+ * usable measurement — that is why this carries the counts it measured. Never retryable: replaying
+ * the same over-envelope request reproduces it exactly.
+ *
+ * The measurement is taken on the FINAL root set, after checkpoint and suffix assembly. Bounding
+ * an intermediate set is what let 192 checkpoint roots plus a two-root suffix emit 194 (#1527).
+ */
+export class CursorRootEnvelopeLimitError extends Error {
+  public readonly code = "cursor_root_envelope_limit";
+  public readonly status = 400;
+
+  constructor(
+    public readonly rootCount: number,
+    public readonly rootBytes: number,
+    public readonly maxRootCount: number,
+    public readonly maxRootBytes: number,
+  ) {
+    super(
+      // No "Cursor invalid request:" prefix here: `safeCursorErrorMessage` adds it for
+      // invalid-argument classes, and carrying it in the message produced it twice.
+      "the assembled conversation exceeds the replay envelope "
+      + `(${rootCount} root blobs / ${rootBytes} bytes against a limit of ${maxRootCount} / ${maxRootBytes}). `
+      + "Start a new conversation or reduce the pending tool output.",
+    );
+    this.name = "CursorRootEnvelopeLimitError";
+  }
+}
+
+/**
+ * The envelope failure is local and deterministic; a retry cannot change the outcome.
+ *
+ * A companion `CursorRootMeasurementError` was drafted for the case where a root blob's size
+ * cannot be read, then deleted: an unmeasurable root is legitimate (a resumed conversation
+ * references ids Cursor minted and this process never stored), so the guard counts it instead of
+ * failing. There is no reachable second case, and an unreachable error class cannot be tested.
+ */
+export function isCursorRootEnvelopeError(value: unknown): boolean {
+  return value instanceof CursorRootEnvelopeLimitError;
+}
+
 export function isCursorBenignCancelError(value: unknown): boolean {
   // An unexpected cancel is never benign, however it is spelled. This class is raised only when
   // the transport knows WE did not request the cancel, so its provenance outranks the code match

@@ -436,17 +436,25 @@ export interface OcxConfig {
   * commit messages, skill orchestration) to a user-chosen model. Default intercepted
   * source models: gpt-5.4-mini (older clients) and gpt-5.6-luna (Codex 0.145.0+).
   * Opt-in; disabled by default. Matching requests preserve their configured reasoning effort.
-   * All requests for configured shadow source models are intercepted regardless of request kind,
-   * except when the replacement intersects the same provider+model source set.
+  * All requests for configured shadow source models are intercepted regardless of request kind,
+  * except when the replacement intersects the same provider+model source set.
+  */
+ shadowCallIntercept?: {
+   /** When true, requests for known shadow/helper source models are rewritten to the configured model. */
+   enabled?: boolean;
+   /** Replacement model id (e.g. "gpt-5.5"). */
+   model?: string;
+   /** Optional override of intercepted source-model prefixes (default: gpt-5.4-mini, gpt-5.6-luna). */
+   sourceModels?: string[];
+ };
+  /**
+   * Optional map of blocked model IDs to their replacement model IDs.
+   * When configured, incoming requests targeting a blocked model (including
+   * account-namespaced and concrete routes) are redirected to the replacement
+   * model at the shared routing layer with routeReason "blocked-model-redirect".
+   * Unset or omitted by default.
    */
-  shadowCallIntercept?: {
-    /** When true, requests for known shadow/helper source models are rewritten to the configured model. */
-    enabled?: boolean;
-    /** Replacement model id (e.g. "gpt-5.5"). */
-    model?: string;
-    /** Optional override of intercepted source-model prefixes (default: gpt-5.4-mini, gpt-5.6-luna). */
-    sourceModels?: string[];
-  };
+  blockedModelRedirects?: Record<string, string>;
   /**
    * 3-state multi-agent surface override:
    * - "v1": force ALL models to v1 surface (override upstream pins)
@@ -654,19 +662,19 @@ export interface OcxConfig {
 
 export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";
 
-export type OcxComboStrategy = "failover" | "round-robin";
+export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export interface OcxComboTarget {
   provider: string;
   model: string;
-  /** Relative SWRR batch weight. Default 1; valid range 1..10000. */
+  /** Relative target weight for round-robin batches and random selection. Default 1; valid range 1..10000. */
   weight?: number;
 }
 
 export interface OcxComboConfig {
   targets: OcxComboTarget[];
-  /** Ordered failover (default) or deterministic smooth weighted round-robin. */
+  /** Ordered failover (default), round-robin, weighted random, least-used, or quota reset-window selection. */
   strategy?: OcxComboStrategy;
   /** Successful requests retained on one RR selection batch. Default 1; range 1..100. */
   stickyLimit?: number;

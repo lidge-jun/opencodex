@@ -18,6 +18,7 @@ import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/t
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "../src/adapters/cursor/types";
 import type { CursorTransportFactoryInput } from "../src/adapters/cursor/transport";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
+import { CursorRootEnvelopeLimitError } from "../src/adapters/cursor/cursor-errors";
 
 const createCursorAdapter = (...args: Parameters<typeof createCursorAdapterProduction>) =>
   withTestTranslatorBudget(createCursorAdapterProduction(...args));
@@ -118,6 +119,51 @@ describe("Cursor adapter live transport", () => {
 
     expect(inputs).toHaveLength(1);
     expect(inputs[0]?.fetch).toBe(pacedFetch);
+  });
+
+  // #1527: the envelope rejection is raised locally while building the request, so it surfaces
+  // through the same terminal catch as a transport fault. Review found the class was flattened to
+  // a bare message there, losing the stable code a caller needs to tell "this conversation cannot
+  // be sent" from a transient upstream error — and the message carried a doubled prefix.
+  test("a local envelope rejection surfaces as a typed 400, not a bare message", async () => {
+    // Raised from the transport seam because that is where it actually originates: encoding
+    // happens inside the live transport (`prepareCursorRunRequest` in live-transport.ts), which a
+    // mock replaces, so a mocked run can never reach the guard itself. What is under test here is
+    // the adapter's terminal catch, not the guard — the guard has its own tests in
+    // tests/cursor-blob.test.ts.
+    const adapter = createCursorAdapter(provider, {
+      createTransport: () => ({
+        async *run(): AsyncGenerator<CursorServerMessage> {
+          throw new CursorRootEnvelopeLimitError(194, 600_000, 192, 524_288);
+        },
+        writeClient() {},
+      }),
+    });
+    const events: AdapterEvent[] = [];
+
+    await adapter.runTurn?.(
+      {
+        ...parsed,
+        modelId: "cursor/gpt-5.6-sol-xhigh",
+        context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      },
+      { headers: new Headers() },
+      event => events.push(event),
+    );
+
+    const error = events.find(event => event.type === "error");
+    expect(error).toBeDefined();
+    expect(error).toMatchObject({
+      status: 400,
+      errorType: "invalid_request_error",
+      code: "cursor_root_envelope_limit",
+      retryable: false,
+    });
+    // One prefix, not two.
+    const message = String((error as { message?: unknown }).message ?? "");
+    expect(message.match(/Cursor invalid request/g)?.length).toBe(1);
+    // And the operator-facing numbers survive the boundary.
+    expect(message).toContain("194");
   });
 
   test("runTurn preserves explicit Cursor Router optimization levels", async () => {

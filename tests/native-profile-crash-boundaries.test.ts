@@ -10,6 +10,27 @@ import { readNativeProfileJournal, readNativeProfileVault } from "../src/codex/n
 import type { NativeProfileKey, NativeProfileKeyProvider } from "../src/codex/native-profile-types";
 import type { OcxConfig } from "../src/types";
 import { INTERNAL_DEADLINE_MS } from "./helpers/test-budget";
+import { watchdogMs } from "./helpers/ci-watchdog";
+
+/**
+ * How long to wait for a spawned startup child to publish its port file.
+ *
+ * That wait is intrinsic: the child is a real `ocx` startup that binds a port and
+ * writes the file, and these cases exist to drive its crash and teardown
+ * branches. But a fixed 10s is a latency assertion on the Windows shards, which
+ * run four Bun pools on one runner -- the bounded-teardown case died on "timed
+ * out waiting for ...\\port" before reaching the teardown it is named for.
+ */
+const STARTUP_FILE_WAIT_MS = watchdogMs(10_000);
+
+/**
+ * Budget for a case that spawns startup children, derived from the wait above.
+ *
+ * A fixed 20s or 30s silently became SHORTER than the CI wait it contains, which
+ * kills the case before its own wait can name the step that stalled. Two child
+ * spawns plus a bounded teardown fit inside three of those waits.
+ */
+const STARTUP_CHILD_BUDGET_MS = Math.max(30_000, STARTUP_FILE_WAIT_MS * 3);
 
 const roots: string[] = [];
 const oldOcx = process.env.OPENCODEX_HOME;
@@ -78,7 +99,7 @@ async function fixture() {
   return { root, home, codexHome, configDir, source, target, key, manager, sourceProfile, targetProfile, initialRevision };
 }
 
-async function waitFor(path: string, timeout = 10_000): Promise<void> {
+async function waitFor(path: string, timeout = STARTUP_FILE_WAIT_MS): Promise<void> {
   const deadline = Date.now() + timeout;
   while (!existsSync(path) && Date.now() < deadline) await Bun.sleep(10);
   if (!existsSync(path)) throw new Error(`timed out waiting for ${path}`);
@@ -90,7 +111,7 @@ async function waitFor(path: string, timeout = 10_000): Promise<void> {
  * satisfies the wait and then throws `Unexpected EOF`. This waits for the real
  * precondition instead.
  */
-async function waitForJson<T>(path: string, timeout = 10_000): Promise<T> {
+async function waitForJson<T>(path: string, timeout = STARTUP_FILE_WAIT_MS): Promise<T> {
   const deadline = Date.now() + timeout;
   let lastError: unknown;
   while (Date.now() < deadline) {
@@ -285,7 +306,7 @@ describe("native profile OpenCodex process-exit phases", () => {
       await first.exited;
       if (second) await second.exited;
     }
-  }, 20_000);
+  }, STARTUP_CHILD_BUDGET_MS);
 
   /*
    * #1061 activation evidence for the teardown deadline. A green suite says nothing
@@ -312,7 +333,7 @@ describe("native profile OpenCodex process-exit phases", () => {
         await child.exited;
       }
     }
-  }, 30_000);
+  }, STARTUP_CHILD_BUDGET_MS);
 
   /*
    * #1061 the other half: the settled file is parsed the moment it appears, so a

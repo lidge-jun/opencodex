@@ -194,7 +194,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "combo",
     usage: "ocx combo <list|show|set|remove> ...",
-    summary: "Manage combo failover and round-robin virtual models.",
+    summary: "Manage combo virtual models and routing strategies.",
     details: ["Alias hierarchy: ocx route combo ...", "Use --targets provider/model[:weight],provider/model[:weight]."],
   },
   {

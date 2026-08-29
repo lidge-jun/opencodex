@@ -33,7 +33,7 @@ import {
   import {
   catalogBackupPathFor,
   catalogHasRoutedEntries,
-  findNativeTemplate,
+  findSupportedNativeTemplate,
   legacyCatalogBackupPath,
   parseCatalogJson,
   type RawCatalog,
@@ -238,7 +238,8 @@ function prepareCatalog(
   observedAccountNativeEntries: readonly RawEntry[] = [],
 ): RawCatalog {
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
-  const template = findNativeTemplate(catalog);
+  // Strict selector: an unknown bare row must never become the routed template (#2813).
+  const template = findSupportedNativeTemplate(catalog);
   const enabled = filterCatalogVisibleModels(routedModels, config);
   const featured = config.subagentModels ?? [];
   const ordered = orderForSubagents(enabled, featured);

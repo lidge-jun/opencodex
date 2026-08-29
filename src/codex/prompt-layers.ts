@@ -28,9 +28,10 @@
  */
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, type Hash } from "node:crypto";
 import { expandUserPath } from "../config";
 import { CODEX_CONFIG_PATH } from "./paths";
+import { resolveCodexHomeDir } from "./home";
 import { OCX_SECTION_MARKER } from "./injected-marker";
 import {
   durableWrite,
@@ -181,6 +182,211 @@ export function activeBaseVariantDir(opts?: Paths): string {
   return opts?.baseVariantDir ?? join(activeCodexHome(), "opencodex-prompt-base");
 }
 
+/**
+ * Instruction documents the prompt probe renders out of CODEX_HOME, in the
+ * precedence order Codex itself applies: an `AGENTS.override.md` shadows
+ * `AGENTS.md`. Both are hashed into the probe fingerprint, because either one
+ * changes the rendered project document without touching a managed file.
+ */
+const PROBE_INSTRUCTION_FILES = ["AGENTS.override.md", "AGENTS.md"] as const;
+
+/**
+ * The project-document filenames Codex would look for in a given home, in its own
+ * order: the two built-ins first, then whatever `project_doc_fallback_filenames`
+ * adds, de-duplicated (`core/src/agents_md.rs` `candidate_filenames`).
+ *
+ * Read from config rather than hard-coded, because a user who configures
+ * `TEAM.md` renders TEAM.md, and a fingerprint that only knew about AGENTS.md
+ * would let an edit to it pass unnoticed.
+ *
+ */
+function probeInstructionFilenames(configBytes: string | null): string[] {
+  const names: string[] = [...PROBE_INSTRUCTION_FILES];
+  for (const entry of rootArrayEntries(configBytes, "project_doc_fallback_filenames")) {
+    // Upstream trims each configured name and drops whitespace-only entries
+    // (`core/src/config/mod.rs`), so " TEAM.md " and "TEAM.md" are one filename.
+    const name = entry.trim();
+    if (name === "") continue;
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+/**
+ * Decoded string entries of a root-scope TOML array.
+ *
+ * Parsed, not pattern-matched. Three successive review rounds each found another
+ * valid spelling a hand-rolled reader missed — multi-line arrays, a comment after the
+ * opening bracket, a quoted key — and every miss was a rendered document whose edits
+ * moved no admission key. The pattern was the defect: TOML is not a line format, so
+ * no regex over lines can enumerate what a parser accepts.
+ *
+ * The module header's warning about JS TOML parsers does apply here, and a review
+ * round proved it against an earlier version of this comment that claimed otherwise.
+ * Bun rejects an entire document containing an integer outside JavaScript's safe
+ * range, such as `model_context_window = 9223372036854775807`, which Rust accepts as
+ * an ordinary `i64`. A whole-document parse turned that into BOTH arrays disappearing
+ * — a worse failure than any single missed spelling, and one the old regex did not
+ * have.
+ *
+ * So the parse is the preferred reader, not the only one. When it fails, the scan
+ * below runs, and it is deliberately loose: it accepts any spelling it recognises and
+ * over-reports rather than under-reports, because an extra hashed filename costs one
+ * redundant probe while a missing one costs stale text.
+ */
+function rootArrayEntries(configBytes: string | null, key: string): string[] {
+  const value = rootValue(configBytes, key);
+  if (value === PARSE_FAILED) return scanRootArrayEntries(configBytes, key);
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+/**
+ * Distinguishes "the parser could not read this file" from "the key is absent".
+ * Collapsing the two is what made an unrelated large integer silently empty the
+ * project-document set.
+ */
+const PARSE_FAILED = Symbol("toml-parse-failed");
+
+/** A root-scope value, `undefined` when the key is absent, `PARSE_FAILED` when the file will not parse. */
+function rootValue(configBytes: string | null, key: string): unknown {
+  if (configBytes === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = Bun.TOML.parse(configBytes);
+  } catch {
+    return PARSE_FAILED;
+  }
+  if (typeof parsed !== "object" || parsed === null) return PARSE_FAILED;
+  return (parsed as Record<string, unknown>)[key];
+}
+
+/**
+ * Fallback reader for a config this parser will not accept but Codex will.
+ *
+ * Not a second attempt at being a TOML parser — that approach failed three review
+ * rounds. It is a deliberately over-eager scan: it takes the first bracketed group for
+ * the key under either spelling, spans lines, strips comments, and keeps anything that
+ * decodes. Over-reporting is the safe direction here.
+ */
+function scanRootArrayEntries(configBytes: string | null, key: string): string[] {
+  const lines = rootLines(configBytes ?? "");
+  const opener = new RegExp(`^\\s*"?${key}"?\\s*=\\s*\\[(.*)$`);
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = opener.exec(lines[i]!);
+    if (!m) continue;
+    let body = m[1]!.replace(/#.*$/, "");
+    for (let j = i; !body.includes("]"); ) {
+      j += 1;
+      if (j >= lines.length) return [];
+      body += lines[j]!.replace(/#.*$/, "");
+    }
+    const out: string[] = [];
+    for (const raw of body.slice(0, body.indexOf("]")).split(",")) {
+      const trimmed = raw.trim();
+      if (trimmed === "") continue;
+      const decoded = trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2
+        ? trimmed.slice(1, -1)
+        : decodeBasicString(trimmed);
+      if (decoded !== null) out.push(decoded);
+    }
+    return out;
+  }
+  return [];
+}
+
+/**
+ * The directories Codex would look in for a project document, given the home the
+ * probe runs in.
+ *
+ * Upstream finds the nearest ancestor holding a `project_root_markers` entry
+ * (default `.git`) and then searches every directory from that root down to the cwd,
+ * inclusive; with no such ancestor it searches the cwd alone
+ * (`core/src/agents_md.rs` `agents_md_paths`).
+ *
+ * This was originally written off as unreachable on the grounds that the probe runs
+ * in CODEX_HOME with no checkout around it. That was wrong, and a review round caught
+ * it: `~/.codex` inside a dotfiles repository is an ordinary setup, and there the
+ * walk finds real documents. The walk is cheap — a bounded number of `existsSync`
+ * calls beside a subprocess spawn — so it is performed rather than assumed away.
+ */
+function probeProjectDocDirs(home: string, configBytes: string | null): string[] {
+  const markers = projectRootMarkers(configBytes);
+  // An explicitly empty array disables root detection upstream, which is not the same
+  // as an absent key falling back to the default.
+  if (markers.length === 0) return [home];
+  let root: string | null = null;
+  for (let dir = home; ; ) {
+    if (markers.some(marker => existsSync(join(dir, marker)))) { root = dir; break; }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (root === null) return [home];
+  const dirs: string[] = [];
+  for (let dir = home; ; ) {
+    dirs.push(dir);
+    if (dir === root) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Root first, matching upstream's reversed search order. Order is load-bearing:
+  // the digest must not change merely because the walk was traversed the other way.
+  return dirs.reverse();
+}
+
+/** `project_root_markers`, defaulting to `.git` when the key is absent. */
+function projectRootMarkers(configBytes: string | null): string[] {
+  if (!hasRootKey(configBytes, "project_root_markers")) return [".git"];
+  // Present-but-empty disables root detection upstream, which is why presence is
+  // tested separately from the decoded entries rather than inferred from them.
+  return rootArrayEntries(configBytes, "project_root_markers").filter(m => m !== "");
+}
+
+/**
+ * Whether a root-scope key is present at all, regardless of what it holds.
+ *
+ * A parse failure is not an answer, so it falls through to the scan rather than
+ * counting as present: reading `PARSE_FAILED` as "present" would report an empty
+ * marker list and disable root detection on a config Codex reads fine.
+ */
+function hasRootKey(configBytes: string | null, key: string): boolean {
+  const value = rootValue(configBytes, key);
+  if (value === PARSE_FAILED) return scanHasRootKey(configBytes, key);
+  return value !== undefined;
+}
+
+/** Textual presence check, used only when the parser cannot read the file. */
+function scanHasRootKey(configBytes: string | null, key: string): boolean {
+  const probe = new RegExp(`^\\s*"?${key}"?\\s*=`);
+  return rootLines(configBytes ?? "").some(line => probe.test(line));
+}
+
+/**
+ * Feed one named field into a fingerprint, framed so that no two distinct states
+ * can produce the same digest.
+ *
+ * Framing is the whole point. Concatenating `name + ":" + contents` is ambiguous:
+ * an adversarial review of the first version of this function showed that
+ * `{override: "left", agents: "right\nAGENTS.md:tail"}` and
+ * `{override: "left\nAGENTS.md:right", agents: "tail"}` hashed identically, because
+ * a file's own bytes can imitate the separator that follows it. That is exactly a
+ * missed invalidation: the fingerprint is the probe's admission key, so two
+ * different prompt states sharing a digest means one caller is served the other's
+ * stale text.
+ *
+ * A byte length cannot be forged by content, so each field carries one. Absence is
+ * a length of -1 rather than a sentinel string, because a sentinel is just more
+ * content: the same review found that `null` collided with a file whose bytes were
+ * literally NUL + "absent".
+ */
+function updateFingerprintField(hash: Hash, name: string, contents: string | null): void {
+  const bytes = contents === null ? -1 : Buffer.byteLength(contents, "utf8");
+  hash.update(`\n${name}:${bytes}:`);
+  if (contents !== null) hash.update(contents);
+}
+
 function journalPathFor(storePath: string): string {
   return `${storePath.replace(/\.json$/, "")}.journal`;
 }
@@ -286,10 +492,13 @@ function readFileOrNull(path: string): string | null {
 
 export function computeRevision(configBytes: string | null, storeBytes: string | null): string {
   const hash = createHash("sha256");
-  hash.update("cfg:");
-  hash.update(configBytes ?? "\0absent");
-  hash.update("\nstore:");
-  hash.update(storeBytes ?? "\0absent");
+  // Length-framed for the reason given on updateFingerprintField: with a bare
+  // separator, config bytes ending in "\nstore:" shift the boundary and two
+  // different pairs hash alike. That matters twice over — this value is both the
+  // probe's admission input and the optimistic-concurrency token compared in
+  // commit(), where a collision would let a write built on stale bytes through.
+  updateFingerprintField(hash, "cfg", configBytes);
+  updateFingerprintField(hash, "store", storeBytes);
   return `sha256:${hash.digest("hex")}`;
 }
 
@@ -506,8 +715,19 @@ function readToggle(configBytes: string | null, id: ToggleId): ToggleState {
 function readModelInstructionsFile(configBytes: string | null): string | null {
   if (configBytes === null) return null;
   for (const line of rootLines(configBytes)) {
-    const m = /^\s*model_instructions_file\s*=\s*"([^"]*)"\s*(?:#.*)?$/.exec(line);
-    if (m) return m[1]!;
+    // Capture the whole literal INCLUDING its quotes and decode it, rather than
+    // returning the raw inner text. `setRootString` writes this key through
+    // `encodeBasicString`, which escapes backslashes, so on Windows the stored
+    // literal is "C:\\Users\\..." while the path is "C:\Users\...". Reading the
+    // inner text verbatim returned the doubled form: the round trip did not
+    // survive, `baseSelection` compared a doubled path against the real variant
+    // path and reported `external` for a variant this code had just selected.
+    //
+    // `[^"]*` cannot span an escaped quote either. That is not a new limit -- it
+    // is the same one the writer's restricted escape set is built around, and
+    // `decodeBasicString` refuses anything outside it rather than guessing.
+    const m = /^\s*model_instructions_file\s*=\s*("[^"]*")\s*(?:#.*)?$/.exec(line);
+    if (m) return decodeBasicString(m[1]!);
   }
   return null;
 }
@@ -632,6 +852,125 @@ export function readPromptLayers(opts?: Paths): PromptLayerSnapshot {
     baseSelection: resolveBaseSelection(configBytes, baseVariants, opts),
     revision: computeRevision(configBytes, storeBytes),
   };
+}
+
+/**
+ * Identity for prompt-text probe admission, deliberately separate from the
+ * optimistic-concurrency revision above. The revision covers only config/store
+ * transaction bytes; an edit to the selected base variant changes the prompt
+ * without changing that transaction contract.
+ *
+ * The instruction documents in CODEX_HOME are hashed for the same reason, and they
+ * are read from `resolveCodexHomeDir()` rather than from `activeConfigPath`'s
+ * directory. Those two are deliberately different under test — the route fixtures
+ * inject `codexPromptPaths` at a temp root while CODEX_HOME points at a decoy — and
+ * the probe renders whatever lives in the home it actually runs in. Deriving the
+ * path from the injected config would name a file the probe never reads, which is
+ * a fingerprint that cannot fail rather than evidence.
+ *
+ * A BOUNDED invalidation key, not prompt identity. It covers opencodex-managed writes,
+ * the selected base prompt, the project documents Codex would discover from this home,
+ * and each skill's manifest. Plugin manifests, live MCP availability, and the clock
+ * also move the rendered prompt and are not files this process can name.
+ *
+ * The distinction is worth stating exactly, because the obvious phrasing is wrong: for
+ * a COVERED input the key moves and a late caller is refused with `busy`. For an
+ * UNCOVERED one the key does not move, so a late caller joins and reads the older
+ * rendering. That is the residual, bounded to one in-flight window in a read-only view.
+ *
+ * "Hash every input" is only closable against a pinned Codex — the dependency graph is
+ * upstream's and moves on its own. An enumeration-free alternative exists (admit only
+ * when the probe started after the request arrived) and is recorded in the plan; it
+ * costs the coalescing this work exists to provide unless arrivals are batched first.
+ * See devlog/_plan/260829_bugpr_lane_h_residual_issues/130_pr2872_probe_fingerprint.md.
+ */
+export function computePromptProbeStateFingerprint(opts?: Paths): string {
+  const configBytes = readFileOrNull(activeConfigPath(opts));
+  const storeBytes = readFileOrNull(activeStorePath(opts));
+  const variants = readBaseVariants(opts);
+  const selection = resolveBaseSelection(configBytes, variants, opts);
+  const hash = createHash("sha256");
+  updateFingerprintField(hash, "revision", computeRevision(configBytes, storeBytes));
+  updateFingerprintField(hash, "selected-base", selection.kind === "variant" ? `variant:${selection.id}` : selection.kind);
+  if (selection.kind === "variant") {
+    updateFingerprintField(hash, "variant-bytes", readFileOrNull(join(activeBaseVariantDir(opts), `${selection.id}.md`)));
+  }
+  if (selection.kind === "external") {
+    // The selected base file is hashed whether or not we manage it. Hashing the
+    // managed variant's bytes while recording an external selection as the bare
+    // word "external" would make the guarantee depend on who authored the file,
+    // which is not a distinction the probe's caller can see.
+    //
+    // Its path is part of the identity as well as its contents: pointing the key
+    // at a different file changes the prompt even when both files read alike.
+    updateFingerprintField(hash, "external-path", selection.path);
+    let externalBytes: string | null = null;
+    try {
+      // Relative to the CONFIG FILE's directory, which is what Codex does with its
+      // relative path fields. resolve() alone would use this process's cwd — the
+      // proxy's working directory, which has nothing to do with either the config
+      // or the probe child's cwd — and would hash an unrelated file.
+      externalBytes = readFileOrNull(resolve(dirname(activeConfigPath(opts)), expandUserPath(selection.path)));
+    } catch {
+      // An unresolvable path is a state, not a failure: it hashes as absent, and
+      // resolveBaseSelection has already reported the selection as external.
+      externalBytes = null;
+    }
+    updateFingerprintField(hash, "external-bytes", externalBytes);
+  }
+  // Codex prefers AGENTS.override.md over AGENTS.md, so both spellings are hashed
+  // in that order: an override edit changes the rendered project document exactly
+  // as a plain edit does.
+  const probeHome = resolveCodexHomeDir();
+  const filenames = probeInstructionFilenames(configBytes);
+  for (const dir of probeProjectDocDirs(probeHome, configBytes)) {
+    for (const name of filenames) {
+      // The path goes in the CONTENTS, never in the field name. Only contents are
+      // length-framed, so a name built from a path would reintroduce exactly the
+      // ambiguity this helper exists to remove. Path and bytes are separate fields
+      // because two directories in the walk can both hold an AGENTS.md.
+      const path = join(dir, name);
+      updateFingerprintField(hash, "doc-path", path);
+      updateFingerprintField(hash, "doc-bytes", readFileOrNull(path));
+    }
+  }
+  for (const path of probeSkillManifests(probeHome)) {
+    updateFingerprintField(hash, "skill-path", path);
+    updateFingerprintField(hash, "skill-bytes", readFileOrNull(path));
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
+/**
+ * `SKILL.md` manifests under the home's skills directory.
+ *
+ * These were written off as unobservable in an earlier version of this function's
+ * comment. They are not: Codex reads each manifest's frontmatter and renders its
+ * description into `<skills_instructions>`, and a review round demonstrated a live
+ * description edit changing the probe's output while the fingerprint stood still.
+ *
+ * One directory listing plus one `readFileOrNull` per skill, beside a subprocess that
+ * costs orders of magnitude more. Sorted, because `readdirSync` order is not a
+ * contract and a digest must not depend on it.
+ *
+ * Only the top-level manifest per skill is read. A skill's bundled scripts and
+ * references do not reach the rendered section, so hashing the whole tree would buy
+ * redundant invalidations at a real cost on large skill sets.
+ */
+function probeSkillManifests(home: string): string[] {
+  const root = join(home, "skills");
+  let entries: string[];
+  try {
+    entries = readdirSync(root);
+  } catch {
+    return [];
+  }
+  const manifests: string[] = [];
+  for (const entry of entries.sort()) {
+    const manifest = join(root, entry, "SKILL.md");
+    if (existsSync(manifest)) manifests.push(manifest);
+  }
+  return manifests;
 }
 
 // ---------------------------------------------------------------------------

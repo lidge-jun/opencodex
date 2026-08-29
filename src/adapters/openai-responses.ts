@@ -20,7 +20,7 @@ import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-co
 import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
-import { normalizeXaiResponsesWebSearch } from "./xai-web-search";
+import { injectXaiResponsesXSearch, normalizeXaiResponsesWebSearch } from "./xai-web-search";
 import {
   isXaiSchemaTarget,
   normalizeXaiToolParameters,
@@ -2070,6 +2070,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Preserve xAI's cached-only fail-closed semantics and image-search mapping before the
         // generic capability fallback removes the private OpenAI fields.
         outBody = normalizeXaiResponsesWebSearch(outBody, provider);
+        outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
         // extensions. Keep them for OpenAI API-key traffic and unclassified gateways.
         if (provider.supportsOpenAiWebSearchToolFields === false) {

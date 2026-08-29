@@ -15,7 +15,9 @@ bun install
 bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
 bun run typecheck    # bun x tsc --noEmit
-bun run test         # bun test ./tests/
+bun run test:changed              # routine import-graph test selection
+bun test tests/router.test.ts     # routine focused test
+bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
 `bun run dev` remains an alias for `bun run dev:proxy`. The dashboard dev server is `bun run dev:gui`;
@@ -28,12 +30,17 @@ scripts so local commands match CI:
 
 ```bash
 bun run typecheck                 # strict TypeScript check
-bun run test                      # complete tests/ suite
+bun run test:changed              # import-graph tests against the resolved dev merge base
+bun run test                      # complete tests/ suite (PR-ready / explicit ask)
 bun test tests/router.test.ts     # focused test file
 bun run build:gui                 # Vite GUI build + package preparation
 bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
 ```
+
+`test:changed` selects the first comparison ref that exists, in order: `upstream/dev`,
+`origin/dev`, then local `dev`. It reports that ref and the exact `git merge-base HEAD <ref>`
+commit, then passes the merge-base SHA to Bun.
 
 Most tests are flat `tests/*.test.ts` Bun tests. `tests/helpers/` contains shared fixtures and
 `tests/e2e-style/` contains broader native-parity scenarios. Keep a focused regression near the

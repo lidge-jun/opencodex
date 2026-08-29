@@ -12,7 +12,9 @@ bun install
 bun run dev:proxy    # 開発モードのプロキシ API
 bun run dev:gui      # ダッシュボード dev サーバー(別ターミナル)
 bun run typecheck    # bun x tsc --noEmit
-bun run test         # bun test ./tests/
+bun run test:changed              # routine import-graph test selection
+bun test tests/router.test.ts     # routine focused test
+bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
 `bun run dev` は引き続き `bun run dev:proxy` のエイリアスとして動作します。ダッシュボード dev サーバーは

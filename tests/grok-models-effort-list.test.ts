@@ -56,7 +56,7 @@ afterEach(() => {
 });
 
 describe("raw /v1/models list reasoning-effort advertisement (Grok Build discovery)", () => {
-  test("routed models with configured tiers advertise the Grok reasoning catalog shape", async () => {
+  test("HTTP /v1/models preserves native ultra for Grok discovery", async () => {
     seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]);
     const config = effortConfig();
     config.providers.openai = {

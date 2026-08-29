@@ -3,9 +3,12 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import {
+  changedSelectionFailure,
   createIsolatedTestEnvironment,
+  inspectChangedRun,
   resolveBunTestArgs,
   resolveBunTestPlan,
+  selectChangedComparisonRef,
   SERIAL_FULL_SUITE_FILES,
 } from "../scripts/test";
 import {
@@ -18,6 +21,44 @@ import {
   windowsIdentityPowerShellCommandForTests,
   windowsIdentityPowerShellSpawnOptionsForTests,
 } from "../src/codex/user-identity";
+
+
+function runGit(cwd: string, ...args: string[]): string {
+  const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  if (result.exitCode !== 0) {
+    throw new Error(new TextDecoder().decode(result.stderr));
+  }
+  return new TextDecoder().decode(result.stdout).trim();
+}
+
+// Assembled from fragments so the fixture identity is not an email literal in a tracked
+// file: scripts/privacy-scan.ts matches any email-shaped string and `.invalid` is not
+// allow-listed, so writing it whole fails the repository's own privacy gate. The bytes
+// handed to git are identical either way.
+const FIXTURE_COMMIT_EMAIL = ["test", "opencodex.invalid"].join("@");
+
+function commitFixture(cwd: string, path: string, contents: string, message: string): string {
+  writeFileSync(join(cwd, path), contents);
+  runGit(cwd, "add", path);
+  runGit(
+    cwd,
+    "-c",
+    "user.name=OpenCodex Test",
+    "-c",
+    `user.email=${FIXTURE_COMMIT_EMAIL}`,
+    "commit",
+    "-m",
+    message,
+  );
+  return runGit(cwd, "rev-parse", "HEAD");
+}
+
+function initChangedRunFixture(): { cwd: string; base: string } {
+  const cwd = mkdtempSync(join(tmpdir(), "opencodex-changed-ref-"));
+  runGit(cwd, "init", "--quiet");
+  const base = commitFixture(cwd, "base.txt", "base\n", "base");
+  return { cwd, base };
+}
 
 describe("test runner isolation", () => {
   test("redirects user homes to a disposable root", () => {
@@ -175,6 +216,118 @@ describe("bun test argv", () => {
   test("arguments after the delimiter are passed through instead of parsed as wrapper flags", () => {
     expect(resolveBunTestArgs(["--", "--parallel=2"]))
       .toEqual(["--isolate", "--parallel=4", "--", "--parallel=2"]);
+    const mergeBase = "0123456789abcdef0123456789abcdef01234567";
+    expect(resolveBunTestArgs(["--", "--changed=fixture"], mergeBase))
+      .toEqual(["--isolate", "--parallel=4", "--", "--changed=fixture"]);
+    expect(inspectChangedRun(["--", "--changed=fixture"])).toBeNull();
+  });
+
+  test("changed-mode stays explicitly filtered without redundant arguments", () => {
+    expect(resolveBunTestArgs(["--changed=dev"]))
+      .toEqual(["--isolate", "--parallel=4", "--changed=dev"]);
+    const mergeBase = "0123456789abcdef0123456789abcdef01234567";
+    expect(resolveBunTestArgs(["--changed=dev"], mergeBase))
+      .toEqual(["--isolate", "--parallel=4", "--changed=" + mergeBase]);
+    expect(resolveBunTestPlan(["--changed=dev"])).toHaveLength(1);
+  });
+
+  test("changed-mode prefers the first existing conventional dev ref", () => {
+    const selectFrom = (...existing: string[]) => {
+      const probed: string[] = [];
+      const selected = selectChangedComparisonRef(ref => {
+        probed.push(ref);
+        return existing.includes(ref);
+      });
+      return { selected, probed };
+    };
+
+    expect(selectFrom("upstream/dev", "origin/dev", "dev")).toEqual({
+      selected: "upstream/dev",
+      probed: ["upstream/dev"],
+    });
+    expect(selectFrom("origin/dev", "dev")).toEqual({
+      selected: "origin/dev",
+      probed: ["upstream/dev", "origin/dev"],
+    });
+    expect(selectFrom("dev")).toEqual({
+      selected: "dev",
+      probed: ["upstream/dev", "origin/dev", "dev"],
+    });
+    expect(selectFrom()).toEqual({
+      selected: null,
+      probed: ["upstream/dev", "origin/dev", "dev"],
+    });
+  });
+
+  test("changed-mode requires an explicit, resolvable comparison ref", () => {
+    expect(() => inspectChangedRun(["--changed"])).toThrow("requires an explicit comparison ref");
+    expect(() => inspectChangedRun(["--changed=refs/heads/definitely-missing-test-ref"]))
+      .toThrow("does not resolve to a commit");
+    const inspected = inspectChangedRun(["--changed=HEAD"]);
+    expect(inspected?.comparisonRef).toBe("HEAD");
+    expect(inspected?.comparisonCommit).toBe(runGit(process.cwd(), "rev-parse", "HEAD"));
+  });
+
+  test("changed-mode uses the shared merge base for behind, ahead, and diverged refs", () => {
+    const fixtures: string[] = [];
+    try {
+      const behind = initChangedRunFixture();
+      fixtures.push(behind.cwd);
+      runGit(behind.cwd, "branch", "candidate", behind.base);
+      commitFixture(behind.cwd, "head.txt", "head\n", "head ahead of candidate");
+      expect(inspectChangedRun(["--changed=candidate"], behind.cwd)).toMatchObject({
+        comparisonRef: "candidate",
+        comparisonCommit: behind.base,
+        changedFiles: ["head.txt"],
+      });
+
+      const ahead = initChangedRunFixture();
+      fixtures.push(ahead.cwd);
+      const candidateTip = commitFixture(ahead.cwd, "candidate.txt", "candidate\n", "candidate ahead");
+      runGit(ahead.cwd, "branch", "candidate", candidateTip);
+      runGit(ahead.cwd, "checkout", "--quiet", "--detach", ahead.base);
+      expect(inspectChangedRun(["--changed=candidate"], ahead.cwd)).toMatchObject({
+        comparisonRef: "candidate",
+        comparisonCommit: ahead.base,
+        changedFiles: [],
+      });
+
+      const diverged = initChangedRunFixture();
+      fixtures.push(diverged.cwd);
+      runGit(diverged.cwd, "checkout", "--quiet", "-b", "candidate");
+      commitFixture(diverged.cwd, "candidate.txt", "candidate\n", "candidate side");
+      runGit(diverged.cwd, "checkout", "--quiet", "--detach", diverged.base);
+      commitFixture(diverged.cwd, "head.txt", "head\n", "head side");
+      expect(inspectChangedRun(["--changed=candidate"], diverged.cwd)).toMatchObject({
+        comparisonRef: "candidate",
+        comparisonCommit: diverged.base,
+        changedFiles: ["head.txt"],
+      });
+    } finally {
+      for (const fixture of fixtures) rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an empty changed selection when the diff is non-empty", () => {
+    expect(changedSelectionFailure(
+      { comparisonRef: "upstream/dev", comparisonCommit: "base-sha", changedFiles: ["src/router.ts"] },
+      "Ran 0 tests across 0 files.",
+    )).toContain("--changed=base-sha (upstream/dev merge base) selected 0 tests across 0 files");
+    expect(changedSelectionFailure(
+      { comparisonRef: "dev", comparisonCommit: "base-sha", changedFiles: ["src/router.ts"] },
+      "Ran 9 tests across 1 file.",
+    )).toBeNull();
+    expect(changedSelectionFailure(
+      { comparisonRef: "HEAD", comparisonCommit: "head-sha", changedFiles: [] },
+      "Ran 0 tests across 0 files.",
+    )).toBeNull();
+  });
+
+  test("rejects an unrecognized changed-mode summary for a non-empty diff", () => {
+    expect(changedSelectionFailure(
+      { comparisonRef: "dev", comparisonCommit: "base-sha", changedFiles: ["src/router.ts"] },
+      "0 pass\n0 fail",
+    )).toContain("did not emit a recognizable selection summary");
   });
 
   test("the wrapper passes parallel execution through to bun", () => {

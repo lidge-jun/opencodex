@@ -12,6 +12,7 @@ import { identifyRoutedModel } from "./identity";
 import { peekReasoningForCall } from "../responses/reasoning-replay-cache";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
+import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../providers/vercel-gateway-routing";
 import {
   canForwardForeignServiceTierForChatModel,
   fastPolicyForModel,
@@ -124,6 +125,8 @@ export function buildOpenAIChatPassthroughRequest(
 
   const openRouterRouting = resolveOpenRouterRouting(provider, modelId);
   if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
+  const vercelRouting = resolveVercelGatewayRouting(provider, modelId);
+  if (vercelRouting) body.provider = vercelGatewayProviderPayload(vercelRouting);
 
   if (modelInList(provider.noTemperatureModels, modelId)) delete body.temperature;
   if (modelInList(provider.noTopPModels, modelId)) delete body.top_p;
@@ -1410,6 +1413,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const maxTokens = resolveMaxTokens(provider, parsed);
       const openRouterRouting = resolveOpenRouterRouting(provider, parsed.modelId);
       if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
+      const vercelRouting = resolveVercelGatewayRouting(provider, parsed.modelId);
+      if (vercelRouting) body.provider = vercelGatewayProviderPayload(vercelRouting);
       if (tools) body.tools = tools;
       if (tools && toolChoice !== undefined) {
         body.tool_choice = modelInList(provider.autoToolChoiceOnlyModels, parsed.modelId)

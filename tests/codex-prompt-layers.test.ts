@@ -189,4 +189,20 @@ describe("revision", () => {
   test("is stable for identical bytes", () => {
     expect(computeRevision("a", "{}")).toBe(computeRevision("a", "{}"));
   });
+
+  /**
+   * The revision is compared in commit() to decide whether a write may proceed, and
+   * it feeds the prompt probe's admission key. A collision is therefore both a
+   * stale-write and a stale-read defect, so the boundary between the two files has
+   * to be unforgeable by their contents.
+   */
+  test("config bytes cannot imitate the store field boundary", () => {
+    expect(computeRevision("left", "right\nstore:tail"))
+      .not.toBe(computeRevision("left\nstore:right", "tail"));
+  });
+
+  test("an absent file is not a file containing the old absence sentinel", () => {
+    expect(computeRevision(null, "{}")).not.toBe(computeRevision("\u0000absent", "{}"));
+    expect(computeRevision("a", null)).not.toBe(computeRevision("a", "\u0000absent"));
+  });
 });

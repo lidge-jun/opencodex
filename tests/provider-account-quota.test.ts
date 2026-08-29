@@ -203,10 +203,13 @@ describe("fetchProviderAccountQuotas", () => {
 
   test("providers without a per-account usage API are skipped", async () => {
     expect(supportsPerAccountQuota("anthropic")).toBe(true);
-    expect(supportsPerAccountQuota("kiro")).toBe(false);
+    // Kiro joined this list once it grew a usage reader; xAI has no per-account usage API,
+    // so it now carries the "unsupported providers never reach the network" contract.
+    expect(supportsPerAccountQuota("kiro")).toBe(true);
+    expect(supportsPerAccountQuota("xai")).toBe(false);
     let called = false;
     globalThis.fetch = (async () => { called = true; return new Response("{}", { status: 200 }); }) as typeof fetch;
-    expect(await fetchProviderAccountQuotas("kiro")).toEqual([]);
+    expect(await fetchProviderAccountQuotas("xai")).toEqual([]);
     expect(called).toBe(false);
   });
 

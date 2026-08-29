@@ -9,6 +9,23 @@
  */
 export const DEFAULT_SHADOW_SOURCE_MODELS = ["gpt-5.6-luna"] as const;
 
+/**
+ * Optional blocked model redirects at the shared routing layer.
+ * When `blockedModelRedirects` is configured (e.g. `{ "gpt-5.6-terra": "gpt-5.6-luna" }`),
+ * requests targeting those models are rewritten to the substitute model with
+ * routeReason "blocked-model-redirect".
+ * Returns undefined when not configured or the model is not in the redirect map.
+ */
+export function resolveBlockedModelRedirect(
+  config: { blockedModelRedirects?: Record<string, string> } | undefined,
+  modelId: string,
+): string | undefined {
+  if (!config?.blockedModelRedirects || typeof config.blockedModelRedirects !== "object") {
+    return undefined;
+  }
+  return config.blockedModelRedirects[modelId];
+}
+
 /** Normalize a persisted `sourceModels` override; falls back to the defaults. */
 export function shadowSourceModels(configured?: unknown): string[] {
   const configuredStrings = Array.isArray(configured)

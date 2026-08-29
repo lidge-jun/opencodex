@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
   classifyError,
@@ -201,7 +202,6 @@ const requestLog: RequestLogEntry[] = [];
 const MAX_LOG_SIZE = 2000;
 const requestLogEntryBytes = new WeakMap<RequestLogEntry, number>();
 let requestLogBytes = 0;
-let requestLogSeq = 0;
 /** True after hydrateRequestLogsFromDisk ran once in this process. */
 let requestLogsHydratedFromDisk = false;
 
@@ -430,9 +430,8 @@ export function addRequestLog(entry: RequestLogEntry) {
   }
 }
 
-export function nextRequestLogId(timestamp = Date.now()): string {
-  requestLogSeq = (requestLogSeq % 1_000_000) + 1;
-  return `ocx-${timestamp.toString(36)}-${requestLogSeq.toString(36)}`;
+export function nextRequestLogId(_timestamp = Date.now()): string {
+  return `ocx-${randomBytes(16).toString("hex")}`;
 }
 
 /**
@@ -1308,6 +1307,5 @@ export function getRequestLogEntries(): RequestLogEntry[] { return requestLog; }
 export function clearRequestLogsForTests(): void {
   requestLog.length = 0;
   requestLogBytes = 0;
-  requestLogSeq = 0;
   requestLogsHydratedFromDisk = false;
 }

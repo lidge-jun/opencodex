@@ -5,7 +5,7 @@ import { isAbsolute, join, posix, win32 } from "node:path";
 import * as serviceModule from "../src/service";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, systemdNeedsDaemonReload, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
 import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
@@ -185,13 +185,12 @@ describe("systemd service unit", () => {
     expect(nativeUnknown.detail).toContain("WinSW status");
   });
 
-  test("uses unquoted append targets for service logs", () => {
+  test("redirects service output through the ExecStart shell for legacy systemd", () => {
     const unit = buildUnit();
 
-    expect(unit).toContain("StandardOutput=append:");
-    expect(unit).toContain("StandardError=append:");
-    expect(unit).not.toContain('StandardOutput="append:');
-    expect(unit).not.toContain('StandardError="append:');
+    expect(unit).toMatch(/ExecStart=.* start --port \d+ >> '[^'\n]*service\.log' 2>&1/);
+    expect(unit).not.toContain("StandardOutput=");
+    expect(unit).not.toContain("StandardError=");
   });
 
   test("bakes outbound proxy env into the unit so the service is not cut off from upstream (#2107)", () => {
@@ -1447,6 +1446,95 @@ describe("service lifecycle cleanup ordering", () => {
       "status:native", "stop:native",
       "stop:standalone", "install:native",
     ]);
+  });
+
+  test("legacy systemd reports an absent unit without stopping cleanup or blocking install", async () => {
+    const commands: string[] = [];
+    const manager = systemdServiceInstallCleanupOps({
+      run: command => {
+        commands.push(command);
+        return "LoadState=not-found\n";
+      },
+    });
+
+    expect(manager.status()).toBeNull();
+    expect(commands).toEqual(["systemctl --user show -p LoadState opencodex-proxy"]);
+    expect(commands[0]).not.toContain("--value");
+
+    commands.length = 0;
+    let installed = false;
+    await installServiceSafely("scheduler", () => { installed = true; }, {
+      platform: "linux",
+      managerOps: () => manager,
+      stopTrackedProxy: async () => {},
+    });
+
+    expect(installed).toBe(true);
+    expect(commands).toEqual(["systemctl --user show -p LoadState opencodex-proxy"]);
+  });
+
+  test("legacy systemd still stops a loaded unit before installation", async () => {
+    const commands: string[] = [];
+    const manager = systemdServiceInstallCleanupOps({
+      run: command => {
+        commands.push(command);
+        return command.includes(" show ") ? "LoadState=loaded\n" : "";
+      },
+    });
+    let installed = false;
+
+    await installServiceSafely("scheduler", () => { installed = true; }, {
+      platform: "linux",
+      managerOps: () => manager,
+      stopTrackedProxy: async () => {},
+    });
+
+    expect(installed).toBe(true);
+    expect(commands).toEqual([
+      "systemctl --user show -p LoadState opencodex-proxy",
+      "systemctl --user stop opencodex-proxy",
+    ]);
+  });
+
+  test("legacy systemd status fails closed when LoadState is missing or empty", async () => {
+    for (const output of ["ActiveState=inactive\n", "LoadState=\n"]) {
+      const commands: string[] = [];
+      let installed = false;
+      const manager = systemdServiceInstallCleanupOps({
+        run: command => {
+          commands.push(command);
+          return output;
+        },
+      });
+
+      await expect(installServiceSafely("scheduler", () => { installed = true; }, {
+        platform: "linux",
+        managerOps: () => manager,
+        stopTrackedProxy: async () => {},
+      })).rejects.toThrow("systemd service status could not be verified");
+      expect(installed).toBe(false);
+      expect(commands).toEqual(["systemctl --user show -p LoadState opencodex-proxy"]);
+    }
+  });
+
+  test("legacy systemd uninstall stops and disables separately even when stop fails", () => {
+    const commands: string[] = [];
+
+    uninstallSystemd({
+      run: command => {
+        commands.push(command);
+        if (command.includes(" stop ")) throw new Error("not running");
+        return "";
+      },
+      unitExists: () => false,
+    });
+
+    expect(commands).toEqual([
+      "systemctl --user stop opencodex-proxy",
+      "systemctl --user disable opencodex-proxy",
+      "systemctl --user daemon-reload",
+    ]);
+    expect(commands.join(" ")).not.toContain("--now");
   });
 
   test("service install fails closed before install on manager or standalone cleanup errors", async () => {

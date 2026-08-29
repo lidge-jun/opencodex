@@ -83,6 +83,26 @@ describe("#2568 generic OAuth account failover", () => {
     expect(rotateGenericOAuthAccountOn429(config(true), "xai", ids[0]!, null)).toBe(ids[1]);
   });
 
+  test("rotation continues AFTER the failed account, not from the top of the roster", async () => {
+    // Quota ranking now orders the candidates, so this pins the property the ranking must
+    // not disturb: with three accounts and no quota evidence anywhere, a 429 on the middle
+    // account moves to the one after it. Ranking the store's own order would answer the
+    // first account instead, silently changing every quota-less provider's traversal.
+    const ids = await seed(3);
+    expect(rotateGenericOAuthAccountOn429(config(), "xai", ids[1]!, null)).toBe(ids[2]);
+  });
+
+  test("the ring wraps when the failed account is last", async () => {
+    const ids = await seed(3);
+    expect(rotateGenericOAuthAccountOn429(config(), "xai", ids[2]!, null)).toBe(ids[0]);
+  });
+
+  test("an unknown failed account still yields a candidate", async () => {
+    // The account may have been removed between dispatch and the 429 landing.
+    const ids = await seed(2);
+    expect(rotateGenericOAuthAccountOn429(config(), "xai", "not-a-real-account", null)).toBe(ids[0]);
+  });
+
   test("a per-provider override beats the global switch", async () => {
     // Provider terms differ, so an operator may accept rotation on one provider and refuse it on
     // another. The narrower setting is the one that means something.
@@ -259,6 +279,28 @@ describe("sidecar on429 wiring", () => {
 
     // Kiro routing metadata still travels with its own token.
     expect(body).toContain("_kiroAuthContext");
+  });
+
+  test("pre-dispatch selection replaces the CCA project instead of inheriting one", () => {
+    // The same pairing rule as the rotation helper, at the OTHER site that can change which
+    // account serves a request. The ordinary path is guarded by `!route.provider.project`,
+    // so without an explicit branch a preferred account would install its own bearer next
+    // to the configured account's project — #2841 in its original shape.
+    const start = coreSource.indexOf("const preferredAccountId =");
+    expect(start).toBeGreaterThan(-1);
+    const region = coreSource.slice(start, start + 6000);
+    expect(region).toContain("usedPreferredAccount && resolved.projectId");
+    // A project-less preferred account falls BACK to the ordinary active-account resolution
+    // rather than erroring: a preference must never turn a working request into a failure,
+    // and Antigravity tolerates project discovery failing, so an account with no project is
+    // an ordinary stored state.
+    expect(region).toContain("usedPreferredAccount = false");
+    expect(region).not.toContain("has no Cloud Code Assist project");
+    // Both fallbacks — a project-less account and an unresolvable one — must reach the SAME
+    // active-account resolution, so neither can dispatch on a half-applied identity.
+    const fallbacks = region.match(/usedPreferredAccount = false;/g) ?? [];
+    expect(fallbacks.length).toBe(2);
+    expect(region).toContain("forgetGenericFailoverRoster(route.providerName)");
   });
 });
 

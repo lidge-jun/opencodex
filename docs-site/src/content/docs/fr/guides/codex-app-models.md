@@ -244,6 +244,26 @@ Tant que Desktop ne permet pas de contrôler cette liste d'autorisation :
 - Utilisez Codex CLI ou TUI plutôt que le sélecteur de Desktop ; ces interfaces n'appliquent pas la liste d'autorisation et répertorient normalement les modèles routés.
 
 ## Actualisation de l'état des modèles
+## Limitation du repli sur quota natif
+
+Lorsque l'application Codex épuise son quota natif de cinq heures, elle peut basculer vers un modèle de repli de réserve et griser les autres lignes de son sélecteur. Signalé dans [#2813](https://github.com/lidge-jun/opencodex/issues/2813), ce filtrage masque aussi les lignes routées par opencodex, alors que celles-ci utilisent des identifiants de fournisseur sans rapport et ne consomment aucun quota ChatGPT.
+
+Ce filtrage est appliqué par le client avant que la requête n'atteigne le proxy, donc opencodex ne peut pas le lever. Les lignes routées sont écrites avec `visibility: "list"`, le filtrage du catalogue ne consulte que `disabledModels` et le `selectedModels` de chaque fournisseur, et aucune valeur de quota n'intervient dans la visibilité routée.
+
+Sélectionner un modèle routé explicitement ne passe pas par le sélecteur. Définissez le modèle dans `config.toml` :
+
+```toml
+model = "anthropic/claude-sonnet-5"
+```
+
+ou envoyez-le directement :
+
+```bash
+ocx access test anthropic/claude-sonnet-5 --protocol responses
+```
+
+Les deux chemins routent correctement **dès que la requête atteint le proxy** — c'est couvert par des tests. Ce qui n'est pas établi, c'est si l'application envoie encore le modèle configuré pendant le mode réserve ; si le client le réécrit ou le refuse avant l'envoi, aucun réglage côté proxy n'y change quoi que ce soit. Considérez la sélection explicite comme une piste à essayer plutôt qu'un contournement confirmé.
+
 
 Si le sélecteur affiche encore des entrées obsolètes, actualisez le catalogue et redémarrez l'interface Codex concernée :
 

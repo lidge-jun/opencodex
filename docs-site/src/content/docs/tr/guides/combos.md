@@ -386,3 +386,4 @@ Hata hedefe özgü olmaktan ziyade uç (terminal) bir hataydı. Geçersiz girdiy
 düzeltin, aşırı büyük bir bağlamı azaltın, bir politika reddini işleyin veya
 reddedilen istek kaynağını düzeltin. Kombolar bu durumlar için atlama yapmaz.
 
+

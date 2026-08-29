@@ -17,7 +17,18 @@ base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
 name = "OCX gpt-5.6-sol"
-# ... one [model.ocx-*] table per visible model ...
+extra_headers = { "x-opencodex-grok" = "1" }
+context_window = 272000
+supports_reasoning_effort = true
+reasoning_effort = "low"
+
+[[model.ocx-gpt-5-6-sol.reasoning_efforts]]
+id = "low"
+value = "low"
+label = "Low"
+description = "Quick, fast implementations"
+default = true
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
 # <<< opencodex managed block <<<
 ```
 
@@ -37,6 +48,32 @@ grok models          # lists ocx-* entries alongside native grok models
 grok -m ocx-anthropic-claude-opus-4-8 -p "hello"
 # or in the TUI: /model ocx-anthropic-claude-opus-4-8
 ```
+
+## 推論 effort
+
+Grok Build の `/effort`（および `--effort`）は、カタログ項目がラダーを公開している
+モデルで動作します。モデル一覧は生の `GET /v1/models` 応答を読み、その項目には
+`supports_reasoning_effort` と `reasoning_efforts` のメニュー選択肢が必要です。ラダーを
+Grok 互換に投影した内容が、管理対象の各 `[model.*]` テーブルにも
+`supports_reasoning_effort`、既定の
+`reasoning_effort`、`[[model.<alias>.reasoning_efforts]]` の各行として書き込まれます。
+ルーティングされたモデルでは、opencodex が設定済みのプロバイダー階層
+（`reasoningEfforts` / `modelReasoningEfforts` と
+`modelDefaultReasoningEfforts` の既定値）を反映します。このメタデータはプロキシで
+設定されたラダーを表し、アダプターは推論をエミュレートしたり、レベルを
+プロバイダー固有のフィールドへ変換したりできます。空の階層リストでは effort
+コントロールを表示しません。ネイティブ GPT-5.6 項目は、固定された上流の推論
+ラダーを保持します。モデルが公開する有効な Grok 段階（`none` と `minimal` を含む）は
+保持されます。Codex 固有の `ultra` を含む、未対応または重複する段階はファイルから
+除外され、出力された選択肢はすべて実行できます。
+
+Grok Build は Chat Completions 経由で opencodex と通信し、ラダーが公開されている
+場合は `reasoning_effort` を送ります。Chat Completions の入力変換は、この場合に
+内部 Responses の `reasoning.summary` を `auto` に設定するため、推論トレースは
+`delta.reasoning_content` として Grok に届きます。トレースを返さずにモデルに
+推論させるクライアントは、`include_reasoning: false`（または
+`reasoning.summary: "none"`）を設定できます。両方が指定された場合は、明示的な
+`reasoning.summary` が優先されます。
 
 ## 認証メモ
 
@@ -78,6 +115,6 @@ api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 
 - **サービスでインストールされた `ocx restart`:** 実行中のプロキシが再起動の認可とドレインの調整を担当し、古いプロセスの終了後はインストール済みのサービス マネージャーが置換プロセスを起動します。サービス監視は維持されます。ループバックの自動登録を使用している場合に限り、マネージド ブロックもハンドオフ中に維持されます。非ループバック構成では Grok 設定を手動管理します。同じポートで、別の ID 検証済みプロセスが正常になったことを確認した場合にのみ成功します。
 - **構成読み取りタイミング:** 最初に opencodex を起動し、その後 `grok` を起動します。
-予測可能な結果。 Grok Build は `~/.grok/config.toml` を監視し、`[model]` テーブルが実際に変更されると (内容で比較すると約 1 秒のデバウンス) 再ロードするため、更新されたブロックは再起動せずに開いているセッションに到達します。 Grok が解析した内容を確認するには、`grok inspect` を実行します。ロードされた設定ソースがリストされ、拒否されたフィールドについて警告が表示されます。解決されたモデルのリストは出力されません。単一の TOML エラーがユーザー設定レイヤー「全体」を無効にすることに注意してください。これが、opencodex がファイルをアトミックに書き込む理由です。Grok は書きかけの設定を決して認識しません。
+予測可能な結果。 Grok Build は `~/.grok/config.toml` を監視し、`[model]` テーブルが実際に変更されると (内容で比較すると約 1 秒のデバウンス) 再ロードするため、更新されたブロックは再起動せずに開いているセッションに到達します。 Grok が解析した内容を確認するには、`grok inspect` を実行します。ロードされた設定ソースがリストされ、拒否されたフィールドについて警告が表示されます。解決されたモデルのリストは出力されません。現在の Grok Build は無効なモデルフィールドを警告してスキップし、残りのモデル項目を保持します。TOML 構文エラーがあるとファイルは読み込まれません。opencodex はファイルをアトミックに書き込むため、Grok は再読み込みのたびに完全な文書を認識します。
 - **カタログの更新:** フェンスで囲まれたブロックには、射出時のカタログが反映されます。後
 プロバイダーまたはモデルを追加するには、`ocx ensure` を実行して (またはプロキシを再起動して) 更新します。

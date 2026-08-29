@@ -10,12 +10,14 @@ import { normalizeCursorToolResultText } from "./tool-result-normalize";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import {
   createCursorBlobRequestScope,
+  cursorBlobByteLength,
   cursorBlobMaxEntryBytes,
   releaseCursorBlobRequestScope,
   sealCursorBlobRequestScope,
   storeCursorBlob,
   type CursorBlobRequestScopeToken,
 } from "./native-exec";
+import { CursorRootEnvelopeLimitError } from "./cursor-errors";
 import { buildSelectedContext, CURSOR_VISION_IMAGE_HISTORY_MARKER } from "./images";
 import { estimateTokens } from "../../lib/token-estimate";
 import { parseDataUrl } from "../image";
@@ -325,6 +327,23 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       .map(entry => truncateToolResultBlob(entry, historyBudget))
       .filter((entry): entry is RootBlobCandidate => entry !== null);
     let activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
+    // Shrink every active result toward an equal share before dropping any of them. Review found
+    // that the previous `active.shift()` loop DELETED whole results: three ~220 KB results emitted
+    // only the last two, and `call_0` vanished with its tool call still in the transcript. A
+    // missing result is worse than a truncated one — the model sees a call it never got an answer
+    // to, which is the pairing break #1527 reports, and the caller cannot tell it happened.
+    if (active.length > 1 && activeBytes > historyBudget) {
+      const share = Math.floor(historyBudget / active.length);
+      for (let index = 0; index < active.length; index++) {
+        const entry = active[index];
+        if (!entry || entry.byteLength <= share) continue;
+        const shrunk = truncateToolResultBlob(entry, share);
+        if (shrunk) active[index] = shrunk;
+      }
+      activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
+    }
+    // Only when even an equal share cannot fit — the marker alone has a floor, so enough results
+    // still overflow — fall back to dropping the oldest.
     while (active.length > 1 && activeBytes > historyBudget) {
       const dropped = active.shift();
       activeBytes -= dropped?.byteLength ?? 0;
@@ -347,6 +366,9 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
     let i = prior.length - 1;
     while (i >= 0 && keptPrior.length + active.length < historyLimit) {
       let turnStart = i;
+      // Root-blob roles are a closed set of four (system, user, assistant, toolResult): a
+      // developer message is normalized to a user root upstream, so "user" IS the turn start.
+      // Review suspected a developer-role gap here; the type says it cannot occur.
       while (turnStart > 0 && prior[turnStart]?.role !== "user") turnStart -= 1;
       const turn = prior.slice(turnStart, i + 1);
       const turnBytes = turn.reduce((sum, entry) => sum + entry.byteLength, 0);
@@ -367,6 +389,73 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       // Never drop the sole active tool-result block.
       if (historyEntries.length <= active.length) break;
       historyEntries.shift();
+    }
+    // #1527: the surviving history must not begin with a tool result. Byte pressure can consume the
+    // whole budget with one large active result and drop the user turn that asked for it, and
+    // `conversationTurns()` then discards the result too for lack of a current turn — the wire
+    // request becomes system roots plus a bare result marker with no instruction, which a model
+    // answers in a handful of tokens.
+    //
+    // Recover the initiating root and pay for it out of the tool-result text instead.
+    //
+    // This needs no full-replay/checkpoint distinction, which is worth stating because the plan
+    // called for one. `activeStart > 0` confines the search to entries present in THIS call's
+    // history, so a checkpoint suffix can only ever recover a turn from inside its own uncovered
+    // slice — never one the checkpoint already carries. And for a suffix that does contain its
+    // initiating turn, recovery is exactly as necessary as it is for a full replay: mode-gating it
+    // would have recreated this defect for checkpoint continuations. Mutation testing found that;
+    // the mode flag could not be made to fail a test because it was never load-bearing.
+    if (
+      historyEntries.length > 0
+      && historyEntries[0]?.role === "toolResult"
+      && activeStart > 0
+    ) {
+      let initiatorIndex = activeStart - 1;
+      while (initiatorIndex >= 0 && history[initiatorIndex]?.role !== "user") {
+        initiatorIndex -= 1;
+      }
+      const initiator = initiatorIndex >= 0 ? history[initiatorIndex] : undefined;
+      if (initiator) {
+        const withInitiator = [initiator, ...historyEntries];
+        const initiatorBytes = withInitiator.reduce((sum, entry) => sum + entry.byteLength, 0);
+        if (withInitiator.length <= historyLimit && initiatorBytes <= historyBudget) {
+          historyEntries.length = 0;
+          historyEntries.push(...withInitiator);
+        } else {
+          // Make room for the initiator instead of abandoning it. Review found that gating this on
+          // `historyEntries.length === 1` left the defect fully intact for the far more common
+          // multi-result shape: one system root plus 191 small trailing results already fills the
+          // count limit, so the initiator did not fit, the single-result branch did not apply, and
+          // the request went out as 191 bare results with nothing asking for them — inside the new
+          // envelope, so the guard could not catch it either.
+          //
+          // Drop the OLDEST results first, which is the same direction the byte-pressure loop above
+          // already prunes, then truncate whatever survives. An instruction with fewer or shorter
+          // results is answerable; results with no instruction are not.
+          const kept = [...historyEntries];
+          while (kept.length > 1 && kept.length + 1 > historyLimit) kept.shift();
+          let keptBytes = kept.reduce((sum, entry) => sum + entry.byteLength, 0);
+          while (kept.length > 1 && initiator.byteLength + keptBytes > historyBudget) {
+            const dropped = kept.shift();
+            keptBytes -= dropped?.byteLength ?? 0;
+          }
+          if (kept.length === 1 && kept[0] && initiator.byteLength + keptBytes > historyBudget) {
+            const room = historyBudget - initiator.byteLength;
+            const shrunk = room > 0 ? truncateToolResultBlob(kept[0], room) : null;
+            if (shrunk) {
+              kept[0] = shrunk;
+              keptBytes = shrunk.byteLength;
+            }
+          }
+          // Only commit when the initiator genuinely fits alongside what is left. If the system
+          // prompt has consumed the budget so completely that not even a truncation marker fits,
+          // there is nothing honest to send here; the envelope guard downstream owns that case.
+          if (kept.length + 1 <= historyLimit && initiator.byteLength + keptBytes <= historyBudget) {
+            historyEntries.length = 0;
+            historyEntries.push(initiator, ...kept);
+          }
+        }
+      }
     }
     selected = [...systemEntries, ...historyEntries];
     const firstKept = historyEntries.find(entry => entry.messageIndex !== undefined);
@@ -976,6 +1065,40 @@ function buildPreparedCursorRunRequest(
   // filtered definitions the wire carries. Both helpers are pure.
   const visibleTools = cursorToolsForActivePrompt(request.tools, rawText, request.toolChoice);
   const mcpToolDefs = buildCursorToolDefinitions(visibleTools, request.toolChoice);
+  // The envelope is measured HERE, on the final root set, and nowhere else.
+  //
+  // `rootPromptMessages` cannot do it: it sees only a checkpoint suffix, so 192 checkpoint roots
+  // plus a two-root suffix passed its per-call check and emitted 194 roots; and its empty-history
+  // early return skips the pruning branch entirely, which let 193 system prompts through. Both are
+  // downstream of this point, which is the first place the wire content is fully known (#1527).
+  //
+  // The same measurement feeds the diagnostic below, so telemetry cannot disagree with the guard.
+  //
+  // Roots carried inside a decoded checkpoint need not be in the local store — Cursor minted some
+  // of them, and a resumed conversation legitimately references ids this process never wrote. So an
+  // unmeasurable root is counted, not fatal: the COUNT limit still binds it (that is the 194-root
+  // case), and `unmeasuredRoots` records that the byte total is a floor rather than a total. An
+  // earlier fail-closed version broke three passing checkpoint tests, which is the evidence that
+  // failing closed here would reject working continuation.
+  const measuredRootCount = conversationState.rootPromptMessagesJson.length;
+  let measuredRootBytes = 0;
+  let unmeasuredRoots = 0;
+  for (const blobId of conversationState.rootPromptMessagesJson) {
+    const size = cursorBlobByteLength(blobId);
+    if (size === null) unmeasuredRoots += 1;
+    else measuredRootBytes += size;
+  }
+  if (
+    isCursorExternalWireModel(request.modelId)
+    && (measuredRootCount > CURSOR_EXTERNAL_ROOT_BLOB_LIMIT || measuredRootBytes > CURSOR_EXTERNAL_ROOT_BYTE_LIMIT)
+  ) {
+    throw new CursorRootEnvelopeLimitError(
+      measuredRootCount,
+      measuredRootBytes,
+      CURSOR_EXTERNAL_ROOT_BLOB_LIMIT,
+      CURSOR_EXTERNAL_ROOT_BYTE_LIMIT,
+    );
+  }
   debugProviderDiagnostic("cursor", "run-request", {
     wireModel: request.modelId,
     action: actionCase,
@@ -987,8 +1110,13 @@ function buildPreparedCursorRunRequest(
     checkpointPresent: continuationMode === "checkpoint",
     checkpointBytes: continuationMode === "checkpoint" ? request.checkpointBytes?.byteLength : undefined,
     checkpointInvalidationReason,
-    rootBlobs: conversationState.rootPromptMessagesJson.length,
-    rootBytes: rootPromptMessagesState?.byteLength ?? 0,
+    rootBlobs: measuredRootCount,
+    // Was `rootPromptMessagesState?.byteLength ?? 0`, which reported 0 for a pure checkpoint and,
+    // for a suffix, counted a synthetic system root that had already been sliced off.
+    rootBytes: measuredRootBytes,
+    // Non-zero means rootBytes is a floor: that many roots came from a checkpoint the local store
+    // never held. Recorded rather than hidden, so an operator reading the number knows which it is.
+    ...(unmeasuredRoots > 0 ? { unmeasuredRoots } : {}),
     turnBlobs: conversationState.turns.length,
     tools: request.tools?.length ?? 0,
   });

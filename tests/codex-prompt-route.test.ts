@@ -9,9 +9,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
 import { LAYER_INVENTORY, readPromptLayers } from "../src/codex/prompt-layers";
+import {
+  promptTextProbeSpawnAttemptsForTests,
+  resetPromptTextProbeForTests,
+  setPromptTextProbeCommandForTests,
+} from "../src/codex/prompt-text-probe";
 import type { ManagementPrincipal } from "../src/server/management-auth";
 import type { OcxConfig } from "../src/types";
 
@@ -62,6 +67,23 @@ function ownedConfig(projection: string): string {
 
 function read(path: string): string | null {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+async function waitUntil(predicate: () => boolean, detail: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${detail}`);
+    await Bun.sleep(10);
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -117,7 +139,8 @@ async function revision(fx: Fixture): Promise<string> {
   return res.body.revision as string;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await resetPromptTextProbeForTests();
   while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
@@ -787,7 +810,7 @@ describe("020 coverage completions", () => {
     const probe = await Bun.file(new URL("../src/codex/prompt-text-probe.ts", import.meta.url)).text();
     // The probe resolves CODEX_HOME itself; it must not accept a directory.
     expect(probe).toContain("resolveCodexHomeDir()");
-    expect(probe).toMatch(/export async function probePromptText\(timeoutMs/);
+    expect(probe).toMatch(/export async function probePromptText\(\s*timeoutMs/);
   });
 
   test("26. the probe is bounded in bytes as well as in time", async () => {
@@ -799,6 +822,616 @@ describe("020 coverage completions", () => {
     // Decoding per chunk corrupts UTF-8 that straddles a chunk boundary.
     expect(probe).toContain("Buffer.concat(chunks).toString(\"utf8\")");
   });
+
+  test("27. the text route forwards live request cancellation to its exact child", async () => {
+    const fx = fixture("");
+    const pidPath = join(fx.decoyHome, "probe-pid.txt");
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", [
+        `require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
+        "setInterval(() => {}, 1_000);",
+      ].join("")],
+    });
+    const controller = new AbortController();
+    const url = new URL("http://127.0.0.1:10100/api/codex-prompt/text");
+    const req = new Request(url, {
+      method: "GET",
+      headers: { host: "127.0.0.1:10100" },
+      signal: controller.signal,
+    });
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = fx.decoyHome;
+    let res: Response | null = null;
+    try {
+      const pending = handleManagementAPI(req, url, config, {
+        codexPromptPaths: { configPath: fx.configPath, storePath: fx.storePath, baseVariantDir: fx.baseVariantDir },
+      }, "gui-session");
+      await waitUntil(() => existsSync(pidPath), "route probe child pid");
+      controller.abort();
+      res = await pending;
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
+
+    expect(res?.status).toBe(200);
+    expect(await res?.json()).toMatchObject({ ok: false, detail: "prompt probe cancelled" });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    const pid = Number(readFileSync(pidPath, "utf8"));
+    await waitUntil(() => !isProcessAlive(pid), "route probe child exit");
+    expectDecoyUntouched(fx);
+  });
+
+  test("28. a post-write text read never joins a pre-write probe", async () => {
+    const fx = fixture("include_apps_instructions = false\n");
+    const startedPath = join(fx.decoyHome, "revision-probe-started.txt");
+    const probeOutput = JSON.stringify([{
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "<skills_instructions>Skill text.</skills_instructions>" }],
+    }]);
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", [
+        `require("node:fs").writeFileSync(${JSON.stringify(startedPath)}, "started");`,
+        `setTimeout(() => process.stdout.write(${JSON.stringify(probeOutput)}), 200);`,
+      ].join("")],
+    });
+
+    const beforeWrite = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "pre-write probe start");
+    writeFileSync(fx.configPath, "include_apps_instructions = true\n", "utf8");
+
+    const afterWrite = await call("GET", "/api/codex-prompt/text", fx);
+    expect(afterWrite.body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeWrite).body.ok).toBe(true);
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.ok).toBe(true);
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
+  test("29. editing the selected base variant invalidates an in-flight text probe", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const created = await call("PUT", "/api/codex-prompt/base", fx, {
+      id: null, title: "Old", body: "old-body", revision: await revision(fx),
+    });
+    const id = created.body.snapshot.baseVariants[0].id as string;
+    await call("PUT", "/api/codex-prompt/base/select", fx, {
+      kind: "variant", id, revision: await revision(fx),
+    });
+
+    const selectedPath = join(fx.baseVariantDir, `${id}.md`);
+    const startedPath = join(fx.decoyHome, "variant-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const prompt = fs.readFileSync(${JSON.stringify(selectedPath)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + prompt + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const revisionBeforeEdit = await revision(fx);
+    const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "selected-variant probe start");
+
+    const edited = await call("PUT", "/api/codex-prompt/base", fx, {
+      id, title: "New", body: "new-body", revision: revisionBeforeEdit,
+    });
+    expect(edited.status).toBe(200);
+    expect(await revision(fx)).toBe(revisionBeforeEdit);
+
+    const afterEdit = await call("GET", "/api/codex-prompt/text", fx);
+    expect(afterEdit.body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("# Old\nold-body");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("# New\nnew-body");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+    expect(readFileSync(startedPath, "utf8").trim().split(/\r?\n/)).toHaveLength(2);
+  });
+
+  /**
+   * The probe renders AGENTS.md out of the home it runs in, so admission has to
+   * name that file. It is asserted here rather than in the probe unit test because
+   * this harness is the only one where CODEX_HOME and the injected
+   * `codexPromptPaths` are deliberately different directories: a fingerprint that
+   * derived the path from the injected config would agree with itself and pass,
+   * while production kept serving pre-write text.
+   *
+   * The stale value is asserted, not merely a differing key — the failure this
+   * covers is a caller receiving another caller's older AGENTS text.
+   */
+  for (const instructionFile of ["AGENTS.md", "AGENTS.override.md"]) {
+    test(`30. editing ${instructionFile} invalidates an in-flight text probe`, async () => {
+      const fx = fixture("model = \"x\"\n");
+      const agentsPath = join(fx.decoyHome, instructionFile);
+      writeFileSync(agentsPath, "old-agent-text", "utf8");
+      const startedPath = join(fx.decoyHome, "agents-probe-starts.txt");
+      const source = [
+        `const fs = require("node:fs");`,
+        `const doc = fs.readFileSync(${JSON.stringify(agentsPath)}, "utf8");`,
+        `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+        `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+        "setTimeout(() => process.stdout.write(output), 200);",
+      ].join("");
+      setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+      const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+      await waitUntil(() => existsSync(startedPath), `${instructionFile} probe start`);
+
+      // Nothing opencodex owns has changed: no config write, no store write, so
+      // the transaction revision and the selected base are identical here.
+      writeFileSync(agentsPath, "new-agent-text", "utf8");
+
+      const afterEdit = await call("GET", "/api/codex-prompt/text", fx);
+      expect(afterEdit.body).toMatchObject({
+        ok: false,
+        detail: "another prompt probe is still finishing; retry shortly",
+      });
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+      expect((await beforeEdit).body.layers.skills.text).toBe("old-agent-text");
+
+      const fresh = await call("GET", "/api/codex-prompt/text", fx);
+      expect(fresh.body.layers.skills.text).toBe("new-agent-text");
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+      expect(readFileSync(startedPath, "utf8").trim().split(/\r?\n/)).toHaveLength(2);
+    });
+  }
+
+  test("31. creating and deleting an instruction file both move probe admission", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const agentsPath = join(fx.decoyHome, "AGENTS.md");
+    const startedPath = join(fx.decoyHome, "absent-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      // Absence is a state this case asserts on, so it is tested for rather than
+      // caught: an empty catch here would also swallow a genuinely unreadable file
+      // and report it as absent.
+      `const doc = fs.existsSync(${JSON.stringify(agentsPath)}) ? fs.readFileSync(${JSON.stringify(agentsPath)}, "utf8") : "\\u0000absent";`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    // absent -> present must move the key, so a probe started with no AGENTS.md
+    // cannot be joined once one exists.
+    const beforeCreate = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "absent-state probe start");
+    writeFileSync(agentsPath, "created-text", "utf8");
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect((await beforeCreate).body.layers.skills.text).toBe("\u0000absent");
+
+    const present = await call("GET", "/api/codex-prompt/text", fx);
+    expect(present.body.layers.skills.text).toBe("created-text");
+
+    // present -> absent is the same requirement in reverse.
+    const beforeDelete = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => readFileSync(startedPath, "utf8").trim().split(/\r?\n/).length === 3, "present-state probe start");
+    rmSync(agentsPath);
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect((await beforeDelete).body.layers.skills.text).toBe("created-text");
+  });
+
+  /**
+   * Absence and emptiness are different prompt states, and a sentinel STRING cannot
+   * tell them apart: an adversarial review showed the null case colliding with a file
+   * whose bytes were literally NUL + "absent", so deleting such a file left the
+   * admission key unmoved. The framing carries a byte length instead, and -1 is not a
+   * length any content can produce.
+   *
+   * Two single-transition cases rather than one chained walk: each in-flight probe is
+   * observed by its own marker file, so a request that is correctly refused as `busy`
+   * cannot be mistaken for a probe that never started.
+   */
+  for (const transition of [
+    { name: "deleting a file whose content is the old absent sentinel", before: "\u0000absent", after: null },
+    { name: "emptying a file", before: "had-content", after: "" },
+    // The one transition where absent and empty are the ONLY difference. A
+    // fingerprint that measured a missing file as zero bytes would hash these two
+    // states identically and hand the second caller the first one's text.
+    { name: "deleting an already-empty file", before: "", after: null },
+  ]) {
+    test(`32. ${transition.name} moves probe admission`, async () => {
+      const fx = fixture("model = \"x\"\n");
+      const agentsPath = join(fx.decoyHome, "AGENTS.md");
+      writeFileSync(agentsPath, transition.before, "utf8");
+      const startedPath = join(fx.decoyHome, "transition-probe-starts.txt");
+      const source = [
+        `const fs = require("node:fs");`,
+        `const p = ${JSON.stringify(agentsPath)};`,
+        `const doc = fs.existsSync(p) ? "present:" + fs.readFileSync(p, "utf8") : "missing";`,
+        `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+        `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+        "setTimeout(() => process.stdout.write(output), 200);",
+      ].join("");
+      setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+      const beforeTransition = call("GET", "/api/codex-prompt/text", fx);
+      await waitUntil(() => existsSync(startedPath), "transition probe start");
+      if (transition.after === null) rmSync(agentsPath);
+      else writeFileSync(agentsPath, transition.after, "utf8");
+
+      expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+        ok: false,
+        detail: "another prompt probe is still finishing; retry shortly",
+      });
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+      expect((await beforeTransition).body.layers.skills.text).toBe(`present:${transition.before}`);
+
+      const fresh = await call("GET", "/api/codex-prompt/text", fx);
+      expect(fresh.body.layers.skills.text).toBe(transition.after === null ? "missing" : `present:${transition.after}`);
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+    });
+  }
+  /**
+   * A file's own bytes must not be able to imitate the separator that frames the
+   * next field. Without a length prefix these two states hash identically, and the
+   * second request joins the first probe and is served its text.
+   */
+  test("33. instruction-file content cannot imitate a fingerprint field boundary", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const overridePath = join(fx.decoyHome, "AGENTS.override.md");
+    const agentsPath = join(fx.decoyHome, "AGENTS.md");
+    writeFileSync(overridePath, "left", "utf8");
+    writeFileSync(agentsPath, "right\nAGENTS.md:tail", "utf8");
+    const startedPath = join(fx.decoyHome, "framing-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const read = p => fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "\\u0000missing";`,
+      `const doc = read(${JSON.stringify(overridePath)}) + "|" + read(${JSON.stringify(agentsPath)});`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const beforeShift = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "framing probe start");
+
+    // Move the boundary: the concatenation of (name, contents) is byte-identical
+    // across this edit, so only a length-framed field distinguishes the two states.
+    writeFileSync(overridePath, "left\nAGENTS.md:right", "utf8");
+    writeFileSync(agentsPath, "tail", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeShift).body.layers.skills.text).toBe("left|right\nAGENTS.md:tail");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("left\nAGENTS.md:right|tail");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
+  /**
+   * An externally authored base prompt is hashed exactly like a managed variant.
+   * Recording only the word "external" made the admission guarantee depend on who
+   * wrote the file, which is not a distinction the caller can observe. The path is
+   * part of the identity too: repointing the key at a different file changes the
+   * prompt even when both files happen to read alike.
+   */
+  test("34. editing an external base prompt invalidates an in-flight text probe", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const externalPath = join(fx.decoyHome, "external-base.md");
+    writeFileSync(externalPath, "old-external", "utf8");
+    await call("PUT", "/api/codex-prompt/base/select", fx, {
+      kind: "external", path: externalPath, revision: await revision(fx),
+    });
+    // Selection through the route is not assumed: the fixture config is what the
+    // fingerprint reads, so assert the state this case depends on.
+    writeFileSync(fx.configPath, `model_instructions_file = "${externalPath}"\n`, "utf8");
+
+    const startedPath = join(fx.decoyHome, "external-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(externalPath)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "external base probe start");
+    writeFileSync(externalPath, "new-external", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-external");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("new-external");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
+  /**
+   * A relative model_instructions_file is resolved against the config file's own
+   * directory, which is what Codex does with its relative path fields. Resolving it
+   * against this process's cwd instead would hash whatever happens to sit beside the
+   * proxy's working directory — a file unrelated to the prompt.
+   *
+   * The fixture root is not the process cwd, so this fails if the base is wrong.
+   */
+  test("35. a relative external base path resolves against the config directory", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const externalPath = join(dirname(fx.configPath), "relative-base.md");
+    writeFileSync(externalPath, "old-relative", "utf8");
+    writeFileSync(fx.configPath, "model_instructions_file = \"relative-base.md\"\n", "utf8");
+
+    const startedPath = join(fx.decoyHome, "relative-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(externalPath)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "relative base probe start");
+    writeFileSync(externalPath, "new-relative", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-relative");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("new-relative");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
+  /**
+   * A user who configures project_doc_fallback_filenames renders those files, so the
+   * admission key has to know about them. Hard-coding AGENTS.md would let an edit to
+   * a configured TEAM.md pass unnoticed and serve a joiner stale text.
+   *
+   * Both TOML spellings are covered: the value is read with the same decoder used for
+   * every other field in this file, not a double-quote-only regex.
+   */
+  for (const spelling of [
+    { label: "double-quoted", literal: "[\"TEAM.md\"]" },
+    { label: "single-quoted", literal: "['TEAM.md']" },
+    // Upstream accepts this ordinary spelling and a single-line regex missed it.
+    { label: "multi-line", literal: "[\n  \"TEAM.md\",\n]" },
+    // Upstream trims each name and drops whitespace-only entries, so a padded value
+    // is the same filename rather than a different one.
+    { label: "padded", literal: "[\"  TEAM.md  \", \"   \"]" },
+    // A comment directly after the opening bracket. The hand-rolled reader consumed
+    // the first entry along with it.
+    { label: "comment-after-bracket", literal: "[ # team docs\n  \"TEAM.md\",\n]" },
+  ]) {
+    for (const keyForm of ["bare", "quoted"]) {
+    test(`36. a ${spelling.label} fallback project document with a ${keyForm} key moves probe admission`, async () => {
+      const key = keyForm === "quoted" ? "\"project_doc_fallback_filenames\"" : "project_doc_fallback_filenames";
+      const fx = fixture(`${key} = ${spelling.literal}\n`);
+      const teamPath = join(fx.decoyHome, "TEAM.md");
+      writeFileSync(teamPath, "old-team", "utf8");
+      const startedPath = join(fx.decoyHome, "team-probe-starts.txt");
+      const source = [
+        `const fs = require("node:fs");`,
+        `const doc = fs.readFileSync(${JSON.stringify(teamPath)}, "utf8");`,
+        `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+        `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+        "setTimeout(() => process.stdout.write(output), 200);",
+      ].join("");
+      setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+      const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+      await waitUntil(() => existsSync(startedPath), "fallback doc probe start");
+      writeFileSync(teamPath, "new-team", "utf8");
+
+      expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+        ok: false,
+        detail: "another prompt probe is still finishing; retry shortly",
+      });
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+      expect((await beforeEdit).body.layers.skills.text).toBe("old-team");
+
+      const fresh = await call("GET", "/api/codex-prompt/text", fx);
+      expect(fresh.body.layers.skills.text).toBe("new-team");
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+    });
+    }
+  }
+
+  /**
+   * A CODEX_HOME inside a git checkout — `~/.codex` in a dotfiles repository is an
+   * ordinary setup — makes Codex search every directory from the repository root down
+   * to the home, so a parent AGENTS.md is rendered and has to move admission.
+   *
+   * This case exists because the first version of the fix argued the ancestor walk
+   * could never find anything and left it out. It could.
+   */
+  test("37. a parent-directory project document moves probe admission", async () => {
+    const fx = fixture("model = \"x\"\n");
+    // A repository root of this test's own, holding the home one level down, so the
+    // document is reachable ONLY by walking up. Built inside the fixture's tracked
+    // root rather than beside it: writing a .git marker into the shared temp
+    // directory would change root detection for every other test using tmpdir().
+    const root = join(fx.baseVariantDir, "..", "ancestor-root");
+    const nestedHome = join(root, "home");
+    mkdirSync(join(root, ".git"), { recursive: true });
+    mkdirSync(nestedHome, { recursive: true });
+    const parentDoc = join(root, "AGENTS.md");
+    writeFileSync(parentDoc, "old-parent", "utf8");
+    const startedPath = join(nestedHome, "parent-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(parentDoc)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const nested: Fixture = { ...fx, decoyHome: nestedHome };
+    const beforeEdit = call("GET", "/api/codex-prompt/text", nested);
+    await waitUntil(() => existsSync(startedPath), "parent doc probe start");
+    writeFileSync(parentDoc, "new-parent", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", nested)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-parent");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", nested);
+    expect(fresh.body.layers.skills.text).toBe("new-parent");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
+  /**
+   * Root detection has to honour a configured marker under any valid spelling. With a
+   * quoted key a hand-rolled reader fell back to `.git`, found no root, and searched
+   * the home alone — so an ancestor document it should have covered went unhashed.
+   */
+  test("38. a quoted project_root_markers key still selects the configured root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-prompt-marker-"));
+    roots.push(root);
+    const nestedHome = join(root, "home");
+    mkdirSync(nestedHome, { recursive: true });
+    writeFileSync(join(root, ".probe-root"), "", "utf8");
+    const fx = fixture("\"project_root_markers\" = [\".probe-root\"]\n");
+    const parentDoc = join(root, "AGENTS.md");
+    writeFileSync(parentDoc, "old-marker", "utf8");
+    const startedPath = join(nestedHome, "marker-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(parentDoc)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const nested: Fixture = { ...fx, decoyHome: nestedHome };
+    const beforeEdit = call("GET", "/api/codex-prompt/text", nested);
+    await waitUntil(() => existsSync(startedPath), "marker doc probe start");
+    writeFileSync(parentDoc, "new-marker", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", nested)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-marker");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", nested);
+    expect(fresh.body.layers.skills.text).toBe("new-marker");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
+  /**
+   * A config Codex reads and this process's TOML parser refuses. `i64` is an ordinary
+   * TOML integer and Rust accepts it; Bun rejects the whole document because the value
+   * exceeds JavaScript's safe range. Reading that as "no keys configured" dropped every
+   * fallback filename at once — worse than the missed spellings the parser was adopted
+   * to fix, and a failure the earlier textual reader did not have.
+   */
+  test("39. a config this parser rejects still contributes its project documents", async () => {
+    const fx = fixture([
+      "project_doc_fallback_filenames = [\"TEAM.md\"]",
+      // Valid i64, outside Number.MAX_SAFE_INTEGER.
+      "model_context_window = 9223372036854775807",
+      "",
+    ].join("\n"));
+    // The premise: this really is unparseable here, so the case cannot silently
+    // degrade into testing the ordinary parsed path.
+    expect(() => Bun.TOML.parse(readFileSync(fx.configPath, "utf8"))).toThrow();
+
+    const teamPath = join(fx.decoyHome, "TEAM.md");
+    writeFileSync(teamPath, "old-unparseable", "utf8");
+    const startedPath = join(fx.decoyHome, "unparseable-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(teamPath)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "unparseable-config probe start");
+    writeFileSync(teamPath, "new-unparseable", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-unparseable");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("new-unparseable");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
+  /**
+   * A skill's SKILL.md frontmatter is rendered into the skills section, so editing a
+   * description changes what the probe returns. This was documented as unobservable
+   * until a review round changed one live and watched the output move while the
+   * fingerprint stood still.
+   */
+  test("40. editing a SKILL.md manifest invalidates an in-flight text probe", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const manifest = join(fx.decoyHome, "skills", "probe-skill", "SKILL.md");
+    mkdirSync(dirname(manifest), { recursive: true });
+    writeFileSync(manifest, "---\nname: probe-skill\ndescription: old-skill-text\n---\n", "utf8");
+    const startedPath = join(fx.decoyHome, "skill-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(manifest)}, "utf8").match(/description: (.*)/)[1];`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "skill manifest probe start");
+    writeFileSync(manifest, "---\nname: probe-skill\ndescription: new-skill-text\n---\n", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-skill-text");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("new-skill-text");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
   test("24. every ownership state is named, not collapsed into a boolean", async () => {
     // developerInstructionsOwned:false covers an ABSENT key and an EXTERNAL one, and
     // a GUI that cannot tell them apart hides its own create affordance from every

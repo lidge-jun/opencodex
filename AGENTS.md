@@ -171,7 +171,8 @@ it binds you regardless of which mechanism is within reach.
 ```bash
 bun install
 bun run typecheck      # bun x tsc --noEmit (strict)
-bun run test           # full tests/ suite
+bun run test:changed   # import-graph tests against the resolved `dev` merge base
+bun run test           # full tests/ suite (PR-ready / explicit ask only)
 bun run lint:gui       # GUI eslint
 bun run privacy:scan   # credential/privacy scan used by CI
 bun run build:gui      # Vite GUI build
@@ -191,10 +192,17 @@ also if the hand-written pages name a command the registry does not have. That s
 hypothetical: it caught a documented `ocx request-history` that never existed.
 
 During implementation, use the smallest focused checks that directly cover the
-changed subsystem. Do not run repository-wide `bun run typecheck` or
-`bun run test` for a scoped change unless the change affects shared runtime,
-routing, config, server behavior, a focused result is failed or ambiguous, or
-the user explicitly asks for full validation.
+changed subsystem. Prefer `bun test tests/<name>.test.ts` for a known file, or
+`bun run test:changed` when the touch set is broader than one file. Do **not**
+run repository-wide `bun run test` or a bare `bun test` with no file arguments
+for a scoped change by default. `bun run test:changed` follows Bun's parsed module graph: it
+selects test files that import changed modules, but it cannot see dependencies
+expressed through subprocesses, source files read as data, or golden/derived
+files. Run the relevant focused tests explicitly for those paths; if no reliable
+focused set covers them, the full suite is required even for a scoped change.
+That indirect-dependency case is the explicit exception to the scoped-change
+default. The full suite is ~850 files, so otherwise reserve it for a failed or
+ambiguous focused result, an explicit user request, or the PR-ready gate below.
 
 Before creating or updating a non-trivial PR as review-ready, or before
 approving such a PR, run `bun run typecheck` and `bun run test`. CI runs these
@@ -326,8 +334,9 @@ reviewers (Codex, CodeRabbit).
   assumptions about a compile step, or code paths that break `bun run
   typecheck` / `bun run test`.
 - **Tests:** behavior changes in `src/` need a focused regression test near
-  the existing tests for that subsystem. Shared routing, adapter, config, or
-  server changes need the full suite green.
+  the existing tests for that subsystem. During implementation, run the relevant
+  focused files and use `bun run test:changed` for import-connected coverage as
+  described above; the full suite is the PR-ready gate.
 - **Docs sync:** user-facing behavior changes should update `docs-site/` (and
   keep translated locales from contradicting the English source).
 - **Privacy:** `bun run privacy:scan` must stay green; never introduce logging

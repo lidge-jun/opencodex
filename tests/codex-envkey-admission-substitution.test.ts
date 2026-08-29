@@ -7,6 +7,7 @@ import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
+import { waitForNativeMainStartupGate } from "../src/codex/native-profile-startup";
 
 /**
  * #1686 end to end: a Codex client injected with `env_key` presents the proxy admission
@@ -22,6 +23,50 @@ const originalFetch = globalThis.fetch;
 const previousOcxHome = process.env.OPENCODEX_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
 const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+
+/**
+ * Start the proxy with ownership scoped to THIS fixture's homes.
+ *
+ * `startServer` inspects the installed service state to decide whether another
+ * installation owns the native homes, and the default path set always includes
+ * `homedir()/.opencodex/service-state.json` -- which no test sandbox moves. On any
+ * machine with a real service installed, that file names the developer's homes,
+ * these temp homes read as `foreign`, native-main admission is fenced, and every
+ * request here answers 503 instead of the 200/401 the case is about. The
+ * ownership-preflight header calls this out by name; this suite had not taken the
+ * seam.
+ *
+ * Empty `statePaths` is "no service is installed", which is the premise these
+ * cases already assume. It narrows the fixture rather than weakening the guard:
+ * the ownership rule itself is covered by its own suites, which inject real
+ * state files.
+ */
+function startFixtureServer(): ReturnType<typeof startServer> {
+  return startServer(0, {
+    inspectNativeCodexOwnership: () => ({ ownership: "owned" as const }),
+  });
+}
+
+/**
+ * Start the proxy and wait for the native-main startup gate to settle.
+ *
+ * `startServer` returns as soon as it is listening, but native-main convergence
+ * continues asynchronously and holds a `recovery-pending` fence while it runs —
+ * during which native model requests answer 503 by design. These cases are about
+ * what admission does with a bearer, so racing that convergence tests the wrong
+ * thing: locally the gate settles first and they pass, on a loaded Windows shard
+ * it does not and all three fail with a 503 that is correct behaviour for a state
+ * they never meant to be in.
+ *
+ * `waitForNativeMainStartupGate` is the seam the runtime already exposes for
+ * this. Nothing is stubbed out: convergence still runs, and the assertions still
+ * exercise the real post-gate path.
+ */
+async function startSettledFixtureServer(): Promise<ReturnType<typeof startServer>> {
+  const server = startFixtureServer();
+  await waitForNativeMainStartupGate();
+  return server;
+}
 
 let ocxHome = "";
 let codexHome = "";
@@ -124,7 +169,7 @@ describe("#1686 env_key bearer admission reaches Direct with substitution", () =
     const stored = liveJwt();
     writeStoredMain(stored);
 
-    const server = startServer(0);
+    const server = await startSettledFixtureServer();
     try {
       const response = await postResponses(server.url, `Bearer ${ADMISSION_SECRET}`);
 
@@ -153,7 +198,7 @@ describe("#1686 env_key bearer admission reaches Direct with substitution", () =
     saveConfig(directConfig());
     writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
 
-    const server = startServer(0);
+    const server = await startSettledFixtureServer();
     try {
       const response = await postResponses(server.url, `Bearer ${ADMISSION_SECRET}`);
 
@@ -170,7 +215,7 @@ describe("#1686 env_key bearer admission reaches Direct with substitution", () =
     saveConfig(directConfig());
     writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
 
-    const server = startServer(0);
+    const server = await startSettledFixtureServer();
     try {
       const response = await postCompact(server.url, `Bearer ${ADMISSION_SECRET}`);
       const body = await response.json() as { error?: { type?: string; message?: string } };
@@ -188,7 +233,7 @@ describe("#1686 env_key bearer admission reaches Direct with substitution", () =
     saveConfig(directConfig());
     writeStoredMain(liveJwt());
 
-    const server = startServer(0);
+    const server = await startSettledFixtureServer();
     try {
       // A real ChatGPT credential is NOT one of our secrets, so it must not be admitted as one.
       const response = await postResponses(server.url, "Bearer sk-user-chatgpt-token");

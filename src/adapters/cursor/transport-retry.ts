@@ -2,7 +2,7 @@ import type { CursorRunRequest, CursorServerMessage } from "./types";
 import type { CursorTransport, CursorTransportFactory, CursorTransportFactoryInput } from "./transport";
 import { abortError, retryBackoffDelayMs, sleepWithAbort } from "../../lib/upstream-retry";
 import { debugProviderDiagnostic } from "../../lib/debug";
-import { safeCursorErrorMessage } from "./cursor-errors";
+import { isCursorRootEnvelopeError, safeCursorErrorMessage } from "./cursor-errors";
 
 // Compat: historical name for the shared abortable sleep, kept for external callers.
 export { sleepWithAbort as abortAwareSleep } from "../../lib/upstream-retry";
@@ -18,6 +18,10 @@ export const CURSOR_RETRY_MAX_MS = 2_000;
  * never replay a turn the Cursor server might already have accepted.
  */
 export function isRetryableCursorError(err: unknown): boolean {
+  // Local envelope failures are deterministic: the same request produces the same rejection.
+  // Checked before the text heuristics below, which would otherwise have to infer this from
+  // wording.
+  if (isCursorRootEnvelopeError(err)) return false;
   const code = typeof err === "object" && err && "code" in err ? String((err as { code?: unknown }).code ?? "") : "";
   const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
   const haystack = `${code} ${message}`.toLowerCase();

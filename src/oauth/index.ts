@@ -4,7 +4,7 @@ import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
-import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, normalizeAuthStoreBuffer, OAuthMutationBusyError } from "./store";
+import { getAccountCredential, getAccountCredentialWithStatus, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, normalizeAuthStoreBuffer, OAuthMutationBusyError } from "./store";
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
@@ -436,11 +436,18 @@ async function resolveAccessSnapshotForAccount(
   provider: string,
   accountId: string,
   rejectedGeneration?: string,
+  requireUsableAccount = false,
 ): Promise<OAuthAccessSnapshot> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
-  const cred = getAccountCredential(provider, accountId);
-  if (!cred) throw new OAuthLoginRequiredError(provider);
+  // One store read answers both questions. A caller that opts in gets the account REJECTED
+  // when it needs reauthentication, which a bare credential read cannot detect: a revoked
+  // account keeps a readable credential, so resolution would otherwise succeed and the
+  // request would dispatch on an account already known to need a fresh login.
+  const row = getAccountCredentialWithStatus(provider, accountId);
+  if (!row) throw new OAuthLoginRequiredError(provider);
+  if (requireUsableAccount && row.needsReauth) throw new OAuthLoginRequiredError(provider);
+  const cred = row.credential;
   const current = accessSnapshot(provider, accountId, cred);
   if (rejectedGeneration !== undefined && current.generation !== rejectedGeneration) return current;
   if (rejectedGeneration === undefined && cred.expires > Date.now() + REFRESH_SKEW_MS) return current;
@@ -529,8 +536,9 @@ export async function getValidAccessTokenForAccount(provider: string, accountId:
 export async function getValidAccessSnapshotForAccount(
   provider: string,
   accountId: string,
+  opts: { requireUsableAccount?: boolean } = {},
 ): Promise<OAuthAccessSnapshot> {
-  return resolveAccessSnapshotForAccount(provider, accountId);
+  return resolveAccessSnapshotForAccount(provider, accountId, undefined, opts.requireUsableAccount === true);
 }
 
 /** Terminal refresh failures (revoked/rotated-away grants) — retrying cannot succeed. */

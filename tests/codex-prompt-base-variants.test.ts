@@ -68,8 +68,11 @@ describe("base variant selection", () => {
 
     expect(selectBaseVariant({ kind: "variant", id }, rev(paths), paths).ok).toBe(true);
     const withVariant = read(paths.configPath)!;
-    expect(withVariant).toContain("model_instructions_file = ");
-    expect(withVariant).toContain(resolve(join(paths.baseVariantDir, id + ".md")));
+    const selectedPath = resolve(join(paths.baseVariantDir, id + ".md"));
+    // The file is TOML, so Windows backslashes appear in an encoded basic-string
+    // literal rather than as the raw filesystem path.
+    expect(withVariant).toContain(`model_instructions_file = ${JSON.stringify(selectedPath)}`);
+    // Assert the decoded behavior separately from its on-disk representation.
     expect(readPromptLayers(paths).baseSelection).toEqual({ kind: "variant", id });
 
     expect(selectBaseVariant({ kind: "default" }, rev(paths), paths).ok).toBe(true);

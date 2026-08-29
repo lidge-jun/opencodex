@@ -49,6 +49,7 @@ import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from ".
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { killWindowsSchedulerWrappers } from "./lib/windows-service-wrappers";
 import { maybeShowStarPrompt } from "./cli/star-prompt";
+import { systemdProperty } from "./service-manager-probe";
 
 const LABEL = "com.opencodex.proxy";
 const TASK = "opencodex-proxy";
@@ -704,12 +705,6 @@ export function resolvedProxyEnv(env: NodeJS.ProcessEnv = process.env): { name: 
     if (value) resolved.push({ name: key, value });
   }
   return resolved;
-}
-
-function systemdOutputTarget(value: string): string {
-  // StandardOutput/StandardError use output specifiers such as append:/path.
-  // Quoting the full specifier makes systemd reject it as an invalid output target.
-  return value.replace(/%/g, "%%").replace(/\n/g, "\\n");
 }
 
 function sh(cmd: string): string {
@@ -2549,6 +2544,7 @@ export function buildUnit(proxyEnv: { name: string; value: string }[] = resolved
     opencodexHome,
     ...proxyEnv.map(({ name, value }) => systemdEnvironmentAssignment(name, value)),
   ].filter((line): line is string => Boolean(line)).join("\n");
+  const command = `${buildServiceShellCommand(bun, cli)} >> ${shellQuote(log)} 2>&1`;
   return `[Unit]
 Description=OpenCodex Proxy Server
 After=network-online.target
@@ -2556,12 +2552,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${systemdQuote("/bin/sh")} -lc ${systemdQuote(buildServiceShellCommand(bun, cli))}
+ExecStart=${systemdQuote("/bin/sh")} -lc ${systemdQuote(command)}
 Restart=on-failure
 RestartSec=5
 ${envLines}
-StandardOutput=${systemdOutputTarget(`append:${log}`)}
-StandardError=${systemdOutputTarget(`append:${log}`)}
 
 [Install]
 WantedBy=default.target
@@ -2660,10 +2654,18 @@ function startSystemd(): void {
 }
 function stopSystemd(): void { try { sh(`systemctl --user stop ${TASK}`); } catch { /* not running */ } }
 function statusSystemd(): string { try { return sh(`systemctl --user status ${TASK}`); } catch { return ""; } }
-function uninstallSystemd(): void {
-  try { sh(`systemctl --user disable --now ${TASK}`); } catch { /* absent */ }
-  if (existsSync(unitPath())) unlinkSync(unitPath());
-  try { sh("systemctl --user daemon-reload"); } catch { /* best-effort */ }
+export function uninstallSystemd(deps: {
+  run?: (command: string) => string;
+  unitExists?: () => boolean;
+  removeUnit?: () => void;
+} = {}): void {
+  const run = deps.run ?? sh;
+  try { run(`systemctl --user stop ${TASK}`); } catch { /* not running */ }
+  try { run(`systemctl --user disable ${TASK}`); } catch { /* absent */ }
+  if ((deps.unitExists ?? (() => existsSync(unitPath())))()) {
+    (deps.removeUnit ?? (() => unlinkSync(unitPath())))();
+  }
+  try { run("systemctl --user daemon-reload"); } catch { /* best-effort */ }
 }
 
 type ServiceOps = {
@@ -2675,6 +2677,21 @@ type ServiceInstallCleanupOps = {
   status: () => string | null;
   stop: () => void;
 };
+
+export function systemdServiceInstallCleanupOps(deps: {
+  run?: (command: string) => string;
+} = {}): ServiceInstallCleanupOps {
+  const run = deps.run ?? sh;
+  return {
+    status: () => {
+      const output = run(`systemctl --user show -p LoadState ${TASK}`);
+      const loadState = systemdProperty(output, "LoadState")?.toLowerCase();
+      if (!loadState) throw new Error("systemd service status could not be verified.");
+      return loadState === "not-found" ? null : loadState;
+    },
+    stop: () => { run(`systemctl --user stop ${TASK}`); },
+  };
+}
 
 function platformOps(backend: ServiceBackend = "scheduler"): ServiceOps | null {
   if (process.platform === "darwin")
@@ -2744,20 +2761,13 @@ function platformServiceInstallCleanupOps(backend: ServiceBackend): ServiceInsta
     };
   }
   if (process.platform === "linux") {
-    return {
-      status: () => {
-        // `list-unit-files <name>` exits non-zero when the unit has never been
-        // installed, which made a clean first install look like an unknown manager
-        // failure. `show LoadState` gives us the tri-state we actually need: a
-        // healthy user manager returns `not-found` for a missing unit, while an
-        // unreachable/permission-denied manager still makes `sh()` throw and the
-        // caller therefore fails closed.
-        const loadState = sh(`systemctl --user show ${TASK} --property=LoadState --value`).trim().toLowerCase();
-        if (!loadState) throw new Error("systemd service status could not be verified.");
-        return loadState === "not-found" ? null : loadState;
-      },
-      stop: () => { sh(`systemctl --user stop ${TASK}`); },
-    };
+    // `list-unit-files <name>` exits non-zero when the unit has never been
+    // installed, which made a clean first install look like an unknown manager
+    // failure. `show LoadState` gives us the tri-state we actually need: a
+    // healthy user manager returns `not-found` for a missing unit, while an
+    // unreachable/permission-denied manager still makes `sh()` throw and the
+    // caller therefore fails closed.
+    return systemdServiceInstallCleanupOps();
   }
   return null;
 }

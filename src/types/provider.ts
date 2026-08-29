@@ -17,6 +17,15 @@ export interface OpenRouterProviderRouting {
   allowFallbacks?: boolean;
 }
 
+export interface VercelGatewayRouting {
+  /** Vercel AI Gateway provider slugs to try first, in priority order. */
+  order?: string[];
+  /** Restrict routing to these Vercel AI Gateway provider slugs. */
+  only?: string[];
+  /** Sort providers by "cost", "ttft", or "tps". */
+  sort?: "cost" | "ttft" | "tps";
+}
+
 export interface ResponsesItemIdRepairConfig {
   /** Exact `message` item ids that the proxy should rewrite to request-local canonical ids. */
   message?: string[];
@@ -344,6 +353,10 @@ export interface OcxProviderConfig {
   openRouterRouting?: OpenRouterProviderRouting;
   /** Exact model-id overrides for `openRouterRouting`. Each matching entry replaces the default. */
   modelOpenRouterRouting?: Record<string, OpenRouterProviderRouting>;
+  /** Default provider-routing preferences for models sent through Vercel AI Gateway (issue #1406). */
+  vercelGatewayRouting?: VercelGatewayRouting;
+  /** Exact model-id overrides for `vercelGatewayRouting`. Each matching entry replaces the default. */
+  modelVercelGatewayRouting?: Record<string, VercelGatewayRouting>;
   /**
    * "key" (default): authenticate upstream with `apiKey`.
    * "forward": relay the caller's incoming auth headers verbatim (OAuth passthrough; gpt only).
@@ -423,6 +436,12 @@ export interface OcxProviderConfig {
    * passthrough compatibility for OpenAI and unclassified gateways.
    */
   supportsOpenAiWebSearchToolFields?: boolean;
+  /**
+   * Opt xAI Responses destinations into the provider-hosted `x_search` declaration when a live
+   * `web_search` tool survives final request normalization. Disabled by default. This is separate
+   * from the web-search sidecar's `search.xSearch` options and never widens caller tool selectors.
+   */
+  xaiResponsesXSearch?: boolean;
   /**
    * Whether the Responses upstream accepts native custom tools and custom_tool_call items.
    * Set false only for a provider whose native contract rejects them; absence preserves

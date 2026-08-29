@@ -179,6 +179,18 @@ of the HTTP retry loop.
   single post-cooldown probe prevent concurrent requests from exhausting independent retry budgets;
   hard quota failures and ordinary service errors are not replayed.
 - Its non-streaming parser drains the same event stream for the web-search loop.
+- Reports per-account usage. `AmazonCodeWhispererService.GetUsageLimits` on
+  `https://management.{region}.kiro.dev/` returns the plan allowance, which becomes the
+  monthly quota window for that account; a free-trial balance is reported as its own window.
+  The region comes from the account's profile ARN, then its stored API/SSO region. An
+  unreadable or unrecognised response is reported as unknown rather than as zero usage, and
+  an account whose overage is enabled is not treated as exhausted merely for passing its
+  limit. The operation is undocumented by AWS, so treat the numbers as best-effort.
+- Participates in multi-account rotation. Two or more logged-in Kiro accounts enable
+  automatic failover on a 429, and rotation prefers the account with the most known
+  headroom; an account whose allowance is provably spent is cooled until its window resets
+  (bounded between five minutes and a day) instead of being retried every minute. Each
+  rotated bearer carries its own profile ARN and region.
 
 ### Completion semantics
 

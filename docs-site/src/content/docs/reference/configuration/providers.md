@@ -94,6 +94,8 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `headers?` | `Record<string, string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid names are rejected. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Default OpenRouter `order`, `only`, and `allowFallbacks` preferences; valid only for canonical OpenRouter with `openai-chat`. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | Exact model-id overrides that replace the provider-wide OpenRouter preference. |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` | Default Vercel AI Gateway `order`, `only`, and `sort` (`"cost"` \| `"ttft"` \| `"tps"`) preferences; valid only for canonical Vercel AI Gateway with `openai-chat`. |
+| `modelVercelGatewayRouting?` | `Record<string, VercelGatewayRouting>` | Exact model-id overrides that replace the provider-wide Vercel AI Gateway preference. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | Authentication mode (default `key`). OAuth/subscription credentials are stored outside `config.json`; `local` is limited to providers whose registry entry permits it. |
 | `codexAccountMode?` | `"pool" \| "direct"` | Canonical `openai` only; defaults to Pool. Direct bypasses pool state. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Override this OAuth provider's Token Guardian policy. |
@@ -549,9 +551,40 @@ eligible provider after the ordered list. `only` is always an allowlist.
 }
 ```
 
-Model keys are exact native OpenRouter ids, without the outer opencodex provider prefix. Selecting
-`openrouter/anthropic-claude-sonnet-5` restores native `anthropic/claude-sonnet-5` before applying
-the model rule.
+## Vercel AI Gateway provider routing
+
+Vercel AI Gateway can route a model across multiple underlying inference providers. `vercelGatewayRouting` configures provider-wide preferences; `modelVercelGatewayRouting` replaces it for exact model IDs. Leaving both unset makes `resolveVercelGatewayRouting()` return `undefined`, so Chat request builders omit the `provider` field and Vercel AI Gateway retains its default dynamic routing behavior.
+
+- `order`: Vercel AI Gateway upstream provider slugs in priority order.
+- `only`: explicit allowlist restricting eligible Vercel AI Gateway upstream providers.
+- `sort`: automatically sort eligible providers by `"cost"` (lowest cost), `"ttft"` (time to first token), or `"tps"` (tokens per second).
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
+        }
+      }
+    }
+  }
+}
+```
+
+Model keys are Vercel public model selectors without the outer OpenCodex provider prefix. Selecting
+`vercel-ai-gateway/zai-glm-5.2` restores native `zai/glm-5.2` before applying the model rule. The
+same mapping applies to a native `vercel/<model-id>` selector: use the encoded
+`vercel-ai-gateway/vercel-<model-id>` selector in OpenCodex and keep `vercel/<model-id>` as the
+model key.
 
 ## Static model allowlists
 
