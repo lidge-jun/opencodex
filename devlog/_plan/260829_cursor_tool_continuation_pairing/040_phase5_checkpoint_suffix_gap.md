@@ -38,7 +38,7 @@ threaded into both replay builders as an optional `knownCalls` parameter. What g
 is unchanged — still only the suffix — so covered messages are not re-sent. Only the lookup
 widens.
 
-```
+```text
                      suffixStart
                           │
   user ─ assistant(call) ─┤─ toolResult ─ …
@@ -103,7 +103,7 @@ full-replay call sites pass no `knownCalls` and are byte-identical in behaviour.
 Checkpoint mode did not engage because every commit was refused. The probe's own diagnostics name
 the guard:
 
-```
+```text
 [ocx:cursor:checkpoint-commit-refused] {"replayUnsafe":true,"emittedClientTool":true,…}
 ```
 
