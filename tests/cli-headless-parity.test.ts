@@ -772,6 +772,19 @@ describe("#2566 per-account quota in ocx account list", () => {
     expect(formatAccountTable([row({ provider: "xai" })] as never, true)).toContain("-");
   });
 
+  test("a Kiro account's monthly allowance renders instead of a bare dash", () => {
+    // Kiro bills a monthly window and reports no shorter one. Without the monthly arm a
+    // healthy account rendered "-", which is the same output as "never probed".
+    expect(formatAccountTable([row({ provider: "kiro", quota: { monthlyPercent: 15 } })] as never, true))
+      .toContain("mo 15%");
+  });
+
+  test("a fractional monthly percentage is rounded for the column", () => {
+    // The column is a glance surface; the exact figure stays in --json.
+    expect(formatAccountTable([row({ provider: "kiro", quota: { monthlyPercent: 14.782 } })] as never, true))
+      .toContain("mo 15%");
+  });
+
   test("an account whose probe failed says so instead of reading as empty", () => {
     expect(formatAccountTable([row({ quotaUnavailable: true })] as never, true)).toContain("unavailable");
   });

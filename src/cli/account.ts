@@ -111,6 +111,9 @@ function quotaText(row: AccountRow): string {
   const short = quota.fiveHourPercent ?? quota.shortPercent;
   if (typeof short === "number") parts.push(`5h ${short}%`);
   if (typeof quota.weeklyPercent === "number") parts.push(`wk ${quota.weeklyPercent}%`);
+  // Kiro bills a monthly allowance and reports no shorter window, so without this arm a
+  // perfectly healthy Kiro account prints "-" and reads as broken.
+  if (typeof quota.monthlyPercent === "number") parts.push(`mo ${Math.round(quota.monthlyPercent)}%`);
   return parts.length > 0 ? parts.join(" ") : "-";
 }
 
