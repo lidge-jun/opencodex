@@ -130,13 +130,42 @@ What remains uncovered:
 - **Clock, timezone, shell.** Not files. A fingerprint over a clock is not a
   fingerprint.
 
-The exposure is an external edit landing inside a single in-flight probe's window,
-whose failure mode is a fail-closed `busy` and a retry, not corruption.
+The exposure is an external edit landing inside a single in-flight probe's window. Be
+precise about the failure mode, because an earlier draft of this sentence got it
+backwards: for an input the key does not cover, the key does not move, so the caller
+DOES join and DOES receive the older rendering. Fail-closed `busy` is what happens for
+a covered input. An uncovered one is a stale read of one layer's text, bounded to that
+window, in a read-only inspection view.
 
 This section has now been wrong twice, in the same direction both times: something was
 called unreadable when it was merely inconvenient to read. The standard that survived
 is narrow — an input belongs on this list only when no file on disk determines it.
 Anything with a path gets hashed.
+
+## Why this is a bounded key and not a total one
+
+Nine rounds in, the useful conclusion is about the shape of the specification rather
+than any single input. "Hash everything the rendered prompt depends on" is closable
+only against a pinned Codex: the dependency graph belongs to Codex, is private, and
+moves independently of this repository. A new config field or a changed precedence
+upstream silently widens the gap without anything here changing.
+
+So this is a bounded invalidation key over known local inputs, and the code says that
+rather than implying identity.
+
+A design that needs no enumeration exists and was assessed: admit on TIME, where a
+request may join a probe only if the probe started after the request arrived. The
+correctness argument holds — such a probe read the filesystem after every write that
+completed before the request — and it needs a monotonic in-process ordinal rather than
+a clock. It was not adopted because it removes almost all the coalescing that motivated
+the work: a probe spawns immediately, so the ordinary second caller arrives after the
+start and would always be refused. Recovering both properties means cohort batching —
+hold arrivals briefly, spawn once the cohort is closed — which is a different change
+from this one.
+
+That is a real option, not a dismissal, and it belongs to whoever needs a strict
+"never older than my arrival" contract. What ships here is the bounded key, which is
+strictly better than the revision-only key it replaces.
 
 ## The reader, and why it stopped being a regex
 

@@ -857,10 +857,20 @@ export function readPromptLayers(opts?: Paths): PromptLayerSnapshot {
  * path from the injected config would name a file the probe never reads, which is
  * a fingerprint that cannot fail rather than evidence.
  *
- * Bounded on purpose: this covers opencodex-managed writes plus the CODEX_HOME
- * instruction files. Skill and plugin metadata, MCP availability, and the clock also
- * move the rendered prompt and cannot be observed from this process; an external
- * edit to one of those, concurrent with an in-flight probe, is still coalescible.
+ * A BOUNDED invalidation key, not prompt identity. It covers opencodex-managed writes,
+ * the selected base prompt, the project documents Codex would discover from this home,
+ * and each skill's manifest. Plugin manifests, live MCP availability, and the clock
+ * also move the rendered prompt and are not files this process can name.
+ *
+ * The distinction is worth stating exactly, because the obvious phrasing is wrong: for
+ * a COVERED input the key moves and a late caller is refused with `busy`. For an
+ * UNCOVERED one the key does not move, so a late caller joins and reads the older
+ * rendering. That is the residual, bounded to one in-flight window in a read-only view.
+ *
+ * "Hash every input" is only closable against a pinned Codex — the dependency graph is
+ * upstream's and moves on its own. An enumeration-free alternative exists (admit only
+ * when the probe started after the request arrived) and is recorded in the plan; it
+ * costs the coalescing this work exists to provide unless arrivals are batched first.
  * See devlog/_plan/260829_bugpr_lane_h_residual_issues/130_pr2872_probe_fingerprint.md.
  */
 export function computePromptProbeStateFingerprint(opts?: Paths): string {
