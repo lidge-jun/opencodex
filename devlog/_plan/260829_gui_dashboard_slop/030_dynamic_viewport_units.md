@@ -1,13 +1,17 @@
 # 030 — Dynamic viewport units in scroll surfaces (wp3)
 
-> **Implemented by this pull request**, separately from the sidecar alignment fix
-> that the rest of this unit records. It is a different change to a different
-> file (`gui/src/styles.css`), kept in the same unit because one audit pass found
-> both.
+> **Shipped in #2906** (`4d646c494`), separately from the sidecar alignment fix in
+> #2905 that the rest of this unit records. It is a different change to a
+> different file (`gui/src/styles.css`), kept in the same unit because one audit
+> pass found both.
+>
+> Rules below are named by selector, not line number: the fix this document
+> describes inserted lines above the very rules it cites, so the original
+> citations (`styles.css:2003`, `:755`, `:1222`) now land on unrelated CSS.
 
 ## Defect
 
-`gui/src/styles.css:2003`:
+`.logs-table-wrap` in `gui/src/styles.css` (line 2011 as shipped):
 
 ```css
 .logs-table-wrap { max-height: calc(100vh - 260px); }
@@ -15,11 +19,11 @@
 
 `vh` is the *large* viewport: it ignores mobile browser chrome, so the log table
 is capped for a viewport taller than the one the user can see, pushing the last
-rows under the browser UI. The rest of the shell already moved to `100dvh`
-(styles.css:244, 247, 411, 412, 2198), so this line is an outlier, not a
-convention.
+rows under the browser UI. The rest of the shell already moved to `100dvh` —
+`.app` (244), the sidebar (247), `.main-inner--combos` (411-412) and the mobile
+drawer (2213) — so this line is an outlier, not a convention.
 
-`styles.css:755` and `1222` cap toast width with `calc(100vw - Npx)`. Per CSS
+`.action-toast` (749) and `.notice` (1215) cap toast width with `calc(100vw - Npx)`. Per CSS
 Values and Units 4, `100vw` includes the classic scrollbar gutter, so a
 scrollbar-reserving platform can in principle render a cap wider than the visible
 area.
@@ -37,7 +41,7 @@ file at equal specificity, so source order won and the toast resolved to 70ch
   classes so it beats the later `.notice` rule. Both halves of the cap are
   restated: dropping the viewport term let the toast reach the screen edge at
   430px (measured `left = 0`, losing the 24px inset the right side keeps).
-- `styles.css:2003` is the only static `vh` in a scroll surface; the `12vh`
+- `.logs-table-wrap` was the only static `vh` in a scroll surface; the `12vh`
   padding on the toast wrapper is decorative offset, not a size cap, and stays.
 
 ### Not changed: the `vw` → containing-block rewrite
