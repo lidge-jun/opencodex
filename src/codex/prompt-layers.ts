@@ -199,29 +199,115 @@ const PROBE_INSTRUCTION_FILES = ["AGENTS.override.md", "AGENTS.md"] as const;
  * `TEAM.md` renders TEAM.md, and a fingerprint that only knew about AGENTS.md
  * would let an edit to it pass unnoticed.
  *
- * Deliberately narrower than upstream in one respect, and it is a real limit: Codex
- * also walks ancestor directories from the project root to its cwd. The probe runs
- * in CODEX_HOME with no project checkout around it, so the ancestor walk has nothing
- * to find; this reads the home's own candidates only.
  */
 function probeInstructionFilenames(configBytes: string | null): string[] {
   const names: string[] = [...PROBE_INSTRUCTION_FILES];
-  for (const line of rootLines(configBytes ?? "")) {
-    const m = /^\s*project_doc_fallback_filenames\s*=\s*\[(.*)\]\s*(?:#.*)?$/.exec(line);
+  for (const entry of rootArrayEntries(configBytes, "project_doc_fallback_filenames")) {
+    // Upstream trims each configured name and drops whitespace-only entries
+    // (`core/src/config/mod.rs`), so " TEAM.md " and "TEAM.md" are one filename.
+    const name = entry.trim();
+    if (name === "") continue;
+    if (!names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+/**
+ * Decoded string entries of a root-scope TOML array.
+ *
+ * Spans lines. A single-line regex missed the ordinary multi-line spelling
+ *
+ *     project_doc_fallback_filenames = [
+ *       "TEAM.md",
+ *     ]
+ *
+ * which upstream accepts, and a missed array meant a rendered document whose edits
+ * moved no admission key. Values go through `decodeBasicString` — the decoder that
+ * already backs every other value read out of this file — with literal (single-quoted)
+ * strings handled separately, since those take no escapes.
+ */
+function rootArrayEntries(configBytes: string | null, key: string): string[] {
+  const lines = rootLines(configBytes ?? "");
+  const opener = new RegExp(`^\\s*${key}\\s*=\\s*\\[(.*)$`);
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = opener.exec(lines[i]!);
     if (!m) continue;
-    for (const raw of m[1]!.split(",")) {
-      const trimmed = raw.trim();
+    let body = m[1]!;
+    // Accumulate until the closing bracket. Comments are stripped per line, so a
+    // trailing "# ]" cannot be mistaken for the terminator.
+    for (let j = i; !body.includes("]"); ) {
+      j += 1;
+      if (j >= lines.length) return [];
+      body += lines[j]!.replace(/#.*$/, "");
+    }
+    body = body.slice(0, body.indexOf("]"));
+    const out: string[] = [];
+    for (const raw of body.split(",")) {
+      const trimmed = raw.trim().replace(/#.*$/, "").trim();
       if (trimmed === "") continue;
-      // Reuse the decoder that already backs every other value we read out of this
-      // file, so a single-quoted or escaped filename is not silently skipped.
       const decoded = trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2
         ? trimmed.slice(1, -1)
         : decodeBasicString(trimmed);
-      if (decoded === null || decoded === "") continue;
-      if (!names.includes(decoded)) names.push(decoded);
+      if (decoded !== null) out.push(decoded);
     }
+    return out;
   }
-  return names;
+  return [];
+}
+
+/**
+ * The directories Codex would look in for a project document, given the home the
+ * probe runs in.
+ *
+ * Upstream finds the nearest ancestor holding a `project_root_markers` entry
+ * (default `.git`) and then searches every directory from that root down to the cwd,
+ * inclusive; with no such ancestor it searches the cwd alone
+ * (`core/src/agents_md.rs` `agents_md_paths`).
+ *
+ * This was originally written off as unreachable on the grounds that the probe runs
+ * in CODEX_HOME with no checkout around it. That was wrong, and a review round caught
+ * it: `~/.codex` inside a dotfiles repository is an ordinary setup, and there the
+ * walk finds real documents. The walk is cheap — a bounded number of `existsSync`
+ * calls beside a subprocess spawn — so it is performed rather than assumed away.
+ */
+function probeProjectDocDirs(home: string, configBytes: string | null): string[] {
+  const markers = projectRootMarkers(configBytes);
+  // An explicitly empty array disables root detection upstream, which is not the same
+  // as an absent key falling back to the default.
+  if (markers.length === 0) return [home];
+  let root: string | null = null;
+  for (let dir = home; ; ) {
+    if (markers.some(marker => existsSync(join(dir, marker)))) { root = dir; break; }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  if (root === null) return [home];
+  const dirs: string[] = [];
+  for (let dir = home; ; ) {
+    dirs.push(dir);
+    if (dir === root) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  // Root first, matching upstream's reversed search order. Order is load-bearing:
+  // the digest must not change merely because the walk was traversed the other way.
+  return dirs.reverse();
+}
+
+/** `project_root_markers`, defaulting to `.git` when the key is absent. */
+function projectRootMarkers(configBytes: string | null): string[] {
+  if (!hasRootKey(configBytes, "project_root_markers")) return [".git"];
+  // Present-but-empty disables root detection upstream, which is why presence is
+  // tested separately from the decoded entries rather than inferred from them.
+  return rootArrayEntries(configBytes, "project_root_markers").filter(m => m !== "");
+}
+
+/** Whether a root-scope key is present at all, regardless of what it holds. */
+function hasRootKey(configBytes: string | null, key: string): boolean {
+  const probe = new RegExp(`^\\s*${key}\\s*=`);
+  return rootLines(configBytes ?? "").some(line => probe.test(line));
 }
 
 /**
@@ -762,8 +848,17 @@ export function computePromptProbeStateFingerprint(opts?: Paths): string {
   // in that order: an override edit changes the rendered project document exactly
   // as a plain edit does.
   const probeHome = resolveCodexHomeDir();
-  for (const name of probeInstructionFilenames(configBytes)) {
-    updateFingerprintField(hash, name, readFileOrNull(join(probeHome, name)));
+  const filenames = probeInstructionFilenames(configBytes);
+  for (const dir of probeProjectDocDirs(probeHome, configBytes)) {
+    for (const name of filenames) {
+      // The path goes in the CONTENTS, never in the field name. Only contents are
+      // length-framed, so a name built from a path would reintroduce exactly the
+      // ambiguity this helper exists to remove. Path and bytes are separate fields
+      // because two directories in the walk can both hold an AGENTS.md.
+      const path = join(dir, name);
+      updateFingerprintField(hash, "doc-path", path);
+      updateFingerprintField(hash, "doc-bytes", readFileOrNull(path));
+    }
   }
   return `sha256:${hash.digest("hex")}`;
 }

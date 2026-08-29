@@ -105,22 +105,32 @@ input I was told about" is not the same as "the key names everything the output
 depends on". Framing, path resolution, and candidate-set breadth each failed
 separately.
 
-What remains uncovered is now a short and deliberate list, and every item on it has a
-reason that is not "we did not get to it":
+A sixth round then rejected the first version of this very section, and it was right.
+It claimed the ancestor walk could never find anything because the probe runs in
+`CODEX_HOME` with no checkout around it. The default project-root marker is `.git`,
+and `~/.codex` inside a dotfiles repository is an ordinary setup: there, Codex renders
+the repository's own `AGENTS.md` and the walk matters. The same round found two more
+parsing gaps — upstream trims each configured filename and drops whitespace-only
+entries, and the ordinary multi-line array spelling was missed by a single-line regex.
 
-- **Ancestor project documents.** Codex walks from a project root to its cwd. The
-  probe runs in `CODEX_HOME` with no checkout around it, so there is no ancestor
-  chain to walk. Hashing a walk that cannot happen would be noise.
+So the walk is now performed rather than argued away: nearest ancestor holding a
+configured marker, then every directory from that root down to the home, with a
+present-but-empty `project_root_markers` disabling detection exactly as upstream does.
+
+What remains uncovered, with a reason that is not "we did not get to it":
+
 - **Skill and plugin metadata.** Readable, but they are directory trees owned by
   Codex, not files with a stable enumeration contract here. Hashing them means
   duplicating a loader we do not own and would have to keep in sync.
 - **Clock, timezone, shell, MCP availability.** Not files. A fingerprint over a clock
   is not a fingerprint.
 
-The exposure for each is the same and it is small: an external edit landing inside a
-single in-flight probe's window, whose failure mode is a fail-closed `busy` and a
-retry, not corruption. The honest move is to name them here rather than to imply the
-key is total.
+The exposure for both is an external edit landing inside a single in-flight probe's
+window, whose failure mode is a fail-closed `busy` and a retry, not corruption.
+
+Given that this section has now been wrong once, the standard it should be held to is
+worth stating: an input belongs on this list only when it cannot be read from this
+process, not when reading it looks inconvenient.
 
 ## Verification
 

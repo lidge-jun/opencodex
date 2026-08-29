@@ -1218,6 +1218,11 @@ describe("020 coverage completions", () => {
   for (const spelling of [
     { label: "double-quoted", literal: "[\"TEAM.md\"]" },
     { label: "single-quoted", literal: "['TEAM.md']" },
+    // Upstream accepts this ordinary spelling and a single-line regex missed it.
+    { label: "multi-line", literal: "[\n  \"TEAM.md\",\n]" },
+    // Upstream trims each name and drops whitespace-only entries, so a padded value
+    // is the same filename rather than a different one.
+    { label: "padded", literal: "[\"  TEAM.md  \", \"   \"]" },
   ]) {
     test(`36. a ${spelling.label} fallback project document moves probe admission`, async () => {
       const fx = fixture(`project_doc_fallback_filenames = ${spelling.literal}\n`);
@@ -1249,6 +1254,53 @@ describe("020 coverage completions", () => {
       expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
     });
   }
+
+  /**
+   * A CODEX_HOME inside a git checkout — `~/.codex` in a dotfiles repository is an
+   * ordinary setup — makes Codex search every directory from the repository root down
+   * to the home, so a parent AGENTS.md is rendered and has to move admission.
+   *
+   * This case exists because the first version of the fix argued the ancestor walk
+   * could never find anything and left it out. It could.
+   */
+  test("37. a parent-directory project document moves probe admission", async () => {
+    const fx = fixture("model = \"x\"\n");
+    // A repository root of this test's own, holding the home one level down, so the
+    // document is reachable ONLY by walking up. Built inside the fixture's tracked
+    // root rather than beside it: writing a .git marker into the shared temp
+    // directory would change root detection for every other test using tmpdir().
+    const root = join(fx.baseVariantDir, "..", "ancestor-root");
+    const nestedHome = join(root, "home");
+    mkdirSync(join(root, ".git"), { recursive: true });
+    mkdirSync(nestedHome, { recursive: true });
+    const parentDoc = join(root, "AGENTS.md");
+    writeFileSync(parentDoc, "old-parent", "utf8");
+    const startedPath = join(nestedHome, "parent-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(parentDoc)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const nested: Fixture = { ...fx, decoyHome: nestedHome };
+    const beforeEdit = call("GET", "/api/codex-prompt/text", nested);
+    await waitUntil(() => existsSync(startedPath), "parent doc probe start");
+    writeFileSync(parentDoc, "new-parent", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", nested)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-parent");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", nested);
+    expect(fresh.body.layers.skills.text).toBe("new-parent");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
 
   test("24. every ownership state is named, not collapsed into a boolean", async () => {
     // developerInstructionsOwned:false covers an ABSENT key and an EXTERNAL one, and
