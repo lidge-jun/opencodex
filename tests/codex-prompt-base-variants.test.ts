@@ -60,6 +60,20 @@ describe("base variant selection", () => {
     });
   });
 
+  // A Windows path is the case where reading the literal verbatim and decoding it
+  // differ, because `encodeBasicString` escapes every backslash on the way in.
+  // The verbatim read returned the doubled form, so a variant this code had just
+  // selected came back as `external` -- the UI would show the user's own base
+  // prompt as replaced by a stranger's file. Asserted with a literal rather than
+  // a platform branch, so the POSIX lanes guard it too.
+  test("a Windows path survives the config round trip and is not read doubled", () => {
+    const paths = fixture("model_instructions_file = \"C:\\\\Users\\\\jun\\\\prompt.md\"\n");
+    expect(readPromptLayers(paths).baseSelection).toEqual({
+      kind: "external",
+      path: "C:\\Users\\jun\\prompt.md",
+    });
+  });
+
   test("selecting a variant writes an absolute path, and the default removes the key", () => {
     const paths = fixture("model = \"x\"\n");
     const created = writeBaseVariant({ id: null, title: "Terse", body: "Be brief." }, rev(paths), paths);

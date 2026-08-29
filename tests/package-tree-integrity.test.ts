@@ -169,6 +169,36 @@ describe("package tree integrity", () => {
     };
   };
 
+  /**
+   * Write the manifest and return once the filesystem reports a DIFFERENT mtime
+   * than before.
+   *
+   * The same-length-rewrite case leaves device, inode, and size untouched on
+   * purpose, so mtime is the only remaining signal -- that is the whole point of
+   * the case. But mtime granularity is a filesystem property, not ours: two
+   * back-to-back writes on Windows land inside one tick, the guard reads an
+   * unchanged observation, and it reports `ok: true` for a genuine replacement.
+   * That is the environment failing to distinguish the two writes, not the guard
+   * failing to notice.
+   *
+   * Rewriting until the timestamp moves keeps the real-filesystem property the
+   * comment above depends on -- a synthetic observation still could not tell
+   * ctime from mtime -- while removing the dependency on tick size. It bounds the
+   * wait so a filesystem with no mtime at all fails loudly instead of hanging.
+   */
+  const rewriteManifestWithDistinctMtime = (contents: string): void => {
+    const before = statSync(manifest(), { bigint: true }).mtimeNs;
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      writeFileSync(manifest(), contents);
+      if (statSync(manifest(), { bigint: true }).mtimeNs !== before) return;
+      if (Date.now() > deadline) {
+        throw new Error("filesystem mtime did not advance within 5s; cannot test content-time detection");
+      }
+      Bun.sleepSync(5);
+    }
+  };
+
   test("a permission change is not a replacement", () => {
     writeFileSync(manifest(), '{"name":"ocx","version":"1.0.0"}');
     let clock = 0;
@@ -189,7 +219,7 @@ describe("package tree integrity", () => {
     // Same length, different bytes: neither inode nor size moves, so mtime is the
     // only signal left. This is the case that would break if someone "simplified"
     // the comparison down to inode and size.
-    writeFileSync(manifest(), '{"name":"ocx","version":"9.9.9"}');
+    rewriteManifestWithDistinctMtime('{"name":"ocx","version":"9.9.9"}');
     clock += 2_000;
     expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
   });
