@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import {
   availableAccountGatedNativeModels,
   cachedAvailableAccountGatedNativeModels,
+  deriveGatedClientVersionFloor,
   entitledCodexAccountIdsForModel,
   GATED_MODEL_CLIENT_VERSION_FLOOR,
   isDirectCallerEntitledToCodexModel,
   isUsableCodexClientVersion,
+  memoizeRuntimeVersionForTests,
   resetCodexModelEntitlementCacheForTests,
   resolveCodexEntitlementClientVersion,
   resolveCodexModelEntitlements,
@@ -13,6 +15,7 @@ import {
   type CodexModelEntitlementCredentialSnapshot,
 } from "../src/codex/model-entitlements";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import { clearCodexRuntimeResolveCache, loadPersistedCodexRuntime } from "../src/codex/runtime";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
 import upstreamModelsSnapshot from "../src/codex/data/upstream-models.json";
 
@@ -257,32 +260,79 @@ describe("entitlement client version (#2886)", () => {
     expect(snapshot.modelsByAccount.has("main")).toBe(true);
   });
 
-  test("the gated floor is derived from the bundled roster, not written by hand", () => {
-    // If the snapshot is refreshed with a model requiring a newer client, the floor must
-    // follow it; a hand-copied constant would silently under-ask forever.
-    const rows = (upstreamModelsSnapshot as { models?: Array<Record<string, unknown>> }).models ?? [];
-    const gatedFloors = rows
-      .filter(row => typeof row.slug === "string" && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(row.slug))
-      .map(row => row.minimal_client_version)
-      .filter((value): value is string => typeof value === "string");
-    expect(gatedFloors.length).toBeGreaterThan(0);
-    expect(gatedFloors).toContain(GATED_MODEL_CLIENT_VERSION_FLOOR);
-    // Highest, so no gated model is asked for under a version that cannot return it.
-    for (const floor of gatedFloors) {
-      const asNumbers = (value: string) => value.split(/[.+-]/).map(Number);
-      const a = asNumbers(floor);
-      const b = asNumbers(GATED_MODEL_CLIENT_VERSION_FLOOR);
-      for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-        const left = Number.isFinite(a[i]) ? a[i]! : 0;
-        const right = Number.isFinite(b[i]) ? b[i]! : 0;
-        if (left !== right) {
-          expect(left).toBeLessThan(right);
-          break;
-        }
-      }
-    }
-    // And it is never the placeholder that caused #2886.
+  test("the gated floor derivation picks the highest usable gated version", () => {
+    // Asserted on INDEPENDENT fixtures, not the shipped snapshot. An earlier version of this test
+    // compared the constant against the bundled data and reimplemented the comparator, so it
+    // stayed green even if the whole derivation were replaced by the literal the fixture happens
+    // to contain — vacuous in exactly the way that matters.
+    const gated = new Set(["a", "b", "c"]);
+    const derive = (rows: Array<Record<string, unknown>>) => deriveGatedClientVersionFloor(rows, gated);
+
+    // Highest wins, and ordering in the input does not matter.
+    expect(derive([
+      { slug: "a", minimal_client_version: "0.98.0" },
+      { slug: "b", minimal_client_version: "0.142.2" },
+      { slug: "c", minimal_client_version: "0.124.0" },
+    ])).toBe("0.142.2");
+    expect(derive([
+      { slug: "b", minimal_client_version: "0.142.2" },
+      { slug: "a", minimal_client_version: "0.98.0" },
+    ])).toBe("0.142.2");
+    // Numeric comparison, not lexicographic: "0.98.0" must not beat "0.142.2".
+    expect(derive([
+      { slug: "a", minimal_client_version: "0.9.0" },
+      { slug: "b", minimal_client_version: "0.10.0" },
+    ])).toBe("0.10.0");
+
+    // Non-gated rows are ignored even when they record a higher floor.
+    expect(derive([
+      { slug: "a", minimal_client_version: "0.100.0" },
+      { slug: "unrelated", minimal_client_version: "9.9.9" },
+    ])).toBe("0.100.0");
+
+    // Unusable and missing values are skipped rather than selected.
+    expect(derive([
+      { slug: "a", minimal_client_version: "0.0.0" },
+      { slug: "b", minimal_client_version: "" },
+      { slug: "c", minimal_client_version: "0.130.0" },
+    ])).toBe("0.130.0");
+    expect(derive([{ slug: "a" }, { slug: "b", minimal_client_version: 5 }])).toBeNull();
+    expect(derive([])).toBeNull();
+
+    // And the shipped constant is a real, filterable version — never the #2886 placeholder.
+    expect(isUsableCodexClientVersion(GATED_MODEL_CLIENT_VERSION_FLOOR)).toBe(true);
     expect(GATED_MODEL_CLIENT_VERSION_FLOOR).not.toBe("0.0.0");
+  });
+
+  test("concurrent roster requests for one account are bounded", async () => {
+    // Distinct client_version values miss the flight key by design, so without a bound a caller
+    // cycling versions could open arbitrarily many concurrent upstream requests, each holding an
+    // 8s timer. Over the bound the answer is unconfirmed — the same fail-closed result a discovery
+    // failure gives.
+    let opened = 0;
+    const gate: Array<() => void> = [];
+    const backend = (async () => {
+      opened += 1;
+      await new Promise<void>(resolve => gate.push(resolve));
+      return roster(SOL);
+    }) as typeof fetch;
+
+    const asks = Array.from({ length: 12 }, (_, i) => isDirectCallerEntitledToCodexModel(
+      directHeaders("tok-flights"),
+      SOL,
+      { fetcher: backend, now: 1_000, clientVersion: `0.${400 + i}.0` },
+    ));
+
+    // Give the admitted flights a turn to reach the backend, then release them.
+    while (gate.length < 4) await new Promise(resolve => setTimeout(resolve, 0));
+    for (const release of gate) release();
+    const results = await Promise.all(asks);
+
+    // At most the bound reached upstream; the rest were refused without a request.
+    expect(opened).toBeLessThanOrEqual(4);
+    // The refused ones are unconfirmed, not confirmed-denied by a bad roster.
+    expect(results.filter(Boolean).length).toBeGreaterThan(0);
+    expect(results.filter(Boolean).length).toBeLessThanOrEqual(4);
   });
 
   test("the placeholder 0.0.0 is never accepted as a client version", async () => {
@@ -334,25 +384,58 @@ describe("entitlement client version (#2886)", () => {
       reads += 1;
       return { selectedVersion: "0.147.3" };
     };
-
+    // A SUPPLIED loader is auto-bypassed — the memo describes the real runtime file, so answering
+    // a different loader from it would cross-answer. Each call must therefore read.
     expect(resolveCodexEntitlementClientVersion(null, loader, { now: 1_000 })).toBe("0.147.3");
-    expect(resolveCodexEntitlementClientVersion(null, loader, { now: 1_200 })).toBe("0.147.3");
-    expect(resolveCodexEntitlementClientVersion(null, loader, { now: 3_000 })).toBe("0.147.3");
-    // Three resolutions inside the memo window, one read.
-    expect(reads).toBe(1);
+    expect(resolveCodexEntitlementClientVersion(null, loader, { now: 1_100 })).toBe("0.147.3");
+    expect(reads).toBe(2);
+
+    // The memo applies to the DEFAULT loader, which is the one on the request path. Count reads
+    // of the real state file through the seam runtime.ts exposes for it.
+    let defaultReads = 0;
+    const countingDefault = () => {
+      defaultReads += 1;
+      return loadPersistedCodexRuntime();
+    };
+    // Establish the memo, then assert three further resolutions inside the window are free.
+    memoizeRuntimeVersionForTests(countingDefault, 1_000);
+    expect(defaultReads).toBe(1);
+    memoizeRuntimeVersionForTests(countingDefault, 1_200);
+    memoizeRuntimeVersionForTests(countingDefault, 3_000);
+    expect(defaultReads).toBe(1);
 
     // Past the window the file is consulted again, so a runtime switch is still picked up.
-    expect(resolveCodexEntitlementClientVersion(null, loader, { now: 20_000 })).toBe("0.147.3");
-    expect(reads).toBe(2);
+    memoizeRuntimeVersionForTests(countingDefault, 20_000);
+    expect(defaultReads).toBe(2);
 
     // An inbound version short-circuits before tier 2, so no read happens at all.
     expect(resolveCodexEntitlementClientVersion("0.150.0", loader, { now: 40_000 })).toBe("0.150.0");
     expect(reads).toBe(2);
+  });
 
-    // The bypass is what lets a caller ask about a loader other than the real runtime file.
-    expect(resolveCodexEntitlementClientVersion(null, () => ({ selectedVersion: "0.149.9" }), {
-      bypassRuntimeMemo: true,
-    })).toBe("0.149.9");
+  test("persisting a new runtime invalidates the memoized version immediately", () => {
+    // A five-second staleness window is not merely a late answer: background sync can commit the
+    // wrong roster to disk inside it. A newer->older switch would confirm models the older client
+    // cannot drive; older->newer would deny models the account owns. The memo is therefore fenced
+    // on the runtime module's own epoch, which persistCodexRuntime bumps as it writes.
+    let version = "0.147.3";
+    let reads = 0;
+    const loader = () => {
+      reads += 1;
+      return { selectedVersion: version };
+    };
+
+    expect(memoizeRuntimeVersionForTests(loader, 1_000)).toBe("0.147.3");
+    expect(reads).toBe(1);
+    // Same epoch, inside the window: memoized.
+    expect(memoizeRuntimeVersionForTests(loader, 1_100)).toBe("0.147.3");
+    expect(reads).toBe(1);
+
+    // The runtime is replaced. Even well inside the time window, the next read must see it.
+    version = "0.120.0";
+    clearCodexRuntimeResolveCache();
+    expect(memoizeRuntimeVersionForTests(loader, 1_200)).toBe("0.120.0");
+    expect(reads).toBe(2);
   });
 
   test("a cached roster is projected only for the version it was fetched under", async () => {
@@ -440,17 +523,25 @@ describe("entitlement client version (#2886)", () => {
     // the newer client's confirmation.
     expect([...cachedAvailableAccountGatedNativeModels(1_100, undefined, "0.150.0")]).toEqual([]);
     // Direct entries are excluded from the CATALOG projection by design, so assert through the
-    // entitlement check itself — both answers must still be served from cache, unchanged.
+    // entitlement check itself. A THROWING fetcher would be useless for the negative case:
+    // production converts a failed fetch into an unconfirmed roster, which is also `false`, so it
+    // could not tell a cache hit from a refetch. Count requests, and have any refetch return the
+    // OPPOSITE answer, so serving from cache is the only way each assertion can hold.
+    let refetches = 0;
+    const inverted = (async (input: RequestInfo | URL) => {
+      refetches += 1;
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      // Inverted on purpose: 0.150.0 would become denied, 0.140.0 would become entitled.
+      return url.searchParams.get("client_version") === "0.150.0" ? roster("gpt-5.5") : roster(SOL);
+    }) as typeof fetch;
+
     expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), SOL, {
-      fetcher: (async () => { throw new Error("must be served from cache"); }) as typeof fetch,
-      now: 1_000,
-      clientVersion: "0.150.0",
+      fetcher: inverted, now: 1_000, clientVersion: "0.150.0",
     })).toBe(true);
     expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), SOL, {
-      fetcher: (async () => { throw new Error("must be served from cache"); }) as typeof fetch,
-      now: 1_000,
-      clientVersion: "0.140.0",
+      fetcher: inverted, now: 1_000, clientVersion: "0.140.0",
     })).toBe(false);
+    expect(refetches).toBe(0);
   });
 
   test("one caller cycling client_version cannot evict another account's evidence", async () => {

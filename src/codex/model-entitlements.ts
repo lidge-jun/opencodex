@@ -11,6 +11,7 @@ import {
 } from "./main-account";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import { loadPersistedCodexRuntime } from "./runtime";
+import { codexRuntimeStateEpoch } from "./runtime";
 import upstreamModelsSnapshot from "./data/upstream-models.json";
 
 const CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models";
@@ -55,21 +56,34 @@ export function isUsableCodexClientVersion(value: string | null | undefined): va
  * and no resolved runtime to speak for. It answers "what does this build believe the gated
  * models need?", which is a claim the repository can actually substantiate.
  */
-export const GATED_MODEL_CLIENT_VERSION_FLOOR: string = (() => {
-  const rows = (upstreamModelsSnapshot as { models?: Array<Record<string, unknown>> }).models ?? [];
+export function deriveGatedClientVersionFloor(
+  rows: ReadonlyArray<Record<string, unknown>>,
+  gatedSlugs: ReadonlySet<string> = ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
+): string | null {
   const floors = rows
-    .filter(row => typeof row.slug === "string" && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(row.slug))
+    .filter(row => typeof row.slug === "string" && gatedSlugs.has(row.slug))
     .map(row => (typeof row.minimal_client_version === "string" ? row.minimal_client_version : null))
     .filter((value): value is string => isUsableCodexClientVersion(value));
-  const highest = floors.reduce<string | null>(
+  return floors.reduce<string | null>(
     (best, candidate) => (best === null || compareClientVersions(candidate, best) > 0 ? candidate : best),
     null,
   );
-  // A snapshot with no gated row still has to yield a usable question; the newest floor any
-  // row records is a better answer than a placeholder, and an empty snapshot is not a state
-  // this build ships in.
-  return highest ?? "0.142.2";
-})();
+}
+
+/**
+ * Fallback when the snapshot records no usable gated floor.
+ *
+ * Not every gated slug carries a `minimal_client_version` — `gpt-daybreak-blue-latest` has no
+ * row in the current snapshot at all — so the derivation can legitimately come back empty as the
+ * gated set changes. This is the last resort behind it, and it is still a version upstream can
+ * filter on rather than the placeholder that caused #2886.
+ */
+const GATED_MODEL_CLIENT_VERSION_FLOOR_FALLBACK = "0.142.2";
+
+export const GATED_MODEL_CLIENT_VERSION_FLOOR: string =
+  deriveGatedClientVersionFloor(
+    (upstreamModelsSnapshot as { models?: Array<Record<string, unknown>> }).models ?? [],
+  ) ?? GATED_MODEL_CLIENT_VERSION_FLOOR_FALLBACK;
 
 /** Numeric-segment comparison. Only used to pick the highest floor in a known-good set. */
 function compareClientVersions(left: string, right: string): number {
@@ -111,9 +125,11 @@ export function resolveCodexEntitlementClientVersion(
   options: { readonly bypassRuntimeMemo?: boolean; readonly now?: number } = {},
 ): string {
   if (isUsableCodexClientVersion(inbound)) return inbound.trim();
-  // A caller can opt out when it is asking about a loader other than the real runtime file,
-  // which the process-wide memo describes.
-  const selected = options.bypassRuntimeMemo === true
+  // The memo describes the real runtime file, so a caller supplying a different loader is asking
+  // a different question and must not be answered from it. Detected rather than left to the
+  // caller, because forgetting the flag would silently cross-answer.
+  const bypass = options.bypassRuntimeMemo === true || loadRuntime !== loadPersistedCodexRuntime;
+  const selected = bypass
     ? readRuntimeVersion(loadRuntime)
     : memoizedPersistedRuntimeVersion(loadRuntime, options.now ?? Date.now());
   return selected ?? GATED_MODEL_CLIENT_VERSION_FLOOR;
@@ -132,7 +148,7 @@ const MODEL_ROSTER_TTL_MS = 5 * 60_000;
  */
 const RUNTIME_VERSION_MEMO_MS = 5_000;
 
-let runtimeVersionMemo: { at: number; version: string | null } | null = null;
+let runtimeVersionMemo: { at: number; epoch: number; version: string | null } | null = null;
 
 function readRuntimeVersion(
   loadRuntime: () => { selectedVersion?: string | null } | null,
@@ -151,11 +167,18 @@ function memoizedPersistedRuntimeVersion(
   loadRuntime: () => { selectedVersion?: string | null } | null,
   now: number,
 ): string | null {
-  if (runtimeVersionMemo && now - runtimeVersionMemo.at < RUNTIME_VERSION_MEMO_MS) {
+  const epoch = codexRuntimeStateEpoch();
+  // Time bounds staleness; the epoch makes a runtime switch invalidate this immediately, so the
+  // window can never answer under the version that was just replaced.
+  if (
+    runtimeVersionMemo
+    && runtimeVersionMemo.epoch === epoch
+    && now - runtimeVersionMemo.at < RUNTIME_VERSION_MEMO_MS
+  ) {
     return runtimeVersionMemo.version;
   }
   const selected = readRuntimeVersion(loadRuntime);
-  runtimeVersionMemo = { at: now, version: selected };
+  runtimeVersionMemo = { at: now, epoch, version: selected };
   return selected;
 }
 const MODEL_ROSTER_FAILURE_TTL_MS = 15_000;
@@ -175,6 +198,18 @@ const MODEL_ROSTER_CACHE_MAX = 64;
  * share.
  */
 const MODEL_ROSTER_VERSIONS_PER_ACCOUNT_MAX = 4;
+
+/**
+ * Concurrent roster requests allowed per account.
+ *
+ * The cache is bounded on write, but an in-flight request is not a cache entry: distinct
+ * `client_version` values miss the flight key by design, so a caller cycling versions could open
+ * arbitrarily many concurrent upstream requests, each holding an eight-second timer. This bounds
+ * the concurrency itself. Exceeding it is reported as unconfirmed — the same fail-closed answer a
+ * discovery failure produces, and cheaper than either queueing or serving another version's
+ * roster.
+ */
+const MODEL_ROSTER_FLIGHTS_PER_ACCOUNT_MAX = 4;
 const DIRECT_CALLER_ACCOUNT_PREFIX = "__direct_codex__:";
 
 export interface CodexModelEntitlementCredentialSnapshot {
@@ -433,6 +468,21 @@ async function modelsForCredential(
   const flightKey = `${credential.accountId}\u0000${credential.credentialIdentity}\u0000${clientVersion}`;
   const existing = accountModelsFlights.get(flightKey);
   if (existing) return existing;
+
+  // Bound concurrency per account before opening another upstream request.
+  let liveForAccount = 0;
+  for (const key of accountModelsFlights.keys()) {
+    if (accountIdOfCacheKey(key) === credential.accountId) liveForAccount += 1;
+  }
+  if (liveForAccount >= MODEL_ROSTER_FLIGHTS_PER_ACCOUNT_MAX) {
+    return {
+      credentialIdentity: credential.credentialIdentity,
+      clientVersion,
+      expiresAt: now,
+      models: new Set(),
+      confirmed: false,
+    };
+  }
   const flight = fetchAccountModels(credential, fetcher, now, clientVersion)
     .then(result => {
       if (currentCredentialIdentity(credential.accountId) === credential.credentialIdentity) {
@@ -590,6 +640,20 @@ export function resetCodexModelEntitlementCacheForTests(): void {
   accountModelsCache.clear();
   accountModelsFlights.clear();
   runtimeVersionMemo = null;
+}
+
+/**
+ * Test-only seam for the memoized tier-2 read.
+ *
+ * The memo is deliberately reachable only through the DEFAULT loader (a supplied loader is
+ * auto-bypassed, so it cannot be cross-answered), which leaves no way to observe memo behavior
+ * from a test without either touching the real state file or exposing this.
+ */
+export function memoizeRuntimeVersionForTests(
+  loadRuntime: () => { selectedVersion?: string | null } | null,
+  now: number,
+): string | null {
+  return memoizedPersistedRuntimeVersion(loadRuntime, now);
 }
 
 export function seedCodexModelEntitlementsForTests(
