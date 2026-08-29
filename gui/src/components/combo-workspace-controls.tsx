@@ -37,6 +37,17 @@ export function StrategySeg({
           {t(key)}
         </button>
       ))}
+      {value !== "failover" && value !== "round-robin" ? (
+        <button
+          type="button"
+          role="radio"
+          aria-checked={true}
+          className="btn btn-sm btn-primary"
+          disabled
+        >
+          {value}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -270,7 +281,7 @@ export function TargetEditor({
                 <option key={id} value={id}>{id}</option>
               ))}
             </select>
-            {strategy === "round-robin" && (
+            {(strategy === "round-robin" || strategy === "random") && (
               <input
                 className="input mono"
                 type="number"

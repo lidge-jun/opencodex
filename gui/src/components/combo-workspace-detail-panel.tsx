@@ -317,7 +317,11 @@ export function DetailPanel({
                 onChange={(strategy) => updateDraft((d) => ({ ...d, strategy }))}
               />
               <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-                {draft.strategy === "failover" ? t("cws.strategy.failoverHint") : t("cws.strategy.roundRobinHint")}
+                {draft.strategy === "failover"
+                  ? t("cws.strategy.failoverHint")
+                  : draft.strategy === "round-robin"
+                    ? t("cws.strategy.roundRobinHint")
+                    : null}
               </p>
             </div>
             <div className="cwi-field">
@@ -363,7 +367,11 @@ export function DetailPanel({
                 onChange={(targets) => updateDraft((d) => ({ ...d, targets }))}
               />
               <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-                {draft.strategy === "failover" ? t("cws.targets.failoverHint") : t("cws.targets.roundRobinHint")}
+                {draft.strategy === "failover"
+                  ? t("cws.targets.failoverHint")
+                  : draft.strategy === "round-robin"
+                    ? t("cws.targets.roundRobinHint")
+                    : null}
               </p>
             </div>
             <ComboCapabilities

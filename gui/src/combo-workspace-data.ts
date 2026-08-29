@@ -7,10 +7,20 @@ import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../src/codex/catalog/native-mo
 
 export { SUPPORTED_NATIVE_OPENAI_SLUGS };
 
-export type ComboStrategy = "failover" | "round-robin";
+export type ComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window";
 export type ComboEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export const COMBO_EFFORTS: ComboEffort[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
+/** Mirrors OcxComboStrategy in src/types/config.ts. */
+export const COMBO_STRATEGIES: readonly ComboStrategy[] = [
+  "failover",
+  "round-robin",
+  "random",
+  "least-used",
+  "reset-window",
+] as const;
+
+const COMBO_STRATEGY_SET = new Set<string>(COMBO_STRATEGIES);
 
 /**
  * Intersection of advertised effort ladders for picker availability.
@@ -136,7 +146,9 @@ function normalizeAlias(raw: unknown): string | null {
 }
 
 export function normalizeStrategy(raw: unknown): ComboStrategy {
-  return raw === "round-robin" ? "round-robin" : "failover";
+  return typeof raw === "string" && COMBO_STRATEGY_SET.has(raw)
+    ? raw as ComboStrategy
+    : "failover";
 }
 
 export function normalizeStickyLimit(raw: unknown): number {
@@ -467,11 +479,12 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     displayName?: string;
   };
 } {
+  const weighted = item.strategy === "round-robin" || item.strategy === "random";
   return {
     id: item.id.trim(),
     ...(options.renameFrom ? { renameFrom: options.renameFrom } : {}),
     combo: {
-      targets: item.targets.map((target) => item.strategy === "round-robin"
+      targets: item.targets.map((target) => weighted
         ? { provider: target.provider.trim(), model: target.model.trim(), weight: target.weight ?? 1 }
         : { provider: target.provider.trim(), model: target.model.trim() }),
       strategy: item.strategy,
@@ -561,6 +574,8 @@ export function validateComboDraft(
     if (!Number.isInteger(item.stickyLimit) || item.stickyLimit < 1 || item.stickyLimit > 100) {
       return "invalidStickyLimit";
     }
+  }
+  if (item.strategy === "round-robin" || item.strategy === "random") {
     for (const target of item.targets) {
       const weight = target.weight ?? 1;
       if (!Number.isInteger(weight) || weight < 1 || weight > 10000) return "invalidWeight";
