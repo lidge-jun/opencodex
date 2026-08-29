@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AnthropicRequestError, anthropicToResponsesBody, anthropicToResponsesTranslation, effortForThinkingBudget, extractOcxEffortDirective, resolveInboundModel } from "../src/claude/inbound";
+import { AnthropicRequestError, anthropicToResponsesBody, anthropicToResponsesTranslation, effortForThinkingBudget, extractOcxEffortDirective, resolveInboundModel, SYSTEM_SEGMENT_SEPARATOR } from "../src/claude/inbound";
 import { parseRequest } from "../src/responses/parser";
 import { responsesRequestSchema } from "../src/responses/schema";
 
@@ -57,7 +57,8 @@ describe("claude inbound translation", () => {
   test("content/tool/option mapping round-trips", () => {
     const body = anthropicToResponsesBody(claudeCodeRequest()) as Record<string, any>;
     expect(body.model).toBe("gemini/gemini-3-pro");
-    expect(body.instructions).toBe("You are Claude Code.\n\nPrefer terse answers.");
+    expect(body.instructions).toBe(["You are Claude Code.", "Prefer terse answers."].join(SYSTEM_SEGMENT_SEPARATOR));
+    expect(parseRequest(body).context.systemPrompt).toEqual(["You are Claude Code.", "Prefer terse answers."]);
     expect(body.max_output_tokens).toBe(8192);
     expect(body.temperature).toBe(0.7);
     expect(body.top_p).toBe(0.9);
@@ -221,7 +222,7 @@ describe("claude inbound translation", () => {
         { role: "user", content: "hi" },
       ],
     }) as any;
-    expect(body.instructions).toBe("top-level\n\nbe terse\n\nblock form");
+    expect(body.instructions).toBe(["top-level", "be terse", "block form"].join(SYSTEM_SEGMENT_SEPARATOR));
     // No system message items in input — native ChatGPT backend 400s on them.
     expect((body.input as any[]).every(item => item.role !== "system")).toBe(true);
     expect(body.input).toHaveLength(1);

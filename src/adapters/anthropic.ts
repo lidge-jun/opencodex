@@ -95,6 +95,14 @@ function applyCacheControlToLastText(blocks: Array<Record<string, unknown>>, cc:
 type PromptCachingOptions = {
   maxExplicitBreakpoints?: number;
   skipLastUser?: boolean;
+  /**
+   * Index of the last system block that is stable across turns. Claude Code appends a
+   * volatile environment segment (cwd, today's date, git status) after its stable
+   * prompt; a breakpoint there caches a prefix whose bytes change every turn, so the
+   * entry is rewritten instead of read and nothing after system can ever hit.
+   * Defaults to the last block when the caller sent a single system segment.
+   */
+  systemStableIndex?: number;
 };
 
 /** Place explicit cache_control breakpoints on the built Anthropic body. */
@@ -128,10 +136,17 @@ function applyPromptCaching(
   }
   if (used >= explicitLimit) return;
 
-  // 2. system
+  // 2. system — on the last STABLE block, not simply the last one.
+  //
+  // Claude Code appends a volatile environment segment (cwd, today's date, git
+  // status) after its stable prompt. A breakpoint on that segment caches a prefix
+  // whose bytes change every turn, so the entry is rewritten instead of read and
+  // nothing after system can ever hit. Marking the block before it keeps the whole
+  // stable prefix cacheable and leaves the churn outside the cached span.
   const system = body.system as Array<Record<string, unknown>> | undefined;
   if (system && system.length > 0) {
-    applyCacheControlToLast(system, cc);
+    const stable = Math.min(options.systemStableIndex ?? system.length - 1, system.length - 1);
+    system[stable] = { ...system[stable], cache_control: cc };
     used++;
   }
   if (used >= explicitLimit || !messages) return;
@@ -651,7 +666,7 @@ function orphanToolResultText(msg: OcxToolResultMessage): string {
 function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
-): { system: string | undefined; messages: unknown[] } {
+): { system: string[] | undefined; callerSystemSegments: number; messages: unknown[] } {
   // One allocator for the whole request: a tool_result must resolve to the SAME wire id its
   // call got, and two distinct raw ids must never collapse into one. Conforming ids are claimed
   // first so a rewritten id can never squat on an id another call legitimately owns.
@@ -670,10 +685,11 @@ function messagesToAnthropicFormat(
     parsed.options.toolChoice,
     tool => toolNames.toWire(namespacedToolName(tool.namespace, tool.name)),
   );
-  const systemParts = [...(parsed.context.systemPrompt ?? []), ...(toolCatalogNudge ? [toolCatalogNudge] : [])];
-  const system = systemParts.length
-    ? identifyRoutedModel(systemParts.join("\n\n"), parsed.modelId) || undefined
-    : undefined;
+  const callerSystem = (parsed.context.systemPrompt ?? [])
+    .map(part => identifyRoutedModel(part, parsed.modelId))
+    .filter(part => part.length > 0);
+  const nudge = toolCatalogNudge ? identifyRoutedModel(toolCatalogNudge, parsed.modelId) : "";
+  const system = [...callerSystem, ...(nudge ? [nudge] : [])];
   const messages: unknown[] = [];
 
   for (let i = 0; i < parsed.context.messages.length; i++) {
@@ -788,7 +804,7 @@ function messagesToAnthropicFormat(
     messages.push({ role: "user", content: "(continue)" });
   }
 
-  return { system, messages };
+  return { system: system.length > 0 ? system : undefined, callerSystemSegments: callerSystem.length, messages };
 }
 
 function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (name: string) => string }): unknown[] | undefined {
@@ -883,7 +899,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         throw new Error("anthropic provider requires a non-empty apiKey (authMode: key)");
       }
 
-      const { system, messages } = messagesToAnthropicFormat(parsed, toolNames);
+      const { system, callerSystemSegments, messages } = messagesToAnthropicFormat(parsed, toolNames);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
@@ -905,10 +921,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
         body.system = [
           { type: "text", text: CLAUDE_CODE_SYSTEM_INSTRUCTION },
-          ...(system ? [{ type: "text", text: system }] : []),
+          ...(system ?? []).map(text => ({ type: "text", text })),
         ];
-      } else if (system) {
-        body.system = [{ type: "text", text: system }];
+      } else if (system && system.length > 0) {
+        body.system = system.map(text => ({ type: "text", text }));
       }
       if (tools) body.tools = tools;
       if (parsed.options.temperature !== undefined) body.temperature = parsed.options.temperature;
@@ -1015,9 +1031,13 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const automaticPromptCaching = cc && usesNativeAnthropicEndpoint(provider);
       if (automaticPromptCaching) body.cache_control = cc;
       const explicitLimit = automaticPromptCaching ? MAX_CACHE_BREAKPOINTS - 1 : MAX_CACHE_BREAKPOINTS;
+      // The final caller system segment is volatile; generated nudges are not caller segments.
       applyPromptCaching(body, cc, {
         maxExplicitBreakpoints: explicitLimit,
         skipLastUser: !!automaticPromptCaching,
+        ...(callerSystemSegments > 0 ? {
+          systemStableIndex: (isOAuth ? 1 : 0) + Math.max(0, callerSystemSegments - 2),
+        } : {}),
       });
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);

@@ -249,6 +249,60 @@ describe("adapter reasoning and usage details", () => {
     expect(body.messages[1].content).toBe("current turn");
   });
 
+  test("Anthropic keeps the volatile system tail out of the cached prefix", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic", baseUrl: "https://api.anthropic.com" });
+    // Claude Code's shape: stable prompt segments, then an environment segment that
+    // changes every turn (cwd, today's date, git status).
+    const build = async (env: string) => {
+      const request = await adapter.buildRequest({
+        modelId: "claude-opus-4-1",
+        context: {
+          systemPrompt: ["You are Claude Code.", "CLAUDE.md contents", `env: modified=${env} files`],
+          messages: [{ role: "user", content: "hi" }],
+        },
+        stream: true,
+        options: {},
+      });
+      return (JSON.parse(request.body) as { system?: Array<Record<string, unknown>> }).system ?? [];
+    };
+
+    const first = await build("3");
+    const second = await build("4");
+
+    // Segments must survive as separate blocks — joined into one, the volatile bytes
+    // land inside the cached prefix and the entry is rewritten on every turn.
+    expect(first.length).toBe(3);
+    const breakpoint = first.findIndex(block => block.cache_control);
+    expect(breakpoint).toBe(first.length - 2);
+    expect(first.at(-1)?.cache_control).toBeUndefined();
+
+    // Everything up to and including the breakpoint is what Anthropic hashes.
+    expect(JSON.stringify(second.slice(0, breakpoint + 1)))
+      .toBe(JSON.stringify(first.slice(0, breakpoint + 1)));
+    // ...and the segment that actually changed stays outside it.
+    expect(second.at(-1)).not.toEqual(first.at(-1));
+  });
+
+  test("Anthropic cache marker ignores the appended tool nudge", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic", baseUrl: "https://api.anthropic.com" });
+    const request = await adapter.buildRequest({
+      modelId: "claude-opus-4-1",
+      context: {
+        systemPrompt: ["stable", "env: modified files"],
+        messages: [{ role: "user", content: "hi" }],
+        tools: [{ namespace: "codex", name: "read_file", description: "Read", parameters: { type: "object" } }],
+      },
+      stream: true,
+      options: {},
+    });
+    const system = (JSON.parse(request.body) as { system?: Array<Record<string, unknown>> }).system ?? [];
+
+    expect(system).toHaveLength(3);
+    expect(system[0]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(system[1]?.cache_control).toBeUndefined();
+    expect(system[2]?.cache_control).toBeUndefined();
+  });
+
   test("Google usage maps cached and thoughts tokens when present", async () => {
     const adapter = createGoogleAdapter({ ...provider, adapter: "google" });
     const events = await adapter.parseResponse?.(new Response(JSON.stringify({

@@ -1171,19 +1171,17 @@ function stripStatefulResponsesParams(body: unknown): unknown {
 
 /**
  * Remove top-level parameters the ChatGPT backend (`authMode: "forward"`) rejects
- * with `{"detail":"Unsupported parameter: …"}` (strict allowlist). Codex CLI never
- * sends these — it controls output length via `reasoning.effort` — but third-party
- * Responses API clients (GJC, SDK wrappers) include `max_output_tokens` per the
- * public spec. `metadata` is likewise absent from the allowlist. No-op when the
- * body carries neither field, keeping the common Codex path allocation-free.
+ * with `{"detail":"Unsupported parameter: …"}` (strict allowlist). The native
+ * Codex backend accepts none of these public/Anthropic compatibility parameters.
+ * No-op when none are present, keeping the common Codex path allocation-free.
  */
 function stripUnsupportedForwardParams(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
-  const hasMot = Object.prototype.hasOwnProperty.call(body, "max_output_tokens");
-  const hasMeta = Object.prototype.hasOwnProperty.call(body, "metadata");
-  if (!hasMot && !hasMeta) return body;
-  const { max_output_tokens: _mot, metadata: _meta, ...rest } = body;
-  return rest;
+  const drop = ["max_output_tokens", "metadata", "user", "stop", "temperature", "top_p"] as const;
+  if (!drop.some(key => Object.hasOwn(body, key))) return body;
+  const next = { ...body };
+  for (const key of drop) delete next[key];
+  return next;
 }
 
 /** Return the lossless text represented by one system message, or null when it is multimodal. */
@@ -2015,10 +2013,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
       if (forward) {
-        outBody = stripUnsupportedForwardParams(outBody);
-        // Only the canonical ChatGPT backend rejects the retired field; a self-hosted or
-        // third-party forward gateway may still accept it, so this must not be widened.
+        // Only the canonical ChatGPT backend rejects these fields; a self-hosted or
+        // third-party forward gateway may accept them, so this must not be widened.
         if (isCanonicalOpenAiForwardProvider(provider)) {
+          outBody = stripUnsupportedForwardParams(outBody);
           outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
           outBody = stripCanonicalForwardPromptCacheOptions(outBody);
           outBody = normalizeCanonicalForwardPromptEnvelope(outBody);

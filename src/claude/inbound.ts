@@ -119,16 +119,33 @@ function formatFromOutputConfig(outputConfig: unknown): Rec | undefined {
   return { type: "json_schema", name: "response", schema: format.schema };
 }
 
-function systemToInstructions(system: unknown): string | undefined {
-  if (typeof system === "string") return system.length > 0 ? system : undefined;
+/**
+ * Sentinel joining system SEGMENTS inside the Responses `instructions` string.
+ * The Responses shape has one instructions field, but Anthropic wants the caller's
+ * original block boundaries back so a cache breakpoint can sit on the stable prefix
+ * and exclude the volatile environment tail. Chosen to never occur in real prompts.
+ */
+export const SYSTEM_SEGMENT_SEPARATOR = "\u0000ocx-system-segment\u0000";
+
+/**
+ * Claude Code sends `system` as several blocks: a stable prefix (agent prompt,
+ * CLAUDE.md, skills) followed by a volatile environment segment (cwd, today's date,
+ * git status). Collapsing them into one string puts the volatile bytes inside the
+ * cached prefix, so the downstream breakpoint rewrites its entry every turn.
+ * Segments are kept apart here and rejoined only where a single string is required.
+ */
+function systemToInstructionParts(system: unknown): string[] {
+  if (typeof system === "string") return system.length > 0 ? [system] : [];
   if (Array.isArray(system)) {
     const parts: string[] = [];
     for (const block of system) {
-      if (isRec(block) && block.type === "text" && typeof block.text === "string") parts.push(block.text);
+      if (isRec(block) && block.type === "text" && typeof block.text === "string" && block.text.length > 0) {
+        parts.push(block.text);
+      }
     }
-    return parts.length > 0 ? parts.join("\n\n") : undefined;
+    return parts;
   }
-  return undefined;
+  return [];
 }
 
 function imageBlockToInputImage(block: Rec): Rec | null {
@@ -478,9 +495,7 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
   }
 
   const input: Rec[] = [];
-  const systemParts: string[] = [];
-  const topLevelSystem = systemToInstructions(raw.system);
-  if (topLevelSystem !== undefined) systemParts.push(topLevelSystem);
+  const systemParts: string[] = [...systemToInstructionParts(raw.system)];
   const blockedNames = effectiveBlockedSkillNames(cc);
   const elide: SkillElisionContext = {
     callIds: blockedSkillCallIds(raw.messages, blockedNames),
@@ -504,7 +519,9 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
     stream: raw.stream === true,
   };
 
-  if (systemParts.length > 0) body.instructions = systemParts.join("\n\n");
+  if (systemParts.length > 0) {
+    body.instructions = systemParts.join(SYSTEM_SEGMENT_SEPARATOR);
+  }
 
   const tools = toolsToResponses(raw.tools);
   if (tools) body.tools = tools;

@@ -21,6 +21,7 @@ import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
 import { extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
+import { SYSTEM_SEGMENT_SEPARATOR } from "../claude/inbound";
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -396,7 +397,12 @@ export function parseRequest(
   let continuationConversationMessageIndex: number | undefined;
 
   if (typeof data.instructions === "string" && data.instructions.length > 0) {
-    systemPrompt.push(data.instructions);
+    // Restore the caller's system block boundaries (see SYSTEM_SEGMENT_SEPARATOR):
+    // adapters that support multi-block system prompts can then place a cache
+    // breakpoint on the stable prefix instead of one block containing volatile text.
+    for (const segment of data.instructions.split(SYSTEM_SEGMENT_SEPARATOR)) {
+      if (segment.length > 0) systemPrompt.push(segment);
+    }
   }
 
   if (typeof data.input === "string") {

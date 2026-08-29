@@ -1978,6 +1978,62 @@ describe("OpenAI Responses passthrough sanitization", () => {
   };
   const meta = { headers: new Headers({ authorization: "Bearer token" }) };
 
+  test("forward mode removes all strict-backend compatibility parameters", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: "gpt-5.6-terra",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.6-terra",
+        input: "hi",
+        max_output_tokens: 64,
+        metadata: { source: "test" },
+        user: "client-user",
+        stop: ["END"],
+        temperature: 0.2,
+        top_p: 0.9,
+      },
+    }, meta).body) as Record<string, unknown>;
+
+    for (const field of ["max_output_tokens", "metadata", "user", "stop", "temperature", "top_p"]) {
+      expect(body).not.toHaveProperty(field);
+    }
+    expect(body.model).toBe("gpt-5.6-terra");
+    expect(body.input).toBe("hi");
+  });
+
+  test("noncanonical forward providers preserve their caller parameters", () => {
+    const adapter = createResponsesPassthroughAdapter({ ...provider, baseUrl: "https://gateway.example/v1" });
+    const request = adapter.buildRequest({
+      modelId: "gateway-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gateway-model",
+        input: "hi",
+        max_output_tokens: 64,
+        metadata: { source: "test" },
+        user: "client-user",
+        stop: ["END"],
+        temperature: 0.2,
+        top_p: 0.9,
+      },
+    }, meta);
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+
+    expect(body).toMatchObject({
+      max_output_tokens: 64,
+      metadata: { source: "test" },
+      user: "client-user",
+      stop: ["END"],
+      temperature: 0.2,
+      top_p: 0.9,
+    });
+  });
+
   test("forward mode always drops previous_response_id (ChatGPT backend rejects it)", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
 

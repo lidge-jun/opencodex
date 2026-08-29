@@ -1380,13 +1380,138 @@ test("claudeCode.enabled=false -> 403 permission_error on both routes", async ()
   }
 });
 
-async function postMessages(serverUrl: string, body: Record<string, unknown>): Promise<Response> {
+async function postMessages(
+  serverUrl: string,
+  body: Record<string, unknown>,
+  extraHeaders: Record<string, string> = {},
+): Promise<Response> {
   return fetch(new URL("/v1/messages", serverUrl), {
     method: "POST",
-    headers: { "content-type": "application/json", "x-api-key": "placeholder", "anthropic-version": "2023-06-01" },
+    headers: { "content-type": "application/json", "x-api-key": "placeholder", "anthropic-version": "2023-06-01", ...extraHeaders },
     body: JSON.stringify(body),
   });
 }
+
+test("newer Claude turn aborts an active turn from the same session", async () => {
+  let calls = 0;
+  let markStarted!: () => void;
+  let markStopped!: () => void;
+  const firstStarted = new Promise<void>(resolve => { markStarted = resolve; });
+  const firstStopped = new Promise<void>(resolve => { markStopped = resolve; });
+  let stopped = false;
+  let firstController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const stopFirst = () => {
+    if (stopped || !firstController) return;
+    stopped = true;
+    firstController.close();
+    markStopped();
+  };
+  const encoder = new TextEncoder();
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req) {
+      calls += 1;
+      if (calls > 1) {
+        return new Response('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          firstController = controller;
+          req.signal.addEventListener("abort", stopFirst, { once: true });
+          markStarted();
+        },
+        cancel() { stopFirst(); },
+      }), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  const request = (content: string) => postMessages(server.url.toString(), {
+    model: "mock/test-model",
+    max_tokens: 64,
+    stream: true,
+    messages: [{ role: "user", content }],
+  }, { session_id: "same-claude-session" });
+  try {
+    const first = request("first").catch(() => null);
+    await firstStarted;
+    const second = await request("second");
+    await second.text();
+    expect(calls).toBe(2);
+    expect(await Promise.race([
+      firstStopped.then(() => true),
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), SERVER_BUDGET_MS)),
+    ])).toBe(true);
+    await first;
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("late older Claude turn cannot replace newer active turn", async () => {
+  let upstreamCalls = 0;
+  let resolveStarted!: () => void;
+  const started = new Promise<void>(resolve => { resolveStarted = resolve; });
+  let upstreamSignal: AbortSignal | undefined;
+  let upstreamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req) {
+      upstreamCalls += 1;
+      upstreamSignal = req.signal;
+      resolveStarted();
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { upstreamController = controller; },
+      }), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  const config = mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`);
+  const encoder = new TextEncoder();
+  const firstPayload = JSON.stringify({
+    model: "mock/test-model", max_tokens: 64, stream: true, messages: [{ role: "user", content: "first" }],
+  });
+  let releaseFirst!: () => void;
+  const delayedBody = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(firstPayload.slice(0, 20)));
+      releaseFirst = () => {
+        controller.enqueue(encoder.encode(firstPayload.slice(20)));
+        controller.close();
+      };
+    },
+  });
+  const headers = { "content-type": "application/json", session_id: "same-claude-session" };
+  const first = handleClaudeMessages(
+    new Request("http://localhost/v1/messages", { method: "POST", headers, body: delayedBody }),
+    config,
+    {} as RequestLogContext,
+  );
+  const second = handleClaudeMessages(
+    new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "mock/test-model", max_tokens: 64, stream: true, messages: [{ role: "user", content: "second" }],
+      }),
+    }),
+    config,
+    {} as RequestLogContext,
+  );
+  try {
+    await started;
+    releaseFirst();
+    expect((await first).status).toBe(409);
+    expect(upstreamCalls).toBe(1);
+    expect(upstreamSignal?.aborted).toBe(false);
+    upstreamController?.close();
+    await (await second).text();
+  } finally {
+    upstream.stop(true);
+  }
+});
 
 test("effort safety valve: routes with a definitive no-effort ladder get reasoning stripped (devlog 136 B6)", async () => {
   const { server: upstream, captured } = mockChatUpstreamCapturing();
