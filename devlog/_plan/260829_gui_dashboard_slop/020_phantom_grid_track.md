@@ -21,28 +21,41 @@ container is wide enough to nominally fit it. With only two children the track
 collapses to 0 and the trailing gap measures 0, so nothing shifts today. It
 becomes a real phantom gap the moment a third card is added.
 
-## Change
+## Why this was withdrawn — measured
 
-Both grids hold a *known* number of cards, so express that instead of asking
-`auto-fit` to guess:
+The claim above ("the trailing gap measures 0, so nothing shifts today") was the
+reason to withdraw, but it went unmeasured on the axis the request named first —
+the horizontal one. It has now been measured, by auditing the rendered edges of
+each grid's direct children rather than reading the computed track list.
 
-```css
-grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr));
-```
+`.dash-sidecar-grid` and `.dash-overview-tools`, two-up regime:
 
-becomes an explicit two-up that collapses to one column by container width:
+| vw | card widths | top spread | bottom spread | gutters |
+|----|-------------|-----------|---------------|---------|
+| 1600 | 556 / 556 | 0.0px | 0.0px | one 16px |
+| 1440 | 555 / 555 | 0.0px | 0.0px | one 16px |
+| 1280 | 475 / 475 | 0.0px | 0.0px | one 16px |
+| 1100 | 385 / 385 | 0.0px | 0.0px | one 16px |
+| 1024 | 347 / 347 | 0.0px | 0.0px | one 16px |
 
-```css
-grid-template-columns: 1fr;                 /* narrow: stack */
-@container / min-width: two-up → 1fr 1fr    /* wide: matched pair */
-```
+Identical widths, shared top and bottom edges, and exactly one gutter — no
+trailing gap after the second card at any width. The collapsed third track
+consumes no space and displaces nothing, in either grid, on both axes. So there
+is no horizontal misalignment to fix here, and the generated-but-collapsed track
+is not a defect.
 
-Applies to `.dash-sidecar-grid` and `.dash-overview-tools`. The wrap width stays
-`21rem` per card so the responsive behaviour is unchanged — verified by the same
-sweep, which must keep reporting STACKED at 900/430 and PAIRED at 1024+.
+## The rewrite that was considered and rejected
 
-## Acceptance
+Recorded so it is not mistaken for a pending plan: **none of this shipped, and
+applying it is not recommended.**
 
-- No `0px` track in either grid's computed columns at any swept width.
-- The PAIRED/STACKED pattern per width matches the baseline exactly (no
-  behavioural change, only the phantom track removed).
+The option was to stop asking `auto-fit` to guess and state the known card count
+— `grid-template-columns: 1fr` with a container query promoting to `1fr 1fr` —
+for both grids. It was rejected on cost against benefit: it fixes nothing
+measurable today (see the table above), and it trades `auto-fit`'s automatic
+behaviour for a hard-coded count, so a third card would then need a stylesheet
+change instead of just appearing. The phantom track only becomes real if a third
+card is added, and at that point `auto-fit` is what handles it correctly.
+
+If a future change does add a third card to either grid, re-measure the trailing
+gap first; the audit above is the procedure.
