@@ -13,7 +13,7 @@ import {
   EMPTY_EXEC_OUTPUT_MESSAGE,
   EMPTY_EXEC_OUTPUT_REGEX,
   FAILED_EXEC_OUTPUT_MESSAGE,
-  FAILED_EXEC_OUTPUT_REGEX,
+  isFailedEmptyExecWrapper,
   isCodexExecBridgeTool,
 } from "../exec-tool-result-normalize";
 
@@ -23,7 +23,7 @@ import {
  * `Script failed`, so restore that arm here rather than widening the shared one.
  */
 function isEmptyOrFailedExecWrapper(text: string): boolean {
-  return EMPTY_EXEC_OUTPUT_REGEX.test(text) || FAILED_EXEC_OUTPUT_REGEX.test(text);
+  return EMPTY_EXEC_OUTPUT_REGEX.test(text) || isFailedEmptyExecWrapper(text);
 }
 
 const COMPUTER_USE_TOOL_NAMES = new Set([
@@ -99,7 +99,7 @@ export function normalizeCursorToolResultText(
       // A `Script failed` wrapper is empty but NOT a success: reporting it as an empty success
       // would erase the only failure signal. Text classification stays separate from Cursor's
       // isError policy, which the Computer Use branch above owns.
-      text: FAILED_EXEC_OUTPUT_REGEX.test(text.trim()) ? FAILED_EXEC_OUTPUT_MESSAGE : EMPTY_EXEC_OUTPUT_MESSAGE,
+    text: isFailedEmptyExecWrapper(text.trim()) ? FAILED_EXEC_OUTPUT_MESSAGE : EMPTY_EXEC_OUTPUT_MESSAGE,
       isError: false,
       changed: true,
     };

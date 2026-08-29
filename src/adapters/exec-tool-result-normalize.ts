@@ -22,8 +22,45 @@
  */
 export const EMPTY_EXEC_OUTPUT_REGEX = /^(?:(?:Script completed|Command finished|Execution finished)[^\n]*\n+)?(?:Wall time[^\n]*\n+)?(?:Output:\s*)?(?:<empty>)?\s*$/;
 
-/** Wrapper for a cell that FAILED without emitting output: empty, but not a success. */
-export const FAILED_EXEC_OUTPUT_REGEX = /^Script failed[^\n]*\n*(?:Wall time[^\n]*\n*)?(?:Output:\s*)?(?:<empty>)?\s*$/;
+/**
+ * True when a trimmed exec wrapper says the cell FAILED and carried no output.
+ *
+ * Deliberately a line scan rather than a regex. The equivalent pattern needs a run of
+ * `[^\n]*`, `\n*`, `\s*` groups that can each match the same whitespace, so a malformed
+ * wrapper that never completes the match makes the engine try every split between them.
+ * Measured on Bun 1.4: a single `Script failed` line padded with 30k spaces took ~820ms
+ * and 60k took ~3.1s — quadratic, on text that arrives from a tool result and can be
+ * attacker-influenced. Each line here is classified exactly once, so there is nothing to
+ * backtrack over: the same 60k input is ~0.02ms.
+ *
+ * Blank separator lines are matched the way the previous pattern's `\n*` did — a line of
+ * spaces is NOT a separator, only a genuinely empty one is — except that a CRLF blank line
+ * now counts. The old pattern accepted `\n\n` but not `\r\n\r\n`, so a CRLF wrapper was
+ * reported as an empty SUCCESS and the failure signal was erased. That was a latent bug,
+ * and fixing it is the point of describing the boundary explicitly.
+ */
+export function isFailedEmptyExecWrapper(trimmed: string): boolean {
+  if (!trimmed.startsWith("Script failed")) return false;
+  const lines = trimmed.split(/\r?\n/);
+  let i = 1;
+  const skipEmpty = (): void => { while (i < lines.length && lines[i] === "") i++; };
+  skipEmpty();
+  if (i < lines.length && lines[i]!.startsWith("Wall time")) { i++; skipEmpty(); }
+  if (i < lines.length && lines[i]!.startsWith("Output:")) {
+    const after = lines[i]!.slice("Output:".length).trim();
+    // Real payload after the marker: this wrapper is not empty and must pass through.
+    if (after !== "" && after !== "<empty>") return false;
+    i++;
+    // A bare `Output:` left the old `\s*` free to swallow any trailing whitespace,
+    // including whitespace-only lines; `Output: <empty>` consumed the marker first and
+    // only `\n*`-style empty lines could follow.
+    if (after === "") { while (i < lines.length && lines[i]!.trim() === "") i++; }
+    else skipEmpty();
+  }
+  if (i < lines.length && lines[i] === "<empty>") { i++; skipEmpty(); }
+  while (i < lines.length && lines[i]!.trim() === "") i++;
+  return i >= lines.length;
+}
 
 /** Guidance for a failed cell whose output was empty: the failure must survive normalization. */
 export const FAILED_EXEC_OUTPUT_MESSAGE =
@@ -94,6 +131,6 @@ export function normalizeEmptyExecToolResultText(
   if (!isCodexExecBridgeTool(options.toolName, options.toolNamespace)) return undefined;
   const trimmed = text.trim();
   // Failure first: a failed wrapper must never be described as an empty success.
-  if (FAILED_EXEC_OUTPUT_REGEX.test(trimmed)) return FAILED_EXEC_OUTPUT_MESSAGE;
+  if (isFailedEmptyExecWrapper(trimmed)) return FAILED_EXEC_OUTPUT_MESSAGE;
   return EMPTY_EXEC_OUTPUT_REGEX.test(trimmed) ? EMPTY_EXEC_OUTPUT_MESSAGE : undefined;
 }

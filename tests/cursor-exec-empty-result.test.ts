@@ -45,6 +45,59 @@ describe("codex exec bridge empty-result normalization (devlog 260826 gap-7)", (
     expect(out.text).toBe("Output:\nhello");
   });
 
+  test("a malformed failed wrapper is classified in linear time", () => {
+    // The previous regex used overlapping whitespace quantifiers, so an input that never
+    // completes the match made the engine try every split between them. Measured on Bun
+    // 1.4 the same shape took ~820ms at 30k and ~3.1s at 60k — quadratic growth on text
+    // that arrives inside a tool result. 500ms is far above the linear scan's real cost
+    // (~0.02ms) and far below the old behavior, so it fails loudly if backtracking returns
+    // without being tight enough to flake on a loaded worker.
+    const malformed = `Script failed${" ".repeat(60_000)}\nY`;
+    const startedAt = performance.now();
+    const out = normalizeCursorToolResultText(malformed, { toolName: "exec", isError: false });
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(out.changed).toBe(false);
+    expect(out.text).toBe(malformed);
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  test("a CRLF failed wrapper is a failure, not an empty success", () => {
+    // The old pattern's `\n*` accepted an LF blank line but not a CRLF one, so on Windows
+    // wrappers this branch fell through to the empty-SUCCESS text and erased the failure.
+    const out = normalizeCursorToolResultText("Script failed\r\n\r\nOutput:", { toolName: "exec", isError: false });
+    expect(out.changed).toBe(true);
+    expect(out.text).toContain("exec failed");
+    expect(out.text).not.toContain("NOT lost context");
+  });
+
+  test("failed-wrapper classification matches the shapes it accepted before", () => {
+    const accepted = [
+      "Script failed",
+      "Script failed\nOutput:",
+      "Script failed\nOutput: <empty>",
+      "Script failed\nWall time 1.2 seconds",
+      "Script failed\nWall time 1.2 seconds\nOutput: <empty>",
+      "Script failed\n\n\nOutput:",
+      "Script failed\nWall time 1s\n\nOutput:",
+    ];
+    for (const wrapper of accepted) {
+      const out = normalizeCursorToolResultText(wrapper, { toolName: "exec", isError: false });
+      expect(out.text).toContain("exec failed");
+    }
+
+    const rejected = [
+      "Script failed\nOutput:\nreal output",
+      "Script failed\nWall time 1s\nsomething real",
+      "Script failed\nOutput: <empty> trailing",
+    ];
+    for (const wrapper of rejected) {
+      const out = normalizeCursorToolResultText(wrapper, { toolName: "exec", isError: false });
+      expect(out.changed).toBe(false);
+      expect(out.text).toBe(wrapper);
+    }
+  });
+
   test("computer-use empties keep the original error semantics", () => {
     const out = normalizeCursorToolResultText("", { toolName: "screenshot" });
     expect(out.isError).toBe(true);
