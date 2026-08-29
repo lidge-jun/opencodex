@@ -104,6 +104,31 @@ Two shapes needed care while writing them:
 ## Verification
 
 - `bun test tests/cursor-tool-result-invocation.test.ts tests/cursor-tool-continuation.test.ts tests/cursor-blob.test.ts` — 123 pass, 0 fail.
+
+## Completeness: are the two patched sites the whole set?
+
+The obvious residual risk is a *third* replay site with the same suffix-indexing bug, which would
+make this unit's third partial fix. Enumerated against the source rather than assumed.
+
+Only two functions attach an invocation line, and both now take `knownCalls`:
+
+| Site | Line | Emits | Indexed from |
+|------|------|-------|--------------|
+| `rootPromptMessages` | 240 | root `[Tool Result]` blob | `knownCalls ?? toolCallsByCallId(messages)` |
+| `conversationTurns` | 953 | turn step `[Tool Result]` | `knownCalls ?? toolCallsByCallId(messages)` |
+
+`toolResultToText` has a third caller, `contentText` at line 498, which passes no call and therefore
+can never name an invocation. It is not a gap, because no tool result reaches it: all three of its
+callers select on role first.
+
+- line 285 — `historyContentText`, guarded by `message.role === "user" || message.role === "developer"`.
+- line 1034 — the turn's `userMessage`, reached only in the loop's final `else` after the `assistant`
+  and `toolResult` branches have both `continue`d.
+- line 1052 — `activePromptText`, which scans backwards for a `user`/`developer` message.
+
+So the `toolResult` branch inside `contentText` is dead for these paths, and the two patched sites are
+the complete set. `request-builder.ts` has its own `toolResultToText` for the text `messages` channel;
+it is a different channel with no invocation line by design and is out of scope here.
 - `bun x tsc --noEmit` — exit 0.
 - Full suite on `ssh lidge`; no local full-suite run was used as a gate.
 
