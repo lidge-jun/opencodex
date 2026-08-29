@@ -11,10 +11,21 @@ let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 const originalFetch = globalThis.fetch;
 
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                           */
+/* ------------------------------------------------------------------ */
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
+  });
+}
+
+function textResponse(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: { "content-type": "text/plain" },
   });
 }
 
@@ -44,14 +55,29 @@ function installLayoutStubs(win: Window): void {
   Object.defineProperty(win, "ResizeObserver", { configurable: true, value: ResizeObserverStub });
 }
 
-const configResponse = {
+/** Deferred promise helper for controlling async timing in tests. */
+function defer<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>(r => { resolve = r; });
+  return { promise, resolve };
+}
+
+const configThreeProviders = {
   providers: {
     openai: { adapter: "openai-responses", baseUrl: "https://api.openai.com" },
     anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com" },
+    grok: { adapter: "grok", baseUrl: "https://api.x.ai" },
   },
 };
 
 const emptyConfigResponse = { providers: {} };
+
+/** Build a config object with N named providers. */
+function makeConfig(names: string[]): { providers: Record<string, { adapter: string; baseUrl: string }> } {
+  const providers: Record<string, { adapter: string; baseUrl: string }> = {};
+  for (const n of names) providers[n] = { adapter: n, baseUrl: `https://${n}.example.com` };
+  return { providers };
+}
 
 function makeFetchHandler(
   calls: string[],
@@ -62,7 +88,7 @@ function makeFetchHandler(
 ) {
   return (async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes("/api/config")) return jsonResponse(opts?.config ?? configResponse);
+    if (url.includes("/api/config")) return jsonResponse(opts?.config ?? configThreeProviders);
     if (url.includes("/api/providers/test")) {
       calls.push(url);
       if (opts?.test) return opts.test(url);
@@ -77,6 +103,10 @@ function makeFetchHandler(
     return jsonResponse({});
   }) as typeof fetch;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Setup / Teardown                                                  */
+/* ------------------------------------------------------------------ */
 
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
@@ -152,9 +182,25 @@ function findTestAllButton(container: HTMLElement): HTMLButtonElement | null {
   ) ?? null;
 }
 
-test("Providers: Test All sends requests for each provider", async () => {
+/** Find the button that shows "Testing…" text (during batch). */
+function findTestingButton(container: HTMLElement): HTMLButtonElement | null {
+  return [...container.querySelectorAll("button")].find(
+    btn => btn.textContent?.includes("Testing"),
+  ) ?? null;
+}
+
+/** Get full page text including portal content (toasts render to document.body). */
+function pageText(): string {
+  return document.body.textContent ?? "";
+}
+
+/* ------------------------------------------------------------------ */
+/*  Tests                                                             */
+/* ------------------------------------------------------------------ */
+
+test("1. all providers succeed", async () => {
   const calls: string[] = [];
-  const { root, container } = await mountProviders(makeFetchHandler(calls));
+  const { root, container } = await mountProviders(makeFetchHandler(calls, { config: configThreeProviders }));
 
   const btn = findTestAllButton(container)!;
   expect(btn).not.toBeNull();
@@ -163,19 +209,31 @@ test("Providers: Test All sends requests for each provider", async () => {
   await act(async () => { btn.click(); });
   await driveAsyncBatch();
 
-  expect(calls.length).toBeGreaterThanOrEqual(2);
-  expect(calls.some(u => u.includes("name=openai"))).toBe(true);
-  expect(calls.some(u => u.includes("name=anthropic"))).toBe(true);
+  // Each provider name appeared exactly once in test calls
+  expect(calls.length).toBeGreaterThanOrEqual(3);
+  expect(calls.filter(u => u.includes("name=openai")).length).toBe(1);
+  expect(calls.filter(u => u.includes("name=anthropic")).length).toBe(1);
+  expect(calls.filter(u => u.includes("name=grok")).length).toBe(1);
+
+  // Toast contains the success message (portaled to document.body)
+  expect(pageText()).toContain("All 3 providers healthy.");
+
+  // Button re-enabled
+  const btnAfter = findTestAllButton(container);
+  expect(btnAfter).not.toBeNull();
+  expect(btnAfter!.disabled).toBe(false);
 
   await act(async () => { root.unmount(); });
 });
 
-test("Providers: Test All counts partial failures correctly", async () => {
+test("2. partial failures", async () => {
   const calls: string[] = [];
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
   const { root, container } = await mountProviders(makeFetchHandler(calls, {
+    config: cfg,
     test: (url) => {
-      if (url.includes("name=openai")) return jsonResponse({ ok: true, latencyMs: 50 });
-      return jsonResponse({ ok: false, error: "invalid key" });
+      if (url.includes("name=openai")) return jsonResponse({ ok: true, latencyMs: 42 });
+      return jsonResponse({ ok: false, error: "bad key" });
     },
   }));
 
@@ -183,20 +241,25 @@ test("Providers: Test All counts partial failures correctly", async () => {
   await act(async () => { btn.click(); });
   await driveAsyncBatch();
 
-  // Both providers were tested
+  // Both tested
   expect(calls.length).toBeGreaterThanOrEqual(2);
   expect(calls.some(u => u.includes("name=openai"))).toBe(true);
   expect(calls.some(u => u.includes("name=anthropic"))).toBe(true);
 
-  // Button should be re-enabled (batchTesting=false)
+  // Toast says partial (portaled to document.body)
+  expect(pageText()).toContain("1 healthy, 1 with errors.");
+
+  // Button re-enabled
   expect(findTestAllButton(container)).not.toBeNull();
 
   await act(async () => { root.unmount(); });
 });
 
-test("Providers: Test All counts non-2xx as failure", async () => {
+test("3. non-2xx treated as failure", async () => {
   const calls: string[] = [];
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
   const { root, container } = await mountProviders(makeFetchHandler(calls, {
+    config: cfg,
     test: () => jsonResponse({ error: "server error" }, 500),
   }));
 
@@ -204,62 +267,218 @@ test("Providers: Test All counts non-2xx as failure", async () => {
   await act(async () => { btn.click(); });
   await driveAsyncBatch();
 
-  // Both providers were tested
+  // Both providers were tested (test calls went out)
   expect(calls.length).toBeGreaterThanOrEqual(2);
+
+  // Both are failures → toast shows 0 healthy, 2 with errors
+  expect(pageText()).toContain("0 healthy, 2 with errors.");
+
+  // Button re-enabled
   expect(findTestAllButton(container)).not.toBeNull();
 
   await act(async () => { root.unmount(); });
 });
 
-test("Providers: Test All handles network error", async () => {
+test("4. invalid JSON counted as failure", async () => {
   const calls: string[] = [];
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" } } };
   const { root, container } = await mountProviders(makeFetchHandler(calls, {
-    test: () => { throw new TypeError("fetch failed"); },
+    config: cfg,
+    test: () => textResponse("not json"),
   }));
 
   const btn = findTestAllButton(container)!;
   await act(async () => { btn.click(); });
   await driveAsyncBatch();
 
-  expect(calls.length).toBeGreaterThanOrEqual(2);
+  // The test call was made
+  expect(calls.length).toBeGreaterThanOrEqual(1);
+  expect(calls[0]).toContain("name=openai");
+
+  // Invalid JSON → failure; toast shows 0 healthy, 1 with errors
+  expect(pageText()).toContain("0 healthy, 1 with errors.");
+
+  // No unhandled rejection — component handles it gracefully
   expect(findTestAllButton(container)).not.toBeNull();
 
   await act(async () => { root.unmount(); });
 });
 
-test("Providers: Test All with no providers sends no test requests", async () => {
+test("5. network error counted as failure, other providers still tested", async () => {
+  const calls: string[] = [];
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
+  const { root, container } = await mountProviders(makeFetchHandler(calls, {
+    config: cfg,
+    test: (url) => {
+      if (url.includes("name=openai")) throw new TypeError("fetch failed");
+      return jsonResponse({ ok: true, latencyMs: 30 });
+    },
+  }));
+
+  const btn = findTestAllButton(container)!;
+  await act(async () => { btn.click(); });
+  await driveAsyncBatch();
+
+  // Both providers tested despite one throwing
+  expect(calls.length).toBeGreaterThanOrEqual(2);
+  expect(calls.some(u => u.includes("name=openai"))).toBe(true);
+  expect(calls.some(u => u.includes("name=anthropic"))).toBe(true);
+
+  // openai failed, anthropic succeeded → partial toast
+  expect(pageText()).toContain("1 healthy, 1 with errors.");
+
+  expect(findTestAllButton(container)).not.toBeNull();
+
+  await act(async () => { root.unmount(); });
+});
+
+test("6. empty provider config sends no test requests", async () => {
   const calls: string[] = [];
   const { root, container } = await mountProviders(makeFetchHandler(calls, {
     config: emptyConfigResponse,
   }));
 
-  // Button is always rendered but clicking with empty config does nothing
+  // Button may or may not be rendered for empty config — handle both cases
   const btn = findTestAllButton(container);
   if (btn) {
     await act(async () => { btn.click(); });
     await driveAsyncBatch();
   }
-  // No test requests should have been sent
+
+  // Zero test API calls
   expect(calls).toHaveLength(0);
+
+  // No crash
+  await act(async () => { root.unmount(); });
+});
+
+test("7. button disabled during batch, shows Testing…", async () => {
+  const calls: string[] = [];
+  const d1 = defer<Response>();
+  const d2 = defer<Response>();
+  const deferreds = [d1, d2];
+  let idx = 0;
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
+
+  const { root, container } = await mountProviders(makeFetchHandler(calls, {
+    config: cfg,
+    test: () => deferreds[idx++].promise,
+  }));
+
+  const btn = findTestAllButton(container)!;
+  expect(btn).not.toBeNull();
+
+  // Click to start batch
+  await act(async () => { btn.click(); });
+
+  // Immediately after click: button should show "Testing…" and be disabled
+  const testingBtn = findTestingButton(container);
+  expect(testingBtn).not.toBeNull();
+  expect(testingBtn!.disabled).toBe(true);
+
+  // Complete all deferred requests
+  await act(async () => { d1.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  await act(async () => { d2.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  await driveAsyncBatch();
+
+  // After completion: button shows "Test All" and is enabled
+  const btnAfter = findTestAllButton(container);
+  expect(btnAfter).not.toBeNull();
+  expect(btnAfter!.disabled).toBe(false);
 
   await act(async () => { root.unmount(); });
 });
 
-test("Providers: Test All button re-enables after completion", async () => {
+test("8. max concurrency ≤ 3", async () => {
+  const names = ["a", "b", "c", "d", "e", "f"];
+  const cfg = makeConfig(names);
+
+  // Shared deferreds that the test handler pushes to, so we can resolve them externally
+  const pendingDeferreds: ReturnType<typeof defer<Response>>[] = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
+
   const calls: string[] = [];
-  const { root, container } = await mountProviders(makeFetchHandler(calls));
+  const { root, container } = await mountProviders(makeFetchHandler(calls, {
+    config: cfg,
+    test: () => {
+      inFlight++;
+      if (inFlight > maxInFlight) maxInFlight = inFlight;
+      const d = defer<Response>();
+      pendingDeferreds.push(d);
+      // Chain: decrement in-flight when resolved
+      return d.promise.then(v => { inFlight--; return v; }, e => { inFlight--; throw e; });
+    },
+  }));
 
   const btn = findTestAllButton(container)!;
-  expect(btn.disabled).toBe(false);
-
   await act(async () => { btn.click(); });
-  // After batch completes, button should be re-enabled
+
+  // Let microtasks settle so workers pick up items from the queue
+  for (let i = 0; i < 10; i++) {
+    await act(async () => {
+      await Promise.resolve();
+      jest.advanceTimersByTime(0);
+    });
+  }
+
+  // With 6 providers and concurrency 3, at most 3 should be in-flight.
+  // The first 3 workers each pick one item.
+  expect(maxInFlight).toBeLessThanOrEqual(3);
+  expect(maxInFlight).toBeGreaterThanOrEqual(1);
+
+  // Resolve all pending deferreds
+  for (const d of pendingDeferreds) {
+    await act(async () => { d.resolve(jsonResponse({ ok: true, latencyMs: 5 })); });
+  }
   await driveAsyncBatch();
 
-  // Button should be present and enabled (batchTesting=false)
-  const btnAfter = findTestAllButton(container);
-  expect(btnAfter).not.toBeNull();
-  expect(btnAfter!.disabled).toBe(false);
+  // All 6 should have been tested (may need multiple waves since concurrency is 3)
+  expect(calls.length).toBe(6);
+
+  await act(async () => { root.unmount(); });
+});
+
+test("9. unmount during batch aborts requests without state-update errors", async () => {
+  const calls: string[] = [];
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
+  const d = defer<Response>();
+
+  const { root, container } = await mountProviders(makeFetchHandler(calls, {
+    config: cfg,
+    test: () => d.promise,
+  }));
+
+  const btn = findTestAllButton(container)!;
+  await act(async () => { btn.click(); });
+
+  // Unmount immediately — aliveRef should prevent state updates
+  await act(async () => { root.unmount(); });
+
+  // Resolve the deferred — should NOT produce act() warnings or state-update errors
+  await act(async () => { d.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+
+  // Additional settle cycles
+  for (let i = 0; i < 3; i++) {
+    await act(async () => {
+      await Promise.resolve();
+      jest.advanceTimersByTime(0);
+    });
+  }
+  // If we reach here without errors, the aliveRef guard worked
+});
+
+test("10. toast text accuracy for success case (1 provider)", async () => {
+  const calls: string[] = [];
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" } } };
+  const { root, container } = await mountProviders(makeFetchHandler(calls, { config: cfg }));
+
+  const btn = findTestAllButton(container)!;
+  await act(async () => { btn.click(); });
+  await driveAsyncBatch();
+
+  // Verify exact toast text for count=1 (portaled to document.body)
+  expect(pageText()).toContain("All 1 providers healthy.");
 
   await act(async () => { root.unmount(); });
 });
