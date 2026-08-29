@@ -387,6 +387,12 @@ export const en = {
   // providers
   "prov.subtitle": "Configure the upstream providers opencodex routes into Codex. Log in with an account, add a provider, or edit the raw config.",
   "prov.add": "Add Provider",
+  "prov.testAll": "Test All",
+  "prov.testing": "Testing…",
+  "prov.testAll.ok": "All {count} providers healthy.",
+  "prov.testAll.partial": "{passed} healthy, {failed} with errors.",
+  "prov.testAll.result.ok": "Healthy ({latency}ms)",
+  "prov.testAll.result.error": "Error: {error}",
   "prov.editJson": "Edit JSON",
   "prov.accountLogin": "Account login",
   "prov.noOauth": "No OAuth providers available.",

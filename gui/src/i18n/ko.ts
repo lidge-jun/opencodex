@@ -373,6 +373,12 @@ export const ko: Record<TKey, string> = {
   // providers
   "prov.subtitle": "opencodex가 Codex로 라우팅하는 업스트림 프로바이더를 설정합니다. 계정으로 로그인하거나, 프로바이더를 추가하거나, 원본 설정을 편집하세요.",
   "prov.add": "프로바이더 추가",
+  "prov.testAll": "전체 테스트",
+  "prov.testing": "테스트 중…",
+  "prov.testAll.ok": "프로바이더 {count}개 모두 정상.",
+  "prov.testAll.partial": "{passed}개 정상, {failed}개 오류.",
+  "prov.testAll.result.ok": "정상 ({latency}ms)",
+  "prov.testAll.result.error": "오류: {error}",
   "prov.editJson": "JSON 편집",
   "prov.accountLogin": "계정 로그인",
   "prov.noOauth": "사용 가능한 OAuth 프로바이더가 없습니다.",

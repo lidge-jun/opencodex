@@ -370,6 +370,12 @@ export const zh: Record<TKey, string> = {
   // providers
   "prov.subtitle": "配置 opencodex 路由到 Codex 的上游提供方。使用账户登录、添加提供方，或编辑原始配置。",
   "prov.add": "添加提供方",
+  "prov.testAll": "测试全部",
+  "prov.testing": "测试中…",
+  "prov.testAll.ok": "全部 {count} 个提供方正常。",
+  "prov.testAll.partial": "{passed} 个正常，{failed} 个出错。",
+  "prov.testAll.result.ok": "正常 ({latency}ms)",
+  "prov.testAll.result.error": "错误：{error}",
   "prov.editJson": "编辑 JSON",
   "prov.accountLogin": "账户登录",
   "prov.noOauth": "没有可用的 OAuth 提供方。",

@@ -375,6 +375,12 @@ export const ru: Record<TKey, string> = {
   // providers
   "prov.subtitle": "Настройте вышестоящих провайдеров, которых opencodex маршрутизирует в Codex. Войдите в аккаунт, добавьте провайдера или отредактируйте конфигурацию вручную.",
   "prov.add": "Добавить провайдера",
+  "prov.testAll": "Проверить все",
+  "prov.testing": "Проверка…",
+  "prov.testAll.ok": "Все {count} провайдеров активны.",
+  "prov.testAll.partial": "{passed} активны, {failed} с ошибками.",
+  "prov.testAll.result.ok": "Активен ({latency}ms)",
+  "prov.testAll.result.error": "Ошибка: {error}",
   "prov.editJson": "Редактировать JSON",
   "prov.accountLogin": "Вход в аккаунт",
   "prov.noOauth": "Нет доступных OAuth-провайдеров.",

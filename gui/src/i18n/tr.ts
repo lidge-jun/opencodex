@@ -378,6 +378,12 @@ export const tr: Record<TKey, string> = {
   // providers
   "prov.subtitle": "opencodex'in Codex'e yönlendirdiği sağlayıcıları yapılandırın.",
   "prov.add": "Sağlayıcı Ekle",
+  "prov.testAll": "Tümünü Test Et",
+  "prov.testing": "Test ediliyor…",
+  "prov.testAll.ok": "Tüm {count} sağlayıcı sağlıklı.",
+  "prov.testAll.partial": "{passed} sağlıklı, {failed} hatalı.",
+  "prov.testAll.result.ok": "Sağlıklı ({latency}ms)",
+  "prov.testAll.result.error": "Hata: {error}",
   "prov.editJson": "JSON Düzenle",
   "prov.accountLogin": "Hesap girişi",
   "prov.noOauth": "Kullanılabilir OAuth sağlayıcısı yok.",

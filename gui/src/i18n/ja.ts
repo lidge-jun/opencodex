@@ -375,6 +375,12 @@ export const ja: Record<TKey, string> = {
   // providers
   "prov.subtitle": "opencodex が Codex にルーティングする上流プロバイダーを設定します。アカウントでログインするか、プロバイダーを追加、または生の設定を編集します。",
   "prov.add": "プロバイダーを追加",
+  "prov.testAll": "すべてテスト",
+  "prov.testing": "テスト中…",
+  "prov.testAll.ok": "全 {count} プロバイダー正常。",
+  "prov.testAll.partial": "{passed} 正常、{failed} エラー。",
+  "prov.testAll.result.ok": "正常 ({latency}ms)",
+  "prov.testAll.result.error": "エラー：{error}",
   "prov.editJson": "JSON を編集",
   "prov.accountLogin": "アカウントログイン",
   "prov.noOauth": "利用可能な OAuth プロバイダーがありません。",
