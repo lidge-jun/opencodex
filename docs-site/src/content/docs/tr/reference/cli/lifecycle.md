@@ -19,7 +19,7 @@ otomatik başlatma dolgusunu kurar.
 
 ## Proxy yaşam döngüsü
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port]]`
 
 Proxy sunucusunu başlatın (tercih edilen port `10100`). Bu port doluysa
 opencodex başka bir kullanılabilir port seçer ve kaydeder. PID/çalışma zamanı
@@ -31,6 +31,8 @@ Codex'i geri yükler.
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`

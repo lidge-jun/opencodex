@@ -298,7 +298,7 @@ Qwen Cloud, Qoder Global and CN (official PAT + CLI), SiliconFlow, and more. Ful
 
 ```bash
 ocx init                       # interactive setup (writes config, wires Codex, offers the shim)
-ocx start [--port 10100]       # start the proxy in the foreground
+ocx start [--port 10100] [--socks5]  # start the proxy; --socks5 saves SOCKS outbound
 ocx stop                       # stop + restore native Codex
 ocx service [install|repair|restart|start|stop|status|uninstall|remove]  # background service
 ocx codex-shim install         # start the proxy on demand whenever `codex` launches

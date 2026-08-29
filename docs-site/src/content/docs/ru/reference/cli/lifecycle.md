@@ -18,7 +18,7 @@ opencodex и его интеграцию с Codex.
 
 ## Жизненный цикл прокси
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port]]`
 
 Запустить proxy server (предпочтительный порт `10100`). Если этот порт занят, opencodex выбирает и
 записывает другой свободный порт. При запуске пишется состояние PID/runtime-port, а попытка
@@ -29,6 +29,8 @@ opencodex и его интеграцию с Codex.
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`

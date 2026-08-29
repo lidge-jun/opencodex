@@ -13,13 +13,15 @@ description: 安裝、啟動、停止、服務、診斷、同步與更新指令�
 
 ## 代理生命週期
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port]]`
 
 啟動代理伺服器（偏好連接埠 `10100`）。若該連接埠被佔用，opencodex 會選擇並記錄另一個可用連接埠。它寫入 PID/runtime-port 狀態，並拒絕啟動第二個即時實例。啟動時它將每個供應商的模型同步到 Codex 目錄。關閉時它還原原生 Codex——除非它是作為受管服務啟動的（`OCX_SERVICE=1`）。
 
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`

@@ -11,7 +11,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 프록시 수신 포트입니다. |
 | `hostname?` | `string` | `"127.0.0.1"` | 바인드 주소입니다. 루프백이 아닌 바인드에는 데이터 admission 토큰이 필요하며, `OPENCODEX_API_AUTH_TOKEN` → `OCX_API_TOKEN_FILE` → 설치된 owner-only `service-api-token` 순서로 결정됩니다. 손으로 내보낼 값은 없습니다. [Remote access](#remote-access)를 보세요. |
-| `proxy?` | `string` | — | 송신용 HTTP(S) 프록시 URL 또는 `${ENV_VAR}`입니다. 해당 변수가 비어 있을 때만 `HTTP_PROXY` / `HTTPS_PROXY`에 적용되며, 루프백은 `NO_PROXY`에 그대로 남습니다. |
+| `proxy?` | `string` | — | 송신용 HTTP(S) 또는 SOCKS 프록시 URL(`socks5://host:port`) 또는 `${ENV_VAR}`입니다. HTTP URL은 해당 변수가 비어 있을 때 `HTTP_PROXY` / `HTTPS_PROXY`에 적용됩니다. SOCKS URL은 `ALL_PROXY`에 적용되며(`ocx start --socks5`) 이 프로세스에서 상속된 `HTTP(S)_PROXY`를 지웁니다. 루프백은 `NO_PROXY`에 그대로 남습니다. |
 | `emptyCompletionRetry?` | `boolean` | `false` | 텍스트나 도구 호출이 없는 Responses 턴을, 터미널 이벤트 전에 스트림이 종료된 경우를 포함해 동일한 요청으로 한 번 재시도하도록 선택합니다. 재시도에는 비용이 발생할 수 있습니다. `OCX_EMPTY_COMPLETION_RETRY=0`은 설정을 바꾸지 않고 비활성화하며, combo 및 routed-compaction turn은 제외됩니다. |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Canonical Codex Responses 응답의 선택적 safety-buffering 헤더 두 개와 SSE 힌트를 제거합니다. 공급자의 안전 정책이나 거절 응답은 바뀌지 않습니다. Native WS 메타데이터와 compact는 제외됩니다. |
 | `stallTimeoutSec?` | `number` | `300` | Responses 및 네이티브 Chat에서 유효한 업스트림 진행이 없는 시간(초). 최소 1초. |

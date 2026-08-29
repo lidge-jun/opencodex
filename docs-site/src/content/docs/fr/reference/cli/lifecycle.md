@@ -13,13 +13,15 @@ Assistant de configuration interactif (`setup` est un alias de `init`). Il deman
 
 ## Cycle de vie du proxy
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port]]`
 
 Démarre le serveur proxy, de préférence sur le port `10100`. Si ce port est occupé, opencodex en choisit un autre qui est disponible et l’enregistre. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`).
 
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`

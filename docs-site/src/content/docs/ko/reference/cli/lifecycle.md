@@ -16,7 +16,7 @@ Codex 자동 시작 shim도 설치합니다.
 
 ## 프록시 수명 주기
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port]]`
 
 프록시 서버를 시작합니다(권장 포트는 `10100`). 해당 포트가 이미 사용 중이면 opencodex가 다른
 사용 가능한 포트를 골라 기록합니다. PID와 런타임 포트 상태를 기록하고, 두 번째 활성 인스턴스는 시작하지
@@ -26,6 +26,8 @@ Codex 자동 시작 shim도 설치합니다.
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`

@@ -282,6 +282,23 @@ describe("applyProxyEnv", () => {
     applyProxyEnv(configWithProxy("${OCX_TEST_PROXY_REF}"));
     expect(process.env.HTTP_PROXY).toBe("http://ref-proxy:9999");
   });
+
+  test("mirrors SOCKS URLs into ALL_PROXY and leaves HTTP(S)_PROXY unset", () => {
+    applyProxyEnv(configWithProxy("socks5://127.0.0.1:10808"));
+    expect(process.env.ALL_PROXY).toBe("socks5://127.0.0.1:10808");
+    expect(process.env.HTTP_PROXY).toBeUndefined();
+    expect(process.env.HTTPS_PROXY).toBeUndefined();
+    expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1,::1,[::1]");
+  });
+
+  test("SOCKS config.proxy wins over inherited HTTP(S)_PROXY in this process", () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:10808";
+    process.env.HTTPS_PROXY = "http://127.0.0.1:10808";
+    applyProxyEnv(configWithProxy("socks5://127.0.0.1:10808"));
+    expect(process.env.ALL_PROXY).toBe("socks5://127.0.0.1:10808");
+    expect(process.env.HTTP_PROXY).toBeUndefined();
+    expect(process.env.HTTPS_PROXY).toBeUndefined();
+  });
 });
 
 describe("applyProxyEnv with proxy: \"auto\" (#1525)", () => {

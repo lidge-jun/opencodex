@@ -13,13 +13,15 @@ description: セットアップ、開始、停止、サービス、診断、同�
 
 ## プロキシのライフサイクル
 
-### `ocx start [--port <port>]`
+### `ocx start [--port <port>] [--socks5 [host:port]]`
 
 プロキシ サーバー (優先ポート `10100`) を起動します。そのポートが占有されている場合、opencodex は別の使用可能なポートを選択して記録します。 PID/ランタイムポートの状態を書き込み、2 番目のライブインスタンスの起動を拒否します。開始時に、各プロバイダーのモデルを Codex のカタログに同期します。マネージド サービス (`OCX_SERVICE=1`) として起動されていない限り、シャットダウン時にネイティブ Codex が復元されます。
 
 ```bash
 ocx start
 ocx start --port 8080
+ocx start --port 10100 --socks5
+ocx start --socks5-off
 ```
 
 ### `ocx stop`
