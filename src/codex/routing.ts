@@ -5,7 +5,7 @@ import { codexAccountLogLabel } from "./account-label";
 import { isCodexAccountPaused } from "./account-pause";
 import { clearCodexAccountPin, codexAccountPriorityLookup, pinnedCodexAccountId } from "./account-priority";
 import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./account-usability";
-import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
+import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
   POOL_KEY_CODEX,
   normalizeAccountPoolStickyLimit,
@@ -127,6 +127,18 @@ const upstreamHealth = new Map<string, CodexUpstreamHealth>();
  * from account-wide Retry-After/default throttles and transient health.
  */
 const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHealth>>();
+/**
+ * Test-only stand-in for a concurrent credential write from another process, invoked between the
+ * 401 side effects and their re-validation (#2892 gap 4). Production leaves this undefined.
+ */
+let credentialRevalidationSeamForTests: ((accountId: string) => void) | undefined;
+
+/** Install (or clear with `null`) the concurrent-write seam used by the gap-4 regression. */
+export function setCodexCredentialRevalidationSeamForTests(
+  seam: ((accountId: string) => void) | null,
+): void {
+  credentialRevalidationSeamForTests = seam ?? undefined;
+}
 let lastReconciledGeneration = 0;
 let liveHealthAccountIds = new Set<string>();
 
@@ -2213,6 +2225,27 @@ export function recordCodexUpstreamOutcome(
     ) {
       return;
     }
+    /*
+     * The pre-check above closes the same-process race, but not a cross-process one (#2892 gap 4).
+     * `isCodexAccountGenerationLive` is an unlocked read while credential writers coordinate under
+     * the mutation lock, and OS preemption needs no `await` — so another process can replace the
+     * credential between the check and these writes. Health and reauth carry no credential identity
+     * of their own (a health entry has no generation field, reauth is a bare id set), so a stale 401
+     * that lands in that window would quarantine the REPLACEMENT credential.
+     *
+     * Taking the credential lock here is not an option: it runs with `busy_timeout=0`, so acquiring
+     * it per outcome would turn ordinary contention into thrown request-path errors. Instead the
+     * mutations stay synchronous and are re-validated afterwards, restoring the previous health and
+     * reauth state if the generation stopped being live. The window still exists; what changes is
+     * that its effects do not survive it.
+     *
+     * Affinity sweeping is deliberately NOT rolled back: an affinity entry already carries a
+     * credential generation and self-invalidates on the next check, and re-adding swept entries
+     * would be a worse bug than the sweep.
+     */
+    const priorHealth = upstreamHealth.get(accountId);
+    const priorScopedHealth = quotaScopedHealth.get(accountId);
+    const priorNeedsReauth = isAccountNeedsReauth(accountId);
     upstreamHealth.set(accountId, {
       consecutiveFailures: 1,
       lastFailureStatus,
@@ -2221,6 +2254,20 @@ export function recordCodexUpstreamOutcome(
     quotaScopedHealth.delete(accountId);
     markAccountNeedsReauth(accountId, writerGeneration);
     clearThreadAccountMapForAccount(accountId);
+    // The interleaving this guards against is a WRITE FROM ANOTHER PROCESS, which no single-process
+    // test can schedule: both reads below would observe the same store. Without a seam the rollback
+    // is unreachable in a test and any regression asserting it would be vacuous, so the seam exists
+    // to stand in for the other process. It is undefined in production and costs one null check.
+    credentialRevalidationSeamForTests?.(accountId);
+    if (
+      meta.credentialGeneration !== undefined
+      && !isCodexAccountGenerationLive(accountId, meta.credentialGeneration)
+    ) {
+      if (priorHealth === undefined) upstreamHealth.delete(accountId);
+      else upstreamHealth.set(accountId, priorHealth);
+      if (priorScopedHealth !== undefined) quotaScopedHealth.set(accountId, priorScopedHealth);
+      if (!priorNeedsReauth) clearAccountNeedsReauth(accountId);
+    }
     return;
   }
 

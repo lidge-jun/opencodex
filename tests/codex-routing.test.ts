@@ -31,10 +31,11 @@ import {
   resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
   resolveCodexAccountForThreadDetailed,
+  setCodexCredentialRevalidationSeamForTests,
   tryAcquireCodexQuotaProbeLease,
 } from "../src/codex/routing";
 import { clearPoolRotationState } from "../src/codex/pool-rotation";
-import { removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
+import { readCodexAccountRecord, removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
@@ -483,6 +484,51 @@ describe("codex routing", () => {
     expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 403 });
     expect(resolveCodexAccountForThread("credential-403-next", config)).toBe("b");
   });
+
+  test("a 401 racing a cross-process credential replacement leaves no health or reauth evidence (#2892 gap 4)", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+    // Establish a benign prior health entry so the rollback has to RESTORE it, not merely delete.
+    recordCodexUpstreamOutcome(config, "a", 503);
+    const priorHealth = getCodexUpstreamHealth("a");
+    expect(priorHealth).toMatchObject({ lastFailureStatus: 503 });
+    expect(isAccountNeedsReauth("a")).toBe(false);
+
+    // Stand in for another process replacing the credential inside the window between the
+    // generation check and the side effects. A single process cannot schedule that write, which is
+    // why the seam exists: without it both reads see one store and the rollback is unreachable.
+    setCodexCredentialRevalidationSeamForTests(() => { saveTestCredential("a"); });
+    try {
+      recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+    } finally {
+      setCodexCredentialRevalidationSeamForTests(null);
+    }
+
+    // The rejected credential is gone, so its 401 must not quarantine the replacement.
+    expect(isAccountNeedsReauth("a")).toBe(false);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ lastFailureStatus: 503 });
+    expect(readCodexAccountRecord("a")!.generation).toBe(generation + 1);
+  });
+
+  test("a 401 on the live credential still quarantines the account (#2892 gap 4 does not over-roll-back)", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+
+    // No concurrent replacement: the evidence is about the credential still in the store, so every
+    // side effect must survive. This is the assertion that stops the rollback from being a blanket
+    // "never quarantine" regression.
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+
+    expect(isAccountNeedsReauth("a")).toBe(true);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 401 });
+  });
+
 
   test("connect failures contribute to transient failover", () => {
     const config = makeConfig();
