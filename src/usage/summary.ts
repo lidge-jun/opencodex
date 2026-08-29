@@ -1,11 +1,10 @@
-import path from "node:path";
 import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
-import { isCodexUsageAccountLogLabel, type PersistedUsageEntry, type UsageStatus } from "./log";
+import { isCodexUsageAccountLogLabel, readUsageSnapshotForManagement, type PersistedUsageEntry, type UsageStatus } from "./log";
 import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, serviceTierContext, type ServiceTierContext } from "./cost";
 import { resolveTimeRange } from "./time-range";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 /**
  * Canonical range members. The warm-up loop in the management usage route
@@ -14,7 +13,7 @@ import { readFileSync, existsSync } from "node:fs";
  * range added to the union but forgotten in the loop was never warmed and
  * never invalidated alongside its siblings.
  */
-export const USAGE_RANGES = ["today", "7d", "30d", "all"] as const;
+export const USAGE_RANGES = ["today", "yesterday", "7d", "30d", "all"] as const;
 export type UsageRange = typeof USAGE_RANGES[number];
 export const USAGE_SURFACES = ["all", "codex", "claude", "grok"] as const;
 export type UsageSurface = typeof USAGE_SURFACES[number];
@@ -39,8 +38,6 @@ export interface UsageSummaryTotals {
    *  Sums per-request estimateRequestCost / per-attempt combo costs; requests whose
    *  price is unmatched are excluded from the sum and counted separately. */
   estimatedCostUsd: number;
-  uncachedCostUsd?: number;
-  savedCostUsd?: number;
   pricedRequests: number;
   /** Requests with usage but no matched price anywhere (excluded from the sum). */
   unpricedRequests: number;
@@ -257,7 +254,7 @@ export function parseRange(input: string | null | undefined): UsageRange {
   // member would need its own cache slot, its own grid arm and its own test
   // matrix for no user-visible gain.
   if (input === "today" || input === "1d") return "today";
-  if (input === "7d" || input === "30d" || input === "all") return input;
+  if (input === "yesterday" || input === "7d" || input === "30d" || input === "all") return input;
   return "30d";
 }
 
@@ -284,6 +281,13 @@ export function rangeWindow(range: UsageRange, now: number, customSince?: number
   // which for a cost surface is a plausible-looking wrong answer rather than a
   // visible failure.
   if (range === "today") return { since: startOfLocalDay(now), until: null, days: 1 };
+  if (range === "yesterday") {
+    const start = new Date(startOfLocalDay(now));
+    start.setDate(start.getDate() - 1);
+    const end = new Date(start);
+    end.setHours(23, 59, 59, 999);
+    return { since: start.getTime(), until: end.getTime(), days: 1 };
+  }
   if (range === "7d") {
     const start = new Date(startOfLocalDay(now));
     start.setDate(start.getDate() - 6);
@@ -565,7 +569,7 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     }
     m.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
   };
-  const startOfToday = startOfLocalDay(now);
+  const startOfToday = window.until === null ? startOfLocalDay(now) : startOfLocalDay(window.until);
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(startOfToday);
     d.setDate(d.getDate() - i);
@@ -1203,7 +1207,18 @@ export function projectUsageSummary<T extends UsageSummary>(
     filtered.push({ ...withoutParentUsage, attempts, ...projectedComboUsage(attempts) });
   }
 
-  const projected = summarizeUsage(filtered, summary.range, summary.generatedAt, summary.surface);
+  const projected = summarizeUsage(
+    filtered,
+    summary.range,
+    summary.generatedAt,
+    summary.surface,
+    summary.since,
+    summary.until,
+    summary.rangeLabel,
+  );
+  // matched reflects usage inside the requested WINDOW, not anywhere in the
+  // log: summarizeUsage applies the range and surface predicates, and the CLI
+  // uses this flag to decide between a table and "no usage recorded".
   const matched = projected.summary.requests > 0;
   const models = projected.models.filter(row => matches(row.provider, row.model));
   const retainedProviders = new Set(models.map(row => row.provider));
@@ -1219,14 +1234,16 @@ export function projectUsageSummary<T extends UsageSummary>(
 }
 
 
-export function summarizeUsageFromLogFile(options: {
+export async function summarizeUsageFromLogFile(options: {
   filePath?: string;
   range?: UsageRange;
   since?: string | number | null;
   until?: string | number | null;
   surface?: UsageSurface;
+  provider?: string | null;
+  model?: string | null;
   now?: number;
-}): UsageSummary {
+}): Promise<UsageSummary & { filter?: UsageFilterEcho }> {
   const now = options.now ?? Date.now();
   const resolved = resolveTimeRange({
     range: options.range,
@@ -1235,23 +1252,27 @@ export function summarizeUsageFromLogFile(options: {
     now,
   });
 
-  const homeDir = process.env.USERPROFILE || process.env.HOME || "";
-  const logPath = options.filePath ? path.resolve(options.filePath) : path.join(homeDir, ".opencodex", "usage.jsonl");
-
-  if (!existsSync(logPath)) {
-    return summarizeUsage([], (options.range ?? "30d") as UsageRange, now, options.surface ?? "all", resolved.since, resolved.until, resolved.rangeLabel);
+  let entries: PersistedUsageEntry[];
+  if (options.filePath) {
+    const content = readFileSync(options.filePath, "utf-8");
+    entries = [];
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try { entries.push(JSON.parse(trimmed)); } catch { /* malformed rows are skipped like the canonical reader */ }
+    }
+  } else {
+    entries = (await readUsageSnapshotForManagement()).entries;
   }
 
-  const content = readFileSync(logPath, "utf-8");
-  const lines = content.split(/\r?\n/);
-  const entries: PersistedUsageEntry[] = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      entries.push(JSON.parse(trimmed));
-    } catch {}
-  }
-
-  return summarizeUsage(entries, (options.range ?? "30d") as UsageRange, now, options.surface ?? "all", resolved.since, resolved.until, resolved.rangeLabel);
+  const summary = summarizeUsage(
+    entries,
+    options.range ?? "30d",
+    now,
+    options.surface ?? "all",
+    resolved.since,
+    resolved.until,
+    resolved.rangeLabel,
+  );
+  return projectUsageSummary(summary, { provider: options.provider, model: options.model }, entries);
 }

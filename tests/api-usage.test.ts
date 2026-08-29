@@ -513,6 +513,79 @@ describe("GET /api/usage", () => {
     }
   });
 
+  test("yesterday narrows the window to the previous local day", async () => {
+    const now = Date.now();
+    writeFixture(now);
+    const server = startServer(0);
+    try {
+      const body = await fetch(new URL("/api/usage?range=yesterday", server.url)).then(res => res.json());
+      expect(body.range).toBe("yesterday");
+      expect(body.since).not.toBeNull();
+      expect(body.until).not.toBeNull();
+      expect(body.summary.requests).toBe(2);
+      expect(body.days).toHaveLength(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("custom since/until bounds are applied and echoed", async () => {
+    const now = Date.now();
+    writeFixture(now);
+    const since = now - 2 * 86_400_000;
+    const until = now - 12 * 60 * 60_000;
+    const server = startServer(0);
+    try {
+      const url = new URL("/api/usage?range=all", server.url);
+      url.searchParams.set("since", String(since));
+      url.searchParams.set("until", String(until));
+      const body = await fetch(url).then(res => res.json());
+      expect(body.since).toBe(since);
+      expect(body.until).toBe(until);
+      expect(body.summary.requests).toBe(2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("custom bounds compose with provider filters without polluting preset caches", async () => {
+    const now = Date.now();
+    writeFixture(now);
+    const since = now - 2 * 86_400_000;
+    const server = startServer(0);
+    try {
+      const custom = new URL("/api/usage?range=all&provider=openai", server.url);
+      custom.searchParams.set("since", String(since));
+      const filtered = await fetch(custom).then(res => res.json());
+      expect(filtered.summary.requests).toBe(1);
+      expect(filtered.summary.totalTokens).toBe(15);
+      expect(filtered.models).toHaveLength(1);
+      expect(filtered.filter).toMatchObject({ provider: "openai", matched: true });
+
+      const preset = await fetch(new URL("/api/usage?range=all", server.url)).then(res => res.json());
+      expect(preset.summary.requests).toBe(3);
+      expect(preset.summary.totalTokens).toBe(165);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("invalid custom bounds fail closed", async () => {
+    writeFixture(Date.now());
+    const server = startServer(0);
+    try {
+      const malformed = await fetch(new URL("/api/usage?range=all&since=not-a-time", server.url));
+      expect(malformed.status).toBe(400);
+      expect(await malformed.json()).toMatchObject({ error: "invalid_since" });
+
+      const reversed = await fetch(new URL("/api/usage?range=all&since=2000&until=1000", server.url));
+      expect(reversed.status).toBe(400);
+      expect(await reversed.json()).toMatchObject({ error: "invalid_time_range" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("1d is an alias for today, not a separate range", async () => {
     writeFixture(Date.now());
     const server = startServer(0);

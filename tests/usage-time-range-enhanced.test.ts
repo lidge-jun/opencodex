@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from "bun:test";
 import { parseTimeBoundary, resolveTimeRange } from "../src/usage/time-range";
 import { summarizeUsage, summarizeUsageFromLogFile } from "../src/usage/summary";
@@ -50,7 +49,6 @@ describe("Time Range Parsing & Resolution", () => {
     expect(custom.until!).toBeGreaterThan(custom.since!);
   });
 });
-
 describe("Usage Summarization and Markdown Output", () => {
   it("formats markdown report properly", () => {
     const md = formatUsageMarkdownReport({
@@ -76,7 +74,7 @@ describe("Usage Summarization and Markdown Output", () => {
     expect(text).toContain("Estimated API Cost");
   });
 
-  it("can summarize usage from offline jsonl file", () => {
+  it("can summarize usage from offline jsonl file", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "ocx-test-"));
     const tmpFile = join(tmpDir, "test-usage.jsonl");
 
@@ -103,7 +101,7 @@ describe("Usage Summarization and Markdown Output", () => {
 
     writeFileSync(tmpFile, sample, "utf-8");
 
-    const summary = summarizeUsageFromLogFile({
+    const summary = await summarizeUsageFromLogFile({
       filePath: tmpFile,
       since: 1787966200000,
       until: 1787966500000,
@@ -115,5 +113,34 @@ describe("Usage Summarization and Markdown Output", () => {
 
     rmSync(tmpDir, { recursive: true, force: true });
   });
-});
 
+  it("applies provider and model filters in offline mode", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ocx-test-filter-"));
+    const tmpFile = join(tmpDir, "test-usage.jsonl");
+    const at = 1787966300000;
+    writeFileSync(tmpFile, [
+      JSON.stringify({
+        requestId: "openai-1", timestamp: at, provider: "openai", model: "gpt-5.6-sol",
+        usageStatus: "reported", usage: { inputTokens: 100, outputTokens: 10 }, totalTokens: 110,
+      }),
+      JSON.stringify({
+        requestId: "google-1", timestamp: at, provider: "google-antigravity", model: "gemini-3.7-flash",
+        usageStatus: "reported", usage: { inputTokens: 200, outputTokens: 20 }, totalTokens: 220,
+      }),
+    ].join("\n"), "utf-8");
+
+    const summary = await summarizeUsageFromLogFile({
+      filePath: tmpFile,
+      range: "all",
+      provider: "google-antigravity",
+      model: "gemini-3.7-flash",
+    });
+
+    expect(summary.summary.requests).toBe(1);
+    expect(summary.summary.totalTokens).toBe(220);
+    expect(summary.models).toHaveLength(1);
+    expect(summary.models[0]).toMatchObject({ provider: "google-antigravity", model: "gemini-3.7-flash" });
+    expect(summary.filter).toMatchObject({ provider: "google-antigravity", model: "gemini-3.7-flash", matched: true });
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+});

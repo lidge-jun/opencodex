@@ -124,7 +124,7 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `GET /api/debug/usage-logs` | Read bounded usage-debug entries | — |
 | `GET /api/debug/injection-logs` | Read bounded guidance-injection debug entries | — |
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
-| `GET /api/usage` | Summarize usage by range and client surface; Codex responses also include an `accounts` breakdown keyed by stable non-PII log labels | Returns an `error: "read_failed"` summary if storage cannot be read |
+| `GET /api/usage` | Summarize usage by preset range or inclusive `since`/`until` bounds and client surface; Codex responses also include an `accounts` breakdown keyed by stable non-PII log labels | 400 invalid time bound/order; returns an `error: "read_failed"` summary if storage cannot be read |
 | `GET /api/storage` | Scan Codex storage usage by bucket | Returns an `error: "scan_failed"` payload on scan failure |
 | `POST /api/storage/cleanup/preview` | Preview archived-session cleanup and return a binding digest | 400 `invalid_json` or `invalid_percent` |
 | `POST /api/storage/cleanup` | Quarantine or permanently remove the previewed archived set | 400 invalid input; 409 stale/busy/referenced state; 500 filesystem/database failure |
@@ -142,6 +142,12 @@ overlays take priority over bundled verified catalog and price fallbacks, and hi
 re-estimated from the pricing active when the summary is read. This is an API-equivalent estimate,
 not a subscription charge. New main-pool requests use the reserved `main` label; legacy bare
 `openai` rows remain in an ambiguous bucket instead of being reassigned from current configuration.
+
+Custom windows use `since` and/or `until`, for example
+`GET /api/usage?range=all&since=2026-08-29T09:17:00&until=2026-08-30T04:23:00`.
+Both bounds are inclusive and interpreted in the server's local time when no offset is supplied.
+Malformed bounds return `invalid_since` or `invalid_until`; reversed bounds return
+`invalid_time_range`. Custom summaries are never stored in the preset-range cache.
 
 :::caution
 Storage cleanup endpoints can move or permanently remove archived session data. Always preview

@@ -1,5 +1,6 @@
 import {
   CliUsageError,
+  RuntimeApiError,
   printData,
   rejectArgs,
   runCliAction,
@@ -12,7 +13,7 @@ import {
 } from "./runtime-api";
 import { formatUsageReport, formatUsageMarkdownReport } from "./usage-report";
 import { summarizeUsageFromLogFile } from "../usage/summary";
-import { resolveTimeRange } from "../usage/time-range";
+import { parseTimeBoundary } from "../usage/time-range";
 import { USAGE_RANGES, USAGE_SURFACES } from "../usage/summary";
 
 const USAGE = `Usage:
@@ -21,8 +22,9 @@ const USAGE = `Usage:
   ocx logs explain <request-id> [--json]
   ocx logs rebuild-index
   ocx logs index-status
-  ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>]
-      [--provider <name>] [--model <id>] [--json]
+  ocx observe usage [--range <today|yesterday|1d|7d|30d|all>] [--since <time>] [--until <time>]
+      [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>]
+      [--offline] [--format <table|markdown|json>] [--json]
   ocx observe storage [codex-logs [status|protect|unprotect|repair|compact] [--mode <compat|quiet>]] [--json]
   ocx observe memory [--json]
   ocx observe debug [--json]
@@ -150,6 +152,17 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const surface = takeOption(args, "--surface") ?? "all";
   const provider = takeOption(args, "--provider");
   const model = takeOption(args, "--model");
+  const now = Date.now();
+  const parsedSince = parseTimeBoundary(sinceOpt, now, false);
+  const parsedUntil = parseTimeBoundary(untilOpt, now, true);
+  if (sinceOpt !== undefined && parsedSince === null) throw new CliUsageError("--since must be a valid date/time", USAGE);
+  if (untilOpt !== undefined && parsedUntil === null) throw new CliUsageError("--until must be a valid date/time", USAGE);
+  if (parsedSince !== null && parsedUntil !== null && parsedSince > parsedUntil) {
+    throw new CliUsageError("--since must not be later than --until", USAGE);
+  }
+  if (!["table", "markdown", "json"].includes(formatOpt)) {
+    throw new CliUsageError("--format must be table, markdown, or json", USAGE);
+  }
   // `1d` is accepted here as well as server-side so the CLI does not reject an
   // alias the API would have understood.
   const ranges = [...USAGE_RANGES, "1d", "custom"];
@@ -168,16 +181,19 @@ async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       if (sinceOpt) qp.since = sinceOpt;
       if (untilOpt) qp.until = untilOpt;
       result = await runtimeRequest(`/api/usage${query(qp)}`, {}, deps);
-    } catch (err) {
-      isOffline = true;
+    } catch (error) {
+      if (error instanceof RuntimeApiError && error.status === 503) isOffline = true;
+      else throw error;
     }
   }
   if (isOffline) {
-    result = summarizeUsageFromLogFile({
+    result = await summarizeUsageFromLogFile({
       range: range === "custom" ? "all" : (range as any),
       since: sinceOpt,
       until: untilOpt,
       surface: surface as any,
+      provider,
+      model,
     });
   }
   if (formatOpt === "json" || wantsJson) {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useI18n, type TFn, type Locale } from "../i18n/shared";
+import { useI18n, type TFn, type TKey, type Locale } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
@@ -13,6 +13,14 @@ import { sectionAnchorId } from "../section-anchors";
 
 type Range = "all" | "30d" | "7d" | "today" | "yesterday" | "custom";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
+
+const RANGE_LABEL_KEYS: Record<Exclude<Range, "all">, TKey> = {
+  today: "usage.range.today",
+  yesterday: "usage.range.yesterday",
+  "7d": "usage.range.7d",
+  "30d": "usage.range.30d",
+  custom: "usage.range.custom",
+};
 
 interface UsageSummaryTotals {
   requests: number;
@@ -225,13 +233,10 @@ function UsageFilters({
   onApplyCustom: (since: string, until: string) => void;
   t: TFn;
 }) {
-  const [showCustom, setShowCustom] = useState(range === "custom");
+  const [customOpen, setCustomOpen] = useState(range === "custom");
   const [sinceVal, setSinceVal] = useState(customSince);
   const [untilVal, setUntilVal] = useState(customUntil);
-
-  useEffect(() => {
-    setShowCustom(range === "custom");
-  }, [range]);
+  const showCustom = customOpen || range === "custom";
 
   return (
     <div className="usage-filters-wrap">
@@ -266,7 +271,7 @@ function UsageFilters({
         </div>
         <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
           {(["today", "yesterday", "7d", "30d", "all", "custom"] as Range[]).map(choice => {
-            const label = choice === "all" ? t("usage.range.available") : (t(`usage.range.${choice}` as any) || choice);
+            const label = choice === "all" ? t("usage.range.available") : t(RANGE_LABEL_KEYS[choice]);
             return (
               <button
                 key={choice}
@@ -275,8 +280,11 @@ function UsageFilters({
                 aria-label={label}
                 aria-pressed={range === choice}
                 onClick={() => {
-                  if (choice === "custom") setShowCustom(true);
-                  onRange(choice);
+                  if (choice === "custom") setCustomOpen(true);
+                  else {
+                    setCustomOpen(false);
+                    onRange(choice);
+                  }
                 }}
               >
                 {label}
@@ -287,32 +295,37 @@ function UsageFilters({
       </div>
       {showCustom && (
         <div className="usage-custom-time-picker panel" style={{ marginTop: 8, padding: "8px 12px", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-          <label className="text-caption muted">{t("usage.custom.since" as any)}:</label>
+          <label className="text-caption muted" htmlFor="usage-custom-since">{t("usage.custom.since")}:</label>
           <input
+            id="usage-custom-since"
+            type="datetime-local"
+            step={60}
             className="input"
             style={{ width: "160px", padding: "4px 8px", fontSize: "12px" }}
-            placeholder="YYYY-MM-DD HH:mm"
             value={sinceVal}
-            onChange={e => setSinceVal(e.target.value)}
+            onInput={e => setSinceVal(e.currentTarget.value)}
           />
-          <label className="text-caption muted">{t("usage.custom.until" as any)}:</label>
+          <label className="text-caption muted" htmlFor="usage-custom-until">{t("usage.custom.until")}:</label>
           <input
+            id="usage-custom-until"
+            type="datetime-local"
+            step={60}
             className="input"
             style={{ width: "160px", padding: "4px 8px", fontSize: "12px" }}
-            placeholder="YYYY-MM-DD HH:mm"
             value={untilVal}
-            onChange={e => setUntilVal(e.target.value)}
+            onInput={e => setUntilVal(e.currentTarget.value)}
           />
           <button
             type="button"
             className="btn btn-sm btn-primary"
             style={{ padding: "4px 12px", fontSize: "12px" }}
+            disabled={!sinceVal.trim() && !untilVal.trim()}
             onClick={() => {
               onRange("custom");
               onApplyCustom(sinceVal, untilVal);
             }}
           >
-            {t("usage.custom.apply" as any)}
+            {t("usage.custom.apply")}
           </button>
         </div>
       )}
@@ -789,17 +802,17 @@ function UsageWorkspaceBody({
 /** Held usage payloads so provider/surface tab switches skip a cold ~5s refetch. */
 const usageMemoryCache = new Map<string, UsageResponse>();
 
-function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface): string {
-  return `ocx.usage.v1:${apiBase}:${range}:${surface}`;
+function usageCacheKey(apiBase: string, range: Range, surface: UsageSurface, since = "", until = ""): string {
+  return `ocx.usage.v1:${apiBase}:${range}:${surface}:${since}:${until}`;
 }
 
-function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface): UsageResponse | null {
-  const key = usageCacheKey(apiBase, range, surface);
+function readHeldUsage(apiBase: string, range: Range, surface: UsageSurface, since = "", until = ""): UsageResponse | null {
+  const key = usageCacheKey(apiBase, range, surface, since, until);
   return usageMemoryCache.get(key) ?? readSessionListCache<UsageResponse>(key);
 }
 
-function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, value: UsageResponse) {
-  const key = usageCacheKey(apiBase, range, surface);
+function writeHeldUsage(apiBase: string, range: Range, surface: UsageSurface, value: UsageResponse, since = "", until = "") {
+  const key = usageCacheKey(apiBase, range, surface, since, until);
   usageMemoryCache.set(key, value);
   writeSessionListCache(key, value);
 }
@@ -821,12 +834,12 @@ export default function Usage({ apiBase }: { apiBase: string }) {
     const response = await fetch(url, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
-    writeHeldUsage(apiBase, range, surface, next);
+    writeHeldUsage(apiBase, range, surface, next, customSince, customUntil);
     return next;
   }, [apiBase, range, surface, customSince, customUntil]);
 
-  const resourceKey = `${usageCacheKey(apiBase, range, surface)}:${customSince}:${customUntil}`;
-  const cached = readHeldUsage(apiBase, range, surface);
+  const resourceKey = usageCacheKey(apiBase, range, surface, customSince, customUntil);
+  const cached = readHeldUsage(apiBase, range, surface, customSince, customUntil);
   // Range and surface identify different reports, so the key changes with both. That prevents
   // a force-loading dependency revalidation from ever showing a previous report as this one.
   const resource = useDataSurface<UsageResponse>(

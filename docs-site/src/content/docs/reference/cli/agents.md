@@ -111,7 +111,7 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 | Alias | Equivalent resource |
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl]` | `ocx observe logs` |
-| `ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]` | `ocx observe usage` |
+| `ocx usage [--range <today|yesterday|1d|7d|30d|all>] [--since <time>] [--until <time>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--offline] [--format <table|markdown|json>] [--json]` | `ocx observe usage` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
@@ -119,10 +119,17 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 ocx observe usage --range 30d --json
 ```
 
-`--range today` (alias `1d`) reports the current local day. `--provider` and
+`--range today` (alias `1d`) reports the current local day, and `--range yesterday`
+reports the previous local day. `--since` and `--until` accept ISO-like local date/time
+values, epoch timestamps, or relative expressions such as `yesterday 09:17` and
+`today 04:23`. `--provider` and
 `--model` narrow the report to one upstream target — distinct from
 `--surface`, which selects the calling client (Codex, Claude Code, Grok)
 rather than the provider serving the request.
+
+`--offline` reads the bounded local usage ledger when the proxy is unavailable. It preserves
+time, surface, provider, and model filters. `--format markdown` emits a copy-ready report;
+`--format json` is equivalent to `--json`.
 
 The default view prints request, token and estimated-cost totals plus
 per-provider and per-model breakdowns. Costs are API list-price equivalents,
@@ -132,6 +139,7 @@ separately, and requests with no matching price row are counted as
 
 ```bash
 ocx usage --range today --provider xai
+ocx usage --since "yesterday 09:17" --until "today 04:23" --format markdown
 ```
 
 ### `ocx debug <provider|usage|injection|claude> <on|off|status|reset|logs [-f]>`
