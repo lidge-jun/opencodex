@@ -1100,6 +1100,49 @@ describe("codex-account-store CRUD", () => {
     }
   });
 
+
+  test("a same-grant sibling on a DIFFERENT upstream identity is never adopted (#2892 review)", async () => {
+    const { forceRefreshCodexPoolToken, getCodexAccountCredential, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    // Both records share one stored grant, but they claim different upstream accounts. Adoption
+    // copies BOTH tokens, so treating a shared fingerprint as proof of identity would hand this
+    // caller another account's credential.
+    saveCodexAccountCredential("foreign-caller", {
+      accessToken: "rejected-token",
+      refreshToken: "foreign-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-one",
+    });
+    saveCodexAccountCredential("foreign-sibling", {
+      accessToken: "sibling-fresh",
+      refreshToken: "foreign-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-two",
+    });
+    const generation = readCodexAccountRecord("foreign-caller")!.generation;
+
+    const originalFetch = globalThis.fetch;
+    let tokenCalls = 0;
+    globalThis.fetch = (async () => {
+      tokenCalls += 1;
+      return Response.json({ access_token: "own-new", refresh_token: "own-rotated", expires_in: 3600 });
+    }) as typeof fetch;
+    try {
+      const result = await forceRefreshCodexPoolToken("foreign-caller", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected-token",
+      });
+      // A real refresh must have run instead of adopting the foreign sibling.
+      expect(tokenCalls).toBe(1);
+      expect(result.accessToken).toBe("own-new");
+      expect(getCodexAccountCredential("foreign-caller")?.accessToken).not.toBe("sibling-fresh");
+      // The sibling is untouched: this path must not write to another identity's record.
+      expect(getCodexAccountCredential("foreign-sibling")?.accessToken).toBe("sibling-fresh");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
 });
 
 describe("shared refresh flight plan reconciliation (#2892 gap 2 follow-up)", () => {

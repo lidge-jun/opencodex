@@ -399,6 +399,11 @@ export function sidecarOutcomeRecorder(
       probeLeaseId: authCtx.probeLeaseId,
       probeQuotaScope: authCtx.probeQuotaScope,
       writerGeneration: authCtx.writerGeneration,
+      // A vision or web-search sidecar can return 401/403, and that is evidence about the exact
+      // stored credential it used. Without the generation it becomes an account-wide quarantine
+      // that a replacement inherits (#2892 gap 4). `main-pool` has no stored-record generation, so
+      // it keeps the unfenced account-wide semantics.
+      ...(authCtx.kind === "pool" ? { credentialGeneration: authCtx.generation } : {}),
     })
     : undefined;
 }

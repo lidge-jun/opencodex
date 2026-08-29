@@ -477,12 +477,20 @@ function findFreshCredentialForGrant(
   refreshGrantFingerprint: string,
   excludeId: string,
   rejectedAccessToken?: string,
+  expectedChatgptAccountId?: string,
 ): CodexAccountCredentials | null {
   const now = Date.now();
   const records = loadCodexAccountRecordStore();
+  // Adoption copies another record's access AND refresh tokens onto the caller, so the two records
+  // must be the same upstream identity. A grant fingerprint is `sha256` of the refresh token and
+  // carries no identity claim, and nothing here guarantees one grant cannot span two accounts, so
+  // require both ids to be present and exactly equal rather than inferring identity from the grant.
+  if (!expectedChatgptAccountId) return null;
   for (const [candidateId, candidate] of Object.entries(records)) {
     if (candidateId === excludeId || candidate.deletedAt != null || !candidate.credential) continue;
     if (recordGrantFingerprint(candidate) !== refreshGrantFingerprint) continue;
+    if (!candidate.credential.chatgptAccountId) continue;
+    if (candidate.credential.chatgptAccountId !== expectedChatgptAccountId) continue;
     // A sibling alias can hold a still-unexpired copy of the exact token upstream
     // just rejected. Reusing it would bump the generation and replay the identical
     // bearer — a second 401 dressed up as recovery.
@@ -762,6 +770,7 @@ async function resolveCodexToken(
       refreshGrantFingerprint,
       id,
       forced?.rejectedAccessToken,
+      lockedCred.chatgptAccountId,
     );
     if (sameGrantFreshCredential) {
       if (!saveCodexAccountCredentialIfGeneration(id, startGeneration, sameGrantFreshCredential)) {

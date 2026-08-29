@@ -91,6 +91,15 @@ type CodexUpstreamHealth = {
    * flaky account without throwing CodexAccountCooldownError (hard-only).
    */
   softAvoidUntil?: number;
+  /**
+   * Credential generation a 401/403 quarantine was derived from (#2892 gap 4).
+   *
+   * Provenance lives ON the entry rather than in a side map keyed by account id. A side map spends
+   * "whatever health is current when the old credential is found dead", which deletes a later
+   * unrelated entry: a G1 401, then a G2 save, then a genuine G2 503 would lose the 503. Only the
+   * entry that carries this field can be spent, and any later write simply replaces it.
+   */
+  credentialFailureGeneration?: number;
 };
 
 const CODEX_DEFAULT_QUOTA_COOLDOWN_MS = 60_000;
@@ -128,27 +137,20 @@ const upstreamHealth = new Map<string, CodexUpstreamHealth>();
  */
 const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHealth>>();
 /**
- * Credential generation each 401/403 quarantine was derived from (#2892 gap 4).
+ * Spend a credential-failure health entry whose credential no longer exists (#2892 gap 4).
  *
- * Health is keyed by account id, but credential evidence describes one CREDENTIAL. A replacement
- * from another process can land at any point after the outcome is recorded, so re-reading the store
- * right after the write narrows the window without closing it. Recording the generation alongside
- * the failure lets the READER decide, which is what actually settles the race: once the credential
- * is gone its failure is spent, and routing stops holding the replacement down.
+ * A 401/403 describes one CREDENTIAL, not an account, and a replacement can land at any point after
+ * the outcome is recorded — so re-reading the store inside `recordCodexUpstreamOutcome` narrows the
+ * window without closing it. The reader decides instead, and it may only spend an entry that
+ * actually carries credential provenance: a later transient or quota write replaces the entry and
+ * with it the tag, so this can never delete evidence that belongs to a different failure.
  */
-const credentialFailureGeneration = new Map<string, number>();
-
-/**
- * Drop a credential-failure health entry whose credential no longer exists, and report whether it
- * was spent. Called from the health readers so a stale 401 cannot outlive its credential.
- */
-function dropSpentCredentialFailure(accountId: string): boolean {
-  const generation = credentialFailureGeneration.get(accountId);
-  if (generation === undefined) return false;
-  if (isCodexAccountGenerationLive(accountId, generation)) return false;
-  credentialFailureGeneration.delete(accountId);
+function dropSpentCredentialFailure(accountId: string): void {
+  const health = upstreamHealth.get(accountId);
+  const generation = health?.credentialFailureGeneration;
+  if (health === undefined || generation === undefined) return;
+  if (isCodexAccountGenerationLive(accountId, generation)) return;
   upstreamHealth.delete(accountId);
-  return true;
 }
 let lastReconciledGeneration = 0;
 let liveHealthAccountIds = new Set<string>();
@@ -305,14 +307,12 @@ export function clearThreadAccountMapForAccount(accountId: string): void {
 export function clearCodexUpstreamHealth(): void {
   upstreamHealth.clear();
   quotaScopedHealth.clear();
-  credentialFailureGeneration.clear();
   runtimeActiveCodexAccountId = undefined;
 }
 
 export function clearCodexUpstreamHealthForAccount(accountId: string): void {
   upstreamHealth.delete(accountId);
   quotaScopedHealth.delete(accountId);
-  credentialFailureGeneration.delete(accountId);
 }
 
 export function reconcileCodexRoutingHealth(context: GenerationContext): number {
@@ -321,7 +321,6 @@ export function reconcileCodexRoutingHealth(context: GenerationContext): number 
   for (const accountId of upstreamHealth.keys()) {
     if (context.codexAccountIds.has(accountId)) continue;
     upstreamHealth.delete(accountId);
-    credentialFailureGeneration.delete(accountId);
     removed += 1;
   }
   for (const accountId of quotaScopedHealth.keys()) {
@@ -717,7 +716,13 @@ function withProbeLeaseReleased(health: CodexUpstreamHealth, now: number): Codex
  */
 function preservedCooldownFields(health: CodexUpstreamHealth | undefined): Partial<CodexUpstreamHealth> {
   if (!health) return {};
-  const { consecutiveFailures: _f, consecutiveSuccesses: _s, lastFailureStatus: _st, lastFailureAt: _at, softAvoidUntil: _sa, ...cooldownFields } = health;
+  // `credentialFailureGeneration` is provenance for ONE credential failure, so it must not survive
+  // into a later transient or quota entry — otherwise that entry inherits the tag and gets spent
+  // when the old credential dies, deleting evidence that was never about it (#2892 gap 4 review).
+  const {
+    consecutiveFailures: _f, consecutiveSuccesses: _s, lastFailureStatus: _st, lastFailureAt: _at,
+    softAvoidUntil: _sa, credentialFailureGeneration: _cg, ...cooldownFields
+  } = health;
   return cooldownFields;
 }
 
@@ -2140,9 +2145,6 @@ export function recordCodexUpstreamOutcome(
   const outcomeClass = classifyCodexUpstreamOutcome(outcome, meta.denial);
   const quotaScope = codexQuotaScopeForModel(meta.modelId);
   if (outcomeClass === "success") {
-    // A healthy terminal retires any credential-failure tag: whatever the 401 described, this
-    // account is answering now.
-    credentialFailureGeneration.delete(accountId);
     const scopedProbe = meta.probeQuotaScope
       ? scopedHealthFor(accountId, meta.probeQuotaScope)
       : undefined;
@@ -2266,15 +2268,14 @@ export function recordCodexUpstreamOutcome(
       consecutiveFailures: 1,
       lastFailureStatus,
       lastFailureAt: now,
+      // Provenance rides on the entry: only this failure can be spent when its credential dies.
+      ...(meta.credentialGeneration !== undefined
+        ? { credentialFailureGeneration: meta.credentialGeneration }
+        : {}),
     });
     quotaScopedHealth.delete(accountId);
-    // Tag both the health entry and the reauth flag with the credential this evidence came from, so
-    // a replacement landing after this call cannot inherit a quarantine that was never about it.
-    if (meta.credentialGeneration !== undefined) {
-      credentialFailureGeneration.set(accountId, meta.credentialGeneration);
-    } else {
-      credentialFailureGeneration.delete(accountId);
-    }
+    // The reauth flag carries the same provenance, so a replacement landing after this call cannot
+    // inherit a quarantine that was never about it.
     markAccountNeedsReauth(accountId, writerGeneration, meta.credentialGeneration);
     clearThreadAccountMapForAccount(accountId);
     return;

@@ -525,6 +525,69 @@ describe("codex routing", () => {
   });
 
 
+  test("a later transient failure is not deleted by a spent credential-failure tag (#2892 gap 4 review)", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+
+    // G1 401, then the credential is replaced, then a GENUINE 503 against G2 — all before any
+    // health read. Provenance keyed only by account id would spend "whatever health is current"
+    // and delete this 503; provenance on the entry cannot, because the 503 write replaced the tag.
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+    saveTestCredential("a");
+    recordCodexUpstreamOutcome(config, "a", 503);
+
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ lastFailureStatus: 503 });
+    expect(isAccountNeedsReauth("a")).toBe(false);
+  });
+
+  test("a workspace denial overwriting a spent credential failure survives the read (#2892 gap 4 review)", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+    saveTestCredential("a");
+    // A workspace denial is a different ownership class and must not be collateral damage.
+    recordCodexUpstreamOutcome(config, "a", 403, { denial: "workspace" });
+
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ lastFailureStatus: 403 });
+  });
+
+
+  test("a sidecar 401 does not quarantine the credential that replaced it (#2892 gap 4 review)", async () => {
+    const { sidecarOutcomeRecorder } = await import("../src/server/responses/core");
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+
+    // A vision or web-search sidecar returns 401 for a stored Pool credential. Recording that
+    // without the credential generation produced an account-wide quarantine, so the replacement
+    // inherited it and the account stayed unroutable.
+    const record = sidecarOutcomeRecorder(config, {
+      kind: "pool",
+      accountId: "a",
+      writerGeneration: 0,
+      generation,
+      accessToken: "access-a",
+      chatgptAccountId: "acct-a",
+    });
+    expect(record).toBeDefined();
+    record!(401);
+    expect(isAccountNeedsReauth("a")).toBe(true);
+
+    saveTestCredential("a");
+    expect(isAccountNeedsReauth("a")).toBe(false);
+    expect(getCodexUpstreamHealth("a")).toBeNull();
+  });
+
+
   test("connect failures contribute to transient failover", () => {
     const config = makeConfig();
     updateAccountQuota("a", 10);
