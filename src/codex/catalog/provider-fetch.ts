@@ -1094,8 +1094,14 @@ function modelInputModalities(
       .filter(value => value === "text" || value === "image" || value === "audio");
     if (inferred.length > 0) return [...new Set(inferred)];
   }
-  if (capabilityRecord?.vision === false) return ["text"];
-  if (capabilityRecord?.vision === true || capabilities?.some(value => (
+  const nestedSupports = plainRecord(capabilityRecord?.supports);
+  const explicitVisionSupport = typeof capabilityRecord?.vision === "boolean"
+    ? capabilityRecord.vision
+    : typeof nestedSupports?.vision === "boolean"
+      ? nestedSupports.vision
+      : undefined;
+  if (explicitVisionSupport === false) return ["text"];
+  if (explicitVisionSupport === true || capabilities?.some(value => (
     value === "vision" || value === "image-input" || value === "image_input"
     // llama.cpp and Ollama-compatible servers report vision as "multimodal" —
     // it is the only image signal those servers emit (#1797). Mapped to the

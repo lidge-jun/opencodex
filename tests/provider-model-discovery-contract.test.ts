@@ -276,6 +276,23 @@ describe("registry-owned provider model discovery", () => {
     })).toEqual({});
   });
 
+  test("reads explicit nested vision support from Copilot-style capabilities", () => {
+    expect(catalogHintsFromModelsApiItem("github-copilot", {
+      id: "vision-model",
+      capabilities: { supports: { vision: true } },
+    })).toEqual({ inputModalities: ["text", "image"] });
+
+    expect(catalogHintsFromModelsApiItem("github-copilot", {
+      id: "text-only-model",
+      capabilities: { supports: { vision: false } },
+    })).toEqual({ inputModalities: ["text"] });
+
+    expect(catalogHintsFromModelsApiItem("github-copilot", {
+      id: "unknown-model",
+      capabilities: { supports: { vision: "true" } },
+    })).toEqual({});
+  });
+
   test("preserves nested reasoning_parameters effort ladders from OpenAI-compatible catalogs", () => {
     expect(catalogHintsFromModelsApiItem("example", {
       id: "reasoning-model",
@@ -605,4 +622,3 @@ describe("same-named custom provider preservation", () => {
     });
   });
 });
-
