@@ -10,6 +10,7 @@ import {
   resolveCodexAccountForThreadDetailed,
 } from "../src/codex/routing";
 import { handleResponses, handleResponsesCompact } from "../src/server/responses";
+import { clearCompactHandoffRoutesForTests } from "../src/server/responses/compact";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
 
@@ -57,19 +58,17 @@ const THREAD_ID = "thread-2887";
 
 function request(
   path: "/v1/responses" | "/v1/responses/compact",
-  options: { affined?: boolean } = {},
+  options: { affined?: boolean; model?: string; headers?: HeadersInit; stream?: boolean } = {},
 ): Request {
+  const headers = new Headers(options.headers);
+  headers.set("content-type", "application/json");
+  if (options.affined) headers.set("x-codex-parent-thread-id", THREAD_ID);
   return new Request(`http://localhost${path}`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      // A bound thread is what makes affinity exist at all; without it there is no
-      // entry to carry across the refresh and the handoff cannot be observed.
-      ...(options.affined ? { "x-codex-parent-thread-id": THREAD_ID } : {}),
-    },
+    headers,
     body: JSON.stringify(path.endsWith("compact")
-      ? { model: "gpt-5.5", input: [] }
-      : { model: "gpt-5.5", input: "hello", stream: false }),
+      ? { model: options.model ?? "gpt-5.5", input: [] }
+      : { model: options.model ?? "gpt-5.5", input: "hello", stream: options.stream ?? false }),
   });
 }
 
@@ -118,7 +117,10 @@ type Harness = { sends: string[]; refreshes: string[] };
  * Upstream rejects the old bearer once, the token endpoint rotates, and the replay with the
  * new bearer succeeds — the reporter's deterministic harness.
  */
-function installHarness(options: { refresh?: () => Response } = {}): Harness {
+function installHarness(options: {
+  refresh?: () => Response;
+  responseForSend?: (authorization: string, sendNumber: number, url: URL) => Response | undefined;
+} = {}): Harness {
   const sends: string[] = [];
   const refreshes: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -137,12 +139,34 @@ function installHarness(options: { refresh?: () => Response } = {}): Harness {
     }
     const authorization = new Headers(init?.headers).get("authorization") ?? "";
     sends.push(authorization);
+    const customResponse = options.responseForSend?.(authorization, sends.length, url);
+    if (customResponse) return customResponse;
     if (authorization === "Bearer rejected-access") {
       return Response.json({ error: { message: "expired bearer" } }, { status: 401 });
     }
     return Response.json({ id: "resp_replayed", object: "response", status: "completed", output: [] });
   }) as typeof fetch;
   return { sends, refreshes };
+}
+
+function recoveryComboConfig(): OcxConfig {
+  const cfg = config();
+  cfg.providers.backup = {
+    adapter: "openai-responses",
+    baseUrl: "https://backup.example/v1",
+    authMode: "key",
+    apiKey: "backup-test-key",
+  };
+  cfg.combos = {
+    recovery: {
+      strategy: "failover",
+      targets: [
+        { provider: "openai", model: "gpt-5.5" },
+        { provider: "backup", model: "m2" },
+      ],
+    },
+  };
+  return cfg;
 }
 
 beforeEach(() => {
@@ -152,6 +176,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
   clearAccountNeedsReauth(ACCOUNT_ID);
+  clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   writeStoredAccount();
@@ -159,7 +184,9 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  clearCompactHandoffRoutesForTests();
   clearAccountNeedsReauth(ACCOUNT_ID);
+  clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -199,6 +226,215 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(harness.refreshes).toEqual(["refresh-grant"]);
     expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
     expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+  });
+
+  test("Responses does not compose a stored-account replay 429 with another Pool account", async () => {
+    writeStoredAccount({
+      [OTHER_ACCOUNT_ID]: storedRecord({
+        accessToken: "other-access",
+        refreshToken: "other-grant",
+        generation: 1,
+        chatgptAccountId: "acc-other",
+      }),
+    });
+    const harness = installHarness({
+      responseForSend: authorization => {
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization === "Bearer refreshed-access") {
+          return Response.json({ error: { message: "pool exhausted" } }, { status: 429 });
+        }
+        if (authorization === "Bearer other-access") {
+          return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
+        }
+        return undefined;
+      },
+    });
+
+    const cfg = config({ secondAccount: true });
+    // This test needs one eligible alternate but must not advance the process-wide
+    // round-robin cursor used by the existing next-request affinity regression.
+    cfg.accountPoolStrategy = "fill-first";
+    const response = await handleResponses(
+      request("/v1/responses"),
+      cfg,
+      { model: "", provider: "" } as RequestLogContext,
+    );
+
+    expect(response.status).toBe(429);
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+  });
+
+  test("a combo stops after a stored-account replay consumes the recovery budget", async () => {
+    const cfg = recoveryComboConfig();
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => {
+        if (url.hostname === "backup.example") {
+          return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
+        }
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization === "Bearer refreshed-access") {
+          return Response.json({ error: { message: "pool exhausted" } }, { status: 429 });
+        }
+        return undefined;
+      },
+    });
+
+    const response = await handleResponses(
+      request("/v1/responses", { model: "combo/recovery" }),
+      cfg,
+      { model: "", provider: "" } as RequestLogContext,
+    );
+
+    expect(response.status).toBe(429);
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+  });
+
+  test("a combo stops when the stored-account replay hits a transport error", async () => {
+    const cfg = recoveryComboConfig();
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => {
+        if (url.hostname === "backup.example") {
+          return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
+        }
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization === "Bearer refreshed-access") {
+          throw new TypeError("stored replay transport failure");
+        }
+        return undefined;
+      },
+    });
+
+    const response = await handleResponses(
+      request("/v1/responses", { model: "combo/recovery" }),
+      cfg,
+      { model: "", provider: "" } as RequestLogContext,
+    );
+
+    expect(response.status).toBe(502);
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+  });
+
+  test("a combo stops on a zero-output failure from the stored-account replay stream", async () => {
+    const cfg = recoveryComboConfig();
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => {
+        if (url.hostname === "backup.example") {
+          return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
+        }
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization === "Bearer refreshed-access") {
+          const events = [
+            { type: "response.created", response: { id: "replay", status: "in_progress" } },
+            {
+              type: "response.failed",
+              response: {
+                id: "replay",
+                status: "failed",
+                error: { type: "server_error", code: "upstream_server_error", message: "busy" },
+              },
+            },
+          ];
+          return new Response(
+            events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""),
+            { headers: { "content-type": "text/event-stream" } },
+          );
+        }
+        return undefined;
+      },
+    });
+
+    const response = await handleResponses(
+      request("/v1/responses", { model: "combo/recovery", stream: true }),
+      cfg,
+      { model: "", provider: "" } as RequestLogContext,
+    );
+
+    expect(response.status).toBe(502);
+    const failure = await response.clone().json() as {
+      error?: { code?: string; message?: string };
+    };
+    expect(failure.error?.code).toBe("upstream_server_error");
+    expect(failure.error?.message).toContain("busy");
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+  });
+
+  test("compact does not compose a stored-account replay 429 with a remembered model", async () => {
+    const headers = { "x-codex-parent-thread-id": "compact-refresh-budget" };
+    writeStoredAccount({
+      [OTHER_ACCOUNT_ID]: storedRecord({
+        accessToken: "other-access",
+        refreshToken: "other-grant",
+        generation: 1,
+        chatgptAccountId: "acc-other",
+      }),
+    });
+    const cfg = config({ secondAccount: true });
+    cfg.accountPoolStrategy = "fill-first";
+    cfg.providers.seed = {
+      adapter: "openai-responses",
+      baseUrl: "https://seed.example/v1",
+      authMode: "key",
+      apiKey: "seed-test-key",
+    };
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => {
+        if (url.hostname === "seed.example") {
+          return Response.json({
+            id: "seed",
+            object: "response",
+            status: "completed",
+            output: [{
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: "seed summary", annotations: [] }],
+            }],
+          });
+        }
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization === "Bearer refreshed-access") {
+          return Response.json({ error: { message: "pool exhausted" } }, { status: 429 });
+        }
+        if (authorization === "Bearer other-access") {
+          return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
+        }
+        return undefined;
+      },
+    });
+
+    const seed = await handleResponsesCompact(
+      request("/v1/responses/compact", { model: "seed/seed-model", headers }),
+      cfg,
+      { model: "", provider: "" } as RequestLogContext,
+    );
+    expect(seed.status).toBe(200);
+
+    const response = await handleResponsesCompact(
+      request("/v1/responses/compact", { headers }),
+      cfg,
+      { model: "", provider: "" } as RequestLogContext,
+    );
+
+    expect(response.status).toBe(429);
+    expect(harness.sends).toEqual([
+      "Bearer seed-test-key",
+      "Bearer rejected-access",
+      "Bearer refreshed-access",
+    ]);
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
   });
 
   test("the replayed account is still selectable on the NEXT request, not just this one", async () => {
