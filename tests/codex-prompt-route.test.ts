@@ -896,6 +896,51 @@ describe("020 coverage completions", () => {
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
   });
 
+  test("29. editing the selected base variant invalidates an in-flight text probe", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const created = await call("PUT", "/api/codex-prompt/base", fx, {
+      id: null, title: "Old", body: "old-body", revision: await revision(fx),
+    });
+    const id = created.body.snapshot.baseVariants[0].id as string;
+    await call("PUT", "/api/codex-prompt/base/select", fx, {
+      kind: "variant", id, revision: await revision(fx),
+    });
+
+    const selectedPath = join(fx.baseVariantDir, `${id}.md`);
+    const startedPath = join(fx.decoyHome, "variant-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const prompt = fs.readFileSync(${JSON.stringify(selectedPath)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + prompt + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const revisionBeforeEdit = await revision(fx);
+    const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "selected-variant probe start");
+
+    const edited = await call("PUT", "/api/codex-prompt/base", fx, {
+      id, title: "New", body: "new-body", revision: revisionBeforeEdit,
+    });
+    expect(edited.status).toBe(200);
+    expect(await revision(fx)).toBe(revisionBeforeEdit);
+
+    const afterEdit = await call("GET", "/api/codex-prompt/text", fx);
+    expect(afterEdit.body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("# Old\nold-body");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", fx);
+    expect(fresh.body.layers.skills.text).toBe("# New\nnew-body");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+    expect(readFileSync(startedPath, "utf8").trim().split(/\r?\n/)).toHaveLength(2);
+  });
+
   test("24. every ownership state is named, not collapsed into a boolean", async () => {
     // developerInstructionsOwned:false covers an ABSENT key and an EXTERNAL one, and
     // a GUI that cannot tell them apart hides its own create affordance from every

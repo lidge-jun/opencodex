@@ -105,7 +105,7 @@ interface ProbeCommand {
   args: string[];
   cwd: string;
   timeoutMs: number;
-  promptRevision: string | null;
+  promptStateFingerprint: string | null;
 }
 
 interface PromptProbeFlight {
@@ -140,7 +140,7 @@ function commandKey(command: ProbeCommand): string {
     command.args,
     command.cwd,
     command.timeoutMs,
-    command.promptRevision,
+    command.promptStateFingerprint,
   ]);
 }
 
@@ -380,7 +380,7 @@ export const extractSectionsForTests = extractSections;
 export async function probePromptText(
   timeoutMs = 15_000,
   signal?: AbortSignal,
-  promptRevision: string | null = null,
+  promptStateFingerprint: string | null = null,
 ): Promise<PromptTextProbe> {
   // The probe runs in CODEX_HOME, never in a caller-supplied directory. A `cwd`
   // parameter let an authenticated request read any readable folder's AGENTS.md,
@@ -399,7 +399,7 @@ export async function probePromptText(
     args: probeCommandForTests?.args ?? ["debug", "prompt-input"],
     cwd: codexHome,
     timeoutMs,
-    promptRevision,
+    promptStateFingerprint,
   };
   const outcome = await runSharedPromptProbe(command, signal);
   if (outcome.kind !== "output") {

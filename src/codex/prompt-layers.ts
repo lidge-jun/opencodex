@@ -634,6 +634,31 @@ export function readPromptLayers(opts?: Paths): PromptLayerSnapshot {
   };
 }
 
+/**
+ * Identity for prompt-text probe admission, deliberately separate from the
+ * optimistic-concurrency revision above. The revision covers only config/store
+ * transaction bytes; an edit to the selected base variant changes the prompt
+ * without changing that transaction contract.
+ */
+export function computePromptProbeStateFingerprint(opts?: Paths): string {
+  const configBytes = readFileOrNull(activeConfigPath(opts));
+  const storeBytes = readFileOrNull(activeStorePath(opts));
+  const variants = readBaseVariants(opts);
+  const selection = resolveBaseSelection(configBytes, variants, opts);
+  const hash = createHash("sha256");
+  hash.update("revision:");
+  hash.update(computeRevision(configBytes, storeBytes));
+  hash.update("\nselected-base:");
+  hash.update(selection.kind);
+  if (selection.kind === "variant") {
+    hash.update(":");
+    hash.update(selection.id);
+    hash.update("\nvariant-bytes:");
+    hash.update(readFileOrNull(join(activeBaseVariantDir(opts), `${selection.id}.md`)) ?? "\0absent");
+  }
+  return `sha256:${hash.digest("hex")}`;
+}
+
 // ---------------------------------------------------------------------------
 // Writing
 // ---------------------------------------------------------------------------

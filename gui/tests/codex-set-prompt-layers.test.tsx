@@ -258,6 +258,27 @@ test("9. the dialog names WHY text is missing rather than omitting it silently",
   await act(async () => { root.unmount(); });
 });
 
+test("the prompt-text request is aborted when the panel unmounts", async () => {
+  let textSignal: AbortSignal | null = null;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).endsWith("/api/codex-prompt/text")) {
+      textSignal = init?.signal as AbortSignal | null ?? null;
+      return await new Promise<Response>((_resolve, reject) => {
+        textSignal?.addEventListener("abort", () => reject(textSignal?.reason), { once: true });
+      });
+    }
+    return json(snapshot());
+  }) as typeof fetch;
+
+  const { root } = await mount();
+  expect(textSignal).not.toBeNull();
+  expect(textSignal!.aborted).toBe(false);
+
+  await act(async () => { root.unmount(); });
+
+  expect(textSignal!.aborted).toBe(true);
+});
+
 test("4. a runtime-conditional row states the condition that emits it", async () => {
   stubRoutes(() => json(snapshot()));
   const { container, root } = await mount();

@@ -151,6 +151,31 @@ describe("prompt probe process lifecycle", () => {
     expect(readFileSync(started, "utf8").trim().split(/\r?\n/)).toHaveLength(1);
   });
 
+  test("concurrent callers share one failure and a later caller retries", async () => {
+    const started = join(root(), "failed-starts.txt");
+    const source = [
+      `require("node:fs").appendFileSync(${JSON.stringify(started)}, "1\\n");`,
+      "setTimeout(() => process.exit(1), 150);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const [first, second] = await Promise.all([
+      probePromptText(2_000),
+      probePromptText(2_000),
+    ]);
+
+    expect(first).toMatchObject({ ok: false, detail: "codex debug prompt-input failed" });
+    expect(second).toMatchObject({ ok: false, detail: "codex debug prompt-input failed" });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect(readFileSync(started, "utf8").trim().split(/\r?\n/)).toHaveLength(1);
+
+    const later = await probePromptText(2_000);
+
+    expect(later).toMatchObject({ ok: false, detail: "codex debug prompt-input failed" });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+    expect(readFileSync(started, "utf8").trim().split(/\r?\n/)).toHaveLength(2);
+  });
+
   test("the last cancellation drains the exact child before another command starts", async () => {
     const dir = root();
     const pidPath = join(dir, "pid.txt");

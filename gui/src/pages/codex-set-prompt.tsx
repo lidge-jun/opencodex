@@ -426,26 +426,26 @@ export default function CodexSetPrompt({ apiBase }: { apiBase: string }) {
     // DECIDE with, and a prompt-budget page that hides which layer costs 15 KB is
     // asking them to guess.
     if (layerText !== null) return;
-    let cancelled = false;
+    const controller = new AbortController();
     void (async () => {
       try {
-        const res = await fetch(apiBase + "/api/codex-prompt/text");
+        const res = await fetch(apiBase + "/api/codex-prompt/text", { signal: controller.signal });
         // Status first. A 500 body still parses as JSON, and `{}` deserialized
         // into this shape reads as a probe that succeeded and found no layers -
         // so every row would silently lose its byte count and every dialog would
         // claim the layer sent nothing.
         if (!res.ok) {
-          if (!cancelled) setLayerText({ ok: false });
+          if (!controller.signal.aborted) setLayerText({ ok: false });
           return;
         }
         const body = await res.json() as { ok: boolean; layers?: Record<string, { text: string | null; reason: string; bytes: number }> };
-        if (!cancelled) setLayerText(body);
+        if (!controller.signal.aborted) setLayerText(body);
       } catch {
         // A failed probe is a missing body, not a broken page.
-        if (!cancelled) setLayerText({ ok: false });
+        if (!controller.signal.aborted) setLayerText({ ok: false });
       }
     })();
-    return () => { cancelled = true; };
+    return () => { controller.abort(); };
   }, [layerText, apiBase]);
 
   return (
