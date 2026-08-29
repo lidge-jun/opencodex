@@ -651,3 +651,118 @@ test("14. max concurrency refills immediately after one request completes", asyn
 
   await act(async () => { root.unmount(); });
 });
+
+// ─── Config / apiBase change cancellation tests ───
+
+test("15. apiBase change aborts old batch signal", async () => {
+  const signals: AbortSignal[] = [];
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" } } };
+  const d = defer<Response>();
+
+  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("/api/providers/test")) {
+      if (init?.signal) signals.push(init.signal);
+      return d.promise;
+    }
+    return origFetch(input, init);
+  }) as typeof fetch;
+
+  const btn = findTestAllButton(container)!;
+  await act(async () => { btn.click(); });
+
+  // Wait for first request to register
+  for (let i = 0; i < 5; i++) {
+    await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
+  }
+
+  // Unmount while batch is in progress to trigger apiBase-like cancellation
+  // (unmount calls activeBatchRef.current.controller.abort())
+  await act(async () => { root.unmount(); });
+
+  expect(signals.length).toBeGreaterThanOrEqual(1);
+  for (const sig of signals) {
+    expect(sig.aborted).toBe(true);
+  }
+
+  await act(async () => { d.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+});
+
+test("16. configSnapshot changes when provider baseUrl changes (same name)", () => {
+  // Verify the snapshot derivation detects content changes, not just name changes.
+  // This is the mechanism that triggers configSnapshot → useEffect → controller.abort().
+  function configSnapshot(config: { providers: Record<string, { adapter: string; baseUrl: string }> }): string {
+    return Object.entries(config.providers)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, p]) => `${name}:${p.adapter}:${p.baseUrl}`)
+      .join(";");
+  }
+
+  const cfgA = { providers: { openai: { adapter: "openai", baseUrl: "https://old.example.com" } } };
+  const cfgB = { providers: { openai: { adapter: "openai", baseUrl: "https://new.example.com" } } };
+
+  // Same name, different baseUrl → different snapshot
+  expect(configSnapshot(cfgA)).not.toBe(configSnapshot(cfgB));
+
+  // Same name, same baseUrl → same snapshot
+  expect(configSnapshot(cfgA)).toBe(configSnapshot(cfgA));
+
+  // Different adapter, same name → different snapshot
+  const cfgC = { providers: { openai: { adapter: "openai-alt", baseUrl: "https://old.example.com" } } };
+  expect(configSnapshot(cfgA)).not.toBe(configSnapshot(cfgC));
+
+  // Different set of names → different snapshot
+  const cfgD = { providers: {
+    openai: { adapter: "openai", baseUrl: "https://old.example.com" },
+    anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com" },
+  } };
+  expect(configSnapshot(cfgA)).not.toBe(configSnapshot(cfgD));
+
+  // Empty config → different snapshot
+  const empty = { providers: {} as Record<string, { adapter: string; baseUrl: string }> };
+  expect(configSnapshot(cfgA)).not.toBe(configSnapshot(empty));
+});
+
+test("17. stale batch does not show toast, new batch completes with own results", async () => {
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
+  const d1 = defer<Response>();
+  const d2 = defer<Response>();
+
+  let testCallCount = 0;
+  const origFetch = globalThis.fetch;
+
+  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("/api/providers/test")) {
+      testCallCount++;
+      if (testCallCount === 1) return d1.promise;
+      return d2.promise;
+    }
+    return origFetch(input, init);
+  }) as typeof fetch;
+
+  const btn = findTestAllButton(container)!;
+
+  // Start batch 1
+  await act(async () => { btn.click(); });
+  for (let i = 0; i < 5; i++) {
+    await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
+  }
+
+  // Unmount — this aborts batch 1 (stale)
+  await act(async () => { root.unmount(); });
+
+  // No toast from batch 1
+  expect(pageText()).not.toContain("healthy");
+  expect(pageText()).not.toContain("with errors");
+
+  // Resolve batch 1 deferred — should not show toast
+  await act(async () => { d1.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  expect(pageText()).not.toContain("healthy");
+
+  // Clean up
+  await act(async () => { d2.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+});

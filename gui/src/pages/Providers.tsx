@@ -134,15 +134,21 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     }
   }, [apiBase]);
 
-  // Cancel batch when provider config identity changes.
-  const configKey = config ? Object.keys(config.providers).sort().join(",") : "";
-  const prevConfigKeyRef = useRef(configKey);
+  // Cancel batch when provider config content changes (names, adapters, baseUrl).
+  // A lightweight snapshot of only the fields the test endpoint depends on.
+  const configSnapshot = config
+    ? Object.entries(config.providers)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, p]) => `${name}:${p.adapter}:${p.baseUrl}`)
+        .join(";")
+    : "";
+  const prevConfigSnapshotRef = useRef(configSnapshot);
   useEffect(() => {
-    if (prevConfigKeyRef.current !== configKey) {
+    if (prevConfigSnapshotRef.current !== configSnapshot) {
       activeBatchRef.current.controller.abort();
-      prevConfigKeyRef.current = configKey;
+      prevConfigSnapshotRef.current = configSnapshot;
     }
-  }, [configKey]);
+  }, [configSnapshot]);
 
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
     if (completion.catalogRefreshPending) {
