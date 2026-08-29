@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ComboEffort, ComboStrategy, ComboTarget, ProviderQuotaStates } from "../combo-workspace-data";
 import { comboImagesSupported } from "../combo-capabilities";
-import { COMBO_EFFORTS, newComboTarget } from "../combo-workspace-data";
+import { COMBO_EFFORTS, COMBO_STRATEGY_LABEL_KEYS, newComboTarget } from "../combo-workspace-data";
 import { IconArrowDown, IconArrowUp, IconGrip, IconPlus, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
 import { Switch } from "../ui";
@@ -45,7 +45,7 @@ export function StrategySeg({
           className="btn btn-sm btn-primary"
           disabled
         >
-          {value}
+          {t(COMBO_STRATEGY_LABEL_KEYS[value])}
         </button>
       ) : null}
     </div>

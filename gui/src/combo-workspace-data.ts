@@ -4,6 +4,7 @@
  */
 
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../src/codex/catalog/native-models";
+import type { TKey } from "./i18n/shared";
 
 export { SUPPORTED_NATIVE_OPENAI_SLUGS };
 
@@ -19,6 +20,30 @@ export const COMBO_STRATEGIES: readonly ComboStrategy[] = [
   "least-used",
   "reset-window",
 ] as const;
+
+export const COMBO_STRATEGY_LABEL_KEYS: Record<ComboStrategy, TKey> = {
+  failover: "cws.strategy.failover",
+  "round-robin": "cws.strategy.roundRobin",
+  random: "cws.strategy.random",
+  "least-used": "cws.strategy.leastUsed",
+  "reset-window": "cws.strategy.resetWindow",
+};
+
+export const COMBO_STRATEGY_HINT_KEYS: Record<ComboStrategy, TKey> = {
+  failover: "cws.strategy.failoverHint",
+  "round-robin": "cws.strategy.roundRobinHint",
+  random: "cws.strategy.randomHint",
+  "least-used": "cws.strategy.leastUsedHint",
+  "reset-window": "cws.strategy.resetWindowHint",
+};
+
+export const COMBO_TARGETS_HINT_KEYS: Record<ComboStrategy, TKey> = {
+  failover: "cws.targets.failoverHint",
+  "round-robin": "cws.targets.roundRobinHint",
+  random: "cws.targets.randomHint",
+  "least-used": "cws.targets.leastUsedHint",
+  "reset-window": "cws.targets.resetWindowHint",
+};
 
 const COMBO_STRATEGY_SET = new Set<string>(COMBO_STRATEGIES);
 
@@ -101,6 +126,7 @@ export interface ComboItem {
 export interface ComboSections {
   failover: ComboItem[];
   roundRobin: ComboItem[];
+  other: ComboItem[];
 }
 
 export interface ComboAttentionItem {
@@ -211,11 +237,13 @@ export function parseComboList(payload: unknown): ComboItem[] {
 export function groupCombos(items: ComboItem[]): ComboSections {
   const failover: ComboItem[] = [];
   const roundRobin: ComboItem[] = [];
+  const other: ComboItem[] = [];
   for (const item of items) {
-    if (item.strategy === "round-robin") roundRobin.push(item);
-    else failover.push(item);
+    if (item.strategy === "failover") failover.push(item);
+    else if (item.strategy === "round-robin") roundRobin.push(item);
+    else other.push(item);
   }
-  return { failover, roundRobin };
+  return { failover, roundRobin, other };
 }
 
 export function filterCombos(items: ComboItem[], query: string): ComboItem[] {

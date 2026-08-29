@@ -13,6 +13,7 @@ import { useT } from "../i18n/shared";
 import { Notice } from "../ui";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
+import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS } from "../combo-workspace-data";
 import { clampedNumberInput } from "./combo-workspace-utils";
 
 export function AddComboModal({
@@ -163,11 +164,7 @@ export function AddComboModal({
               onChange={(strategy) => setDraft((d) => ({ ...d, strategy }))}
             />
             <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-              {draft.strategy === "failover"
-                ? t("cws.strategy.failoverHint")
-                : draft.strategy === "round-robin"
-                  ? t("cws.strategy.roundRobinHint")
-                  : null}
+              {t(COMBO_STRATEGY_HINT_KEYS[draft.strategy])}
             </p>
           </div>
           <div className="cwi-field">
@@ -216,11 +213,7 @@ export function AddComboModal({
               onChange={(targets) => setDraft((d) => ({ ...d, targets }))}
             />
             <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
-              {draft.strategy === "failover"
-                ? t("cws.targets.failoverHint")
-                : draft.strategy === "round-robin"
-                  ? t("cws.targets.roundRobinHint")
-                  : null}
+              {t(COMBO_TARGETS_HINT_KEYS[draft.strategy])}
             </p>
           </div>
           <ComboCapabilities

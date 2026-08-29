@@ -6,7 +6,7 @@
  * combo silently rewrote its strategy (and stripped weights for random).
  */
 import { expect, test } from "bun:test";
-import { parseComboList, toPutBody } from "../src/combo-workspace-data";
+import { groupCombos, parseComboList, toPutBody } from "../src/combo-workspace-data";
 
 const strategies = ["failover", "round-robin", "random", "least-used", "reset-window"] as const;
 
@@ -63,4 +63,16 @@ test("round-robin still sends weights and stickyLimit", () => {
   expect(body.combo.strategy).toBe("round-robin");
   expect(body.combo.targets[0]).toEqual({ provider: "openai", model: "gpt-5", weight: 2 });
   expect(body.combo.stickyLimit).toBe(3);
+});
+
+test("groupCombos keeps the three newer strategies in their own bucket", () => {
+  const combos = strategies.map((strategy) => parseComboList(payloadWith(strategy))[0]!);
+  const sections = groupCombos(combos);
+  expect(sections.failover.map((c) => c.strategy)).toEqual(["failover"]);
+  expect(sections.roundRobin.map((c) => c.strategy)).toEqual(["round-robin"]);
+  expect(sections.other.map((c) => c.strategy)).toEqual([
+    "random",
+    "least-used",
+    "reset-window",
+  ]);
 });
