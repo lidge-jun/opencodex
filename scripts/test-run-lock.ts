@@ -8,12 +8,11 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const TEST_RUN_ID_ENV = "OCX_TEST_RUN_ID";
 export const TEST_RUN_NO_QUEUE_ENV = "OCX_TEST_NO_QUEUE";
-const DEFAULT_LOCK_PATH = join(tmpdir(), "opencodex-bun-test.lock");
 const OWNER_FILE = "owner.json";
 const MEMBERS_DIR = "members";
 const INCOMPLETE_OWNER_GRACE_MS = 10_000;
@@ -46,6 +45,19 @@ export interface AcquireTestRunLockOptions {
 export interface BareTestRunIdentity {
   ownerPid: number;
   runId: string;
+}
+
+/**
+ * Resolve the default lock path inside the current OS user's home.
+ *
+ * The lock previously lived in `tmpdir()`, which on a multi-user host is shared and
+ * world-writable. Any local account could pre-create the lock directory and hold it,
+ * stalling every other user's test run for the full 45-minute wait, or plant an
+ * unremovable owner file. Serializing test runs is only ever needed per user, so the
+ * home directory expresses the real scope and removes the cross-user surface.
+ */
+export function resolveDefaultTestRunLockPath(home = homedir()): string {
+  return join(home, ".opencodex-bun-test.lock");
 }
 
 /**
@@ -151,7 +163,7 @@ function ownsLock(lockPath: string, owner: TestRunLockOwner): boolean {
 }
 
 /**
- * Acquire the machine-wide OpenCodex Bun-test lock.
+ * Acquire the user-scoped OpenCodex Bun-test lock.
  *
  * `mkdir` is the cross-platform atomic primitive. The owner PID makes a lock left by
  * SIGKILL recoverable, while the run ID lets every worker belonging to one bare
@@ -165,7 +177,7 @@ export async function acquireTestRunLock(options: AcquireTestRunLockOptions): Pr
     return { acquired: false, owner: null, release() {} };
   }
 
-  const lockPath = options.lockPath ?? DEFAULT_LOCK_PATH;
+  const lockPath = options.lockPath ?? resolveDefaultTestRunLockPath();
   const ownerPid = options.ownerPid ?? process.pid;
   const pollMs = Math.max(1, options.pollMs ?? 5_000);
   const maxWaitMs = Math.max(pollMs, options.maxWaitMs ?? 45 * 60 * 1000);

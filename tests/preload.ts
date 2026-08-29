@@ -34,7 +34,7 @@ await acquireTestRunLock({
   runId,
   ownerPid: bareIdentity.ownerPid,
   onWait: owner => console.warn(
-    `[test] bare Bun worker ${process.pid} is waiting for test run${owner ? ` pid ${owner.pid}` : ""} to release the machine lock.`,
+    `[test] bare Bun worker ${process.pid} is waiting for test run${owner ? ` pid ${owner.pid}` : ""} to release the user lock.`,
   ),
 });
 

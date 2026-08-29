@@ -14,6 +14,7 @@ import {
 import {
   acquireTestRunLock,
   resolveBareTestRunIdentity,
+  resolveDefaultTestRunLockPath,
   TEST_RUN_NO_QUEUE_ENV,
 } from "../scripts/test-run-lock";
 import {
@@ -361,7 +362,16 @@ describe("bun test argv", () => {
   });
 });
 
-describe("bun test machine lock", () => {
+describe("bun test user lock", () => {
+  test("the default lock path is user-scoped, not a shared temp directory", () => {
+    expect(resolveDefaultTestRunLockPath("/home/alice")).toBe(join("/home/alice", ".opencodex-bun-test.lock"));
+    // Two accounts must not rendezvous on one path: a shared temp lock lets any local
+    // user hold every other user's test run for the full wait window.
+    expect(resolveDefaultTestRunLockPath("/home/alice"))
+      .not.toBe(resolveDefaultTestRunLockPath("/home/mallory"));
+    expect(resolveDefaultTestRunLockPath("/home/alice").startsWith(tmpdir())).toBe(false);
+  });
+
   test("independent bare runners do not inherit a shared long-lived parent identity", () => {
     expect(resolveBareTestRunIdentity({ pid: 101, ppid: 50 })).toEqual({
       ownerPid: 101,
