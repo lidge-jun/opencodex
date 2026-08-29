@@ -16,6 +16,7 @@
  */
 import { getAccountSet } from "./store";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
+import { exhaustedCooldownMs, rankAccountsByHeadroom } from "./account-quota-rank";
 import { parseRetryAfterMs } from "../combos/failover";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -167,7 +168,11 @@ export function rotateGenericOAuthAccountOn429(
   if (!set || set.accounts.length < 2) return null;
 
   const parsed = parseRetryAfterMs(retryAfterHeader, now);
-  const cooldownMs = Math.min(parsed ?? DEFAULT_COOLDOWN_MS, MAX_COOLDOWN_MS);
+  // An account whose allowance is provably spent gets a reset-aligned cooldown instead of
+  // the default minute: retrying it every 60s until the window rolls over is pure waste.
+  // A Retry-After from upstream still wins — it is the server's own instruction.
+  const exhausted = parsed === null ? exhaustedCooldownMs(providerName, failedAccountId, now) : null;
+  const cooldownMs = exhausted ?? Math.min(parsed ?? DEFAULT_COOLDOWN_MS, MAX_COOLDOWN_MS);
   health.set(healthKey(providerName, failedAccountId), {
     cooldownUntil: now + cooldownMs,
     cooldownSource: parsed ? "retry-after" : "default",
@@ -180,14 +185,16 @@ export function rotateGenericOAuthAccountOn429(
   // from a count read before the failure.
   presence.delete(providerName);
   // Deterministic: start after the failed account so repeated 429s walk the roster instead of
-  // hammering whichever id happens to sort first.
+  // hammering whichever id happens to sort first. The ring is built BEFORE ranking — ranking
+  // the store's own order would change which account a quota-less provider rotates to.
   const order = set.accounts.map(account => account.id);
   const start = order.indexOf(failedAccountId);
-  for (let i = 1; i <= order.length; i++) {
-    const candidate = order[(start + i) % order.length]!;
-    if (candidate !== failedAccountId && eligible.includes(candidate)) return candidate;
-  }
-  return null;
+  const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
+  const candidates = ring.filter(id => id !== failedAccountId && eligible.includes(id));
+  if (candidates.length === 0) return null;
+  // With no quota evidence this returns the ring untouched, so providers without
+  // per-account quota keep exactly the traversal they have today.
+  return rankAccountsByHeadroom(providerName, candidates)[0] ?? null;
 }
 
 /**

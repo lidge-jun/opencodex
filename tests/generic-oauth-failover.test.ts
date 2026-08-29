@@ -83,6 +83,26 @@ describe("#2568 generic OAuth account failover", () => {
     expect(rotateGenericOAuthAccountOn429(config(true), "xai", ids[0]!, null)).toBe(ids[1]);
   });
 
+  test("rotation continues AFTER the failed account, not from the top of the roster", async () => {
+    // Quota ranking now orders the candidates, so this pins the property the ranking must
+    // not disturb: with three accounts and no quota evidence anywhere, a 429 on the middle
+    // account moves to the one after it. Ranking the store's own order would answer the
+    // first account instead, silently changing every quota-less provider's traversal.
+    const ids = await seed(3);
+    expect(rotateGenericOAuthAccountOn429(config(), "xai", ids[1]!, null)).toBe(ids[2]);
+  });
+
+  test("the ring wraps when the failed account is last", async () => {
+    const ids = await seed(3);
+    expect(rotateGenericOAuthAccountOn429(config(), "xai", ids[2]!, null)).toBe(ids[0]);
+  });
+
+  test("an unknown failed account still yields a candidate", async () => {
+    // The account may have been removed between dispatch and the 429 landing.
+    const ids = await seed(2);
+    expect(rotateGenericOAuthAccountOn429(config(), "xai", "not-a-real-account", null)).toBe(ids[0]);
+  });
+
   test("a per-provider override beats the global switch", async () => {
     // Provider terms differ, so an operator may accept rotation on one provider and refuse it on
     // another. The narrower setting is the one that means something.
