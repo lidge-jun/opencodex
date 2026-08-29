@@ -3,7 +3,9 @@ import {
   availableAccountGatedNativeModels,
   cachedAvailableAccountGatedNativeModels,
   entitledCodexAccountIdsForModel,
+  GATED_MODEL_CLIENT_VERSION_FLOOR,
   isDirectCallerEntitledToCodexModel,
+  isUsableCodexClientVersion,
   resetCodexModelEntitlementCacheForTests,
   resolveCodexEntitlementClientVersion,
   resolveCodexModelEntitlements,
@@ -11,6 +13,8 @@ import {
   type CodexModelEntitlementCredentialSnapshot,
 } from "../src/codex/model-entitlements";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
+import upstreamModelsSnapshot from "../src/codex/data/upstream-models.json";
 
 const TEST_CLIENT_VERSION = "0.146.0";
 const DAYBREAK = "gpt-daybreak-blue-latest";
@@ -216,51 +220,139 @@ describe("entitlement client version (#2886)", () => {
     expect(snapshot.confirmedAccountIds.has("main")).toBe(true);
   });
 
-  test("no trustworthy version means UNCONFIRMED, not a confirmed denial", async () => {
-    // Fail closed on absent evidence is the existing contract; failing closed on invented
-    // evidence is the defect. A placeholder would return a real 200 with a short roster,
-    // which reads as "this account positively lacks these models".
-    //
-    // `clientVersion: null` is an inbound miss, not a verdict — the resolver still consults
-    // the selected runtime, which is the whole point of the precedence chain. To reach the
-    // no-evidence branch both sources have to be unusable, so this pins the resolver's own
-    // output and then drives discovery with it.
-    expect(resolveCodexEntitlementClientVersion(null, () => null)).toBeNull();
+  test("no request and no runtime still asks under this build's own gated floor", async () => {
+    // Background catalog sync has no inbound request and, on a host where Codex has never
+    // been resolved, no persisted runtime either — yet it is the path that publishes
+    // account-confirmed native rows. An earlier revision of this fix skipped discovery in
+    // that state, which suppressed exactly the rows the fix exists to restore
+    // (tests/claude-models-discovery.test.ts and tests/codex-catalog-sync-hardening.test.ts
+    // both failed on it). The last tier therefore has to be a real, answerable version.
+    expect(resolveCodexEntitlementClientVersion(null, () => null))
+      .toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
     const seen: string[] = [];
     const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
       credentials: [credential("main")],
-      fetcher: versionFilteredBackend(seen),
+      // Gates exactly at the version the bundled snapshot declares for the gated models, so
+      // this asserts the floor is *sufficient* to return them rather than re-testing the
+      // arbitrary threshold the other backend uses.
+      fetcher: (async (input: RequestInfo | URL) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const version = url.searchParams.get("client_version") ?? "";
+        seen.push(version);
+        const minor = Number(version.split(".")[1] ?? "0");
+        return minor >= 142 ? roster("gpt-5.5", SOL, TERRA, LUNA) : roster("gpt-5.5");
+      }) as typeof fetch,
       now: 1_000,
       clientVersion: null,
-      // Both halves of the chain unusable: no inbound version, no selected runtime.
+      // Both of the first two tiers unusable: no inbound version, no selected runtime.
       loadPersistedRuntime: () => null,
     });
 
-    expect(seen).toEqual([]);
-    expect(snapshot.confirmedAccountIds.has("main")).toBe(false);
+    // The floor is asked verbatim — not `0.0.0`, and not skipped.
+    expect(seen).toEqual([GATED_MODEL_CLIENT_VERSION_FLOOR]);
+    expect(snapshot.confirmedAccountIds.has("main")).toBe(true);
     // Read the SNAPSHOT, not the process-wide cache: another suite in the same run can leave
     // a confirmed entry behind, and this assertion is about what this discovery pass proved.
-    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([]);
-    expect(snapshot.modelsByAccount.get("main")?.size).toBe(0);
-    // The account is still enumerated, so callers can tell "unknown" from "absent".
+    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([SOL, TERRA, LUNA]);
     expect(snapshot.modelsByAccount.has("main")).toBe(true);
+  });
+
+  test("the gated floor is derived from the bundled roster, not written by hand", () => {
+    // If the snapshot is refreshed with a model requiring a newer client, the floor must
+    // follow it; a hand-copied constant would silently under-ask forever.
+    const rows = (upstreamModelsSnapshot as { models?: Array<Record<string, unknown>> }).models ?? [];
+    const gatedFloors = rows
+      .filter(row => typeof row.slug === "string" && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(row.slug))
+      .map(row => row.minimal_client_version)
+      .filter((value): value is string => typeof value === "string");
+    expect(gatedFloors.length).toBeGreaterThan(0);
+    expect(gatedFloors).toContain(GATED_MODEL_CLIENT_VERSION_FLOOR);
+    // Highest, so no gated model is asked for under a version that cannot return it.
+    for (const floor of gatedFloors) {
+      const asNumbers = (value: string) => value.split(/[.+-]/).map(Number);
+      const a = asNumbers(floor);
+      const b = asNumbers(GATED_MODEL_CLIENT_VERSION_FLOOR);
+      for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+        const left = Number.isFinite(a[i]) ? a[i]! : 0;
+        const right = Number.isFinite(b[i]) ? b[i]! : 0;
+        if (left !== right) {
+          expect(left).toBeLessThan(right);
+          break;
+        }
+      }
+    }
+    // And it is never the placeholder that caused #2886.
+    expect(GATED_MODEL_CLIENT_VERSION_FLOOR).not.toBe("0.0.0");
   });
 
   test("the placeholder 0.0.0 is never accepted as a client version", async () => {
     // 0.0.0 is exactly what shipped, and it is a syntactically valid version string, so the
     // guard has to reject it by value rather than by shape.
-    expect(resolveCodexEntitlementClientVersion("0.0.0", () => null)).toBeNull();
-    expect(resolveCodexEntitlementClientVersion("", () => null)).toBeNull();
-    expect(resolveCodexEntitlementClientVersion(null, () => null)).toBeNull();
-    expect(resolveCodexEntitlementClientVersion("0.146.0", () => null)).toBe("0.146.0");
+    // Rejected by value means "does not win the precedence chain": each of these falls
+    // through to the derived floor rather than being asked upstream verbatim.
+    // Every assertion here is about a SUPPLIED loader, so each bypasses the process memo that
+    // describes the real runtime file — otherwise one case's cached read answers the next.
+    const ask = (inbound: string | null, load: () => { selectedVersion?: string | null } | null) =>
+      resolveCodexEntitlementClientVersion(inbound, load, { bypassRuntimeMemo: true });
+    expect(ask("0.0.0", () => null))
+      .toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
+    expect(ask("", () => null))
+      .toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
+    expect(ask(null, () => null))
+      .toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
+    expect(ask("0.146.0", () => null)).toBe("0.146.0");
     // The inbound value wins over the persisted runtime; the runtime is the sync fallback.
-    expect(resolveCodexEntitlementClientVersion("0.146.0", () => ({ selectedVersion: "0.120.0" })))
-      .toBe("0.146.0");
-    expect(resolveCodexEntitlementClientVersion(null, () => ({ selectedVersion: "0.145.1" })))
-      .toBe("0.145.1");
-    expect(resolveCodexEntitlementClientVersion(null, () => ({ selectedVersion: "0.0.0" }))).toBeNull();
+    expect(ask("0.146.0", () => ({ selectedVersion: "0.120.0" }))).toBe("0.146.0");
+    expect(ask(null, () => ({ selectedVersion: "0.145.1" }))).toBe("0.145.1");
+    // A persisted `0.0.0` is the same placeholder and must not be preferred over the floor.
+    expect(ask(null, () => ({ selectedVersion: "0.0.0" })))
+      .toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
     // A persisted-state read that throws must not take entitlement down with it.
-    expect(resolveCodexEntitlementClientVersion(null, () => { throw new Error("unreadable"); })).toBeNull();
+    expect(ask(null, () => { throw new Error("unreadable"); }))
+      .toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
+    // isUsableCodexClientVersion is the by-value guard the chain relies on.
+    expect(isUsableCodexClientVersion("0.0.0")).toBe(false);
+    expect(isUsableCodexClientVersion("0.142.2")).toBe(true);
+    // Every spelling of an all-zero core makes the same claim `0.0.0` does, so rejecting only
+    // the exact string would leave the defect reachable through a variant.
+    for (const zeroish of ["0", "0.0", "00.0.0", "0.0.0-dev", "0.0.0.0", " 0.0.0 "]) {
+      expect(isUsableCodexClientVersion(zeroish)).toBe(false);
+      expect(ask(zeroish, () => null)).toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
+    }
+    // Bounded, because the value is interpolated into an outbound URL.
+    expect(isUsableCodexClientVersion(`0.${"9".repeat(120)}`)).toBe(false);
+    // A leading-zero segment with a nonzero core is still a real version.
+    expect(isUsableCodexClientVersion("00.142.2")).toBe(true);
+  });
+
+  test("the persisted runtime version is not re-read from disk on every resolution", () => {
+    // Tier 2 reads codex-runtime.json, and it is consulted on every gated Direct authorization
+    // and every /v1/models resolution — including when the roster cache is hot and the answer
+    // needs no I/O. Without a memo that is a synchronous readFileSync on the request path.
+    let reads = 0;
+    const loader = () => {
+      reads += 1;
+      return { selectedVersion: "0.147.3" };
+    };
+
+    expect(resolveCodexEntitlementClientVersion(null, loader, { now: 1_000 })).toBe("0.147.3");
+    expect(resolveCodexEntitlementClientVersion(null, loader, { now: 1_200 })).toBe("0.147.3");
+    expect(resolveCodexEntitlementClientVersion(null, loader, { now: 3_000 })).toBe("0.147.3");
+    // Three resolutions inside the memo window, one read.
+    expect(reads).toBe(1);
+
+    // Past the window the file is consulted again, so a runtime switch is still picked up.
+    expect(resolveCodexEntitlementClientVersion(null, loader, { now: 20_000 })).toBe("0.147.3");
+    expect(reads).toBe(2);
+
+    // An inbound version short-circuits before tier 2, so no read happens at all.
+    expect(resolveCodexEntitlementClientVersion("0.150.0", loader, { now: 40_000 })).toBe("0.150.0");
+    expect(reads).toBe(2);
+
+    // The bypass is what lets a caller ask about a loader other than the real runtime file.
+    expect(resolveCodexEntitlementClientVersion(null, () => ({ selectedVersion: "0.149.9" }), {
+      bypassRuntimeMemo: true,
+    })).toBe("0.149.9");
   });
 
   test("a cached roster is projected only for the version it was fetched under", async () => {
@@ -278,5 +370,86 @@ describe("entitlement client version (#2886)", () => {
     // read rather than silently matching one.
     expect([...cachedAvailableAccountGatedNativeModels(1_100, undefined, "0.0.0")])
       .toEqual([SOL, TERRA, LUNA]);
+  });
+
+  // The projection test above seeds the cache directly, so it cannot see the cache-hit key or
+  // the in-flight key — both survived being reverted while it stayed green. These two drive
+  // the real write path instead. A Direct caller's credential identity is derived from its own
+  // bearer token (`direct:<hash>`), so it satisfies the identity guard that decides whether a
+  // completed flight is allowed to write, which a synthetic pool credential never does.
+  function directHeaders(token: string): Headers {
+    return new Headers({ authorization: `Bearer ${token}`, "chatgpt-account-id": "acct-1" });
+  }
+
+  test("a roster fetched under one version is refetched for another, not reused", async () => {
+    const asked: string[] = [];
+    const backend = (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      asked.push(url.searchParams.get("client_version") ?? "");
+      return roster(SOL);
+    }) as typeof fetch;
+
+    // Same account, same credential, same instant — only the version differs.
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-refetch"), SOL, {
+      fetcher: backend, now: 1_000, clientVersion: "0.146.0",
+    })).toBe(true);
+    // Second ask under the SAME version is served from cache: no new request.
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-refetch"), SOL, {
+      fetcher: backend, now: 1_000, clientVersion: "0.146.0",
+    })).toBe(true);
+    expect(asked).toEqual(["0.146.0"]);
+
+    // A different version is a different question and must reach upstream again, even though
+    // the entry is still well within its TTL.
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-refetch"), SOL, {
+      fetcher: backend, now: 1_000, clientVersion: "0.150.0",
+    })).toBe(true);
+    expect(asked).toEqual(["0.146.0", "0.150.0"]);
+  });
+
+  test("two versions in flight for one account do not overwrite each other's evidence", async () => {
+    // The failure this pins: with an account-only cache key, the LATER-completing version
+    // overwrites the earlier one, and the unversioned projection readers in catalog/metadata
+    // then publish whichever landed last rather than what each client actually proved.
+    const release: Array<() => void> = [];
+    const backend = (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      const version = url.searchParams.get("client_version") ?? "";
+      // The newer client is entitled; the older one is not.
+      const body = version === "0.150.0" ? roster(SOL, TERRA) : roster("gpt-5.5");
+      await new Promise<void>(resolve => release.push(resolve));
+      return body;
+    }) as typeof fetch;
+
+    const newer = isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), SOL, {
+      fetcher: backend, now: 1_000, clientVersion: "0.150.0",
+    });
+    const older = isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), SOL, {
+      fetcher: backend, now: 1_000, clientVersion: "0.140.0",
+    });
+    // Let both requests reach the backend, then complete the NEWER one first so the older,
+    // model-less roster is the last write.
+    while (release.length < 2) await new Promise(resolve => setTimeout(resolve, 0));
+    release[0]!();
+    release[1]!();
+
+    expect(await newer).toBe(true);
+    expect(await older).toBe(false);
+
+    // Each version's evidence survives independently: the late, empty roster did not erase
+    // the newer client's confirmation.
+    expect([...cachedAvailableAccountGatedNativeModels(1_100, undefined, "0.150.0")]).toEqual([]);
+    // Direct entries are excluded from the CATALOG projection by design, so assert through the
+    // entitlement check itself — both answers must still be served from cache, unchanged.
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), SOL, {
+      fetcher: (async () => { throw new Error("must be served from cache"); }) as typeof fetch,
+      now: 1_000,
+      clientVersion: "0.150.0",
+    })).toBe(true);
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), SOL, {
+      fetcher: (async () => { throw new Error("must be served from cache"); }) as typeof fetch,
+      now: 1_000,
+      clientVersion: "0.140.0",
+    })).toBe(false);
   });
 });

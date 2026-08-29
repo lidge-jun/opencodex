@@ -11,6 +11,7 @@ import {
 } from "./main-account";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import { loadPersistedCodexRuntime } from "./runtime";
+import upstreamModelsSnapshot from "./data/upstream-models.json";
 
 const CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models";
 
@@ -34,7 +35,52 @@ export function isUsableCodexClientVersion(value: string | null | undefined): va
   if (typeof value !== "string") return false;
   const trimmed = value.trim();
   if (!trimmed || trimmed === "0.0.0") return false;
-  return /^\d+(\.\d+)*([-+][0-9A-Za-z.-]+)?$/.test(trimmed);
+  // Bounded: the value reaches an outbound URL, and no real client version is this long.
+  if (trimmed.length > 64) return false;
+  if (!/^\d+(\.\d+)*([-+][0-9A-Za-z.-]+)?$/.test(trimmed)) return false;
+  // An all-zero numeric core is the same claim `0.0.0` makes — a client predating every gated
+  // model — so `0`, `0.0`, `00.0.0`, and `0.0.0-dev` must fail for the same reason, by value
+  // rather than by exact string.
+  const core = trimmed.split(/[-+]/, 1)[0]!;
+  if (core.split(".").every(segment => Number(segment) === 0)) return false;
+  return true;
+}
+
+/**
+ * Highest `minimal_client_version` this build's bundled roster records for the models that
+ * are account-gated. Derived, not hardcoded: if the snapshot is refreshed with a model that
+ * requires a newer client, the floor follows it, so the two can never drift apart.
+ *
+ * Used only as the last tier of version precedence, for background work that has no request
+ * and no resolved runtime to speak for. It answers "what does this build believe the gated
+ * models need?", which is a claim the repository can actually substantiate.
+ */
+export const GATED_MODEL_CLIENT_VERSION_FLOOR: string = (() => {
+  const rows = (upstreamModelsSnapshot as { models?: Array<Record<string, unknown>> }).models ?? [];
+  const floors = rows
+    .filter(row => typeof row.slug === "string" && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(row.slug))
+    .map(row => (typeof row.minimal_client_version === "string" ? row.minimal_client_version : null))
+    .filter((value): value is string => isUsableCodexClientVersion(value));
+  const highest = floors.reduce<string | null>(
+    (best, candidate) => (best === null || compareClientVersions(candidate, best) > 0 ? candidate : best),
+    null,
+  );
+  // A snapshot with no gated row still has to yield a usable question; the newest floor any
+  // row records is a better answer than a placeholder, and an empty snapshot is not a state
+  // this build ships in.
+  return highest ?? "0.142.2";
+})();
+
+/** Numeric-segment comparison. Only used to pick the highest floor in a known-good set. */
+function compareClientVersions(left: string, right: string): number {
+  const l = left.split(/[.+-]/).map(Number);
+  const r = right.split(/[.+-]/).map(Number);
+  for (let i = 0; i < Math.max(l.length, r.length); i += 1) {
+    const a = Number.isFinite(l[i]) ? l[i]! : 0;
+    const b = Number.isFinite(r[i]) ? r[i]! : 0;
+    if (a !== b) return a - b;
+  }
+  return 0;
 }
 
 /**
@@ -45,26 +91,73 @@ export function isUsableCodexClientVersion(value: string | null | undefined): va
  * 2. the selected Codex runtime version, for background sync where no request exists.
  *    Retained sync refreshes runtime evidence before discovery, which is what makes this
  *    usable here; the persisted file itself carries no freshness guarantee.
+ * 3. the floor this build's own bundled roster records for the models being gated
+ *    (`GATED_MODEL_CLIENT_VERSION_FLOOR`).
  *
- * Neither available means the roster is not requested at all. Unconfirmed already suppresses
- * the gated rows and routing already rejects them, so failing closed on ABSENT evidence is
- * the existing contract; failing closed on INVENTED evidence was the bug.
+ * Tier 3 exists because background catalog sync has no request and, on a host where Codex
+ * has never been resolved, no persisted runtime either — yet it is exactly the path that
+ * publishes account-confirmed native rows. Skipping discovery there suppressed the rows this
+ * fix is meant to restore. The floor is not invented: it is the version this build's own
+ * snapshot states the gated models require, so asking under it is the narrowest question
+ * that can still return them.
+ *
+ * There is deliberately no `0.0.0`-style fallback. A placeholder describes a client that
+ * predates every gated model, which is what made upstream answer with an empty roster and
+ * turned absent evidence into a manufactured confirmed negative (#2886).
  */
 export function resolveCodexEntitlementClientVersion(
   inbound?: string | null,
   loadRuntime: () => { selectedVersion?: string | null } | null = loadPersistedCodexRuntime,
-): string | null {
+  options: { readonly bypassRuntimeMemo?: boolean; readonly now?: number } = {},
+): string {
   if (isUsableCodexClientVersion(inbound)) return inbound.trim();
-  let persisted: { selectedVersion?: string | null } | null = null;
-  try {
-    persisted = loadRuntime();
-  } catch {
-    persisted = null;
-  }
-  const selected = persisted?.selectedVersion;
-  return isUsableCodexClientVersion(selected) ? selected.trim() : null;
+  // A caller can opt out when it is asking about a loader other than the real runtime file,
+  // which the process-wide memo describes.
+  const selected = options.bypassRuntimeMemo === true
+    ? readRuntimeVersion(loadRuntime)
+    : memoizedPersistedRuntimeVersion(loadRuntime, options.now ?? Date.now());
+  return selected ?? GATED_MODEL_CLIENT_VERSION_FLOOR;
 }
 const MODEL_ROSTER_TTL_MS = 5 * 60_000;
+
+/**
+ * How long a persisted-runtime version read is reused.
+ *
+ * Tier 2 of the version chain reads `codex-runtime.json` from disk, and it is consulted on
+ * every gated Direct authorization and every `/v1/models` resolution — including when the
+ * five-minute roster cache is hot, so the entitlement answer needs no I/O at all. Left
+ * unmemoized that is a synchronous `readFileSync` on the request path under concurrent gated
+ * traffic. `persistCodexRuntime` is the only writer, and it clears the runtime's own resolve
+ * cache; this window is short enough that a runtime switch is picked up promptly either way.
+ */
+const RUNTIME_VERSION_MEMO_MS = 5_000;
+
+let runtimeVersionMemo: { at: number; version: string | null } | null = null;
+
+function readRuntimeVersion(
+  loadRuntime: () => { selectedVersion?: string | null } | null,
+): string | null {
+  try {
+    const value = loadRuntime()?.selectedVersion;
+    return isUsableCodexClientVersion(value) ? value.trim() : null;
+  } catch {
+    // An unreadable or malformed runtime file is an absent version, not a failure worth
+    // propagating into entitlement resolution.
+    return null;
+  }
+}
+
+function memoizedPersistedRuntimeVersion(
+  loadRuntime: () => { selectedVersion?: string | null } | null,
+  now: number,
+): string | null {
+  if (runtimeVersionMemo && now - runtimeVersionMemo.at < RUNTIME_VERSION_MEMO_MS) {
+    return runtimeVersionMemo.version;
+  }
+  const selected = readRuntimeVersion(loadRuntime);
+  runtimeVersionMemo = { at: now, version: selected };
+  return selected;
+}
 const MODEL_ROSTER_FAILURE_TTL_MS = 15_000;
 const MODEL_ROSTER_TIMEOUT_MS = 8_000;
 const MODEL_ROSTER_MAX_BYTES = 2 * 1024 * 1024;
@@ -126,6 +219,22 @@ const accountModelsCache = new Map<string, CachedAccountModels>();
 const accountModelsFlights = new Map<string, Promise<CachedAccountModels>>();
 
 /**
+ * Cache key. The roster is version-specific, so the version has to be part of the identity —
+ * with an account-only key, two versions in flight for one account race to overwrite each
+ * other, and the unversioned projection readers in `catalog/metadata.ts` then publish
+ * whichever landed last.
+ */
+function cacheKeyFor(accountId: string, clientVersion: string): string {
+  return `${accountId}\u0000${clientVersion}`;
+}
+
+/** Account component of a cache key, for eviction budgets and per-account invalidation. */
+function accountIdOfCacheKey(key: string): string {
+  const separator = key.indexOf("\u0000");
+  return separator === -1 ? key : key.slice(0, separator);
+}
+
+/**
  * Direct-caller entries are evicted separately from main/Pool entries.
  *
  * Direct keys are per-credential (`__direct_codex__:<hash>`) and unbounded in practice, while
@@ -136,9 +245,11 @@ const accountModelsFlights = new Map<string, Promise<CachedAccountModels>>();
  * from erasing the other's evidence.
  */
 function boundedCacheSet(accountId: string, value: CachedAccountModels): void {
-  accountModelsCache.delete(accountId);
-  accountModelsCache.set(accountId, value);
-  const isDirect = (key: string): boolean => key.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX);
+  const key = cacheKeyFor(accountId, value.clientVersion);
+  accountModelsCache.delete(key);
+  accountModelsCache.set(key, value);
+  const isDirect = (candidate: string): boolean =>
+    accountIdOfCacheKey(candidate).startsWith(DIRECT_CALLER_ACCOUNT_PREFIX);
   const evictClass = (direct: boolean): void => {
     let count = 0;
     for (const key of accountModelsCache.keys()) if (isDirect(key) === direct) count += 1;
@@ -152,7 +263,7 @@ function boundedCacheSet(accountId: string, value: CachedAccountModels): void {
       count -= 1;
     }
   };
-  evictClass(isDirect(accountId));
+  evictClass(accountId.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX));
 }
 
 function currentCredentialIdentity(accountId: string): string | undefined {
@@ -286,13 +397,10 @@ async function modelsForCredential(
   now: number,
   clientVersion: string,
 ): Promise<CachedAccountModels> {
-  const cached = accountModelsCache.get(credential.accountId);
+  const cached = accountModelsCache.get(cacheKeyFor(credential.accountId, clientVersion));
   if (
     cached
     && cached.credentialIdentity === credential.credentialIdentity
-    // Upstream filters by client version, so a roster fetched under a different one is a
-    // different question's answer and must not be reused.
-    && cached.clientVersion === clientVersion
     && cached.expiresAt > now
   ) return cached;
 
@@ -356,16 +464,6 @@ export async function resolveCodexModelEntitlements(
     ? [...options.credentials].filter(credential => !options.excludeAccountIds?.has(credential.accountId))
     : (await Promise.all(allowedAccountIds.map(accountId => credentialSnapshot(accountId, options))))
       .filter((value): value is CodexModelEntitlementCredentialSnapshot => value !== null);
-  // No trustworthy client version means the roster cannot be asked for meaningfully.
-  // Report every account as UNCONFIRMED rather than fetching under a placeholder that
-  // upstream would answer with an empty or truncated roster (#2886).
-  if (clientVersion === null) {
-    return {
-      modelsByAccount: new Map(credentials.map(credential => [credential.accountId, new Set<string>()])),
-      confirmedAccountIds: new Set<string>(),
-      credentialIdentities: new Map(credentials.map(credential => [credential.accountId, credential.credentialIdentity])),
-    };
-  }
   const results = await Promise.all(credentials.map(async credential => ({
     credential,
     result: await modelsForCredential(credential, fetcher, now, clientVersion),
@@ -387,8 +485,6 @@ export async function isDirectCallerEntitledToCodexModel(
   const credential = directCallerCredential(headers);
   if (!credential) return false;
   const clientVersion = resolveCodexEntitlementClientVersion(options.clientVersion);
-  // Fail closed on absent evidence, exactly as an unconfirmed roster does.
-  if (clientVersion === null) return false;
   const result = await modelsForCredential(
     credential,
     options.fetcher ?? fetch,
@@ -438,8 +534,8 @@ export function cachedAvailableAccountGatedNativeModels(
   const version = isUsableCodexClientVersion(clientVersion) ? clientVersion.trim() : null;
   return new Set([...ACCOUNT_GATED_NATIVE_OPENAI_MODELS].filter(modelId => (
     [...accountModelsCache].some(([accountId, entry]) => (
-      (!eligibleAccountIds || eligibleAccountIds.has(accountId))
-      && !accountId.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX)
+      (!eligibleAccountIds || eligibleAccountIds.has(accountIdOfCacheKey(accountId)))
+      && !accountIdOfCacheKey(accountId).startsWith(DIRECT_CALLER_ACCOUNT_PREFIX)
       && (version === null || entry.clientVersion === version)
       && entry.confirmed
       && entry.expiresAt > now
@@ -456,12 +552,18 @@ export function isCodexModelEntitlementSnapshotCurrent(snapshot: CodexModelEntit
 }
 
 export function invalidateCodexModelEntitlementsForAccount(accountId: string | null | undefined): void {
-  if (accountId) accountModelsCache.delete(accountId);
+  if (!accountId) return;
+  // Every version's entry for this account, since a credential change invalidates the
+  // account's entitlement evidence regardless of which client version asked for it.
+  for (const key of [...accountModelsCache.keys()]) {
+    if (accountIdOfCacheKey(key) === accountId) accountModelsCache.delete(key);
+  }
 }
 
 export function resetCodexModelEntitlementCacheForTests(): void {
   accountModelsCache.clear();
   accountModelsFlights.clear();
+  runtimeVersionMemo = null;
 }
 
 export function seedCodexModelEntitlementsForTests(

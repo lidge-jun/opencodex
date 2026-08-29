@@ -63,11 +63,31 @@ So version authority is a precedence chain, not a single lookup:
    describe the binary OpenCodex chose rather than an externally launched client. Retained
    sync does refresh runtime evidence first (`src/codex/catalog/sync.ts:1828`), which is
    what makes it usable here and not elsewhere.
-3. **Neither available → do not ask.** Sending `0.0.0` manufactures a confirmed negative,
-   which is the whole defect. No trustworthy version means unconfirmed, and unconfirmed
-   already suppresses (`:321`) and routing already rejects
-   (`src/codex/auth-context.ts:458`). Fail closed on absent evidence, never on invented
-   evidence.
+3. **Neither available → ask under this build's own gated floor.**
+   `GATED_MODEL_CLIENT_VERSION_FLOOR` is derived from the highest
+   `minimal_client_version` that `src/codex/data/upstream-models.json` records for the
+   models in `ACCOUNT_GATED_NATIVE_OPENAI_MODELS` (`0.142.2` today). It is a claim this
+   repository can substantiate, and it is derived rather than written down so a refreshed
+   snapshot cannot leave it stale.
+
+   **This tier was wrong in the first attempt and CI caught it.** The original design said
+   "neither available → do not ask", on the reasoning that failing closed on absent evidence
+   was the existing contract. That is true for a *request*, and false for background sync:
+   `syncCatalogModels` has no inbound request, and on a host where Codex has never been
+   resolved it has no persisted runtime either — yet it is exactly the path that publishes
+   account-confirmed native rows. Skipping discovery there suppressed the rows this fix
+   exists to restore. Two pre-existing tests failed on `dev` CI and neither was in the
+   originally chosen focused set:
+   `tests/claude-models-discovery.test.ts` ("Codex discovery exposes the observed native as
+   a selector row plus one global bare row") and `tests/codex-catalog-sync-hardening.test.ts`
+   ("account sync preserves an observed gated native only after the mapped account confirms
+   it"). The lesson is narrow and worth keeping: *fail-closed is a property of a request
+   path, and a background publisher is not a request path.*
+
+   Sending `0.0.0` remains forbidden, and now by value rather than by exact string —
+   `0`, `0.0`, `00.0.0`, and `0.0.0-dev` all make the same claim (a client predating every
+   gated model) and are all rejected. The value is also length-bounded because it is
+   interpolated into an outbound URL.
 
 This needs a real seam. `fetcher` (`:43`) can observe the URL but cannot choose the
 version, so `resolveCodexModelEntitlements` and `isDirectCallerEntitledToCodexModel`
@@ -78,6 +98,13 @@ both take an explicit client version.
 `accountModelsCache` is keyed by account ID alone, with credential identity stored as a
 discriminator (`:30`, `:216`); the flight key is account plus credential identity
 (`:223`). Version must join both, or a roster fetched under one version keeps answering
+
+The first attempt kept the account-only **cache key** and merely compared the stored version
+on read. Review showed that is not equivalent: with two versions in flight for one account,
+the later-completing one overwrites the earlier, and the *unversioned* projection readers in
+`src/codex/catalog/metadata.ts:424,514` then publish whichever landed last rather than what
+each client proved. The key itself is now `account\u0000version`, with account-scoped
+invalidation walking every version's entry so a credential change still clears all of them.
 for another until the TTL expires.
 
 `cachedAvailableAccountGatedNativeModels` scans every cache entry (`:331`). Once two
@@ -115,12 +142,33 @@ roster below the threshold and the full roster at `0.146.0`. The wrong behavior 
 is the real one — *an entitled account is classified as denying GPT-5.6 because OpenCodex
 under-reports its own client version*. Named mutation: restore the `0.0.0` literal.
 
-A second case pins the precedence chain: with no trustworthy version, discovery must be
-**unconfirmed** rather than a confirmed negative. Named mutation: fall back to `0.0.0`;
-the account is then reported as positively denying the models.
+A second case pins the precedence chain's last tier: with no inbound version and no
+persisted runtime, discovery must still ask — under the derived floor, verbatim. Named
+mutations: return `null` from tier 3 (three tests fail, including the two CI regressions
+above), and hardcode a stale floor instead of deriving it from the snapshot.
 
-Cache identity gets its own case — fetch under one version, ask under another, assert a
-re-fetch. Named mutation: drop version from the cache key.
+Cache identity gets its own case, and the **first version of it was vacuous** — an
+independent review proved the test stayed green after reverting *both* the cache-hit version
+comparison and the version component of the flight key. It seeded the cache directly through
+`seedCodexModelEntitlementsForTests`, so it only ever exercised the optional projection
+filter, never the write path. The rework drives the real path through a Direct caller, whose
+credential identity is derived from its own bearer token (`direct:<hash>`) and therefore
+satisfies the identity guard that decides whether a completed flight may write — which a
+synthetic pool credential never does. Two cases now:
+
+- sequential: fetch under version A, ask again under A (served from cache, no second
+  request), then ask under B and assert a re-fetch;
+- concurrent: two versions in flight for one account, completing newest-first, and both
+  answers must survive. Named mutation for both: collapse the cache key back to account-only.
+  The flight key's version component has its own mutation, which the concurrent case catches.
+
+The version is also asserted end to end at the route: `/v1/models?client_version=0.151.7`
+must produce `0.151.7` on the outbound `/codex/models` request. Named mutation: drop the
+`url.searchParams.get("client_version")` argument in `src/server/index.ts`.
+
+Tier 2 is memoized for five seconds because it reads `codex-runtime.json` from disk on every
+gated authorization and every `/v1/models` resolution, including when the roster cache is hot
+and the answer needs no I/O at all. Named mutation: bypass the memo and re-read every time.
 
 **B** in `tests/model-visibility-management-api.test.ts`: with `disabledModels:
 ["gpt-5.6-sol"]` and no entitlement cache, the PUT must be accepted and clear the entry,
@@ -135,4 +183,3 @@ the same symptom. The version-filter explanation is what the source, the version
 and this repository's own measurement support, and the fix is correct either way — but if
 their roster was failing for another reason the models will still be missing afterwards,
 and the issue should be reopened with a redacted capture rather than assumed fixed.
-
