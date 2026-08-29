@@ -372,6 +372,12 @@ type CodexTokenResult = { accessToken: string; chatgptAccountId: string; generat
 type CodexRefreshResult = CodexTokenResult & {
   credential?: CodexAccountCredentials;
   /**
+   * Records that adopted this refresh's rotated credential through same-grant propagation, each
+   * with its own committed generation (#2892 gap 3). Carried on the result so the flight settles
+   * every plan in one place rather than the commit doing its own (#2933).
+   */
+  propagatedAliases?: { id: string; generation: number }[];
+  /**
    * Grant the returned credential actually belongs to.
    *
    * Flights are keyed by refresh grant and shared across every account holding that
@@ -847,20 +853,16 @@ async function resolveCodexToken(
     }
     if (commit.propagatedAliases.length > 0) {
       console.warn(`[codex-auth] rotated refresh grant propagated to ${commit.propagatedAliases.length} dormant same-grant account record(s)`);
-      // The rotated JWT can carry a different `chatgpt_plan_type`, and each alias now holds that
-      // JWT. Without this the alias keeps its old plan — its cached-token fast path never
-      // reconciles, and repository-wide reconciliation only runs at startup — so quota scoring and
-      // the 30-day projection stay wrong until a restart or a WHAM refresh. Reconcile at each
-      // alias's OWN committed generation, since the plan note is generation-fenced.
-      for (const alias of commit.propagatedAliases) {
-        await notePlanFromRefreshedAccessToken(alias.id, updated.accessToken, alias.generation);
-      }
     }
     return {
       accessToken: updated.accessToken,
       chatgptAccountId: updated.chatgptAccountId,
       generation: startGeneration + 1,
       credential: updated,
+      // Aliases that adopted this rotated credential travel on the result so the FLIGHT settles
+      // their plans in the same single place as the owner's (#2933). Each carries its own committed
+      // generation because the plan note is generation-fenced.
+      ...(commit.propagatedAliases.length > 0 ? { propagatedAliases: commit.propagatedAliases } : {}),
       // The grant this flight was OPENED for, not the rotated one it produced. Joiners
       // are waiting on that key, and a successful refresh normally rotates the refresh
       // token — tagging the new grant would make every legitimate joiner look foreign.
@@ -882,6 +884,12 @@ async function resolveCodexToken(
    */
   const refreshPromise = fetchPromise.then(async (result): Promise<CodexRefreshResult> => {
     await notePlanFromRefreshedAccessToken(id, result.accessToken, result.generation);
+    // One settlement path for the whole flight: the refreshing account, then any dormant alias that
+    // adopted the same rotated JWT. An alias holds the identical access token, so a changed
+    // `chatgpt_plan_type` applies to it too, and its cached-token fast path would never reconcile it.
+    for (const alias of result.propagatedAliases ?? []) {
+      await notePlanFromRefreshedAccessToken(alias.id, result.accessToken, alias.generation);
+    }
     return result;
   }).finally(() => {
     if (refreshLocks.get(refreshGrantFingerprint) === flight) refreshLocks.delete(refreshGrantFingerprint);
