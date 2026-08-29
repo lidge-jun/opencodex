@@ -9,7 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
@@ -49,6 +49,21 @@ async function freePort(hostname = "127.0.0.1"): Promise<number> {
 
 function dashboardUrl(port: number, path: string): string {
   return `http://127.0.0.1:${port}${path}`;
+}
+
+/**
+ * The origin-gate test needs a bind hostname the management gate treats as non-loopback.
+ * 127.0.0.2 is that on Linux and Windows, but macOS does not bind it (EADDRNOTAVAIL), so
+ * use the host's real interface address the way tests/loopback-listener-integration.test.ts
+ * does — the production shape for this listener is a tailnet/LAN bind anyway.
+ */
+function firstNonLoopbackIPv4(): string | null {
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === "IPv4" && !entry.internal) return entry.address;
+    }
+  }
+  return null;
 }
 
 beforeEach(() => {
@@ -229,13 +244,21 @@ describe("dashboard listener surface", () => {
   test("management origin gate follows the listener policy when the proxy stays loopback", async () => {
     // The regression this pins: handleManagementAPI re-derived the request origin
     // from the shared loopback config, so a non-loopback dashboard Host was rejected
-    // as cross-origin (403) even after the listener policy had admitted it. 127.0.0.2
-    // is non-loopback for the origin check yet bindable on every supported platform.
-    const dashboardPort = await freePort("127.0.0.2");
-    saveConfig(baseConfig(dashboardPort, "127.0.0.2"));
+    // as cross-origin (403) even after the listener policy had admitted it. The
+    // listener binds the host's real interface address: non-loopback for the origin
+    // check and bindable on Linux, Windows, and macOS alike (127.0.0.2 is not bound
+    // on macOS, which is exactly how this test originally failed there).
+    const dashboardHost = firstNonLoopbackIPv4();
+    if (!dashboardHost) {
+      // A host with no external IPv4 cannot prove this. Say so rather than pass silently.
+      console.warn("[dashboard-listener] no non-loopback IPv4 interface; origin-gate check not run");
+      return;
+    }
+    const dashboardPort = await freePort(dashboardHost);
+    saveConfig(baseConfig(dashboardPort, dashboardHost));
     const server = startServer(0);
     try {
-      const authorized = await fetch(`http://127.0.0.2:${dashboardPort}/api/config`, {
+      const authorized = await fetch(`http://${dashboardHost}:${dashboardPort}/api/config`, {
         headers: { "x-opencodex-api-key": ADMIN_TOKEN },
       });
       expect(authorized.status).toBe(200);
