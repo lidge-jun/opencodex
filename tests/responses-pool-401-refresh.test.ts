@@ -375,72 +375,76 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(harness.refreshes).toEqual(["refresh-grant"]);
   });
 
-  test("compact does not compose a stored-account replay 429 with a remembered model", async () => {
-    const headers = { "x-codex-parent-thread-id": "compact-refresh-budget" };
-    writeStoredAccount({
-      [OTHER_ACCOUNT_ID]: storedRecord({
-        accessToken: "other-access",
-        refreshToken: "other-grant",
-        generation: 1,
-        chatgptAccountId: "acc-other",
-      }),
+  for (const replayStatus of [429, 402] as const) {
+    test(`compact does not compose a stored-account replay ${replayStatus} with another account or remembered model`, async () => {
+      const headers = { "x-codex-parent-thread-id": `compact-refresh-budget-${replayStatus}` };
+      writeStoredAccount({
+        [OTHER_ACCOUNT_ID]: storedRecord({
+          accessToken: "other-access",
+          refreshToken: "other-grant",
+          generation: 1,
+          chatgptAccountId: "acc-other",
+        }),
+      });
+      const cfg = config({ secondAccount: true });
+      cfg.accountPoolStrategy = "fill-first";
+      cfg.providers.seed = {
+        adapter: "openai-responses",
+        baseUrl: "https://seed.example/v1",
+        authMode: "key",
+        apiKey: "seed-test-key",
+      };
+      let seedModelSends = 0;
+      let alternateAccountSends = 0;
+      const harness = installHarness({
+        responseForSend: (authorization, _sendNumber, url) => {
+          if (url.hostname === "seed.example") {
+            seedModelSends += 1;
+            return Response.json({
+              id: "seed",
+              object: "response",
+              status: "completed",
+              output: [{
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "seed summary", annotations: [] }],
+              }],
+            });
+          }
+          if (authorization === "Bearer rejected-access") {
+            return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+          }
+          if (authorization === "Bearer refreshed-access") {
+            return Response.json({ error: { message: "pool exhausted" } }, { status: replayStatus });
+          }
+          if (authorization === "Bearer other-access") {
+            alternateAccountSends += 1;
+            return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
+          }
+          return undefined;
+        },
+      });
+
+      const seed = await handleResponsesCompact(
+        request("/v1/responses/compact", { model: "seed/seed-model", headers }),
+        cfg,
+        { model: "", provider: "" } as RequestLogContext,
+      );
+      expect(seed.status).toBe(200);
+
+      const response = await handleResponsesCompact(
+        request("/v1/responses/compact", { headers }),
+        cfg,
+        { model: "", provider: "" } as RequestLogContext,
+      );
+
+      expect(response.status).toBe(replayStatus);
+      expect(harness.sends).toHaveLength(3);
+      expect(alternateAccountSends).toBe(0);
+      expect(seedModelSends).toBe(1);
+      expect(harness.refreshes).toHaveLength(1);
     });
-    const cfg = config({ secondAccount: true });
-    cfg.accountPoolStrategy = "fill-first";
-    cfg.providers.seed = {
-      adapter: "openai-responses",
-      baseUrl: "https://seed.example/v1",
-      authMode: "key",
-      apiKey: "seed-test-key",
-    };
-    const harness = installHarness({
-      responseForSend: (authorization, _sendNumber, url) => {
-        if (url.hostname === "seed.example") {
-          return Response.json({
-            id: "seed",
-            object: "response",
-            status: "completed",
-            output: [{
-              type: "message",
-              role: "assistant",
-              content: [{ type: "output_text", text: "seed summary", annotations: [] }],
-            }],
-          });
-        }
-        if (authorization === "Bearer rejected-access") {
-          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
-        }
-        if (authorization === "Bearer refreshed-access") {
-          return Response.json({ error: { message: "pool exhausted" } }, { status: 429 });
-        }
-        if (authorization === "Bearer other-access") {
-          return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
-        }
-        return undefined;
-      },
-    });
-
-    const seed = await handleResponsesCompact(
-      request("/v1/responses/compact", { model: "seed/seed-model", headers }),
-      cfg,
-      { model: "", provider: "" } as RequestLogContext,
-    );
-    expect(seed.status).toBe(200);
-
-    const response = await handleResponsesCompact(
-      request("/v1/responses/compact", { headers }),
-      cfg,
-      { model: "", provider: "" } as RequestLogContext,
-    );
-
-    expect(response.status).toBe(429);
-    expect(harness.sends).toEqual([
-      "Bearer seed-test-key",
-      "Bearer rejected-access",
-      "Bearer refreshed-access",
-    ]);
-    expect(harness.refreshes).toEqual(["refresh-grant"]);
-  });
+  }
 
   test("the replayed account is still selectable on the NEXT request, not just this one", async () => {
     // The affinity entry is bound under generation G; the forced refresh CAS-writes G+1 and
@@ -641,7 +645,7 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(harness.refreshes).toEqual(["refresh-grant"]);
   });
 
-  test("a stored-account replay 429 cannot reach another account even when one is eligible", async () => {
+  test("a stored-account replay 402 cannot reach another account even when one is eligible", async () => {
     // The mirror of the case above: a quota failure has no same-account move left, so it is
     // terminal. Asserted with a healthy alternate present, so passing means the budget stopped
     // it rather than there being nowhere to go.
