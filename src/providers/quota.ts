@@ -23,21 +23,35 @@ import {
   sweepExpiredOnWrite,
   type GenerationContext,
 } from "../lib/state-store-sweeper";
-import { readBoundedResponseBody } from "../lib/bounded-body";
+import {
+  ACCOUNT_QUOTA_TTL_MS,
+  asRecord,
+  CACHE_TTL_MS,
+  normalizePercent,
+  normalizeResetAt,
+  QUOTA_JSON_READ_FAILURE,
+  readQuotaJson,
+  REQUEST_TIMEOUT_MS,
+  toFiniteNumber,
+} from "./quota-wire";
 import {
   aggregateCodexPoolCapacity,
   CODEX_CAPACITY_MAX_QUOTA_AGE_MS,
   type CodexCapacityAggregation,
   type CodexCapacityQuota,
 } from "./codex-capacity";
+import type {
+  ProviderQuota,
+  ProviderQuotaCreditsUsd,
+  ProviderQuotaWindow,
+} from "./quota-types";
+
+export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
-
-const CACHE_TTL_MS = 5 * 60_000;
-const REQUEST_TIMEOUT_MS = 8_000;
 /** Successful provider quota payloads are small; reject oversized or stalled JSON before parsing. */
-export const QUOTA_RESPONSE_MAX_BYTES = 512 * 1024;
+export { QUOTA_RESPONSE_MAX_BYTES } from "./quota-wire";
 const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
 const KIMI_CODE_USAGE_URL = `${KIMI_CODE_BASE_URL}/usages`;
 const COMMAND_CODE_BASE_URL = "https://api.commandcode.ai";
@@ -74,33 +88,6 @@ export function setProviderQuotaBeforePublishForTests(
 }
 const TERMINAL_QUOTA_FAILURE = Symbol("terminal-quota-failure");
 type ProviderQuotaProbeResult = ProviderQuotaReport | null | typeof TERMINAL_QUOTA_FAILURE;
-
-export interface ProviderQuotaWindow {
-  label: string;
-  percent: number;
-  resetAt?: number;
-}
-
-export interface ProviderQuotaCreditsUsd {
-  used: number;
-  limit: number;
-  remaining: number;
-  percent: number;
-  expiresAt?: number;
-  unlimited?: boolean;
-}
-
-export interface ProviderQuota {
-  fiveHourPercent?: number;
-  fiveHourResetAt?: number;
-  weeklyPercent?: number;
-  weeklyResetAt?: number;
-  monthlyPercent?: number;
-  monthlyResetAt?: number;
-  customWindows?: ProviderQuotaWindow[];
-  creditsUsd?: ProviderQuotaCreditsUsd;
-  updatedAt: number;
-}
 
 export interface ProviderQuotaReport {
   provider: string;
@@ -258,77 +245,6 @@ function hasQuotaRows(quota: ProviderQuota | null | undefined): quota is Provide
 
 function providerLabel(providerId: string): string {
   return getProviderRegistryEntry(providerId)?.label ?? providerId;
-}
-
-function normalizeResetAt(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return epochMillis(value);
-  if (typeof value === "string" && value.trim()) {
-    const trimmed = value.trim();
-    // Cursor Connect RPC returns billingCycleEnd as a unix-ms decimal string ("1771077734000").
-    // Date.parse treats that as invalid; numeric epoch strings must be handled explicitly.
-    if (/^[+-]?\d+(\.\d+)?$/.test(trimmed)) {
-      const numeric = Number(trimmed);
-      return epochMillis(numeric);
-    }
-    const parsed = Date.parse(trimmed);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-  }
-  return undefined;
-}
-
-/** Unix 0 / negative values are sentinels, not reset clocks (Command Code fiveHour.resetAt: 0). */
-function epochMillis(value: number): number | undefined {
-  if (!Number.isFinite(value) || value <= 0) return undefined;
-  return value > 10_000_000_000 ? value : value * 1000;
-}
-
-function toFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
-function normalizePercent(value: unknown): number | undefined {
-  const numeric = toFiniteNumber(value);
-  return numeric === undefined ? undefined : Math.max(0, Math.min(100, numeric));
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-const QUOTA_JSON_READ_FAILURE = Symbol("quota-json-read-failure");
-
-async function readQuotaJson(
-  response: Response,
-  timeoutMs = REQUEST_TIMEOUT_MS,
-): Promise<unknown | typeof QUOTA_JSON_READ_FAILURE> {
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > QUOTA_RESPONSE_MAX_BYTES) {
-    try {
-      void response.body?.cancel(
-        new DOMException("Provider quota response is too large", "QuotaExceededError"),
-      ).catch(() => undefined);
-    } catch {
-      // Best-effort cancellation only.
-    }
-    return QUOTA_JSON_READ_FAILURE;
-  }
-
-  try {
-    const bounded = await readBoundedResponseBody(response, {
-      maxBytes: QUOTA_RESPONSE_MAX_BYTES,
-      totalTimeoutMs: timeoutMs,
-      inactivityTimeoutMs: timeoutMs,
-    });
-    if (bounded.oversized || bounded.truncated || !bounded.displaySafe) return QUOTA_JSON_READ_FAILURE;
-    return JSON.parse(bounded.text) as unknown;
-  } catch {
-    return QUOTA_JSON_READ_FAILURE;
-  }
 }
 
 /** Test-only access to the quota reader's deadline and cancellation contract. */
@@ -1414,15 +1330,13 @@ async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaRepor
 // ---------------------------------------------------------------------------
 
 /**
- * Anthropic reports usage per CREDENTIAL, so every logged-in account can be probed with its
- * own bearer token — the active-account selection and the local usage log are irrelevant here.
- * Mirrors the Codex pool behaviour (codex/auth-api.ts:fetchPoolAccountQuota), including a
- * per-account TTL so N accounts cost at most N upstream calls per window.
- *
- * The TTL is deliberately longer than the provider-level one: this path multiplies by account
- * count, and Anthropic rate-limits the usage endpoint (observed 429 under repeated probing).
+ * Anthropic and Kiro both report usage per CREDENTIAL, so every logged-in account can be
+ * probed with its own bearer token — the active-account selection and the local usage log
+ * are irrelevant here. Mirrors the Codex pool behaviour
+ * (codex/auth-api.ts:fetchPoolAccountQuota), including a per-account TTL so N accounts cost
+ * at most N upstream calls per window. `ACCOUNT_QUOTA_TTL_MS` lives in `quota-wire.ts`
+ * because the Kiro exhaustion reader applies the same staleness bound.
  */
-const ACCOUNT_QUOTA_TTL_MS = 10 * 60_000;
 type AccountQuotaCacheEntry = {
   ts: number;
   quota: ProviderQuota | null;
