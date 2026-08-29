@@ -53,6 +53,11 @@ import {
   kiroUsageContextForAccount,
   reconcileKiroAccountUsageState,
 } from "./kiro-usage";
+import {
+  cancelPendingAccountQuotaPersist,
+  readPersistedAccountQuotas,
+  schedulePersistAccountQuotas,
+} from "./account-quota-disk";
 
 export type { ProviderQuota, ProviderQuotaCreditsUsd, ProviderQuotaWindow } from "./quota-types";
 
@@ -1378,6 +1383,31 @@ type AccountQuotaCacheEntry = {
   unavailable?: true;
 };
 const accountQuotaCache = new Map<string, AccountQuotaCacheEntry>();
+
+/**
+ * Seed the cache from the last run, once.
+ *
+ * Without this a restart forgets every measurement, so the pool opens its next turn with
+ * no idea which account has room — the exact blindness pre-dispatch selection exists to
+ * remove. A hydrated row is still subject to the ordinary TTL, so it orders the first
+ * request and is replaced by a live probe immediately after.
+ */
+let diskHydrated = false;
+function hydrateAccountQuotaCache(): void {
+  if (diskHydrated) return;
+  diskHydrated = true;
+  for (const [key, quota] of readPersistedAccountQuotas()) {
+    if (!accountQuotaCache.has(key)) accountQuotaCache.set(key, { ts: quota.updatedAt, quota });
+  }
+}
+
+function persistAccountQuotaCache(): void {
+  schedulePersistAccountQuotas(function* () {
+    for (const [key, entry] of accountQuotaCache) {
+      if (entry.quota) yield [key, entry.quota] as [string, ProviderQuota];
+    }
+  });
+}
 const accountQuotaInflight = new Map<string, Promise<AccountQuotaCacheEntry>>();
 let lastReconciledGeneration = 0;
 let liveAccountQuotaKeys = new Set<string>();
@@ -1475,6 +1505,10 @@ export function clearAccountQuotaCache(provider?: string): void {
     accountQuotaCache.clear();
     accountQuotaInflight.clear();
     clearKiroAccountUsageState();
+    // A cleared cache must not be re-seeded from the file it was just cleared of, and any
+    // pending write of the old rows is abandoned.
+    diskHydrated = false;
+    cancelPendingAccountQuotaPersist();
     return;
   }
   const prefix = `${provider}\u0000`;
@@ -1486,6 +1520,7 @@ export function clearAccountQuotaCache(provider?: string): void {
   for (const key of [...accountQuotaInflight.keys()]) {
     if (key.startsWith(prefix)) accountQuotaInflight.delete(key);
   }
+  persistAccountQuotaCache();
 }
 
 /**
