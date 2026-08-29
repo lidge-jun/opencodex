@@ -21,13 +21,15 @@ import { ProvidersPageModals } from "./providers-page-modals";
 import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-page-utils";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 
-interface TestResult {
-  ok: boolean;
-  latencyMs: number;
+type ConnectionTestResult = {
+  ok?: boolean;
+  latencyMs?: number;
   error?: string;
   message?: string;
   applicable?: boolean;
-}
+};
+
+const TEST_CONCURRENCY = 3;
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
@@ -82,18 +84,24 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     const names = Object.keys(config.providers);
     if (names.length === 0) return;
     setBatchTesting(true);
-    const results: Record<string, TestResult> = {};
-    await Promise.allSettled(
-      names.map(async (name) => {
+    const results: Record<string, ConnectionTestResult> = {};
+    for (let i = 0; i < names.length; i += TEST_CONCURRENCY) {
+      const batch = names.slice(i, i + TEST_CONCURRENCY);
+      await Promise.allSettled(batch.map(async (name) => {
         try {
           const res = await fetch(`${apiBase}/api/providers/test?${new URLSearchParams({ name })}`, { method: "POST" });
-          const body = (await res.json()) as TestResult;
-          results[name] = body;
+          if (!res.ok) {
+            results[name] = { ok: false, error: `HTTP ${res.status}` };
+            return;
+          }
+          let body: unknown;
+          try { body = await res.json(); } catch { results[name] = { ok: false, error: "Invalid response" }; return; }
+          results[name] = body as ConnectionTestResult;
         } catch {
-          results[name] = { ok: false, latencyMs: 0, error: "Network error" };
+          results[name] = { ok: false, error: "Network error" };
         }
-      }),
-    );
+      }));
+    }
     if (aliveRef.current) {
       setBatchTesting(false);
       const passed = Object.values(results).filter(r => r.ok).length;

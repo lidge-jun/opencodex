@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
@@ -366,7 +366,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const cachedLogs = validCachedLogs(readSessionListCache<LogEntry[]>(resourceKey));
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [clearedAt, setClearedAt] = useState<number | null>(null);
+  const [clearedBoundaryId, setClearedBoundaryId] = useState<string | null>(null);
+
+  useEffect(() => { setClearedBoundaryId(null); }, [resourceKey]);
   const [failureStreak, setFailureStreak] = useState<{ error: unknown; count: number }>(
     { error: null, count: 0 },
   );
@@ -510,13 +512,17 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     return () => { cancelled = true; };
   }, [conversationQuery]);
 
-  // Clear view: stash current logs and show only new entries after the clear point.
+  const logsRef = useRef(logs);
+  logsRef.current = logs;
   const clearView = useCallback(() => {
-    setClearedAt(Date.now());
+    setClearedBoundaryId(logsRef.current[0]?.requestId ?? null);
   }, []);
-  const visibleLogs = clearedAt !== null
-    ? logs.filter(log => log.timestamp > clearedAt)
-    : logs;
+  const visibleLogs = (() => {
+    if (clearedBoundaryId === null) return logs;
+    const idx = logs.findIndex(l => l.requestId === clearedBoundaryId);
+    if (idx < 0) return logs;
+    return logs.slice(0, idx);
+  })();
 
   const filteredLogs = visibleLogs.filter(log => (
     logMatchesSurface(log, surfaceFilter)
@@ -539,14 +545,14 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
     : 0;
 
-  // Auto-scroll to bottom when new entries arrive and autoScroll is enabled.
   const prevCountRef = useRef(filteredLogs.length);
-  useLayoutEffect(() => {
-    if (autoScroll && filteredLogs.length > prevCountRef.current && scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+  useEffect(() => {
+    if (filteredLogs.length === 0) { prevCountRef.current = 0; return; }
+    if (autoScroll && filteredLogs.length > prevCountRef.current) {
+      rowVirtualizer.scrollToIndex(filteredLogs.length - 1, { align: "end" });
     }
     prevCountRef.current = filteredLogs.length;
-  }, [filteredLogs.length, autoScroll]);
+  }, [filteredLogs.length, autoScroll, rowVirtualizer]);
 
   return (
     <div className="logs-page">
@@ -562,7 +568,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />
             {t("logs.autoScroll")}
           </label>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={clearView} disabled={filteredLogs.length === 0}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={clearView} disabled={visibleLogs.length === 0}>
             {t("logs.clearView")}
           </button>
           </>
