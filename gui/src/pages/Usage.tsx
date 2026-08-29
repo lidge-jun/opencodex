@@ -11,7 +11,7 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 
-type Range = "all" | "30d" | "7d";
+type Range = "all" | "30d" | "7d" | "today" | "yesterday" | "custom";
 type UsageSurface = "all" | "codex" | "claude" | "grok";
 
 interface UsageSummaryTotals {
@@ -209,63 +209,113 @@ function buildHeatmap(days: UsageDay[]): { weeks: HeatmapCell[][]; months: { lab
 function UsageFilters({
   surface,
   range,
+  customSince,
+  customUntil,
   onSurface,
   onRange,
+  onApplyCustom,
   t,
 }: {
   surface: UsageSurface;
   range: Range;
+  customSince: string;
+  customUntil: string;
   onSurface: (surface: UsageSurface) => void;
   onRange: (range: Range) => void;
+  onApplyCustom: (since: string, until: string) => void;
   t: TFn;
 }) {
+  const [showCustom, setShowCustom] = useState(range === "custom");
+  const [sinceVal, setSinceVal] = useState(customSince);
+  const [untilVal, setUntilVal] = useState(customUntil);
+
+  useEffect(() => {
+    setShowCustom(range === "custom");
+  }, [range]);
+
   return (
-    <div className="usage-filters">
-      <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
-        {(["all", "codex", "claude", "grok"] as UsageSurface[]).map(choice => {
-          const label = t(`logs.filter.surface.${choice}`);
-          return (
-            <button
-              key={choice}
-              type="button"
-              className={`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`}
-              aria-label={label}
-              aria-pressed={surface === choice}
-              onClick={() => onSurface(choice)}
-            >
-              {choice === "codex" && (
-                <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
-              )}
-              {choice === "claude" && (
-                <img className="usage-source-mark" src="/provider-icons/claude-color.svg" alt="" aria-hidden="true" />
-              )}
-              {choice === "grok" && (
-                <img className="usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />
-              )}
-              <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
+    <div className="usage-filters-wrap">
+      <div className="usage-filters">
+        <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
+          {(["all", "codex", "claude", "grok"] as UsageSurface[]).map(choice => {
+            const label = t(`logs.filter.surface.${choice}`);
+            return (
+              <button
+                key={choice}
+                type="button"
+                className={`usage-segmented-btn usage-source-btn${surface === choice ? " active" : ""}`}
+                aria-label={label}
+                aria-pressed={surface === choice}
+                onClick={() => onSurface(choice)}
+              >
+                {choice === "codex" && (
+                  <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
+                )}
+                {choice === "claude" && (
+                  <img className="usage-source-mark" src="/provider-icons/claude-color.svg" alt="" aria-hidden="true" />
+                )}
+                {choice === "grok" && (
+                  <img className="usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />
+                )}
+                <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
+                  {label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
+          {(["today", "yesterday", "7d", "30d", "all", "custom"] as Range[]).map(choice => {
+            const label = choice === "all" ? t("usage.range.available") : (t(`usage.range.${choice}` as any) || choice);
+            return (
+              <button
+                key={choice}
+                type="button"
+                className={`usage-segmented-btn${range === choice ? " active" : ""}`}
+                aria-label={label}
+                aria-pressed={range === choice}
+                onClick={() => {
+                  if (choice === "custom") setShowCustom(true);
+                  onRange(choice);
+                }}
+              >
                 {label}
-              </span>
-            </button>
-          );
-        })}
+              </button>
+            );
+          })}
+        </div>
       </div>
-      <div className="usage-segmented" role="group" aria-label={t("usage.title")}>
-        {(["all", "30d", "7d"] as Range[]).map(choice => {
-          const label = choice === "all" ? t("usage.range.available") : t(`usage.range.${choice}`);
-          return (
-            <button
-              key={choice}
-              type="button"
-              className={`usage-segmented-btn${range === choice ? " active" : ""}`}
-              aria-label={label}
-              aria-pressed={range === choice}
-              onClick={() => onRange(choice)}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      {showCustom && (
+        <div className="usage-custom-time-picker panel" style={{ marginTop: 8, padding: "8px 12px", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+          <label className="text-caption muted">{t("usage.custom.since" as any)}:</label>
+          <input
+            className="input"
+            style={{ width: "160px", padding: "4px 8px", fontSize: "12px" }}
+            placeholder="YYYY-MM-DD HH:mm"
+            value={sinceVal}
+            onChange={e => setSinceVal(e.target.value)}
+          />
+          <label className="text-caption muted">{t("usage.custom.until" as any)}:</label>
+          <input
+            className="input"
+            style={{ width: "160px", padding: "4px 8px", fontSize: "12px" }}
+            placeholder="YYYY-MM-DD HH:mm"
+            value={untilVal}
+            onChange={e => setUntilVal(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            style={{ padding: "4px 12px", fontSize: "12px" }}
+            onClick={() => {
+              onRange("custom");
+              onApplyCustom(sinceVal, untilVal);
+            }}
+          >
+            {t("usage.custom.apply" as any)}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -759,22 +809,29 @@ export default function Usage({ apiBase }: { apiBase: string }) {
   const [range, setRange] = useState<Range>("30d");
   const [surface, setSurface] = useState<UsageSurface>("all");
   const [modelQuery, setModelQuery] = useState("");
+  const [customSince, setCustomSince] = useState("");
+  const [customUntil, setCustomUntil] = useState("");
 
   const loadUsage = useCallback(async (signal: AbortSignal): Promise<UsageResponse> => {
-    const response = await fetch(`${apiBase}/api/usage?range=${range}&surface=${surface}`, { signal });
+    let url = `${apiBase}/api/usage?range=${range === "custom" ? "all" : range}&surface=${surface}`;
+    if (range === "custom") {
+      if (customSince) url += `&since=${encodeURIComponent(customSince)}`;
+      if (customUntil) url += `&until=${encodeURIComponent(customUntil)}`;
+    }
+    const response = await fetch(url, { signal });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
     const next = await response.json() as UsageResponse;
     writeHeldUsage(apiBase, range, surface, next);
     return next;
-  }, [apiBase, range, surface]);
+  }, [apiBase, range, surface, customSince, customUntil]);
 
-  const resourceKey = usageCacheKey(apiBase, range, surface);
+  const resourceKey = `${usageCacheKey(apiBase, range, surface)}:${customSince}:${customUntil}`;
   const cached = readHeldUsage(apiBase, range, surface);
   // Range and surface identify different reports, so the key changes with both. That prevents
   // a force-loading dependency revalidation from ever showing a previous report as this one.
   const resource = useDataSurface<UsageResponse>(
     resourceKey,
-    [apiBase, range, surface],
+    [apiBase, range, surface, customSince, customUntil],
     loadUsage,
     { isEmpty: () => false, initialData: cached ?? undefined },
   );
@@ -805,7 +862,19 @@ export default function Usage({ apiBase }: { apiBase: string }) {
     <>
       <div className="page-head usage-head">
         <h2 id="usage-page-title">{t("usage.title")}</h2>
-        <UsageFilters surface={surface} range={range} onSurface={setSurface} onRange={setRange} t={t} />
+        <UsageFilters
+          surface={surface}
+          range={range}
+          customSince={customSince}
+          customUntil={customUntil}
+          onSurface={setSurface}
+          onRange={setRange}
+          onApplyCustom={(s, u) => {
+            setCustomSince(s);
+            setCustomUntil(u);
+          }}
+          t={t}
+        />
       </div>
       <p className="page-sub">{t("usage.subtitle")}</p>
 
