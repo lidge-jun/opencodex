@@ -253,12 +253,12 @@ export function commitRefreshedCodexCredentialWithAliases(
   id: string,
   generation: number,
   cred: CodexAccountCredentials,
-): { committed: boolean; propagatedAliasIds: string[] } {
+): { committed: boolean; propagatedAliases: { id: string; generation: number }[] } {
   return withCredentialMutationLockSync(() => {
     const store = loadCodexAccountRecordStore();
     const current = store[id];
     if (!current || current.generation !== generation || current.deletedAt != null || !current.credential) {
-      return { committed: false, propagatedAliasIds: [] };
+      return { committed: false, propagatedAliases: [] };
     }
     const priorCredential = current.credential;
     const priorFingerprint = recordGrantFingerprint(current);
@@ -273,7 +273,9 @@ export function commitRefreshedCodexCredentialWithAliases(
       ...preservedValidationMetadata(current),
     };
 
-    const propagatedAliasIds: string[] = [];
+    // Each alias carries its OWN committed generation: aliases need not share one, and the plan
+    // reconciliation below is generation-fenced, so an id alone would be reconciled at the wrong fence.
+    const propagatedAliases: { id: string; generation: number }[] = [];
     // Nothing to propagate when the grant did not actually rotate: the aliases already hold it.
     if (priorFingerprint !== undefined && priorCredential.refreshToken !== cred.refreshToken) {
       for (const [aliasId, alias] of Object.entries(store)) {
@@ -282,19 +284,20 @@ export function commitRefreshedCodexCredentialWithAliases(
         if (alias.credential.accessToken !== priorCredential.accessToken) continue;
         if (alias.credential.expiresAt !== priorCredential.expiresAt) continue;
         if (alias.credential.chatgptAccountId !== priorCredential.chatgptAccountId) continue;
+        const aliasGeneration = alias.generation + 1;
         store[aliasId] = {
           // The alias keeps its OWN chatgptAccountId value, which the guard above proved equal.
           credential: { ...cred, chatgptAccountId: alias.credential.chatgptAccountId },
-          generation: alias.generation + 1,
+          generation: aliasGeneration,
           refreshGrantFingerprint,
           replacedAt: alias.replacedAt,
           ...preservedValidationMetadata(alias),
         };
-        propagatedAliasIds.push(aliasId);
+        propagatedAliases.push({ id: aliasId, generation: aliasGeneration });
       }
     }
     persist(store);
-    return { committed: true, propagatedAliasIds };
+    return { committed: true, propagatedAliases };
   });
 }
 
@@ -833,8 +836,16 @@ async function resolveCodexToken(
     if (!commit.committed) {
       throw new CodexCredentialGenerationConflictError();
     }
-    if (commit.propagatedAliasIds.length > 0) {
-      console.warn(`[codex-auth] rotated refresh grant propagated to ${commit.propagatedAliasIds.length} dormant same-grant account record(s)`);
+    if (commit.propagatedAliases.length > 0) {
+      console.warn(`[codex-auth] rotated refresh grant propagated to ${commit.propagatedAliases.length} dormant same-grant account record(s)`);
+      // The rotated JWT can carry a different `chatgpt_plan_type`, and each alias now holds that
+      // JWT. Without this the alias keeps its old plan — its cached-token fast path never
+      // reconciles, and repository-wide reconciliation only runs at startup — so quota scoring and
+      // the 30-day projection stay wrong until a restart or a WHAM refresh. Reconcile at each
+      // alias's OWN committed generation, since the plan note is generation-fenced.
+      for (const alias of commit.propagatedAliases) {
+        await notePlanFromRefreshedAccessToken(alias.id, updated.accessToken, alias.generation);
+      }
     }
     return {
       accessToken: updated.accessToken,

@@ -31,7 +31,6 @@ import {
   resetCodexRoutingForManualSelection,
   resolveCodexAccountForThread,
   resolveCodexAccountForThreadDetailed,
-  setCodexCredentialRevalidationSeamForTests,
   tryAcquireCodexQuotaProbeLease,
 } from "../src/codex/routing";
 import { clearPoolRotationState } from "../src/codex/pool-rotation";
@@ -485,32 +484,28 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("credential-403-next", config)).toBe("b");
   });
 
-  test("a 401 racing a cross-process credential replacement leaves no health or reauth evidence (#2892 gap 4)", () => {
+  test("a 401 does not quarantine a credential that replaced the rejected one AFTER the outcome (#2892 gap 4)", () => {
     const config = makeConfig();
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 20);
     saveTestCredential("a");
     const generation = readCodexAccountRecord("a")!.generation;
-    // Establish a benign prior health entry so the rollback has to RESTORE it, not merely delete.
-    recordCodexUpstreamOutcome(config, "a", 503);
-    const priorHealth = getCodexUpstreamHealth("a");
-    expect(priorHealth).toMatchObject({ lastFailureStatus: 503 });
-    expect(isAccountNeedsReauth("a")).toBe(false);
 
-    // Stand in for another process replacing the credential inside the window between the
-    // generation check and the side effects. A single process cannot schedule that write, which is
-    // why the seam exists: without it both reads see one store and the rollback is unreachable.
-    setCodexCredentialRevalidationSeamForTests(() => { saveTestCredential("a"); });
-    try {
-      recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
-    } finally {
-      setCodexCredentialRevalidationSeamForTests(null);
-    }
+    // Record the 401 while the rejected credential is still the live one, so every side effect is
+    // legitimately applied. This is the ordering @Ingwannu reproduced: the replacement lands AFTER
+    // recordCodexUpstreamOutcome returns, which no post-write re-read inside it can ever observe.
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+    expect(isAccountNeedsReauth("a")).toBe(true);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 401 });
 
-    // The rejected credential is gone, so its 401 must not quarantine the replacement.
-    expect(isAccountNeedsReauth("a")).toBe(false);
-    expect(getCodexUpstreamHealth("a")).toMatchObject({ lastFailureStatus: 503 });
+    // Another process replaces the credential. The 401 was evidence about a credential that no
+    // longer exists, so it must not hold the replacement out of rotation.
+    saveTestCredential("a");
     expect(readCodexAccountRecord("a")!.generation).toBe(generation + 1);
+
+    expect(isAccountNeedsReauth("a")).toBe(false);
+    expect(getCodexUpstreamHealth("a")).toBeNull();
+    expect(resolveCodexAccountForThread("gap4-replacement-selectable", config)).toBe("a");
   });
 
   test("a 401 on the live credential still quarantines the account (#2892 gap 4 does not over-roll-back)", () => {

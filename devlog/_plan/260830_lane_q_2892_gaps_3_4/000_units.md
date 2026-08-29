@@ -82,20 +82,46 @@ bare `Set<string>` fenced only by config generation, and affinity clearing remov
 every entry for the account.
 
 Affinity is already self-invalidating on the next generation check. Health and
-reauth are not. Rather than thread a generation through every health consumer, the
-fix keeps the whole sequence synchronous and makes the *observable end state*
-free of stale evidence: snapshot the health entry and the reauth flag, apply the
-mutations, then re-validate the generation and roll back if it stopped being live.
+reauth were not.
 
-A cross-process replacement landing inside the window is therefore caught after
-the fact instead of being prevented, which is the strongest guarantee available
-without taking the config lock on the request path — the lock runs with
-`busy_timeout=0`, so acquiring it per outcome would convert ordinary contention
-into thrown request errors. Affinity clearing is deliberately not rolled back: it
-is self-invalidating, and re-adding swept entries would be a worse bug than the
-sweep. `recordCodexUpstreamOutcome` stays synchronous — many callers consume it as
+My first attempt snapshotted the state, mutated, then re-read the generation and
+rolled back. Two reviewers independently rejected it, correctly: a replacement can
+land at any point *after* `recordCodexUpstreamOutcome` returns, so a post-write
+read narrows the window without closing it. @Ingwannu reproduced the surviving
+ordering on the exact head — record a 401 at G, return, then persist G+1, and the
+quarantine still applied to G+1.
+
+The evidence is now tagged with the credential it came from and checked when it is
+*read*, which is what actually settles it. `credentialFailureGeneration` holds the
+generation a 401/403 was derived from, and the health readers (`shouldFailover`,
+`getCodexUpstreamHealth`) drop a failure whose credential is gone. The reauth set
+became a map from account id to the generation that justified the flag, with
+`undefined` preserved as an account-wide mark so a login flow with no specific
+credential still quarantines unconditionally.
+
+Affinity clearing stays un-reverted: entries already carry a generation and
+self-invalidate, so re-adding swept entries would be the worse bug.
+`recordCodexUpstreamOutcome` stays synchronous — many callers consume it as
 `void` (`src/server/responses/core.ts:391`), so making it async would silently
-leave mutations unawaited.
+leave mutations unawaited. The config lock is still never taken on the request
+path; it runs with `busy_timeout=0`, and per-outcome acquisition would turn
+contention into request errors.
+
+## The alias plan note
+
+Review also caught that propagation installs the rotated JWT on an alias but left
+its configured plan alone: a `plus → pro` rotation gave the alias a Pro credential
+while its plan stayed `plus`, and the cached-token fast path never repairs that, so
+quota scoring and the 30-day projection stayed wrong until a restart or a WHAM
+refresh. Each propagated alias is now reconciled at its **own** committed
+generation, which is why the commit returns `{ id, generation }` rather than ids —
+aliases need not share a generation, and the plan note is generation-fenced.
+
+That last point produced the one genuinely vacuous assertion of this unit: with a
+single `saveCodexAccountCredential` per record, owner and alias generations
+coincided, so an assertion about the per-alias fence passed even when the code used
+the owner's generation. The fixture now advances the alias twice so the generations
+diverge, and the mutation turns red.
 
 ## Constraints the audit flagged
 

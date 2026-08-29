@@ -128,16 +128,27 @@ const upstreamHealth = new Map<string, CodexUpstreamHealth>();
  */
 const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHealth>>();
 /**
- * Test-only stand-in for a concurrent credential write from another process, invoked between the
- * 401 side effects and their re-validation (#2892 gap 4). Production leaves this undefined.
+ * Credential generation each 401/403 quarantine was derived from (#2892 gap 4).
+ *
+ * Health is keyed by account id, but credential evidence describes one CREDENTIAL. A replacement
+ * from another process can land at any point after the outcome is recorded, so re-reading the store
+ * right after the write narrows the window without closing it. Recording the generation alongside
+ * the failure lets the READER decide, which is what actually settles the race: once the credential
+ * is gone its failure is spent, and routing stops holding the replacement down.
  */
-let credentialRevalidationSeamForTests: ((accountId: string) => void) | undefined;
+const credentialFailureGeneration = new Map<string, number>();
 
-/** Install (or clear with `null`) the concurrent-write seam used by the gap-4 regression. */
-export function setCodexCredentialRevalidationSeamForTests(
-  seam: ((accountId: string) => void) | null,
-): void {
-  credentialRevalidationSeamForTests = seam ?? undefined;
+/**
+ * Drop a credential-failure health entry whose credential no longer exists, and report whether it
+ * was spent. Called from the health readers so a stale 401 cannot outlive its credential.
+ */
+function dropSpentCredentialFailure(accountId: string): boolean {
+  const generation = credentialFailureGeneration.get(accountId);
+  if (generation === undefined) return false;
+  if (isCodexAccountGenerationLive(accountId, generation)) return false;
+  credentialFailureGeneration.delete(accountId);
+  upstreamHealth.delete(accountId);
+  return true;
 }
 let lastReconciledGeneration = 0;
 let liveHealthAccountIds = new Set<string>();
@@ -294,12 +305,14 @@ export function clearThreadAccountMapForAccount(accountId: string): void {
 export function clearCodexUpstreamHealth(): void {
   upstreamHealth.clear();
   quotaScopedHealth.clear();
+  credentialFailureGeneration.clear();
   runtimeActiveCodexAccountId = undefined;
 }
 
 export function clearCodexUpstreamHealthForAccount(accountId: string): void {
   upstreamHealth.delete(accountId);
   quotaScopedHealth.delete(accountId);
+  credentialFailureGeneration.delete(accountId);
 }
 
 export function reconcileCodexRoutingHealth(context: GenerationContext): number {
@@ -308,6 +321,7 @@ export function reconcileCodexRoutingHealth(context: GenerationContext): number 
   for (const accountId of upstreamHealth.keys()) {
     if (context.codexAccountIds.has(accountId)) continue;
     upstreamHealth.delete(accountId);
+    credentialFailureGeneration.delete(accountId);
     removed += 1;
   }
   for (const accountId of quotaScopedHealth.keys()) {
@@ -323,6 +337,7 @@ export function reconcileCodexRoutingHealth(context: GenerationContext): number 
 export function getCodexUpstreamHealth(
   accountId: string,
 ): CodexUpstreamHealth | null {
+  dropSpentCredentialFailure(accountId);
   return upstreamHealth.get(accountId) ?? null;
 }
 
@@ -1599,6 +1614,7 @@ function applyQuotaAutoSwitch(
 function shouldFailover(config: OcxConfig, accountId: string, now: number): boolean {
   const threshold = config.upstreamFailoverThreshold ?? 3;
   if (threshold <= 0) return false;
+  dropSpentCredentialFailure(accountId);
   const health = upstreamHealth.get(accountId);
   if (health?.lastFailureAt && now - health.lastFailureAt > CODEX_FAILURE_WINDOW_MS) return false;
   return !!health && health.consecutiveFailures >= threshold;
@@ -2124,6 +2140,9 @@ export function recordCodexUpstreamOutcome(
   const outcomeClass = classifyCodexUpstreamOutcome(outcome, meta.denial);
   const quotaScope = codexQuotaScopeForModel(meta.modelId);
   if (outcomeClass === "success") {
+    // A healthy terminal retires any credential-failure tag: whatever the 401 described, this
+    // account is answering now.
+    credentialFailureGeneration.delete(accountId);
     const scopedProbe = meta.probeQuotaScope
       ? scopedHealthFor(accountId, meta.probeQuotaScope)
       : undefined;
@@ -2243,31 +2262,21 @@ export function recordCodexUpstreamOutcome(
      * credential generation and self-invalidates on the next check, and re-adding swept entries
      * would be a worse bug than the sweep.
      */
-    const priorHealth = upstreamHealth.get(accountId);
-    const priorScopedHealth = quotaScopedHealth.get(accountId);
-    const priorNeedsReauth = isAccountNeedsReauth(accountId);
     upstreamHealth.set(accountId, {
       consecutiveFailures: 1,
       lastFailureStatus,
       lastFailureAt: now,
     });
     quotaScopedHealth.delete(accountId);
-    markAccountNeedsReauth(accountId, writerGeneration);
-    clearThreadAccountMapForAccount(accountId);
-    // The interleaving this guards against is a WRITE FROM ANOTHER PROCESS, which no single-process
-    // test can schedule: both reads below would observe the same store. Without a seam the rollback
-    // is unreachable in a test and any regression asserting it would be vacuous, so the seam exists
-    // to stand in for the other process. It is undefined in production and costs one null check.
-    credentialRevalidationSeamForTests?.(accountId);
-    if (
-      meta.credentialGeneration !== undefined
-      && !isCodexAccountGenerationLive(accountId, meta.credentialGeneration)
-    ) {
-      if (priorHealth === undefined) upstreamHealth.delete(accountId);
-      else upstreamHealth.set(accountId, priorHealth);
-      if (priorScopedHealth !== undefined) quotaScopedHealth.set(accountId, priorScopedHealth);
-      if (!priorNeedsReauth) clearAccountNeedsReauth(accountId);
+    // Tag both the health entry and the reauth flag with the credential this evidence came from, so
+    // a replacement landing after this call cannot inherit a quarantine that was never about it.
+    if (meta.credentialGeneration !== undefined) {
+      credentialFailureGeneration.set(accountId, meta.credentialGeneration);
+    } else {
+      credentialFailureGeneration.delete(accountId);
     }
+    markAccountNeedsReauth(accountId, writerGeneration, meta.credentialGeneration);
+    clearThreadAccountMapForAccount(accountId);
     return;
   }
 
