@@ -108,6 +108,7 @@ You can also manage the same profile from the command line:
 ```bash
 ocx claude desktop [apply]
 ocx claude desktop show [--json]
+ocx claude desktop status [--json]
 ocx claude desktop move <route> <opus|fable|sonnet|haiku> [--default]
 ocx claude desktop default <opus|fable|sonnet|haiku> <route|none>
 ocx claude desktop export <path|->
@@ -115,10 +116,18 @@ ocx claude desktop import <path> [--apply]
 ```
 
 `ocx claude desktop` and `apply` both write the current profile to Claude Desktop. `show` gives a
-readable summary; add `--json` for scripts. `export -` writes versioned JSON to standard output.
+readable summary; `status` reports the applied profile, drift, request activity, and Windows
+managed-policy health. Add `--json` for scripts. `export -` writes versioned JSON to standard output.
 Import validates the complete file before saving, so an invalid file leaves the current profile
 unchanged. Add `--apply` to write a valid imported profile to Desktop immediately. Use `none` only
 for an empty family; every non-empty family must keep one default.
+
+On Windows, a machine-managed Claude policy can make Desktop ignore the local third-party profile.
+OpenCodex reports this as `present`; a policy it cannot read is `unknown`, which is also a warning
+rather than a clean result. The diagnostic reports only that state—it does not expose policy value
+names or data, and it never removes or bypasses policy. Resolve the policy with your administrator,
+then fully quit and reopen Claude Desktop. Applying again also preserves profile keys that OpenCodex
+does not own while refreshing its gateway and model fields.
 
 Apply writes to Claude Desktop's real Electron user-data `configLibrary`: `~/Library/Application
 Support/Claude/configLibrary` on macOS, `%APPDATA%\Claude\configLibrary` on Windows, and

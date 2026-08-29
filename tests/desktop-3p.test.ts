@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import {
@@ -13,6 +13,7 @@ import {
   parseDesktop3pModeArgs,
   resolveDesktop3pConfigLibraryPath,
   resolveDesktop3pAlias,
+  writeDesktop3pConfig,
 } from "../src/claude/desktop-3p";
 import { moveDesktopRoute, reconcileDesktopProfile, setDesktopFamilyDefault } from "../src/claude/desktop-profile";
 import { resolveInboundModel } from "../src/claude/inbound";
@@ -270,6 +271,40 @@ describe("Claude Desktop 3P models", () => {
       expect(readFileSync(path, "utf8")).toBe("stable bytes\n");
       expect(readFileSync(`${path}.bak`, "utf8")).toBe("stable bytes\n");
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("re-applying an owned profile preserves foreign profile keys", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-desktop-merge-"));
+    const previous = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+    process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = dir;
+    try {
+      const id = "owned-profile";
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "_meta.json"), JSON.stringify({
+        appliedId: id,
+        entries: [{ id, name: "opencodex" }],
+      }));
+      writeFileSync(join(dir, `${id}.json`), JSON.stringify({
+        inferenceProvider: "gateway",
+        inferenceCredentialKind: "static",
+        inferenceGatewayBaseUrl: "http://127.0.0.1:1",
+        inferenceGatewayApiKey: "old-key",
+        modelDiscoveryEnabled: false,
+        inferenceModels: [],
+        foreignDeploymentSetting: { allowed: true },
+      }));
+
+      const written = writeDesktop3pConfig(4096, ["gpt-5.6-sol"], [], "new-key");
+      expect(written.written).toBe(true);
+      const profile = JSON.parse(readFileSync(join(dir, `${id}.json`), "utf8"));
+      expect(profile.foreignDeploymentSetting).toEqual({ allowed: true });
+      expect(profile.inferenceGatewayBaseUrl).toBe("http://127.0.0.1:4096");
+      expect(profile.inferenceGatewayApiKey).toBe("new-key");
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+      else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previous;
       rmSync(dir, { recursive: true, force: true });
     }
   });

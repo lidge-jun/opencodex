@@ -858,6 +858,11 @@ async function handleStatus() {
     console.log(`❌ Proxy: ${status.proxyLabel}`);
   }
   console.log(`   Health: ${status.healthLabel}`);
+  if (status.json.claudeDesktop.desiredEnabled && !status.json.claudeDesktop.policy.ok) {
+    console.log(`   ⚠️  Claude Desktop 3P health: ${status.json.claudeDesktop.policy.status}`);
+    console.log(`      ${status.json.claudeDesktop.policy.message}`);
+    console.log(`      Action: ${status.json.claudeDesktop.policy.action}`);
+  }
   // Printed here, not only in --json: a stale ocx on PATH is exactly the situation where
   // the operator is reading human output and wondering why the CLI disagrees with the
   // dashboard. Adding the JSON field alone would satisfy a test and help nobody (#2701).

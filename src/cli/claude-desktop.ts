@@ -37,7 +37,8 @@ export interface ApplyProfileDeps {
   postApplyImpl?: (
     mode: Desktop3pConfigMode,
     profile: DesktopProfile,
-  ) => Promise<{ ok?: boolean; path?: string; error?: string }>;
+  ) => Promise<{ ok?: boolean; path?: string; error?: string; warning?: string }>;
+  probeClaudeDesktopPolicy?: typeof import("../claude/desktop-policy").probeClaudeDesktopPolicy;
 }
 
 export async function applyProfile(
@@ -71,10 +72,11 @@ export async function applyProfile(
       // Partial success: Desktop was written but the applied marker was not
       // persisted. Pass the degradation up instead of reporting a clean apply.
       const partial = (applied as { saved?: boolean; warning?: string }).saved === false;
+      const warning = (applied as { warning?: string }).warning;
       return {
         ok: true,
         path: applied.path ?? "",
-        ...(partial ? { warning: (applied as { warning?: string }).warning ?? "applied marker was not saved" } : {}),
+        ...(warning ? { warning } : partial ? { warning: "applied marker was not saved" } : {}),
       };
     } catch (error) {
       return { ok: false, path: "", reason: error instanceof Error ? error.message : String(error) };
@@ -102,7 +104,15 @@ export async function applyProfile(
     state.profile,
     nativeContextLimits(config),
   );
-  return { ok: result.written, path: result.path, reason: result.reason };
+  const { claudeDesktopPolicyWarning, probeClaudeDesktopPolicy } = await import("../claude/desktop-policy");
+  const policyState = (deps.probeClaudeDesktopPolicy ?? probeClaudeDesktopPolicy)();
+  const warning = result.written ? claudeDesktopPolicyWarning(policyState) : undefined;
+  return {
+    ok: result.written,
+    path: result.path,
+    reason: result.reason,
+    ...(warning ? { warning } : {}),
+  };
 }
 
 export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProfileDeps = {}): Promise<number> {
