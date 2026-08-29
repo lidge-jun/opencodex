@@ -11,6 +11,11 @@ import {
 } from "../src/codex/routing";
 import { handleResponses, handleResponsesCompact } from "../src/server/responses";
 import { clearCompactHandoffRoutesForTests } from "../src/server/responses/compact";
+import {
+  REQUEST_PACING_MAX_QUEUE_DEPTH,
+  resetProviderRequestPacingForTest,
+  setProviderRequestPacingLimitsForTest,
+} from "../src/providers/request-pacing";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
 
@@ -676,11 +681,16 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(harness.refreshes).toEqual(["refresh-grant"]);
   });
 
-  test("a gated-model 400 after a stored replay retries the same account, never an alternate", async () => {
+  test("a gated-model 400 after a stored replay refuses an alternate account", async () => {
     // The narrow seam the budget leaves open, tested on the branch where it could leak. When the
     // refreshed roster no longer grants the model, retryCodexPoolOnAlternateAccount would
     // ordinarily resolve a DIFFERENT account; after a stored replay it must decline instead, or
     // the 400 ladder becomes a way to spend the account budget twice.
+    //
+    // This covers the REFUSAL only. The same-account rescue that the ladder still allows is a
+    // different branch (retryAuthCtx = firstAuthCtx, taken when the refreshed roster still grants
+    // the model) and is covered by the opaque-blob case above, which is the ladder this fix was
+    // actually reported to have broken.
     writeStoredAccount({
       [OTHER_ACCOUNT_ID]: storedRecord({
         accessToken: "other-access",
@@ -771,5 +781,58 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     // The backup target is never sent to, and the account is charged exactly twice.
     expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
     expect(harness.refreshes).toEqual(["refresh-grant"]);
+  });
+
+  test("a replay that never leaves the pacing queue does not spend the recovery budget", async () => {
+    // The dispatch signal is what bounds combo and policy fallback, so it has to describe a send
+    // that actually happened. fetchWithHeaderTimeout awaits pacing admission BEFORE calling the
+    // executor, so signalling at the call site would spend the budget for a replay that never
+    // reached the network — the request would lose its fallback for nothing. This drives the real
+    // path: pacing is enabled with a zero-depth queue, so the replay's admission is rejected.
+    //
+    // A plain request, deliberately NOT a combo: handleComboResponses installs its own
+    // onStoredPool401ReplayDispatched for the child, which replaces the caller's and would make
+    // the signal unobservable from here.
+    const cfg = config();
+    // Pacing must be enabled BEFORE routing: `route.provider` is a snapshot taken at routing
+    // time, so enabling it mid-flight cannot affect the replay. The queue DEPTH limit, by
+    // contrast, is a module-level value read on every admission, which is what lets the first
+    // send through and rejects only the replay.
+    cfg.providers.openai!.requestPacing = { enabled: true, minIntervalMs: 60_000 };
+    const harness = installHarness({
+      responseForSend: (authorization, _sendNumber, url) => {
+        if (authorization === "Bearer rejected-access") {
+          // Close the admission queue only once the original send is through, so the rejection
+          // lands on the replay rather than on the request that produces the 401.
+          setProviderRequestPacingLimitsForTest({ maxQueueDepth: 0 });
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        return undefined;
+      },
+    });
+
+    let dispatchSignals = 0;
+    let response: Response;
+    try {
+      response = await handleResponses(
+        request("/v1/responses"),
+        cfg,
+        { model: "", provider: "" } as RequestLogContext,
+        { onStoredPool401ReplayDispatched: () => { dispatchSignals += 1; } },
+      );
+    } finally {
+      setProviderRequestPacingLimitsForTest({ maxQueueDepth: REQUEST_PACING_MAX_QUEUE_DEPTH });
+      resetProviderRequestPacingForTest();
+    }
+
+    // The replay never reached the network, so the budget must not be reported as spent. Asserted
+    // on the signal itself rather than on a fallback outcome: a pacing overload is deliberately
+    // terminal (it propagates as an error and becomes a 429 above the combo layer), so the
+    // downstream fallback is unreachable here for a reason that has nothing to do with this fix.
+    expect(dispatchSignals).toBe(0);
+    expect(harness.sends.filter(send => send === "Bearer refreshed-access")).toEqual([]);
+    // The refresh did happen — this is the post-refresh replay being rejected, not an earlier stop.
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+    expect(response.status).toBe(429);
   });
 });

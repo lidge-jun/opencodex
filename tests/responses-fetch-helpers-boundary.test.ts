@@ -120,7 +120,7 @@ describe("storedPoolReplayDispatchNotifier", () => {
     expect(dispatched).toBe(0);
   });
 
-  test("signals exactly once, after pacing admission, and preserves pacing", async () => {
+  test("signals after pacing admission, once per notifier, and preserves pacing", async () => {
     let dispatched = 0;
     let paced = 0;
     const order: string[] = [];
@@ -147,6 +147,19 @@ describe("storedPoolReplayDispatchNotifier", () => {
     // and unpacedFetch, which fetchWithHeaderTimeout reads off the executor.
     expect(paced).toBe(1);
     expect(order).toEqual(["pacing", "dispatch"]);
+
+    // A second send through the SAME notifier must not signal again. One replay is one dispatch,
+    // and without the internal guard a retry inside the helper would report two.
+    await fetchWithHeaderTimeout(
+      "https://example.test/v1/responses",
+      { method: "POST" },
+      new AbortController().signal,
+      1_000,
+      false,
+      notifier,
+    );
+    expect(dispatched).toBe(1);
+    expect(paced).toBe(2);
   });
 
   test("returns the executor untouched when there is nothing to notify", () => {

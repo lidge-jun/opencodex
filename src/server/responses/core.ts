@@ -4225,12 +4225,13 @@ async function handleResponsesInner(
 
       if (poolRetryOutcome !== undefined) {
         // A stored Pool 401 spent this request's account budget on its own refresh and replay, so
-        // nothing afterwards may be paid for out of a DIFFERENT account. A quota failure has no
-        // same-account move left, so it is terminal here; the gated-model 400 ladder does have
-        // one — retrying the account the refreshed roster still grants — and keeps it, with
-        // alternate resolution refused by `sameAccountOnly`.
+        // nothing afterwards may be paid for out of a DIFFERENT account. One flag carries that,
+        // rather than a status check here as well: a quota failure has no same-account move, so
+        // `sameAccountOnly` makes it terminal by refusing the alternate; the gated-model 400
+        // ladder does have one — retrying the account the refreshed roster still grants — and
+        // keeps it. An earlier revision also broke here on a non-400 outcome, which no test could
+        // justify because this flag already produced the identical result.
         const storedReplaySpent = codex401ReplayKind === "stored";
-        if (storedReplaySpent && poolRetryOutcome !== 400) break;
         const retry = await retryCodexPoolOnAlternateAccount({
           req,
           config,

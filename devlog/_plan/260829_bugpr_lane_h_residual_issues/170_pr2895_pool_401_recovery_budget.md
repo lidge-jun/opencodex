@@ -42,11 +42,16 @@ rebuild would have succeeded. A regression proves it: restoring that one line tu
 The corrected boundary is stated in terms of what is actually scarce — **another account's quota**,
 not further sends:
 
-- a quota failure (429/402) after a stored replay has no same-account move left, so it stays
-  terminal at the pool-retry site;
-- a gated-model 400 keeps its ladder, with `sameAccountOnly` refusing alternate-account resolution
-  inside `retryCodexPoolOnAlternateAccount`;
+- a quota failure (429/402) after a stored replay has no same-account move left, so `sameAccountOnly`
+  makes it terminal by refusing the alternate;
+- a gated-model 400 keeps its ladder, because it can retry the account the refreshed roster still
+  grants, and `sameAccountOnly` refuses only the alternate resolution;
 - opaque-blob recovery is untouched.
+
+That is **one** mechanism, not two. An earlier revision of this fix also broke at the pool-retry
+site on a non-400 outcome, and review showed no test could tell the difference: `sameAccountOnly`
+already produced the identical result by returning `no-alternate`. The redundant break is gone
+rather than kept as unjustifiable control flow.
 
 `sameAccountOnly` is a new field on the retry args rather than a check at the call site, because
 the decision belongs where the alternate is resolved — the existing `fixedAccount` guard already
@@ -76,16 +81,28 @@ Named mutations, each turning its own test red:
 | Mutation | Test that fails |
 | --- | --- |
 | restore the broad `status >= 400` break | opaque blob rebuilt on the same account |
-| remove the quota-terminal bound | both stored-replay-429 cases reach another account |
 | `sameAccountOnly: false` | gated-model 400 after a stored replay reaches an alternate |
-| notify eagerly instead of at send time | pacing-rejected case signals a phantom dispatch |
+| disable the combo dispatch gate | all four combo cases reach the backup target |
+| notify eagerly at the core call site | replay stuck in the pacing queue signals a dispatch |
+| drop the `notified` guard | one notifier signals twice across two sends |
 | drop `unpacedFetch` from the wrapper | pacing applied twice |
 
-One process note worth keeping: the gated-model test was **vacuous on the first attempt**. The
-injected entitlement resolver reported only the other account as entitled, so initial selection
-picked that account and the stored 401 never happened — the assertion passed with one send and no
-refresh. It now returns both accounts on the first resolution and only the other account from the
-retry resolution onward, which is what actually reaches the alternate-account branch.
+Three process notes, all from tests that looked fine and were not:
+
+1. The gated-model test was **vacuous on the first attempt**. The injected entitlement resolver
+   reported only the other account as entitled, so initial selection picked that account and the
+   stored 401 never happened — it passed with one send and no refresh. It now returns both accounts
+   on the first resolution and only the alternate from the retry resolution onward. Its name was
+   also wrong: it asserts the *refusal* of an alternate, not a same-account retry, and now says so.
+2. The pacing test began as a **helper unit test only**, which review showed could not catch the
+   defect it was written for: restoring eager notification at the core call site left it green. It
+   is now an integration test through `handleResponses`, and two details had to be right for it to
+   bite at all — `route.provider` is a snapshot taken at routing time, so enabling pacing
+   mid-flight does nothing (the module-level queue depth is what changes under a live request), and
+   the request must not be a combo, because `handleComboResponses` installs its own dispatch
+   callback for the child and would swallow the caller's.
+3. "Signals exactly once" was **not mutation-protected** while the test invoked the notifier once.
+   It now sends twice through one notifier.
 
 ## Not in this unit
 
