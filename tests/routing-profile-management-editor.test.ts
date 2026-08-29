@@ -375,10 +375,6 @@ describe("routing profile management editor API", () => {
     config.shadowCallIntercept = { model: "ocx/fast" };
     config.claudeCode = {
       enabled: true,
-      // This case verifies reference migration, not generated agent files.
-      // Leaving injection enabled starts real provider discovery after the
-      // migration and races Windows cleanup with its still-unwinding handle.
-      injectAgents: false,
       model: "ocx/fast",
       smallFastModel: "a/m1",
       modelMap: { "ocx/fast": "a/m1", "a/m2": "ocx/fast" },
@@ -406,7 +402,12 @@ describe("routing profile management editor API", () => {
       req,
       new URL(req.url),
       config,
-      deps(() => { saves += 1; }),
+      {
+        ...deps(() => { saves += 1; }),
+        // Generated Claude agent files are part of this migration side effect,
+        // but a route test must keep them inside its own temporary root.
+        claudeAgentConfigDir: join(testDir, "claude"),
+      },
     );
 
     expect(response?.status).toBe(200);

@@ -22,6 +22,8 @@ export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
   createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;
+  /** Test-only destination for best-effort Claude agent-definition sync. */
+  claudeAgentConfigDir?: string;
   /** Startup-health seam keeps route tests from launching platform probes. */
   getCachedStartupHealth?: (config: Pick<OcxConfig, "codexAutoStart">) => Promise<StartupHealth>;
   /**
