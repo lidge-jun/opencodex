@@ -283,6 +283,26 @@ Desktop izin listesi için bir denetim sunana kadar:
   uygulamaz ve yönlendirilen modelleri normal şekilde listeler.
 
 ## Model durumunu yenileme
+## Yerel kota geri dönüş kısıtı
+
+Codex uygulaması yerel beş saatlik kotasını tükettiğinde bir rezerv yedek modeline geçip seçicideki diğer satırları soluklaştırabilir. [#2813](https://github.com/lidge-jun/opencodex/issues/2813) numaralı raporda görüldüğü gibi bu kısıtlama, ilgisiz sağlayıcı kimlik bilgileri kullanan ve ChatGPT kotasından hiç tüketmeyen opencodex yönlendirmeli satırları da gizliyor.
+
+Bu kısıt istek proxy'ye ulaşmadan önce istemci tarafında uygulanır, dolayısıyla opencodex onu kaldıramaz. Yönlendirilen satırlar `visibility: "list"` ile yazılır, katalog filtrelemesi yalnızca `disabledModels` ve her sağlayıcının `selectedModels` değerine bakar ve hiçbir kota değeri yönlendirilen görünürlüğe katılmaz.
+
+Yönlendirilen bir modeli açıkça seçmek seçiciden geçmez. Modeli `config.toml` içinde ayarlayın:
+
+```toml
+model = "anthropic/claude-sonnet-5"
+```
+
+ya da doğrudan gönderin:
+
+```bash
+ocx access test anthropic/claude-sonnet-5 --protocol responses
+```
+
+Her iki yol da **istek proxy'ye ulaştıktan sonra** doğru yönlendirilir; bu testlerle kapsanıyor. Kanıtlanmayan nokta, rezerv modu etkinken uygulamanın yapılandırılan modeli hâlâ gönderip göndermediğidir; istemci onu göndermeden önce değiştirir ya da reddederse proxy tarafındaki hiçbir ayar bunu değiştirmez. Açık seçimi doğrulanmış bir geçici çözüm değil, denemeye değer bir yol olarak görün.
+
 
 Seçici hala eski girdileri gösteriyorsa kataloğu yenileyin ve hedef Codex
 yüzeyini yeniden başlatın:
@@ -294,5 +314,4 @@ ocx sync
 opencodex, katalog görünürlüğü, önceliği veya meta verileri her değiştiğinde
 `models_cache.json` dosyasını kasıtlı olarak eski bir önbellek sarmalayıcısıyla
 yeniden yazar, böylece bir sonraki Codex model yenilemesi yeni kataloğu okur.
-
 

@@ -31,7 +31,7 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
+import { activeCodexModelsCachePath, catalogBackupPathFor, findNativeTemplate, findSupportedNativeTemplate, isDefaultCatalogPath, legacyCatalogBackupPath, parseCatalogJson, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
 import type { RawCatalog, RawEntry } from "./parsing";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "../exec-invocation";
 import {
@@ -541,9 +541,11 @@ export function readCurrentCodexModelsCache(): RawCatalog | null {
 export function loadCatalogTemplate(): RawEntry | null {
   const catalogPath = readCodexCatalogPath();
   const bundled = loadBundledCodexCatalog();
-  const native = findNativeTemplate(readCatalog(catalogPath))
-    ?? findNativeTemplate(readCatalogBackup(catalogPath))
-    ?? findNativeTemplate(readCatalog(activeCodexModelsCachePath()))
-    ?? findNativeTemplate(bundled ? JSON.parse(JSON.stringify(bundled)) as RawCatalog : null);
+  // Template inheritance only. The validity gates in this file keep `findNativeTemplate`
+  // so a catalog carrying only a newly launched native row stays valid (#2813).
+  const native = findSupportedNativeTemplate(readCatalog(catalogPath))
+    ?? findSupportedNativeTemplate(readCatalogBackup(catalogPath))
+    ?? findSupportedNativeTemplate(readCatalog(activeCodexModelsCachePath()))
+    ?? findSupportedNativeTemplate(bundled ? JSON.parse(JSON.stringify(bundled)) as RawCatalog : null);
   return native ? JSON.parse(JSON.stringify(native)) : null;
 }

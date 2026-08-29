@@ -7,7 +7,9 @@ import { applyProviderConfigHints } from "../src/codex/catalog/provider-fetch";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
+  ensureStrictCatalogFields,
   findNativeTemplate,
+  findSupportedNativeTemplate,
 } from "../src/codex/catalog/parsing";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
 import {
@@ -5861,5 +5863,113 @@ describe("#2465 model preset management routes", () => {
     };
     const { status } = await call(config, "PUT", { provider: "groq", mode: "preset" });
     expect(status).toBe(400);
+  });
+});
+
+/**
+ * #2813: a Reserve-shaped row injected by the Codex client carries `base_instructions`,
+ * so the permissive selector would let it become the template every routed model clones
+ * from. Template selection has to be strict — but catalog VALIDITY must stay permissive,
+ * or a catalog holding only a newly launched native model gets replaced by stale data.
+ * Plan review rejected restricting the shared function for exactly that reason.
+ */
+describe("routed template selection is strict, catalog validity is not", () => {
+  const unknownBareRow = (): Record<string, unknown> => ({
+    slug: "gpt-reserve",
+    display_name: "Luna Reserve",
+    description: "Reserve fallback",
+    visibility: "list",
+    base_instructions: "You are Codex.",
+    available_in_plans: ["reserve"],
+    supported_in_api: false,
+  });
+
+  test("the strict selector skips an unknown row ordered before a known one", () => {
+    // The unknown row is FIRST, so a first-match implementation would pick it.
+    const catalog = { models: [unknownBareRow(), nativeTemplate()] } as never;
+
+    expect(findSupportedNativeTemplate(catalog)?.slug).toBe("gpt-5.5");
+  });
+
+  test("the strict selector returns null rather than inheriting from an unknown row", () => {
+    const catalog = { models: [unknownBareRow()] } as never;
+
+    expect(findSupportedNativeTemplate(catalog)).toBeNull();
+  });
+
+  // The regression guard for the rejected fix: if this ever goes red, catalog validity
+  // has been narrowed and a new upstream model can invalidate a healthy catalog.
+  test("the permissive selector still accepts an unknown row, so validity stays forward-compatible", () => {
+    const catalog = { models: [unknownBareRow()] } as never;
+
+    expect(findNativeTemplate(catalog)?.slug).toBe("gpt-reserve");
+  });
+});
+
+/**
+ * Each eligibility field is asserted through `ensureStrictCatalogFields` DIRECTLY.
+ * Review found the build path cannot prove them: `deriveEntry` already neutralizes
+ * `upgrade` and `availability_nux` on its own, so a build-path assertion stays green
+ * after the corresponding sanitizer line is deleted.
+ */
+describe("routed rows never carry native eligibility metadata", () => {
+  const contaminated = (): Record<string, unknown> => ({
+    slug: "anthropic/claude-sonnet-5",
+    display_name: "claude-sonnet-5",
+    supported_in_api: false,
+    available_in_plans: ["reserve", "plus"],
+    minimal_client_version: "999.0.0",
+    availability_nux: { message: "reserve only" },
+    upgrade: { message: "subscribe" },
+  });
+
+  test("supported_in_api is forced true", () => {
+    const entry = ensureStrictCatalogFields(contaminated() as never, { isRouted: true });
+
+    expect(entry.supported_in_api).toBe(true);
+  });
+
+  test("available_in_plans is stripped", () => {
+    expect(ensureStrictCatalogFields(contaminated() as never, { isRouted: true }))
+      .not.toHaveProperty("available_in_plans");
+  });
+
+  test("minimal_client_version is stripped", () => {
+    expect(ensureStrictCatalogFields(contaminated() as never, { isRouted: true }))
+      .not.toHaveProperty("minimal_client_version");
+  });
+
+  test("availability_nux is stripped", () => {
+    expect(ensureStrictCatalogFields(contaminated() as never, { isRouted: true }))
+      .not.toHaveProperty("availability_nux");
+  });
+
+  test("upgrade is stripped", () => {
+    expect(ensureStrictCatalogFields(contaminated() as never, { isRouted: true }))
+      .not.toHaveProperty("upgrade");
+  });
+
+  // Routed-only. Native rows legitimately carry availability_nux and plan eligibility;
+  // sanitizing them here would corrupt the native picker.
+  test("a native row keeps its own eligibility metadata", () => {
+    const native = ensureStrictCatalogFields(contaminated() as never, {});
+
+    expect(native.available_in_plans).toEqual(["reserve", "plus"]);
+    expect(native.availability_nux).toEqual({ message: "reserve only" });
+    expect(native.supported_in_api).toBe(false);
+  });
+
+  // Review blocker 3: preserved degraded/foreign rows never pass through
+  // normalizeRoutedCatalogEntry, so sanitizing only there would leave rows already on
+  // disk contaminated. Both paths end in ensureStrictCatalogFields, which is why it owns
+  // the sanitation.
+  test("the routed normalizer inherits the same guarantees", () => {
+    const entry = normalizeRoutedCatalogEntry(contaminated() as never);
+
+    expect(entry.supported_in_api).toBe(true);
+    expect(entry).not.toHaveProperty("available_in_plans");
+    expect(entry).not.toHaveProperty("minimal_client_version");
+    expect(entry).not.toHaveProperty("availability_nux");
+    expect(entry).not.toHaveProperty("upgrade");
   });
 });

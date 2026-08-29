@@ -131,6 +131,26 @@ Codex Desktop 的远程服务器模式会针对客户端自己的 `available_mod
 - 改用 Codex CLI 或 TUI，而不是 Desktop 选择器；它们不应用该白名单，会正常列出路由模型。
 
 ## 刷新模型状态
+## 原生配额回退限制
+
+Codex 应用用完原生的五小时配额后，可能切换到预备回退模型，并把选择器里其他行置灰。正如 [#2813](https://github.com/lidge-jun/opencodex/issues/2813) 所报告的，这个限制同样会隐藏 opencodex 路由的行，而那些行使用的是无关的提供方凭据，不消耗任何 ChatGPT 配额。
+
+这个限制由客户端在请求到达代理之前施加，因此 opencodex 无法解除。路由行写入时带 `visibility: "list"`，目录过滤只读取 `disabledModels` 和各提供方的 `selectedModels`，任何配额值都不参与路由行的可见性。
+
+显式选择路由模型不经过选择器。在 `config.toml` 中设置模型：
+
+```toml
+model = "anthropic/claude-sonnet-5"
+```
+
+或者直接发送：
+
+```bash
+ocx access test anthropic/claude-sonnet-5 --protocol responses
+```
+
+**请求到达代理之后**，两条路径都能正确路由，这一点有测试覆盖。尚未确认的是：预备模式生效时，应用是否仍会发送已配置的模型。如果客户端在发出之前重写或拒绝它，代理端的任何设置都改变不了。请把显式选择当作值得一试的做法，而不是已确认的规避方案。
+
 
 如果选择器里仍然显示旧条目，请刷新目录并重启目标 Codex 界面：
 
