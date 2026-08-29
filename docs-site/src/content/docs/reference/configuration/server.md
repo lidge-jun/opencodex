@@ -144,10 +144,12 @@ original `127.0.0.1` address exactly as before.
 }
 ```
 
-`hostname` is required when the listener is enabled and must be a specific non-blank bind address,
-typically the machine's Tailscale IP (`100.x.y.z`). The key is absent by default; an
-`{ "enabled": false }` shape is also accepted. `port` must differ from the proxy `port` and from
-`unauthenticatedLoopbackListener`'s port; a collision is a write-time validation error.
+`hostname` is required when the listener is enabled and must be a literal private address: RFC1918
+IPv4, Tailscale CGNAT (`100.64.0.0/10`), or IPv6 ULA (`fc00::/7`). Typically this is the machine's
+Tailscale IP (`100.x.y.z`). Wildcard, loopback, public, and DNS addresses are rejected. The key is
+absent by default; an `{ "enabled": false }` shape is also accepted. `port` must differ from the
+proxy `port` and from `unauthenticatedLoopbackListener`'s port; a collision is a write-time
+validation error.
 
 Every data-plane route is refused on this listener: `/v1/*` (Responses, Chat Completions, models,
 Messages, Realtime/live), data-plane WebSocket upgrades, and `/readyz` all return `404`. `GET /healthz` is served because the dashboard itself polls it; it returns the standard health payload — service name, version, uptime, pid, port, and restart/provider-reload capability flags — operational metadata only, with no credentials or provider data.
@@ -156,10 +158,13 @@ generated `~/.opencodex/admin-api-token` file) — the same credential the local
 bind address should be a private or tailnet address; see
 [Remote dashboard access (Tailscale)](/guides/web-dashboard/#remote-dashboard-access-tailscale).
 
-Session endpoints exist on the proxy listener and the dashboard listener: `POST /api/auth/session`
-with the admin token in `X-OpenCodex-API-Key` mints a 12-hour GUI session cookie, and
-`GET /api/auth/session` returns the current session's `csrfToken`, `origin`, and `expiresAt`.
-The unauthenticated loopback listener returns `404` for all of `/api/*`.
+Only the dashboard listener exposes `POST /api/auth/session`. With the admin token in
+`X-OpenCodex-API-Key`, it mints a 12-hour opaque session carrying its CSRF token, exact bound origin,
+and expiry. The dashboard stores that session only at the exact browser origin; it never persists the
+raw admin token. `GET /api/auth/session` is not supported, and the proxy and unauthenticated loopback
+listeners return `404` for this endpoint. This feature does not add TLS: use the allowed private bind
+only through a trusted transport such as Tailscale, and keep the dashboard free of untrusted scripts
+because that origin can read its opaque session.
 
 ### SSH port forwarding
 

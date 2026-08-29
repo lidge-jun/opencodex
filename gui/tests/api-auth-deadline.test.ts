@@ -178,7 +178,7 @@ test("the retried request carries the caller signal", async () => {
   const seenSignals: Array<AbortSignal | null | undefined> = [];
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (pathnameOf(input) === "/opencodex-session") return MINTED();
-    // The install-time cookie arm probe is not a data request; keep it out of seenSignals.
+    // The session endpoint is not a data request; keep it out of seenSignals.
     if (pathnameOf(input) === "/api/auth/session") return new Response("unauthorized", { status: 401 });
     seenSignals.push(init?.signal ?? (input instanceof Request ? input.signal : undefined));
     const key = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("X-OpenCodex-API-Key");

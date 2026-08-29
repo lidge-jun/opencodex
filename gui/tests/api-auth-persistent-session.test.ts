@@ -83,6 +83,26 @@ test("a persisted opaque session is origin-scoped and re-arms dashboard requests
   ]);
 });
 
+test("a stored session for a different origin is discarded without sending its token", async () => {
+  localStorage.setItem("opencodex-gui-session", JSON.stringify({
+    token: "ocx_session_other_origin",
+    csrfToken: "csrf",
+    origin: "http://100.88.9.100:10102",
+    expiresAt: Date.now() + 60_000,
+  }));
+  const seenKeys: Array<string | null> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (pathnameOf(input) === "/opencodex-session") return new Response("missing", { status: 404 });
+    seenKeys.push(headersOf(input, init).get("X-OpenCodex-API-Key"));
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  expect((await fetch("/api/config")).status).toBe(401);
+  expect(seenKeys).toEqual([null]);
+  expect(localStorage.getItem("opencodex-gui-session")).toBeNull();
+});
+
 test("admin-token sign-in persists only the opaque session returned by the remote listener", async () => {
   resetApiAuthFetchForTests(async () => {
     promptCalls += 1;

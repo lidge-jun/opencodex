@@ -218,7 +218,7 @@ describe("headless GUI parity CLI", () => {
     }
     const coverage: Array<[string, string]> = [
       // GUI-only affordance: the browser dashboard exchanges its once-entered admin
-      // token for an HttpOnly cookie session here. The CLI already authenticates with
+      // token for an opaque browser session here. The CLI already authenticates with
       // the admin token directly, so a mirror command would duplicate auth it has.
       ["/api/auth/session", "(none — GUI-only)"],
       ["/api/claude-code", "ocx claude config"],

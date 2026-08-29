@@ -155,7 +155,7 @@ test("concurrent 401s share one token prompt and all retry with the stored token
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    // Session probes (meta re-bootstrap, cookie arm, cookie mint): this fixture never mints
+    // Session bootstrap/mint requests: this fixture never mints
     // sessions, so fail them fast instead of letting them join the release queue below.
     const path = new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname;
     if (path === "/opencodex-session" || path === "/api/auth/session") {
@@ -328,7 +328,7 @@ test("data-plane requests never receive the management token or prompt", async (
   let phase: "seed" | "cross" = "seed";
   const seenHeaders: Array<string | null> = [];
   const stateful = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-    // The install-time cookie-session arm must not count as a data-plane probe here.
+    // Session endpoints must not count as data-plane probes here.
     const path = new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname;
     if (path === "/api/auth/session") return new Response("unauthorized", { status: 401 });
     const headers = new Headers(init?.headers);

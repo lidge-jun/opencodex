@@ -286,7 +286,8 @@ export function issueGuiSession(
 /** The management credential a request presented in a header. */
 function managementCredential(req: Request): string | null {
   return req.headers.get("x-opencodex-api-key")?.trim()
-    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim()
+    || null;
 }
 
 /** The origin/CSRF admission a session credential must pass, shared by every gate that reads one. */

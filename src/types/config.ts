@@ -520,12 +520,13 @@ export interface OcxConfig {
    * version, uptime, pid, port, restart/provider-reload capability), never credentials.
    *
    * Management requests on this listener authenticate with the admin token once and then
-   * with the HttpOnly cookie session it mints (see /api/auth/session); loopback dashboard
+   * with its opaque origin-scoped browser session (see /api/auth/session); loopback dashboard
    * behavior on the main listener is unchanged.
    *
    * The port is required when enabled and must differ from the proxy port and from
-   * unauthenticatedLoopbackListener. The hostname is required so the operator names the
-   * exact interface (for example the machine's tailnet IP) instead of inheriting a wildcard.
+   * unauthenticatedLoopbackListener. The hostname must be a literal RFC1918, tailnet-CGNAT,
+   * or IPv6 ULA address, so the operator names an exact private interface instead of inheriting
+   * a wildcard, public address, or DNS name.
    */
   dashboardListener?:
     | { enabled: false }

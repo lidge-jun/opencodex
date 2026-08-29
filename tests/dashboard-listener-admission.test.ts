@@ -85,14 +85,27 @@ describe("dashboard listener configuration", () => {
     if (!result.ok) expect(result.error).toContain("dashboardListener.port");
   });
 
-  test("a distinct port with a named bind address is accepted and survives the parse", () => {
-    const result = validateConfigCandidate({
-      ...base,
-      dashboardListener: { enabled: true, port: 10101, hostname: "100.88.9.100" },
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.dashboardListener).toEqual({ enabled: true, port: 10101, hostname: "100.88.9.100" });
+  test("accepts literal private and tailnet bind addresses", () => {
+    for (const hostname of ["10.1.2.3", "172.16.0.1", "192.168.1.1", "100.88.9.100", "fc00::1", "fdff::1"]) {
+      const result = validateConfigCandidate({
+        ...base,
+        dashboardListener: { enabled: true, port: 10101, hostname },
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.dashboardListener).toEqual({ enabled: true, port: 10101, hostname });
+      }
+    }
+  });
+
+  test("rejects wildcard, loopback, public, and DNS bind addresses", () => {
+    for (const hostname of ["0.0.0.0", "::", "127.0.0.1", "::1", "8.8.8.8", "dashboard.example"]) {
+      const result = validateConfigCandidate({
+        ...base,
+        dashboardListener: { enabled: true, port: 10101, hostname },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("literal private or tailnet IP address");
     }
   });
 });

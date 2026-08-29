@@ -30,9 +30,8 @@ the admin token (`OPENCODEX_ADMIN_AUTH_TOKEN`, or the auto-generated
 `~/.opencodex/admin-api-token` file).
 
 When a remote dashboard needs that credential, it presents a standard password form so a browser
-password manager can offer to save and autofill it. The dashboard itself still keeps the token only
-in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
-the browser or password manager's decision.
+password manager can offer to save and autofill it. The raw admin token stays only in memory; after
+sign-in, the dashboard stores a separate opaque session for that exact browser origin.
 
 ## Remote dashboard access (Tailscale)
 
@@ -51,11 +50,12 @@ that serves only the dashboard: the web app and the `/api/*` management API. The
 }
 ```
 
-`hostname` is required and must be a specific non-blank bind address; the typical choice is the
-machine's Tailscale IP, making the dashboard reachable at `http://100.88.9.100:10101` from anywhere
-on your tailnet. The key is absent by default, and `{ "enabled": false }` is also accepted. The
-`port` must differ from the proxy port and from `unauthenticatedLoopbackListener`'s port — a
-collision is rejected when the config is written.
+`hostname` is required and must be a literal private address: RFC1918 IPv4, Tailscale CGNAT
+(`100.64.0.0/10`), or IPv6 ULA (`fc00::/7`). The typical choice is the machine's Tailscale IP,
+making the dashboard reachable at `http://100.88.9.100:10101` from anywhere on your tailnet.
+Wildcard, loopback, public, and DNS addresses are rejected. The key is absent by default, and
+`{ "enabled": false }` is also accepted. The `port` must differ from the proxy port and from
+`unauthenticatedLoopbackListener`'s port — a collision is rejected when the config is written.
 
 The main proxy listener is completely unchanged: it stays on `127.0.0.1`, and Codex and every other
 client keep pointing at the original proxy port. Nothing about provider or API-key mode changes.
@@ -67,22 +67,21 @@ Messages, Realtime/live), data-plane WebSocket upgrades, and `/readyz` all retur
 
 Management calls on this listener require the existing admin token (`OPENCODEX_ADMIN_AUTH_TOKEN` or
 the generated `~/.opencodex/admin-api-token` file) — the same credential as the local dashboard.
-After sign-in the dashboard exchanges the token for a session automatically. `POST /api/auth/session`
-with the token in `X-OpenCodex-API-Key` mints a 12-hour GUI session and sets the HttpOnly
-`opencodex_gui_session` cookie (`Path=/`; `SameSite=Strict`), while `GET /api/auth/session` returns
-the current session's `csrfToken`, `origin`, and `expiresAt` when the cookie is valid. The cookie is
-host-scoped and unreadable by page JavaScript, and mutations additionally require the per-session
-CSRF token. The phone therefore asks for the admin token once per 12 hours instead of on every
-refresh.
+After sign-in the dashboard exchanges the token for a 12-hour opaque session automatically.
+`POST /api/auth/session` receives the admin token in `X-OpenCodex-API-Key` and returns the opaque
+session, CSRF token, bound origin, and expiry. The browser stores that separate session only for the
+exact scheme, host, and port; it never stores the raw admin token. Mutations additionally require the
+per-session CSRF token. The phone therefore asks for the admin token once per 12 hours instead of on
+every refresh.
 
 Loopback dashboard behavior is unchanged: the local dashboard keeps auto-minting its 5-minute
 sessions into the served page.
 
 :::caution[Keep it on the tailnet]
-The bind hostname should be a private or tailnet address; Tailscale is the recommended setup. The
-session cookie travels over plain HTTP to that address, which is acceptable inside a
-WireGuard-encrypted tailnet but should not be exposed on an untrusted network. The cookie carries no
-`Secure` flag because the tailnet URL is `http://`.
+The bind hostname is limited to a private or tailnet address; Tailscale is the recommended setup.
+This feature does not add TLS, so use it only over a trusted private transport such as a
+WireGuard-encrypted tailnet. The persistent opaque session is readable by JavaScript at that exact
+origin, so keep the dashboard free of untrusted scripts and do not expose it on an untrusted network.
 :::
 
 ## What you can do

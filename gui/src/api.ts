@@ -268,12 +268,12 @@ function clearLegacySessionToken(): void {
 }
 
 function withToken(input: RequestInfo | URL, init: RequestInit | undefined, token: string | null): [RequestInfo | URL, RequestInit | undefined] {
-  // Nothing to attach (no credential, no cookie-session pair) — pass through untouched.
+  // Nothing to attach (no credential or opaque session) — pass through untouched.
   if (!token && !(memorySessionOrigin && memoryCsrfToken)) return [input, init];
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
   if (token) headers.set("X-OpenCodex-API-Key", token);
-  // Cookie-backed sessions carry the GUI binding headers with any credential shape; the
-  // server ignores them on the raw-admin-token header path.
+  // Opaque sessions carry the GUI binding headers; the server ignores them on the
+  // raw-admin-token header path.
   if (memorySessionOrigin && memoryCsrfToken) {
     headers.set("X-OpenCodex-GUI-Origin", memorySessionOrigin);
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
