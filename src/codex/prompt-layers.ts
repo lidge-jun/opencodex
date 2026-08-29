@@ -215,44 +215,39 @@ function probeInstructionFilenames(configBytes: string | null): string[] {
 /**
  * Decoded string entries of a root-scope TOML array.
  *
- * Spans lines. A single-line regex missed the ordinary multi-line spelling
+ * Parsed, not pattern-matched. Three successive review rounds each found another
+ * valid spelling a hand-rolled reader missed — multi-line arrays, a comment after the
+ * opening bracket, a quoted key — and every miss was a rendered document whose edits
+ * moved no admission key. The pattern was the defect: TOML is not a line format, so
+ * no regex over lines can enumerate what a parser accepts.
  *
- *     project_doc_fallback_filenames = [
- *       "TEAM.md",
- *     ]
+ * The module header forbids trusting a JS TOML parser to VERIFY bytes we write,
+ * because Bun and Rust `toml_edit` disagree on escapes and Codex reads what we wrote.
+ * That prohibition is about writing. This is a read of two arrays of plain filenames,
+ * and the failure modes differ in the safe direction: a parse disagreement here can
+ * only cost a redundant probe, never a corrupted config. A missed spelling costs a
+ * stale read, which is the defect being fixed.
  *
- * which upstream accepts, and a missed array meant a rendered document whose edits
- * moved no admission key. Values go through `decodeBasicString` — the decoder that
- * already backs every other value read out of this file — with literal (single-quoted)
- * strings handled separately, since those take no escapes.
+ * An unparseable file yields no entries. Codex could not load it either, so there is
+ * no configured value to honour.
  */
 function rootArrayEntries(configBytes: string | null, key: string): string[] {
-  const lines = rootLines(configBytes ?? "");
-  const opener = new RegExp(`^\\s*${key}\\s*=\\s*\\[(.*)$`);
-  for (let i = 0; i < lines.length; i += 1) {
-    const m = opener.exec(lines[i]!);
-    if (!m) continue;
-    let body = m[1]!;
-    // Accumulate until the closing bracket. Comments are stripped per line, so a
-    // trailing "# ]" cannot be mistaken for the terminator.
-    for (let j = i; !body.includes("]"); ) {
-      j += 1;
-      if (j >= lines.length) return [];
-      body += lines[j]!.replace(/#.*$/, "");
-    }
-    body = body.slice(0, body.indexOf("]"));
-    const out: string[] = [];
-    for (const raw of body.split(",")) {
-      const trimmed = raw.trim().replace(/#.*$/, "").trim();
-      if (trimmed === "") continue;
-      const decoded = trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2
-        ? trimmed.slice(1, -1)
-        : decodeBasicString(trimmed);
-      if (decoded !== null) out.push(decoded);
-    }
-    return out;
+  const value = rootValue(configBytes, key);
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+/** A root-scope value, or undefined when the key is absent or the file will not parse. */
+function rootValue(configBytes: string | null, key: string): unknown {
+  if (configBytes === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = Bun.TOML.parse(configBytes);
+  } catch {
+    return undefined;
   }
-  return [];
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  return (parsed as Record<string, unknown>)[key];
 }
 
 /**
@@ -306,8 +301,7 @@ function projectRootMarkers(configBytes: string | null): string[] {
 
 /** Whether a root-scope key is present at all, regardless of what it holds. */
 function hasRootKey(configBytes: string | null, key: string): boolean {
-  const probe = new RegExp(`^\\s*${key}\\s*=`);
-  return rootLines(configBytes ?? "").some(line => probe.test(line));
+  return rootValue(configBytes, key) !== undefined;
 }
 
 /**

@@ -132,6 +132,24 @@ Given that this section has now been wrong once, the standard it should be held 
 worth stating: an input belongs on this list only when it cannot be read from this
 process, not when reading it looks inconvenient.
 
+## The reader, and why it stopped being a regex
+
+Rounds five, six and seven each found another valid TOML spelling the hand-rolled
+reader missed: a multi-line array, then a comment directly after the opening bracket,
+then a quoted key. Three rounds, three patches to the same regex, each closing one
+spelling and leaving the rest.
+
+At that point the pattern was the defect. TOML is not a line format, so no regex over
+lines can enumerate what a parser accepts, and each fix was only ever going to cover
+the example in front of it. `Bun.TOML.parse` reads both keys now.
+
+The module header forbids trusting a JS TOML parser, and that prohibition is worth
+not eroding, so the distinction matters: it is about VERIFYING BYTES WE WRITE, where
+Bun and Rust `toml_edit` disagree on escapes and Codex reads what we wrote. This is a
+read of two arrays of plain filenames, and the failure directions are opposite. A
+parse disagreement here costs a redundant probe; a missed spelling costs a stale read.
+An unparseable file yields nothing, which is correct — Codex could not load it either.
+
 ## Verification
 
 Route-level, in the file whose fixture separates `CODEX_HOME` from the injected

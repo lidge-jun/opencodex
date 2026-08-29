@@ -1223,9 +1223,14 @@ describe("020 coverage completions", () => {
     // Upstream trims each name and drops whitespace-only entries, so a padded value
     // is the same filename rather than a different one.
     { label: "padded", literal: "[\"  TEAM.md  \", \"   \"]" },
+    // A comment directly after the opening bracket. The hand-rolled reader consumed
+    // the first entry along with it.
+    { label: "comment-after-bracket", literal: "[ # team docs\n  \"TEAM.md\",\n]" },
   ]) {
-    test(`36. a ${spelling.label} fallback project document moves probe admission`, async () => {
-      const fx = fixture(`project_doc_fallback_filenames = ${spelling.literal}\n`);
+    for (const keyForm of ["bare", "quoted"]) {
+    test(`36. a ${spelling.label} fallback project document with a ${keyForm} key moves probe admission`, async () => {
+      const key = keyForm === "quoted" ? "\"project_doc_fallback_filenames\"" : "project_doc_fallback_filenames";
+      const fx = fixture(`${key} = ${spelling.literal}\n`);
       const teamPath = join(fx.decoyHome, "TEAM.md");
       writeFileSync(teamPath, "old-team", "utf8");
       const startedPath = join(fx.decoyHome, "team-probe-starts.txt");
@@ -1253,6 +1258,7 @@ describe("020 coverage completions", () => {
       expect(fresh.body.layers.skills.text).toBe("new-team");
       expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
     });
+    }
   }
 
   /**
@@ -1299,6 +1305,47 @@ describe("020 coverage completions", () => {
 
     const fresh = await call("GET", "/api/codex-prompt/text", nested);
     expect(fresh.body.layers.skills.text).toBe("new-parent");
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+  });
+
+  /**
+   * Root detection has to honour a configured marker under any valid spelling. With a
+   * quoted key a hand-rolled reader fell back to `.git`, found no root, and searched
+   * the home alone — so an ancestor document it should have covered went unhashed.
+   */
+  test("38. a quoted project_root_markers key still selects the configured root", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-prompt-marker-"));
+    roots.push(root);
+    const nestedHome = join(root, "home");
+    mkdirSync(nestedHome, { recursive: true });
+    writeFileSync(join(root, ".probe-root"), "", "utf8");
+    const fx = fixture("\"project_root_markers\" = [\".probe-root\"]\n");
+    const parentDoc = join(root, "AGENTS.md");
+    writeFileSync(parentDoc, "old-marker", "utf8");
+    const startedPath = join(nestedHome, "marker-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `const doc = fs.readFileSync(${JSON.stringify(parentDoc)}, "utf8");`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    const nested: Fixture = { ...fx, decoyHome: nestedHome };
+    const beforeEdit = call("GET", "/api/codex-prompt/text", nested);
+    await waitUntil(() => existsSync(startedPath), "marker doc probe start");
+    writeFileSync(parentDoc, "new-marker", "utf8");
+
+    expect((await call("GET", "/api/codex-prompt/text", nested)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+    expect((await beforeEdit).body.layers.skills.text).toBe("old-marker");
+
+    const fresh = await call("GET", "/api/codex-prompt/text", nested);
+    expect(fresh.body.layers.skills.text).toBe("new-marker");
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
   });
 
