@@ -24,6 +24,36 @@ function configWithProxy(proxy?: string, noProxy?: string | string[]): OcxConfig
   return { proxy, noProxy, providers: {} } as unknown as OcxConfig;
 }
 
+// The top-level config schema ends in `.passthrough()` and declares neither `proxy` nor
+// `noProxy`, so these shapes survive validation and reach applyProxyEnv verbatim.
+function configWithRawProxy(proxy: unknown, noProxy?: unknown): OcxConfig {
+  return { proxy, noProxy, providers: {} } as unknown as OcxConfig;
+}
+
+describe("applyProxyEnv with values the schema does not constrain", () => {
+  // applyProxyEnv runs at every process entry point that makes outbound requests, so a
+  // throw here is a startup crash rather than a degraded proxy.
+  test("a non-string proxy does not throw and sets no proxy env", () => {
+    expect(() => applyProxyEnv(configWithRawProxy(42))).not.toThrow();
+    expect(process.env.HTTP_PROXY).toBeUndefined();
+    expect(process.env.HTTPS_PROXY).toBeUndefined();
+  });
+
+  test("a non-string noProxy does not throw and keeps loopback exclusions", () => {
+    expect(() => applyProxyEnv(configWithRawProxy("http://proxy.corp:8080", 42))).not.toThrow();
+    expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1,::1,[::1]");
+  });
+
+  test.each([
+    ["a number", 42],
+    ["null", null],
+    ["an object", { a: 1 }],
+  ])("keeps the operator's usable noProxy entries when the array also holds %s", (_label, bad) => {
+    expect(() => applyProxyEnv(configWithRawProxy("http://proxy.corp:8080", ["internal.example", bad]))).not.toThrow();
+    expect(process.env.NO_PROXY).toBe("internal.example,localhost,127.0.0.1,::1,[::1]");
+  });
+});
+
 describe("applyProxyEnv", () => {
   test("no-op when config.proxy is unset", () => {
     process.env.NO_PROXY = "operator-owned.example";

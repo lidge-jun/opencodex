@@ -3134,7 +3134,13 @@ export function resolveEnvValue(value: string | undefined): string | undefined {
  * that makes outbound provider requests (server start, catalog sync).
  */
 export function applyProxyEnv(config: OcxConfig): void {
-  const proxy = resolveEnvValue(config.proxy);
+  // `proxy` and `noProxy` are not declared in the top-level schema, which ends in
+  // `.passthrough()`, so whatever is on disk arrives here verbatim. A non-string value
+  // reached string-only methods and threw out of this function, and it runs once per
+  // process entry point — the failure was a startup crash, not a degraded proxy. Ignore
+  // malformed values instead: they cannot express a routing intent, and refusing to start
+  // is a worse answer than starting without them.
+  const proxy = typeof config.proxy === "string" ? resolveEnvValue(config.proxy) : undefined;
   if (!proxy) return;
   if (!process.env.HTTP_PROXY?.trim() && !process.env.http_proxy?.trim()) process.env.HTTP_PROXY = proxy;
   if (!process.env.HTTPS_PROXY?.trim() && !process.env.https_proxy?.trim()) process.env.HTTPS_PROXY = proxy;
@@ -3144,7 +3150,10 @@ export function applyProxyEnv(config: OcxConfig): void {
   // Configured entries first, then loopback: loopback is unconditional, so appending it last
   // keeps it present even when the operator lists a loopback host themselves.
   const raw = config.noProxy;
-  const configured = (Array.isArray(raw) ? raw : (resolveEnvValue(raw) ?? "").split(","))
+  const configured = (Array.isArray(raw)
+    // One unusable element must not discard the operator's other entries.
+    ? raw.filter((entry): entry is string => typeof entry === "string")
+    : (typeof raw === "string" ? resolveEnvValue(raw) ?? "" : "").split(","))
     .map(entry => entry.trim())
     .filter(Boolean);
   for (const host of [...configured, "localhost", "127.0.0.1", "::1", "[::1]"]) {
