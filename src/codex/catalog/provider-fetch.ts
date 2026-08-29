@@ -1094,6 +1094,16 @@ function modelInputModalities(
       .filter(value => value === "text" || value === "image" || value === "audio");
     if (inferred.length > 0) return [...new Set(inferred)];
   }
+  // GitHub Copilot nests vision support one level down as `capabilities.supports.vision`, so the
+  // flat read alone finds nothing and every Copilot model falls through to `["text"]` — Codex then
+  // refuses image attachments on models that accept them (#2941). Precedence is by specificity:
+  // a flat boolean is authoritative when present, the nested boolean is consulted only otherwise,
+  // and a non-boolean at either level decides NOTHING so the signals below still apply. Two things
+  // this ordering deliberately avoids: a deny-wins rule across both levels would flip a provider
+  // reporting flat `true` with nested `false` from image-capable to text-only, changing behaviour
+  // that predates Copilot support; and a truthy test would let the string `"no"` advertise image
+  // input. The payload also carries a SECOND `vision` key under `limits` holding an image count,
+  // which is why this reads one exact path instead of searching `capabilities` for a vision-ish key.
   const nestedSupports = plainRecord(capabilityRecord?.supports);
   const explicitVisionSupport = typeof capabilityRecord?.vision === "boolean"
     ? capabilityRecord.vision

@@ -293,6 +293,74 @@ describe("registry-owned provider model discovery", () => {
     })).toEqual({});
   });
 
+  test("a flat vision boolean outranks a disagreeing nested one (#2941)", () => {
+    // Precedence is by specificity, NOT deny-wins. A deny-wins rule across both levels would flip
+    // this shape from image-capable to text-only, silently changing behaviour that predates Copilot
+    // support — the flat `true` alone already meant image input. Pinned so it cannot regress.
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "flat-true-nested-false",
+      capabilities: { vision: true, supports: { vision: false } },
+    })).toEqual({ inputModalities: ["text", "image"], capabilities: ["vision"] });
+
+    // The mirror image: a flat denial is authoritative over a nested claim.
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "flat-false-nested-true",
+      capabilities: { vision: false, supports: { vision: true } },
+    })).toEqual({ inputModalities: ["text"] });
+  });
+
+  test("the reporter's full Copilot payload is read despite the limits.vision sibling (#2941)", () => {
+    // `capabilities` carries a SECOND vision key under `limits` holding an image count. Anything
+    // that searched loosely for a vision-ish key would find that object and treat it as a signal.
+    expect(catalogHintsFromModelsApiItem("github-copilot", {
+      id: "claude-opus-4.6",
+      capabilities: {
+        supports: { vision: true },
+        limits: { vision: { max_prompt_images: 20 } },
+      },
+    })).toEqual({ inputModalities: ["text", "image"] });
+  });
+
+  test("an explicit nested denial outranks a loose capability-array claim, exactly as a flat one does (#2941)", () => {
+    // A boolean capability field is a specific statement; a "vision" string in a capability array is
+    // a loose one. Flat `false` has always won that contest, and the internal contradiction it
+    // produces -- text-only modalities reported next to capabilities: ["vision"] -- predates the
+    // nested read. These two shapes must agree, or the nested field would mean something subtly
+    // different from the flat field it stands in for.
+    const nested = catalogHintsFromModelsApiItem("example", {
+      id: "nested-denial-vs-array",
+      metadata: { capabilities: { supports: { vision: false } } },
+      capabilities: ["vision"],
+    });
+    const flat = catalogHintsFromModelsApiItem("example", {
+      id: "flat-denial-vs-array",
+      metadata: { capabilities: { vision: false } },
+      capabilities: ["vision"],
+    });
+    expect(nested).toEqual({ inputModalities: ["text"], capabilities: ["vision"] });
+    expect(nested).toEqual(flat);
+  });
+
+  test("a non-record supports container decides nothing and leaves the fallback chain intact (#2941)", () => {
+    // It must not collapse into a denial either — the `features` signal further down still decides.
+    expect(catalogHintsFromModelsApiItem("github-copilot", {
+      id: "malformed-container",
+      capabilities: { supports: 5 },
+      features: ["vision"],
+    })).toEqual({
+      inputModalities: ["text", "image"],
+      capabilities: ["vision"],
+    });
+  });
+
+  test("explicit item input modalities still outrank a nested Copilot vision claim (#2941)", () => {
+    expect(catalogHintsFromModelsApiItem("github-copilot", {
+      id: "explicit-audio-model",
+      input_modalities: ["audio"],
+      capabilities: { supports: { vision: true } },
+    })).toEqual({ inputModalities: ["audio"] });
+  });
+
   test("preserves nested reasoning_parameters effort ladders from OpenAI-compatible catalogs", () => {
     expect(catalogHintsFromModelsApiItem("example", {
       id: "reasoning-model",
