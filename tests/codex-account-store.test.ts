@@ -1092,3 +1092,264 @@ describe("shared refresh flight plan reconciliation (#2892 gap 2 follow-up)", ()
     }
   });
 });
+
+describe("rotated refresh grant fan-out (#2892 gap 3)", () => {
+  beforeEach(() => {
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+  });
+
+  afterEach(() => {
+    setIcaclsRunnerForTests(null);
+    delete process.env.OPENCODEX_HOME;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  async function refreshOwnerWithIdleSibling(siblingExpiresAt: number): Promise<{
+    sibling: ReturnType<typeof import("../src/codex/account-store")["readCodexAccountRecord"]>;
+    siblingBefore: number;
+  }> {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("owner-alias", {
+      accessToken: "rejected",
+      refreshToken: "shared-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-shared",
+    });
+    saveCodexAccountCredential("idle-alias", {
+      accessToken: "idle-access",
+      refreshToken: "shared-grant",
+      expiresAt: siblingExpiresAt,
+      chatgptAccountId: "acct-shared",
+    });
+    const generation = readCodexAccountRecord("owner-alias")!.generation;
+    const siblingBefore = readCodexAccountRecord("idle-alias")!.generation;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "rotated-access",
+      refresh_token: "rotated-grant",
+      expires_in: 3600,
+    })) as typeof fetch;
+    try {
+      await forceRefreshCodexPoolToken("owner-alias", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    return { sibling: readCodexAccountRecord("idle-alias"), siblingBefore };
+  }
+
+  test("an idle same-account alias is carried onto the rotated grant", async () => {
+    // Upstream rotates the grant for the ACCOUNT. Without fan-out the idle alias keeps a
+    // grant upstream has already invalidated and is retired on its next refresh even
+    // though the account is healthy.
+    const { sibling, siblingBefore } = await refreshOwnerWithIdleSibling(Date.now() + 60_000);
+    expect(sibling!.credential!.refreshToken).toBe("rotated-grant");
+    expect(sibling!.credential!.accessToken).toBe("rotated-access");
+    expect(sibling!.generation).toBe(siblingBefore + 1);
+  });
+
+  test("an alias holding a newer access credential keeps it and takes only the grant", async () => {
+    // Exercised directly: reaching this state through a live flight is not possible,
+    // because a same-identity alias holding a fresh non-rejected credential is adopted
+    // before any fetch. It survives only as the concurrent-writer race the merge exists
+    // to lose safely, so the contract is asserted against the exported helper rather
+    // than dressed up as an interleaving the code cannot actually produce.
+    const { fanOutRotatedRefreshGrant, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("owner-alias", {
+      accessToken: "owner-access",
+      refreshToken: "shared-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-shared",
+    });
+    saveCodexAccountCredential("newer-alias", {
+      accessToken: "newer-access",
+      refreshToken: "shared-grant",
+      expiresAt: Date.now() + 30 * 3600_000,
+      chatgptAccountId: "acct-shared",
+    });
+    const before = readCodexAccountRecord("newer-alias")!;
+
+    const applied = fanOutRotatedRefreshGrant({
+      excludeId: "owner-alias",
+      chatgptAccountId: "acct-shared",
+      previousRefreshGrantFingerprint: refreshGrantFingerprint("shared-grant"),
+      rotated: {
+        accessToken: "rotated-access",
+        refreshToken: "rotated-grant",
+        expiresAt: Date.now() + 3600_000,
+        chatgptAccountId: "acct-shared",
+      },
+    });
+
+    expect(applied).toEqual([{
+      id: "newer-alias",
+      fromGeneration: before.generation,
+      toGeneration: before.generation + 1,
+      accessToken: "newer-access",
+      mode: "grant-only",
+    }]);
+    const after = readCodexAccountRecord("newer-alias")!;
+    expect(after.credential!.accessToken).toBe("newer-access");
+    expect(after.credential!.refreshToken).toBe("rotated-grant");
+    expect(after.generation).toBe(before.generation + 1);
+  });
+
+  test("a different upstream identity sharing the grant fingerprint is never touched", async () => {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("owner-alias", {
+      accessToken: "rejected",
+      refreshToken: "shared-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-shared",
+    });
+    saveCodexAccountCredential("foreign-alias", {
+      accessToken: "foreign-access",
+      refreshToken: "shared-grant",
+      expiresAt: Date.now() + 60_000,
+      chatgptAccountId: "acct-other",
+    });
+    const generation = readCodexAccountRecord("owner-alias")!.generation;
+    const foreignBefore = readCodexAccountRecord("foreign-alias")!;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "rotated-access",
+      refresh_token: "rotated-grant",
+      expires_in: 3600,
+    })) as typeof fetch;
+    try {
+      await forceRefreshCodexPoolToken("owner-alias", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const foreignAfter = readCodexAccountRecord("foreign-alias")!;
+    expect(foreignAfter.credential!.accessToken).toBe("foreign-access");
+    expect(foreignAfter.credential!.refreshToken).toBe("shared-grant");
+    expect(foreignAfter.generation).toBe(foreignBefore.generation);
+  });
+
+  test("a sibling that already moved to another grant is left alone", async () => {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("owner-alias", {
+      accessToken: "rejected",
+      refreshToken: "shared-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-shared",
+    });
+    saveCodexAccountCredential("moved-alias", {
+      accessToken: "moved-access",
+      refreshToken: "some-other-grant",
+      expiresAt: Date.now() + 60_000,
+      chatgptAccountId: "acct-shared",
+    });
+    const generation = readCodexAccountRecord("owner-alias")!.generation;
+    const movedBefore = readCodexAccountRecord("moved-alias")!;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "rotated-access",
+      refresh_token: "rotated-grant",
+      expires_in: 3600,
+    })) as typeof fetch;
+    try {
+      await forceRefreshCodexPoolToken("owner-alias", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const movedAfter = readCodexAccountRecord("moved-alias")!;
+    expect(movedAfter.credential!.refreshToken).toBe("some-other-grant");
+    expect(movedAfter.generation).toBe(movedBefore.generation);
+  });
+
+  test("a refresh that does NOT rotate the grant writes nothing to siblings", async () => {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("owner-alias", {
+      accessToken: "rejected",
+      refreshToken: "shared-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-shared",
+    });
+    saveCodexAccountCredential("idle-alias", {
+      accessToken: "idle-access",
+      refreshToken: "shared-grant",
+      expiresAt: Date.now() + 60_000,
+      chatgptAccountId: "acct-shared",
+    });
+    const generation = readCodexAccountRecord("owner-alias")!.generation;
+    const idleBefore = readCodexAccountRecord("idle-alias")!;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "rotated-access",
+      refresh_token: "shared-grant",
+      expires_in: 3600,
+    })) as typeof fetch;
+    try {
+      await forceRefreshCodexPoolToken("owner-alias", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const idleAfter = readCodexAccountRecord("idle-alias")!;
+    expect(idleAfter.generation).toBe(idleBefore.generation);
+    expect(idleAfter.credential!.accessToken).toBe("idle-access");
+  });
+
+  test("a sibling adoption requires the same upstream identity, not just the grant", async () => {
+    // findFreshCredentialForGrant can hand a sibling's live credential to this alias.
+    // Matching only the grant fingerprint would send one account's requests under
+    // another account's bearer.
+    const { getValidCodexToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("expired-alias", {
+      accessToken: "expired-access",
+      refreshToken: "shared-grant",
+      expiresAt: Date.now() - 1000,
+      chatgptAccountId: "acct-shared",
+    });
+    saveCodexAccountCredential("foreign-fresh", {
+      accessToken: "foreign-fresh-access",
+      refreshToken: "shared-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-other",
+    });
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "refreshed-access",
+      refresh_token: "refreshed-grant",
+      expires_in: 3600,
+    })) as typeof fetch;
+    try {
+      const result = await getValidCodexToken("expired-alias");
+      // It must refresh for itself rather than adopt the foreign-identity credential.
+      expect(result.accessToken).toBe("refreshed-access");
+      expect(result.chatgptAccountId).toBe("acct-shared");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(readCodexAccountRecord("foreign-fresh")!.credential!.accessToken).toBe("foreign-fresh-access");
+  });
+});
