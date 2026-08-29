@@ -118,7 +118,12 @@ const canSymlink = (() => {
     const probe = runProbe(`
       import { assertNotRealCodexHomeUnderTest } from "${REPO_ROOT_URL}src/lib/test-home-guard";
       try {
-        assertNotRealCodexHomeUnderTest("${codexHome}");
+        // JSON.stringify, not raw interpolation: a Windows temp path is
+        // C:\\Users\\..., and pasting it between quotes makes every backslash an
+        // escape sequence in the probe's own source. \U and \p are not valid
+        // escapes, so the path the guard compared was not the path under test and
+        // it correctly reported WRITE_ALLOWED for a directory it never saw.
+        assertNotRealCodexHomeUnderTest(${JSON.stringify(codexHome)});
         console.log("WRITE_ALLOWED");
       } catch (err) {
         console.log(String(err).includes("refusing to write the real Codex home") ? "REFUSED" : "OTHER");
@@ -182,7 +187,9 @@ const canSymlink = (() => {
       import { atomicWriteFile, writePid } from "${REPO_ROOT_URL}src/config";
       const REFUSAL = "refusing to write the real OpenCodex home";
       try {
-        atomicWriteFile("${linkDir}/never-created.json", "x");
+        // Same escaping hazard as the Codex-home probe above: JSON.stringify the
+        // path, then join in the child so no backslash reaches the source text.
+        atomicWriteFile(${JSON.stringify(linkDir)} + "/never-created.json", "x");
         console.log("WRITE_SUCCEEDED");
       } catch (err) {
         console.log(String(err).includes(REFUSAL) ? "REFUSED" : "OTHER:" + String(err));
