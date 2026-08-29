@@ -595,6 +595,28 @@ describe("codex routing", () => {
   });
 
 
+  test("a spent credential failure does not donate its failure count to a later transient (#2892 gap 4 review)", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+    saveTestCredential("a");
+    // G2's first genuine transient must start the count at 1. Inheriting the spent 401's count
+    // pushes the account over the failover threshold a failure early, and because the transient
+    // write drops the provenance tag, no later read can detect that it happened.
+    recordCodexUpstreamOutcome(config, "a", 503);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 503 });
+    // The same inheritance path exists for a workspace denial.
+    clearCodexUpstreamHealthForAccount("a");
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: readCodexAccountRecord("a")!.generation });
+    saveTestCredential("a");
+    recordCodexUpstreamOutcome(config, "a", 403, { denial: "workspace" });
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 403 });
+  });
+
+
   test("connect failures contribute to transient failover", () => {
     const config = makeConfig();
     updateAccountQuota("a", 10);

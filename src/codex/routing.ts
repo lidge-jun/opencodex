@@ -2144,6 +2144,16 @@ export function recordCodexUpstreamOutcome(
   const now = meta.now ?? Date.now();
   const outcomeClass = classifyCodexUpstreamOutcome(outcome, meta.denial);
   const quotaScope = codexQuotaScopeForModel(meta.modelId);
+  /*
+   * Spend a stale credential failure BEFORE any branch reads health (#2892 gap 4 review).
+   *
+   * Reader-side spending alone is not enough: the transient and workspace branches derive their new
+   * entry from the current one, so a spent G1 401 would donate its `consecutiveFailures` to G2's
+   * first genuine 503 and drop the tag while doing it. The account then reaches the failover
+   * threshold one failure early, and no later read can tell. Clearing it here means every branch
+   * starts from evidence that still describes a live credential.
+   */
+  dropSpentCredentialFailure(accountId);
   if (outcomeClass === "success") {
     const scopedProbe = meta.probeQuotaScope
       ? scopedHealthFor(accountId, meta.probeQuotaScope)
