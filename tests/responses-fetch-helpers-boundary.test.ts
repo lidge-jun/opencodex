@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createScanner, LanguageVariant, SyntaxKind } from "typescript/unstable/ast";
+import { fetchWithHeaderTimeout, storedPoolReplayDispatchNotifier } from "../src/server/responses/fetch-helpers";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const helperPath = resolve(repoRoot, "src/server/responses/fetch-helpers.ts");
@@ -74,5 +75,82 @@ describe("Responses fetch-helper import boundary", () => {
       "moduleName",
       "`./template`",
     ]);
+  });
+});
+
+describe("storedPoolReplayDispatchNotifier", () => {
+  function pacedExecutor(options: { pacing: () => Promise<void> }) {
+    const sends: string[] = [];
+    const unpaced = Object.assign(
+      async (input: Parameters<typeof globalThis.fetch>[0]) => {
+        sends.push(String(input));
+        return new Response("ok");
+      },
+      { preconnect: () => {} },
+    );
+    const wrapped = Object.assign(
+      async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+        await options.pacing();
+        return unpaced(input, init);
+      },
+      { preconnect: () => {}, waitForPacing: options.pacing, unpacedFetch: unpaced },
+    );
+    return { wrapped, sends };
+  }
+
+  test("does not signal a dispatch when pacing admission rejects", async () => {
+    // The signal bounds later account/model/combo recovery, so it has to describe a send that
+    // actually happened. fetchWithHeaderTimeout awaits pacing BEFORE calling the executor, so a
+    // caller signalling at its own call site would spend the budget for a request that never
+    // reached the network.
+    let dispatched = 0;
+    const executor = pacedExecutor({ pacing: () => Promise.reject(new Error("pacing closed")) });
+    const notifier = storedPoolReplayDispatchNotifier(executor.wrapped, () => { dispatched += 1; });
+
+    await expect(fetchWithHeaderTimeout(
+      "https://example.test/v1/responses",
+      { method: "POST" },
+      new AbortController().signal,
+      1_000,
+      false,
+      notifier,
+    )).rejects.toThrow("pacing closed");
+
+    expect(executor.sends).toEqual([]);
+    expect(dispatched).toBe(0);
+  });
+
+  test("signals exactly once, after pacing admission, and preserves pacing", async () => {
+    let dispatched = 0;
+    let paced = 0;
+    const order: string[] = [];
+    const executor = pacedExecutor({
+      pacing: async () => { paced += 1; order.push("pacing"); },
+    });
+    const notifier = storedPoolReplayDispatchNotifier(executor.wrapped, () => {
+      dispatched += 1;
+      order.push("dispatch");
+    });
+
+    const response = await fetchWithHeaderTimeout(
+      "https://example.test/v1/responses",
+      { method: "POST" },
+      new AbortController().signal,
+      1_000,
+      false,
+      notifier,
+    );
+
+    expect(response.status).toBe(200);
+    expect(dispatched).toBe(1);
+    // Pacing is still applied exactly once — a plain function wrapper would drop waitForPacing
+    // and unpacedFetch, which fetchWithHeaderTimeout reads off the executor.
+    expect(paced).toBe(1);
+    expect(order).toEqual(["pacing", "dispatch"]);
+  });
+
+  test("returns the executor untouched when there is nothing to notify", () => {
+    const executor = pacedExecutor({ pacing: async () => {} });
+    expect(storedPoolReplayDispatchNotifier(executor.wrapped, undefined)).toBe(executor.wrapped);
   });
 });

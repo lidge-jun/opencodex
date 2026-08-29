@@ -588,4 +588,154 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(harness.sends).toEqual(["Bearer externally-replaced"]);
     expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
   });
+
+  // The recovery budget bounds which ACCOUNT may be charged, not whether the request may be
+  // rescued at all. Two ladders send to the account that was already paying, so a stored replay
+  // must not cut them: the one-shot opaque-blob rebuild, and the allow-listed gated-model 400
+  // retry against a still-entitled account. A blanket "no sends after the replay" rule passes
+  // every test above and silently converts both into a user-visible 400.
+  test("a stored-account replay may still rebuild a rejected opaque blob on the same account", async () => {
+    const harness = installHarness({
+      responseForSend: (authorization, sendNumber) => {
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization !== "Bearer refreshed-access") return undefined;
+        // First refreshed send still carries the stale blob; upstream names the exact code.
+        if (sendNumber === 2) {
+          return Response.json({
+            error: { type: "invalid_request_error", code: "invalid_encrypted_content" },
+          }, { status: 400 });
+        }
+        // The rebuild stripped it, so the same refreshed account now succeeds.
+        return Response.json({ id: "resp_rebuilt", object: "response", status: "completed", output: [] });
+      },
+    });
+
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-5.5",
+        input: [{ type: "reasoning", encrypted_content: "stale-blob", summary: [] }],
+      }),
+    });
+    const response = await handleResponses(
+      req,
+      config(),
+      { model: "", provider: "" } as RequestLogContext,
+    );
+
+    expect(response.status).toBe(200);
+    // Three sends, all on the SAME account: rejected bearer, refreshed replay, rebuilt resend.
+    expect(harness.sends).toEqual([
+      "Bearer rejected-access",
+      "Bearer refreshed-access",
+      "Bearer refreshed-access",
+    ]);
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+  });
+
+  test("a stored-account replay 429 cannot reach another account even when one is eligible", async () => {
+    // The mirror of the case above: a quota failure has no same-account move left, so it is
+    // terminal. Asserted with a healthy alternate present, so passing means the budget stopped
+    // it rather than there being nowhere to go.
+    writeStoredAccount({
+      [OTHER_ACCOUNT_ID]: storedRecord({
+        accessToken: "other-access",
+        refreshToken: "other-grant",
+        generation: 1,
+        chatgptAccountId: "acc-other",
+      }),
+    });
+    const harness = installHarness({
+      responseForSend: authorization => {
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization === "Bearer refreshed-access") {
+          return Response.json({ error: { message: "quota exhausted" } }, { status: 402 });
+        }
+        if (authorization === "Bearer other-access") {
+          return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
+        }
+        return undefined;
+      },
+    });
+
+    const cfg = config({ secondAccount: true });
+    cfg.accountPoolStrategy = "fill-first";
+    const response = await handleResponses(
+      request("/v1/responses"),
+      cfg,
+      { model: "", provider: "" } as RequestLogContext,
+    );
+
+    expect(response.status).toBe(402);
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+  });
+
+  test("a gated-model 400 after a stored replay retries the same account, never an alternate", async () => {
+    // The narrow seam the budget leaves open, tested on the branch where it could leak. When the
+    // refreshed roster no longer grants the model, retryCodexPoolOnAlternateAccount would
+    // ordinarily resolve a DIFFERENT account; after a stored replay it must decline instead, or
+    // the 400 ladder becomes a way to spend the account budget twice.
+    writeStoredAccount({
+      [OTHER_ACCOUNT_ID]: storedRecord({
+        accessToken: "other-access",
+        refreshToken: "other-grant",
+        generation: 1,
+        chatgptAccountId: "acc-other",
+      }),
+    });
+    const gatedModel = "gpt-5.6-sol";
+    const harness = installHarness({
+      responseForSend: authorization => {
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization === "Bearer refreshed-access") {
+          // Exactly the allow-listed unsupported-model detail the 400 ladder recognises.
+          return Response.json({
+            detail: `The '${gatedModel}' model is not supported when using Codex with a ChatGPT account.`,
+          }, { status: 400 });
+        }
+        if (authorization === "Bearer other-access") {
+          return Response.json({ id: "must-not-run", object: "response", status: "completed", output: [] });
+        }
+        return undefined;
+      },
+    });
+
+    const cfg = config({ secondAccount: true });
+    cfg.accountPoolStrategy = "fill-first";
+    const response = await handleResponses(
+      request("/v1/responses", { model: gatedModel }),
+      cfg,
+      { model: "", provider: "" } as RequestLogContext,
+      {
+        // Both accounts are entitled on the FIRST resolution, so ordinary selection still picks
+        // the affined work account and the stored 401 happens. From the retry resolution onward
+        // only the other account is entitled, which declines the same-account retry and leaves
+        // the alternate-account branch as the one under test.
+        resolveCodexModelEntitlements: (() => {
+          let call = 0;
+          return async () => {
+            call += 1;
+            const accounts = call === 1 ? [ACCOUNT_ID, OTHER_ACCOUNT_ID] : [OTHER_ACCOUNT_ID];
+            return {
+              modelsByAccount: new Map(accounts.map(id => [id, new Set([gatedModel])])),
+              confirmedAccountIds: new Set(accounts),
+              credentialIdentities: new Map(),
+            };
+          };
+        })(),
+      },
+    );
+
+    // The 400 is surfaced rather than paid for out of the other account.
+    expect(response.status).toBe(400);
+    expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
+  });
 });

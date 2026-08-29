@@ -321,7 +321,7 @@ import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/cat
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
+import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, storedPoolReplayDispatchNotifier } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import {
   acquireUpstreamHostAdmission,
@@ -922,6 +922,15 @@ interface CodexPoolAccountRetryArgs {
   firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   firstResponse: Response;
   outcomeStatus: number;
+  /**
+   * Forbid resolving a DIFFERENT account for this retry.
+   *
+   * Set when a stored Pool 401 already spent this logical request's account budget on its own
+   * refresh and replay. The same-account gated-model retry above stays available, because it
+   * sends to the account that was already paying; only the alternate-account resolution below is
+   * out of budget.
+   */
+  sameAccountOnly?: boolean;
   upstream: AbortController;
   connectMs: number;
   passthroughEstimate?: number;
@@ -1084,7 +1093,9 @@ async function retryCodexPoolOnAlternateAccount(
   }
   // Exact account selectors may retry the same confirmed account above, but must never resolve
   // an alternate. Quota failures and a refreshed entitlement miss remain terminal.
-  if (!retryAuthCtx && firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
+  if (!retryAuthCtx && (firstAuthCtx.fixedAccount || args.sameAccountOnly === true)) {
+    return { kind: "no-alternate" };
+  }
   try {
     retryAuthCtx ??= await resolveCodexAuthContext(
         req.headers,
@@ -3980,17 +3991,25 @@ async function handleResponsesInner(
         recordAdapterTier(logCtx, request);
         refreshUndeclaredToolGuard(request);
         noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, "oauth-401");
-        if (codex401ReplayKind === "stored") options.onStoredPool401ReplayDispatched?.();
         upstreamResponse = await fetchWithHeaderTimeout(
           request.url,
           { method: request.method, headers: request.headers, body: request.body },
           upstream.signal,
           connectMs,
           parsed.stream,
-          providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-            providerName: route.providerName,
-            modelId: route.modelId,
-          }),
+          // The replay-dispatched signal is what bounds the rest of this logical request, so it
+          // has to describe a send that actually happened. fetchWithHeaderTimeout awaits pacing
+          // admission BEFORE calling the executor, so signalling at the call site would spend the
+          // budget even when a rejected pacing wait means nothing reaches the network. Wrapping
+          // the executor moves the signal to the last moment before the send, where a throw from
+          // here on is a genuine transport attempt.
+          storedPoolReplayDispatchNotifier(
+            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              providerName: route.providerName,
+              modelId: route.modelId,
+            }),
+            codex401ReplayKind === "stored" ? options.onStoredPool401ReplayDispatched : undefined,
+          ),
           route.provider.authMode === "forward",
         ).then(response => {
           settleObservedHostResponse();
@@ -4005,10 +4024,6 @@ async function handleResponsesInner(
     }
 
     if (codex401ReplayKind !== null && upstreamResponse.status === 401) break;
-    // A stored Pool 401 owns one refresh and one same-account replay. The replay
-    // result is authoritative for this logical request and cannot enter a later
-    // account, model, or combo recovery ladder.
-    if (codex401ReplayKind === "stored" && upstreamResponse.status >= 400) break;
 
     // Native Responses providers return before the generic adapter recovery loop below. Keep
     // their OAuth contract identical: one pre-stream 401 forces a credential refresh and one
@@ -4209,6 +4224,13 @@ async function handleResponsesInner(
       }
 
       if (poolRetryOutcome !== undefined) {
+        // A stored Pool 401 spent this request's account budget on its own refresh and replay, so
+        // nothing afterwards may be paid for out of a DIFFERENT account. A quota failure has no
+        // same-account move left, so it is terminal here; the gated-model 400 ladder does have
+        // one — retrying the account the refreshed roster still grants — and keeps it, with
+        // alternate resolution refused by `sameAccountOnly`.
+        const storedReplaySpent = codex401ReplayKind === "stored";
+        if (storedReplaySpent && poolRetryOutcome !== 400) break;
         const retry = await retryCodexPoolOnAlternateAccount({
           req,
           config,
@@ -4219,6 +4241,7 @@ async function handleResponsesInner(
           firstAuthCtx: authCtx,
           firstResponse: upstreamResponse,
           outcomeStatus: poolRetryOutcome,
+          sameAccountOnly: storedReplaySpent,
           upstream,
           connectMs,
           passthroughEstimate,

@@ -108,6 +108,48 @@ export function providerFetch(
 
 
 
+/**
+ * Wrap a provider fetch so `onDispatch` fires immediately before the send, not before pacing.
+ *
+ * `fetchWithHeaderTimeout` awaits `waitForPacing` and only then calls the executor, so a caller
+ * that signals at the call site records a dispatch even when a rejected pacing wait means nothing
+ * reached the network. That matters when the signal bounds later recovery: the request would lose
+ * its fallback on the strength of a send that never happened.
+ *
+ * The pacing surface is preserved deliberately. `waitForPacing` and `unpacedFetch` are read off
+ * the executor by `fetchWithHeaderTimeout`, so a plain function wrapper would silently drop
+ * provider pacing and double-send the slot.
+ */
+export function storedPoolReplayDispatchNotifier(
+  executor: ProviderFetch,
+  onDispatch: (() => void) | undefined,
+): ProviderFetch {
+  if (!onDispatch) return executor;
+  let notified = false;
+  const notifyOnce = (): void => {
+    if (notified) return;
+    notified = true;
+    onDispatch();
+  };
+  const unpacedSource = executor.unpacedFetch ?? executor;
+  const unpaced = Object.assign(
+    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      notifyOnce();
+      return unpacedSource(input, init);
+    },
+    { preconnect: unpacedSource.preconnect },
+  ) as ProviderFetch["unpacedFetch"];
+  const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    await executor.waitForPacing?.(init?.signal ?? undefined);
+    return unpaced!(input, init);
+  };
+  return Object.assign(wrapped, {
+    preconnect: executor.preconnect,
+    waitForPacing: executor.waitForPacing,
+    unpacedFetch: unpaced,
+  }) as ProviderFetch;
+}
+
 export async function fetchWithHeaderTimeout(
   url: string,
   init: Omit<RequestInit, "signal">,
