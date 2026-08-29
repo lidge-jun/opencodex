@@ -339,3 +339,382 @@ test("Logs: clear view after apiBase change resets boundary", async () => {
 
   await act(async () => { root2.unmount(); });
 });
+
+// ─── New tests: clear + no-requestId, mixed, eviction, surface filter, buffer counts ───
+
+test("Logs: clear works for entries without requestId", async () => {
+  const noId1 = {
+    timestamp: 1_700_000_000_000,
+    model: "gpt-test",
+    provider: "openai",
+    status: 200,
+    durationMs: 42,
+    usageStatus: "reported",
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    displayMetrics: {
+      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
+      cost: { kind: "unavailable", reason: "price_unmatched" },
+    },
+  };
+  const noId2 = {
+    timestamp: 1_700_000_001_000,
+    model: "gpt-test",
+    provider: "openai",
+    status: 200,
+    durationMs: 42,
+    usageStatus: "reported",
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    displayMetrics: {
+      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
+      cost: { kind: "unavailable", reason: "price_unmatched" },
+    },
+  };
+  // New entry after clear: different timestamp → different composite key
+  const noId3 = {
+    timestamp: 1_700_000_005_000,
+    model: "gpt-test",
+    provider: "openai",
+    status: 200,
+    durationMs: 42,
+    usageStatus: "reported",
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    displayMetrics: {
+      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
+      cost: { kind: "unavailable", reason: "price_unmatched" },
+    },
+  };
+
+  let callCount = 0;
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    callCount++;
+    if (callCount <= 1) return jsonResponse([noId2, noId1]);
+    return jsonResponse([noId3, noId2, noId1]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  // Both entries shown (they appear as timestamps in the text)
+  expect(hasLogRow(container, "gpt-test")).toBe(true);
+
+  const btn = findClearButton(container)!;
+  expect(btn).not.toBeNull();
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+
+  // All old entries hidden
+  expect(hasLogRow(container, "gpt-test")).toBe(false);
+
+  // Advance timer so poll fires and brings back old + new
+  await act(async () => { jest.advanceTimersByTime(2000); });
+  await flushMicrotasks();
+  await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
+
+  // New entry (noId3 with timestamp 5000) should be visible;
+  // old entries (noId1 ts=0, noId2 ts=1000) should still be hidden
+  // We verify by checking there are exactly the right number of rows
+  // Since all share "gpt-test" and "openai", we can't disambiguate by text.
+  // Instead, check that the buffer count says 1 shown (only the new one).
+  expect(container.textContent).toContain("1 / 3");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: clear works for mixed requestId/no-requestId entries", async () => {
+  const noId = {
+    timestamp: 1_700_000_000_000,
+    model: "gpt-test",
+    provider: "openai",
+    status: 200,
+    durationMs: 42,
+    usageStatus: "reported",
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    displayMetrics: {
+      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
+      cost: { kind: "unavailable", reason: "price_unmatched" },
+    },
+  };
+  const withId = makeLog("r-mix", 1_700_000_001_000);
+
+  // After clear: one old (with id, still in buffer) + two brand-new
+  const newLog1 = makeLog("r-new1", 1_700_000_005_000);
+  const newLog2 = makeLog("r-new2", 1_700_000_006_000);
+
+  let callCount = 0;
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    callCount++;
+    if (callCount <= 1) return jsonResponse([withId, noId]);
+    return jsonResponse([newLog2, newLog1, withId, noId]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  expect(hasLogRow(container, "r-mix")).toBe(true);
+  expect(hasLogRow(container, "gpt-test")).toBe(true);
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+
+  // Both with and without requestId should be hidden
+  expect(hasLogRow(container, "r-mix")).toBe(false);
+  expect(hasLogRow(container, "gpt-test")).toBe(false);
+
+  // New poll
+  await act(async () => { jest.advanceTimersByTime(2000); });
+  await flushMicrotasks();
+  await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
+
+  // New entries visible, old still hidden
+  expect(hasLogRow(container, "r-new1")).toBe(true);
+  expect(hasLogRow(container, "r-new2")).toBe(true);
+  expect(hasLogRow(container, "r-mix")).toBe(false);
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: same timestamp different entries are not merged", async () => {
+  // Two logs with IDENTICAL timestamp but different model/provider/status
+  const logA = {
+    timestamp: 1_700_000_000_000,
+    model: "model-alpha",
+    provider: "provider-x",
+    status: 200,
+    durationMs: 10,
+    usageStatus: "reported",
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    displayMetrics: {
+      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
+      cost: { kind: "unavailable", reason: "price_unmatched" },
+    },
+  };
+  const logB = {
+    timestamp: 1_700_000_000_000, // same timestamp
+    model: "model-beta",
+    provider: "provider-y",
+    status: 500,
+    durationMs: 99,
+    usageStatus: "reported",
+    usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 },
+    displayMetrics: {
+      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
+      cost: { kind: "unavailable", reason: "price_unmatched" },
+    },
+  };
+
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([logA, logB]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  // Both shown
+  expect(hasLogRow(container, "model-alpha")).toBe(true);
+  expect(hasLogRow(container, "model-beta")).toBe(true);
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+
+  // Both hidden despite same timestamp (different composite keys)
+  expect(hasLogRow(container, "model-alpha")).toBe(false);
+  expect(hasLogRow(container, "model-beta")).toBe(false);
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: evicted boundary entries do not cause old logs to reappear", async () => {
+  // Load 5 logs newest-first: E, D, C, B, A
+  const logA = makeLog("r-a-old", 1_700_000_000_000);
+  const logB = makeLog("r-b-old", 1_700_000_001_000);
+  const logC = makeLog("r-c-still", 1_700_000_002_000);
+  const logD = makeLog("r-d-still", 1_700_000_003_000);
+  const logE = makeLog("r-e-still", 1_700_000_004_000);
+
+  // New entries
+  const logF = makeLog("r-f-new", 1_700_000_005_000);
+  const logG = makeLog("r-g-new", 1_700_000_006_000);
+
+  let callCount = 0;
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    callCount++;
+    // Initial load: E D C B A (newest first)
+    if (callCount <= 1) return jsonResponse([logE, logD, logC, logB, logA]);
+    // After clear: F G C D E (A and B fell off the server buffer)
+    return jsonResponse([logG, logF, logC, logD, logE]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  // All 5 shown initially
+  expect(hasLogRow(container, "r-a-old")).toBe(true);
+  expect(hasLogRow(container, "r-e-still")).toBe(true);
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+
+  // All 5 hidden
+  expect(hasLogRow(container, "r-a-old")).toBe(false);
+  expect(hasLogRow(container, "r-c-still")).toBe(false);
+  expect(hasLogRow(container, "r-e-still")).toBe(false);
+
+  // New poll returns F G C D E (A, B gone from server)
+  await act(async () => { jest.advanceTimersByTime(2000); });
+  await flushMicrotasks();
+  await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
+
+  // F and G are NEW → visible
+  expect(hasLogRow(container, "r-f-new")).toBe(true);
+  expect(hasLogRow(container, "r-g-new")).toBe(true);
+
+  // C, D, E are STILL in the cleared set → hidden despite reappearing from server
+  expect(hasLogRow(container, "r-c-still")).toBe(false);
+  expect(hasLogRow(container, "r-d-still")).toBe(false);
+  expect(hasLogRow(container, "r-e-still")).toBe(false);
+
+  // A, B are gone from server entirely → hidden
+  expect(hasLogRow(container, "r-a-old")).toBe(false);
+  expect(hasLogRow(container, "r-b-old")).toBe(false);
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: filter change after clear does not restore cleared logs", async () => {
+  // One log with surface "claude", one without surface (matches "codex" filter)
+  const logClaude = {
+    requestId: "r-surf-claude",
+    timestamp: 1_700_000_000_000,
+    model: "claude-test",
+    provider: "anthropic",
+    surface: "claude" as const,
+    status: 200,
+    durationMs: 50,
+    usageStatus: "reported",
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    displayMetrics: {
+      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
+      cost: { kind: "unavailable", reason: "price_unmatched" },
+    },
+  };
+  const logCodex = {
+    requestId: "r-surf-codex",
+    timestamp: 1_700_000_001_000,
+    model: "codex-test",
+    provider: "openai",
+    // no surface → matches "codex" filter
+    status: 200,
+    durationMs: 30,
+    usageStatus: "reported",
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    displayMetrics: {
+      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
+      cost: { kind: "unavailable", reason: "price_unmatched" },
+    },
+  };
+
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([logClaude, logCodex]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  // Both shown with "all" filter
+  expect(hasLogRow(container, "r-surf-claude")).toBe(true);
+  expect(hasLogRow(container, "r-surf-codex")).toBe(true);
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+
+  // Both hidden after clear
+  expect(hasLogRow(container, "r-surf-claude")).toBe(false);
+  expect(hasLogRow(container, "r-surf-codex")).toBe(false);
+
+  // Change surface filter to "Claude" — should NOT bring back cleared logs
+  const claudeFilterBtn = [...container.querySelectorAll('button[role="radio"]')].find(
+    b => b.textContent?.trim() === "Claude",
+  )!;
+  expect(claudeFilterBtn).not.toBeNull();
+  await act(async () => { claudeFilterBtn.click(); });
+  await flushMicrotasks();
+
+  // Still hidden — clear takes precedence over surface filter
+  expect(hasLogRow(container, "r-surf-claude")).toBe(false);
+  expect(hasLogRow(container, "r-surf-codex")).toBe(false);
+
+  // Switch to "Codex" filter too — still hidden
+  const codexFilterBtn = [...container.querySelectorAll('button[role="radio"]')].find(
+    b => b.textContent?.trim() === "Codex",
+  )!;
+  expect(codexFilterBtn).not.toBeNull();
+  await act(async () => { codexFilterBtn.click(); });
+  await flushMicrotasks();
+
+  expect(hasLogRow(container, "r-surf-codex")).toBe(false);
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: buffer count after clear shows 0 shown", async () => {
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([log3, log2, log1]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  expect(container.textContent).toContain("3 / 3");
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+
+  // After clear: 0 shown, 3 total
+  expect(container.textContent).toContain("0 / 3");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("Logs: buffer count shows correct shown after new entries arrive post-clear", async () => {
+  let callCount = 0;
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    callCount++;
+    if (callCount <= 1) return jsonResponse([log2, log1]);
+    // After clear: 1 old (log1 still in buffer) + 2 new (log4, log5)
+    return jsonResponse([log5, log4, log1]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  expect(container.textContent).toContain("2 / 2");
+
+  const btn = findClearButton(container)!;
+  await act(async () => { btn.click(); });
+  await flushMicrotasks();
+
+  // After clear: 0 shown, 2 total
+  expect(container.textContent).toContain("0 / 2");
+
+  // Advance timer so poll fires with 3 entries (1 old + 2 new)
+  await act(async () => { jest.advanceTimersByTime(2000); });
+  await flushMicrotasks();
+  await act(async () => { jest.advanceTimersByTime(0); await Promise.resolve(); });
+
+  // 2 new visible (log4, log5), 3 total in buffer
+  expect(container.textContent).toContain("2 / 3");
+
+  await act(async () => { root.unmount(); });
+});

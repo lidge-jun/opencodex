@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
+import { logKey } from "../log-key";
 import { hashLogConversationQuery, matchesLogConversationId } from "../log-conversation-id";
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
@@ -366,9 +367,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const cachedLogs = validCachedLogs(readSessionListCache<LogEntry[]>(resourceKey));
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [clearedBoundaryId, setClearedBoundaryId] = useState<string | null>(null);
+  const [clearedIds, setClearedIds] = useState<Set<string> | null>(null);
 
-  useEffect(() => { setClearedBoundaryId(null); }, [resourceKey]);
+  useEffect(() => { setClearedIds(null); }, [resourceKey]);
   const [failureStreak, setFailureStreak] = useState<{ error: unknown; count: number }>(
     { error: null, count: 0 },
   );
@@ -515,13 +516,13 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const logsRef = useRef(logs);
   logsRef.current = logs;
   const clearView = useCallback(() => {
-    setClearedBoundaryId(logsRef.current[0]?.requestId ?? null);
+    const ids = new Set<string>();
+    for (const log of logsRef.current) { ids.add(logKey(log)); }
+    setClearedIds(ids);
   }, []);
   const visibleLogs = (() => {
-    if (clearedBoundaryId === null) return logs;
-    const idx = logs.findIndex(l => l.requestId === clearedBoundaryId);
-    if (idx < 0) return logs;
-    return logs.slice(0, idx);
+    if (!clearedIds) return logs;
+    return logs.filter(log => !clearedIds.has(logKey(log)));
   })();
 
   const filteredLogs = visibleLogs.filter(log => (
