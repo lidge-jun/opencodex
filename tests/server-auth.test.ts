@@ -378,6 +378,32 @@ describe("Responses request identity handoff", () => {
     }
   }, { timeout: SERVER_BUDGET_MS });
 
+  test("names the request id in Access-Control-Expose-Headers so browser JS can read it", async () => {
+    const harness = await startPoolRetryHarness(() => Response.json({
+      id: "resp_request_identity_expose",
+      object: "response",
+      status: "completed",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    }), { secondAccount: false });
+    try {
+      const response = await harness.request();
+      const requestId = response.headers.get("x-opencodex-request-id");
+      expect(requestId).toMatch(/^ocx-[a-f0-9]{32}$/);
+
+      // The header being present above is not enough: cross-origin JavaScript may read only
+      // the CORS-safelisted response headers plus whatever the expose-list names, so without
+      // this the id ships on every response and no browser caller can ever see it.
+      const exposed = (response.headers.get("Access-Control-Expose-Headers") ?? "")
+        .split(",")
+        .map(name => name.trim().toLowerCase());
+      expect(exposed).toContain("x-opencodex-request-id");
+      await response.text();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  }, { timeout: SERVER_BUDGET_MS });
+
   test("binds the same generated request id on a streaming terminal", async () => {
     let releaseTerminal!: () => void;
     let terminalReleased = false;
