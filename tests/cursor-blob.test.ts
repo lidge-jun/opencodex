@@ -42,6 +42,7 @@ import {
 import { estimateTokens } from "../src/lib/token-estimate";
 import { CursorRootEnvelopeLimitError } from "../src/adapters/cursor/cursor-errors";
 import { isRetryableCursorError } from "../src/adapters/cursor/transport-retry";
+import { encodeCursorCallId, resetCursorCallIdProvenanceForTests } from "../src/adapters/cursor/call-id";
 import {
   AgentClientMessageSchema,
   ConversationStepSchema,
@@ -792,6 +793,8 @@ describe("Cursor blob handshake", () => {
   });
 
   test("native Cursor replay preserves tool calls with results in turn steps", () => {
+    resetCursorCallIdProvenanceForTests();
+    const local = encodeCursorCallId("ocxc1e_");
     const bytes = encodeCursorRunRequest({
       modelId: "composer-2.5",
       conversationId: "c1",
@@ -803,9 +806,9 @@ describe("Cursor blob handshake", () => {
           role: "assistant",
           model: "cursor/auto",
           timestamp: 2,
-          content: [{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a.txt" } }],
+          content: [{ type: "toolCall", id: local, name: "read_file", arguments: { path: "a.txt" } }],
         },
-        { role: "toolResult", toolCallId: "call_1", toolName: "read_file", content: "contents", isError: false, timestamp: 3 },
+        { role: "toolResult", toolCallId: local, toolName: "read_file", content: "contents", isError: false, timestamp: 3 },
       ],
     });
     const msg = fromBinary(AgentClientMessageSchema, bytes);
@@ -821,7 +824,7 @@ describe("Cursor blob handshake", () => {
     const tool = step.message.value.tool;
     expect(tool.case).toBe("mcpToolCall");
     if (tool.case === "mcpToolCall") {
-      expect(tool.value.args?.toolCallId).toBe("call_1");
+      expect(tool.value.args?.toolCallId).toBe("ocxc1e_");
       expect(tool.value.result?.result.case).toBe("success");
       if (tool.value.result?.result.case === "success") {
         const content = tool.value.result.result.value.content[0]?.content;
@@ -832,6 +835,34 @@ describe("Cursor blob handshake", () => {
     expect(run?.action?.action.case).toBe("userMessageAction");
     const value = run?.action?.action.case === "userMessageAction" ? run.action.action.value : undefined;
     expect(value?.userMessage?.text).toBe(CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT);
+  });
+
+  test("native protobuf replay leaves an opaque escape lookalike byte-identical", () => {
+    resetCursorCallIdProvenanceForTests();
+    const opaque = "ocxc1e_b2N4YzFf";
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c-opaque-call-id",
+      system: [],
+      messages: [{ role: "tool", content: "ignored" }],
+      rawMessages: [
+        { role: "user", content: "read a file", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/auto",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: opaque, name: "read_file", arguments: { path: "a.txt" } }],
+        },
+        { role: "toolResult", toolCallId: opaque, toolName: "read_file", content: "contents", isError: false, timestamp: 3 },
+      ],
+    });
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(run!.conversationState!.turns[0]!));
+    const step = fromBinary(ConversationStepSchema, blobData(turn.turn.value.steps[0]!));
+    const tool = step.message.value.tool;
+
+    expect(tool.value.args?.toolCallId).toBe(opaque);
   });
 
   test("composer-2.5 ordinary turns keep native replay semantics", () => {

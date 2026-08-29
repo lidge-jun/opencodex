@@ -18,6 +18,7 @@ import {
 } from "../src/adapters/cursor/request-builder";
 import { cursorCheckpointModelAffinityId } from "../src/adapters/cursor/discovery";
 import { cursorMcpToolsEncodedSize } from "../src/adapters/cursor/tool-definitions";
+import { encodeCursorCallId, resetCursorCallIdProvenanceForTests } from "../src/adapters/cursor/call-id";
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest } from "../src/types";
 
@@ -356,6 +357,26 @@ describe("Cursor request builder", () => {
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi" },
       { role: "tool", content: "[tool_result]\ncall_id: call_1\nname: tool\nis_error: false\noutput:\ntool out" },
+    ]);
+  });
+
+  test("preserves call/result identity for local escapes and opaque escape lookalikes", () => {
+    resetCursorCallIdProvenanceForTests();
+    const local = encodeCursorCallId("ocxc1_");
+    const opaque = "ocxc1e_b2N4YzFlXw";
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [
+          { role: "toolResult", toolCallId: local, toolName: "first", content: "one", isError: false, timestamp: 1 },
+          { role: "toolResult", toolCallId: opaque, toolName: "second", content: "two", isError: false, timestamp: 2 },
+        ],
+      },
+    });
+
+    expect(request.messages.map(message => message.content)).toEqual([
+      "[tool_result]\ncall_id: ocxc1_\nname: first\nis_error: false\noutput:\none",
+      `[tool_result]\ncall_id: ${opaque}\nname: second\nis_error: false\noutput:\ntwo`,
     ]);
   });
 

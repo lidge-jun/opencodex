@@ -1,5 +1,9 @@
-import { describe, expect, test } from "bun:test";
-import { decodeCursorCallId, encodeCursorCallId } from "../src/adapters/cursor/call-id";
+import { beforeEach, describe, expect, test } from "bun:test";
+import {
+  decodeCursorCallId,
+  encodeCursorCallId,
+  resetCursorCallIdProvenanceForTests,
+} from "../src/adapters/cursor/call-id";
 import { mapCursorServerMessage } from "../src/adapters/cursor/message-mapper";
 import type { CursorMessageMapperState } from "../src/adapters/cursor/message-mapper";
 import type { CursorKvStore } from "../src/adapters/cursor/kv-store";
@@ -10,6 +14,10 @@ function mapperState(): CursorMessageMapperState {
   const kv: CursorKvStore = { get: () => undefined, set: () => {} };
   return { kv, writeClient: () => {} };
 }
+
+beforeEach(() => {
+  resetCursorCallIdProvenanceForTests();
+});
 
 describe("cursor call-id codec", () => {
   test("plain ids pass through unchanged", () => {
@@ -30,13 +38,10 @@ describe("cursor call-id codec", () => {
     }
   });
 
-  // CodeRabbit on PR #2868: with one shared prefix the decoder had to guess, and it guessed
-  // wrong here. `ocxc1_b2N4YzFf` is a legal opaque upstream id whose payload decodes to the
-  // literal text `ocxc1_`, so unwrapping it produced a bare `ocxc1_` and sent a DIFFERENT id
-  // to Cursor — breaking pairing for any pre-change call or replayed history. The parent codec
-  // preserved it; a fix that regresses it is not a fix.
-  test("an opaque id whose payload merely looks encoded is preserved", () => {
-    expect(decodeCursorCallId("ocxc1_b2N4YzFf")).toBe("ocxc1_b2N4YzFf");
+  test("opaque ids whose payloads look like reserved namespaces are preserved without provenance", () => {
+    for (const id of ["ocxc1_b2N4YzFf", "ocxc1e_b2N4YzFf", "ocxc1e_b2N4YzFlXw"]) {
+      expect(decodeCursorCallId(id)).toBe(id);
+    }
     // And it still survives a full round trip, via the escape namespace.
     const encoded = encodeCursorCallId("ocxc1_b2N4YzFf");
     expect(encoded.startsWith("ocxc1e_")).toBe(true);
@@ -62,22 +67,30 @@ describe("cursor call-id codec", () => {
 
   test("adversarial reserved-prefix ids escape one layer at a time", () => {
     const cases = [
-      ["ocxc1_Y2FsbF8x", "ocxc1e_b2N4YzFfWTJGc2JGOHg"],
-      ["ocxc1_Y2FsbF8xCg", "ocxc1e_b2N4YzFfWTJGc2JGOHhDZw"],
-      ["ocxc1e_b2N4YzFfWTJGc2JGOHhDZw", "ocxc1e_b2N4YzFlX2IyTjRZekZmV1RKR2MySkdPSGhEWnc"],
+      "ocxc1_Y2FsbF8x",
+      "ocxc1_Y2FsbF8xCg",
+      "ocxc1e_b2N4YzFfWTJGc2JGOHhDZw",
     ] as const;
 
-    for (const [id, encoded] of cases) {
-      expect(encodeCursorCallId(id)).toBe(encoded);
+    for (const id of cases) {
+      const encoded = encodeCursorCallId(id);
+      expect(encoded.startsWith("ocxc1e_")).toBe(true);
       expect(decodeCursorCallId(encoded)).toBe(id);
     }
   });
 
-  test("legacy encoded line breaks remain decodable", () => {
-    expect(decodeCursorCallId("ocxc1_YQpi")).toBe("a\nb");
-    expect(decodeCursorCallId("ocxc1_DQ")).toBe("\r");
-    expect(decodeCursorCallId("ocxc1_DQo")).toBe("\r\n");
-    expect(decodeCursorCallId("ocxc1_Y2FsbF8xCg")).toBe("call_1\n");
+  test("unsigned pre-restart encodings stay opaque", () => {
+    for (const id of ["ocxc1_YQpi", "ocxc1_DQ", "ocxc1_DQo", "ocxc1_Y2FsbF8xCg"]) {
+      expect(decodeCursorCallId(id)).toBe(id);
+    }
+  });
+
+  test("a process restart invalidates provenance instead of guessing from the payload", () => {
+    const encoded = encodeCursorCallId("ocxc1e_");
+    expect(decodeCursorCallId(encoded)).toBe("ocxc1e_");
+
+    resetCursorCallIdProvenanceForTests();
+    expect(decodeCursorCallId(encoded)).toBe(encoded);
   });
 
   test("newline composite id round-trips through a single-line form", () => {
