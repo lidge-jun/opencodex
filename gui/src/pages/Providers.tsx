@@ -72,27 +72,39 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setStatusTone("err");
   }, []);
 
+  /** Identity of the currently-active batch; stale callbacks see a mismatch and bail out. */
+  const activeBatchRef = useRef<{ id: number; controller: AbortController }>({ id: 0, controller: new AbortController() });
+
   const testAllProviders = useCallback(async () => {
     if (!config || batchTesting) return;
     const names = Object.keys(config.providers);
     if (names.length === 0) return;
+
+    // Cancel any in-flight batch before starting a new one.
+    activeBatchRef.current.controller.abort();
+    const batchId = activeBatchRef.current.id + 1;
+    const controller = new AbortController();
+    activeBatchRef.current = { id: batchId, controller };
+
     setBatchTesting(true);
     const results: Record<string, ConnectionTestResult> = {};
-    const abortController = new AbortController();
     const queue = [...names];
+    const signal = controller.signal;
     const workerCount = Math.min(TEST_CONCURRENCY, names.length);
     const runWorker = async () => {
-      while (queue.length > 0 && !abortController.signal.aborted) {
+      while (queue.length > 0 && !signal.aborted) {
         const name = queue.shift()!;
-        results[name] = await testProviderConnection(apiBase, name, abortController.signal);
+        results[name] = await testProviderConnection(apiBase, name, signal);
       }
     };
     try {
       await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
     } finally {
-      if (aliveRef.current) {
+      const isStale = activeBatchRef.current.id !== batchId;
+      // Only the active batch clears busy and shows toast.
+      if (!isStale && aliveRef.current) {
         setBatchTesting(false);
-        if (!abortController.signal.aborted) {
+        if (!signal.aborted) {
           const passed = Object.values(results).filter(r => r.ok).length;
           const failed = names.length - passed;
           notify(
@@ -105,6 +117,32 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       }
     }
   }, [config, batchTesting, apiBase, notify, t]);
+
+  // Cancel batch on unmount.
+  useEffect(() => {
+    return () => {
+      activeBatchRef.current.controller.abort();
+    };
+  }, []);
+
+  // Cancel batch when apiBase changes.
+  const prevApiBaseRef = useRef(apiBase);
+  useEffect(() => {
+    if (prevApiBaseRef.current !== apiBase) {
+      activeBatchRef.current.controller.abort();
+      prevApiBaseRef.current = apiBase;
+    }
+  }, [apiBase]);
+
+  // Cancel batch when provider config identity changes.
+  const configKey = config ? Object.keys(config.providers).sort().join(",") : "";
+  const prevConfigKeyRef = useRef(configKey);
+  useEffect(() => {
+    if (prevConfigKeyRef.current !== configKey) {
+      activeBatchRef.current.controller.abort();
+      prevConfigKeyRef.current = configKey;
+    }
+  }, [configKey]);
 
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
     if (completion.catalogRefreshPending) {

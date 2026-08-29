@@ -1,10 +1,3 @@
-/**
- * Shared provider connection probe — used by both the single-provider
- * Overview panel and the batch "Test All" action in the Providers page.
- *
- * Centralises: URL construction, POST method, HTTP status check, JSON
- * parsing (via readJsonOrThrow), AbortSignal, and safe error mapping.
- */
 import { readJsonOrThrow } from "../../fetch-json";
 
 export type ConnectionTestResult = {
@@ -17,12 +10,8 @@ export type ConnectionTestResult = {
 };
 
 /**
- * Probe a single provider through the management API.
- *
- * @param apiBase  proxy base URL (e.g. `http://localhost:10100`)
- * @param name     provider name key (e.g. `"openai"`)
- * @param signal   optional AbortSignal — cancelled requests resolve to an
- *                 `{ ok: false, error: "Aborted" }` result instead of throwing.
+ * Probe a single provider through `POST /api/providers/test?name=...`.
+ * On abort or network failure returns `{ ok: false, error }` — never throws.
  */
 export async function testProviderConnection(
   apiBase: string,

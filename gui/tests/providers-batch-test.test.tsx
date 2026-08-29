@@ -482,3 +482,172 @@ test("10. toast text accuracy for success case (1 provider)", async () => {
 
   await act(async () => { root.unmount(); });
 });
+
+// ─── Cancellation-specific tests ───
+
+test("11. unmount aborts batch signal", async () => {
+  const signals: AbortSignal[] = [];
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
+  const d = defer<Response>();
+
+  const { root, container } = await mountProviders(makeFetchHandler([], {
+    config: cfg,
+    test: (_url, _init) => {
+      // The second arg has { signal } from fetch — we capture it from the mock
+      return d.promise;
+    },
+  }));
+
+  // Override fetch to capture signals
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("/api/providers/test")) {
+      if (init?.signal) signals.push(init.signal);
+      return d.promise;
+    }
+    return origFetch(input, init);
+  }) as typeof fetch;
+
+  const btn = findTestAllButton(container)!;
+  await act(async () => { btn.click(); });
+
+  // Unmount while batch is in progress
+  await act(async () => { root.unmount(); });
+
+  // Signal should be aborted
+  expect(signals.length).toBeGreaterThanOrEqual(1);
+  for (const sig of signals) {
+    expect(sig.aborted).toBe(true);
+  }
+
+  // Resolve deferred — should not cause errors
+  await act(async () => { d.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+});
+
+test("12. abort does not show toast", async () => {
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
+  const d = defer<Response>();
+
+  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
+
+  // Override fetch to use deferred
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).includes("/api/providers/test")) return d.promise;
+    return origFetch(input);
+  }) as typeof fetch;
+
+  const btn = findTestAllButton(container)!;
+  await act(async () => { btn.click(); });
+
+  // Unmount to abort
+  await act(async () => { root.unmount(); });
+
+  // Resolve the deferred after unmount
+  await act(async () => { d.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+
+  // No toast should appear — page text should not contain success/failure messages
+  expect(pageText()).not.toContain("healthy");
+  expect(pageText()).not.toContain("with errors");
+});
+
+test("13. replacement batch: button disabled prevents concurrent batch", async () => {
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" }, grok: { adapter: "grok", baseUrl: "https://c" } } };
+
+  const d1 = defer<Response>();
+
+  const calls: string[] = [];
+  const { root, container } = await mountProviders(makeFetchHandler(calls, { config: cfg }));
+
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input).includes("/api/providers/test")) return d1.promise;
+    return origFetch(input);
+  }) as typeof fetch;
+
+  const btn = findTestAllButton(container)!;
+
+  // Start first batch
+  await act(async () => { btn.click(); });
+  // Button should be disabled (batchTesting = true) — shows "Testing…"
+  const testingBtn1 = findTestingButton(container);
+  expect(testingBtn1).not.toBeNull();
+  expect(testingBtn1!.disabled).toBe(true);
+
+  // The original "Test All" button is now showing "Testing…" and is disabled,
+  // so clicking it again is a no-op (disabled). This is the correct behavior:
+  // the component returns early when batchTesting is true.
+  expect(testingBtn1!.disabled).toBe(true);
+
+  // Complete first batch
+  await act(async () => { d1.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  await driveAsyncBatch();
+
+  // After first batch completes, button should be enabled again
+  const btnAfter = findTestAllButton(container);
+  expect(btnAfter).not.toBeNull();
+  expect(btnAfter!.disabled).toBe(false);
+
+  await act(async () => { root.unmount(); });
+});
+
+test("14. max concurrency refills immediately after one request completes", async () => {
+  const names = ["a", "b", "c", "d"];
+  const cfg = makeConfig(names);
+
+  const pendingDeferreds: ReturnType<typeof defer<Response>>[] = [];
+  let inFlight = 0;
+  let maxInFlight = 0;
+
+  const calls: string[] = [];
+  const { root, container } = await mountProviders(makeFetchHandler(calls, {
+    config: cfg,
+    test: () => {
+      inFlight++;
+      if (inFlight > maxInFlight) maxInFlight = inFlight;
+      const d = defer<Response>();
+      pendingDeferreds.push(d);
+      return d.promise.then(v => { inFlight--; return v; }, e => { inFlight--; throw e; });
+    },
+  }));
+
+  const btn = findTestAllButton(container)!;
+  await act(async () => { btn.click(); });
+
+  // Let workers start
+  for (let i = 0; i < 10; i++) {
+    await act(async () => {
+      await Promise.resolve();
+      jest.advanceTimersByTime(0);
+    });
+  }
+
+  // With 4 providers and concurrency 3, first 3 should start immediately
+  expect(pendingDeferreds.length).toBeGreaterThanOrEqual(3);
+  expect(maxInFlight).toBeLessThanOrEqual(3);
+
+  // Complete the first request — the 4th should immediately start
+  await act(async () => { pendingDeferreds[0].resolve(jsonResponse({ ok: true, latencyMs: 5 })); });
+
+  // Let microtasks settle so worker picks up next item
+  for (let i = 0; i < 10; i++) {
+    await act(async () => {
+      await Promise.resolve();
+      jest.advanceTimersByTime(0);
+    });
+  }
+
+  // All 4 should now be in flight or completed
+  expect(pendingDeferreds.length).toBe(4);
+
+  // Complete remaining
+  for (let i = 1; i < 4; i++) {
+    await act(async () => { pendingDeferreds[i].resolve(jsonResponse({ ok: true, latencyMs: 5 })); });
+  }
+  await driveAsyncBatch();
+
+  expect(calls.length).toBe(4);
+  expect(maxInFlight).toBeLessThanOrEqual(3);
+
+  await act(async () => { root.unmount(); });
+});
