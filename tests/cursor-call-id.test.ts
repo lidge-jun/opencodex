@@ -21,11 +21,35 @@ describe("cursor call-id codec", () => {
     for (const id of ["ocxc1_", "ocxc1_Y2FsbF8x", "ocxc1_!!not-base64url!!", "ocxc1_raw\nwire"]) {
       const encoded = encodeCursorCallId(id);
       expect(encoded).not.toBe(id);
-      expect(encoded.startsWith("ocxc1_")).toBe(true);
+      // Newline-bearing ids take the encoding namespace; newline-free reserved ids take the
+      // escape namespace. Both are single-line and both reverse exactly.
+      expect(encoded.startsWith(id.includes("\n") ? "ocxc1_" : "ocxc1e_")).toBe(true);
       expect(encoded).not.toContain("\n");
       expect(encoded).not.toContain("\r");
       expect(decodeCursorCallId(encoded)).toBe(id);
     }
+  });
+
+  // CodeRabbit on PR #2868: with one shared prefix the decoder had to guess, and it guessed
+  // wrong here. `ocxc1_b2N4YzFf` is a legal opaque upstream id whose payload decodes to the
+  // literal text `ocxc1_`, so unwrapping it produced a bare `ocxc1_` and sent a DIFFERENT id
+  // to Cursor — breaking pairing for any pre-change call or replayed history. The parent codec
+  // preserved it; a fix that regresses it is not a fix.
+  test("an opaque id whose payload merely looks encoded is preserved", () => {
+    expect(decodeCursorCallId("ocxc1_b2N4YzFf")).toBe("ocxc1_b2N4YzFf");
+    // And it still survives a full round trip, via the escape namespace.
+    const encoded = encodeCursorCallId("ocxc1_b2N4YzFf");
+    expect(encoded.startsWith("ocxc1e_")).toBe(true);
+    expect(decodeCursorCallId(encoded)).toBe("ocxc1_b2N4YzFf");
+  });
+
+  test("ids already in the escape namespace are themselves escaped", () => {
+    const id = "ocxc1e_YQpi";
+    const encoded = encodeCursorCallId(id);
+    expect(encoded).not.toBe(id);
+    expect(decodeCursorCallId(encoded)).toBe(id);
+    // Untouched when it is not our output: the payload decodes to newline-free non-reserved text.
+    expect(decodeCursorCallId("ocxc1e_Y2FsbF8x")).toBe("ocxc1e_Y2FsbF8x");
   });
 
   test("reserved-prefix ids resembling legacy newline encodings stay opaque", () => {
@@ -38,9 +62,9 @@ describe("cursor call-id codec", () => {
 
   test("adversarial reserved-prefix ids escape one layer at a time", () => {
     const cases = [
-      ["ocxc1_Y2FsbF8x", "ocxc1_b2N4YzFfWTJGc2JGOHg"],
-      ["ocxc1_Y2FsbF8xCg", "ocxc1_b2N4YzFfWTJGc2JGOHhDZw"],
-      ["ocxc1_b2N4YzFfWTJGc2JGOHhDZw", "ocxc1_b2N4YzFfYjJONFl6RmZXVEpHYzJKR09IaERadw"],
+      ["ocxc1_Y2FsbF8x", "ocxc1e_b2N4YzFfWTJGc2JGOHg"],
+      ["ocxc1_Y2FsbF8xCg", "ocxc1e_b2N4YzFfWTJGc2JGOHhDZw"],
+      ["ocxc1e_b2N4YzFfWTJGc2JGOHhDZw", "ocxc1e_b2N4YzFlX2IyTjRZekZmV1RKR2MySkdPSGhEWnc"],
     ] as const;
 
     for (const [id, encoded] of cases) {
