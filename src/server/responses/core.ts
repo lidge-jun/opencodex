@@ -1433,6 +1433,8 @@ export interface HandleResponsesOptions {
   deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
   onConsumedComboFailure?: (failure: ConsumedComboFailure) => void;
+  /** A stored Pool credential was refreshed and its one allowed same-account replay was sent. */
+  onStoredPool401ReplayDispatched?: () => void;
   /** Caller-owned for Chat/Claude replay; omitted only at genuine Responses ingress. */
   translatorBudget?: TranslatorBudget;
   /**
@@ -2289,6 +2291,7 @@ export async function handleComboResponses(
       attemptRetained = true;
     };
     let consumedChildFailure: ConsumedComboFailure | undefined;
+    let storedPool401ReplayDispatched = false;
     const callbackGate = createChildPassthroughCallbackGate(options);
     let response: Response;
     try {
@@ -2315,6 +2318,7 @@ export async function handleComboResponses(
         onCodexAuthContextResolved: value => { resolvedAuth = value; },
         setTerminalOutcomeRecorder: value => { terminalRecorder = value; },
         onConsumedComboFailure: value => { consumedChildFailure = value; },
+        onStoredPool401ReplayDispatched: () => { storedPool401ReplayDispatched = true; },
         onNativePassthroughTerminal: callbackGate.onTerminal,
         onNativePassthroughCancel: callbackGate.onCancel,
       });
@@ -2420,6 +2424,10 @@ export async function handleComboResponses(
     (logCtx.attempts ??= []).push(attempt);
     attemptRetained = true;
     lastFailure = failure.response;
+    if (storedPool401ReplayDispatched) {
+      adoptFailedChildLog(childLog);
+      return lastFailure;
+    }
     if (comboFailureDecision(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     }) === "stop") {
@@ -3839,7 +3847,7 @@ async function handleResponsesInner(
 
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     let oauth401ReplayAttempted = false;
-    let codexMain401ReplayAttempted = false;
+    let codex401ReplayKind: "main" | "stored" | null = null;
     const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
     let rateLimitRetries = 0;
     const rebuildAndRefetch = async (
@@ -3914,9 +3922,9 @@ async function handleResponsesInner(
       upstreamResponse.status === 401
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")
       && usesCodexForwardPoolAuth(authCtx, route.provider)
-      && !codexMain401ReplayAttempted
+      && codex401ReplayKind === null
     ) {
-      codexMain401ReplayAttempted = true;
+      codex401ReplayKind = authCtx.kind === "pool" ? "stored" : "main";
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
       const poolAuthCtx = authCtx.kind === "pool" ? authCtx : undefined;
       const poolReplay = poolAuthCtx
@@ -3972,6 +3980,7 @@ async function handleResponsesInner(
         recordAdapterTier(logCtx, request);
         refreshUndeclaredToolGuard(request);
         noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, "oauth-401");
+        if (codex401ReplayKind === "stored") options.onStoredPool401ReplayDispatched?.();
         upstreamResponse = await fetchWithHeaderTimeout(
           request.url,
           { method: request.method, headers: request.headers, body: request.body },
@@ -3995,7 +4004,11 @@ async function handleResponsesInner(
       continue passthroughRecovery;
     }
 
-    if (codexMain401ReplayAttempted && upstreamResponse.status === 401) break;
+    if (codex401ReplayKind !== null && upstreamResponse.status === 401) break;
+    // A stored Pool 401 owns one refresh and one same-account replay. The replay
+    // result is authoritative for this logical request and cannot enter a later
+    // account, model, or combo recovery ladder.
+    if (codex401ReplayKind === "stored" && upstreamResponse.status >= 400) break;
 
     // Native Responses providers return before the generic adapter recovery loop below. Keep
     // their OAuth contract identical: one pre-stream 401 forces a credential refresh and one

@@ -116,16 +116,21 @@ export async function handleResponsesWithPolicyFallback(
 ): Promise<Response> {
   const runCore = deps.runCore ?? handleResponsesCore;
   let requestBodyReadNotified = false;
-  const coreOptions: CoreOptions = options.onRequestBodyRead
-    ? {
-      ...options,
+  let storedPool401ReplayDispatched = false;
+  const coreOptions: CoreOptions = {
+    ...options,
+    ...(options.onRequestBodyRead ? {
       onRequestBodyRead: () => {
         if (requestBodyReadNotified) return;
         requestBodyReadNotified = true;
         options.onRequestBodyRead?.();
       },
-    }
-    : options;
+    } : {}),
+    onStoredPool401ReplayDispatched: () => {
+      storedPool401ReplayDispatched = true;
+      options.onStoredPool401ReplayDispatched?.();
+    },
+  };
   let rawBody: Record<string, unknown> | null = null;
   try {
     const parsed = await readJsonRequestBody(req.clone());
@@ -150,7 +155,7 @@ export async function handleResponsesWithPolicyFallback(
     candidateKey({ provider: initialTrace.selected.provider, model: initialTrace.selected.model }),
   ]);
 
-  while (await shouldHopPolicyCandidate(response, req.signal)) {
+  while (!storedPool401ReplayDispatched && await shouldHopPolicyCandidate(response, req.signal)) {
     if (req.signal.aborted) return response;
     const next = rankPolicyFallbackCandidates(initialTrace, tried)[0];
     if (!next) return response;

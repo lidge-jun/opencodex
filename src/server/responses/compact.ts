@@ -163,6 +163,10 @@ interface CompactHandoffRoute {
  */
 const compactHandoffRoutes = new Map<string, CompactHandoffRoute>();
 
+export function clearCompactHandoffRoutesForTests(): void {
+  compactHandoffRoutes.clear();
+}
+
 function pruneCompactHandoffRoutes(now: number): void {
   for (const [key, entry] of compactHandoffRoutes) {
     if (now - entry.lastUsedAt > COMPACT_HANDOFF_ROUTE_TTL_MS) compactHandoffRoutes.delete(key);
@@ -740,6 +744,7 @@ export async function handleResponsesCompact(
     // actually happens, so every recorder call names the context that produced it.
     let outcomeCtx = authCtx;
     let upstream: Response;
+    let storedPool401ReplayAttempted = false;
     try {
       // Same connect timeout + keep-alive reset + transient-5xx recovery as /v1/responses —
       // compact hits the same ChatGPT host and must soft-avoid / clear affinity (#186).
@@ -777,6 +782,7 @@ export async function handleResponsesCompact(
     ) {
       await upstream.body?.cancel().catch(() => undefined);
       const poolAuthCtx = authCtx.kind === "pool" ? authCtx : undefined;
+      storedPool401ReplayAttempted = poolAuthCtx !== undefined;
       const poolReplay = poolAuthCtx
         ? await refreshPoolCompactContext({
           req,
@@ -837,6 +843,7 @@ export async function handleResponsesCompact(
     // — reporting exhausted retries while another pool account sat idle (#913).
     if (
       (upstream.status === 429 || upstream.status === 402)
+      && !storedPool401ReplayAttempted
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
       && route.codexAccountMode
@@ -947,7 +954,7 @@ export async function handleResponsesCompact(
     if (buffered.ok) {
       inspectResponseLogJson(logCtx, await buffered.clone().text());
       forgetCompactHandoffRoute(req);
-    } else if (quotaFailure) {
+    } else if (quotaFailure && !storedPool401ReplayAttempted) {
       const fallbackModel = compactHandoffRoute(req, raw.model);
       if (fallbackModel && !req.signal.aborted) {
         const fallbackReq = new Request(req.url, {
