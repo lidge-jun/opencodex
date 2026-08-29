@@ -419,6 +419,26 @@ describe("Codex app-server process matching (#476)", () => {
     // A backup name must not be normalised into the target-triple pattern. Stripping the
     // suffix before that test would make this unrelated binary a kill target.
     expect(isCodexAppServerCommandLine("/opt/tools/codex-report-generator-worker.opencodex-real app-server")).toBe(false);
+    // No shim installation can produce a .exe backup: Windows refuses to rename a native
+    // codex.exe. Matching a name nothing writes only widens what SIGTERM can reach.
+    expect(isCodexAppServerCommandLine("C:\\tools\\codex.opencodex-real.exe app-server")).toBe(false);
+  });
+
+  /**
+   * `--` ends option parsing, so the next word is a TUI prompt rather than a subcommand.
+   * `codex -- app-server` opens an interactive session whose first prompt word happens to
+   * be "app-server"; matching it sent SIGTERM to a live session. Predates the shim-backup
+   * work and applies to every launcher name.
+   */
+  test("a prompt after -- is not the app-server subcommand", () => {
+    expect(isCodexAppServerCommandLine("codex -- app-server")).toBe(false);
+    expect(isCodexAppServerCommandLine("/usr/local/bin/codex -- app-server --listen unix://")).toBe(false);
+    expect(isCodexAppServerCommandLine("codex.opencodex-real -- app-server")).toBe(false);
+    expect(isCodexAppServerCommandLine("codex -c features.x=true -- app-server")).toBe(false);
+    expect(isCodexAppServerCommandLine("node /usr/local/bin/codex -- app-server")).toBe(false);
+    // The real invocations still match: a global option before the subcommand is ordinary.
+    expect(isCodexAppServerCommandLine("codex app-server")).toBe(true);
+    expect(isCodexAppServerCommandLine("codex -c features.x=true app-server")).toBe(true);
   });
 
 

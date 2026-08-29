@@ -80,15 +80,16 @@ const CODEX_TARGET_TRIPLE_BASENAME_RE = new RegExp(
  * refuses a real `codex.exe` outright — so the combination is unreachable, not merely
  * unlisted.
  *
- * `.ps1` is here because `findWindowsCodexTargets` shims `codex.ps1` alongside
- * `codex.cmd`. `.exe` is breadth rather than an observed shape: current installation
- * refuses to rename a native `codex.exe`, and matching a name nothing produces costs
- * nothing, while missing one leaves a process alive.
+ * `.ps1` and `.cmd` are here because `findWindowsCodexTargets` shims both, and the
+ * extensionless form because Unix discovery and the Git-Bash launcher use it. There is
+ * deliberately no `.opencodex-real.exe`: Windows installation REFUSES to rename a native
+ * `codex.exe`, so that backup cannot exist. Matching it looked like free breadth until a
+ * review round put it plainly — this set decides what receives SIGTERM, and a name no
+ * installation can produce only widens what a coincidence can hit.
  */
 const CODEX_LAUNCHER_BASENAMES = new Set([
   "codex", "codex.exe", "codex.cmd",
   "codex.opencodex-real",
-  "codex.opencodex-real.exe",
   "codex.opencodex-real.cmd",
   "codex.opencodex-real.ps1",
 ]);
@@ -318,6 +319,10 @@ export function isCodexAppServerCommandLine(commandLine: string, executable?: st
   let i = 1;
   while (i < tokens.length) {
     const token = tokens[i]!;
+    // `--` ends option parsing, so what follows is a prompt for the interactive TUI, not
+    // a subcommand. `codex -- app-server` starts a session whose first prompt word is
+    // "app-server"; treating it as a match sends SIGTERM to somebody's live session.
+    if (token === "--") return false;
     if (token.startsWith("-")) {
       i = advancePastCodexGlobalOption(tokens, i);
       continue;

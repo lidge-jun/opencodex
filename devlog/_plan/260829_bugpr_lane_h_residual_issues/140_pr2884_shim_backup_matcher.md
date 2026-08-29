@@ -49,9 +49,13 @@ path whose job is sending SIGTERM, widening the matcher to be tidy is the wrong 
 An exact basename set, kept separate from the triple pattern rather than folded into it.
 
 `.ps1` is added because `findWindowsCodexTargets` shims `codex.ps1` alongside
-`codex.cmd`, and #2884 omitted it. `.exe` is kept as breadth, not as an observed shape:
-current installation refuses to rename a native `codex.exe`, so matching that name costs
-nothing while missing one leaves a process alive.
+`codex.cmd`, and #2884 omitted it.
+
+`.opencodex-real.exe` is deliberately NOT matched. Both #2884 and my first draft included
+it, reasoning that matching a name nothing produces is free breadth. A review round
+rejected that and was right: this set decides what receives SIGTERM, and Windows
+installation refuses to rename a native `codex.exe`, so the backup cannot exist. Breadth
+in a matcher is not free when the matcher's output is a signal.
 
 The Windows prefilter's optional suffix goes where `backupPathFor` writes it — after the
 stem, before the extension. #2884 placed it before the triple, which admits
@@ -59,13 +63,32 @@ stem, before the extension. #2884 placed it before the triple, which admits
 GetOwner for it. The regex source is embedded into PowerShell, so every addition stays
 within plain character classes that .NET reads identically.
 
+## A pre-existing kill-target bug, found on the way
+
+The same review round found that `codex -- app-server` matched, and still matched before
+any of this work: `--` was consumed by the option-skipping loop like any other
+`-`-prefixed token. But `--` ends option parsing, so the word after it is a prompt for
+the interactive TUI. `codex -- app-server` opens a session whose first prompt word is
+"app-server", and `--restart-codex` sent SIGTERM to it.
+
+That is not #2884's defect and it is not caused by the backup names — it applies to every
+launcher spelling. It is fixed here because the shim-backup change widens which processes
+reach this scanner, and shipping a broader matcher over a known false positive would be
+the wrong order. The scanner now stops at `--`.
+
 ## Verification
 
 Named mutations, each observed red:
 
 - Backups not admitted at all — the reported command line fails.
 - Reversed suffix/triple ordering — the prefilter negative assertion fails.
+- `--` treated as an ordinary option again — the TUI-prompt case fails.
+- `.opencodex-real.exe` readmitted — the impossible-backup negative fails.
 
 Positive coverage uses the exact command line from the report. Negative coverage holds
 the line the fix is at risk of crossing: a subcommand, an argument position, and
 `codex-report-generator-worker.opencodex-real`, which must never match.
+
+One limit worth stating: `.ps1` is basename admission only. A real PowerShell launcher
+runs as `powershell.exe -File <path>`, which this scanner does not match, and proving
+that shape needs a Win32 reproduction rather than another synthetic token test.
