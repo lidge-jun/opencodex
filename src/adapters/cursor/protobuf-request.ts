@@ -714,7 +714,12 @@ function toolCallArgumentsText(args: Record<string, unknown>): string {
   const serialized = serializeToolCallArguments(args);
   if (serialized === undefined) return "[unserializable arguments]";
   if (encoder.encode(serialized).byteLength <= CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT) return serialized;
-  return `${truncateUtf8(serialized, CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT)}…[arguments truncated]`;
+  // The budget is the size of the RENDERED line, so the marker has to come out of it rather than be
+  // added on top: otherwise every truncated invocation exceeds the declared limit by the marker.
+  const marker = "…[arguments truncated]";
+  const markerBytes = encoder.encode(marker).byteLength;
+  const keep = Math.max(0, CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT - markerBytes);
+  return `${truncateUtf8(serialized, keep)}${marker}`;
 }
 
 /**

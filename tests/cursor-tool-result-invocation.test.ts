@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { create, fromBinary } from "@bufbuild/protobuf";
-import { encodeCursorRunRequest } from "../src/adapters/cursor/protobuf-request";
+import { CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT, encodeCursorRunRequest } from "../src/adapters/cursor/protobuf-request";
 import { handleCursorNativeKv } from "../src/adapters/cursor/native-exec";
 import {
   AgentClientMessageSchema,
@@ -225,6 +225,26 @@ describe("cursor replayed tool results name their invocation", () => {
     const root = resultRoot(encode(messages, "grok-4.6-high"));
     expect(root).toBeDefined();
     expect(root).toContain("SENTINEL_OUTPUT");
+  });
+
+  // The cap is a budget for the RENDERED line, so the truncation marker must come out of it rather
+  // than be appended on top of a full-size prefix.
+  test("the truncated invocation line stays within the declared argument budget", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Write the file.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "write_file", arguments: { contents: "Z".repeat(600 * 1024) } }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "write_file", content: "SENTINEL_OUTPUT", isError: false, timestamp: 3 },
+    ];
+    const root = resultRoot(encode(messages, "grok-4.6-high"));
+    const line = root?.split("\n").find(text => text.startsWith("invoked: "));
+    expect(line).toBeDefined();
+    expect(line).toContain("…[arguments truncated]");
+    const rendered = line!.slice("invoked: write_file with ".length);
+    expect(new TextEncoder().encode(rendered).byteLength).toBeLessThanOrEqual(CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT);
   });
 
   // REVIEW BLOCKER PROBE 2: namespace is part of tool identity. Two different tools sharing one
