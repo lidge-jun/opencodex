@@ -9,7 +9,13 @@ import {
   preferredInitialAccount,
   rotateGenericOAuthAccountOn429,
 } from "../src/oauth/generic-account-failover";
-import { getAccountSet, removeAccount, saveCredential, setActiveAccount } from "../src/oauth/store";
+import {
+  getAccountSet,
+  markAccountNeedsReauth,
+  removeAccount,
+  saveCredential,
+  setActiveAccount,
+} from "../src/oauth/store";
 import { getValidAccessSnapshotForAccount } from "../src/oauth";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import {
@@ -254,11 +260,11 @@ describe("pre-dispatch account preference", () => {
     }
   });
 
-  test("repeated calls inside the TTL do not re-read the credential store", async () => {
+  test("a non-redirecting request never touches the credential store", async () => {
     // loadAuthStore chmods the config dir, chmods the secret, and re-parses the whole
     // credential file on every call — and this runs on the initial resolution of EVERY
-    // request. Rather than measure atime (which noatime mounts make vacuous), remove the
-    // store after one warm call: a cached selection still answers, an uncached one cannot.
+    // request. The common case, where the ranking agrees with the active account, must
+    // answer entirely from cache. Deleting the store proves it: an uncached path could not.
     home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
     process.env.OPENCODEX_HOME = home;
     clearGenericFailoverHealth();
@@ -266,11 +272,12 @@ describe("pre-dispatch account preference", () => {
     try {
       const ids = await seedAccounts(2);
       await setActiveAccount("xai", ids[0]!);
-      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
-      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
-      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+      // Active already holds the most headroom, so there is nothing to redirect.
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
       rmSync(join(home, "auth.json"), { force: true });
-      for (let i = 0; i < 4; i++) expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+      for (let i = 0; i < 4; i++) expect(preferredInitialAccount(config, "xai")).toBeNull();
     } finally {
       clearGenericFailoverHealth();
       clearAccountQuotaCache();
@@ -297,15 +304,42 @@ describe("pre-dispatch account preference", () => {
       expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
 
       await removeAccount("xai", ids[1]!);
-      // Still returned: the roster read predates the removal.
-      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
-      // ...and resolving it fails, which is the condition the request path must absorb.
-      await expect(getValidAccessSnapshotForAccount("xai", ids[1]!)).rejects.toThrow();
-
-      // After the request path forgets the stale roster, selection stops naming it.
-      forgetGenericFailoverRoster("xai");
+      // A redirection re-checks its winner against the live store, so the removed account
+      // is never named — the request path keeps the healthy active account.
       expect(preferredInitialAccount(config, "xai")).toBeNull();
+      // ...and had it been named, resolving it would have thrown; the caller absorbs that
+      // too, but this is the layer that stops it happening at all.
+      await expect(getValidAccessSnapshotForAccount("xai", ids[1]!)).rejects.toThrow();
       expect(getAccountSet("xai")?.accounts.map(a => a.id)).toEqual([ids[0]!]);
+    } finally {
+      clearGenericFailoverHealth();
+      clearAccountQuotaCache();
+      if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a preferred account flagged for reauth inside the TTL is not selected", async () => {
+    // The dangerous variant of stale roster data: unlike a removal, a needsReauth account
+    // still has a readable credential, so resolution SUCCEEDS and no error path fires. The
+    // request would dispatch on an account already known to need a fresh login while a
+    // healthy active account sat unused.
+    home = mkdtempSync(join(tmpdir(), "ocx-predispatch-"));
+    process.env.OPENCODEX_HOME = home;
+    clearGenericFailoverHealth();
+    clearAccountQuotaCache();
+    try {
+      const ids = await seedAccounts(2);
+      await setActiveAccount("xai", ids[0]!);
+      setCachedProviderAccountQuotaForTests("xai", ids[0]!, { monthlyPercent: 95, updatedAt: Date.now() });
+      setCachedProviderAccountQuotaForTests("xai", ids[1]!, { monthlyPercent: 5, updatedAt: Date.now() });
+      expect(preferredInitialAccount(config, "xai")).toBe(ids[1]);
+
+      await markAccountNeedsReauth("xai", ids[1]!, true);
+      expect(preferredInitialAccount(config, "xai")).toBeNull();
+      // Proof the flag alone would not have stopped it: the credential still resolves.
+      await expect(getValidAccessSnapshotForAccount("xai", ids[1]!)).resolves.toBeDefined();
     } finally {
       clearGenericFailoverHealth();
       clearAccountQuotaCache();
