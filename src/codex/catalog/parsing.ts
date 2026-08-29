@@ -431,6 +431,13 @@ export function ensureStrictCatalogFields(
   entry: RawEntry,
   options: { preserveExactInputModalities?: boolean; isRouted?: boolean } = {},
 ): RawEntry {
+  if (entry.shell_type === "default" || entry.shell_type === "local" || entry.shell_type === "shell_command") {
+    entry.shell_type = "unified_exec";
+  }
+  if (typeof entry.node_repl_disabled !== "boolean") entry.node_repl_disabled = false;
+  if (typeof entry.node_repl_auto_review_required !== "boolean") entry.node_repl_auto_review_required = false;
+  if (typeof entry.include_plugin_usage_instructions !== "boolean") entry.include_plugin_usage_instructions = false;
+  if (typeof entry.include_apps_usage_instructions !== "boolean") entry.include_apps_usage_instructions = true;
   if (typeof entry.supports_reasoning_summaries !== "boolean") entry.supports_reasoning_summaries = false;
   if (typeof entry.default_reasoning_summary !== "string") entry.default_reasoning_summary = "none";
   if (typeof entry.support_verbosity !== "boolean") entry.support_verbosity = true;

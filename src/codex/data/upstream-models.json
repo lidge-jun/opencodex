@@ -21,6 +21,10 @@
       "multi_agent_version": "v2",
       "use_responses_lite": true,
       "include_skills_usage_instructions": false,
+      "node_repl_disabled": false,
+      "node_repl_auto_review_required": false,
+      "include_plugin_usage_instructions": true,
+      "include_apps_usage_instructions": true,
       "auto_review_model_override": null,
       "context_window": 372000,
       "max_context_window": 372000,
@@ -57,7 +61,7 @@
           "description": "Maximum reasoning with automatic task delegation"
         }
       ],
-      "shell_type": "shell_command",
+      "shell_type": "unified_exec",
       "visibility": "list",
       "minimal_client_version": "0.142.2",
       "supported_in_api": true,
@@ -135,6 +139,10 @@
       "multi_agent_version": "v2",
       "use_responses_lite": true,
       "include_skills_usage_instructions": false,
+      "node_repl_disabled": false,
+      "node_repl_auto_review_required": false,
+      "include_plugin_usage_instructions": true,
+      "include_apps_usage_instructions": true,
       "auto_review_model_override": null,
       "context_window": 372000,
       "max_context_window": 372000,
@@ -171,7 +179,7 @@
           "description": "Maximum reasoning with automatic task delegation"
         }
       ],
-      "shell_type": "shell_command",
+      "shell_type": "unified_exec",
       "visibility": "list",
       "minimal_client_version": "0.142.2",
       "supported_in_api": true,
@@ -247,6 +255,10 @@
       "multi_agent_version": "v1",
       "use_responses_lite": true,
       "include_skills_usage_instructions": false,
+      "node_repl_disabled": false,
+      "node_repl_auto_review_required": false,
+      "include_plugin_usage_instructions": true,
+      "include_apps_usage_instructions": true,
       "auto_review_model_override": null,
       "context_window": 372000,
       "max_context_window": 372000,
@@ -279,7 +291,7 @@
           "description": "Maximum reasoning depth for the hardest problems"
         }
       ],
-      "shell_type": "shell_command",
+      "shell_type": "unified_exec",
       "visibility": "list",
       "minimal_client_version": "0.142.2",
       "supported_in_api": true,
@@ -355,6 +367,10 @@
       "multi_agent_version": null,
       "use_responses_lite": false,
       "include_skills_usage_instructions": true,
+      "node_repl_disabled": false,
+      "node_repl_auto_review_required": false,
+      "include_plugin_usage_instructions": true,
+      "include_apps_usage_instructions": true,
       "auto_review_model_override": null,
       "context_window": 272000,
       "max_context_window": 272000,
@@ -383,7 +399,7 @@
           "description": "Extra high reasoning depth for complex problems"
         }
       ],
-      "shell_type": "shell_command",
+      "shell_type": "unified_exec",
       "visibility": "list",
       "minimal_client_version": "0.124.0",
       "supported_in_api": true,
@@ -461,6 +477,10 @@
       "multi_agent_version": null,
       "use_responses_lite": false,
       "include_skills_usage_instructions": false,
+      "node_repl_disabled": false,
+      "node_repl_auto_review_required": false,
+      "include_plugin_usage_instructions": true,
+      "include_apps_usage_instructions": true,
       "auto_review_model_override": null,
       "context_window": 272000,
       "max_context_window": 1000000,
@@ -489,7 +509,7 @@
           "description": "Extra high reasoning depth for complex problems"
         }
       ],
-      "shell_type": "shell_command",
+      "shell_type": "unified_exec",
       "visibility": "list",
       "minimal_client_version": "0.98.0",
       "supported_in_api": true,
@@ -562,6 +582,10 @@
       "multi_agent_version": null,
       "use_responses_lite": false,
       "include_skills_usage_instructions": false,
+      "node_repl_disabled": false,
+      "node_repl_auto_review_required": false,
+      "include_plugin_usage_instructions": true,
+      "include_apps_usage_instructions": true,
       "auto_review_model_override": null,
       "context_window": 272000,
       "max_context_window": 272000,
@@ -590,7 +614,7 @@
           "description": "Extra high reasoning depth for complex problems"
         }
       ],
-      "shell_type": "shell_command",
+      "shell_type": "unified_exec",
       "visibility": "list",
       "minimal_client_version": "0.98.0",
       "supported_in_api": true,
@@ -658,6 +682,10 @@
       "multi_agent_version": null,
       "use_responses_lite": false,
       "include_skills_usage_instructions": false,
+      "node_repl_disabled": false,
+      "node_repl_auto_review_required": false,
+      "include_plugin_usage_instructions": true,
+      "include_apps_usage_instructions": true,
       "auto_review_model_override": null,
       "context_window": 272000,
       "max_context_window": 272000,
@@ -686,7 +714,7 @@
           "description": "Extra high reasoning for complex problems"
         }
       ],
-      "shell_type": "shell_command",
+      "shell_type": "unified_exec",
       "visibility": "list",
       "minimal_client_version": "0.0.1",
       "supported_in_api": true,
@@ -754,6 +782,10 @@
       "multi_agent_version": null,
       "use_responses_lite": false,
       "include_skills_usage_instructions": false,
+      "node_repl_disabled": false,
+      "node_repl_auto_review_required": false,
+      "include_plugin_usage_instructions": true,
+      "include_apps_usage_instructions": true,
       "auto_review_model_override": null,
       "context_window": 272000,
       "max_context_window": 1000000,
@@ -782,7 +814,7 @@
           "description": "Extra high reasoning depth for complex problems"
         }
       ],
-      "shell_type": "shell_command",
+      "shell_type": "unified_exec",
       "visibility": "hide",
       "minimal_client_version": "0.98.0",
       "supported_in_api": true,

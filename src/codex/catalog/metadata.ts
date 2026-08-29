@@ -548,7 +548,7 @@ function hasNativeCatalogRowShape(entry: RawEntry): boolean {
   return typeof entry.base_instructions === "string"
     && entry.base_instructions.length > 0
     && (typeof entry.comp_hash === "string" || entry.comp_hash === null)
-    && entry.shell_type === "shell_command"
+    && (entry.shell_type === "unified_exec" || entry.shell_type === "shell_command")
     && Array.isArray(levels)
     && levels.length > 0
     && levels.every(level => typeof level === "object" && level !== null

@@ -56,7 +56,7 @@ describe("Codex tool mode configuration (#2106)", () => {
     const deepseekEntry = entries.find(e => e.slug === "deepseek/deepseek-v4-flash");
     expect(deepseekEntry).toBeDefined();
     expect(deepseekEntry?.tool_mode).toBe("code_mode_only");
-    expect(deepseekEntry?.shell_type).toBe("shell_command");
+    expect(deepseekEntry?.shell_type).toBe("unified_exec");
   });
 
   test("buildCatalogEntries leaves tool_mode unset when codexToolMode is shell", () => {
@@ -70,7 +70,7 @@ describe("Codex tool mode configuration (#2106)", () => {
     const deepseekEntry = entries.find(e => e.slug === "deepseek/deepseek-v4-flash");
     expect(deepseekEntry).toBeDefined();
     expect(deepseekEntry?.tool_mode).toBeUndefined();
-    expect(deepseekEntry?.shell_type).toBe("shell_command");
+    expect(deepseekEntry?.shell_type).toBe("unified_exec");
   });
 
   test("under shell mode with declared exec_command, undeclared-tool-guard allows exec_command", () => {
@@ -238,4 +238,3 @@ describe("#2503 combo derivation preserves a member's verbosity opt-out", () => 
     expect(derived?.supportsVerbosity).toBeUndefined();
   });
 });
-

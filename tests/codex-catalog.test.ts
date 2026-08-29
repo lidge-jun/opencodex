@@ -2734,6 +2734,20 @@ describe("Codex catalog routed normalization", () => {
     expect(terra?.multi_agent_version).toBe("v2");
     expect(luna?.multi_agent_version).toBe("v1");
 
+    const codex0151Contract = {
+      shell_type: "unified_exec",
+      node_repl_disabled: false,
+      node_repl_auto_review_required: false,
+      include_plugin_usage_instructions: true,
+      include_apps_usage_instructions: true,
+    };
+    for (const slug of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+      expect(upstreamNativeEntry(slug)).toMatchObject(codex0151Contract);
+    }
+    for (const entry of [sol, terra, luna]) {
+      expect(entry).toMatchObject(codex0151Contract);
+    }
+
     // ocx adaptations: client-version gate stripped; ws preference gated off by default.
     for (const e of [sol, terra, luna]) {
       expect(e).not.toHaveProperty("minimal_client_version");
@@ -3240,7 +3254,14 @@ describe("Codex catalog routed normalization", () => {
     ]);
 
     const routed = rows.find(row => row.slug === "deepseek/deepseek-v4-flash");
-    expect(routed?.tool_mode).toBe("code_mode_only");
+    expect(routed).toMatchObject({
+      tool_mode: "code_mode_only",
+      shell_type: "unified_exec",
+      node_repl_disabled: false,
+      node_repl_auto_review_required: false,
+      include_plugin_usage_instructions: false,
+      include_apps_usage_instructions: true,
+    });
   });
 
   test("buildCatalogEntries preserves native tool mode on account-qualified rows", () => {
@@ -5971,5 +5992,40 @@ describe("routed rows never carry native eligibility metadata", () => {
     expect(entry).not.toHaveProperty("minimal_client_version");
     expect(entry).not.toHaveProperty("availability_nux");
     expect(entry).not.toHaveProperty("upgrade");
+  });
+});
+
+describe("Codex 0.151 catalog contract fields", () => {
+  test("legacy shell types canonicalize while disabled remains disabled", () => {
+    const normalizedLegacy = ["default", "local", "shell_command"].map(shell_type =>
+      ensureStrictCatalogFields({ slug: "test", shell_type }).shell_type);
+
+    expect(normalizedLegacy).toEqual(["unified_exec", "unified_exec", "unified_exec"]);
+    expect(ensureStrictCatalogFields({ slug: "test", shell_type: "disabled" }).shell_type)
+      .toBe("disabled");
+  });
+
+  test("missing booleans receive serde defaults", () => {
+    expect(ensureStrictCatalogFields({ slug: "test" })).toMatchObject({
+      node_repl_disabled: false,
+      node_repl_auto_review_required: false,
+      include_plugin_usage_instructions: false,
+      include_apps_usage_instructions: true,
+    });
+  });
+
+  test("explicit per-model booleans are never overwritten by defaults", () => {
+    expect(ensureStrictCatalogFields({
+      slug: "test",
+      node_repl_disabled: true,
+      node_repl_auto_review_required: true,
+      include_plugin_usage_instructions: true,
+      include_apps_usage_instructions: false,
+    })).toMatchObject({
+      node_repl_disabled: true,
+      node_repl_auto_review_required: true,
+      include_plugin_usage_instructions: true,
+      include_apps_usage_instructions: false,
+    });
   });
 });
