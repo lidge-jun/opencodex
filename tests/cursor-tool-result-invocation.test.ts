@@ -148,6 +148,51 @@ describe("cursor replayed tool results name their invocation", () => {
     expect(rootTexts(bytes).some(text => text.includes("invoked:"))).toBe(false);
   });
 
+  // A reused call id must not let a LATER command describe an EARLIER result: a confidently wrong
+  // invocation line is worse than none, because nothing downstream can detect the mislabel.
+  test("a call id claimed by two different invocations yields no invocation line", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Run both.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: { cmd: "echo FIRST" } }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "exec_command", content: "FIRST", isError: false, timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: { cmd: "echo SECOND" } }],
+        timestamp: 4,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "exec_command", content: "SECOND", isError: false, timestamp: 5 },
+    ];
+    const roots = rootTexts(encode(messages, "grok-4.6-high"));
+    const results = roots.filter(text => text.startsWith("[Tool Result]"));
+    expect(results.length).toBeGreaterThan(0);
+    // Neither result may claim an invocation, and in particular none may name the wrong command.
+    for (const result of results) expect(result).not.toContain("invoked:");
+  });
+
+  test("a call id repeated for the SAME invocation still names it", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "Run it twice.", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: { cmd: "echo AAA" } }],
+        timestamp: 2,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "exec_command", content: "AAA", isError: false, timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CALL_ID, name: "exec_command", arguments: { cmd: "echo AAA" } }],
+        timestamp: 4,
+      },
+      { role: "toolResult", toolCallId: CALL_ID, toolName: "exec_command", content: "AAA", isError: false, timestamp: 5 },
+    ];
+    const root = resultRoot(encode(messages, "grok-4.6-high"));
+    expect(root).toContain("invoked: exec_command with");
+  });
+
   test("unserializable arguments do not break request encoding", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;

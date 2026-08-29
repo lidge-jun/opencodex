@@ -696,18 +696,46 @@ function toolInvocationLine(call: Extract<OcxAssistantContentPart, { type: "tool
   return `invoked: ${namespacedToolName(call.namespace, call.name)} with ${toolCallArgumentsText(call.arguments)}`;
 }
 
-/** Index assistant tool calls by decoded call id so a replayed result can name its invocation. */
+/**
+ * Index assistant tool calls by decoded call id so a replayed result can name its invocation.
+ *
+ * A call id is supposed to be unique, but nothing upstream guarantees it across a long history, and
+ * `decodeCursorCallId` can map distinct wire ids onto the same decoded id. Two calls sharing one id
+ * would make the LAST one describe every result bearing it, so an early result could be labelled
+ * with a later command — a wrong invocation is worse than none, since it is the kind of mislabel the
+ * model cannot detect. Keep the FIRST call for an id (results follow their call, so the first
+ * binding is the one an earlier result belongs to) and drop the ambiguous id entirely once a second
+ * distinct call claims it, which degrades to the honest no-invocation-line path.
+ */
 function toolCallsByCallId(messages: readonly OcxMessage[]): Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>> {
   const calls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
+  const ambiguous = new Set<string>();
   for (const message of messages) {
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
-      if (part.type === "toolCall") calls.set(decodeCursorCallId(part.id), part);
+      if (part.type !== "toolCall") continue;
+      const callId = decodeCursorCallId(part.id);
+      if (ambiguous.has(callId)) continue;
+      const existing = calls.get(callId);
+      if (!existing) {
+        calls.set(callId, part);
+        continue;
+      }
+      // Same id, and not the same invocation: neither claim can be trusted for a given result.
+      if (existing.name !== part.name || toolCallArgumentsText(existing.arguments) !== toolCallArgumentsText(part.arguments)) {
+        calls.delete(callId);
+        ambiguous.add(callId);
+      }
     }
   }
   return calls;
 }
 
+/**
+ * The replayed text of one tool result. When `call` is supplied, the invocation that produced it is
+ * named inline so the result is not orphaned; when it is absent (no match, or an ambiguous call id)
+ * the envelope is emitted unchanged rather than guessing.
+ */
 function toolResultToText(
   message: OcxToolResultMessage,
   call?: Extract<OcxAssistantContentPart, { type: "toolCall" }>,
