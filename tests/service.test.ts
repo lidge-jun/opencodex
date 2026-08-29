@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, posix, win32 } from "node:path";
 import * as serviceModule from "../src/service";
@@ -300,7 +301,7 @@ describe("systemd service unit", () => {
 
     // The write goes through writeServiceDefinitionFile so the unit lands 0600: it can carry a
     // proxy credential (#2107). What this test pins is the ORDER — write, then reload.
-    const writeAt = installSystemd.indexOf('writeServiceDefinitionFile(unitPath(), buildUnit(), "utf8")');
+    const writeAt = installSystemd.indexOf("writeServiceDefinitionFile(unitPath(), buildUnit(");
     const reloadAt = installSystemd.indexOf("systemctl --user daemon-reload");
     const enableAt = installSystemd.indexOf("systemctl --user enable");
     const restartAt = installSystemd.indexOf("systemctl --user restart");
@@ -310,6 +311,15 @@ describe("systemd service unit", () => {
     expect(enableAt).toBeLessThan(restartAt);
     expect(installSystemd).not.toContain("ocx service install");
     expect(installSystemd).not.toContain("process.exit(1)");
+
+    // #2898: the unit and the recorded install state must agree about WHAT is launched, so
+    // the launcher is resolved once and handed to both. Resolving twice would let the
+    // staleness check validate a path the unit does not run.
+    const resolveAt = installSystemd.indexOf("stableLauncherEntry()");
+    expect(resolveAt).toBeGreaterThan(-1);
+    expect(resolveAt).toBeLessThan(writeAt);
+    expect(installSystemd).toContain("writeServiceInstallState(\"scheduler\", launcher)");
+    expect(installSystemd.match(/stableLauncherEntry\(\)/g)).toHaveLength(1);
   });
 });
 
@@ -798,7 +808,14 @@ describe("launchd service plist", () => {
       const trustedPlist = buildPlist();
       expect(trustedPlist).toContain("<key>OCX_BUN_RUNTIME_SOURCE</key><string>override</string>");
       expectTextToContainPath(trustedPlist, process.execPath);
-      expect(buildUnit()).toContain('Environment="OCX_BUN_RUNTIME_SOURCE=override"');
+      // The systemd unit stamps the pair only when it BAKES that pair. A stable-launcher
+      // install runs `ocx` and lets it resolve the current package's Bun, so stamping a
+      // path there would pin the runtime to the directory a version upgrade deletes
+      // (#2898) — the opposite of what #848 asks for. Assert both modes explicitly.
+      expect(buildUnit(resolvedProxyEnv(), { launcher: null })).toContain('Environment="OCX_BUN_RUNTIME_SOURCE=override"');
+      const launched = buildUnit(resolvedProxyEnv(), { launcher: "/opt/shims/ocx" });
+      expect(launched).not.toContain("OCX_BUN_RUNTIME_SOURCE");
+      expect(launched).not.toContain("OCX_BUN_RUNTIME_PATH");
       expect(buildWindowsServiceScript()).toContain('set "OCX_BUN_RUNTIME_SOURCE=override"');
     } finally {
       if (inheritedOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
@@ -860,6 +877,62 @@ describe("launchd service plist", () => {
       if (inherited === undefined) delete process.env.CODEX_SQLITE_HOME;
       else process.env.CODEX_SQLITE_HOME = inherited;
     }
+  });
+
+  // #2898. A version manager installs OpenCodex under a versioned directory and deletes the
+  // old one on upgrade; the baked Bun and CLI both live there. The shim does not move, so the
+  // unit has to name the shim and nothing from inside the version directory.
+  test("a stable launcher install names the launcher and bakes no versioned path", () => {
+    const launcher = "/home/u/.local/share/mise/shims/ocx";
+    const unit = buildUnit(resolvedProxyEnv({}), { launcher });
+
+    expect(unit).toContain(launcher);
+    expect(unit).toContain("start --port");
+    // The versioned pair must be absent from BOTH the command and the environment: either one
+    // pins the service to a directory the next upgrade removes.
+    expect(unit).not.toContain("OCX_BUN_RUNTIME_PATH");
+    expect(unit).not.toContain("OCX_BUN_RUNTIME_SOURCE");
+    expect(unit).not.toContain("cli/index.ts");
+    // The token still comes from the file at start, never from the unit (#2107).
+    expectTextToContainPath(unit, serviceApiTokenFilePath());
+    expect(unit).toContain("OPENCODEX_API_AUTH_TOKEN");
+
+    // Without a launcher the unit keeps the previous shape, so source checkouts are unaffected.
+    const direct = buildUnit(resolvedProxyEnv({}), { launcher: null });
+    expect(direct).toContain("cli/index.ts");
+    expect(direct).toContain("OCX_BUN_RUNTIME_PATH");
+  });
+
+  // The scenario itself, executed rather than asserted: retarget the shim the way an upgrade
+  // does, delete the old version, and check the generated command still reaches live code.
+  test("the generated launcher command follows a retargeted shim after the old version is gone", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-shim-"));
+    const shimDir = join(root, "shims");
+    const v1 = join(root, "installs", "2.35.0");
+    const v2 = join(root, "installs", "2.36.0");
+    mkdirSync(shimDir, { recursive: true });
+    mkdirSync(v1, { recursive: true });
+    mkdirSync(v2, { recursive: true });
+    writeFileSync(join(v1, "ocx"), "#!/bin/sh\necho V1 \"$@\"\n", { mode: 0o755 });
+    writeFileSync(join(v2, "ocx"), "#!/bin/sh\necho V2 \"$@\"\n", { mode: 0o755 });
+
+    const shim = join(shimDir, "ocx");
+    writeFileSync(shim, `#!/bin/sh\nexec ${join(v1, "ocx")} "\$@"\n`, { mode: 0o755 });
+
+    // stableLauncherEntry finds the shim lexically from PATH — not its versioned target.
+    const found = buildUnit(resolvedProxyEnv({}), { launcher: shim });
+    expect(found).toContain(shim);
+    expect(found).not.toContain(v1);
+
+    expect(execSync(`sh -c ${JSON.stringify(`${shim} start --port 1`)}`, { encoding: "utf8" })).toContain("V1");
+
+    // The upgrade: shim retargeted, old version removed.
+    writeFileSync(shim, `#!/bin/sh\nexec ${join(v2, "ocx")} "\$@"\n`, { mode: 0o755 });
+    rmSync(v1, { recursive: true, force: true });
+    expect(existsSync(join(v1, "ocx"))).toBe(false);
+    expect(execSync(`sh -c ${JSON.stringify(`${shim} start --port 1`)}`, { encoding: "utf8" })).toContain("V2");
+
+    rmSync(root, { recursive: true, force: true });
   });
 
   // The relative case is why the resolve() is there at all: a service unit has no meaningful
@@ -1810,6 +1883,54 @@ describe("service diagnostics", () => {
       // Pre-loop-3 state files without baked paths stay silent.
       writeFileSync(statePath, JSON.stringify({ version: 1, codexHome: stateDir, opencodexHome: stateDir }), "utf8");
       expect(bakedServicePathsDiagnostic()).toBeNull();
+    } finally {
+      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
+    }
+  });
+
+  // #2898: a version manager (mise, asdf) installs OpenCodex into a VERSIONED directory and
+  // deletes the old one on upgrade. The baked Bun and CLI both live in that directory, so the
+  // unit's `exec <old-bun> <old-cli>` stops resolving and Restart=on-failure restart-loops.
+  // When the install went through a stable launcher, the launcher is what systemd runs, so it
+  // is the only path whose absence means anything — and the replaced version directory must
+  // NOT be reported as stale.
+  test("a launcher install judges staleness by the launcher, not the replaced version dir", () => {
+    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
+    const stateDir = join(TEST_DIR, "launcher-paths-home");
+    try {
+      process.env.OPENCODEX_HOME = stateDir;
+      mkdirSync(stateDir, { recursive: true });
+      const statePath = join(stateDir, "service-state.json");
+      const launcher = join(import.meta.dir, "service.test.ts");
+      const removedVersionDir = join(stateDir, "installs", "2.35.0");
+
+      // The upgrade case: version directory gone, launcher intact. Healthy.
+      writeFileSync(statePath, JSON.stringify({
+        version: 2,
+        codexHome: stateDir,
+        opencodexHome: stateDir,
+        bunPath: join(removedVersionDir, "bun"),
+        cliPath: join(removedVersionDir, "cli", "index.ts"),
+        launcherPath: launcher,
+        backend: "scheduler",
+      }), "utf8");
+      expect(bakedServicePathsDiagnostic()).toBeNull();
+
+      // A launcher that is itself gone is genuinely stale, and names the launcher.
+      const missingLauncher = join(stateDir, "shims", "ocx");
+      writeFileSync(statePath, JSON.stringify({
+        version: 2,
+        codexHome: stateDir,
+        opencodexHome: stateDir,
+        bunPath: join(import.meta.dir, "service.test.ts"),
+        cliPath: join(import.meta.dir, "service.test.ts"),
+        launcherPath: missingLauncher,
+        backend: "scheduler",
+      }), "utf8");
+      const diagnostic = bakedServicePathsDiagnostic();
+      expect(diagnostic).toContain("STALE baked paths");
+      expect(diagnostic).toContain(missingLauncher);
     } finally {
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
