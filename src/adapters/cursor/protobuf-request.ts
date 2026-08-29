@@ -404,14 +404,38 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
         if (withInitiator.length <= historyLimit && initiatorBytes <= historyBudget) {
           historyEntries.length = 0;
           historyEntries.push(...withInitiator);
-        } else if (historyEntries.length === 1 && historyEntries[0]) {
-          // Shrink the result to make room: an instruction with a truncated result is usable,
-          // a full result with no instruction is not.
-          const room = historyBudget - initiator.byteLength;
-          const shrunk = room > 0 ? truncateToolResultBlob(historyEntries[0], room) : null;
-          if (shrunk) {
+        } else {
+          // Make room for the initiator instead of abandoning it. Review found that gating this on
+          // `historyEntries.length === 1` left the defect fully intact for the far more common
+          // multi-result shape: one system root plus 191 small trailing results already fills the
+          // count limit, so the initiator did not fit, the single-result branch did not apply, and
+          // the request went out as 191 bare results with nothing asking for them — inside the new
+          // envelope, so the guard could not catch it either.
+          //
+          // Drop the OLDEST results first, which is the same direction the byte-pressure loop above
+          // already prunes, then truncate whatever survives. An instruction with fewer or shorter
+          // results is answerable; results with no instruction are not.
+          const kept = [...historyEntries];
+          while (kept.length > 1 && kept.length + 1 > historyLimit) kept.shift();
+          let keptBytes = kept.reduce((sum, entry) => sum + entry.byteLength, 0);
+          while (kept.length > 1 && initiator.byteLength + keptBytes > historyBudget) {
+            const dropped = kept.shift();
+            keptBytes -= dropped?.byteLength ?? 0;
+          }
+          if (kept.length === 1 && kept[0] && initiator.byteLength + keptBytes > historyBudget) {
+            const room = historyBudget - initiator.byteLength;
+            const shrunk = room > 0 ? truncateToolResultBlob(kept[0], room) : null;
+            if (shrunk) {
+              kept[0] = shrunk;
+              keptBytes = shrunk.byteLength;
+            }
+          }
+          // Only commit when the initiator genuinely fits alongside what is left. If the system
+          // prompt has consumed the budget so completely that not even a truncation marker fits,
+          // there is nothing honest to send here; the envelope guard downstream owns that case.
+          if (kept.length + 1 <= historyLimit && initiator.byteLength + keptBytes <= historyBudget) {
             historyEntries.length = 0;
-            historyEntries.push(initiator, shrunk);
+            historyEntries.push(initiator, ...kept);
           }
         }
       }

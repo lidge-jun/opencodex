@@ -93,7 +93,9 @@ export class CursorRootEnvelopeLimitError extends Error {
     public readonly maxRootBytes: number,
   ) {
     super(
-      "Cursor invalid request: the assembled conversation exceeds the replay envelope "
+      // No "Cursor invalid request:" prefix here: `safeCursorErrorMessage` adds it for
+      // invalid-argument classes, and carrying it in the message produced it twice.
+      "the assembled conversation exceeds the replay envelope "
       + `(${rootCount} root blobs / ${rootBytes} bytes against a limit of ${maxRootCount} / ${maxRootBytes}). `
       + "Start a new conversation or reduce the pending tool output.",
     );

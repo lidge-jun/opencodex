@@ -2186,6 +2186,98 @@ describe("Cursor external replay envelope", () => {
     })).not.toThrow();
   });
 
+  // Review probe: 191 small trailing results plus one system root already fill the count limit, so
+  // the initiator did not fit and the earlier single-result-only recovery branch never ran. The
+  // request then went out as bare results with nothing asking for them — and at exactly 192 roots
+  // the envelope guard could not catch it either. Recovery must make room, not give up.
+  test("a multi-result orphan block still recovers its initiating turn", () => {
+    const results = Array.from({ length: CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 1 }, (_, i) => ({
+      role: "toolResult" as const,
+      toolCallId: `call_${i}`,
+      toolName: "read_file",
+      content: `r${i}`,
+      isError: false,
+      timestamp: i + 2,
+    }));
+
+    const bytes = encodeCursorRunRequest({
+      modelId: "gpt-5.6-sol-xhigh",
+      conversationId: "c-orphan-multi",
+      system: ["system"],
+      messages: [{ role: "tool", content: "ignored" }],
+      rawMessages: [{ role: "user", content: "please read the files", timestamp: 1 }, ...results],
+    });
+
+    const roots = decodeRootMessages(bytes);
+    expect(roots.length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    // The initiating instruction must survive: a model handed only tool results has nothing to do.
+    const serialized = JSON.stringify(roots);
+    expect(serialized).toContain("please read the files");
+    // And it must come first, so the results read as answers to it rather than as an orphan block.
+    const nonSystem = roots.slice(1);
+    expect(JSON.stringify(nonSystem[0])).toContain("please read the files");
+  });
+
+  // The shape the guard was moved for. Review noted that every other new fixture here is an
+  // oversized full replay, so a guard that measured only the suffix (or only
+  // `rootPromptMessagesState`) would still satisfy them. These two do not: the suffix is tiny and
+  // legal on its own, and only the checkpoint plus the suffix crosses a limit.
+  test("a checkpoint plus a legal suffix cannot exceed the root count limit cumulatively", () => {
+    const checkpointRoots = Array.from(
+      { length: CURSOR_EXTERNAL_ROOT_BLOB_LIMIT },
+      (_, i) => new Uint8Array(32).fill(i % 251),
+    );
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: checkpointRoots,
+      turns: [new Uint8Array(32).fill(8)],
+    });
+
+    expect(() => prepareCursorRunRequest({
+      modelId: "gpt-5.6-sol-xhigh",
+      conversationId: "c-ckpt-cumulative",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "next" }],
+      rawMessages: [
+        { role: "user", content: "old user", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "old assistant" }], timestamp: 2 },
+        { role: "user", content: "mid user", timestamp: 3 },
+        { role: "assistant", content: [{ type: "text", text: "mid assistant" }], timestamp: 4 },
+        { role: "user", content: "next", timestamp: 5 },
+      ],
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      checkpointSuffixStart: 2,
+      continuationMode: "checkpoint",
+    })).toThrow(CursorRootEnvelopeLimitError);
+  });
+
+  test("a checkpoint plus a legal suffix cannot exceed the byte limit cumulatively", () => {
+    // Roots the local store actually holds, so their bytes are measurable: a suffix-only or
+    // `rootPromptMessagesState`-only measurement reports far less than the assembled total.
+    const big = new Uint8Array(200_000).fill(65);
+    const checkpointRoots = [storeCursorBlob(big), storeCursorBlob(new Uint8Array(200_000).fill(66)), storeCursorBlob(new Uint8Array(200_000).fill(67))];
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: checkpointRoots,
+      turns: [new Uint8Array(32).fill(8)],
+    });
+
+    expect(() => prepareCursorRunRequest({
+      modelId: "gpt-5.6-sol-xhigh",
+      conversationId: "c-ckpt-bytes",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "next" }],
+      rawMessages: [
+        { role: "user", content: "old user", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "old assistant" }], timestamp: 2 },
+        { role: "user", content: "mid user", timestamp: 3 },
+        { role: "assistant", content: [{ type: "text", text: "mid assistant" }], timestamp: 4 },
+        { role: "user", content: "next", timestamp: 5 },
+      ],
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      checkpointSuffixStart: 2,
+      continuationMode: "checkpoint",
+    })).toThrow(CursorRootEnvelopeLimitError);
+  });
+
   // The diagnostic used to read `rootPromptMessagesState?.byteLength`, which is undefined for a
   // pure checkpoint continuation — so an operator sizing a conversation that was about to be
   // rejected saw rootBytes=0. The guard and the telemetry now read the same measurement, and a
