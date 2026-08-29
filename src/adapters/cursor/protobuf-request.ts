@@ -214,6 +214,12 @@ function rootPromptMessages(
    * which is where the defect this line prevents actually reappeared in live use.
    */
   knownCalls?: Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>,
+  /**
+   * Full-history index of `rawMessages[0]` for this call. Non-zero only on the checkpoint path, where
+   * only a suffix is replayed but `knownCalls` still spans full history; the positional bound needs
+   * both sides in the same space (devlog 260829 060).
+   */
+  knownCallsOffset = 0,
 ): {
   ids: Uint8Array[];
   byteLength: number;
@@ -320,7 +326,9 @@ function rootPromptMessages(
       // #1920: the prefix must reflect the NORMALIZED error state (an empty
       // node_repl result is an error even when the runtime said isError=false).
       const prefix = normalizedToolResult(message, contentToText(message.content)).isError ? "[Tool Error]" : "[Tool Result]";
-      const text = `${prefix}\n${toolResultToText(message, replayedCalls?.get(decodeCursorCallId(message.toolCallId)))}`;
+      // The bound compares in full-history space: this loop's `i` is already full-history on the
+      // full-replay path, and `knownCallsOffset` re-bases it when only a suffix is replayed.
+      const text = `${prefix}\n${toolResultToText(message, callBefore(replayedCalls, decodeCursorCallId(message.toolCallId), knownCallsOffset + i))}`;
       pushDeduped(toolResultRootPayload(text), "toolResult", { messageIndex: i, text }, text);
     }
   }
@@ -749,6 +757,42 @@ function toolInvocationLine(call: Extract<OcxAssistantContentPart, { type: "tool
 }
 
 /**
+ * History position of each indexed call, keyed by the map `toolCallsByCallId` returned.
+ *
+ * A side table rather than a wider return type: the map is threaded through two builders and the
+ * checkpoint site, and changing its shape would touch every one of them for data only the bound reads.
+ */
+const callPositions = new WeakMap<
+  Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>,
+  Map<string, number>
+>();
+
+/**
+ * The indexed call for `callId`, but only when it appears BEFORE `resultIndex` in history.
+ *
+ * `toolCallsByCallId` has no ordering constraint, so it would happily name a call that runs LATER than
+ * the result being labelled — a result whose own output is `EARLY-OUT` was measured on the shipped tree
+ * as `invoked: exec_command with {"cmd":"echo LATER"}`. That is the mislabel the index's own comment
+ * calls worse than no label, because nothing downstream can detect it (devlog 260829 060).
+ *
+ * `resultIndex` MUST be in full-history space. The checkpoint path replays a suffix and the turn
+ * builder starts at `historyMessageStart`, so a caller composes `knownCallsOffset + start + local`
+ * before calling; comparing a full-history call index against a slice-local result index silently
+ * drops legitimate pairings and re-creates the orphan #2910 fixed.
+ */
+function callBefore(
+  calls: Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>> | undefined,
+  callId: string,
+  resultIndex: number,
+): Extract<OcxAssistantContentPart, { type: "toolCall" }> | undefined {
+  const call = calls?.get(callId);
+  if (!call || !calls) return undefined;
+  const position = callPositions.get(calls)?.get(callId);
+  if (position === undefined || position >= resultIndex) return undefined;
+  return call;
+}
+
+/**
  * Index assistant tool calls by decoded call id so a replayed result can name its invocation.
  *
  * A call id is supposed to be unique, but nothing upstream guarantees it across a long history, and
@@ -762,8 +806,10 @@ function toolInvocationLine(call: Extract<OcxAssistantContentPart, { type: "tool
 function toolCallsByCallId(messages: readonly OcxMessage[]): Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>> {
   const calls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
   const ambiguous = new Set<string>();
-  for (const message of messages) {
-    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+  const positions = new Map<string, number>();
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (!message || message.role !== "assistant" || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
       if (part.type !== "toolCall") continue;
       const callId = decodeCursorCallId(part.id);
@@ -771,6 +817,7 @@ function toolCallsByCallId(messages: readonly OcxMessage[]): Map<string, Extract
       const existing = calls.get(callId);
       if (!existing) {
         calls.set(callId, part);
+        positions.set(callId, index);
         continue;
       }
       // Same id, and not the same invocation: neither claim can be trusted for a given result.
@@ -786,10 +833,12 @@ function toolCallsByCallId(messages: readonly OcxMessage[]): Map<string, Extract
         && existingArgs === partArgs;
       if (!sameInvocation) {
         calls.delete(callId);
+        positions.delete(callId);
         ambiguous.add(callId);
       }
     }
   }
+  callPositions.set(calls, positions);
   return calls;
 }
 
@@ -943,6 +992,8 @@ function conversationTurns(
   historyMessageStart = 0,
   /** Calls indexed from the FULL history; see {@link rootPromptMessages}. */
   knownCalls?: Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>,
+  /** Full-history index of `rawMessages[0]`; see {@link rootPromptMessages}. */
+  knownCallsOffset = 0,
 ): Uint8Array[] {
   const messages = request.rawMessages;
   if (!messages?.length) return [];
@@ -967,7 +1018,15 @@ function conversationTurns(
     pendingToolCalls.clear();
   };
 
-  for (const message of messages.slice(start, historyEnd)) {
+  const walked = messages.slice(start, historyEnd);
+  for (let w = 0; w < walked.length; w++) {
+    const message = walked[w];
+    // `for…of` gave this for free; keep it explicit so the indexed loop behaves identically.
+    if (!message) continue;
+    // Full-history position of this message: the slice offset the caller passed, plus where this
+    // loop starts inside `rawMessages`, plus the local step. All three terms are needed — dropping
+    // `start` still passes every test except the checkpoint-plus-pruned-root case (devlog 060).
+    const fullIndex = knownCallsOffset + start + w;
     if (message.role === "assistant") {
       if (!current) continue;
       for (const part of message.content) {
@@ -1004,7 +1063,7 @@ function conversationTurns(
         const prefix = normalized.isError ? "[Tool Error]" : "[Tool Result]";
         // Name the invocation here as well, for the same reason the root replay does: a result with
         // no visible originating call reads as an interrupted attempt (devlog 260829 000_rca).
-const call = turnCalls?.get(decodeCursorCallId(message.toolCallId));
+        const call = callBefore(turnCalls, decodeCursorCallId(message.toolCallId), fullIndex);
         const invocation = call ? `${toolInvocationLine(call)}\n` : "";
         current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
           message: {
@@ -1170,8 +1229,10 @@ function buildPreparedCursorRunRequest(
         // Index calls from the FULL history, not the suffix: the cut can fall between a call and
         // its result, and a result replayed without its invocation is the orphaned-result defect.
         const fullHistoryCalls = toolCallsByCallId(request.rawMessages);
-        const suffixRoots = rootPromptMessages(suffixRequest, requestScope, fullHistoryCalls);
-        const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart, fullHistoryCalls);
+        // `suffixStart` re-bases the replayed slice into full-history space, which is the space
+        // `fullHistoryCalls` positions live in. Without it the positional bound compares two origins.
+        const suffixRoots = rootPromptMessages(suffixRequest, requestScope, fullHistoryCalls, suffixStart);
+        const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart, fullHistoryCalls, suffixStart);
         const suffixSystemCount = systemPromptBlobs(suffixRequest).length;
         const suffixHistoryIds = suffixRoots.ids.slice(suffixSystemCount);
         const suffixHistorySerialized = suffixRoots.serialized.slice(suffixSystemCount);

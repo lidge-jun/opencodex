@@ -446,3 +446,110 @@ describe("cursor checkpoint continuation names the invocation from covered histo
     expect(root).not.toContain("echo SECOND");
   });
 });
+
+/**
+ * devlog 260829 060: the index that names an invocation had no ordering constraint, so it would name a
+ * call that runs LATER in history than the result being labelled. Measured on the shipped tree, a
+ * result whose own output was `EARLY-OUT` came out as
+ * `invoked: exec_command with {"cmd":"echo LATER"}` — the mislabel the index's own comment calls worse
+ * than no label, because nothing downstream can detect it.
+ *
+ * The bound compares positions in FULL-HISTORY space. That matters because two call sites replay less
+ * than the whole history: the checkpoint path replays a suffix, and the turn builder starts at
+ * `historyMessageStart`. The comparison position is therefore `knownCallsOffset + start + local`, and
+ * dropping any term passes almost every test here — which is why the last case exists.
+ */
+describe("cursor invocation lookup is bounded by history position", () => {
+  const FWD = "call_fwd";
+
+  /** Result at index 1; the call claiming its id is at index 3. */
+  function forwardHistory(): OcxMessage[] {
+    return [
+      { role: "user", content: "start", timestamp: 1 },
+      { role: "toolResult", toolCallId: FWD, toolName: "exec_command", content: "EARLY-OUT", isError: false, timestamp: 2 },
+      { role: "user", content: "next", timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: FWD, name: "exec_command", arguments: { cmd: "echo LATER" } }],
+        timestamp: 4,
+      },
+      { role: "user", content: "answer", timestamp: 5 },
+    ];
+  }
+
+  test("a result whose call appears LATER in history gets no invocation line", () => {
+    const root = resultRoot(encode(forwardHistory(), "grok-4.6-high"));
+    expect(root).toBeDefined();
+    expect(root).toContain("EARLY-OUT");
+    expect(root).not.toContain("invoked:");
+    expect(root).not.toContain("echo LATER");
+  });
+
+  test("the turn step is bounded too", () => {
+    const step = turnStepTexts(encode(forwardHistory(), "grok-4.6-high"))
+      .find(text => text.startsWith("[Tool Result]"));
+    if (step) {
+      expect(step).not.toContain("invoked:");
+      expect(step).not.toContain("echo LATER");
+    }
+  });
+
+  // The bound must not become a blanket refusal: without this, a lookup that returns nothing at all
+  // would satisfy the case above and look correct.
+  test("the ordinary call-then-result order is still named", () => {
+    const root = resultRoot(encode(history(), "grok-4.6-high"));
+    expect(root).toContain("invoked: exec_command with");
+    expect(root).toContain("echo AAA");
+  });
+
+  test("a call before the checkpoint cut is still named on the root path", () => {
+    const root = resultRoot(encodeCheckpoint(history(), "grok-4.6-high", 2));
+    expect(root).toContain("invoked: exec_command with");
+  });
+
+  /**
+   * The one case that needs all THREE offset terms. Audits r5, r6 and r7 each measured that a bound
+   * computing `knownCallsOffset + local` — dropping `historyMessageStart` — passes every other
+   * assertion in this file and the whole cursor suite, while emitting a live orphan here.
+   *
+   * It cannot be caught on the root path: `historyMessageStart` is an OUTPUT of `rootPromptMessages`,
+   * assigned after the loop that would use it, so that loop always walks full-history `i` from zero and
+   * the dropped term is identically zero there. Only `conversationTurns` carries a non-zero `start`.
+   *
+   * Both offsets must actually be non-zero for the case to bite, so the history forces a checkpoint cut
+   * AND enough root pressure to prune, and the assertion is on the TURN step.
+   */
+  test("checkpoint plus root pruning still names the call on the turn path", () => {
+    const CK = "call_ck3";
+    // CURSOR_EXTERNAL_ROOT_BYTE_LIMIT is 512 KiB; this must exceed it to force any pruning, so
+    // historyMessageStart lands above zero. A 400 KiB message left it at 0 and made the case toothless.
+    const bulky = "Z".repeat(600 * 1024);
+    const messages: OcxMessage[] = [
+      { role: "user", content: "first", timestamp: 1 },
+      // Pruned from the root, which is what pushes historyMessageStart above zero.
+      { role: "user", content: bulky, timestamp: 2 },
+      { role: "user", content: "carry on", timestamp: 3 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: CK, name: "exec_command", arguments: { cmd: "echo COVERED" } }],
+        timestamp: 4,
+      },
+      { role: "toolResult", toolCallId: CK, toolName: "exec_command", content: "COVERED-OUT", isError: false, timestamp: 5 },
+      { role: "user", content: "answer", timestamp: 6 },
+    ];
+    // Derived rather than guessed: dropping `start` under-counts a walked message's position by
+    // exactly `start`, so it flips the decision only when the call is INSIDE the slice and
+    // (w_result - w_call) <= start. The call must therefore sit next to its result in the replayed
+    // region, not in the covered region — three earlier fixtures put it in the covered region, where
+    // the call's position is below the offset and the under-count can never cross it.
+    const bytes = encodeCheckpoint(messages, "grok-4.6-high", 1);
+    // Assert on the TURN step specifically. Pooling roots and turn steps together hid the mutation:
+    // the root path has no historyMessageStart term to drop (it is an OUTPUT of rootPromptMessages,
+    // assigned after the loop that would use it), so the root keeps naming the call and an
+    // either-source assertion stays green. Only the turn step discriminates.
+    const step = turnStepTexts(bytes).find(text => text.includes("COVERED-OUT"));
+    expect(step).toBeDefined();
+    expect(step).toContain("invoked: exec_command with");
+    expect(step).toContain("echo COVERED");
+  });
+});
