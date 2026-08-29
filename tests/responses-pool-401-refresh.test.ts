@@ -835,4 +835,51 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     expect(harness.refreshes).toEqual(["refresh-grant"]);
     expect(response.status).toBe(429);
   });
+
+  test("a gated-model 400 after a stored replay still retries the SAME account when entitled", async () => {
+    // The branch the budget deliberately leaves open, asserted directly rather than by implication
+    // from the opaque-blob case. When the refreshed roster still grants the model,
+    // retryCodexPoolOnAlternateAccount sets retryAuthCtx = firstAuthCtx and sends again to the
+    // account already paying — no other account is charged, so it is outside the budget.
+    const gatedModel = "gpt-5.6-sol";
+    const harness = installHarness({
+      responseForSend: (authorization, sendNumber) => {
+        if (authorization === "Bearer rejected-access") {
+          return Response.json({ error: { message: "rejected bearer" } }, { status: 401 });
+        }
+        if (authorization !== "Bearer refreshed-access") return undefined;
+        if (sendNumber === 2) {
+          return Response.json({
+            detail: `The '${gatedModel}' model is not supported when using Codex with a ChatGPT account.`,
+          }, { status: 400 });
+        }
+        // Upstream shards can briefly disagree during a gated-model rollout, so the same account
+        // succeeds on the retry.
+        return Response.json({ id: "resp_same_account", object: "response", status: "completed", output: [] });
+      },
+    });
+
+    const response = await handleResponses(
+      request("/v1/responses", { model: gatedModel }),
+      config(),
+      { model: "", provider: "" } as RequestLogContext,
+      {
+        // The single configured account stays entitled across both resolutions.
+        resolveCodexModelEntitlements: async () => ({
+          modelsByAccount: new Map([[ACCOUNT_ID, new Set([gatedModel])]]),
+          confirmedAccountIds: new Set([ACCOUNT_ID]),
+          credentialIdentities: new Map(),
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    // Three sends, every one of them on the same account.
+    expect(harness.sends).toEqual([
+      "Bearer rejected-access",
+      "Bearer refreshed-access",
+      "Bearer refreshed-access",
+    ]);
+    expect(harness.refreshes).toEqual(["refresh-grant"]);
+  });
 });
