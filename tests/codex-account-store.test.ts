@@ -1100,6 +1100,50 @@ describe("codex-account-store CRUD", () => {
     }
   });
 
+  test("a TOKENFUL tombstone is not resurrected either, isolating the deletedAt guard (#2892 gap 3)", async () => {
+    // The sibling test above cannot prove the `deletedAt` check is load-bearing: `tombstoneCodexAccount`
+    // drops the credential, so the separate `!alias.credential` guard already skips that record and the
+    // assertion passes with `deletedAt` removed. A tombstone that still CARRIES a credential is the only
+    // shape that reaches the `deletedAt` check, and it is reachable — a store written by an older build,
+    // or a tombstone raced by a concurrent save, produces exactly this record. `tokenful tombstone is
+    // treated as absent` earlier in this file pins the same shape for the read path.
+    const { getValidCodexToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    const shared = {
+      accessToken: "tokenful-old",
+      refreshToken: "tokenful-grant",
+      expiresAt: 0,
+      chatgptAccountId: "tokenful-acc",
+    };
+    saveCodexAccountCredential("tokenful-owner", { ...shared });
+    const ownerGeneration = readCodexAccountRecord("tokenful-owner")!.generation;
+    // Written directly: no public API produces a tombstone that retains its credential.
+    writeFileSync(ACCOUNTS_PATH, JSON.stringify({
+      "tokenful-owner": { credential: { ...shared }, generation: ownerGeneration },
+      "tokenful-deleted": { credential: { ...shared }, generation: ownerGeneration, deletedAt: Date.now() },
+    }, null, 2));
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "tokenful-new",
+      refresh_token: "tokenful-rotated",
+      expires_in: 3600,
+    })) as typeof fetch;
+    try {
+      await getValidCodexToken("tokenful-owner");
+      // The owner rotated.
+      expect(readCodexAccountRecord("tokenful-owner")!.credential!.refreshToken).toBe("tokenful-rotated");
+      // The tombstone kept its stale grant and stayed deleted: propagation skipped it on `deletedAt`
+      // alone, since its credential was present and every other eligibility field matched the owner.
+      const deleted = readCodexAccountRecord("tokenful-deleted")!;
+      expect(deleted.deletedAt).toBeGreaterThan(0);
+      expect(deleted.credential!.refreshToken).toBe("tokenful-grant");
+      expect(deleted.generation).toBe(ownerGeneration);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
 
   test("a same-grant sibling on a DIFFERENT upstream identity is never adopted (#2892 review)", async () => {
     const { forceRefreshCodexPoolToken, getCodexAccountCredential, readCodexAccountRecord, saveCodexAccountCredential } =
