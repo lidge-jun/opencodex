@@ -38,8 +38,8 @@ kasıtlı olarak ikiye ayrılmıştır:
   mobile bağlı Codex oturumu görüşmenin ortasında yeniden dengelenmek yerine tek
   bir hesabı kullanmaya devam eder.
 - **Yeni oturumlar yeniden dengelenebilir.** Yeni bir iş parçacığı için
-  opencodex, `accountPoolStrategy` (varsayılan olarak `quota` veya `round-robin`
-  / `fill-first` / `reset-window`) kullanarak uygun hesaplar arasından seçim yapar. `quota`
+  opencodex, `accountPoolStrategy` (varsayılan `quota`; `round-robin`, `fill-first`
+  ve `reset-window` da desteklenir) kullanarak uygun hesaplar arasından seçim yapar. `quota`
   stratejisi, 5 saatlik, haftalık ve 30 günlük pencerelerdeki bilinen kullanımı
   karşılaştırır ve aktif hesap `autoSwitchThreshold` eşiğini aştığında daha
   düşük kullanımlı bir hesaba geçebilir. `reset-window`, geçerli haftalık sıfırlama
