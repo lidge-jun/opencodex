@@ -941,6 +941,93 @@ describe("020 coverage completions", () => {
     expect(readFileSync(startedPath, "utf8").trim().split(/\r?\n/)).toHaveLength(2);
   });
 
+  /**
+   * The probe renders AGENTS.md out of the home it runs in, so admission has to
+   * name that file. It is asserted here rather than in the probe unit test because
+   * this harness is the only one where CODEX_HOME and the injected
+   * `codexPromptPaths` are deliberately different directories: a fingerprint that
+   * derived the path from the injected config would agree with itself and pass,
+   * while production kept serving pre-write text.
+   *
+   * The stale value is asserted, not merely a differing key — the failure this
+   * covers is a caller receiving another caller's older AGENTS text.
+   */
+  for (const instructionFile of ["AGENTS.md", "AGENTS.override.md"]) {
+    test(`30. editing ${instructionFile} invalidates an in-flight text probe`, async () => {
+      const fx = fixture("model = \"x\"\n");
+      const agentsPath = join(fx.decoyHome, instructionFile);
+      writeFileSync(agentsPath, "old-agent-text", "utf8");
+      const startedPath = join(fx.decoyHome, "agents-probe-starts.txt");
+      const source = [
+        `const fs = require("node:fs");`,
+        `const doc = fs.readFileSync(${JSON.stringify(agentsPath)}, "utf8");`,
+        `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+        `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+        "setTimeout(() => process.stdout.write(output), 200);",
+      ].join("");
+      setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+      const beforeEdit = call("GET", "/api/codex-prompt/text", fx);
+      await waitUntil(() => existsSync(startedPath), `${instructionFile} probe start`);
+
+      // Nothing opencodex owns has changed: no config write, no store write, so
+      // the transaction revision and the selected base are identical here.
+      writeFileSync(agentsPath, "new-agent-text", "utf8");
+
+      const afterEdit = await call("GET", "/api/codex-prompt/text", fx);
+      expect(afterEdit.body).toMatchObject({
+        ok: false,
+        detail: "another prompt probe is still finishing; retry shortly",
+      });
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+      expect((await beforeEdit).body.layers.skills.text).toBe("old-agent-text");
+
+      const fresh = await call("GET", "/api/codex-prompt/text", fx);
+      expect(fresh.body.layers.skills.text).toBe("new-agent-text");
+      expect(promptTextProbeSpawnAttemptsForTests()).toBe(2);
+      expect(readFileSync(startedPath, "utf8").trim().split(/\r?\n/)).toHaveLength(2);
+    });
+  }
+
+  test("31. creating and deleting an instruction file both move probe admission", async () => {
+    const fx = fixture("model = \"x\"\n");
+    const agentsPath = join(fx.decoyHome, "AGENTS.md");
+    const startedPath = join(fx.decoyHome, "absent-probe-starts.txt");
+    const source = [
+      `const fs = require("node:fs");`,
+      `let doc = "\\u0000absent";`,
+      `try { doc = fs.readFileSync(${JSON.stringify(agentsPath)}, "utf8"); } catch {}`,
+      `fs.appendFileSync(${JSON.stringify(startedPath)}, "1\\n");`,
+      `const output = JSON.stringify([{type:"message",role:"developer",content:[{type:"input_text",text:"<skills_instructions>" + doc + "</skills_instructions>"}]}]);`,
+      "setTimeout(() => process.stdout.write(output), 200);",
+    ].join("");
+    setPromptTextProbeCommandForTests({ binary: process.execPath, args: ["-e", source] });
+
+    // absent -> present must move the key, so a probe started with no AGENTS.md
+    // cannot be joined once one exists.
+    const beforeCreate = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => existsSync(startedPath), "absent-state probe start");
+    writeFileSync(agentsPath, "created-text", "utf8");
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect((await beforeCreate).body.layers.skills.text).toBe("\u0000absent");
+
+    const present = await call("GET", "/api/codex-prompt/text", fx);
+    expect(present.body.layers.skills.text).toBe("created-text");
+
+    // present -> absent is the same requirement in reverse.
+    const beforeDelete = call("GET", "/api/codex-prompt/text", fx);
+    await waitUntil(() => readFileSync(startedPath, "utf8").trim().split(/\r?\n/).length === 3, "present-state probe start");
+    rmSync(agentsPath);
+    expect((await call("GET", "/api/codex-prompt/text", fx)).body).toMatchObject({
+      ok: false,
+      detail: "another prompt probe is still finishing; retry shortly",
+    });
+    expect((await beforeDelete).body.layers.skills.text).toBe("created-text");
+  });
+
   test("24. every ownership state is named, not collapsed into a boolean", async () => {
     // developerInstructionsOwned:false covers an ABSENT key and an EXTERNAL one, and
     // a GUI that cannot tell them apart hides its own create affordance from every

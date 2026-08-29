@@ -31,6 +31,7 @@ import { dirname, join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { expandUserPath } from "../config";
 import { CODEX_CONFIG_PATH } from "./paths";
+import { resolveCodexHomeDir } from "./home";
 import { OCX_SECTION_MARKER } from "./injected-marker";
 import {
   durableWrite,
@@ -180,6 +181,14 @@ export function activeStorePath(opts?: Paths): string {
 export function activeBaseVariantDir(opts?: Paths): string {
   return opts?.baseVariantDir ?? join(activeCodexHome(), "opencodex-prompt-base");
 }
+
+/**
+ * Instruction documents the prompt probe renders out of CODEX_HOME, in the
+ * precedence order Codex itself applies: an `AGENTS.override.md` shadows
+ * `AGENTS.md`. Both are hashed into the probe fingerprint, because either one
+ * changes the rendered project document without touching a managed file.
+ */
+const PROBE_INSTRUCTION_FILES = ["AGENTS.override.md", "AGENTS.md"] as const;
 
 function journalPathFor(storePath: string): string {
   return `${storePath.replace(/\.json$/, "")}.journal`;
@@ -639,6 +648,20 @@ export function readPromptLayers(opts?: Paths): PromptLayerSnapshot {
  * optimistic-concurrency revision above. The revision covers only config/store
  * transaction bytes; an edit to the selected base variant changes the prompt
  * without changing that transaction contract.
+ *
+ * The instruction documents in CODEX_HOME are hashed for the same reason, and they
+ * are read from `resolveCodexHomeDir()` rather than from `activeConfigPath`'s
+ * directory. Those two are deliberately different under test — the route fixtures
+ * inject `codexPromptPaths` at a temp root while CODEX_HOME points at a decoy — and
+ * the probe renders whatever lives in the home it actually runs in. Deriving the
+ * path from the injected config would name a file the probe never reads, which is
+ * a fingerprint that cannot fail rather than evidence.
+ *
+ * Bounded on purpose: this covers opencodex-managed writes plus the CODEX_HOME
+ * instruction files. Skill and plugin metadata, MCP availability, and the clock also
+ * move the rendered prompt and cannot be observed from this process; an external
+ * edit to one of those, concurrent with an in-flight probe, is still coalescible.
+ * See devlog/_plan/260829_bugpr_lane_h_residual_issues/130_pr2872_probe_fingerprint.md.
  */
 export function computePromptProbeStateFingerprint(opts?: Paths): string {
   const configBytes = readFileOrNull(activeConfigPath(opts));
@@ -655,6 +678,15 @@ export function computePromptProbeStateFingerprint(opts?: Paths): string {
     hash.update(selection.id);
     hash.update("\nvariant-bytes:");
     hash.update(readFileOrNull(join(activeBaseVariantDir(opts), `${selection.id}.md`)) ?? "\0absent");
+  }
+  // Codex prefers AGENTS.override.md over AGENTS.md, so both spellings are hashed
+  // in that order: an override edit changes the rendered project document exactly
+  // as a plain edit does. A missing file hashes to its own sentinel so that
+  // creating or deleting one moves the key too.
+  const probeHome = resolveCodexHomeDir();
+  for (const name of PROBE_INSTRUCTION_FILES) {
+    hash.update(`\n${name}:`);
+    hash.update(readFileOrNull(join(probeHome, name)) ?? "\0absent");
   }
   return `sha256:${hash.digest("hex")}`;
 }
