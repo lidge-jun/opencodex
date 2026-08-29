@@ -343,6 +343,12 @@ function rootPromptMessages(
   let selected = entries;
   let historyMessageStart = 0;
   if (externalModel) {
+    // A non-zero offset means `rawMessages[0]` is NOT the conversation start: only the checkpoint
+    // path passes one, and it passes `suffixStart`, the count of messages the checkpoint carries.
+    // Named rather than tested inline because `knownCallsOffset` answers two different questions —
+    // where to re-base a position (#2936) and whether this history has a covered predecessor — and
+    // collapsing them back into one bare `!== 0` is how the second meaning gets lost again.
+    const suffixContinuesCoveredTurn = knownCallsOffset > 0;
     const systemEntries = entries.slice(0, systemEntryCount);
     const history = entries.slice(systemEntryCount);
     const systemBytes = systemEntries.reduce((sum, entry) => sum + entry.byteLength, 0);
@@ -417,10 +423,21 @@ function rootPromptMessages(
 
     const historyEntries = [...keptPrior, ...active];
     // Guard against orphan assistant / toolResult at the start of the retained suffix.
-    while (historyEntries[0]?.role === "assistant" || historyEntries[0]?.role === "toolResult") {
-      // Never drop the sole active tool-result block.
-      if (historyEntries.length <= active.length) break;
-      historyEntries.shift();
+    //
+    // Premised on `history` starting where the CONVERSATION starts: only then does a leading
+    // assistant/result entry mean its user turn was pruned. A checkpoint suffix breaks that premise —
+    // it begins at `suffixStart`, so its first entry is routinely the assistant message whose
+    // initiating user turn is inside the checkpoint. Running the loop there strips pair after pair
+    // until only `active` survives, because the `break` fires only once the survivors ARE `active`:
+    // measured 2 roots for 1, 2, 3 and 4 completed pairs in the suffix, so a growing conversation
+    // replayed a constant payload and the model never saw the output of the command it just ran
+    // (devlog 260829 070).
+    if (!suffixContinuesCoveredTurn) {
+      while (historyEntries[0]?.role === "assistant" || historyEntries[0]?.role === "toolResult") {
+        // Never drop the sole active tool-result block.
+        if (historyEntries.length <= active.length) break;
+        historyEntries.shift();
+      }
     }
     // #1527: the surviving history must not begin with a tool result. Byte pressure can consume the
     // whole budget with one large active result and drop the user turn that asked for it, and

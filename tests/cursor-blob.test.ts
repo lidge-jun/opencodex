@@ -2408,3 +2408,117 @@ describe("Cursor external replay envelope", () => {
     }
   });
 });
+
+/**
+ * devlog 260829 070. The orphan-strip guard in `rootPromptMessages` assumed the replayed history
+ * starts where the CONVERSATION starts, which holds only for a full replay. A checkpoint suffix starts
+ * at `checkpointSuffixStart`, so its first entry is routinely the assistant message whose initiating
+ * user turn lives inside the checkpoint — and the loop stripped pair after pair until only the trailing
+ * active result survived, because its `break` fires only once the survivors ARE the active block.
+ *
+ * The consequence was not a cosmetic omission. Measured live against `cursor/grok-4.6`, three
+ * sequential commands produced 14 tool executions — STEP1 and STEP2 seven times each, STEP3 never —
+ * with six "was interrupted" narrations and no terminal answer. Each turn replayed the same collapsed
+ * payload, so the model never saw the output of the command it had just run.
+ *
+ * These assert the property the collapse violated: the replayed suffix grows with the history.
+ */
+describe("Cursor checkpoint suffix keeps its completed pairs", () => {
+  afterEach(() => {
+    clearCursorCheckpointsForTests();
+    resetCursorBlobStateForTests();
+  });
+
+  /** One covered opening user message, then `pairs` completed call/result exchanges. */
+  function growingHistory(pairs: number) {
+    const messages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+      { role: "user", content: "Run each step once.", timestamp: 1 },
+    ];
+    let timestamp = 2;
+    for (let n = 1; n <= pairs; n++) {
+      messages!.push({
+        role: "assistant",
+        content: [
+          { type: "text", text: `Running STEP${n}.` },
+          { type: "toolCall", id: `call_${n}`, name: "exec_command", arguments: { cmd: `echo STEP${n}` } },
+        ],
+        timestamp: timestamp++,
+      });
+      messages!.push({
+        role: "toolResult",
+        toolCallId: `call_${n}`,
+        toolName: "exec_command",
+        content: `STEP${n}`,
+        isError: false,
+        timestamp: timestamp++,
+      });
+    }
+    return messages;
+  }
+
+  /** Replayed root texts, minus the checkpoint-carried root this process cannot read back. */
+  function suffixTexts(pairs: number): string[] {
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: [new Uint8Array(32).fill(7)],
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: `cursor_ckpt_pairs_${pairs}`,
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages: growingHistory(pairs),
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      // Only the opening user message is covered; every pair below it must be replayed.
+      checkpointSuffixStart: 1,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    return roots.slice(1).map(id => {
+      const parsed = JSON.parse(new TextDecoder().decode(blobData(id))) as { content?: string | [{ text?: string }] };
+      const content = parsed.content;
+      return typeof content === "string" ? content : (content?.[0]?.text ?? "");
+    });
+  }
+
+  test("every completed pair in the uncovered suffix reaches the model", () => {
+    const texts = suffixTexts(3);
+    // Before the fix this was a single entry: the STEP3 result, with STEP1 and STEP2 discarded.
+    for (const step of ["STEP1", "STEP2", "STEP3"]) {
+      expect(texts.some(text => text.includes(`echo ${step}`))).toBe(true);
+      expect(texts.some(text => text.startsWith("[Tool Result]") && text.includes(step))).toBe(true);
+    }
+  });
+
+  test("the replayed suffix grows with the history instead of collapsing to a constant", () => {
+    // Exact counts are an implementation detail; a payload that does not grow at all is the defect.
+    const counts = [1, 2, 3, 4].map(pairs => suffixTexts(pairs).length);
+    expect(counts).toEqual([...counts].sort((a, b) => a - b));
+    expect(new Set(counts).size).toBeGreaterThan(1);
+    expect(counts.at(-1)!).toBeGreaterThan(counts[0]!);
+  });
+
+  test("a full replay still strips a genuinely orphaned leading entry", () => {
+    // The guard's reason to exist (#1527). With no checkpoint there is no covered turn, so a leading
+    // assistant entry IS orphaned and must not survive — this is what keeps the fix narrow.
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: "cursor_full_replay_orphan",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages: [
+        { role: "assistant", content: [{ type: "text", text: "ORPHAN LEADING ASSISTANT" }], timestamp: 1 },
+        { role: "user", content: "please read", timestamp: 2 },
+        { role: "toolResult", toolCallId: "call_1", toolName: "read_file", content: "FILE", isError: false, timestamp: 3 },
+      ],
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    const serialized = JSON.stringify(roots.map(id => JSON.parse(new TextDecoder().decode(blobData(id)))));
+    expect(serialized).not.toContain("ORPHAN LEADING ASSISTANT");
+    expect(serialized).toContain("FILE");
+  });
+});
