@@ -409,27 +409,50 @@ function rootPromptMessages(
     // twice, which cost a slot that was genuinely free: at 190 carried roots the limit came out 1 when 2
     // results fit, and the count bound below then dropped an answered call for no reason (audit r10).
     const chargeableSystemCount = suffixContinuesCoveredTurn ? 0 : systemEntryCount;
-    const chargeableSystemBytes = suffixContinuesCoveredTurn ? 0 : systemBytes;
     const historyLimit = Math.max(0, CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - chargeableSystemCount - carriedRoots.count);
-    const historyBudget = Math.max(0, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - chargeableSystemBytes - carriedRoots.byteLength);
+    // Only the COUNT is relaxed. The byte side keeps charging `systemBytes` on both paths: the same
+    // double-charge argument applies in principle, but no configuration could be found where relaxing it
+    // changes the assembled payload — 6 crossings of carried bytes against system size against result size
+    // in the deciding band produced byte-identical output with and without it. Untested new code on the
+    // envelope path is a liability rather than a saving, and charging the bytes twice only ever errs
+    // conservative, so the relaxation is deliberately not made here (audit r11).
+    const historyBudget = Math.max(0, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - systemBytes - carriedRoots.byteLength);
 
     // Retain the active trailing tool-result block when it fits (may truncate text).
     // If even a truncation marker cannot fit the remaining budget, omit it rather than
     // emitting an oversized root blob.
-    let activeStart = history.length;
+    //
+    // Walk past any SYNTHETIC trailing root first. The repetition breaker above appends a
+    // `[context note]` user root after the transcript, and it stands for no message, so it carries no
+    // `messageIndex`. Without this step the result-run walk stopped dead on that note: `activeStart`
+    // came out equal to `history.length`, the trailing run was empty, and the results lost their
+    // trailing-run status entirely — they fell through to `prior` and were pruned as ordinary history,
+    // with no "keep at least one" guarantee and an empty `activeMessageIndexes` that sent the abandon
+    // check back to the raw-message scan it must not use. Measured: a note-armed continuation at 186
+    // carried roots was retained where the same shape without the note correctly abandoned, and the
+    // note arms on three identical assistant narrations — the runaway-repetition shape this whole unit
+    // exists to end, so the one input most likely to hit it (audit r11).
+    let activeEnd = history.length;
+    while (activeEnd > 0 && history[activeEnd - 1]?.messageIndex === undefined) activeEnd -= 1;
+    let activeStart = activeEnd;
     while (activeStart > 0 && history[activeStart - 1]?.role === "toolResult") activeStart -= 1;
     const active = history
-      .slice(activeStart)
+      .slice(activeStart, activeEnd)
       .map(entry => truncateToolResultBlob(entry, historyBudget))
       .filter((entry): entry is RootBlobCandidate => entry !== null);
     // Record the run BEFORE any pruning below can shrink it, so the abandon decision downstream compares
     // against what pruning was asked to preserve rather than against a raw-message scan that cannot see
     // this run's true width (audit r10).
     activeMessageIndexes = history
-      .slice(activeStart)
+      .slice(activeStart, activeEnd)
       .map(entry => entry.messageIndex)
       .filter((index): index is number => index !== undefined);
-    let activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
+    // Synthetic trailing roots are re-appended after pruning, so they must be PAID FOR here or the
+    // envelope is overrun by exactly their number: they are counted with the trailing run rather than
+    // added afterwards, which is the mistake the count budget already made once (audit r11).
+    const syntheticCount = history.length - activeEnd;
+    const syntheticBytes = history.slice(activeEnd).reduce((sum, entry) => sum + entry.byteLength, 0);
+    let activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0) + syntheticBytes;
     // Shrink every active result toward an equal share before dropping any of them. Review found
     // that the previous `active.shift()` loop DELETED whole results: three ~220 KB results emitted
     // only the last two, and `call_0` vanished with its tool call still in the transcript. A
@@ -443,7 +466,7 @@ function rootPromptMessages(
         const shrunk = truncateToolResultBlob(entry, share);
         if (shrunk) active[index] = shrunk;
       }
-      activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
+      activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0) + syntheticBytes;
     }
     // Only when even an equal share cannot fit — the marker alone has a floor, so enough results
     // still overflow — fall back to dropping the oldest.
@@ -452,13 +475,13 @@ function rootPromptMessages(
       activeBytes -= dropped?.byteLength ?? 0;
     }
     if (active.length === 1 && active[0] && activeBytes > historyBudget) {
-      const truncated = truncateToolResultBlob(active[0], historyBudget);
+      const truncated = truncateToolResultBlob(active[0], Math.max(0, historyBudget - syntheticBytes));
       if (truncated) {
         active[0] = truncated;
-        activeBytes = truncated.byteLength;
+        activeBytes = truncated.byteLength + syntheticBytes;
       } else {
         active.length = 0;
-        activeBytes = 0;
+        activeBytes = syntheticBytes;
       }
     }
     // COUNT-bound the trailing run, not only its bytes. `historyLimit` already subtracts what the
@@ -473,7 +496,7 @@ function rootPromptMessages(
     // Drop the OLDEST results first, matching the direction byte pressure already prunes, and keep
     // at least one: a continuation with no result is worthless, and the abandon decision downstream
     // reads `historyMessageIndexes` to notice exactly that and fall back to a full replay.
-    while (active.length > 1 && active.length > historyLimit) {
+    while (active.length > 1 && active.length + syntheticCount > historyLimit) {
       const dropped = active.shift();
       activeBytes -= dropped?.byteLength ?? 0;
     }
@@ -490,7 +513,9 @@ function rootPromptMessages(
     // guard fix, because there was nothing left for that guard to strip. Admitting entry-by-entry keeps
     // as much recent history as fits instead of none (devlog 260829 070, audit r8 finding 2).
     let i = prior.length - 1;
-    while (i >= 0 && keptPrior.length + active.length < historyLimit) {
+    // `syntheticCount` is charged here too: those roots are re-appended after this loop, so admitting
+    // prior history against a limit that ignores them overruns the envelope by their number.
+    while (i >= 0 && keptPrior.length + active.length + syntheticCount < historyLimit) {
       let turnStart = i;
       if (!suffixContinuesCoveredTurn) {
         // Root-blob roles are a closed set of four (system, user, assistant, toolResult): a
@@ -501,7 +526,7 @@ function rootPromptMessages(
       const turn = prior.slice(turnStart, i + 1);
       const turnBytes = turn.reduce((sum, entry) => sum + entry.byteLength, 0);
       if (
-        keptPrior.length + active.length + turn.length > historyLimit
+        keptPrior.length + active.length + syntheticCount + turn.length > historyLimit
         || priorBytes + activeBytes + turnBytes > historyBudget
       ) {
         break;
@@ -511,7 +536,12 @@ function rootPromptMessages(
       i = turnStart - 1;
     }
 
-    const historyEntries = [...keptPrior, ...active];
+    // The synthetic trailing roots excluded from the run above — today only the repetition-breaker note —
+    // are re-appended so telling the model to change strategy is not silently dropped by the very walk
+    // that stopped ignoring it. They are budgeted with `active`, which is why they sit inside the count
+    // bound rather than after it.
+    const trailingSynthetic = history.slice(activeEnd);
+    const historyEntries = [...keptPrior, ...active, ...trailingSynthetic];
     // Guard against orphan assistant / toolResult at the start of the retained suffix.
     //
     // Premised on `history` starting where the CONVERSATION starts: only then does a leading
@@ -524,8 +554,9 @@ function rootPromptMessages(
     // (devlog 260829 070).
     if (!suffixContinuesCoveredTurn) {
       while (historyEntries[0]?.role === "assistant" || historyEntries[0]?.role === "toolResult") {
-        // Never drop the sole active tool-result block.
-        if (historyEntries.length <= active.length) break;
+        // Never drop the sole active tool-result block. The floor counts the re-appended synthetic roots
+        // too, or the strip eats into the trailing run once a repetition note is present.
+        if (historyEntries.length <= active.length + trailingSynthetic.length) break;
         historyEntries.shift();
       }
     }

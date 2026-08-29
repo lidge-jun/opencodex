@@ -421,3 +421,67 @@ flag left all 191 tests green, and `tests/` is outside `tsconfig`'s `include`, s
 noticed either. Covered now by asserting the abandonment it is supposed to trigger.
 
 Four-suite total is 197 pass / 0 fail; `cursor-blob` alone 111.
+
+## Audit round 7: the repetition note stopped the walk that protects the results
+
+The trailing-result walk tested one thing — `role === "toolResult"` — and walked backwards from the very end
+of `history`. The repetition breaker appends a synthetic `[context note]` **user** root after the transcript
+when the same output repeats three times or more. That note stands for no message, so it carries no
+`messageIndex`, and the walk hit it immediately and stopped: `activeStart === history.length`, the trailing
+run came out empty, `activeMessageIndexes` came out `[]`.
+
+Two failures at once, both worse than the defect round 6 fixed:
+
+The results lost trailing-run status altogether. They fell through into `prior` and were pruned as ordinary
+history, so the "keep at least one result" floor never applied to them.
+
+And the empty `activeMessageIndexes` sent the abandon check into its raw-space fallback — the exact scan
+round 6 exists to avoid. Measured: at 186 carried roots the note-armed shape was RETAINED where the
+identical shape without the note correctly abandoned to a coherent full replay.
+
+The trigger is the worst possible one. The note arms on three consecutive identical assistant narrations,
+which is the runaway-repetition shape this entire unit exists to end — so the input most likely to hit the
+defect is the input the fix was written for.
+
+Instrumented state at the moment of the break:
+
+```
+PRUNE   {historyLen:10, activeStart:10, active:0, activeIdx:[], historyLimit:6, lastRole:"user"}
+ABANDON {activeIdx:[], usedFallback:true, trailingIndexes:[19], keptEnough:true}
+```
+
+`activeStart` equal to `historyLen` is the whole bug in one number.
+
+The walk now skips trailing roots that carry no `messageIndex` before looking for the result run, and the
+excluded roots are re-appended afterwards so the note itself still reaches the model. That re-append is the
+part that needed care: a root added after pruning has to be paid for DURING pruning, or the envelope is
+overrun by exactly its number. Left uncharged, note-armed continuations at 188-190 carried roots threw the
+non-retryable 400 for both sequential and parallel suffixes. `syntheticCount` and `syntheticBytes` are
+therefore charged in the count bound, in the prior-history admission loop, and in the byte accounting, and
+the orphan-strip floor counts them too so the strip cannot eat into the trailing run.
+
+### The byte relaxation was dropped rather than covered
+
+Round 7 also found that `chargeableSystemBytes = 0` had no coverage: reverting it alone left all four suites
+green. The double-charge argument applies to bytes in principle, but no configuration could be found where
+relaxing it changes the assembled payload — six crossings of carried bytes against system size against
+result size in the deciding band produced byte-identical output either way. So it is gone. Charging the
+system bytes twice only ever errs conservative, and untested new code on the envelope path is a liability,
+not a saving. The count relaxation stays: it is covered, and its own case reddens without it.
+
+### Mutation evidence
+
+- the `messageIndex` walk removed (r11 defect restored) → 1 red
+- `syntheticCount` uncharged in the count bound → 1 red
+- the note dropped from the payload instead of re-appended → 1 red
+- `syntheticCount` uncharged in the prior-history loop → 2 red
+
+The middle two are why this round's first attempt was not finished: both charges initially had no failing
+test, exactly the condition round 6 had already been caught on once. A 224-configuration count sweep across
+carried 185-191 by note-armed sequential and parallel suffixes showed the uncharged version throwing and the
+charged version clean, which is what the new boundary case now asserts.
+
+Four-suite total is 198 pass / 0 fail; `cursor-blob` alone 115. Sweeps re-run clean at this head: 1440
+configurations across narrated, bare-call, whitespace-text and parallel shapes with zero envelope overruns,
+zero orphaned calls and zero lost newest results; 78-position count-by-parallel grid clean; all five
+multi-turn growth shapes survive 200 turns.

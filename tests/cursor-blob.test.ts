@@ -2654,6 +2654,168 @@ describe("Cursor external replay envelope", () => {
   });
 
   /**
+   * Audit r11. The repetition breaker appends a synthetic `[context note]` user root AFTER the transcript,
+   * standing for no message and therefore carrying no `messageIndex`. The trailing-result walk tested only
+   * for `role === "toolResult"`, so it stopped dead on that note: the trailing run came out EMPTY, the
+   * results lost their trailing-run status entirely and were pruned as ordinary history with no "keep at
+   * least one" floor, and the empty `activeMessageIndexes` sent the abandon check back to the raw-message
+   * scan that r10 exists to avoid. Measured: at 186 carried roots the note-armed shape was RETAINED while
+   * the identical shape without the note correctly abandoned.
+   *
+   * The note arms on three consecutive identical assistant narrations — the runaway-repetition shape this
+   * whole unit exists to end — so the input most likely to trigger it is the one the fix is for.
+   *
+   * Asserted as an A/B against the same pressure, because the defect is a DIVERGENCE: whatever the no-note
+   * shape does, the note must not change whether a call keeps its answer, and the note itself must survive.
+   */
+  test("a repetition note does not cost the trailing results their answers", () => {
+    const carried = CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 6;
+    const pairs = 8;
+    const build = (withNote: boolean) => {
+      const checkpointRoots = Array.from(
+        { length: carried },
+        (_, i) => storeCursorBlob(new TextEncoder().encode(JSON.stringify({ role: "user", content: [{ type: "text", text: `covered ${i}` }] }))),
+      );
+      const checkpoint = create(ConversationStateStructureSchema, {
+        rootPromptMessagesJson: checkpointRoots,
+        turns: [new Uint8Array(32).fill(8)],
+      });
+      const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+        { role: "user", content: "Work through the plan.", timestamp: 1 },
+      ];
+      let timestamp = 2;
+      if (withNote) {
+        // Three consecutive identical narrations with no root between them: this is what arms the breaker.
+        for (let r = 0; r < 4; r++) {
+          rawMessages!.push({ role: "assistant", content: [{ type: "text", text: "Still working on it." }], timestamp: timestamp++ });
+        }
+      }
+      for (let n = 0; n < pairs; n++) {
+        rawMessages!.push({
+          role: "assistant",
+          content: [{ type: "toolCall", id: `call_note_${n}`, name: "exec_command", arguments: { cmd: `echo N${n}` } }],
+          timestamp: timestamp++,
+        });
+        rawMessages!.push({
+          role: "toolResult",
+          toolCallId: `call_note_${n}`,
+          toolName: "exec_command",
+          content: `NOTE_OUT_${String(n).padStart(3, "0")}`,
+          isError: false,
+          timestamp: timestamp++,
+        });
+      }
+      const prepared = prepareCursorRunRequest({
+        modelId: "grok-4.6",
+        conversationId: `cursor_ckpt_repetition_note_${withNote}`,
+        system: ["You are helpful."],
+        messages: [{ role: "tool", content: "result" }],
+        rawMessages,
+        checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+        continuationMode: "checkpoint",
+        checkpointSuffixStart: 1,
+      });
+      const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+      const run = message.message.case === "runRequest" ? message.message.value : undefined;
+      const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+      const texts = roots.map(id => {
+        try {
+          const parsed = JSON.parse(new TextDecoder().decode(blobData(id))) as { content?: string | [{ text?: string }] };
+          const content = parsed.content;
+          return typeof content === "string" ? content : (content?.[0]?.text ?? "");
+        } catch {
+          return "";
+        }
+      });
+      const blob = texts.join("\n");
+      return {
+        roots: roots.length,
+        kept: roots.length > carried,
+        note: blob.includes("[context note]"),
+        answered: Array.from({ length: pairs }, (_, n) => blob.includes(`NOTE_OUT_${String(n).padStart(3, "0")}`)),
+      };
+    };
+    const plain = build(false);
+    const noted = build(true);
+    expect(noted.roots).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    // The note reached the model: excluding it from the trailing-result walk must not drop it.
+    expect(noted.note).toBe(true);
+    // Every replayed call still has its answer, and the note did not change which calls those are.
+    expect(noted.answered).toEqual(plain.answered);
+    expect(noted.answered.every(Boolean)).toBe(true);
+    // And the note did not flip a coherent full replay into a retained checkpoint.
+    expect(noted.kept).toBe(plain.kept);
+  });
+
+  /**
+   * Audit r11, second half. Excluding the repetition note from the trailing-result walk means it is
+   * re-appended after pruning, so its root slot has to be PAID FOR during pruning — the same mistake the
+   * count budget already made once, one root further along. Left uncharged, a note-armed continuation under
+   * count pressure assembles past the envelope and throws the non-retryable 400: measured at 188-190 carried
+   * roots for sequential and parallel suffixes alike.
+   *
+   * The note-armed A/B case above cannot catch this — it uses byte-free small results and lands below the
+   * count cliff — which is why the charge needs its own case at the boundary.
+   */
+  test.each([
+    [CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 4, 3, false],
+    [CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 3, 2, false],
+    [CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 4, 4, true],
+  ])("a repetition note is paid for out of the envelope, not added to it (carried=%i, results=%i, parallel=%s)", (carried, results, parallel) => {
+    const checkpointRoots = Array.from(
+      { length: carried },
+      (_, i) => storeCursorBlob(new TextEncoder().encode(JSON.stringify({ role: "user", content: [{ type: "text", text: `covered ${i}` }] }))),
+    );
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: checkpointRoots,
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+      { role: "user", content: "Work through the plan.", timestamp: 1 },
+    ];
+    let timestamp = 2;
+    for (let r = 0; r < 4; r++) {
+      rawMessages!.push({ role: "assistant", content: [{ type: "text", text: "Same line again." }], timestamp: timestamp++ });
+    }
+    if (parallel) {
+      const calls: OcxAssistantContentPart[] = Array.from({ length: results }, (_, i) => ({
+        type: "toolCall",
+        id: `call_np_${i}`,
+        name: "exec_command",
+        arguments: { cmd: `echo NP${i}` },
+      }));
+      rawMessages!.push({ role: "assistant", content: calls, timestamp: timestamp++ });
+      for (let i = 0; i < results; i++) {
+        rawMessages!.push({ role: "toolResult", toolCallId: `call_np_${i}`, toolName: "exec_command", content: `NP_OUT_${i}`, isError: false, timestamp: timestamp++ });
+      }
+    } else {
+      for (let i = 0; i < results; i++) {
+        rawMessages!.push({
+          role: "assistant",
+          content: [{ type: "toolCall", id: `call_ns_${i}`, name: "exec_command", arguments: { cmd: `echo NS${i}` } }],
+          timestamp: timestamp++,
+        });
+        rawMessages!.push({ role: "toolResult", toolCallId: `call_ns_${i}`, toolName: "exec_command", content: `NS_OUT_${i}`, isError: false, timestamp: timestamp++ });
+      }
+    }
+    // Throwing here is the failure: the envelope error is a non-retryable 400 at the provider.
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: `cursor_ckpt_note_budget_${carried}_${results}_${parallel}`,
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages,
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      checkpointSuffixStart: 1,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    expect(roots.length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+  });
+
+  /**
    * Audit r10 finding 2. `outputElided` on the marker-only return had no coverage: removing the flag left
    * all 191 tests green, and `tests/` is not typechecked (`tsconfig` include is `["src"]`), so nothing would
    * have caught its removal. A result reduced to the truncation marker answers its call with nothing, which
