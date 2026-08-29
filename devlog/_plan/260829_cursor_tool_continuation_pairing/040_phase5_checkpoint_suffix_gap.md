@@ -62,7 +62,7 @@ the fix was restored:
 | covered history is not replayed a second time | no — double-replay guard |
 | an id reused in covered history yields no invocation line | no — ambiguity guard |
 | native composer keeps checkpoint results off the root prompt | no — native-path guard |
-| an ambiguous id resolved from full history is not re-resolved from the suffix | yes — but against `size > 0`, not against the threading |
+| an ambiguous id resolved from full history is not re-resolved from the suffix | yes — against the threading *and* against `size > 0` |
 
 ### Why the lookup uses `??` and not a `size > 0` check
 
@@ -89,8 +89,19 @@ covered history yields no invocation line" passes under *both* variants, because
 is ambiguous within the suffix too. The distinction only shows up when the ambiguity is visible in
 full history but not in the suffix, which is what the added case constructs.
 
-Two assertions fail without the threading and pass with it; the other three are guards that
-must hold either way, and they document what the widened lookup must *not* break.
+**Three** of the six assertions fail without the threading and pass with it; the other three are
+guards that must hold either way, and they document what the widened lookup must *not* break.
+
+An independent final-gate review corrected this count. The original text said two of five, which was
+wrong on both numbers: the sixth test was added after the table was written, and it fails against a
+missing threading too, not only against a `size > 0` fallback. Without the threading `knownCalls` is
+`undefined`, so the suffix-only index sees one candidate and names `echo SECOND` for a result whose
+output is `FIRST` — the same wrong label, reached by a different route. Measured at `1241a8d5c`:
+reverting only the call-site threading gives **16 pass / 3 fail**.
+
+The fix is therefore better covered than the first version of this record claimed. Recorded because a
+reader who reverts the threading expecting two failures would not know whether they were looking at a
+stale doc or a real drift.
 
 Two shapes needed care while writing them:
 
@@ -129,6 +140,37 @@ callers select on role first.
 So the `toolResult` branch inside `contentText` is dead for these paths, and the two patched sites are
 the complete set. `request-builder.ts` has its own `toolResultToText` for the text `messages` channel;
 it is a different channel with no invocation line by design and is out of scope here.
+
+### Two gaps that enumeration missed
+
+The final-gate review found the argument above correct about `contentText` but the surrounding claim
+overstated: "only two functions attach an invocation line" is true, yet it is not the same statement as
+"every site that emits a result envelope has been accounted for". Both items below are **pre-existing**
+and neither is induced by the checkpoint cut.
+
+**A fourth emission site, line ~1025.** The `conversationTurns` native branch resolves its call from
+suffix-local `pendingToolCalls` and, on a miss, falls through to a bare `toolResultToText(message)`
+with no invocation line. It never consults `knownCalls`. Measured: full replay and checkpoint produce
+byte-identical bare output on the same interleaved input, so the cut does not induce it.
+
+**The two builders gate on different predicates.** `rootPromptMessages` uses
+`cursorNeedsExternalToolContinuation`; `conversationTurns` uses `isCursorExternalWireModel`. These
+disagree for exactly one model:
+
+| Model | `cursorNeedsExternalToolContinuation` | `isCursorExternalWireModel` |
+|-------|--------------------------------------|------------------------------|
+| `composer-2.5` | true | **false** |
+| `grok-4.6-high` | true | true |
+| `composer-2.5-fast` | false | false |
+
+So for `composer-2.5` the map is threaded in and then ignored by the turn builder. Measured on an
+interleaved history: `ROOT invoked=true`, `TURN_STEP invoked=false`.
+
+The asymmetry was inherited from #2900, where the root gate was deliberately widened to
+`cursorNeedsExternalToolContinuation` (audit 001 F2) while the turn gate was left alone. Whether
+`composer-2.5` turn steps should also name the invocation is a behaviour question about a native
+model's replay, not a checkpoint-indexing bug, so it is not folded in here — it belongs to a unit that
+can verify the native path end to end rather than being changed on inference.
 - `bun x tsc --noEmit` — exit 0.
 - Full suite on `ssh lidge`; no local full-suite run was used as a gate.
 
