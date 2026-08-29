@@ -30,6 +30,7 @@ import {
   registerRetainedStore,
   resetAppOwnedMemoryForTests,
 } from "../src/lib/app-owned-memory";
+import { resetDebugSettingsForTests } from "../src/lib/debug-settings";
 import {
   CURSOR_EXTERNAL_ROOT_BYTE_LIMIT,
   CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT,
@@ -39,6 +40,8 @@ import {
   prepareCursorRunRequest,
 } from "../src/adapters/cursor/protobuf-request";
 import { estimateTokens } from "../src/lib/token-estimate";
+import { CursorRootEnvelopeLimitError } from "../src/adapters/cursor/cursor-errors";
+import { isRetryableCursorError } from "../src/adapters/cursor/transport-retry";
 import {
   AgentClientMessageSchema,
   ConversationStepSchema,
@@ -506,6 +509,16 @@ describe("Cursor blob handshake", () => {
     expect(rootBytes).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
     expect(JSON.stringify(roots)).toContain("[Tool Result]");
     expect(JSON.stringify(roots)).toContain("truncated for Cursor external replay budget");
+    // #1527: the result surviving is not enough. Byte pressure used to consume the whole budget
+    // with this one result and drop the user turn that asked for it, and `conversationTurns()`
+    // then discarded the result too for lack of a current turn. What went on the wire was system
+    // roots plus a bare result marker and a generic Continue action — no instruction, which a
+    // model answers in a handful of tokens. That is the reported symptom.
+    //
+    // Asserting the marker alone is what let it pass CI, so assert the instruction as well.
+    expect(JSON.stringify(roots)).toContain("read it");
+    expect(roots.find(root => root.role !== "system")?.role).toBe("user");
+    expect(run?.conversationState?.turns.length).toBe(1);
   });
 
   test("truncates multi-byte tool results by UTF-8 byte budget", () => {
@@ -1852,6 +1865,57 @@ describe("Cursor checkpoint request construction", () => {
     expect(serialized).not.toContain("old user");
   });
 
+  /**
+   * The blocker-8 regression guard. Full replay must never emit a tool result without the turn
+   * that caused it, but a CHECKPOINT suffix legitimately can: `checkpointSuffixStart` is the
+   * count of messages the checkpoint already carries, so the initiating turn is inside it.
+   *
+   * Slicing at 3 makes the suffix exactly `[toolResult]`. Applying the full-replay rule here
+   * would pull the covered user turn back in and replay it twice.
+   */
+  test("a checkpoint suffix may legitimately begin with a tool result", () => {
+    const checkpoint = create(ConversationStateStructureSchema, {
+      rootPromptMessagesJson: [new Uint8Array(32).fill(7)],
+      turns: [new Uint8Array(32).fill(8)],
+    });
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: "cursor_ckpt_result_only",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages: [
+        { role: "user", content: "old user", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "old assistant" }], timestamp: 2 },
+        { role: "user", content: "please read the file", timestamp: 3 },
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "read_file",
+          content: "SUFFIX ONLY CONTENTS",
+          isError: false,
+          timestamp: 4,
+        },
+      ],
+      checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+      continuationMode: "checkpoint",
+      checkpointSuffixStart: 3,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+
+    // The checkpoint's own root is preserved and the suffix is appended after it.
+    expect(Array.from(roots[0] ?? [])).toEqual(Array.from({ length: 32 }, () => 7));
+    const suffix = roots.slice(1).map(id => new TextDecoder().decode(blobData(id)));
+    const serialized = JSON.stringify(suffix);
+    expect(serialized).toContain("SUFFIX ONLY CONTENTS");
+
+    // The covered turn stays covered: pulling it back in would replay it a second time.
+    expect(serialized).not.toContain("please read the file");
+    // And no synthetic system root is re-appended on top of the checkpoint's own.
+    expect(suffix.some(root => root.includes('"role":"system"'))).toBe(false);
+  });
+
   test("active checkpoint lease keeps referenced blobs after request pin release", () => {
     clearCursorCheckpointsForTests();
     const data = new TextEncoder().encode('{"role":"system","content":"lease-me"}');
@@ -1997,5 +2061,183 @@ describe("Cursor checkpoint idle TTL", () => {
     scheduled?.();
     expect(cursorCheckpointStoreMetricsForTests().count).toBe(0);
     expect(cursorBlobRetainedStoreSnapshot().pinnedBytes).toBe(0);
+  });
+});
+
+/**
+ * #1527 envelope enforcement. The 192-root / 512-KiB limits existed but were applied to the
+ * pruned history only, so three shapes escaped them entirely. Each of these reproduced a real
+ * over-envelope request before the guard moved to the final assembled root set.
+ */
+describe("Cursor external replay envelope", () => {
+  test("system roots alone cannot exceed the root count limit", () => {
+    // 193 system prompts: the history budget is zero, so the pruning branch had nothing to
+    // trim and emitted every system root.
+    const system = Array.from({ length: CURSOR_EXTERNAL_ROOT_BLOB_LIMIT + 1 }, (_, i) => `system-${i}`);
+
+    let thrown: unknown;
+    try {
+      encodeCursorRunRequest({
+        modelId: "gpt-5.6-sol-xhigh",
+        conversationId: "c-sys-count",
+        system,
+        messages: [{ role: "user", content: "hi" }],
+        rawMessages: [{ role: "user", content: "hi", timestamp: 1 }],
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(CursorRootEnvelopeLimitError);
+    const limit = thrown as CursorRootEnvelopeLimitError;
+    expect(limit.name).toBe("CursorRootEnvelopeLimitError");
+    expect(limit.code).toBe("cursor_root_envelope_limit");
+    expect(limit.status).toBe(400);
+    expect(limit.rootCount).toBeGreaterThan(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    expect(limit.maxRootCount).toBe(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    expect(limit.maxRootBytes).toBe(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+    // A local, deterministic rejection: replaying it reproduces it.
+    expect(isRetryableCursorError(limit)).toBe(false);
+  });
+
+  test("a single oversized system root cannot exceed the byte limit", () => {
+    const oversized = "s".repeat(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT + 100_000);
+
+    let thrown: unknown;
+    try {
+      encodeCursorRunRequest({
+        modelId: "gpt-5.6-sol-xhigh",
+        conversationId: "c-sys-bytes",
+        system: [oversized],
+        messages: [{ role: "user", content: "hi" }],
+        rawMessages: [{ role: "user", content: "hi", timestamp: 1 }],
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(CursorRootEnvelopeLimitError);
+    expect((thrown as CursorRootEnvelopeLimitError).rootBytes).toBeGreaterThan(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+  });
+
+  // The early return at the top of `rootPromptMessages` skips the pruning branch entirely when
+  // there is no history, so a guard placed inside that branch never saw this shape.
+  test("the empty-history path is bounded too", () => {
+    const system = Array.from({ length: CURSOR_EXTERNAL_ROOT_BLOB_LIMIT + 1 }, (_, i) => `only-system-${i}`);
+
+    expect(() => encodeCursorRunRequest({
+      modelId: "gpt-5.6-sol-xhigh",
+      conversationId: "c-no-history",
+      system,
+      messages: [{ role: "user", content: "hi" }],
+      rawMessages: [],
+    })).toThrow(CursorRootEnvelopeLimitError);
+  });
+
+  // Contiguous trailing results were byte-pruned but never count-pruned, so 193 small results
+  // sailed past the history limit that only checked `keptPrior`.
+  test("a long contiguous tool-result block cannot exceed the root count limit", () => {
+    const results = Array.from({ length: CURSOR_EXTERNAL_ROOT_BLOB_LIMIT + 1 }, (_, i) => ({
+      role: "toolResult" as const,
+      toolCallId: `call_${i}`,
+      toolName: "read_file",
+      content: `r${i}`,
+      isError: false,
+      timestamp: i + 2,
+    }));
+
+    let thrown: unknown;
+    try {
+      encodeCursorRunRequest({
+        modelId: "gpt-5.6-sol-xhigh",
+        conversationId: "c-many-results",
+        system: ["system"],
+        messages: [{ role: "tool", content: "ignored" }],
+        rawMessages: [{ role: "user", content: "go", timestamp: 1 }, ...results],
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    // Either bounded within the envelope, or rejected — never silently shortened past the cap.
+    if (thrown) {
+      expect(thrown).toBeInstanceOf(CursorRootEnvelopeLimitError);
+    } else {
+      const bytes = encodeCursorRunRequest({
+        modelId: "gpt-5.6-sol-xhigh",
+        conversationId: "c-many-results-2",
+        system: ["system"],
+        messages: [{ role: "tool", content: "ignored" }],
+        rawMessages: [{ role: "user", content: "go", timestamp: 1 }, ...results],
+      });
+      expect(decodeRootMessages(bytes).length).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    }
+  });
+
+  test("a native model is not subject to the external envelope", () => {
+    const system = Array.from({ length: CURSOR_EXTERNAL_ROOT_BLOB_LIMIT + 1 }, (_, i) => `system-${i}`);
+
+    expect(() => encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c-native",
+      system,
+      messages: [{ role: "user", content: "hi" }],
+      rawMessages: [{ role: "user", content: "hi", timestamp: 1 }],
+    })).not.toThrow();
+  });
+
+  // The diagnostic used to read `rootPromptMessagesState?.byteLength`, which is undefined for a
+  // pure checkpoint continuation — so an operator sizing a conversation that was about to be
+  // rejected saw rootBytes=0. The guard and the telemetry now read the same measurement, and a
+  // root the local store never held is disclosed as `unmeasuredRoots` rather than silently
+  // making the total look small.
+  test("the run-request diagnostic reports the measured envelope, not zero", () => {
+    const previousDebug = process.env.OCX_DEBUG;
+    process.env.OCX_DEBUG = "1";
+    resetDebugSettingsForTests();
+    const lines: string[] = [];
+    const originalError = console.error;
+    console.error = (line: unknown) => { lines.push(String(line)); };
+    try {
+      // A PURE checkpoint continuation: no suffix, so `rootPromptMessagesState` is undefined and
+      // the old expression had nothing to read. One root is in the local store (measurable) and
+      // one was minted by Cursor (not), which is the mix a resumed conversation actually carries.
+      const storedRoot = storeCursorBlob(new TextEncoder().encode("root-payload-in-store"));
+      const checkpoint = create(ConversationStateStructureSchema, {
+        rootPromptMessagesJson: [storedRoot, new Uint8Array(32).fill(7)],
+        turns: [new Uint8Array(32).fill(8)],
+      });
+      prepareCursorRunRequest({
+        modelId: "grok-4.6",
+        conversationId: "cursor_telemetry",
+        system: ["You are helpful."],
+        messages: [{ role: "user", content: "new user" }],
+        rawMessages: [
+          { role: "user", content: "old user", timestamp: 1 },
+          { role: "assistant", content: [{ type: "text", text: "old assistant" }], timestamp: 2 },
+          { role: "user", content: "new user", timestamp: 3 },
+        ],
+        checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+        continuationMode: "checkpoint",
+      });
+      const runLine = lines.find(line => line.includes("[ocx:cursor:run-request]"));
+      expect(runLine).toBeDefined();
+      const payload = JSON.parse(runLine!.slice(runLine!.indexOf("{"))) as {
+        rootBlobs: number;
+        rootBytes: number;
+        unmeasuredRoots?: number;
+      };
+      expect(payload.rootBlobs).toBe(2);
+      // The load-bearing assertion: with no suffix state to read, the old expression reported 0.
+      expect(payload.rootBytes).toBeGreaterThan(0);
+      // Exactly the one root that came from the checkpoint and was never in the local store, so
+      // the reader knows rootBytes is a floor.
+      expect(payload.unmeasuredRoots).toBe(1);
+    } finally {
+      console.error = originalError;
+      if (previousDebug === undefined) delete process.env.OCX_DEBUG;
+      else process.env.OCX_DEBUG = previousDebug;
+      resetDebugSettingsForTests();
+    }
   });
 });

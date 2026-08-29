@@ -404,6 +404,19 @@ export function storeCursorBlob(data: Uint8Array, requestScope?: CursorBlobReque
 }
 
 /**
+ * Stored byte length of one blob, or null when it is not in the store.
+ *
+ * Size only, never content: the envelope guard needs to measure the FINAL root set, which mixes
+ * roots minted this turn with roots carried inside a checkpoint. Reading them back through a
+ * hydration path would both defeat the request-scope sealing and log served bytes for a request
+ * that may never be sent.
+ */
+export function cursorBlobByteLength(blobId: Uint8Array): number | null {
+  const entry = blobs.get(key(blobId));
+  return entry ? entry.data.byteLength : null;
+}
+
+/**
  * Serve-time integrity for content-addressed blobs (devlog 260826_cursor_responses_gap 080):
  * a raw 32-byte blob id IS the SHA-256 of its bytes, so served data whose digest mismatches
  * the id means in-store corruption — the splice signature behind garbled replayed tool
