@@ -5505,6 +5505,13 @@ async function handleResponsesInner(
       { headers: { "Content-Type": "application/json" } },
     );
   }
+  // One request-scoped transient-retry budget owner, declared here so BOTH the initial send
+  // and the later recovery refetches (429, key/account rotation, OAuth replay) share it. A
+  // per-leg budget would let a request that recovers several times multiply upstream load.
+  let transientSendsUsed = 0;
+  const noteTransientSends = (used: number): void => { transientSendsUsed += Math.max(0, used); };
+  const remainingTransientSendBudget = (budget: number): number =>
+    Math.max(1, budget - transientSendsUsed);
   try {
     initialRequest = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
     refreshRoutedNamespaceToolAliases(initialRequest);
@@ -5563,14 +5570,6 @@ async function handleResponsesInner(
       // legacy direct-Google exception is preserved exactly; every other adapter still keeps
       // reset-only semantics so combo failover hops on the first 5xx.
       const transientPolicy = transientRetryPolicyFor(route.provider);
-      // One request-scoped budget owner. The initial send and every later recovery refetch
-      // (429, key/account rotation, OAuth replay) draw from this single pool, so a request
-      // that recovers several times cannot quietly multiply upstream load the way a
-      // per-leg budget would.
-      let transientSendsUsed = 0;
-      const noteTransientSends = (used: number): void => { transientSendsUsed += Math.max(0, used); };
-      const remainingTransientSendBudget = (budget: number): number =>
-        Math.max(1, budget - transientSendsUsed);
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
