@@ -66,7 +66,7 @@ and overrides only conflicting keys for the child process.
 | Layer | Behavior with `ocx opencode` |
 | --- | --- |
 | Global / custom / project config | Left on disk exactly as you wrote it |
-| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Receives only the generated `provider.opencodex` and `providers.opencodex` blocks |
+| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Receives the generated `provider.opencodex` and `providers.opencodex` blocks (merged into any inherited inline config) |
 | Relative `{file:…}` paths | Still resolve against the config file that originally defined them |
 
 If a global or project config also defines the provider under `provider.opencodex` or

@@ -41,7 +41,7 @@ et ne remplace que les clés en conflit pour le processus enfant.
 | Couche | Comportement avec `ocx opencode` |
 | --- | --- |
 | Configuration globale/personnalisée/de projet | Conservée sur disque exactement telle que vous l’avez écrite |
-| Exécution en ligne (`OPENCODE_CONFIG_CONTENT`) | Reçoit uniquement les blocs `provider.opencodex` et `providers.opencodex` générés |
+| Exécution en ligne (`OPENCODE_CONFIG_CONTENT`) | Reçoit les blocs `provider.opencodex` et `providers.opencodex` générés (fusionnés dans toute config en ligne héritée) |
 | Chemins relatifs `{file:…}` | Toujours résolus par rapport au fichier de configuration qui les a définis à l’origine |
 
 Si une configuration globale ou de projet définit également `provider.opencodex` ou `providers.opencodex`, le lanceur affiche une
