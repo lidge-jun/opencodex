@@ -1153,14 +1153,17 @@ export function parseXaiCreditsResponse(value: unknown): { percent: number; rese
   if (!config) return null;
   const period = asRecord(config.currentPeriod);
   if (!period || period.type !== "USAGE_PERIOD_TYPE_WEEKLY") return null;
-  const resetAt = normalizeResetAt(period.end);
-  if (resetAt === undefined) return null;
+  let percent = 0;
   if (config.creditUsagePercent !== undefined) {
-    const percent = normalizePercent(config.creditUsagePercent);
-    if (percent === undefined) return null;
-    return { percent, resetAt };
+    const normalized = normalizePercent(config.creditUsagePercent);
+    if (normalized === undefined) return null;
+    percent = normalized;
   }
-  return { percent: 0, resetAt };
+  const resetAt = normalizeResetAt(period.end);
+  return {
+    percent,
+    ...(resetAt !== undefined ? { resetAt } : {}),
+  };
 }
 
 async function fetchXaiWeeklyCredits(accessToken: string, userId: string): Promise<ProviderQuota | null> {
