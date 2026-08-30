@@ -733,6 +733,7 @@ describe("empty and absent tool catalogs", () => {
     history: unknown[] = [],
     model = "fixture/deepseek-v4-flash",
     previousResponseId?: string,
+    toolChoice?: unknown,
   ) {
     const savedFetch = globalThis.fetch;
     globalThis.fetch = (async () => upstream()) as typeof fetch;
@@ -752,6 +753,7 @@ describe("empty and absent tool catalogs", () => {
               : [{ type: "additional_tools", role: "developer", tools: additionalTools }]),
           ],
           ...(tools === undefined ? {} : { tools }),
+          ...(toolChoice === undefined ? {} : { tool_choice: toolChoice }),
         }),
       }), requestConfig, { model: "", provider: "" });
     } finally {
@@ -1316,6 +1318,53 @@ describe("empty and absent tool catalogs", () => {
     expect(refused.status).toBe(502);
     const refusedBody = await refused.json() as { error: { message: string } };
     expect(refusedBody.error.message).toContain('undeclared client tool "apply_patch"');
+  });
+
+  test("a bare tool_choice selecting a namespaced exec does not authorize the helper names", () => {
+    // The bridge maps alias a namespaced tool under its bare name when `tool_choice` selected it
+    // unambiguously, and the live guard merges those maps into the declared set. For `exec` that
+    // alias would switch nested-helper normalization back on, so selecting an MCP `exec` would
+    // re-authorize the shell bridge the request never declared.
+    return post(
+      false,
+      [{
+        type: "namespace",
+        name: "mcp__functions",
+        tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+      }],
+      jsonUpstream,
+      undefined,
+      config,
+      [],
+      "fixture/deepseek-v4-flash",
+      undefined,
+      { type: "allowed_tools", mode: "required", tools: [{ type: "custom", name: "exec" }] },
+    ).then(async response => {
+      expect(response.status).toBe(502);
+      const body = await response.json() as { error: { message: string } };
+      expect(body.error.message).toContain('undeclared client tool "apply_patch"');
+    });
+  });
+
+  test("a request that really declares a bare exec still accepts the helper names", () => {
+    return post(
+      false,
+      [
+        { type: "custom", name: "exec", description: "Run a command" },
+        {
+          type: "namespace",
+          name: "mcp__functions",
+          tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+        },
+      ],
+      jsonUpstream,
+    ).then(async response => {
+      expect(response.status).toBe(200);
+      const body = await response.json() as { output: Array<Record<string, unknown>> };
+      // Accepted and normalized onto the declared code-mode shell tool, exactly as before.
+      expect(body.output[0]).toMatchObject({ name: "exec", type: "custom_tool_call" });
+      expect(String(body.output[0]?.input)).toContain("tools.apply_patch");
+    });
   });
 });
 
