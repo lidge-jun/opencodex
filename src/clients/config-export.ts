@@ -25,7 +25,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { providerCodexAccountMode } from "../providers/registry";
-import { sanitizeCodexReasoningEfforts } from "../reasoning-effort";
+import { canonicalizeReasoningEfforts, sanitizeCodexReasoningEfforts } from "../reasoning-effort";
 import { probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 
@@ -65,6 +65,9 @@ export interface OpencodeCatalogModel {
   id?: string;
   contextWindow?: number;
   displayName?: string;
+  /** Declared effort ladder. Exported as opencode model variants where the client reads them. */
+  reasoningEfforts?: readonly string[];
+  defaultReasoningEffort?: string;
 }
 
 export interface OpencodeModelEntry {
@@ -72,20 +75,51 @@ export interface OpencodeModelEntry {
   limit?: { context: number; output: number };
 }
 
+/**
+ * One selectable reasoning effort.
+ *
+ * opencode V2 applies these only from the `providers` block: a `variants` array under the
+ * legacy `provider` block is parsed and then dropped, so the V1 block stays variant-free
+ * rather than carrying fields that look configured but never reach a request.
+ */
+export interface OpencodeModelVariant {
+  id: string;
+  settings: { reasoningEffort: string };
+}
+
+export interface OpencodeV2ModelEntry extends OpencodeModelEntry {
+  variants?: OpencodeModelVariant[];
+}
+
+/** Endpoint and admission, spelled once and shared by both block generations. */
+export interface OpencodeProviderConnection {
+  baseURL: string;
+  apiKey?: string;
+  headers?: Record<string, string>;
+}
+
+/** opencode V1 provider block: `npm` + `options`. */
 export interface OpencodeProviderBlock {
   npm: string;
   name: string;
-  options: {
-    baseURL: string;
-    apiKey?: string;
-    headers?: Record<string, string>;
-  };
+  options: OpencodeProviderConnection;
   models: Record<string, OpencodeModelEntry>;
+}
+
+/** opencode V2 provider block: `package` + `settings`. The only form whose variants apply. */
+export interface OpencodeV2ProviderBlock {
+  package: string;
+  name: string;
+  settings: OpencodeProviderConnection;
+  models: Record<string, OpencodeV2ModelEntry>;
 }
 
 export interface OpencodeGeneratedConfig {
   $schema: string;
+  /** Legacy block. Kept so opencode V1 installs keep working; V2 merges both and this one loses. */
   provider: Record<string, OpencodeProviderBlock>;
+  /** opencode V2 block. */
+  providers: Record<string, OpencodeV2ProviderBlock>;
 }
 
 /** Provider key owned by this project; the only key any exporter ever emits. */
@@ -98,6 +132,16 @@ export const OPENCODE_CONFIG_SCHEMA = "https://opencode.ai/config.json";
  * the AI SDK's openai-compatible package (the same wiring users hand-write today).
  */
 const OPENCODE_PROVIDER_NPM = "@ai-sdk/openai-compatible";
+
+/**
+ * opencode V2's spelling of the same runtime. V2 resolves providers through its own
+ * package table and ignores the V1 `npm` field, so a V2 block has to name this package
+ * or the provider is not loaded at all.
+ */
+const OPENCODE_V2_PROVIDER_PACKAGE = "@opencode-ai/ai/providers/openai-compatible";
+
+/** Display name for the provider block, identical in both generations. */
+const OPENCODE_PROVIDER_NAME = "OpenCodex";
 
 /**
  * Env var carrying the proxy admission key to opencode. The config only ever holds the
@@ -651,8 +695,9 @@ function exportModelLabel(model: OpencodeCatalogModel): string {
   return `${id} (${providerLabel})`;
 }
 
-function opencodeProviderOptions(baseURL: string, config: OcxConfig): OpencodeProviderBlock["options"] {
-  const options: OpencodeProviderBlock["options"] = { baseURL };
+/** Endpoint plus admission, identical for the V1 `options` and V2 `settings` field. */
+function opencodeProviderConnection(baseURL: string, config: OcxConfig): OpencodeProviderConnection {
+  const options: OpencodeProviderConnection = { baseURL };
   // Non-loopback binds accept proxy admission only via x-opencodex-api-key so Authorization
   // stays free for Codex Direct upstream credentials when applicable.
   if (shouldInjectApiAuthHeader(config)) {
@@ -664,35 +709,86 @@ function opencodeProviderOptions(baseURL: string, config: OcxConfig): OpencodePr
 }
 
 /**
- * `opencodex` provider block for a resolved base URL.
+ * Selectable reasoning efforts for one model, in canonical ladder order.
+ *
+ * No model-level `settings.reasoningEffort` default is emitted: the proxy already applies
+ * its own configured default when a request carries no effort, and pinning one here would
+ * override a default the user controls in opencodex. Variants are opt-in per selection,
+ * which is the same reason we never emit `defaultModel` for MCode.
+ */
+function opencodeEffortVariants(model: OpencodeCatalogModel): OpencodeModelVariant[] | undefined {
+  if (model.reasoningEfforts === undefined) return undefined;
+  // Canonical order (none, minimal, then low..ultra) and dedupe, so the picker order does
+  // not depend on whatever order a provider listed its efforts in.
+  const efforts = canonicalizeReasoningEfforts(model.reasoningEfforts);
+  if (efforts.length === 0) return undefined;
+  return efforts.map(effort => ({ id: effort, settings: { reasoningEffort: effort } }));
+}
+
+/**
+ * Both provider generations for one resolved base URL.
  *
  * `limit.context` is emitted ONLY from an authoritative context window — never guessed.
  * When none is available the whole `limit` block is dropped and opencode keeps its own
  * defaults; when one is present, `limit.output` rides along (opencode's schema requires
  * the pair) clamped to the context window.
+ *
+ * Two blocks instead of one because opencode V2 reads the `providers` map and V1 reads
+ * `provider`, and only the V2 form applies `variants`. Emitting both keeps V1 installs
+ * working: V2 merges them by provider id and model id, so a model listed in both blocks
+ * appears once, with the V2 entry's name, connection, and variants.
  */
-function opencodeProviderBlock(
+function opencodeProviderBlocks(
   baseURL: string,
   catalogModels: readonly OpencodeCatalogModel[],
   config: OcxConfig,
-): OpencodeProviderBlock {
-  const models: Record<string, OpencodeModelEntry> = {};
+): { v1: OpencodeProviderBlock; v2: OpencodeV2ProviderBlock } {
+  const v1Models: Record<string, OpencodeModelEntry> = {};
+  const v2Models: Record<string, OpencodeV2ModelEntry> = {};
   for (const model of catalogModels) {
     const key = model.namespaced;
-    if (models[key]) continue; // first entry wins; native rows lead /api/models
+    if (v1Models[key]) continue; // first entry wins; native rows lead /api/models
     const entry: OpencodeModelEntry = { name: exportModelLabel(model) };
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.limit = { context, output: outputBudgetFor(context) };
     }
-    models[key] = entry;
+    v1Models[key] = entry;
+    const variants = opencodeEffortVariants(model);
+    v2Models[key] = variants === undefined ? { ...entry } : { ...entry, variants };
   }
   return {
-    npm: OPENCODE_PROVIDER_NPM,
-    name: "OpenCodex",
-    options: opencodeProviderOptions(baseURL, config),
-    models,
+    v1: {
+      npm: OPENCODE_PROVIDER_NPM,
+      name: OPENCODE_PROVIDER_NAME,
+      options: opencodeProviderConnection(baseURL, config),
+      models: v1Models,
+    },
+    v2: {
+      package: OPENCODE_V2_PROVIDER_PACKAGE,
+      name: OPENCODE_PROVIDER_NAME,
+      settings: opencodeProviderConnection(baseURL, config),
+      models: v2Models,
+    },
   };
+}
+
+/** `opencodex` provider block for a resolved base URL (opencode V1 shape). */
+function opencodeProviderBlock(
+  baseURL: string,
+  catalogModels: readonly OpencodeCatalogModel[],
+  config: OcxConfig,
+): OpencodeProviderBlock {
+  return opencodeProviderBlocks(baseURL, catalogModels, config).v1;
+}
+
+/** `opencodex` provider block for a resolved base URL (opencode V2 shape, carries variants). */
+export function opencodeV2ProviderBlock(
+  baseURL: string,
+  catalogModels: readonly OpencodeCatalogModel[],
+  config: OcxConfig = OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
+): OpencodeV2ProviderBlock {
+  return opencodeProviderBlocks(baseURL, catalogModels, config).v2;
 }
 
 /**
@@ -726,14 +822,21 @@ export function normalizeExportModels(models: readonly ExportModel[]): ExportMod
   return unique.sort((a, b) => (a.namespaced < b.namespaced ? -1 : a.namespaced > b.namespaced ? 1 : 0));
 }
 
-/** OpenCode V1 document: our provider block plus `$schema`, and nothing else. */
+/**
+ * OpenCode document: both provider generations plus `$schema`, and nothing else.
+ *
+ * The V2 block is last so a V2 reader's merge leaves it authoritative, and first-wins
+ * ordering inside `providers` mirrors `provider`.
+ */
 function buildOpencodeClientConfig(ctx: ExportContext): OpencodeGeneratedConfig {
-  const block = opencodeProviderBlock(
-    ctx.baseUrl,
-    normalizeExportModels(ctx.models),
-    ctx.config ?? OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
-  );
-  return { $schema: OPENCODE_CONFIG_SCHEMA, provider: { [OPENCODE_PROVIDER_ID]: block } };
+  const models = normalizeExportModels(ctx.models);
+  const config = ctx.config ?? OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG;
+  const blocks = opencodeProviderBlocks(ctx.baseUrl, models, config);
+  return {
+    $schema: OPENCODE_CONFIG_SCHEMA,
+    provider: { [OPENCODE_PROVIDER_ID]: blocks.v1 },
+    providers: { [OPENCODE_PROVIDER_ID]: blocks.v2 },
+  };
 }
 
 export interface PiModelEntry {
@@ -1435,7 +1538,15 @@ function singleFragment(clientId: ExportClientId, path: readonly string[], value
 
 function buildOpencodeContribution(ctx: ExportContext): ManagedContribution {
   const doc = buildOpencodeClientConfig(ctx);
-  return singleFragment("opencode", ["provider", OPENCODE_PROVIDER_ID], doc.provider[OPENCODE_PROVIDER_ID]);
+  return {
+    clientId: "opencode",
+    fragments: [
+      // Legacy block first. opencode V1 reads only `provider`; V2 reads both and lets the
+      // `providers` block win, which is the only generation whose variants it applies.
+      { path: ["provider", OPENCODE_PROVIDER_ID], value: doc.provider[OPENCODE_PROVIDER_ID] },
+      { path: ["providers", OPENCODE_PROVIDER_ID], value: doc.providers[OPENCODE_PROVIDER_ID] },
+    ],
+  };
 }
 
 function buildPiContribution(ctx: ExportContext): ManagedContribution {

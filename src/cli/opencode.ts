@@ -27,12 +27,15 @@ import {
   OPENCODE_PROVIDER_ID,
   buildOpencodeProviderBlockFromCatalog,
   opencodeGlobalConfigPath,
+  opencodeProxyBaseUrl,
+  opencodeV2ProviderBlock,
 } from "../clients/config-export";
 import type {
   OpencodeCatalogModel,
   OpencodeGeneratedConfig,
   OpencodeLaunchEnv,
   OpencodeProviderBlock,
+  OpencodeV2ProviderBlock,
 } from "../clients/config-export";
 import { visibleNativeSlugs } from "../codex/catalog";
 import { commandInvocation } from "../lib/win-exec";
@@ -57,6 +60,7 @@ export {
   buildOpencodeProviderBlockFromCatalog,
   opencodeGlobalConfigPath,
   opencodeProxyBaseUrl,
+  opencodeV2ProviderBlock,
 } from "../clients/config-export";
 export type {
   OpencodeCatalogModel,
@@ -64,6 +68,7 @@ export type {
   OpencodeLaunchEnv,
   OpencodeModelEntry,
   OpencodeProviderBlock,
+  OpencodeV2ProviderBlock,
 } from "../clients/config-export";
 
 /** One proxy-routed model destined for the generated provider block. */
@@ -74,6 +79,8 @@ export interface OpencodeRoutedModel {
   contextWindow?: number;
   /** Authoritative display label (CatalogModel.displayName); optional. */
   displayName?: string;
+  /** Declared effort ladder; exported as opencode model variants when present. */
+  reasoningEfforts?: readonly string[];
 }
 
 /** Row shape from authenticated GET /api/models on the running proxy. */
@@ -85,6 +92,8 @@ export interface OpencodeProxyModelRow {
   disabled?: boolean;
   displayName?: string;
   contextWindow?: number;
+  /** Declared effort ladder from `/api/models`; carried into opencode model variants. */
+  reasoningEfforts?: string[];
 }
 
 const PROJECT_CONFIG_FILENAMES = ["opencode.json", "opencode.jsonc"] as const;
@@ -196,16 +205,13 @@ export function opencodeLaunchNativeSlugs(config: OcxConfig): string[] {
   return [...visibleNativeSlugs(config)];
 }
 
-/** Back-compat helper for unit tests that assemble slugs/routed rows directly. */
-export function buildOpencodeProviderBlock(
-  port: number,
+/** Catalog rows for the slugs/routed models a caller assembled by hand. */
+function opencodeLaunchCatalog(
   nativeSlugs: readonly string[],
   routedModels: readonly OpencodeRoutedModel[],
-  nativeContextWindow: (slug: string) => number | undefined = () => undefined,
-  hostname?: string,
-  config: OcxConfig = OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
-): OpencodeProviderBlock {
-  const catalog: OpencodeCatalogModel[] = [
+  nativeContextWindow: (slug: string) => number | undefined,
+): OpencodeCatalogModel[] {
+  return [
     ...nativeSlugs.map(id => ({
       namespaced: id,
       native: true,
@@ -220,9 +226,57 @@ export function buildOpencodeProviderBlock(
       id: model.id,
       contextWindow: model.contextWindow,
       displayName: model.displayName,
+      ...(model.reasoningEfforts && model.reasoningEfforts.length > 0
+        ? { reasoningEfforts: [...model.reasoningEfforts] }
+        : {}),
     })),
   ];
-  return buildOpencodeProviderBlockFromCatalog(port, catalog, hostname, config);
+}
+
+/** Back-compat helper for unit tests that assemble slugs/routed rows directly. */
+export function buildOpencodeProviderBlock(
+  port: number,
+  nativeSlugs: readonly string[],
+  routedModels: readonly OpencodeRoutedModel[],
+  nativeContextWindow: (slug: string) => number | undefined = () => undefined,
+  hostname?: string,
+  config: OcxConfig = OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
+): OpencodeProviderBlock {
+  return buildOpencodeProviderBlockFromCatalog(
+    port,
+    opencodeLaunchCatalog(nativeSlugs, routedModels, nativeContextWindow),
+    hostname,
+    config,
+  );
+}
+
+/**
+ * V2 counterpart of `buildOpencodeProviderBlock`. The launcher injects both generations,
+ * because only the V2 block carries selectable reasoning efforts.
+ */
+export function buildOpencodeV2ProviderBlock(
+  port: number,
+  nativeSlugs: readonly string[],
+  routedModels: readonly OpencodeRoutedModel[],
+  nativeContextWindow: (slug: string) => number | undefined = () => undefined,
+  hostname?: string,
+  config: OcxConfig = OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
+): OpencodeV2ProviderBlock {
+  return opencodeV2ProviderBlock(
+    opencodeProxyBaseUrl(port, hostname),
+    opencodeLaunchCatalog(nativeSlugs, routedModels, nativeContextWindow),
+    config,
+  );
+}
+
+/** Catalog-derived V2 block for a live proxy, mirroring `buildOpencodeProviderBlockFromCatalog`. */
+export function buildOpencodeV2ProviderBlockFromCatalog(
+  port: number,
+  catalogModels: readonly OpencodeCatalogModel[],
+  hostname?: string,
+  config: OcxConfig = OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG,
+): OpencodeV2ProviderBlock {
+  return opencodeV2ProviderBlock(opencodeProxyBaseUrl(port, hostname), catalogModels, config);
 }
 
 /** Default deadline for authenticated GET /api/models during `ocx opencode` launch. */
@@ -315,6 +369,9 @@ export function opencodeCatalogFromProxyRows(
       id: row.id,
       contextWindow: row.contextWindow,
       displayName: row.displayName,
+      ...(Array.isArray(row.reasoningEfforts) && row.reasoningEfforts.length > 0
+        ? { reasoningEfforts: [...row.reasoningEfforts] }
+        : {}),
     });
   }
   return catalog;
@@ -330,17 +387,20 @@ export function isOpencodeRuntimeConfigError(
 }
 
 /**
- * Merge inherited `OPENCODE_CONFIG_CONTENT` and override only `provider.opencodex`.
+ * Merge inherited `OPENCODE_CONFIG_CONTENT` and override only our own blocks:
+ * `provider.opencodex` (V1) and `providers.opencodex` (V2, the one carrying variants).
  * When no inline layer is present, emit the minimal runtime object for this launcher.
  */
 export function mergeOpencodeRuntimeConfig(
   inheritedContent: string | undefined,
   providerBlock: OpencodeProviderBlock,
+  v2ProviderBlock: OpencodeV2ProviderBlock,
 ): OpencodeGeneratedConfig | OpencodeRuntimeConfigError {
   if (!inheritedContent?.trim()) {
     return {
       $schema: OPENCODE_CONFIG_SCHEMA,
       provider: { [OPENCODE_PROVIDER_ID]: providerBlock },
+      providers: { [OPENCODE_PROVIDER_ID]: v2ProviderBlock },
     };
   }
   let parsed: unknown;
@@ -356,12 +416,20 @@ export function mergeOpencodeRuntimeConfig(
   if (existingProvider !== undefined && !isRecord(existingProvider)) {
     return { error: "OPENCODE_CONFIG_CONTENT provider must be a JSON object when present." };
   }
+  const existingProviders = parsed.providers;
+  if (existingProviders !== undefined && !isRecord(existingProviders)) {
+    return { error: "OPENCODE_CONFIG_CONTENT providers must be a JSON object when present." };
+  }
   return {
     ...parsed,
     $schema: typeof parsed.$schema === "string" ? parsed.$schema : OPENCODE_CONFIG_SCHEMA,
     provider: {
       ...(isRecord(existingProvider) ? existingProvider : {}),
       [OPENCODE_PROVIDER_ID]: providerBlock,
+    },
+    providers: {
+      ...(isRecord(existingProviders) ? existingProviders : {}),
+      [OPENCODE_PROVIDER_ID]: v2ProviderBlock,
     },
   } as OpencodeGeneratedConfig;
 }
@@ -378,6 +446,7 @@ export function buildOpencodeConfig(
   const merged = mergeOpencodeRuntimeConfig(
     undefined,
     buildOpencodeProviderBlock(port, nativeSlugs, routedModels, nativeContextWindow, hostname, config),
+    buildOpencodeV2ProviderBlock(port, nativeSlugs, routedModels, nativeContextWindow, hostname, config),
   );
   if (isOpencodeRuntimeConfigError(merged)) {
     throw new Error(merged.error);
@@ -460,16 +529,21 @@ export function opencodeProxyStartEnv(base: OpencodeLaunchEnv = process.env): Op
 }
 
 /**
- * Env assembly (unit-tested). Inherited inline config is merged and only
- * `provider.opencodex` is replaced; disk config layers stay untouched. The admission
- * key travels in the child env rather than in the inline config payload.
+ * Env assembly (unit-tested). Inherited inline config is merged and only our own blocks are
+ * replaced — `provider.opencodex` and `providers.opencodex`; disk config layers stay
+ * untouched. The admission key travels in the child env rather than in the inline config
+ * payload.
  */
 export function buildOpencodeEnv(
-  providerBlock: OpencodeProviderBlock,
+  blocks: { v1: OpencodeProviderBlock; v2: OpencodeV2ProviderBlock },
   apiKey: string,
   base: OpencodeLaunchEnv,
 ): OpencodeLaunchEnv | OpencodeRuntimeConfigError {
-  const runtimeConfig = mergeOpencodeRuntimeConfig(base[OPENCODE_CONFIG_CONTENT_ENV], providerBlock);
+  const runtimeConfig = mergeOpencodeRuntimeConfig(
+    base[OPENCODE_CONFIG_CONTENT_ENV],
+    blocks.v1,
+    blocks.v2,
+  );
   if (isOpencodeRuntimeConfigError(runtimeConfig)) return runtimeConfig;
   return {
     ...base,
@@ -553,6 +627,12 @@ export async function cmdOpencode(args: string[]): Promise<number> {
     live.hostname,
     config,
   );
+  const v2ProviderBlock = buildOpencodeV2ProviderBlockFromCatalog(
+    live.port,
+    catalog,
+    live.hostname,
+    config,
+  );
   const baseUrl = providerBlock.options.baseURL;
   const modelCount = catalog.length;
   console.error(`✅ opencode wired to ${baseUrl} — ${modelCount} model(s) under provider \`${OPENCODE_PROVIDER_ID}\`.`);
@@ -562,7 +642,7 @@ export async function cmdOpencode(args: string[]): Promise<number> {
     console.error(`ℹ ${providerOverride} also defines provider.${OPENCODE_PROVIDER_ID}; the runtime layer from ocx opencode overrides it for this launch.`);
   }
 
-  const builtEnv = buildOpencodeEnv(providerBlock, apiKey, process.env);
+  const builtEnv = buildOpencodeEnv({ v1: providerBlock, v2: v2ProviderBlock }, apiKey, process.env);
   if ("error" in builtEnv) {
     console.error(`❌ ${builtEnv.error}`);
     return 1;

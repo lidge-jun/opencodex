@@ -26,6 +26,28 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+## Reasoning effort
+
+opencode exposes reasoning effort as model *variants*. opencodex writes one variant per
+declared effort for every model that advertises a ladder, so the effort is selectable in
+opencode's model picker instead of being pinned by the proxy.
+
+Two provider blocks are generated for this:
+
+| Block | Read by | Carries variants |
+|---|---|---|
+| `provider.opencodex` | opencode V1 (`npm` + `options`) | no |
+| `providers.opencodex` | opencode V2 (`package` + `settings`) | yes |
+
+Only the V2 spelling applies `variants`; a variant written under the legacy block is parsed
+and then dropped, which is why both blocks are emitted. They name the same provider and
+model ids, and opencode V2 merges them into a single provider entry, so no model appears
+twice in the picker. Models with no declared effort ladder carry no `variants` key at all.
+
+No model-level default effort is written. The proxy keeps applying its own configured
+default whenever a request carries no effort, so a default you change in opencodex stays
+in force instead of being frozen into the config.
+
 ## Your own config is never modified
 
 The launcher does not copy or rewrite `~/.config/opencode/opencode.json`,
@@ -41,7 +63,7 @@ and overrides only conflicting keys for the child process.
 | Layer | Behavior with `ocx opencode` |
 | --- | --- |
 | Global / custom / project config | Left on disk exactly as you wrote it |
-| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Receives only the generated `provider.opencodex` block |
+| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Receives only the generated `provider.opencodex` and `providers.opencodex` blocks |
 | Relative `{file:…}` paths | Still resolve against the config file that originally defined them |
 
 If a global or project config also defines `provider.opencodex`, the launcher prints an
@@ -64,10 +86,10 @@ warning, and the env export line. It never touches that file — the section abo
 moving the block into your config is your explicit act.
 
 :::caution[Merge, never replace]
-Merge the `provider.opencodex` block into your existing config. Replacing the whole file with the
-exported one destroys your other providers, agents, keybinds, and MCP entries. `ocx export --out`
-refuses to overwrite an existing file for exactly this reason, so point `--out` at a scratch path
-and copy the block across:
+Merge both blocks — `provider.opencodex` and `providers.opencodex` — into your existing config.
+Replacing the whole file with the exported one destroys your other providers, agents, keybinds,
+and MCP entries. `ocx export --out` refuses to overwrite an existing file for exactly this reason,
+so point `--out` at a scratch path and copy the blocks across:
 
 ```bash
 ocx export --client opencode --out ~/opencodex-opencode.json
