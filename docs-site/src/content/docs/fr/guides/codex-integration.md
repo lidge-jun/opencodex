@@ -254,8 +254,7 @@ Ajoutez un nom d'affichage depuis la CLI ; si le proxy est actif, il synchronise
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-Les clients Codex distants peuvent récupérer le même catalogue généré avec une clé ordinaire du plan de données (pas un jeton d'administration) — le même identifiant
-d'admission que pour les autres routes `/api/*` :
+Les clients Codex distants peuvent récupérer le même catalogue généré avec une clé ordinaire du plan de données — le même identifiant que celui utilisé pour `/v1/responses`, et non un jeton de gestion ou d'administration :
 
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"

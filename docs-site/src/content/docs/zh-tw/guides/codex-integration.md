@@ -219,8 +219,7 @@ provider 與原生 OpenAI 行銷名稱都維持不動。
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-遠端 Codex client 也能透過管理 API 取得相同的產生目錄，使用與其他 `/api/*` route 相同的 admission
-token：
+遠端 Codex client 可以使用一般的資料平面金鑰取得相同的產生目錄——與 `/v1/responses` 所用的憑證相同，而非管理或管理員權杖：
 
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
