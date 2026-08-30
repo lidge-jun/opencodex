@@ -1210,8 +1210,13 @@ describe("oauth refresh hardening", () => {
     await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, source: "local-cli" });
     const id = getAccountSet("anthropic")!.activeAccountId;
     const stored = getAccountCredential("anthropic", id)!;
-    writeOAuthRefreshIntent("anthropic", id, credentialGeneration(stored));
-    expect(readOAuthRefreshIntent("anthropic", id)).toBeDefined();
+    const pending = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(stored));
+    expect(markOAuthRefreshIntentCleanupPending(
+      "anthropic",
+      id,
+      pending,
+      "definitive-rejection",
+    )).toMatchObject({ cleanupPending: "definitive-rejection" });
 
     seedClaudeCredentials("disk", "rt-new", Date.now() + 3600_000);
     const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
@@ -1234,6 +1239,7 @@ describe("oauth refresh hardening", () => {
     expect(mock.count()).toBe(0);
     expect(getCredential("anthropic")?.refresh).toBe("rt-new");
     expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+    expect(readOAuthRefreshIntent("anthropic", id)?.cleanupPending).toBe("definitive-rejection");
   });
 
   test("marked Anthropic local-cli account lazily recovers only from a newer disk generation", async () => {

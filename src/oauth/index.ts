@@ -786,10 +786,6 @@ export async function refreshAnthropicAccountWithLock(
     const account = getAccountSet(provider)?.accounts.find(candidate => candidate.id === accountId);
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
-    if (pendingIntent?.cleanupPending && pendingIntent.generation === generation) {
-      resumeAnthropicRefreshIntentCleanup(provider, accountId, pendingIntent);
-      pendingIntent = undefined;
-    }
     const disk = newerClaudeCredential(stored, now());
     if (disk) {
       const outcome = await mergeAccountCredential(provider, accountId, disk, {
@@ -805,6 +801,10 @@ export async function refreshAnthropicAccountWithLock(
       }
       if (pendingIntent) clearAnthropicRefreshIntentBestEffort(provider, accountId, pendingIntent);
       return disk.access;
+    }
+    if (pendingIntent?.cleanupPending && pendingIntent.generation === generation) {
+      resumeAnthropicRefreshIntentCleanup(provider, accountId, pendingIntent);
+      pendingIntent = undefined;
     }
     if (!pendingIntent?.uncertain && pendingIntent?.generation === generation) {
       if (pendingIntent.staleOwner) throw new OAuthTokenRefreshStaleError();
