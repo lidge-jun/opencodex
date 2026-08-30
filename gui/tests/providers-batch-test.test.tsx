@@ -491,15 +491,8 @@ test("11. unmount aborts batch signal", async () => {
   const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
   const d = defer<Response>();
 
-  const { root, container } = await mountProviders(makeFetchHandler([], {
-    config: cfg,
-    test: (_url, _init) => {
-      // The second arg has { signal } from fetch — we capture it from the mock
-      return d.promise;
-    },
-  }));
+  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
 
-  // Override fetch to capture signals
   const origFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).includes("/api/providers/test")) {
@@ -525,13 +518,12 @@ test("11. unmount aborts batch signal", async () => {
   await act(async () => { d.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
 });
 
-test("12. abort does not show toast", async () => {
+test("12. abort exits Testing UI and shows no toast", async () => {
   const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
   const d = defer<Response>();
 
   const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
 
-  // Override fetch to use deferred
   const origFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     if (String(input).includes("/api/providers/test")) return d.promise;
@@ -541,53 +533,108 @@ test("12. abort does not show toast", async () => {
   const btn = findTestAllButton(container)!;
   await act(async () => { btn.click(); });
 
-  // Unmount to abort
+  // Verify Testing state is active
+  expect(findTestingButton(container)).not.toBeNull();
+
+  // Unmount to abort (cancelCurrentBatch)
   await act(async () => { root.unmount(); });
 
   // Resolve the deferred after unmount
   await act(async () => { d.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
 
-  // No toast should appear — page text should not contain success/failure messages
+  // No toast should appear
   expect(pageText()).not.toContain("healthy");
   expect(pageText()).not.toContain("with errors");
 });
 
-test("13. replacement batch: button disabled prevents concurrent batch", async () => {
-  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" }, grok: { adapter: "grok", baseUrl: "https://c" } } };
-
+test("13. overlapping replacement via apiBase change: batch 1 aborted, batch 2 takes over", async () => {
+  // 1 provider so the deferred blocks the entire batch.
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" } } };
   const d1 = defer<Response>();
+  const d2 = defer<Response>();
 
-  const calls: string[] = [];
-  const { root, container } = await mountProviders(makeFetchHandler(calls, { config: cfg }));
+  const signals: AbortSignal[] = [];
+  let testCallCount = 0;
+  let usedApiBases: string[] = [];
 
   const origFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    if (String(input).includes("/api/providers/test")) return d1.promise;
-    return origFetch(input);
+
+  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/api/providers/test")) {
+      if (init?.signal) signals.push(init.signal);
+      const match = url.match(/^(https?:\/\/[^/]+)/);
+      if (match) usedApiBases.push(match[1]);
+      testCallCount++;
+      if (testCallCount === 1) return d1.promise;
+      return d2.promise;
+    }
+    // Config fetch for bootstrap: return same config
+    if (url.includes("/api/config")) return jsonResponse(cfg);
+    return origFetch(input, init);
   }) as typeof fetch;
 
   const btn = findTestAllButton(container)!;
 
-  // Start first batch
+  // Start batch 1 — d1 blocks the entire batch (1 provider)
   await act(async () => { btn.click(); });
-  // Button should be disabled (batchTesting = true) — shows "Testing…"
-  const testingBtn1 = findTestingButton(container);
-  expect(testingBtn1).not.toBeNull();
-  expect(testingBtn1!.disabled).toBe(true);
+  for (let i = 0; i < 5; i++) {
+    await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
+  }
+  expect(signals.length).toBe(1);
+  expect(testCallCount).toBe(1);
 
-  // The original "Test All" button is now showing "Testing…" and is disabled,
-  // so clicking it again is a no-op (disabled). This is the correct behavior:
-  // the component returns early when batchTesting is true.
-  expect(testingBtn1!.disabled).toBe(true);
+  // While batch 1 is pending, re-render with new apiBase.
+  // This triggers cancelCurrentBatch: abort + setBatchTesting(false).
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <Providers apiBase="http://localhost:9999" />
+      </LanguageProvider>,
+    );
+  });
+  // Let the apiBase effect + re-render settle
+  await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
 
-  // Complete first batch
-  await act(async () => { d1.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
-  await driveAsyncBatch();
+  // Batch 1 signal should be aborted
+  expect(signals[0].aborted).toBe(true);
 
-  // After first batch completes, button should be enabled again
+  // UI should exit Testing state (cancelCurrentBatch called setBatchTesting(false))
   const btnAfter = findTestAllButton(container);
   expect(btnAfter).not.toBeNull();
   expect(btnAfter!.disabled).toBe(false);
+
+  // Start batch 2 on new apiBase — d2 blocks it
+  await act(async () => { btnAfter!.click(); });
+  for (let i = 0; i < 5; i++) {
+    await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
+  }
+
+  // Both deferreds consumed
+  expect(testCallCount).toBe(2);
+  // Batch 2 uses the new apiBase
+  expect(usedApiBases.some(b => b.includes("9999"))).toBe(true);
+
+  // Resolve stale d1 — should not produce toast
+  await act(async () => { d1.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  await driveAsyncBatch();
+  expect(pageText()).not.toContain("healthy");
+  expect(pageText()).not.toContain("with errors");
+
+  // Batch 2 should still be Testing
+  expect(findTestingButton(container)).not.toBeNull();
+
+  // Resolve d2 — batch 2 completes with its own toast
+  await act(async () => { d2.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  await driveAsyncBatch();
+  expect(pageText()).toContain("All 1 providers healthy.");
+
+  // Button re-enabled
+  const btnFinal = findTestAllButton(container);
+  expect(btnFinal).not.toBeNull();
+  expect(btnFinal!.disabled).toBe(false);
 
   await act(async () => { root.unmount(); });
 });
@@ -615,7 +662,6 @@ test("14. max concurrency refills immediately after one request completes", asyn
   const btn = findTestAllButton(container)!;
   await act(async () => { btn.click(); });
 
-  // Let workers start
   for (let i = 0; i < 10; i++) {
     await act(async () => {
       await Promise.resolve();
@@ -623,14 +669,11 @@ test("14. max concurrency refills immediately after one request completes", asyn
     });
   }
 
-  // With 4 providers and concurrency 3, first 3 should start immediately
   expect(pendingDeferreds.length).toBeGreaterThanOrEqual(3);
   expect(maxInFlight).toBeLessThanOrEqual(3);
 
-  // Complete the first request — the 4th should immediately start
   await act(async () => { pendingDeferreds[0].resolve(jsonResponse({ ok: true, latencyMs: 5 })); });
 
-  // Let microtasks settle so worker picks up next item
   for (let i = 0; i < 10; i++) {
     await act(async () => {
       await Promise.resolve();
@@ -638,10 +681,8 @@ test("14. max concurrency refills immediately after one request completes", asyn
     });
   }
 
-  // All 4 should now be in flight or completed
   expect(pendingDeferreds.length).toBe(4);
 
-  // Complete remaining
   for (let i = 1; i < 4; i++) {
     await act(async () => { pendingDeferreds[i].resolve(jsonResponse({ ok: true, latencyMs: 5 })); });
   }
@@ -655,19 +696,31 @@ test("14. max concurrency refills immediately after one request completes", asyn
 
 // ─── Config / apiBase change cancellation tests ───
 
-test("15. re-rendering with new apiBase aborts old batch signal", async () => {
-  // Uses root.render (same instance) instead of unmount to verify the apiBase effect.
+test("15. apiBase change aborts batch and exits Testing UI, then new batch works on new apiBase", async () => {
+  // Verifies: (1) signal aborted, (2) UI exits Testing, (3) new batch works on new apiBase.
   const signals: AbortSignal[] = [];
   const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" } } };
-  const d = defer<Response>();
+  const d1 = defer<Response>();
+  const d2 = defer<Response>();
+
+  let testCallCount = 0;
+  let usedApiBases: string[] = [];
+
+  const origFetch = globalThis.fetch;
 
   const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
 
-  const origFetch = globalThis.fetch;
+  // Capture signals and apiBase used for each test request
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input).includes("/api/providers/test")) {
+    const url = String(input);
+    if (url.includes("/api/providers/test")) {
       if (init?.signal) signals.push(init.signal);
-      return d.promise;
+      // Extract apiBase from the URL
+      const match = url.match(/^(https?:\/\/[^/]+)/);
+      if (match) usedApiBases.push(match[1]);
+      testCallCount++;
+      if (testCallCount === 1) return d1.promise;
+      return d2.promise;
     }
     return origFetch(input, init);
   }) as typeof fetch;
@@ -675,12 +728,13 @@ test("15. re-rendering with new apiBase aborts old batch signal", async () => {
   const btn = findTestAllButton(container)!;
   await act(async () => { btn.click(); });
 
+  // Let batch 1 start
   for (let i = 0; i < 5; i++) {
     await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
   }
   expect(signals.length).toBeGreaterThanOrEqual(1);
 
-  // Re-render with new apiBase on the SAME root — triggers the apiBase useEffect
+  // Re-render with new apiBase on the SAME root — triggers cancelCurrentBatch
   await act(async () => {
     root.render(
       <LanguageProvider>
@@ -689,15 +743,39 @@ test("15. re-rendering with new apiBase aborts old batch signal", async () => {
     );
   });
 
+  // Signal 1 should be aborted
   expect(signals.some(s => s.aborted)).toBe(true);
 
-  await act(async () => { d.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  // Resolve batch 1 deferred
+  await act(async () => { d1.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
   await driveAsyncBatch();
+
+  // UI should have exited Testing state after cancelCurrentBatch
+  const btnAfter = findTestAllButton(container);
+  expect(btnAfter).not.toBeNull();
+  expect(btnAfter!.disabled).toBe(false);
+
+  // Start batch 2 on new apiBase
+  await act(async () => { btnAfter!.click(); });
+  for (let i = 0; i < 5; i++) {
+    await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
+  }
+
+  // batch 2 should use the new apiBase
+  expect(testCallCount).toBe(2);
+  expect(usedApiBases.some(b => b.includes("9999"))).toBe(true);
+
+  await act(async () => { d2.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  await driveAsyncBatch();
+
+  // Batch 2 completed with its own toast
+  expect(pageText()).toContain("All 1 providers healthy.");
+
   await act(async () => { root.unmount(); });
 });
 
-test("16. providerTestInputSnapshot detects all test-relevant config changes", async () => {
-  // Imports the shared production function — no duplicated algorithm.
+test("16. providerTestInputSnapshot covers all endpoint-relevant fields", async () => {
+  // Tests the shared production function directly — no duplicated algorithm.
   const { providerTestInputSnapshot } = await import("../src/pages/providers-shared");
 
   const base: ProvidersConfig = {
@@ -708,53 +786,23 @@ test("16. providerTestInputSnapshot detects all test-relevant config changes", a
     },
   };
 
-  // baseUrl change → different snapshot
-  const baseUrlChanged: ProvidersConfig = {
-    ...base,
-    providers: {
-      openai: { adapter: "openai", baseUrl: "https://api.openai.com/v2" },
-    },
-  };
-  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(baseUrlChanged));
+  // Each field change produces a different snapshot
+  const fields: Array<[string, ProvidersConfig]> = [
+    ["baseUrl", { ...base, providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com/v2" } } }],
+    ["adapter", { ...base, providers: { openai: { adapter: "openai-alt", baseUrl: "https://api.openai.com" } } }],
+    ["disabled", { ...base, providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com", disabled: true } } }],
+    ["authMode", { ...base, providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com", authMode: "oauth" } } }],
+    ["liveModels", { ...base, providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com", liveModels: false } } }],
+    ["hasHeaders", { ...base, providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com", hasHeaders: true } } }],
+  ];
 
-  // adapter change → different snapshot
-  const adapterChanged: ProvidersConfig = {
-    ...base,
-    providers: {
-      openai: { adapter: "openai-alt", baseUrl: "https://api.openai.com" },
-    },
-  };
-  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(adapterChanged));
-
-  // disabled change → different snapshot
-  const disabledChanged: ProvidersConfig = {
-    ...base,
-    providers: {
-      openai: { adapter: "openai", baseUrl: "https://api.openai.com", disabled: true },
-    },
-  };
-  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(disabledChanged));
-
-  // authMode change → different snapshot
-  const authModeChanged: ProvidersConfig = {
-    ...base,
-    providers: {
-      openai: { adapter: "openai", baseUrl: "https://api.openai.com", authMode: "oauth" },
-    },
-  };
-  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(authModeChanged));
-
-  // liveModels change → different snapshot
-  const liveModelsChanged: ProvidersConfig = {
-    ...base,
-    providers: {
-      openai: { adapter: "openai", baseUrl: "https://api.openai.com", liveModels: false },
-    },
-  };
-  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(liveModelsChanged));
+  const baseSnapshot = providerTestInputSnapshot(base);
+  for (const [field, changed] of fields) {
+    expect(providerTestInputSnapshot(changed)).not.toBe(baseSnapshot);
+  }
 
   // Same config → same snapshot (idempotent)
-  expect(providerTestInputSnapshot(base)).toBe(providerTestInputSnapshot(base));
+  expect(providerTestInputSnapshot(base)).toBe(baseSnapshot);
 
   // Provider added → different snapshot
   const added: ProvidersConfig = {
@@ -764,26 +812,25 @@ test("16. providerTestInputSnapshot detects all test-relevant config changes", a
       anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com" },
     },
   };
-  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(added));
+  expect(providerTestInputSnapshot(added)).not.toBe(baseSnapshot);
 });
 
-test("17. stale batch does not show toast, new batch completes with own results", async () => {
-  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
+test("17. stale batch resolve after unmount: no toast, no state corruption", async () => {
+  // 1 provider so d1 blocks the entire batch.
+  const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" } } };
   const d1 = defer<Response>();
-  const d2 = defer<Response>();
 
   let testCallCount = 0;
   const origFetch = globalThis.fetch;
 
   const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
 
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
     if (String(input).includes("/api/providers/test")) {
       testCallCount++;
-      if (testCallCount === 1) return d1.promise;
-      return d2.promise;
+      return d1.promise;
     }
-    return origFetch(input, init);
+    return origFetch(input);
   }) as typeof fetch;
 
   const btn = findTestAllButton(container)!;
@@ -794,17 +841,71 @@ test("17. stale batch does not show toast, new batch completes with own results"
     await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
   }
 
-  // Unmount — this aborts batch 1 (stale)
+  // Only 1 request was made (1 provider)
+  expect(testCallCount).toBe(1);
+
+  // Unmount — cancelCurrentBatch: abort + setBatchTesting(false)
   await act(async () => { root.unmount(); });
 
   // No toast from batch 1
   expect(pageText()).not.toContain("healthy");
   expect(pageText()).not.toContain("with errors");
 
-  // Resolve batch 1 deferred — should not show toast
+  // Resolve batch 1 deferred after unmount — should not show toast
   await act(async () => { d1.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  await driveAsyncBatch();
   expect(pageText()).not.toContain("healthy");
 
-  // Clean up
-  await act(async () => { d2.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  // Only 1 request was consumed
+  expect(testCallCount).toBe(1);
+});
+
+test("18. abort stops queue: unstarted providers never fire requests", async () => {
+  // 5 providers, concurrency 3. After 3 start, abort. Verify only 3 requests fire.
+  const cfg = makeConfig(["a", "b", "c", "d", "e"]);
+  const pendingDeferreds: ReturnType<typeof defer<Response>>[] = [];
+  const testCalls: string[] = [];
+
+  const { root, container } = await mountProviders(makeFetchHandler([], {
+    config: cfg,
+    test: (url) => {
+      testCalls.push(url);
+      const d = defer<Response>();
+      pendingDeferreds.push(d);
+      return d.promise;
+    },
+  }));
+
+  const btn = findTestAllButton(container)!;
+  await act(async () => { btn.click(); });
+
+  // Let workers start — with concurrency 3, first 3 should start
+  for (let i = 0; i < 10; i++) {
+    await act(async () => {
+      await Promise.resolve();
+      jest.advanceTimersByTime(0);
+    });
+  }
+
+  expect(pendingDeferreds.length).toBeGreaterThanOrEqual(3);
+  expect(pendingDeferreds.length).toBeLessThanOrEqual(3);
+
+  // Abort the batch by unmounting
+  await act(async () => { root.unmount(); });
+
+  // Resolve active deferreds — workers should exit due to signal.aborted
+  for (const d of pendingDeferreds) {
+    await act(async () => { d.resolve(jsonResponse({ ok: true, latencyMs: 5 })); });
+  }
+
+  // Wait for workers to notice abort
+  for (let i = 0; i < 10; i++) {
+    await act(async () => {
+      await Promise.resolve();
+      jest.advanceTimersByTime(0);
+    });
+  }
+
+  // Only 3 requests should have been made (the ones already in flight when abort happened)
+  expect(testCalls.length).toBe(3);
 });

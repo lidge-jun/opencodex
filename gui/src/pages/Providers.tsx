@@ -73,13 +73,21 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setStatusTone("err");
   }, []);
 
+  /** Monotonically increasing batch counter. Never resets. */
+  const nextBatchIdRef = useRef(0);
   /** Identity of the currently-active batch; stale callbacks see a mismatch and bail out. */
   const activeBatchRef = useRef<{ id: number; controller: AbortController } | null>(null);
 
-  /** Abort the active batch if one exists. */
-  const abortActiveBatch = useCallback(() => {
-    activeBatchRef.current?.controller.abort();
+  /**
+   * Cancel the current batch and exit Testing UI (no replacement will follow).
+   * Used by apiBase/config change effects and unmount.
+   */
+  const cancelCurrentBatch = useCallback(() => {
+    const active = activeBatchRef.current;
+    if (!active) return;
+    active.controller.abort();
     activeBatchRef.current = null;
+    setBatchTesting(false);
   }, []);
 
   const testAllProviders = useCallback(async () => {
@@ -87,9 +95,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     const names = Object.keys(config.providers);
     if (names.length === 0) return;
 
-    // Cancel any in-flight batch before starting a new one.
-    abortActiveBatch();
-    const batchId = (activeBatchRef.current?.id ?? 0) + 1;
+    // Cancel any in-flight batch (ownership transfers to the new batch).
+    activeBatchRef.current?.controller.abort();
+    const batchId = ++nextBatchIdRef.current;
     const controller = new AbortController();
     activeBatchRef.current = { id: batchId, controller };
 
@@ -107,9 +115,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     try {
       await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
     } finally {
-      const isStale = activeBatchRef.current?.id !== batchId;
-      // Only the active batch clears busy and shows toast.
-      if (!isStale && aliveRef.current) {
+      // Only the current active batch can update UI.
+      const isActive = activeBatchRef.current?.id === batchId;
+      if (isActive && aliveRef.current) {
+        activeBatchRef.current = null;
         setBatchTesting(false);
         if (!signal.aborted) {
           const passed = Object.values(results).filter(r => r.ok).length;
@@ -123,31 +132,31 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         }
       }
     }
-  }, [config, batchTesting, apiBase, notify, t, abortActiveBatch]);
+  }, [config, batchTesting, apiBase, notify, t]);
 
-  // Cancel batch on unmount.
+  // Cancel batch and exit Testing UI on unmount.
   useEffect(() => {
-    return () => { activeBatchRef.current?.controller.abort(); };
-  }, []);
+    return () => { cancelCurrentBatch(); };
+  }, [cancelCurrentBatch]);
 
-  // Cancel batch when apiBase changes.
+  // Cancel batch and exit Testing UI when apiBase changes.
   const prevApiBaseRef = useRef(apiBase);
   useEffect(() => {
     if (prevApiBaseRef.current !== apiBase) {
-      abortActiveBatch();
+      cancelCurrentBatch();
       prevApiBaseRef.current = apiBase;
     }
-  }, [apiBase, abortActiveBatch]);
+  }, [apiBase, cancelCurrentBatch]);
 
-  // Cancel batch when provider config content changes.
+  // Cancel batch and exit Testing UI when provider config content changes.
   const configSnapshot = config ? providerTestInputSnapshot(config) : "";
   const prevConfigSnapshotRef = useRef(configSnapshot);
   useEffect(() => {
     if (prevConfigSnapshotRef.current !== configSnapshot) {
-      abortActiveBatch();
+      cancelCurrentBatch();
       prevConfigSnapshotRef.current = configSnapshot;
     }
-  }, [configSnapshot, abortActiveBatch]);
+  }, [configSnapshot, cancelCurrentBatch]);
 
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
     if (completion.catalogRefreshPending) {
