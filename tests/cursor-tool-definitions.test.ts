@@ -64,6 +64,20 @@ describe("Cursor tool definitions", () => {
     }
   });
 
+  test("prefers a semantic tool name over a generated client wire alias", () => {
+    const tools: OcxTool[] = [
+      { name: "read", description: "Read", parameters: {} },
+      { name: "ocx_client_read", description: "Literal client-prefixed tool", parameters: {} },
+    ];
+
+    expect(buildCursorToolDefinitions(tools, { name: "ocx_client_read" }).map(tool => tool.toolName))
+      .toEqual(["ocx_client_ocx_client_read"]);
+    expect(buildCursorToolDefinitions(tools, { mode: "required", allowedTools: ["ocx_client_read"] }).map(tool => tool.toolName))
+      .toEqual(["ocx_client_ocx_client_read"]);
+    expect(buildCursorToolDefinitions(tools, { name: "read" }).map(tool => tool.toolName))
+      .toEqual(["ocx_client_read"]);
+  });
+
   test("advertises bare exec_command with compact native exec schema", () => {
     const tool: OcxTool = {
       name: "exec_command",

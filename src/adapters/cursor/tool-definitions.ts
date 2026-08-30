@@ -170,8 +170,10 @@ function cursorToolChoiceMatches(
     }
     return tool.name === choiceName || cursorToolWireName(tool) === choiceName;
   }
-  if (tool.name === choiceName || cursorToolWireName(tool) === choiceName) return true;
-  return cursorToolChoiceAliases(tool).includes(choiceName);
+  if (tool.name === choiceName) return true;
+  if (cursorToolChoiceAliases(tool).includes(choiceName)) return true;
+  return cursorToolWireName(tool) === choiceName
+    && !catalog.some(candidate => candidate.name === choiceName);
 }
 
 export function isBareCodexShellBridgeTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
