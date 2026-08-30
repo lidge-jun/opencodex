@@ -3,7 +3,8 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getValidAccessToken, getValidAccessTokenForAccount, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, seedOAuthTokenRefreshFlightsForTests } from "../src/oauth";
+import { getValidAccessToken, getValidAccessTokenForAccount, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, refreshGenericAccountWithLock, seedOAuthTokenRefreshFlightsForTests } from "../src/oauth";
+import { ChatGPTTokenRefreshError } from "../src/oauth/chatgpt";
 import { RefreshIntentIOError, nousRefreshIntentBlocksReplay } from "../src/oauth/nous";
 import * as nousModule from "../src/oauth/nous";
 import { AnthropicTokenError } from "../src/oauth/anthropic";
@@ -137,6 +138,41 @@ function mockRefreshFetch(responses: Array<Response | Error>): { count: () => nu
 }
 
 describe("oauth refresh hardening", () => {
+  test("classifies only structured ChatGPT invalid_grant 400 and 401 as terminal", async () => {
+    const cases = [
+      { status: 400, code: "invalid_grant", terminal: true },
+      { status: 401, code: "invalid_grant", terminal: true },
+      { status: 500, code: "invalid_grant", terminal: false },
+      { status: 400, code: "other", terminal: false },
+    ];
+    for (const testCase of cases) {
+      const accountId = `chatgpt-${testCase.status}-${testCase.code}`;
+      const credential = {
+        access: "expired-access",
+        refresh: "refresh-token",
+        expires: Date.now() - 1,
+        accountId,
+      };
+      await saveCredential("chatgpt", credential);
+      const activeAccountId = getAccountSet("chatgpt")!.activeAccountId;
+      const storedCredential = getAccountCredential("chatgpt", activeAccountId)!;
+      const provider = {
+        ...OAUTH_PROVIDERS.chatgpt!,
+        refresh: async () => { throw new ChatGPTTokenRefreshError(testCase.status, testCase.code); },
+      };
+
+      const failure = await refreshGenericAccountWithLock("chatgpt", activeAccountId, provider, storedCredential).catch(error => error);
+
+      if (testCase.terminal) {
+        expect(failure).toBeInstanceOf(OAuthLoginRequiredError);
+        expect(getAccountSet("chatgpt")?.accounts.find(account => account.id === activeAccountId)?.needsReauth).toBe(true);
+        continue;
+      }
+      expect(failure).toBeInstanceOf(ChatGPTTokenRefreshError);
+      expect(getAccountSet("chatgpt")?.accounts.find(account => account.id === activeAccountId)?.needsReauth).not.toBe(true);
+    }
+  });
+
   test("OAuth token-refresh flight 33 rejects and a stale same-key owner cannot delete replacement", async () => {
     await saveCredential("kiro", { access: "old", refresh: "rt-old", expires: 1, accountId: "flight-owner" });
     const accountId = getAccountSet("kiro")!.activeAccountId;

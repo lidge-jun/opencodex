@@ -56,8 +56,13 @@ export interface NativeMainRefreshDependencies {
 type NativeMainRefreshFlight = {
   controller: AbortController;
   deadline: ReturnType<typeof setTimeout>;
-  waiters: number;
   promise: Promise<{ accessToken: string; chatgptAccountId: string }>;
+};
+
+type NativeMainRefreshResolution = {
+  dependencies: NativeMainRefreshDependencies;
+  rejectedAccessToken: string | undefined;
+  replacementAttempted: boolean;
 };
 
 const nativeMainRefreshFlights = new Map<string, NativeMainRefreshFlight>();
@@ -183,6 +188,7 @@ export function setMainAuthJsonBeforeRenameHookForTests(hook: (() => void) | nul
 async function resolveMainAccountToken(
   dependencies: NativeMainRefreshDependencies = {},
   rejectedAccessToken?: string,
+  replacementAttempted = false,
 ): Promise<{ accessToken: string; chatgptAccountId: string } | null> {
   const initial = readMainAuthJsonCredential();
   if (!initial) return null;
@@ -200,7 +206,8 @@ async function resolveMainAccountToken(
 
   const context = resolveNativeProfileContext();
   const current = nativeMainRefreshFlights.get(context.homeId);
-  if (current) return await waitForNativeMainRefresh(current, dependencies.signal);
+  const resolution = { dependencies, rejectedAccessToken, replacementAttempted };
+  if (current) return await resolveNativeMainRefreshFlight(context, current, resolution);
   if (nativeMainRefreshFlights.size >= MAX_NATIVE_MAIN_REFRESH_FLIGHTS) {
     throw new MainAccountTokenRefreshError("transient");
   }
@@ -209,7 +216,6 @@ async function resolveMainAccountToken(
   const flight: NativeMainRefreshFlight = {
     controller,
     deadline,
-    waiters: 0,
     promise: runNativeMainRefreshFlight(context, dependencies, rejectedAccessToken, controller.signal),
   };
   nativeMainRefreshFlights.set(context.homeId, flight);
@@ -217,7 +223,21 @@ async function resolveMainAccountToken(
     clearTimeout(flight.deadline);
     if (nativeMainRefreshFlights.get(context.homeId) === flight) nativeMainRefreshFlights.delete(context.homeId);
   }).catch(() => undefined);
-  return await waitForNativeMainRefresh(flight, dependencies.signal);
+  return await resolveNativeMainRefreshFlight(context, flight, resolution);
+}
+
+async function resolveNativeMainRefreshFlight(
+  context: NativeProfileContext,
+  flight: NativeMainRefreshFlight,
+  resolution: NativeMainRefreshResolution,
+): Promise<{ accessToken: string; chatgptAccountId: string }> {
+  const result = await waitForNativeMainRefresh(flight, resolution.dependencies.signal);
+  if (resolution.rejectedAccessToken === undefined || result.accessToken !== resolution.rejectedAccessToken) return result;
+  if (resolution.replacementAttempted) throw new MainAccountTokenRefreshError("transient");
+  if (nativeMainRefreshFlights.get(context.homeId) === flight) nativeMainRefreshFlights.delete(context.homeId);
+  const replacement = await resolveMainAccountToken(resolution.dependencies, resolution.rejectedAccessToken, true);
+  if (!replacement) throw new MainAccountTokenRefreshError("transient");
+  return replacement;
 }
 
 function abortError(_signal: AbortSignal): MainAccountRefreshCancelledError {
@@ -228,18 +248,12 @@ async function waitForNativeMainRefresh(
   flight: NativeMainRefreshFlight,
   signal: AbortSignal | undefined,
 ): Promise<{ accessToken: string; chatgptAccountId: string }> {
-  flight.waiters += 1;
-  try {
-    if (!signal) return await flight.promise;
-    if (signal.aborted) throw abortError(signal);
-    return await Promise.race([
-      flight.promise,
-      new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(abortError(signal)), { once: true })),
-    ]);
-  } finally {
-    flight.waiters -= 1;
-    if (flight.waiters === 0) flight.controller.abort();
-  }
+  if (!signal) return await flight.promise;
+  if (signal.aborted) throw abortError(signal);
+  return await Promise.race([
+    flight.promise,
+    new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(abortError(signal)), { once: true })),
+  ]);
 }
 
 async function runNativeMainRefreshFlight(

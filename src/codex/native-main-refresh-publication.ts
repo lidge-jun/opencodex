@@ -19,8 +19,8 @@ type Journal = {
 };
 
 export class NativeMainRefreshPublicationError extends Error {
-  constructor() {
-    super("Native credential refresh could not be published.");
+  constructor(options?: ErrorOptions) {
+    super("Native credential refresh could not be published.", options);
     this.name = "NativeMainRefreshPublicationError";
   }
 }
@@ -30,7 +30,7 @@ function digest(value: string | Buffer): string {
 }
 
 function fsync(path: string): void {
-  const fd = openSync(path, "r");
+  const fd = openSync(path, "r+");
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
@@ -57,7 +57,7 @@ function readExact(path: string): Buffer | null {
 }
 
 function removeExact(path: string): void {
-  try { unlinkSync(path); } catch { throw new NativeMainRefreshPublicationError(); }
+  try { unlinkSync(path); } catch (cause) { throw new NativeMainRefreshPublicationError({ cause }); }
 }
 
 function journalPaths(context: NativeProfileContext, journal: Journal): { staged: string; previous: string } {
@@ -79,22 +79,23 @@ export function recoverNativeMainRefreshPublication(context: NativeProfileContex
   const path = journalPath(context);
   if (!existsSync(path)) return;
   let journal: Journal;
-  try { journal = JSON.parse(readFileSync(path, "utf8")) as Journal; } catch { throw new NativeMainRefreshPublicationError(); }
+  try { journal = JSON.parse(readFileSync(path, "utf8")) as Journal; } catch (cause) { throw new NativeMainRefreshPublicationError({ cause }); }
   if (!validJournal(journal)) throw new NativeMainRefreshPublicationError();
   const { staged, previous } = journalPaths(context, journal);
   const canonical = readExact(context.authPath);
   const stagedBytes = readExact(staged);
-  const previousBytes = readExact(previous);
   if (!canonical) throw new NativeMainRefreshPublicationError();
   if (digest(canonical) === journal.expectedSha256 && stagedBytes && digest(stagedBytes) === journal.replacementSha256) {
-    replaceFilePreservingTarget(staged, context.authPath, previous);
-    cleanup(context, { ...journal, phase: "replaced" });
+    try {
+      replaceFilePreservingTarget(staged, context.authPath, previous);
+      cleanup(context, { ...journal, phase: "replaced" });
+    } catch (cause) {
+      throw new NativeMainRefreshPublicationError({ cause });
+    }
     return;
   }
-  if (digest(canonical) === journal.replacementSha256
-    && ((stagedBytes && digest(stagedBytes) === journal.expectedSha256)
-      || (previousBytes && digest(previousBytes) === journal.expectedSha256))) {
-    cleanup(context, journal);
+  if (digest(canonical) === journal.replacementSha256) {
+    try { cleanup(context, journal); } catch (cause) { throw new NativeMainRefreshPublicationError({ cause }); }
     return;
   }
   throw new NativeMainRefreshPublicationError();
@@ -144,11 +145,10 @@ export function publishNativeMainRefresh(
     }
     atomicWriteFile(journalPath(context), `${JSON.stringify({ ...journal, phase: "replaced" })}\n`);
     cleanup(context, journal);
-  } catch (error) {
-    if (error instanceof NativeMainRefreshPublicationError || error instanceof PreservingReplaceError) {
-      throw new NativeMainRefreshPublicationError();
-    }
-    throw new NativeMainRefreshPublicationError();
+  } catch (cause) {
+    if (cause instanceof NativeMainRefreshPublicationError) throw cause;
+    if (cause instanceof PreservingReplaceError) throw new NativeMainRefreshPublicationError({ cause });
+    throw new NativeMainRefreshPublicationError({ cause });
   }
 }
 
