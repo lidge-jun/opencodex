@@ -107,6 +107,20 @@ describe("collectDeclaredWireToolNames", () => {
     expect([...names]).toEqual(["mcp__exec"]);
   });
 
+  test("keeps exec bare in Codex's reserved functions namespace", () => {
+    // Codex groups ordinary top-level tools here; this is not an MCP namespace and the parser
+    // deliberately lowers its children without a namespace.
+    const names = collectDeclaredWireToolNames({
+      tools: [{
+        type: "namespace",
+        name: "functions",
+        tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+      }],
+    });
+
+    expect([...names]).toEqual(["exec"]);
+  });
+
   test("keeps the bare alias when the request also declared a top-level exec", () => {
     const names = collectDeclaredWireToolNames({
       tools: [
@@ -1199,6 +1213,48 @@ describe("empty and absent tool catalogs", () => {
     expect(response.status).toBe(200);
     const currentBody = await response.json() as { output: Array<Record<string, unknown>> };
     expect(currentBody.output[0]).toMatchObject({ name: "exec" });
+  });
+
+  test("a replayed functions namespace still authorizes its top-level exec", async () => {
+    const previousId = "resp_replay_with_functions_exec";
+    const prime = await post(
+      false,
+      undefined,
+      () => Response.json({ id: previousId, status: "completed", output: [] }),
+      [{ type: "function", name: "historical", parameters: { type: "object" } }],
+    );
+    expect(prime.status).toBe(200);
+    await prime.arrayBuffer();
+
+    const response = await post(
+      false,
+      undefined,
+      () => Response.json({
+        id: "resp_functions_exec",
+        status: "completed",
+        output: [{
+          type: "custom_tool_call",
+          id: "ctc_functions_exec",
+          call_id: "call_functions_exec",
+          name: "exec",
+          input: "echo allowed",
+          status: "completed",
+        }],
+      }),
+      [{
+        type: "namespace",
+        name: "functions",
+        tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+      }],
+      config,
+      [],
+      "fixture/deepseek-v4-flash",
+      previousId,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject({ name: "exec", type: "custom_tool_call" });
   });
 
   test("a current tool-search output still authorizes its discovered tool after replay", async () => {

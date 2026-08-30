@@ -7,6 +7,8 @@ import { sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 
 /** Item types the client executes through a request-declared wire name. */
 const CLIENT_EXECUTED_CALL_TYPES = new Set(["function_call", "custom_tool_call"]);
+/** Codex groups ordinary top-level tools here; unlike an MCP namespace, it has no wire prefix. */
+const BUILTIN_FUNCTIONS_NAMESPACE = "functions";
 
 /**
  * Hosted declarations whose response items the PROVIDER executes, keyed by the request
@@ -86,7 +88,7 @@ function addWireToolName(names: Set<string>, tool: unknown, namespace?: string):
   // Codex routes MCP calls by an explicit `namespace` field, so the same tool is reachable
   // as a bare inner name or as the flattened form; accept both rather than guess which
   // coordinate system this provider echoes back.
-  if (!namespace) {
+  if (!namespace || namespace === BUILTIN_FUNCTIONS_NAMESPACE) {
     names.add(name);
     return;
   }
