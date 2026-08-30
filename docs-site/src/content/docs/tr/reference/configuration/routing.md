@@ -234,7 +234,8 @@ deneme çalıştırması bu aday başına hesap alanlarını sağlayamaz.
 
 - Bir **kombo**, açık sıralı/ağırlıklı hedef yönlendirmesidir (`failover`,
   ağırlıklı `round-robin` veya `random` dengelemesi, `least-used` ya da
-  `reset-window`): yapılandırılmış strateji karar verir ve arızalar liste boyunca ilerler.
+  `reset-window`): yapılandırılmış strateji karar verir ve yeniden denenebilir arızalar
+  liste boyunca ilerler.
 - Bir **politika profili**, yapılandırılmış adaylar arasında kanıta dayalı
   seçimdir: kesin yetenek gereksinimleri önce filtreler, ardından belirleyici
   puanlama kalanları sıralar.
