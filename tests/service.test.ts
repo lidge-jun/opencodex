@@ -2082,6 +2082,76 @@ describe("service repair", () => {
     expect(calls).toEqual(["env", "auth", "stop", "assets", "start", "state"]);
   });
 
+  /**
+   * Rewriting the on-disk assets leaves the definition Task Scheduler holds untouched, so a
+   * task registered by an older version keeps its old triggers: status reports it stale and
+   * sends the user to repair, and repair changes nothing status is complaining about. Repair
+   * therefore re-registers, but only when the registered XML is actually stale, so the common
+   * case stays free of `schtasks /create` and its UAC prompt.
+   */
+  test("repair re-registers a scheduler task whose registered definition is stale", async () => {
+    const calls: string[] = [];
+    const stale = buildWindowsTaskXml("s.cmd", "l.vbs")
+      .replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+    expect(windowsTaskRegistrationHealthy(stale, "s.cmd", "l.vbs")).toBe(false);
+    await repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => { calls.push("env"); },
+      assertAuth: () => { calls.push("auth"); },
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => stale,
+      reregisterScheduler: async () => { calls.push("reregister"); },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+      repairNative: async () => { calls.push("native"); },
+      repairSystemd: () => { calls.push("systemd"); },
+    });
+    // Re-registration happens after the assets exist and before the task is started.
+    expect(calls).toEqual(["env", "auth", "stop", "assets", "reregister", "start", "state"]);
+  });
+
+  test("repair leaves a healthy registration alone", async () => {
+    const calls: string[] = [];
+    await repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => { calls.push("env"); },
+      assertAuth: () => { calls.push("auth"); },
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => buildWindowsTaskXml(),
+      reregisterScheduler: async () => { calls.push("reregister"); },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+      repairNative: async () => { calls.push("native"); },
+      repairSystemd: () => { calls.push("systemd"); },
+    });
+    expect(calls).toEqual(["env", "auth", "stop", "assets", "start", "state"]);
+  });
+
+  test("repair does not re-register when the registered XML cannot be read", async () => {
+    // An unreadable query is not evidence of staleness, and re-registering on it would raise
+    // a UAC prompt on every repair. Empty means "unknown", so leave the registration alone.
+    const calls: string[] = [];
+    await repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => { calls.push("env"); },
+      assertAuth: () => { calls.push("auth"); },
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => "",
+      reregisterScheduler: async () => { calls.push("reregister"); },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+      repairNative: async () => { calls.push("native"); },
+      repairSystemd: () => { calls.push("systemd"); },
+    });
+    expect(calls).toEqual(["env", "auth", "stop", "assets", "start", "state"]);
+  });
+
   test("repair rejects when nothing is installed", async () => {
     await expect(repairService({
       platform: "win32",

@@ -2404,6 +2404,23 @@ function installWindows(): void {
   writeServiceInstallState("scheduler");
 }
 
+/**
+ * Re-register an already-installed scheduler task from a freshly staged definition.
+ *
+ * Reuses the fresh-install staging and registration path, so the same ownership and shape
+ * validation applies and an access-denied `schtasks /create` still escalates through the
+ * existing elevated fallback. The staged XML is removed on every exit.
+ */
+async function reregisterWindowsSchedulerTask(): Promise<void> {
+  const attemptNonce = randomUUID();
+  const stagedXml = stageWindowsSchedulerRegistrationXml(attemptNonce);
+  try {
+    await registerFreshWindowsSchedulerTask(stagedXml, attemptNonce);
+  } finally {
+    removeWindowsSchedulerRegistrationStage(stagedXml);
+  }
+}
+
 export interface RepairServiceDeps {
   diagnose?: () => ServiceDiagnostic;
   assertEnv?: () => void;
@@ -2416,6 +2433,10 @@ export interface RepairServiceDeps {
   repairNative?: () => void | Promise<void>;
   repairLaunchd?: () => void;
   repairSystemd?: () => void;
+  /** Reads the currently registered task XML; empty when it cannot be read. */
+  readSchedulerXml?: () => string;
+  /** Re-registers the task from freshly staged XML. Used only when the definition is stale. */
+  reregisterScheduler?: () => Promise<void>;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
 }
@@ -2455,6 +2476,15 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     }
     try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
     (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)();
+    // Rewriting the on-disk assets does not touch the definition Task Scheduler holds, so a
+    // task registered by an older version keeps its old triggers forever: status reports it
+    // stale, tells the user to run repair, and repair changes nothing it complains about.
+    // Re-register only when the registered XML is actually stale, so the ordinary repair
+    // stays free of `schtasks /create` and its UAC prompt.
+    const registeredXml = (deps.readSchedulerXml ?? statusWindowsXml)();
+    if (registeredXml.length > 0 && !windowsTaskRegistrationHealthy(registeredXml)) {
+      await (deps.reregisterScheduler ?? reregisterWindowsSchedulerTask)();
+    }
     (deps.startScheduler ?? startWindows)();
     (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();
     return;
