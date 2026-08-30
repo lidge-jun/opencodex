@@ -11,6 +11,7 @@ export interface TimeRangeResolution {
 
 const RELATIVE_TIME_RE = /^(\d+)\s*(m|min|minute|minutes|h|hr|hour|hours|d|day|days|w|week|weeks)\s*(?:ago)?$/i;
 const TIME_OF_DAY_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+const DATE_TIME_TO_MINUTE_RE = /^\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}$/;
 
 function startOfLocalDay(ts: number, dayOffset = 0): number {
   const d = new Date(ts);
@@ -102,6 +103,11 @@ export function parseTimeBoundary(input: string | number | null | undefined, now
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw) && isEndOfWindow) {
       return endOfLocalDay(parsed, 0);
     }
+    if (DATE_TIME_TO_MINUTE_RE.test(raw) && isEndOfWindow) {
+      const inclusiveMinute = new Date(parsed);
+      inclusiveMinute.setSeconds(59, 999);
+      return inclusiveMinute.getTime();
+    }
     return parsed;
   }
 
@@ -138,6 +144,14 @@ export function resolveTimeRange(options: {
       since: startOfLocalDay(now, 0),
       until: null,
       rangeLabel: "today",
+      isCustom: false,
+    };
+  }
+  if (range === "yesterday") {
+    return {
+      since: startOfLocalDay(now, -1),
+      until: endOfLocalDay(now, -1),
+      rangeLabel: "yesterday",
       isCustom: false,
     };
   }

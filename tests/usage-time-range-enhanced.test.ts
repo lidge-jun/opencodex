@@ -48,8 +48,46 @@ describe("Time Range Parsing & Resolution", () => {
     expect(custom.until).toBeNumber();
     expect(custom.until!).toBeGreaterThan(custom.since!);
   });
+
+  it("resolves yesterday to the complete previous local calendar day", () => {
+    const expectedSince = new Date(fixedNow);
+    expectedSince.setHours(0, 0, 0, 0);
+    expectedSince.setDate(expectedSince.getDate() - 1);
+    const expectedUntil = new Date(expectedSince);
+    expectedUntil.setHours(23, 59, 59, 999);
+
+    expect(resolveTimeRange({ range: "yesterday", now: fixedNow })).toEqual({
+      since: expectedSince.getTime(),
+      until: expectedUntil.getTime(),
+      rangeLabel: "yesterday",
+      isCustom: false,
+    });
+  });
+
+  it("treats a minute-precision until boundary as inclusive through that minute", () => {
+    const boundary = parseTimeBoundary("2026-08-29T23:59", fixedNow, true);
+    const parsed = new Date(boundary!);
+
+    expect(parsed.getFullYear()).toBe(2026);
+    expect(parsed.getMonth()).toBe(7);
+    expect(parsed.getDate()).toBe(29);
+    expect(parsed.getHours()).toBe(23);
+    expect(parsed.getMinutes()).toBe(59);
+    expect(parsed.getSeconds()).toBe(59);
+    expect(parsed.getMilliseconds()).toBe(999);
+  });
 });
 describe("Usage Summarization and Markdown Output", () => {
+  it("builds the daily grid from custom bounds even when the range token is all", () => {
+    const now = new Date("2026-08-30T12:00:00+08:00").getTime();
+    const since = new Date(2026, 7, 29, 9, 17).getTime();
+    const until = new Date(2026, 7, 30, 4, 23, 59, 999).getTime();
+
+    const summary = summarizeUsage([], "all", now, "all", since, until, "custom");
+
+    expect(summary.days.map(day => day.date)).toEqual(["2026-08-29", "2026-08-30"]);
+  });
+
   it("formats markdown report properly", () => {
     const md = formatUsageMarkdownReport({
       range: "custom",
@@ -111,6 +149,41 @@ describe("Usage Summarization and Markdown Output", () => {
     expect(summary.summary.totalTokens).toBe(3300);
     expect(summary.models.length).toBe(2);
 
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("uses the yesterday preset when summarizing an offline jsonl file", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ocx-test-yesterday-"));
+    const tmpFile = join(tmpDir, "test-usage.jsonl");
+    const now = new Date(2026, 7, 30, 12).getTime();
+    const yesterday = new Date(2026, 7, 29, 12).getTime();
+    const today = new Date(2026, 7, 30, 1).getTime();
+    const twoDaysAgo = new Date(2026, 7, 28, 12).getTime();
+    const row = (requestId: string, timestamp: number) => JSON.stringify({
+      requestId,
+      timestamp,
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      usageStatus: "reported",
+      usage: { inputTokens: 100, outputTokens: 10 },
+      totalTokens: 110,
+    });
+    writeFileSync(tmpFile, [
+      row("two-days-ago", twoDaysAgo),
+      row("yesterday", yesterday),
+      row("today", today),
+    ].join("\n"), "utf-8");
+
+    const summary = await summarizeUsageFromLogFile({
+      filePath: tmpFile,
+      range: "yesterday",
+      now,
+    });
+
+    expect(summary.summary.requests).toBe(1);
+    expect(summary.summary.totalTokens).toBe(110);
+    expect(summary.days).toHaveLength(1);
+    expect(summary.days[0]?.date).toBe("2026-08-29");
     rmSync(tmpDir, { recursive: true, force: true });
   });
 

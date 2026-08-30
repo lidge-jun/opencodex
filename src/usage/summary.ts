@@ -269,36 +269,29 @@ function startOfLocalDay(ts: number): number {
   return d.getTime();
 }
 
+function localCalendarDayCount(since: number, until: number): number {
+  const cursor = new Date(startOfLocalDay(since));
+  const end = startOfLocalDay(until);
+  let days = 1;
+  while (cursor.getTime() < end) {
+    cursor.setDate(cursor.getDate() + 1);
+    days += 1;
+  }
+  return days;
+}
+
 export function rangeWindow(range: UsageRange, now: number, customSince?: number | null, customUntil?: number | null): { since: number | null; until: number | null; days: number } {
-  if ((customSince !== undefined && customSince !== null) || (customUntil !== undefined && customUntil !== null)) {
-    const since = customSince ?? null;
-    const until = customUntil ?? null;
-    const dayDiff = since ? Math.max(1, Math.ceil(((until ?? now) - since) / 86400000)) : 0;
-    return { since, until, days: dayDiff };
-  }
-  // Handled before the others because the fallthrough below is the `all`
-  // window: a range that reaches it is silently reported as all-time history,
-  // which for a cost surface is a plausible-looking wrong answer rather than a
-  // visible failure.
-  if (range === "today") return { since: startOfLocalDay(now), until: null, days: 1 };
-  if (range === "yesterday") {
-    const start = new Date(startOfLocalDay(now));
-    start.setDate(start.getDate() - 1);
-    const end = new Date(start);
-    end.setHours(23, 59, 59, 999);
-    return { since: start.getTime(), until: end.getTime(), days: 1 };
-  }
-  if (range === "7d") {
-    const start = new Date(startOfLocalDay(now));
-    start.setDate(start.getDate() - 6);
-    return { since: start.getTime(), until: null, days: 7 };
-  }
-  if (range === "30d") {
-    const start = new Date(startOfLocalDay(now));
-    start.setDate(start.getDate() - 29);
-    return { since: start.getTime(), until: null, days: 30 };
-  }
-  return { since: null, until: null, days: 0 };
+  const { since, until } = resolveTimeRange({
+    range,
+    since: customSince,
+    until: customUntil,
+    now,
+  });
+  return {
+    since,
+    until,
+    days: since === null ? 0 : localCalendarDayCount(since, until ?? now),
+  };
 }
 
 function localDateKey(ts: number): string {
@@ -521,9 +514,11 @@ function addEstimatedCost(
   totals.estimatedCostUsd += costInfo.costTotal;
 }
 
-function buildDayGrid(range: UsageRange, since: number | null, now: number, entries: PersistedUsageEntry[], costMap: Map<PersistedUsageEntry, EntryCostInfo>): UsageDay[] {
-  const window = rangeWindow(range, now);
-  const days = range === "all" ? dayCountForAllRange(entries, now) : window.days;
+function buildDayGrid(range: UsageRange, since: number | null, until: number | null, now: number, entries: PersistedUsageEntry[], costMap: Map<PersistedUsageEntry, EntryCostInfo>): UsageDay[] {
+  const gridEnd = until ?? now;
+  const days = since !== null
+    ? localCalendarDayCount(since, gridEnd)
+    : (range === "all" ? dayCountForAllRange(entries, gridEnd) : rangeWindow(range, now).days);
   const grid = new Map<string, UsageDay>();
   // Per-day model breakdown accumulator, keyed by day then provider/model, so the 7d bar chart can
   // render a per-model stacked bar with a hover tooltip without a second pass over the entries.
@@ -569,7 +564,7 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     }
     m.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
   };
-  const startOfToday = window.until === null ? startOfLocalDay(now) : startOfLocalDay(window.until);
+  const startOfToday = startOfLocalDay(gridEnd);
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(startOfToday);
     d.setDate(d.getDate() - i);
@@ -1140,7 +1135,7 @@ export function summarizeUsage(
     until,
     generatedAt: now,
     summary: totals,
-    days: buildDayGrid(range, since, now, filteredEntries, costMap),
+    days: buildDayGrid(range, since, until, now, filteredEntries, costMap),
     models: buildModels(filteredEntries, totals.totalTokens, costMap),
     providers: buildProviders(filteredEntries, totals.totalTokens, costMap),
     accounts: buildAccounts(filteredEntries, costMap),
