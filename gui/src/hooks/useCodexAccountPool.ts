@@ -39,6 +39,12 @@ export interface CodexAccountEntry {
   priority: number;
   hasCredential: boolean;
   quota: AccountQuota | null;
+  quotaAutoRefresh: {
+    fiveHourAvailable: boolean;
+    weeklyAvailable: boolean;
+    fiveHourEnabled: boolean;
+    weeklyEnabled: boolean;
+  };
   needsReauth?: boolean;
   health?: { status: "healthy" | "cooldown" | "reauth_required" | "warning"; reason?: string; until?: string };
   healthLabel?: string;

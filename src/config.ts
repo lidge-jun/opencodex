@@ -840,6 +840,16 @@ const codexAccountPrioritiesSchema = z.custom<Record<string, unknown>>(
   }
 }).pipe(z.record(z.string(), z.number().int()));
 
+const codexQuotaAutoRefreshSchema = z.record(
+  z.string().refine(isCodexAccountPriorityKey),
+  z.object({
+    fiveHour: z.boolean().optional(),
+    weekly: z.boolean().optional(),
+    lastFiveHourResetAt: z.number().finite().nonnegative().optional(),
+    lastWeeklyResetAt: z.number().finite().nonnegative().optional(),
+  }).strict(),
+);
+
 /**
  * Deliberately permissive. A user's config is not ours to invalidate: a strict
  * entry fails the whole parse, and loadConfig's fallback then backs the file up
@@ -1083,6 +1093,7 @@ const configSchema = z.object({
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
+  codexQuotaAutoRefresh: codexQuotaAutoRefreshSchema.optional().catch(undefined),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
   // Selection order is a preference, not a safety control like pause: a malformed
   // map degrades to "no ordering" rather than failing the parse, so a hand-edited

@@ -33,7 +33,11 @@ import {
   type NativeCodexOwnership,
   type OwnershipInspection,
 } from "../integrations/native/ownership-preflight";
-import { createResetCreditWhamClient, registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
+import {
+  createResetCreditWhamClient,
+  registerCodexCooldownRecoveryProbeWorker,
+  registerCodexQuotaAutoRefreshWorker,
+} from "../codex/auth-api";
 import { activateResetCreditAutoRedeem } from "../codex/reset-credit-auto-redeem";
 import {
   reconcileLiveStateStores,
@@ -744,6 +748,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(config.appOwnedMemoryBudgetMb));
   enforceAppOwnedMemoryBudget();
   registerCodexCooldownRecoveryProbeWorker(config);
+  registerCodexQuotaAutoRefreshWorker(config);
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
   // Heavy work runs in a Worker via the single-flight job controller.

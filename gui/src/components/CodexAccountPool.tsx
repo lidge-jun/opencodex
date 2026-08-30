@@ -72,6 +72,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [actionFeedbackTone, setActionFeedbackTone] = useState<NoticeTone | null>(null);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
+  const [quotaAutoRefreshBusy, setQuotaAutoRefreshBusy] = useState<string | null>(null);
   // undefined until /api/settings answers: the switch must not render a guessed position and
   // then visibly correct itself a moment later.
   const [sparkVisible, setSparkVisible] = useState<boolean | undefined>(undefined);
@@ -232,6 +233,28 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     }
   };
 
+  const toggleQuotaAutoRefresh = async (account: CodexAccountEntry, window: "fiveHour" | "weekly") => {
+    if (quotaAutoRefreshBusy) return;
+    const enabled = window === "fiveHour"
+      ? !account.quotaAutoRefresh.fiveHourEnabled
+      : !account.quotaAutoRefresh.weeklyEnabled;
+    setQuotaAutoRefreshBusy(`${account.id}:${window}`);
+    try {
+      const response = await fetch(`${apiBase}/api/codex-auth/accounts/quota-auto-refresh`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: account.id, window, enabled }),
+      });
+      if (!response.ok) throw new Error("save");
+      await load();
+      showActionFeedback(t("codexAuth.quotaAutoRefreshUpdated"), "ok");
+    } catch {
+      showActionFeedback(t("codexAuth.quotaAutoRefreshFailed"), "err");
+    } finally {
+      setQuotaAutoRefreshBusy(null);
+    }
+  };
+
   useEffect(() => {
     // AbortController rather than a `cancelled` flag: the in-flight request is actually torn
     // down on unmount, and the state update lands in a .then() the linter can see is guarded.
@@ -377,6 +400,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             onOpenReset={openResetPopup}
             onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
             doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
+            quotaAutoRefreshBusy={quotaAutoRefreshBusy}
+            onToggleQuotaAutoRefresh={(entry, window) => { void toggleQuotaAutoRefresh(entry, window); }}
           />
 
           <div className="section-sep">
@@ -413,6 +438,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             onRemove={remove}
             onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}
             doctorCopyOutcomeFor={showDoctorCopy ? doctorCopy.outcomeFor : undefined}
+            quotaAutoRefreshBusy={quotaAutoRefreshBusy}
+            onToggleQuotaAutoRefresh={(entry, window) => { void toggleQuotaAutoRefresh(entry, window); }}
           />
         </>
       )}

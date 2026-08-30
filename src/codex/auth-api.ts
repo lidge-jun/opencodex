@@ -1,5 +1,6 @@
 import {
   ConfigMutationLockError,
+  deleteConfigTopLevelKey,
   loadConfig,
   mutatePersistedConfig,
   saveConfigPreservingClaudeCode,
@@ -84,7 +85,7 @@ export {
   updateAccountQuota,
 } from "./quota";
 import { extractAccountId } from "../oauth/chatgpt";
-import { getMainAccountPlan, isMainAccountTokenVerifiablyLive, MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
+import { getMainAccountPlan, getValidMainAccountToken, isMainAccountTokenVerifiablyLive, MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
 import { captureConfigGeneration, registerStateSweepAfterTick } from "../lib/state-store-sweeper";
 import { reconcileLiveStateStores } from "../lib/state-store-registrations";
 import {
@@ -275,6 +276,7 @@ function quotaForPlan<T extends Omit<StoredAccountQuota, "updatedAt"> | StoredAc
 }
 
 function poolAccountDto(
+  config: OcxConfig,
   account: CodexAccount,
   quotaResult: PoolQuotaResult,
   hasCredential: boolean,
@@ -295,6 +297,7 @@ function poolAccountDto(
     paused,
     priority,
     quota: quota ? { ...quota } : null,
+    quotaAutoRefresh: quotaAutoRefreshDto(config, account.id, quota),
     needsReauth,
     hasCredential,
     ...(quotaResult.quotaProbeSkipped ? { quotaProbeSkipped: true as const } : {}),
@@ -965,6 +968,29 @@ export interface CodexAuthAccountDto {
   healthSummary: string;
   healthAction?: string;
   quotaProbeSkipped?: true;
+  quotaAutoRefresh: {
+    fiveHourAvailable: boolean;
+    weeklyAvailable: boolean;
+    fiveHourEnabled: boolean;
+    weeklyEnabled: boolean;
+  };
+}
+
+const FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
+
+function quotaAutoRefreshDto(
+  config: OcxConfig,
+  accountId: string,
+  quota: StoredAccountQuota | Omit<StoredAccountQuota, "updatedAt"> | null,
+): CodexAuthAccountDto["quotaAutoRefresh"] {
+  const saved = config.codexQuotaAutoRefresh?.[accountId];
+  return {
+    fiveHourAvailable: quota?.shortWindowSeconds === FIVE_HOUR_WINDOW_SECONDS
+      && typeof quota.shortResetAt === "number",
+    weeklyAvailable: typeof quota?.weeklyResetAt === "number",
+    fiveHourEnabled: saved?.fiveHour === true,
+    weeklyEnabled: saved?.weekly === true,
+  };
 }
 
 interface FreshPoolPlanUpdate {
@@ -1335,6 +1361,129 @@ let primeInFlight: Promise<void> | null = null;
  */
 const poolQuotaPrimeAttemptedAt = new Map<string, { generation: number; at: number }>();
 let cooldownRecoveryInFlight: Promise<void> | null = null;
+let quotaAutoRefreshInFlight: Promise<void> | null = null;
+const quotaAutoRefreshCompleted = new Map<string, { fiveHour?: number; weekly?: number }>();
+const quotaAutoRefreshRetryAfter = new Map<string, number>();
+const QUOTA_AUTO_REFRESH_RETRY_MS = 5 * 60_000;
+
+function quotaResetAtMs(resetAt: number): number {
+  return resetAt < 100_000_000_000 ? resetAt * 1000 : resetAt;
+}
+
+function dueQuotaAutoRefreshWindows(
+  config: OcxConfig,
+  accountId: string,
+  quota: StoredAccountQuota | null,
+  now: number,
+): { fiveHour?: number; weekly?: number } | null {
+  if (!quota) return null;
+  const saved = config.codexQuotaAutoRefresh?.[accountId];
+  const completed = quotaAutoRefreshCompleted.get(accountId);
+  const due: { fiveHour?: number; weekly?: number } = {};
+  if (saved?.fiveHour === true
+    && quota.shortWindowSeconds === FIVE_HOUR_WINDOW_SECONDS
+    && typeof quota.shortResetAt === "number"
+    && quotaResetAtMs(quota.shortResetAt) <= now
+    && saved.lastFiveHourResetAt !== quota.shortResetAt
+    && completed?.fiveHour !== quota.shortResetAt) {
+    due.fiveHour = quota.shortResetAt;
+  }
+  if (saved?.weekly === true
+    && typeof quota.weeklyResetAt === "number"
+    && quotaResetAtMs(quota.weeklyResetAt) <= now
+    && saved.lastWeeklyResetAt !== quota.weeklyResetAt
+    && completed?.weekly !== quota.weeklyResetAt) {
+    due.weekly = quota.weeklyResetAt;
+  }
+  return due.fiveHour === undefined && due.weekly === undefined ? null : due;
+}
+
+async function warmCodexQuotaAccount(config: OcxConfig, accountId: string): Promise<void> {
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) {
+    const lease = tryAcquireNativeMainProfileClaim();
+    if (!lease) throw new Error("native main busy");
+    try {
+      await withNativeMainCredentialClaim(async () => {
+        const token = await getValidMainAccountToken();
+        if (!token) throw new Error("main account unavailable");
+        await warmCodexAccount(token);
+      });
+    } finally {
+      lease.release();
+    }
+    return;
+  }
+  if (!configuredPoolAccount(config, accountId)) throw new Error("account unavailable");
+  await warmCodexAccount(await getValidCodexToken(accountId));
+}
+
+function recordCompletedQuotaAutoRefresh(
+  config: OcxConfig,
+  accountId: string,
+  completed: { fiveHour?: number; weekly?: number },
+): void {
+  quotaAutoRefreshCompleted.set(accountId, {
+    ...quotaAutoRefreshCompleted.get(accountId),
+    ...completed,
+  });
+  try {
+    const outcome = mutatePersistedConfig(persisted => {
+      const saved = persisted.codexQuotaAutoRefresh?.[accountId];
+      if (!saved) return { changed: false, value: null };
+      const next = {
+        ...saved,
+        ...(completed.fiveHour !== undefined ? { lastFiveHourResetAt: completed.fiveHour } : {}),
+        ...(completed.weekly !== undefined ? { lastWeeklyResetAt: completed.weekly } : {}),
+      };
+      persisted.codexQuotaAutoRefresh = {
+        ...persisted.codexQuotaAutoRefresh,
+        [accountId]: next,
+      };
+      return { changed: true, value: next };
+    });
+    if (outcome.status === "unavailable" || !outcome.value) return;
+    config.codexQuotaAutoRefresh = {
+      ...config.codexQuotaAutoRefresh,
+      [accountId]: outcome.value,
+    };
+  } catch {
+    // The process-local marker still prevents duplicate sends until a later restart.
+  }
+}
+
+export async function runCodexQuotaAutoRefresh(config: OcxConfig, now = Date.now()): Promise<void> {
+  const openai = config.providers[OPENAI_CODEX_PROVIDER_ID];
+  if (!openai || openai.disabled === true || !isCanonicalOpenAiForwardProvider(openai)) return;
+  if (quotaAutoRefreshInFlight) return quotaAutoRefreshInFlight;
+  quotaAutoRefreshInFlight = (async () => {
+    const accountIds = [
+      MAIN_CODEX_ACCOUNT_ID,
+      ...(config.codexAccounts ?? []).filter(isSelectableCodexPoolAccount).map(account => account.id),
+    ];
+    const due = accountIds.flatMap(accountId => {
+      if (isCodexAccountPaused(config, accountId)
+        || isAccountNeedsReauth(accountId)
+        || (quotaAutoRefreshRetryAfter.get(accountId) ?? 0) > now) return [];
+      const windows = dueQuotaAutoRefreshWindows(config, accountId, getAccountQuota(accountId), now);
+      return windows ? [{ accountId, windows }] : [];
+    });
+    await mapWithConcurrency(due, POOL_QUOTA_REFRESH_CONCURRENCY, async ({ accountId, windows }) => {
+      try {
+        await warmCodexQuotaAccount(config, accountId);
+        quotaAutoRefreshRetryAfter.delete(accountId);
+        recordCompletedQuotaAutoRefresh(config, accountId, windows);
+        if (accountId === MAIN_CODEX_ACCOUNT_ID) await fetchMainAccountInfo(true);
+        else {
+          const account = configuredPoolAccount(config, accountId);
+          if (account) await fetchPoolAccountQuota(accountId, true, account.plan);
+        }
+      } catch {
+        quotaAutoRefreshRetryAfter.set(accountId, now + QUOTA_AUTO_REFRESH_RETRY_MS);
+      }
+    });
+  })().finally(() => { quotaAutoRefreshInFlight = null; });
+  return quotaAutoRefreshInFlight;
+}
 
 export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Date.now()): Promise<void> {
   const openai = config.providers[OPENAI_CODEX_PROVIDER_ID];
@@ -1375,6 +1524,13 @@ export function registerCodexCooldownRecoveryProbeWorker(config: OcxConfig): voi
   registerStateSweepAfterTick({
     name: "codex-cooldown-recovery",
     afterTick: () => { void runCodexCooldownRecoveryProbes(config); },
+  });
+}
+
+export function registerCodexQuotaAutoRefreshWorker(config: OcxConfig): void {
+  registerStateSweepAfterTick({
+    name: "codex-quota-auto-refresh",
+    afterTick: () => { void runCodexQuotaAutoRefresh(config); },
   });
 }
 
@@ -1591,6 +1747,7 @@ export async function listCodexAuthAccountsSnapshot(
     const currentCredential = getCodexAccountCredential(accountId);
     if (!currentCredential) {
       return [poolAccountDto(
+        runtimeConfig,
         currentAccount,
         { quota: null, needsReauth: true },
         false,
@@ -1610,6 +1767,7 @@ export async function listCodexAuthAccountsSnapshot(
       ? { ...currentAccount, plan: quotaResult.freshPlan }
       : currentAccount;
     return [poolAccountDto(
+      runtimeConfig,
       dtoAccount,
       effectiveQuotaResult,
       true,
@@ -1645,6 +1803,7 @@ export async function listCodexAuthAccountsSnapshot(
         updatedAt: getAccountQuota(MAIN_CODEX_ACCOUNT_ID)?.updatedAt ?? Date.now(),
       }, mainInfo.plan),
     } : null,
+    quotaAutoRefresh: quotaAutoRefreshDto(runtimeConfig, MAIN_CODEX_ACCOUNT_ID, mainInfo.quota),
     ...oauthAccountHealthFields("codex", MAIN_CODEX_ACCOUNT_ID, mainHealth),
   };
   return {
@@ -1886,6 +2045,41 @@ export async function handleCodexAuthAPI(
       id,
       priority,
       activeCodexAccountId: getEffectiveActiveCodexAccountId(runtimeConfig) ?? null,
+    });
+  }
+
+  if (url.pathname === "/api/codex-auth/accounts/quota-auto-refresh" && req.method === "PUT") {
+    const body = await req.json().catch(() => ({})) as {
+      id?: unknown;
+      window?: unknown;
+      enabled?: unknown;
+    };
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    if (!isCodexAccountPriorityKey(id)) return jsonResponse({ error: "Invalid account id format" }, 400);
+    if (body.window !== "fiveHour" && body.window !== "weekly") {
+      return jsonResponse({ error: "window must be fiveHour or weekly" }, 400);
+    }
+    if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+
+    const runtimeConfig = getRuntimeConfig(config);
+    const exists = id === MAIN_CODEX_ACCOUNT_ID
+      || (runtimeConfig.codexAccounts ?? []).some(account => isSelectableCodexPoolAccount(account) && account.id === id);
+    if (!exists) return jsonResponse({ error: "Account not found" }, 404);
+
+    const next = { ...(runtimeConfig.codexQuotaAutoRefresh?.[id] ?? {}) };
+    if (body.enabled) next[body.window] = true;
+    else delete next[body.window];
+    const all = { ...(runtimeConfig.codexQuotaAutoRefresh ?? {}) };
+    if (Object.keys(next).length > 0) all[id] = next;
+    else delete all[id];
+    if (Object.keys(all).length > 0) runtimeConfig.codexQuotaAutoRefresh = all;
+    else deleteConfigTopLevelKey(runtimeConfig, "codexQuotaAutoRefresh");
+    saveRuntimeConfig(config, runtimeConfig);
+    void runCodexQuotaAutoRefresh(runtimeConfig);
+    return jsonResponse({
+      ok: true,
+      id,
+      quotaAutoRefresh: quotaAutoRefreshDto(runtimeConfig, id, getAccountQuota(id)),
     });
   }
 

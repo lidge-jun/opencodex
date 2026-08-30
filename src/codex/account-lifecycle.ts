@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   atomicWriteFile,
+  deleteConfigTopLevelKey,
   getConfigPath,
   saveConfigPreservingClaudeCode,
   withConfigMutationLockSync,
@@ -135,6 +136,12 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
       .filter(account => account.isMain || account.id !== accountId);
     forgetCodexAccountPause(runtimeConfig, accountId);
     forgetCodexAccountPriority(runtimeConfig, accountId);
+    if (runtimeConfig.codexQuotaAutoRefresh?.[accountId]) {
+      const retained = { ...runtimeConfig.codexQuotaAutoRefresh };
+      delete retained[accountId];
+      if (Object.keys(retained).length > 0) runtimeConfig.codexQuotaAutoRefresh = retained;
+      else deleteConfigTopLevelKey(runtimeConfig, "codexQuotaAutoRefresh");
+    }
     clearCodexAccountPin(runtimeConfig, accountId);
     if (runtimeConfig.activeCodexAccountId === accountId) runtimeConfig.activeCodexAccountId = undefined;
 

@@ -7,6 +7,7 @@ export interface AccountQuota {
   weeklyResetAt?: number;
   fiveHourResetAt?: number;
   shortResetAt?: number;
+  shortWindowSeconds?: number;
   monthlyResetAt?: number;
   customWindows?: { label: string; percent: number; resetAt?: number }[];
   creditsUsd?: {
@@ -37,6 +38,11 @@ export function normalizeQuotaForPlan(quota: AccountQuota | null, plan: string |
       };
   if (!isThirtyDayOnlyPlan(plan)) return normalized;
   return {
+    ...(normalized.fiveHourPercent !== undefined ? { fiveHourPercent: normalized.fiveHourPercent } : {}),
+    ...(normalized.fiveHourResetAt !== undefined ? { fiveHourResetAt: normalized.fiveHourResetAt } : {}),
+    ...(normalized.shortPercent !== undefined ? { shortPercent: normalized.shortPercent } : {}),
+    ...(normalized.shortResetAt !== undefined ? { shortResetAt: normalized.shortResetAt } : {}),
+    ...(normalized.shortWindowSeconds !== undefined ? { shortWindowSeconds: normalized.shortWindowSeconds } : {}),
     ...(normalized.monthlyPercent !== undefined ? { monthlyPercent: normalized.monthlyPercent } : {}),
     ...(normalized.monthlyResetAt !== undefined ? { monthlyResetAt: normalized.monthlyResetAt } : {}),
     ...(normalized.creditsUsd !== undefined ? { creditsUsd: normalized.creditsUsd } : {}),
