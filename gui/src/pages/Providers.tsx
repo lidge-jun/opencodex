@@ -73,6 +73,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }, []);
 
   const { batchTesting, startBatch, cancelMountedBatch, isActiveBatch } = useProviderBatchController();
+  const [providerConfigGeneration, setProviderConfigGeneration] = useState(0);
 
   // Cancel batch when apiBase changes.
   const prevApiBaseRef = useRef(apiBase);
@@ -186,10 +187,14 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setQuotaRefresh(previous => ({ epoch: previous.epoch + 1, force }));
   }, []);
   const { fetchConfig, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
-    apiBase, t, setConfig, setOauthProviders, setOauthStatus, notify,
+    apiBase, t, setConfig, setProviderConfigGeneration, setOauthProviders, setOauthStatus, notify,
     invalidateProviderQuotas,
     configCacheKey,
   });
+
+  useEffect(() => {
+    cancelMountedBatch();
+  }, [providerConfigGeneration, cancelMountedBatch]);
 
 
 
