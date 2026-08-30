@@ -120,6 +120,8 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `POST /api/storage/cleanup-policy/run` | 啟動手動清理政策執行 | 409 `already_running`；500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | 僅測試的政策串流 hook | 不可用時 404 `not_found` |
 
+`models`、`providers` 及 `days[].models` 中的列也帶有 `cacheHitRate`：表示由供應商提示快取提供的輸入權杖比例，並限制在 `[0, 1]`。當供應商未回報快取遙測資料，或該列沒有輸入權杖時，其值為 `null`，絕不會是 `0`；因為「沒有快取資料」與「確實為 0% 的命中率」是不同事實，若圖表將兩者呈現為相同狀態，便會造成誤導。
+
 :::caution
 儲存清理端點可移動或永久移除已封存的 session 資料。請務必先預覽並提交回傳的摘要。在可能需要復原時偏好隔離。
 :::

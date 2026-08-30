@@ -98,6 +98,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `headers?` | `Record<string, string>` | Ek yukarı akış başlıkları. Yetkilendirme, çerezler, API anahtarı başlıkları, gömülü yeni satırlar ve geçersiz adlar reddedilir. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Varsayılan OpenRouter `order`, `only` ve `allowFallbacks` tercihleri; yalnızca `openai-chat` ile kurallı OpenRouter için geçerlidir. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | Sağlayıcı genelindeki OpenRouter tercihinin yerini alan tam model kimliği geçersiz kılmaları. |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` | Varsayılan Vercel AI Gateway `order`, `only` ve `sort` (`"cost"` \| `"ttft"` \| `"tps"`) tercihleri; yalnızca `openai-chat` ile kurallı Vercel AI Gateway için geçerlidir. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | Kimlik doğrulama modu (varsayılan `key`). OAuth/abonelik kimlik bilgileri `config.json` dışında saklanır; `local`, kayıt defteri girdisi izin veren sağlayıcılarla sınırlıdır. |
 | `codexAccountMode?` | `"pool" \| "direct"` | Yalnızca kurallı `openai`; varsayılan olarak Pool. Direct havuz durumunu atlar. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Bu OAuth sağlayıcısının Token Guardian politikasını geçersiz kılın. |
@@ -412,6 +413,47 @@ verir. `only` her zaman bir izin listesidir.
 Model anahtarları, dış opencodex sağlayıcı öneki olmadan tam yerel OpenRouter
 kimlikleridir. `openrouter/anthropic-claude-sonnet-5` seçimi model kuralını
 uygulamadan önce yerel `anthropic/claude-sonnet-5`'i geri yükler.
+
+## Vercel AI Gateway sağlayıcı yönlendirmesi
+
+Vercel AI Gateway bir modeli birden çok temel çıkarım sağlayıcısı arasında
+yönlendirebilir. `vercelGatewayRouting` sağlayıcı genelindeki tercihleri
+yapılandırır; `modelVercelGatewayRouting` tam model kimlikleri için onun yerini
+alır. İkisi de ayarlanmazsa `resolveVercelGatewayRouting()` `undefined` döndürür;
+böylece Chat istek oluşturucuları `provider` alanını atlar ve Vercel AI Gateway
+varsayılan dinamik yönlendirme davranışını korur.
+
+- `order`: Öncelik sırasına göre Vercel AI Gateway yukarı akış sağlayıcı slug'ları.
+- `only`: Uygun Vercel AI Gateway yukarı akış sağlayıcılarını sınırlayan açık izin listesi.
+- `sort`: Uygun sağlayıcıları `"cost"` (en düşük maliyet), `"ttft"` (ilk belirtece kadar geçen süre) veya `"tps"` (saniye başına belirteç) ölçütüne göre otomatik sıralar.
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
+        }
+      }
+    }
+  }
+}
+```
+
+Model anahtarları, dış OpenCodex sağlayıcı öneki olmadan herkese açık Vercel
+model seçicileridir. `vercel-ai-gateway/zai-glm-5.2` seçimi, model kuralını
+uygulamadan önce yerel `zai/glm-5.2` kimliğini geri yükler. Aynı eşleme yerel bir
+`vercel/<model-id>` seçicisi için de geçerlidir: OpenCodex'te kodlanmış
+`vercel-ai-gateway/vercel-<model-id>` seçicisini kullanın ve model anahtarı olarak
+`vercel/<model-id>` değerini koruyun.
 
 ## Statik model izin listeleri
 

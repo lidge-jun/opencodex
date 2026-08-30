@@ -82,6 +82,14 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 
 在可用时，`input_tokens_details` 还可以包含 `cache_write_tokens`。始终存在的 detail 对象是严格 Responses 客户端的兼容性保证；零可能表示“未报告”，不一定表示“提供方没有进行此类工作”。
 
+### 将响应与其请求日志关联
+
+每个通过准入的 HTTP Responses 回复都带有 `x-opencodex-request-id` 标头，其中保存代理生成的 `ocx-<32 hex>` 形式 ID。它是将响应与请求日志及使用情况报告中对应记录关联起来的键。
+
+代理始终生成此值，并覆盖调用方提供或上游返回的任何 ID，因此该值仅属于此代理，可安全地用作关联键。该标头列在 `Access-Control-Expose-Headers` 中，浏览器 JavaScript 因而可以跨源读取它；否则，即使自定义 `x-` 标头已在网络上传输，`response.headers.get()` 也无法看到它。
+
+在身份验证或来源准入阶段被拒绝的 Responses 请求不会到达此包装层，也不会带有 ID。因此，缺少该标头意味着请求在写入日志之前已被拒绝。
+
 ### 同一路径上的 WebSocket 升级
 
 当启用 `websockets` 时，客户端可以升级 `/v1/responses`，而不是发起 HTTP POST。

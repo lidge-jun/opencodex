@@ -92,6 +92,19 @@ queue overflow 시 downstream에는 terminal `response.failed` 이벤트와 `[DO
 엄격한 Responses 클라이언트를 위한 호환성 보장입니다. 0은 "보고되지 않음"을 뜻할 수 있으며, 반드시
 "제공자가 그런 작업을 하지 않았다"는 의미는 아닙니다.
 
+### 응답과 요청 로그 연결
+
+허용된 모든 HTTP Responses 응답에는 프록시가 생성한 `ocx-<32 hex>` 형식의 ID를 담은
+`x-opencodex-request-id` 헤더가 있습니다. 이 값은 응답을 요청 로그 및 사용량 보고의 해당 행과 연결하는 키입니다.
+
+프록시는 이 값을 항상 직접 생성하고 호출자가 제공하거나 업스트림이 반환한 ID를 덮어쓰므로, 이 프록시에서
+고유하며 상관관계 키로 신뢰할 수 있습니다. 이 헤더는 `Access-Control-Expose-Headers`에 명시되어 있어 브라우저
+JavaScript가 교차 출처에서도 읽을 수 있습니다. 사용자 지정 `x-` 헤더는 실제 전송 데이터에 있더라도 그렇지 않으면
+`response.headers.get()`에서 보이지 않습니다.
+
+인증 또는 출처 허용 단계에서 거부된 Responses 요청은 이 래퍼에 도달하지 않으며 ID가 없습니다. 따라서 헤더가
+없다는 것은 요청이 로그에 기록되기 전에 거부되었다는 뜻입니다.
+
 ### 같은 경로에서의 WebSocket 업그레이드
 
 `websockets`가 활성화되어 있으면 클라이언트는 HTTP POST를 여는 대신 `/v1/responses`로 업그레이드할 수

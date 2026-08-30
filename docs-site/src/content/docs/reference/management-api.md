@@ -143,6 +143,12 @@ re-estimated from the pricing active when the summary is read. This is an API-eq
 not a subscription charge. New main-pool requests use the reserved `main` label; legacy bare
 `openai` rows remain in an ambiguous bucket instead of being reassigned from current configuration.
 
+Rows in `models`, `providers`, and `days[].models` also carry `cacheHitRate`: the share of input
+tokens served from the provider's prompt cache, clamped to `[0, 1]`. It is `null` — never `0` —
+when the provider reported no cache telemetry or the row has no input tokens, because "no cache
+data" and "a genuine 0% hit rate" are different facts and a chart that renders them alike is
+misleading.
+
 :::caution
 Storage cleanup endpoints can move or permanently remove archived session data. Always preview
 first and submit the returned digest. Prefer quarantine when recovery may be needed.

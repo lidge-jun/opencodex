@@ -99,6 +99,24 @@ içerebilir. Her zaman mevcut olan ayrıntı nesneleri katı Responses istemcile
 için bir uyumluluk garantisidir; sıfır olması "sağlayıcı böyle bir çalışma
 yapmadı" anlamına gelmek zorunda değildir, "bildirilmedi" anlamına gelebilir.
 
+### Bir yanıtı istek günlüğüyle ilişkilendirme
+
+Kabul edilen her HTTP Responses yanıtı, `ocx-<32 hex>` biçiminde proxy
+tarafından oluşturulan bir kimlik içeren `x-opencodex-request-id` başlığını
+taşır. Bu, yanıtı istek günlüğündeki ve kullanım raporlamasındaki satırına
+bağlayan anahtardır.
+
+Proxy bu değeri her zaman oluşturur ve arayanın sağladığı ya da yukarı akışın
+döndürdüğü tüm kimliklerin üzerine yazar; bu nedenle yalnızca bu proxy'ye
+özgüdür ve ilişkilendirme anahtarı olarak güvenle kullanılabilir. Başlık,
+`Access-Control-Expose-Headers` içinde adlandırılır; bu sayede tarayıcı
+JavaScript'i onu farklı kaynaktan okuyabilir — özel bir `x-` başlığı hatta
+bulunsa bile aksi halde `response.headers.get()` için görünmezdir.
+
+Kimlik doğrulama veya kaynak kabulü sırasında reddedilen Responses istekleri bu
+sarmalayıcıya hiç ulaşmaz ve kimlik taşımaz; dolayısıyla eksik başlık, isteğin
+günlüğe kaydedilmeden önce reddedildiği anlamına gelir.
+
 ### Aynı yol üzerinde WebSocket yükseltmesi
 
 `websockets` etkinleştirildiğinde bir istemci bir HTTP POST açmak yerine
@@ -329,5 +347,4 @@ okuyamazsa opencodex bu sağlayıcıya okunamayan baytlar göndermek yerine
 `unreadable_encrypted_agent_task` ile başarısız olur. Çalışan görevleri
 etrafındaki istemci davranışı için [Alt Ajan
 Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
-
 

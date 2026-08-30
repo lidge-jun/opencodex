@@ -79,6 +79,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `headers?` | `Record<string, string>` | 추가 상위 헤더입니다. Authorization, cookies, API-key 헤더, 내장 개행, 잘못된 이름은 허용하지 않습니다. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | 기본 OpenRouter `order`, `only`, `allowFallbacks` 선호도입니다. 정식 OpenRouter와 `openai-chat`에서만 유효합니다. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | 공급자 전반의 OpenRouter 선호도를 덮어쓰는 정확한 모델 id별 재정의입니다. |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` | 기본 Vercel AI Gateway `order`, `only`, `sort`(`"cost"` \| `"ttft"` \| `"tps"`) 선호도입니다. 정식 Vercel AI Gateway와 `openai-chat`에서만 유효합니다. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | 인증 모드입니다. 기본값은 `key`입니다. OAuth/구독 자격 증명은 `config.json` 밖에 저장되며, `local`은 레지스트리 항목이 허용하는 공급자에서만 사용할 수 있습니다. |
 | `codexAccountMode?` | `"pool" \| "direct"` | 정식 `openai` 전용입니다. 기본값은 Pool입니다. Direct는 풀 상태를 우회합니다. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | 이 OAuth 공급자의 Token Guardian 정책을 덮어씁니다. |
@@ -300,6 +301,43 @@ OpenRouter는 하나의 모델을 여러 추론 공급자로 제공할 수 있�
 ```
 
 모델 키는 외부 opencodex 공급자 접두사 없이, 정확한 네이티브 OpenRouter id여야 합니다. `openrouter/anthropic-claude-sonnet-5`를 선택하면 모델 규칙을 적용하기 전에 네이티브 `anthropic/claude-sonnet-5`로 되돌아갑니다.
+
+## Vercel AI Gateway 공급자 라우팅
+
+Vercel AI Gateway는 하나의 모델을 여러 기반 추론 공급자에 걸쳐 라우팅할 수 있습니다. `vercelGatewayRouting`은
+공급자 전반의 선호도를 구성하고, `modelVercelGatewayRouting`은 정확한 모델 ID에 대해 이를 대체합니다. 둘 다
+설정하지 않으면 `resolveVercelGatewayRouting()`이 `undefined`를 반환하므로 Chat 요청 빌더는 `provider` 필드를
+생략하고 Vercel AI Gateway의 기본 동적 라우팅 동작이 유지됩니다.
+
+- `order`: Vercel AI Gateway 업스트림 공급자 slug를 우선순위 순으로 지정합니다.
+- `only`: 사용할 수 있는 Vercel AI Gateway 업스트림 공급자를 제한하는 명시적 허용 목록입니다.
+- `sort`: 사용할 수 있는 공급자를 `"cost"`(최저 비용), `"ttft"`(첫 토큰까지 걸리는 시간), `"tps"`(초당 토큰 수) 기준으로 자동 정렬합니다.
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
+        }
+      }
+    }
+  }
+}
+```
+
+모델 키는 외부 OpenCodex 공급자 접두사가 없는 Vercel 공개 모델 선택자입니다.
+`vercel-ai-gateway/zai-glm-5.2`를 선택하면 모델 규칙 적용 전에 네이티브 `zai/glm-5.2`가 복원됩니다. 네이티브
+`vercel/<model-id>` 선택자에도 동일한 매핑이 적용됩니다. OpenCodex에서는 인코딩된
+`vercel-ai-gateway/vercel-<model-id>` 선택자를 사용하고, 모델 키에는 `vercel/<model-id>`를 유지하십시오.
 
 ## 정적 모델 허용 목록
 

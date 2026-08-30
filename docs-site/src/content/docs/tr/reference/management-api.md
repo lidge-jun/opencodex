@@ -153,6 +153,13 @@ abonelik ücreti değildir. Yeni ana havuz istekleri ayrılmış `main` etiketin
 kullanır; eski yalın `openai` satırları geçerli yapılandırmadan yeniden atanmak
 yerine belirsiz bir sepette kalır.
 
+`models`, `providers` ve `days[].models` içindeki satırlar da `cacheHitRate`
+taşır: sağlayıcının istem önbelleğinden sunulan girdi belirteçlerinin `[0, 1]`
+aralığıyla sınırlandırılmış payı. Sağlayıcı hiç önbellek telemetrisi
+bildirmediğinde veya satırda hiç girdi belirteci olmadığında bu değer `0` değil,
+`null` olur; çünkü "önbellek verisi yok" ile "gerçekten %0 isabet oranı" farklı
+olgulardır ve bunları aynı şekilde gösteren bir grafik yanıltıcıdır.
+
 :::caution
 Depolama temizleme uç noktaları arşivlenmiş oturum verilerini taşıyabilir veya
 kalıcı olarak kaldırabilir. Her zaman önce önizleyin ve döndürülen özeti
@@ -300,5 +307,4 @@ rehberli iş akışını sağlar. Başsız ana bilgisayarlar ve otomasyon için 
 olduğunda veya işlem başarısız olduğunda sıfır olmayan bir sonuç döndürürler.
 Doğrudan HTTP, yukarıdaki tam uç nokta sözleşmelerine ihtiyaç duyan
 entegrasyonlar için en yararlıdır.
-
 

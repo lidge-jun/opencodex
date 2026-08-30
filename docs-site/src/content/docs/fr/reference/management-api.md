@@ -143,6 +143,12 @@ réestimée d'après la tarification active au moment de la lecture du résumé.
 et non de frais d'abonnement. Les nouvelles requêtes du pool principal utilisent le libellé réservé `main` ; les anciennes lignes
 `openai` sans qualification restent dans une catégorie ambiguë au lieu d'être réaffectées d'après la configuration actuelle.
 
+Les lignes de `models`, `providers` et `days[].models` comportent également `cacheHitRate` : la part des jetons
+d'entrée servis depuis le cache d'invites du fournisseur, limitée à `[0, 1]`. Cette valeur est `null` — jamais `0` —
+lorsque le fournisseur n'a transmis aucune télémétrie de cache ou que la ligne ne contient aucun jeton d'entrée, car
+« aucune donnée de cache » et « un véritable taux de succès de 0 % » sont deux faits distincts, et un graphique qui
+les représente de la même manière est trompeur.
+
 :::caution
 Les points de terminaison de nettoyage du stockage peuvent déplacer ou supprimer définitivement les données de session archivées. Toujours prévisualiser
 d’abord et soumettez le résumé renvoyé. Préférez la quarantaine lorsqu’une récupération peut être nécessaire.

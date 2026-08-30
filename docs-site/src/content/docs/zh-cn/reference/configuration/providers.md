@@ -79,6 +79,7 @@ selector，而不是分配一个新名称。
 | `headers?` | `Record<string, string>` | 额外的上游请求头。会拒绝 Authorization、cookie、API key 头、嵌入换行符以及无效名称。 |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | 默认的 OpenRouter `order`、`only` 和 `allowFallbacks` 偏好；仅对使用 `openai-chat` 的规范 OpenRouter 有效。 |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | 精确模型 id 级别的覆盖项，会替换提供者级 OpenRouter 偏好。 |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` | 默认的 Vercel AI Gateway `order`、`only` 和 `sort`（`"cost"` \| `"ttft"` \| `"tps"`）偏好；仅对使用 `openai-chat` 的规范 Vercel AI Gateway 有效。 |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | 身份验证模式（默认 `key`）。OAuth/订阅凭据存放在 `config.json` 之外；`local` 仅限注册表条目允许它的提供者。 |
 | `codexAccountMode?` | `"pool" \| "direct"` | 仅适用于规范的 `openai`；默认是 Pool。Direct 会绕过池状态。 |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | 覆盖该 OAuth 提供者的 Token Guardian 策略。 |
@@ -302,6 +303,37 @@ OpenRouter 可以通过多个推理提供者来提供同一个模型。`openRout
 ```
 
 模型键必须是精确的原生 OpenRouter id，不带外层的 opencodex 提供者前缀。选择 `openrouter/anthropic-claude-sonnet-5` 会在应用模型规则之前，还原为原生 `anthropic/claude-sonnet-5`。
+
+## Vercel AI Gateway 提供者路由
+
+Vercel AI Gateway 可以在多个底层推理提供者之间路由一个模型。`vercelGatewayRouting` 配置提供者级偏好；`modelVercelGatewayRouting` 会针对精确模型 ID 替换这些偏好。两者均未设置时，`resolveVercelGatewayRouting()` 返回 `undefined`，因此 Chat 请求构建器会省略 `provider` 字段，Vercel AI Gateway 则保留其默认的动态路由行为。
+
+- `order`：按优先级排列的 Vercel AI Gateway 上游提供者 slug。
+- `only`：限制可用 Vercel AI Gateway 上游提供者的显式允许列表。
+- `sort`：按 `"cost"`（成本最低）、`"ttft"`（首个 token 所需时间）或 `"tps"`（每秒 token 数）自动排列可用提供者。
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
+        }
+      }
+    }
+  }
+}
+```
+
+模型键是 Vercel 的公开模型选择器，不带外层的 OpenCodex 提供者前缀。选择 `vercel-ai-gateway/zai-glm-5.2` 时，会先还原为原生 `zai/glm-5.2`，再应用模型规则。相同映射也适用于原生 `vercel/<model-id>` 选择器：在 OpenCodex 中使用编码后的 `vercel-ai-gateway/vercel-<model-id>` 选择器，并将 `vercel/<model-id>` 保留为模型键。
 
 ## 静态模型允许列表
 

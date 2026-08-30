@@ -91,6 +91,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `headers?` | `Record<string, string>` | En-têtes supplémentaires en amont. L'autorisation, les cookies, les en-têtes de clé API, les nouvelles lignes intégrées et les noms invalides sont rejetés. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Préférences OpenRouter `order`, `only` et `allowFallbacks` par défaut ; valable uniquement pour les OpenRouter canoniques avec `openai-chat`. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | Remplacements exacts de l'ID de modèle qui remplacent la préférence OpenRouter à l'échelle du fournisseur. |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` | Préférences Vercel AI Gateway par défaut pour `order`, `only` et `sort` (`"cost"` \| `"ttft"` \| `"tps"`) ; valables uniquement pour le fournisseur Vercel AI Gateway canonique avec `openai-chat`. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | Mode d'authentification (`key` par défaut). Les identifiants OAuth ou d'abonnement sont stockés hors de `config.json` ; `local` est réservé aux fournisseurs dont l'entrée de registre l'autorise. |
 | `codexAccountMode?` | `"pool" \| "direct"` | Réservé au fournisseur canonique `openai` ; la valeur par défaut est Pool. Le mode Direct contourne l'état du pool. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Remplace la politique Token Guardian de ce fournisseur OAuth. |
@@ -373,6 +374,45 @@ Les noms de fournisseurs sont les identifiants courts d'OpenRouter. Avec `allowF
 Les clés de modèle sont les identifiants OpenRouter natifs exacts, sans le préfixe externe du fournisseur opencodex. La sélection de
 `openrouter/anthropic-claude-sonnet-5` restaure l'identifiant natif `anthropic/claude-sonnet-5` avant d'appliquer
 la règle du modèle.
+
+## Routage des fournisseurs Vercel AI Gateway
+
+Vercel AI Gateway peut router un modèle entre plusieurs fournisseurs d'inférence sous-jacents.
+`vercelGatewayRouting` configure les préférences à l'échelle du fournisseur ; `modelVercelGatewayRouting` les remplace
+pour les identifiants de modèle exacts. Lorsque les deux sont omis, `resolveVercelGatewayRouting()` renvoie `undefined`.
+Les générateurs de requêtes Chat omettent alors le champ `provider`, et Vercel AI Gateway conserve son comportement de
+routage dynamique par défaut.
+
+- `order` : identifiants courts des fournisseurs en amont de Vercel AI Gateway, par ordre de priorité.
+- `only` : liste d'autorisation explicite limitant les fournisseurs en amont de Vercel AI Gateway admissibles.
+- `sort` : trie automatiquement les fournisseurs admissibles par `"cost"` (coût le plus faible), `"ttft"` (délai
+  avant le premier jeton) ou `"tps"` (jetons par seconde).
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
+        }
+      }
+    }
+  }
+}
+```
+
+Les clés de modèle sont les sélecteurs de modèle publics de Vercel, sans le préfixe externe du fournisseur OpenCodex.
+La sélection de `vercel-ai-gateway/zai-glm-5.2` restaure l'identifiant natif `zai/glm-5.2` avant d'appliquer la règle du
+modèle. Le même mappage s'applique à un sélecteur natif `vercel/<model-id>` : utilisez le sélecteur encodé
+`vercel-ai-gateway/vercel-<model-id>` dans OpenCodex et conservez `vercel/<model-id>` comme clé de modèle.
 
 ## Listes autorisées de modèles statiques
 
