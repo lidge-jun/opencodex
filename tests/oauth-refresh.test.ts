@@ -1221,7 +1221,7 @@ describe("oauth refresh hardening", () => {
     let cleanupAttempts = 0;
     const cleanupSpy = spyOn(storeModule, "clearOAuthRefreshIntentIfMatch").mockImplementation(() => {
       cleanupAttempts += 1;
-      throw new OAuthRefreshIntentIOError("clear-intent", new Error("forced cleanup failure (EROFS)"));
+      throw new OAuthRefreshIntentIOError("clear-cleanup-pending", new Error("forced cleanup failure (EROFS)"));
     });
     try {
       await expect(getValidAccessToken("anthropic")).resolves.toBe("disk");
