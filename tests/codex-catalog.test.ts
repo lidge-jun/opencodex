@@ -1921,6 +1921,33 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     }
   });
 
+  test("provider and model aliases label picker rows without changing routing slugs", async () => {
+    clearModelCache("google-antigravity");
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "google-antigravity",
+        providers: {
+          "google-antigravity": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            liveModels: false,
+            models: ["gemini-3.7-flash"],
+            alias: "ga",
+            modelAliases: { "gemini-3.7-flash": "g3f" },
+          },
+        },
+      });
+      const row = buildCatalogEntries(nativeTemplate(), [], models)
+        .find(entry => entry.slug === "google-antigravity/gemini-3.7-flash");
+
+      expect(row?.display_name).toBe("ga/g3f");
+      expect(row?.slug).toBe("google-antigravity/gemini-3.7-flash");
+    } finally {
+      clearModelCache("google-antigravity");
+    }
+  });
+
   test("a custom row clamps its soft budget to the provider max-input ceiling", async () => {
     const models = await gatherRoutedModels({
       port: 10100,
