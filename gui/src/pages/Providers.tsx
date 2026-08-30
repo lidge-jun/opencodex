@@ -20,9 +20,10 @@ import { useProvidersFetch } from "./use-providers-fetch";
 import { ProvidersPageModals } from "./providers-page-modals";
 import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-page-utils";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
+import { useProviderBatchController } from "../hooks/use-provider-batch-controller";
 import { testProviderConnection, type ConnectionTestResult } from "../components/provider-workspace/provider-test";
 
-const TEST_CONCURRENCY = 3;
+
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
@@ -47,7 +48,6 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [codexLoginOpen, setCodexLoginOpen] = useState(false);
   const [modelsRefreshToken, setModelsRefreshToken] = useState(0);
   const [oauthTosPending, setOauthTosPending] = useState<{ provider: string; addAccount: boolean } | null>(null);
-  const [batchTesting, setBatchTesting] = useState(false);
   /** Bumped after OAuth login so ProviderDetails switches to the Accounts tab. */
   const [accountsFocus, setAccountsFocus] = useState<{ token: number; provider: string | null }>({
     token: 0,
@@ -72,50 +72,27 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setStatusTone("err");
   }, []);
 
-  /** Monotonically increasing batch counter. Never resets. */
-  const nextBatchIdRef = useRef(0);
-  /** Identity of the currently-active batch; stale callbacks see a mismatch and bail out. */
-  const activeBatchRef = useRef<{ id: number; controller: AbortController } | null>(null);
-  /** Bumped whenever provider config is refreshed via a successful /api/config fetch. */
-  const [providerConfigGeneration, setProviderConfigGeneration] = useState(0);
+  const { batchTesting, startBatch, cancelMountedBatch, isActiveBatch } = useProviderBatchController();
 
-  /**
-   * Cancel an in-flight batch for a mounted component: abort + exit Testing UI.
-   * Used by apiBase change effect and config generation change effect.
-   */
-  const cancelMountedBatch = useCallback(() => {
-    const active = activeBatchRef.current;
-    if (!active) return;
-    active.controller.abort();
-    activeBatchRef.current = null;
-    setBatchTesting(false);
-  }, []);
-
-  /**
-   * Clean up batch resources on unmount without touching state.
-   * Called only from the unmount effect to avoid setState on unmounted components.
-   */
-  const abortBatchOnUnmount = useCallback(() => {
-    activeBatchRef.current?.controller.abort();
-    activeBatchRef.current = null;
-  }, []);
+  // Cancel batch when apiBase changes.
+  const prevApiBaseRef = useRef(apiBase);
+  useEffect(() => {
+    if (prevApiBaseRef.current !== apiBase) {
+      cancelMountedBatch();
+      prevApiBaseRef.current = apiBase;
+    }
+  }, [apiBase, cancelMountedBatch]);
 
   const testAllProviders = useCallback(async () => {
     if (!config || batchTesting) return;
     const names = Object.keys(config.providers);
     if (names.length === 0) return;
 
-    // Cancel any in-flight batch (ownership transfers to the new batch).
-    activeBatchRef.current?.controller.abort();
-    const batchId = ++nextBatchIdRef.current;
-    const controller = new AbortController();
-    activeBatchRef.current = { id: batchId, controller };
-
-    setBatchTesting(true);
+    const controller = startBatch();
+    const signal = controller.signal;
     const results: Record<string, ConnectionTestResult> = {};
     const queue = [...names];
-    const signal = controller.signal;
-    const workerCount = Math.min(TEST_CONCURRENCY, names.length);
+    const workerCount = Math.min(3, names.length);
     const runWorker = async () => {
       while (queue.length > 0 && !signal.aborted) {
         const name = queue.shift()!;
@@ -125,43 +102,19 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     try {
       await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
     } finally {
-      // Only the current active batch can update UI.
-      const isActive = activeBatchRef.current?.id === batchId;
-      if (isActive && aliveRef.current) {
-        activeBatchRef.current = null;
-        setBatchTesting(false);
-        if (!signal.aborted) {
-          const passed = Object.values(results).filter(r => r.ok).length;
-          const failed = names.length - passed;
-          notify(
-            failed === 0
-              ? t("prov.testAll.ok", { count: passed })
-              : t("prov.testAll.partial", { passed, failed }),
-            failed === 0,
-          );
-        }
+      if (!signal.aborted && isActiveBatch(controller) && aliveRef.current) {
+        cancelMountedBatch();
+        const passed = Object.values(results).filter(r => r.ok).length;
+        const failed = names.length - passed;
+        notify(
+          failed === 0
+            ? t("prov.testAll.ok", { count: passed })
+            : t("prov.testAll.partial", { passed, failed }),
+          failed === 0,
+        );
       }
     }
-  }, [config, batchTesting, apiBase, notify, t]);
-
-  // Clean up batch resources on unmount — no state updates (component may be gone).
-  useEffect(() => {
-    return () => { abortBatchOnUnmount(); };
-  }, [abortBatchOnUnmount]);
-
-  // Cancel batch and exit Testing UI when apiBase changes.
-  const prevApiBaseRef = useRef(apiBase);
-  useEffect(() => {
-    if (prevApiBaseRef.current !== apiBase) {
-      cancelMountedBatch();
-      prevApiBaseRef.current = apiBase;
-    }
-  }, [apiBase, cancelMountedBatch]);
-
-  // Cancel batch and exit Testing UI when provider config is refreshed.
-  useEffect(() => {
-    cancelMountedBatch();
-  }, [providerConfigGeneration, cancelMountedBatch]);
+  }, [config, batchTesting, apiBase, notify, t, startBatch, cancelMountedBatch, isActiveBatch]);
 
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
     if (completion.catalogRefreshPending) {
@@ -233,26 +186,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setQuotaRefresh(previous => ({ epoch: previous.epoch + 1, force }));
   }, []);
   const { fetchConfig, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
-    apiBase, t, setConfig, setProviderConfigGeneration, setOauthProviders, setOauthStatus, notify,
+    apiBase, t, setConfig, setOauthProviders, setOauthStatus, notify,
     invalidateProviderQuotas,
     configCacheKey,
   });
 
-  // TEST HOOK: expose internal state for same-base config-refresh regression tests.
-  // Uses a mutable ref so tests always read the current value.
-  // Only active when __OCX_TEST_HOOKS is defined (set by the test harness before mount).
-  const testBatchState = useRef<{
-    fetchConfig: () => Promise<void>;
-    providerConfigGeneration: number;
-    cancelMountedBatch: () => void;
-    activeBatchRef: { id: number; controller: AbortController } | null;
-  } | null>(null);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/no-update
-    testBatchState.current = { fetchConfig, providerConfigGeneration, cancelMountedBatch, activeBatchRef: activeBatchRef.current };
-    const h = (globalThis as Record<string, unknown>).__OCX_TEST_HOOKS as Record<string, unknown> | undefined;
-    if (h) h.providersBatch = testBatchState.current;
-  }); // no deps — re-run after every render to keep values fresh
+
 
   // WP3, shared by the
   // Overview tab and the Accounts tab so a mutation on either is instantly visible on

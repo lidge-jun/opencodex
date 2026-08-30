@@ -8,7 +8,6 @@ export function useProvidersFetch({
   apiBase,
   t,
   setConfig,
-  setProviderConfigGeneration,
   setOauthProviders,
   setOauthStatus,
   notify,
@@ -18,7 +17,6 @@ export function useProvidersFetch({
   apiBase: string;
   t: TFn;
   setConfig: React.Dispatch<React.SetStateAction<ProvidersConfig | null>>;
-  setProviderConfigGeneration: React.Dispatch<React.SetStateAction<number>>;
   setOauthProviders: React.Dispatch<React.SetStateAction<string[]>>;
   setOauthStatus: React.Dispatch<React.SetStateAction<Record<string, OAuthStatus>>>;
   notify: (msg: string, ok: boolean) => void;
@@ -32,12 +30,11 @@ export function useProvidersFetch({
       const res = await fetch(`${apiBase}/api/config`);
       const data = await readJsonOrThrow<ProvidersConfig>(res);
       setConfig(data ?? null);
-      setProviderConfigGeneration(g => g + 1);
       if (configCacheKey && data) writeSessionListCache(configCacheKey, data);
     } catch {
       notify(t("prov.loadConfigFail"), false);
     }
-  }, [apiBase, configCacheKey, notify, setConfig, setProviderConfigGeneration, t]);
+  }, [apiBase, configCacheKey, notify, setConfig, t]);
 
   const fetchOauth = useCallback(async () => {
     try {

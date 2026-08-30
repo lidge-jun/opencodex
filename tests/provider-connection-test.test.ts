@@ -383,13 +383,12 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     // Verifies that when the GUI aborts /api/providers/test, the server's
     // upstream model-discovery fetch also receives the abort signal.
     const controller = new AbortController();
-    const abortReason = "gui-user-cancelled-test-probe";
-
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
     let outboundSignal: AbortSignal | undefined;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       outboundSignal = (init as RequestInit & { signal?: AbortSignal })?.signal;
-      // If the signal is already aborted, throw immediately.
-      if (outboundSignal!.aborted) throw outboundSignal!.reason as Error;
+      markStarted();
       // Hold the response open so we can abort mid-flight.
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, 30_000);
@@ -412,14 +411,14 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     );
     const handlerPromise = handleManagementAPI(req, new URL(req.url), config, {});
 
-    // Let the route start the outbound fetch.
-    await new Promise(r => setTimeout(r, 50));
+    // Wait for the outbound fetch to start.
+    await started;
     expect(outboundSignal).toBeDefined();
     expect(outboundSignal!.aborted).toBe(false);
 
     // Abort the client-side request — this should propagate via AbortSignal.any
     // to the upstream fetch and cause it to reject.
-    controller.abort(new DOMException(abortReason, "AbortError"));
+    controller.abort(new DOMException("private-dom-detail", "AbortError"));
 
     // The handler must resolve quickly (not wait the full 8 s timeout).
     const res = await handlerPromise;
@@ -429,10 +428,57 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(typeof body.error).toBe("string");
 
     // The abort reason must NOT leak into the error response.
-    expect(String(body.error)).not.toContain(abortReason);
+    expect(String(body.error)).not.toContain("private-dom-detail");
     expect(String(body.error)).not.toContain("AbortError");
 
     // The outbound signal must have been aborted.
+    expect(outboundSignal!.aborted).toBe(true);
+  });
+
+  test("client abort with ordinary Error does not leak the reason", async () => {
+    // Verifies that client-side abort with a plain Error (not DOMException)
+    // also does not leak the abort reason into the response.
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    let outboundSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      outboundSignal = (init as RequestInit & { signal?: AbortSignal })?.signal;
+      markStarted();
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 30_000);
+        outboundSignal!.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(outboundSignal!.reason);
+        }, { once: true });
+      });
+      return Response.json({ models: [] });
+    }) as typeof fetch;
+
+    const config = baseConfig({
+      testprov: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "sk-x" },
+    });
+
+    const controller = new AbortController();
+    const req = new Request(
+      "http://127.0.0.1/api/providers/test?name=testprov",
+      { method: "POST", signal: controller.signal },
+    );
+    const handlerPromise = handleManagementAPI(req, new URL(req.url), config, {});
+
+    await started;
+    expect(outboundSignal).toBeDefined();
+    expect(outboundSignal!.aborted).toBe(false);
+
+    // Abort with an ordinary Error containing private details.
+    controller.abort(new Error("private-error-detail"));
+
+    const res = await handlerPromise;
+    expect(res).not.toBeNull();
+    const body = await res!.json() as Record<string, unknown>;
+    expect(body.ok).toBe(false);
+    expect(String(body.error)).not.toContain("private-error-detail");
+    expect(String(body.error)).not.toContain("stack");
+    expect(String(body.error)).not.toContain("Error");
     expect(outboundSignal!.aborted).toBe(true);
   });
 });

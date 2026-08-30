@@ -953,12 +953,14 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     } catch (err) {
       // Do not leak client-abort reasons (e.g. user navigation, tab close) into
       // the response body; surface a neutral message instead.
-      const isAbort = err instanceof DOMException && err.name === "AbortError";
+      const clientAborted = req.signal?.aborted;
+      const isTimeout = upstreamSignal.aborted && !clientAborted;
+      const isAbort = clientAborted || isTimeout;
       return jsonResponse({
         ok: false,
         latencyMs: Date.now() - started,
         error: isAbort
-          ? "Connection test aborted"
+          ? (clientAborted ? "Connection test aborted" : "Connection test timed out")
           : err instanceof ProviderOutboundPolicyError
             ? `upstream /models blocked by destination policy: ${err.message}`
             : err instanceof Error ? err.message : "Connection test failed",
