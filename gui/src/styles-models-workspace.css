@@ -274,6 +274,31 @@
   min-width: 0;
 }
 
+/* Every child, not an enumerated list. Four earlier designs bounded this row by naming
+   the children that could overflow it (name, then alias chip, then the count and
+   badge), and each revision found another one; a child added later would have
+   reintroduced the defect silently. Quantifying over the children instead: min-width:0
+   removes the automatic min-content floor that stops a flex child shrinking, and the
+   ellipsis makes that shrink legible instead of clipped. Covers every ELEMENT child; a
+   bare interpolated string would become an anonymous flex item no selector can reach,
+   so keep this button's children element-wrapped. */
+.models-provider-toggle > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The one exemption, and not a return to enumerating children: every other child is
+   TEXT, whose overflow the ellipsis makes legible. The chevron is an icon at a fixed
+   14px with nothing to truncate, so shrinking it destroys the collapse affordance
+   instead of abbreviating it. Selected by element TYPE, so a future icon child inherits
+   it without being named. Measured: without this, the adversarial stress row rendered
+   the chevron at 2.5px while the containment check still reported success. */
+.models-provider-toggle > svg {
+  flex: none;
+}
+
 .models-provider-actions {
   margin-left: auto;
   flex-wrap: wrap;

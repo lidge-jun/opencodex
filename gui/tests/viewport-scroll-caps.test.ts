@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { allRuleBodies, effectiveDeclaration, ruleBodies, withoutComments } from "./helpers/css-declarations";
 
 /**
  * Viewport-dependent sizing contracts in the shared stylesheet.
@@ -11,71 +12,6 @@ import { expect, test } from "bun:test";
 
 const cssUrl = new URL("../src/styles.css", import.meta.url);
 
-/** Strip comments so no assertion can pass on prose that quotes an old value. */
-function withoutComments(css: string): string {
-  return css.replace(/\/\*[\s\S]*?\*\//g, "");
-}
-
-/** All bodies for a selector, which may be declared more than once. */
-function allRuleBodies(css: string, selector: string): string {
-  return ruleBodies(css, selector).join("\n");
-}
-
-/** Every body for a selector, in source order. */
-function ruleBodies(css: string, selector: string): string[] {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const matches = [...css.matchAll(new RegExp("(^|\\n)\\s*" + escaped + "\\s*\\{([^}]*)\\}", "g"))];
-  if (matches.length === 0) throw new Error("rule not found: " + selector);
-  return matches.map((m) => m[2]);
-}
-
-/**
- * The last *textual* declaration of a property across all bodies of an exact selector,
- * matched on the property's canonical lowercase spelling.
- *
- * Two false negatives, both found by review and both reproduced before being closed:
- *
- * 1. Concatenating bodies and taking the FIRST match let a second rule for the same
- *    selector, added later with a wrong value, win the cascade while the earlier correct
- *    declaration still satisfied the assertion. Hence reading the last occurrence.
- * 2. An unanchored property name matched inside a CUSTOM PROPERTY, so
- *    `max-height: calc(100dvh - 261px); --max-height: calc(100dvh - 260px)` passed with
- *    the rendered cap wrong. Hence the boundary below: the property must start the body
- *    or follow `;`/newline, and must not be preceded by `-`.
- *
- * CSS property names are case-insensitive, and an identifier may be written with escapes
- * (`max\\2d height` is `max-height`). A case-sensitive literal match therefore reported the
- * wrong winner when the real declaration used `MAX-HEIGHT`. Matching is now case-insensitive,
- * and an escape in the property name is rejected outright rather than silently skipped:
- * nothing in this stylesheet writes one, so its appearance means the oracle no longer
- * understands the file and should fail loudly instead of guessing.
- *
- * Scope, stated because an earlier version of this comment overclaimed: this is source
- * order within one exact selector string. It does not model `!important`, competing
- * selectors of different specificity, or @-rule nesting. For these two rules that is
- * enough - each is declared once, and the cascade question that matters (`.notice` beating
- * a single-class `.action-toast`) is asserted separately below.
- */
-function effectiveDeclaration(css: string, selector: string, property: string): string {
-  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp("(?:^|[;{\\n])\\s*" + escaped + "\\s*:\\s*([^;}]+)", "gi");
-  let winner: string | null = null;
-  // Only an escape in PROPERTY-NAME position defeats this reader. Scanning the whole body
-  // would also reject an escape in a value - `content: "\\2014"` is ordinary CSS - so the
-  // guard is anchored the same way the matcher is: body start or after `;`/newline, then a
-  // name containing a hex escape, then a colon.
-  const escapedName = /(?:^|[;{\n])\s*[-\w]*\\[0-9a-fA-F]/;
-  for (const body of ruleBodies(css, selector)) {
-    // An escaped identifier would need CSS unescaping to compare; refuse rather than report
-    // a value this reader cannot prove is the winner.
-    if (escapedName.test(body)) {
-      throw new Error("escaped property identifier in " + selector + "; this reader cannot resolve it");
-    }
-    for (const m of body.matchAll(pattern)) winner = m[1].trim();
-  }
-  if (winner === null) throw new Error("property not found: " + selector + " { " + property + " }");
-  return winner;
-}
 
 test("the log table caps its scroll height against the dynamic viewport", async () => {
   const css = withoutComments(await Bun.file(cssUrl).text());
