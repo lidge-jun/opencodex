@@ -22,7 +22,10 @@ import {
   MainAccountTokenRefreshError,
   setMainAuthJsonBeforeRenameHookForTests,
 } from "../src/codex/main-account";
-import { recoverNativeMainRefreshPublication } from "../src/codex/native-main-refresh-publication";
+import {
+  recoverNativeMainRefreshPublication,
+  setNativeMainBeforeRecoveryReplaceHookForTests,
+} from "../src/codex/native-main-refresh-publication";
 import { resolveNativeProfileContext } from "../src/codex/native-profile-store";
 
 let home: string;
@@ -54,6 +57,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setMainAuthJsonBeforeRenameHookForTests(null);
+  setNativeMainBeforeRecoveryReplaceHookForTests(null);
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   rmSync(home, { recursive: true, force: true });
@@ -536,6 +540,40 @@ describe("native main token refresh", () => {
       expectedSha256: digest(original),
       replacementSha256: digest(replacement),
     }));
+
+    recoverNativeMainRefreshPublication(resolveNativeProfileContext());
+
+    expect(readFileSync(authPath, "utf8")).toBe(external);
+    expect(existsSync(journalPath)).toBe(false);
+    expect(existsSync(stagedPath)).toBe(false);
+    expect(existsSync(previousPath)).toBe(false);
+  });
+
+  test("preserves an external write that races a prepared recovery exchange", () => {
+    const authPath = join(home, "auth.json");
+    const transactionId = "11111111-1111-4111-8111-111111111111";
+    const stagedBasename = `.opencodex-native-main-refresh.${transactionId}.new`;
+    const previousBasename = `.opencodex-native-main-refresh.${transactionId}.previous`;
+    const stagedPath = join(home, stagedBasename);
+    const previousPath = join(home, previousBasename);
+    const journalPath = join(home, ".opencodex-native-main-refresh.json");
+    const original = JSON.stringify({ tokens: { access_token: "old-access", refresh_token: "old-refresh" } });
+    const replacement = JSON.stringify({ tokens: { access_token: "new-access", refresh_token: "new-refresh" } });
+    const external = JSON.stringify({ tokens: { access_token: "external-access", refresh_token: "external-refresh" } });
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    writeFileSync(authPath, original);
+    writeFileSync(stagedPath, replacement);
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      transactionId,
+      targetPath: authPath,
+      stagedBasename,
+      previousBasename,
+      phase: "prepared",
+      expectedSha256: digest(original),
+      replacementSha256: digest(replacement),
+    }));
+    setNativeMainBeforeRecoveryReplaceHookForTests(() => writeFileSync(authPath, external));
 
     recoverNativeMainRefreshPublication(resolveNativeProfileContext());
 

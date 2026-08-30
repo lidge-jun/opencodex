@@ -7,6 +7,7 @@ import type { NativeProfileContext } from "./native-profile-store";
 
 const JOURNAL = ".opencodex-native-main-refresh.json";
 const TRANSACTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+let beforeRecoveryReplaceForTests: (() => void) | null = null;
 
 type Journal = {
   version: 1;
@@ -90,6 +91,22 @@ function cleanup(context: NativeProfileContext, journal: Journal): void {
   }
 }
 
+function settlePreparedReplacement(
+  context: NativeProfileContext,
+  journal: Journal,
+  displacedPath: string,
+  rollbackPath: string,
+): void {
+  const displaced = readExact(displacedPath);
+  if (!displaced) throw new NativeMainRefreshPublicationError();
+  if (digest(displaced) !== journal.expectedSha256) {
+    restoreFilePreservingTarget(displacedPath, journal.targetPath, rollbackPath);
+    const restored = readExact(journal.targetPath);
+    if (!restored || !restored.equals(displaced)) throw new NativeMainRefreshPublicationError();
+  }
+  cleanup(context, journal);
+}
+
 /** Recover only a transaction whose exact hashes prove one deterministic outcome. */
 export function recoverNativeMainRefreshPublication(context: NativeProfileContext): void {
   const path = journalPath(context);
@@ -103,12 +120,14 @@ export function recoverNativeMainRefreshPublication(context: NativeProfileContex
   const stagedBytes = readExact(staged);
   const displacedPath = process.platform === "win32" ? previous : staged;
   const rollbackPath = process.platform === "win32" ? staged : previous;
-  const displacedBytes = readExact(displacedPath);
   if (!canonical) throw new NativeMainRefreshPublicationError();
   if (digest(canonical) === journal.expectedSha256 && stagedBytes && digest(stagedBytes) === journal.replacementSha256) {
     try {
+      const hook = beforeRecoveryReplaceForTests;
+      beforeRecoveryReplaceForTests = null;
+      hook?.();
       replaceFilePreservingTarget(staged, journal.targetPath, previous);
-      cleanup(context, { ...journal, phase: "replaced" });
+      settlePreparedReplacement(context, journal, displacedPath, rollbackPath);
     } catch (cause) {
       throw new NativeMainRefreshPublicationError({ cause });
     }
@@ -116,18 +135,9 @@ export function recoverNativeMainRefreshPublication(context: NativeProfileContex
   }
   if (digest(canonical) === journal.replacementSha256) {
     if (journal.phase === "prepared") {
-      if (!displacedBytes) throw new NativeMainRefreshPublicationError();
-      if (digest(displacedBytes) !== journal.expectedSha256) {
-        try {
-          restoreFilePreservingTarget(displacedPath, journal.targetPath, rollbackPath);
-          const restored = readExact(journal.targetPath);
-          if (!restored || !restored.equals(displacedBytes)) throw new NativeMainRefreshPublicationError();
-          cleanup(context, journal);
-        } catch (cause) {
-          throw new NativeMainRefreshPublicationError({ cause });
-        }
-        return;
-      }
+      try { settlePreparedReplacement(context, journal, displacedPath, rollbackPath); }
+      catch (cause) { throw new NativeMainRefreshPublicationError({ cause }); }
+      return;
     }
     try { cleanup(context, journal); } catch (cause) { throw new NativeMainRefreshPublicationError({ cause }); }
     return;
@@ -169,12 +179,12 @@ export function publishNativeMainRefresh(
     if (!displaced || digest(displaced) !== journal.expectedSha256) {
       const canonical = readExact(targetPath);
       if (canonical && digest(canonical) === journal.replacementSha256) {
-        restoreFilePreservingTarget(
+        settlePreparedReplacement(
+          context,
+          journal,
           process.platform === "win32" ? previous : staged,
-          targetPath,
           process.platform === "win32" ? staged : previous,
         );
-        cleanup(context, journal);
       }
       throw new NativeMainRefreshPublicationError();
     }
@@ -193,4 +203,8 @@ export function publishNativeMainRefresh(
 
 export function nativeMainRefreshJournalBasename(): string {
   return basename(JOURNAL);
+}
+
+export function setNativeMainBeforeRecoveryReplaceHookForTests(hook: (() => void) | null): void {
+  beforeRecoveryReplaceForTests = hook;
 }
