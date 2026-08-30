@@ -36,9 +36,9 @@ import {
 import {
   createResetCreditWhamClient,
   registerCodexCooldownRecoveryProbeWorker,
-  registerCodexQuotaAutoRefreshWorker,
 } from "../codex/auth-api";
 import { activateResetCreditAutoRedeem } from "../codex/reset-credit-auto-redeem";
+import { registerCodexQuotaAutoRefreshWorker } from "../codex/quota-auto-refresh";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import { IconPlus } from "../icons";
 import { EmptyState, type NoticeTone } from "../ui";
@@ -26,6 +26,7 @@ import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 export type { CodexAccountEntry } from "../hooks/useCodexAccountPool";
 
 const DOCTOR_CMD = "ocx doctor";
+type QuotaAutoRefreshSettings = Record<string, { fiveHour?: boolean; weekly?: boolean }>;
 
 /**
  * Global ChatGPT / Codex account pool (main + extras), extracted from the Codex
@@ -73,6 +74,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
   const [quotaAutoRefreshBusy, setQuotaAutoRefreshBusy] = useState<string | null>(null);
+  const [quotaAutoRefreshSettings, setQuotaAutoRefreshSettings] = useState<QuotaAutoRefreshSettings>({});
   // undefined until /api/settings answers: the switch must not render a guessed position and
   // then visibly correct itself a moment later.
   const [sparkVisible, setSparkVisible] = useState<boolean | undefined>(undefined);
@@ -240,13 +242,14 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       : !account.quotaAutoRefresh.weeklyEnabled;
     setQuotaAutoRefreshBusy(`${account.id}:${window}`);
     try {
-      const response = await fetch(`${apiBase}/api/codex-auth/accounts/quota-auto-refresh`, {
+      const response = await fetch(`${apiBase}/api/settings`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: account.id, window, enabled }),
+        body: JSON.stringify({ codexQuotaAutoRefresh: { id: account.id, window, enabled } }),
       });
       if (!response.ok) throw new Error("save");
-      await load();
+      const payload = await response.json() as { codexQuotaAutoRefresh?: QuotaAutoRefreshSettings };
+      setQuotaAutoRefreshSettings(payload.codexQuotaAutoRefresh ?? {});
       showActionFeedback(t("codexAuth.quotaAutoRefreshUpdated"), "ok");
     } catch {
       showActionFeedback(t("codexAuth.quotaAutoRefreshFailed"), "err");
@@ -261,9 +264,13 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     const abort = new AbortController();
     fetch(`${apiBase}/api/settings`, { signal: abort.signal })
       .then(response => (response.ok ? response.json() : null))
-      .then((payload: { showCodexSparkQuota?: unknown } | null) => {
-        if (abort.signal.aborted || typeof payload?.showCodexSparkQuota !== "boolean") return;
-        setSparkVisible(payload.showCodexSparkQuota);
+      .then((payload: {
+        showCodexSparkQuota?: unknown;
+        codexQuotaAutoRefresh?: QuotaAutoRefreshSettings;
+      } | null) => {
+        if (abort.signal.aborted || !payload) return;
+        if (typeof payload.showCodexSparkQuota === "boolean") setSparkVisible(payload.showCodexSparkQuota);
+        setQuotaAutoRefreshSettings(payload.codexQuotaAutoRefresh ?? {});
       })
       // A settings read failure leaves the switch unrendered rather than guessing a position.
       .catch(() => {});
@@ -342,8 +349,19 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     }
   };
 
-  const main = accounts.find(a => a.isMain);
-  const pool = accounts.filter(a => !a.isMain);
+  const displayAccounts = useMemo(() => accounts.map(account => {
+    const setting = quotaAutoRefreshSettings[account.id];
+    return {
+      ...account,
+      quotaAutoRefresh: {
+        ...account.quotaAutoRefresh,
+        fiveHourEnabled: setting?.fiveHour === true,
+        weeklyEnabled: setting?.weekly === true,
+      },
+    };
+  }), [accounts, quotaAutoRefreshSettings]);
+  const main = displayAccounts.find(a => a.isMain);
+  const pool = displayAccounts.filter(a => !a.isMain);
   const isMainActive = !main?.paused && (!activeId || activeId === "__main__");
   const switchActionLabel = t(accountModeState === "direct" ? "codexAuth.prepareForPool" : "codexAuth.setAsNext");
   const pauseBusy = pauseUpdatingId !== null || pausingExhausted;

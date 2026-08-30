@@ -16,6 +16,7 @@ import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
 import { clearMainAccountCredentialPresence, clearMainAccountInfoCache } from "./main-account-cache";
 import { forgetCodexAccountPause } from "./account-pause";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
+import { forgetCodexQuotaAutoRefreshAccount } from "./quota-auto-refresh";
 import { codexAccountNamespaceEntries, codexAccountPickerEnabled } from "./account-namespaces";
 import type { OcxConfig } from "../types";
 
@@ -174,6 +175,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
     return hadVisiblePickerBinding;
   });
 
+  forgetCodexQuotaAutoRefreshAccount(accountId);
   if (cleanupFailed) throw new CodexAccountDeleteCleanupError();
   return pickerVisibilityChanged;
 }

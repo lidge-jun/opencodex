@@ -99,7 +99,6 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/codex-auth/accounts/pause", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/pause-exhausted", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/accounts/priority", module: "codex/auth-api", mutates: true },
-  { method: "PUT", path: "/api/codex-auth/accounts/quota-auto-refresh", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/active", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/auto-switch", module: "codex/auth-api", mutates: true },
   { method: "PUT", path: "/api/codex-auth/failover", module: "codex/auth-api", mutates: true },

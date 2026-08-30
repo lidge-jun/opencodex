@@ -22,6 +22,14 @@ export interface AccountQuota {
   updatedAt: number;
 }
 
+export function quotaAutoRefreshAvailability(quota: AccountQuota | null) {
+  return {
+    fiveHourAvailable: quota?.shortWindowSeconds === 5 * 60 * 60
+      && typeof quota.shortResetAt === "number",
+    weeklyAvailable: typeof quota?.weeklyResetAt === "number",
+  };
+}
+
 export function isThirtyDayOnlyPlan(plan: string | null | undefined): boolean {
   const normalized = plan?.trim().toLowerCase();
   return normalized === "go" || normalized === "free";
