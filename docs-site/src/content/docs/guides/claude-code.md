@@ -34,6 +34,9 @@ Operational contract when enabled:
   when known.
 - Recovery, including 429 failover, uses `quotaWindow` to rank eligible replacements without
   changing the existing cooldown or failover limits; `round-robin` ignores `quotaWindow`.
+- `autoSwitchThreshold: 0` turns off **proactive** usage-based switching only. New-session
+  selection and 429 recovery still consult `quotaWindow`, so the window is inert only under
+  `round-robin`. `fill-first` evaluates its drain threshold in the selected window.
 
 See [Configuration](/reference/configuration/#anthropicaccountpool-experimental).
 
