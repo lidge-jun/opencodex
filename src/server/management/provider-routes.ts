@@ -880,16 +880,17 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
+    const upstreamSignal = req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000);
     try {
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,
           body: JSON.stringify({ project }),
-          signal: AbortSignal.timeout(8000),
+          signal: upstreamSignal,
         })
         : await providerOutboundGet(name, prov, modelsUrl, {
           headers,
-          signal: AbortSignal.timeout(8000),
+          signal: upstreamSignal,
         });
       const latencyMs = Date.now() - started;
       const redirectError = await providerRedirectError(res, modelsUrl);

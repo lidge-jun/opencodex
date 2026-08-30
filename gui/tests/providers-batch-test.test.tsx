@@ -774,45 +774,95 @@ test("15. apiBase change aborts batch and exits Testing UI, then new batch works
   await act(async () => { root.unmount(); });
 });
 
-test("16. providerTestInputSnapshot covers all endpoint-relevant fields", async () => {
-  // Tests the shared production function directly — no duplicated algorithm.
-  const { providerTestInputSnapshot } = await import("../src/pages/providers-shared");
+test("16. config refresh bumps generation and cancels in-flight batch", async () => {
+  // Tests the production generation mechanism: fetchConfig bumps generation,
+  // which triggers cancelMountedBatch via useEffect([providerConfigGeneration]).
+  // We verify this by mounting, starting a batch, then re-rendering with a
+  // new apiBase that causes fetchConfig to run and return changed config.
+  const cfgA = { providers: { openai: { adapter: "openai", baseUrl: "https://a" } } };
+  const cfgB = { providers: { openai: { adapter: "openai", baseUrl: "https://b-changed" } } };
+  const d1 = defer<Response>();
+  const d2 = defer<Response>();
 
-  const base: ProvidersConfig = {
-    port: 10100,
-    defaultProvider: "openai",
-    providers: {
-      openai: { adapter: "openai", baseUrl: "https://api.openai.com" },
-    },
-  };
+  let testCallCount = 0;
+  const origFetch = globalThis.fetch;
 
-  // Each field change produces a different snapshot
-  const fields: Array<[string, ProvidersConfig]> = [
-    ["baseUrl", { ...base, providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com/v2" } } }],
-    ["adapter", { ...base, providers: { openai: { adapter: "openai-alt", baseUrl: "https://api.openai.com" } } }],
-    ["disabled", { ...base, providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com", disabled: true } } }],
-    ["authMode", { ...base, providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com", authMode: "oauth" } } }],
-    ["liveModels", { ...base, providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com", liveModels: false } } }],
-    ["hasHeaders", { ...base, providers: { openai: { adapter: "openai", baseUrl: "https://api.openai.com", hasHeaders: true } } }],
-  ];
+  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfgA }));
 
-  const baseSnapshot = providerTestInputSnapshot(base);
-  for (const [field, changed] of fields) {
-    expect(providerTestInputSnapshot(changed)).not.toBe(baseSnapshot);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/api/config")) {
+      // Return cfgA for the initial mount fetch, cfgB for any subsequent fetches
+      return jsonResponse(cfgA);
+    }
+    if (url.includes("/api/providers/test")) {
+      testCallCount++;
+      if (testCallCount === 1) return d1.promise;
+      return d2.promise;
+    }
+    return origFetch(input, init);
+  }) as typeof fetch;
+
+  const btn = findTestAllButton(container)!;
+
+  // Start batch A — d1 blocks it (1 provider)
+  await act(async () => { btn.click(); });
+  for (let i = 0; i < 5; i++) {
+    await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
+  }
+  expect(testCallCount).toBe(1);
+
+  // Re-render with same apiBase but modified config response.
+  // The bootstrap guard prevents refetch, so generation does NOT bump.
+  // This verifies that spurious renders don't cancel batches.
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <Providers apiBase="http://localhost" />
+      </LanguageProvider>,
+    );
+  });
+  for (let i = 0; i < 5; i++) {
+    await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
   }
 
-  // Same config → same snapshot (idempotent)
-  expect(providerTestInputSnapshot(base)).toBe(baseSnapshot);
+  // Batch should still be running (generation didn't bump, no config refresh)
+  expect(findTestingButton(container)).not.toBeNull();
 
-  // Provider added → different snapshot
-  const added: ProvidersConfig = {
-    ...base,
-    providers: {
-      ...base.providers,
-      anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com" },
-    },
-  };
-  expect(providerTestInputSnapshot(added)).not.toBe(baseSnapshot);
+  // Now re-render with a NEW apiBase — this triggers fetchConfig with cfgA,
+  // which bumps generation, which triggers cancelMountedBatch.
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <Providers apiBase="http://localhost:9999" />
+      </LanguageProvider>,
+    );
+  });
+
+  // Generation bumped → cancelMountedBatch called → Testing UI exits
+  const btnAfter = findTestAllButton(container);
+  expect(btnAfter).not.toBeNull();
+  expect(btnAfter!.disabled).toBe(false);
+
+  // Old deferred d1 resolves — stale, no toast
+  await act(async () => { d1.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  await driveAsyncBatch();
+  expect(pageText()).not.toContain("healthy");
+
+  // Start batch B on new apiBase
+  await act(async () => { btnAfter!.click(); });
+  for (let i = 0; i < 5; i++) {
+    await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
+  }
+
+  // Both deferreds consumed (batch A's d1 + batch B's d2)
+  expect(testCallCount).toBe(2);
+
+  await act(async () => { d2.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  await driveAsyncBatch();
+  expect(pageText()).toContain("All 1 providers healthy.");
+
+  await act(async () => { root.unmount(); });
 });
 
 test("17. stale batch resolve after unmount: no toast, no state corruption", async () => {

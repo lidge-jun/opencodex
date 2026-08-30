@@ -55,22 +55,3 @@ const OAUTH_LABELS: Record<string, string> = {
 };
 
 export const oauthLabel = (id: string) => OAUTH_LABELS[id] ?? id;
-
-/**
- * Deterministic identity for the provider config fields the test endpoint depends on.
- * Covers: disabled, authMode, liveModels, adapter, baseUrl, hasHeaders — the full set
- * of config fields that affect `POST /api/providers/test` behavior (see provider-routes.ts
- * lines 797-900: disabled → early return, authMode → forward/oauth branching,
- * liveModels → static_catalog skip, adapter → cursor vs standard path,
- * baseUrl → model discovery URL, hasHeaders → transport static headers).
- *
- * No secrets or API keys are included — hasHeaders is a boolean flag.
- */
-export function providerTestInputSnapshot(config: ProvidersConfig): string {
-  return Object.entries(config.providers)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, p]) =>
-      `${name}:${p.disabled ? 1 : 0}:${p.authMode ?? ""}:${p.liveModels === false ? "0" : "1"}:${p.adapter}:${p.baseUrl}:${p.hasHeaders ? 1 : 0}`,
-    )
-    .join(";");
-}
