@@ -607,10 +607,10 @@ describe("oauth refresh hardening", () => {
     controller.abort(aborted);
     const realClear = storeModule.clearOAuthRefreshIntentIfMatch;
     let clearCalls = 0;
-    const clearSpy = spyOn(storeModule, "clearOAuthRefreshIntentIfMatch").mockImplementation((provider, accountId, expected) => {
+    const clearSpy = spyOn(storeModule, "clearOAuthRefreshIntentIfMatch").mockImplementation((...args) => {
       clearCalls += 1;
       if (clearCalls === 1) throw new Error("intent unlink failed");
-      return realClear(provider, accountId, expected);
+      return realClear(...args);
     });
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -680,14 +680,14 @@ describe("oauth refresh hardening", () => {
     const realClear = storeModule.clearOAuthRefreshIntentIfMatch;
     const events: string[] = [];
     let clearCalls = 0;
-    const clearSpy = spyOn(storeModule, "clearOAuthRefreshIntentIfMatch").mockImplementation((provider, accountId, expected) => {
+    const clearSpy = spyOn(storeModule, "clearOAuthRefreshIntentIfMatch").mockImplementation((...args) => {
       clearCalls += 1;
       if (clearCalls === 1) {
         events.push("clear-fail");
         throw clearFailure;
       }
-      events.push(expected.cleanupPending ? "clear-recovery" : "clear-success");
-      return realClear(provider, accountId, expected);
+      events.push(args[2].cleanupPending ? "clear-recovery" : "clear-success");
+      return realClear(...args);
     });
     const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
     try {
