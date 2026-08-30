@@ -1243,6 +1243,16 @@ async function fetchPoolAccountQuota(accountId: string, forceRefresh = false, co
 }
 
 let primeInFlight: Promise<void> | null = null;
+/**
+ * Last prime attempt per pool account. A failed WHAM lookup stores no quota, so
+ * without this the account stays "unknown" and every later prime trigger re-selects
+ * it as stale and repeats the same failing request. Successful lookups are already
+ * throttled by their stored updatedAt; this gives failures the same TTL backoff.
+ *
+ * Keyed by credential generation so a re-authentication, refresh, or account removal
+ * retries immediately instead of waiting out a backoff earned by the old credential.
+ */
+const poolQuotaPrimeAttemptedAt = new Map<string, { generation: number; at: number }>();
 let cooldownRecoveryInFlight: Promise<void> | null = null;
 
 export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Date.now()): Promise<void> {
@@ -1331,7 +1341,15 @@ export async function primeCodexPoolQuotas(
     const pool = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
     const stale = pool.filter(a => {
       const q = getAccountQuota(a.id);
-      return !q || Date.now() - q.updatedAt >= POOL_CACHE_TTL;
+      if (q) return Date.now() - q.updatedAt >= POOL_CACHE_TTL;
+      // No stored quota: either never primed, or the last attempt failed. Retry only
+      // once per TTL window so an unreachable or rejecting account cannot turn every
+      // prime trigger into another upstream request.
+      const lastAttempt = poolQuotaPrimeAttemptedAt.get(a.id);
+      if (!lastAttempt) return true;
+      // A newer credential invalidates the previous failure: retry without waiting.
+      if (lastAttempt.generation !== readCodexAccountRecord(a.id)?.generation) return true;
+      return Date.now() - lastAttempt.at >= POOL_CACHE_TTL;
     });
     const primeMain = async () => {
       const mainLease = tryAcquireNativeMainPrimeLease();
@@ -1359,6 +1377,10 @@ export async function primeCodexPoolQuotas(
         primeMain(),
         mapWithConcurrency(stale, POOL_QUOTA_REFRESH_CONCURRENCY, async a => {
           if (!getCodexAccountCredential(a.id)) return;
+          poolQuotaPrimeAttemptedAt.set(a.id, {
+            generation: readCodexAccountRecord(a.id)?.generation ?? 0,
+            at: Date.now(),
+          });
           await fetchPoolAccountQuota(a.id, false, a.plan);
         }),
       ]);
@@ -1375,6 +1397,14 @@ export async function primeCodexPoolQuotas(
 /** Test-only: drop any in-flight prime pass so a leaked single-flight promise
  * from another suite cannot coalesce into the next prime. */
 export function clearCodexQuotaPrimeState(): void {
+  primeInFlight = null;
+  poolQuotaPrimeAttemptedAt.clear();
+}
+
+/** Test-only: drop the shared single-flight promise while keeping the per-account
+ * failure backoff, so a test can trigger a second real prime pass and still observe
+ * the throttle a production caller would see. */
+export function clearCodexQuotaPrimeSingleFlightForTests(): void {
   primeInFlight = null;
 }
 

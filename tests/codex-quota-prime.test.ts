@@ -7,6 +7,7 @@ import {
   updateAccountQuota,
   clearAccountQuota,
   clearCodexQuotaPrimeState,
+  clearCodexQuotaPrimeSingleFlightForTests,
   clearMainAccountInfoCache,
 } from "../src/codex/auth-api";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
@@ -395,6 +396,83 @@ describe("primeCodexPoolQuotas", () => {
       await primeCodexPoolQuotas(config, "test");
       expect(calls).toBe(0);
       expect(getAccountQuota("nocred")).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a failed pool quota fetch is throttled for the rest of the TTL window", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, "p1");
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    try {
+      // Upstream is unavailable, so no quota is ever stored for this account. The
+      // account therefore stays "unknown" and, without an attempt record, every
+      // later prime re-selects it as stale and re-issues the same failing fetch.
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        if (String(input).includes("/backend-api/wham/usage")) {
+          calls += 1;
+          return new Response("upstream unavailable", { status: 503 });
+        }
+        return originalFetch(input);
+      };
+      await primeCodexPoolQuotas(config, "test");
+      expect(calls).toBe(1);
+      expect(getAccountQuota("p1")).toBeNull();
+
+      // Only the single-flight promise is dropped between passes; the throttle state
+      // must survive so a later trigger does not repeat the failing lookup.
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "test");
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "test");
+
+      // A failed lookup must back off for the same POOL_CACHE_TTL window that a
+      // successful one gets, instead of retrying on every prime trigger.
+      expect(calls).toBe(1);
+      expect(getAccountQuota("p1")).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("re-authenticating a failed account retries without waiting out the backoff", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, "p1");
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    let upstreamHealthy = false;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        if (String(input).includes("/backend-api/wham/usage")) {
+          calls += 1;
+          return upstreamHealthy ? whamResponse(20) : new Response("down", { status: 503 });
+        }
+        return originalFetch(input);
+      };
+      await primeCodexPoolQuotas(config, "test");
+      expect(calls).toBe(1);
+      expect(getAccountQuota("p1")).toBeNull();
+
+      // Throttled while the same credential keeps failing.
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "test");
+      expect(calls).toBe(1);
+
+      // A re-authentication bumps the credential generation, which must invalidate the
+      // backoff earned by the old credential instead of hiding a now-usable account.
+      upstreamHealthy = true;
+      saveCodexAccountCredential("p1", {
+        accessToken: "access-p1-renewed",
+        refreshToken: "refresh-p1-renewed",
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: "acct-p1",
+      });
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "test");
+      expect(calls).toBe(2);
+      expect(getAccountQuota("p1")).toMatchObject({ weeklyPercent: 20 });
     } finally {
       globalThis.fetch = originalFetch;
     }
