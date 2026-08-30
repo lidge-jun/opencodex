@@ -206,20 +206,24 @@ disproved.
   and the `svg` exemption); the existing `min-width: 0` on the toggle is kept.
 - `gui/tests/models-provider-head.test.ts` — extended; the existing line-29
   `min-width: 0` assertion stays valid and must not be removed.
+- `gui/tests/helpers/css-declarations.ts` — NEW. The shared source-text CSS readers,
+  lifted out of `viewport-scroll-caps.test.ts` so two tests can use one copy.
+- `gui/tests/viewport-scroll-caps.test.ts` — its four file-local helpers are deleted and
+  replaced by an import from that module; its assertions are unchanged.
 
 ## Regression test (red first)
 
-Use the effective-declaration reader from `gui/tests/viewport-scroll-caps.test.ts`
-(PR #2915) so a commented-out or custom-property occurrence cannot satisfy an
-assertion.
+Use the effective-declaration reader so a commented-out or custom-property occurrence
+cannot satisfy an assertion.
 
-**It cannot be imported.** `effectiveDeclaration` is declared at
-`viewport-scroll-caps.test.ts:59` without `export`, and it depends on two more
-file-local helpers (`ruleBodies` at :25 and `withoutComments` at :15). B must
-therefore either export all three from that file, or lift them into a shared
-`gui/tests/helpers/` module and have both tests import it. Copying them a third time
-is the option to avoid — this repository already has two copies. Decide in B and say
-which; do not write the plan as though an import already works.
+**It lives in `gui/tests/helpers/css-declarations.ts`**, which exports
+`effectiveDeclaration`, `ruleBodies`, `allRuleBodies` and `withoutComments`.
+
+That module is part of this change. The reader originated in
+`viewport-scroll-caps.test.ts` (PR #2915) as four **file-local, unexported** functions,
+so it could not be imported as first planned. B resolved that by moving all four into the
+shared module and rewriting the original test to import them — one copy, not the third
+copy that copying them here would have produced.
 
 **What this gate can and cannot see.** The reader's own comment (:53) records that it
 does not model competing specificity, `!important`, or at-rule nesting. So it proves

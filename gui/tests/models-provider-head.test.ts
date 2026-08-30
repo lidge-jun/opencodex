@@ -62,7 +62,7 @@ test("Models exposes provider and per-model context-window controls (#1073)", as
  * `devlog/_plan/260830_models_provider_header/010_toggle_basis_and_shrink.md`. What this
  * file can do is stop the specific declarations from being removed or narrowed silently.
  */
-test("the provider toggle keeps a real flex basis so the header can wrap (#2916)", async () => {
+test("the provider toggle keeps a real flex basis so the header can wrap (#2958)", async () => {
   const page = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
 
   // Scoped to the toggle's own style object on purpose. A file-wide search for `flex: 1`
@@ -76,7 +76,7 @@ test("the provider toggle keeps a real flex basis so the header can wrap (#2916)
   expect(toggleStyle).not.toMatch(/flex:\s*1\s*,/);
 });
 
-test("every provider-toggle child can shrink, and the chevron cannot (#2916)", async () => {
+test("every provider-toggle child can shrink, and the chevron cannot (#2958)", async () => {
   const css = withoutComments(await Bun.file(new URL("../src/styles-models-workspace.css", import.meta.url)).text());
 
   // Quantified over the children rather than enumerating them. Four earlier designs
@@ -100,7 +100,7 @@ test("every provider-toggle child can shrink, and the chevron cannot (#2916)", a
   expect(effectiveDeclaration(css, ".models-provider-toggle", "min-width")).toBe("0");
 });
 
-test("provider-toggle children stay element-wrapped, which is what the child rule needs (#2916)", async () => {
+test("provider-toggle children stay element-wrapped, which is what the child rule needs (#2958)", async () => {
   const page = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
 
   // `> *` selects ELEMENT children. A bare interpolated string inside the button would

@@ -159,9 +159,12 @@ the user actually complained about.
 ## Rendered verification
 
 Screenshot the header at 1100 and 1440 in ko, and confirm by CDP that every
-`button.switch` in the header resolves a non-empty accessible name **and** either
-visible text or a `title`. Re-run the `010` geometry sweep afterwards: the added
+`button.switch` in the header resolves a non-empty accessible name **and** is legible
+to a sighted user. Apply the same wrapper-aware condition stated in item 3 above — the
+button has a `title` **OR** its enclosing `.switch-labeled` wrapper contains text —
+because a `showLabel` switch deliberately carries no `title` and puts its visible text
+in a **sibling** node. A check that inspects only the button element would fail exactly
+the controls this phase fixes. Re-run the `010` geometry sweep afterwards: the added
 text changes intrinsic widths, so the chip/overlap gate must still pass.
-
 
 
