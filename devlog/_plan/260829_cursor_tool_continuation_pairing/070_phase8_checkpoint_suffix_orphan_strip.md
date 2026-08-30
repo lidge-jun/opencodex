@@ -601,3 +601,48 @@ Four-suite total is 208 pass / 0 fail; `cursor-blob` alone 122. Every sweep re-r
 deficit positions, 60 count-boundary positions, 150 zero-budget boundary cases, 896 note-armed
 configurations, 1440-case call-answer invariant, 224-case count sweep, 78-position grid, 24 bare-call cases,
 and five multi-turn growth shapes surviving 200 turns.
+
+## Audit round 10: the guard removed as inert was load-bearing at exactly one value
+
+Round 9 dropped the count half of the affordability test, arguing that the count bound below always leaves a
+slot free because it keeps one result. That is true for every value of `historyLimit` except 1 — where the
+one free slot is precisely the one the surviving result takes. The note was then judged affordable on bytes
+alone, the reservation clamped to zero, and the append pushed full replay to 193 roots.
+
+Four armed-only `CursorRootEnvelopeLimitError` throws at 191 system prompts, across both tails and both
+suffix widths, where the same request without the note assembled 192 and succeeded. Full replay has no
+abandon branch, so nothing rescued it.
+
+The reasoning error is worth naming precisely, because the sweep that supported it was real. It varied
+**carried roots on the checkpoint path**, where the count-full disjunct abandons the checkpoint long before
+`historyLimit` can reach 1. The reachable route is full replay with many system prompts — a different axis
+entirely, and one no earlier round had needed. "Inert across 60 positions" was a true statement about the
+wrong sixty.
+
+Both conjuncts are restored. The lesson is not that removing inert guards was wrong; it is that "inert"
+needs the axis that can make it fire, and a sweep along one axis does not establish it along another.
+
+### The reservation was uncovered, distinctly from the append
+
+Round 9's own mutation table claimed the affordability check was covered. It was covered at the **append**
+site only: neutering `syntheticCount`/`syntheticBytes` while leaving `trailingSynthetic` gated left the
+suite green, because asserting on the assembled payload cannot separate "the deficit was charged" from "the
+tail simply was not appended". Asserting the exact root count at the boundary does separate them, and that
+case is now present.
+
+Mutation evidence at this head, each applied alone:
+
+- count conjunct removed (the r14 defect) → 4 red
+- byte conjunct removed (the r13 defect) → 3 red
+- reservation neutered, append still gated → 6 red
+- append ungated → 7 red
+
+Four-suite total is 212 pass / 0 fail; `cursor-blob` alone 126.
+
+### Ten rounds, one shape
+
+Every round found the same class of defect: a fact added to the pruning code beside a construct that assumed
+it absent. Rounds 5 through 10 were each triggered by the previous round's own fix. Two of those were
+arguments about whether a guard could fire — one dropped correctly, one dropped wrongly and restored here —
+which suggests the code's real difficulty is that its budget arithmetic has several axes and any single sweep
+silently fixes all but one of them.

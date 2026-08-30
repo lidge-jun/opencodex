@@ -2975,6 +2975,66 @@ describe("Cursor external replay envelope", () => {
   });
 
   /**
+   * Audit r14. Two things the deficit case above cannot see, both proven by mutation to be real.
+   *
+   * The count axis. Affordability was briefly decided on bytes alone, on the reasoning that the count bound
+   * always leaves a slot free — wrong at exactly `historyLimit === 1`, where the one free slot is the one
+   * the surviving result takes. The note was then appended anyway and full replay assembled 193 roots: an
+   * armed-only non-retryable 400 where the same request without the note sent 192 and succeeded. Reached by
+   * full replay with many system prompts, which has no abandon branch to rescue it — not by carried roots,
+   * which is why a checkpoint-path sweep missed it.
+   *
+   * And the reservation itself, as distinct from the append. Neutralizing `syntheticCount`/`syntheticBytes`
+   * while leaving the append gated left the whole suite green, because asserting on the assembled payload
+   * cannot distinguish "the deficit was charged" from "the tail was simply not appended". Asserting the
+   * exact root count at the boundary does: with the reservation the result is admitted and the note is
+   * dropped, giving 192; without it the reservation is a no-op and pruning admits one root too few.
+   */
+  test.each([
+    ["result" as const, 1],
+    ["result" as const, 3],
+    ["user" as const, 1],
+    ["user" as const, 3],
+  ])("an armed note never spends a root slot it was not given (tail=%s, results=%i)", (tail, results) => {
+    // 191 system roots leaves exactly one free slot out of 192: the result takes it, so the note cannot fit.
+    const systemCount = CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 1;
+    const build = (armed: boolean) => {
+      const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+        { role: "user", content: "Go.", timestamp: 1 },
+      ];
+      let timestamp = 2;
+      for (let r = 0; r < (armed ? 4 : 2); r++) {
+        rawMessages!.push({ role: "assistant", content: [{ type: "text", text: "Same." }], timestamp: timestamp++ });
+      }
+      const calls: OcxAssistantContentPart[] = Array.from({ length: results }, (_, i) => ({
+        type: "toolCall",
+        id: `call_slot_${i}`,
+        name: "exec_command",
+        arguments: { cmd: `echo S${i}` },
+      }));
+      rawMessages!.push({ role: "assistant", content: calls, timestamp: timestamp++ });
+      for (let i = 0; i < results; i++) {
+        rawMessages!.push({ role: "toolResult", toolCallId: `call_slot_${i}`, toolName: "exec_command", content: `SLOT_OUT_${i}`, isError: false, timestamp: timestamp++ });
+      }
+      if (tail === "user") rawMessages!.push({ role: "user", content: "Try something else.", timestamp: timestamp++ });
+      // Full replay on purpose: there is no abandon branch here, so nothing rescues an overrun.
+      const prepared = prepareCursorRunRequest({
+        modelId: "grok-4.6",
+        conversationId: `cursor_note_slot_${tail}_${results}_${armed}`,
+        system: Array.from({ length: systemCount }, (_, i) => `S${i}`),
+        messages: [{ role: tail === "user" ? "user" : "tool", content: "result" }],
+        rawMessages,
+      });
+      const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+      const run = message.message.case === "runRequest" ? message.message.value : undefined;
+      return (run?.conversationState?.rootPromptMessagesJson ?? []).length;
+    };
+    // Arming the note must not throw and must not cost a slot: exactly the envelope, same as un-armed.
+    expect(build(true)).toBe(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    expect(build(false)).toBe(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+  });
+
+  /**
    * Audit r10 finding 2. `outputElided` on the marker-only return had no coverage: removing the flag left
    * all 191 tests green, and `tests/` is not typechecked (`tsconfig` include is `["src"]`), so nothing would
    * have caught its removal. A result reduced to the truncation marker answers its call with nothing, which

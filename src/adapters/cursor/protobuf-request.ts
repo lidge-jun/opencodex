@@ -457,12 +457,18 @@ function rootPromptMessages(
     const syntheticEntries = history.slice(activeEnd);
     const syntheticCountRaw = syntheticEntries.length;
     const syntheticBytesRaw = syntheticEntries.reduce((sum, entry) => sum + entry.byteLength, 0);
-    // Bytes only. A count deficit cannot arise here: the count bound below already stops at one surviving
-    // result, so a slot for the tail is free whenever `historyLimit` is at least 1, and at 0 there is no
-    // history to append it to. Adding `historyLimit - syntheticCountRaw >= 1` made no difference across 60
-    // boundary positions at and past the root limit, and an inert condition on the envelope path is the
-    // same liability this unit removed once already (audit r13).
-    const syntheticAffordable = historyBudget - syntheticBytesRaw >= 0;
+    // BOTH axes. The count conjunct was briefly dropped as inert on the reasoning that the count bound
+    // below keeps one result and therefore always leaves a slot — which is exactly wrong at
+    // `historyLimit === 1`, where that one free slot is the one the result takes. The note was then judged
+    // affordable on bytes, the reservation clamped to 0, and the append pushed full replay to 193 roots:
+    // four armed-only `CursorRootEnvelopeLimitError` throws at 191 system prompts, on both tails and both
+    // suffix widths, where the same request without the note assembled 192 and succeeded.
+    //
+    // The sweep that called it inert varied CARRIED roots on the checkpoint path, where the count-full
+    // disjunct abandons the checkpoint before `historyLimit` can reach 1. The reachable route is full
+    // replay with many system prompts, and full replay has no abandon branch to rescue it (audit r14).
+    const syntheticAffordable = historyBudget - syntheticBytesRaw >= 0
+      && historyLimit - syntheticCountRaw >= 1;
     const syntheticCount = syntheticAffordable ? syntheticCountRaw : 0;
     const syntheticBytes = syntheticAffordable ? syntheticBytesRaw : 0;
     const historyLimitForReal = Math.max(0, historyLimit - syntheticCount);
