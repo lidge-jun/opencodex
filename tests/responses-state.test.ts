@@ -38,6 +38,7 @@ import {
   recoverStaleResponseStateTemps,
   rememberResponseState,
   sweepAbandonedResponseStateTemps,
+  sweepExpiredResponseStates,
   responseAdmissionCountersForTests,
   responseStateMetrics,
   responseStatePersistPendingForTests,
@@ -45,6 +46,8 @@ import {
   runPendingResponseStatePersistForTests,
   setResponseSpillAsyncAclAttemptBudgetForTests,
   setResponseStateByteCapForTests,
+  setSpilledResponseByteCapForTests,
+  getSpilledResponseBytesForTests,
   setResponseStatePersistAttemptHookForTests,
   setResponseSpillShutdownBudgetForTests,
   getStoredResponseBytesForTests,
@@ -282,6 +285,7 @@ describe("Responses previous_response_id state", () => {
     setResponseSpillShutdownBudgetForTests(null);
     setResponseSpillAsyncAclAttemptBudgetForTests(null);
     setResponseStateByteCapForTests(null);
+    setSpilledResponseByteCapForTests(null);
     clearResponseStateForTests();
     rmSync(home, { recursive: true, force: true });
     if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
@@ -809,6 +813,23 @@ describe("Responses previous_response_id state", () => {
     expect(metrics.totalBytes).toBeLessThanOrEqual(1_024);
     expect((expandPreviousResponseInput({
       previous_response_id: "resp_only_oversized", input: "next",
+    }) as { input: unknown[] }).input).toHaveLength(3);
+  });
+
+  test("evicts oldest spills once the durable set exceeds the disk cap", () => {
+    setResponseStateByteCapForTests(1_024);
+    setSpilledResponseByteCapForTests(20_000);
+    for (let i = 0; i < 6; i += 1) rememberLarge(`resp_spill_budget_${i}`, "x".repeat(8_000));
+    // Without a disk cap all six stay on disk: the RAM cap only moves bytes out of
+    // memory, it never bounds where they land.
+    expect(getSpilledResponseBytesForTests()).toBeLessThanOrEqual(20_000);
+    expect(spillFileNames(home).length).toBeLessThan(6);
+    // The oldest entry is the one that must be gone, not merely "some" entry.
+    expect(spillFileNames(home).some(name => name.startsWith("resp_spill_budget_0."))).toBe(false);
+    // Eviction is oldest-first and must not clear the set it was asked to bound.
+    expect(spillFileNames(home).length).toBeGreaterThanOrEqual(1);
+    expect((expandPreviousResponseInput({
+      previous_response_id: "resp_spill_budget_5", input: "next",
     }) as { input: unknown[] }).input).toHaveLength(3);
   });
 
@@ -1533,6 +1554,147 @@ describe("Responses previous_response_id state", () => {
     await flushResponseState();
     expect(existsSync(join(responseSpillDirectory(home), old))).toBe(false);
     expect(spillFileNames(home)).toHaveLength(1);
+  });
+
+  test("evicts by createdAt, not by insertion order", () => {
+    const realNow = Date.now;
+    try {
+      setResponseStateByteCapForTests(1_024);
+      // Insert the NEWER entry first so insertion order and createdAt order
+      // disagree. Map order alone would evict the newer one; `states` is not a
+      // reliable age index — writeBoundedSnapshot even serializes it reversed.
+      const base = realNow();
+      Date.now = () => base;
+      const beforeNewer = new Set(spillFileNames(home));
+      rememberLarge("resp_order_newer", "x".repeat(8_000));
+      const newerFile = spillFileNames(home).find(name => !beforeNewer.has(name))!;
+
+      Date.now = () => base - 5 * 60_000;
+      const beforeOlder = new Set(spillFileNames(home));
+      rememberLarge("resp_order_older", "x".repeat(8_000));
+      const olderFile = spillFileNames(home).find(name => !beforeOlder.has(name))!;
+      Date.now = () => base;
+
+      // Each spill payload is ~16.2 KB, so 20_000 leaves room for exactly one.
+      setSpilledResponseByteCapForTests(20_000);
+      rememberLarge("resp_order_trigger", "y");
+
+      const dir = responseSpillDirectory(home);
+      expect(existsSync(join(dir, olderFile))).toBe(false);
+      expect(existsSync(join(dir, newerFile))).toBe(true);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  test("breaks createdAt ties on the response id, not on insertion order", () => {
+    const realNow = Date.now;
+    try {
+      setResponseStateByteCapForTests(1_024);
+      const base = realNow();
+      Date.now = () => base;
+      // Same createdAt, inserted in reverse id order: a stable sort alone would
+      // keep insertion order and evict "_b" first.
+      const before = new Set(spillFileNames(home));
+      rememberLarge("resp_tie_b", "x".repeat(8_000));
+      const bFile = spillFileNames(home).find(name => !before.has(name))!;
+      const beforeA = new Set(spillFileNames(home));
+      rememberLarge("resp_tie_a", "x".repeat(8_000));
+      const aFile = spillFileNames(home).find(name => !beforeA.has(name))!;
+
+      setSpilledResponseByteCapForTests(20_000);
+      rememberLarge("resp_tie_trigger", "y");
+
+      const dir = responseSpillDirectory(home);
+      expect(existsSync(join(dir, aFile))).toBe(false);
+      expect(existsSync(join(dir, bFile))).toBe(true);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
+  test("survives a single spill payload larger than the whole disk budget", () => {
+    setResponseStateByteCapForTests(1_024);
+    // Below one payload (~16.2 KB), so every spill is written and then evicted on
+    // the same tick and the running total goes negative. The loop must still
+    // terminate and leave the store usable.
+    setSpilledResponseByteCapForTests(1_000);
+    rememberLarge("resp_over_budget_a", "x".repeat(8_000));
+    rememberLarge("resp_over_budget_b", "x".repeat(8_000));
+    expect(spillFileNames(home)).toHaveLength(0);
+    expect(getSpilledResponseBytesForTests()).toBe(0);
+    // Raising the cap restores ordinary retention: the store is not wedged.
+    setSpilledResponseByteCapForTests(1_000_000);
+    rememberLarge("resp_over_budget_c", "x".repeat(8_000));
+    expect(spillFileNames(home)).toHaveLength(1);
+  });
+
+  test("counts deferred spill generations against the disk cap and drains them first", () => {
+    setResponseStateByteCapForTests(1_024);
+    // Replacing a spilled id queues the superseded file in pendingSpillUnlinks
+    // instead of unlinking it, so the directory holds generations that `states`
+    // alone cannot see. Payloads are ~16.2 KB, so 60_000 fits about three.
+    setSpilledResponseByteCapForTests(60_000);
+    for (let i = 0; i < 8; i += 1) rememberLarge("resp_deferred_gen", "x".repeat(8_000));
+    // Counting only the live entry would report ~16 KB here and evict nothing while
+    // eight files sat on disk.
+    expect(getSpilledResponseBytesForTests()).toBeLessThanOrEqual(60_000);
+    const onDisk = spillFileNames(home);
+    expect(onDisk.length).toBeLessThanOrEqual(4);
+    // The live continuation survives: deferred generations are released first.
+    expect((expandPreviousResponseInput({
+      previous_response_id: "resp_deferred_gen", input: "next",
+    }) as { input: unknown[] }).input).toHaveLength(3);
+  });
+
+  test("reclaims an over-budget snapshot without a new continuation mutation", async () => {
+    const realNow = Date.now;
+    try {
+      setResponseStateByteCapForTests(4_000);
+      const base = realNow();
+      const files: string[] = [];
+      for (let i = 0; i < 4; i += 1) {
+        Date.now = () => base - (10 - i) * 60_000;
+        const before = new Set(spillFileNames(home));
+        rememberResponseState(
+          { model: "test/model", input: "z".repeat(8_000), store: false },
+          fixedResponse(`resp_budget_restart_${i}`, [{ type: "message", role: "assistant", content: "stored" }]),
+          undefined,
+          { force: true, clientThreadId: "task-budget" },
+        );
+        files.push(spillFileNames(home).find(name => !before.has(name))!);
+      }
+      Date.now = () => base;
+      await flushResponseState();
+      clearResponseStateMemoryForTests();
+
+      // Come back up under a ceiling the snapshot was not written for. Nothing has
+      // mutated the store yet, which is the case the mutation-path prune misses.
+      setResponseStateByteCapForTests(4_000);
+      // Four spills total ~32.9 KB, so this ceiling keeps the two newest.
+      setSpilledResponseByteCapForTests(20_000);
+      expect(spillFileNames(home).length).toBe(4);
+
+      // A read, not a write: this drives the lazy load and its prune.
+      const expanded = expandPreviousResponseInput(
+        { previous_response_id: "resp_budget_restart_3", input: "next" },
+        "task-budget",
+      );
+
+      expect(getSpilledResponseBytesForTests()).toBeLessThanOrEqual(20_000);
+      expect(existsSync(join(responseSpillDirectory(home), files[0]!))).toBe(false);
+      // The newest entry survives the reclaim and still replays.
+      expect(existsSync(join(responseSpillDirectory(home), files[3]!))).toBe(true);
+      expect((expanded as { input: unknown[] }).input).toHaveLength(3);
+
+      // The periodic sweep owns the same ceiling: lower it again and let the tick,
+      // not a request, do the work.
+      setSpilledResponseByteCapForTests(10_000);
+      sweepExpiredResponseStates();
+      expect(getSpilledResponseBytesForTests()).toBeLessThanOrEqual(10_000);
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   test("TTL and count eviction delete dedicated spill files and release stub bytes", () => {

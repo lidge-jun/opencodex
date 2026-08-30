@@ -157,6 +157,34 @@ Hidden` inside an already-running PowerShell script, nor to .NET/VBS process-win
 - 다른 대안 대신 이 방식을 선택한 이유: Names and environment paths are caller-controlled, required secret writes must not silently skip ACLs, and elevation has a larger authority boundary that should remain FFI-only.
 - 장점, 단점 및 영향: Default Windows ARM64 installations can start and harden secrets; non-default Windows roots continue to fail closed until Bun exposes a trustworthy native system-directory API without FFI.
 
+The durable response-spill directory `~/.opencodex/responses-state-spill/` is bounded in
+aggregate, not only per file. Continuation state demoted out of the in-memory cap
+(`MAX_STORED_RESPONSE_BYTES`) is written there, and eviction past
+`MAX_SPILLED_RESPONSE_BYTES` removes oldest-first through the same deletion point that serves
+TTL and count eviction, so an evicted entry unlinks its file. One function owns that ceiling and
+three callers drive it: mutation pruning, the lazy load that follows a restart, and the periodic
+sweep. The periodic caller is not redundant — the mutation path runs only when traffic arrives, so a
+process that comes up over budget from a snapshot written under a larger ceiling would otherwise
+stay over it while idle.
+
+The ceiling bounds what the store can account for, which is every entry in the map plus the
+superseded generations queued for unlink, and deliberately not the directory as a whole. Spill files
+orphaned by a crash are absent from the map, so this accounting can neither see nor price them; they
+remain with the `recoverOrphanedResponseSpills` grace sweep described below, which is the only
+mechanism that reclaims them. A host that crashes repeatedly can therefore hold spill bytes above
+this ceiling for up to `RESPONSE_SPILL_ORPHAN_GRACE_MS` past each crash. Without that aggregate bound the
+directory was limited only per file (256 MiB) and per entry (1000) — a 250 GiB product — which
+left `RESPONSE_TTL_MS` as the only effective limit and made disk use a function of client
+request rate rather than of anything the process controls.
+
+[Decision Log]
+- 목적과 의도: Bound the durable spill directory in aggregate so demoted continuation state cannot consume the host disk.
+- 기존 구현 및 제약 조건: The resident map has an unconditional byte cap and demotes past it, but the disk it demotes onto had only a per-file ceiling and the shared 1000-entry count cap. Retention itself worked — the hour-long TTL did evict — so the gap was a missing budget, not a leak.
+- 검토한 주요 대안: Lower the per-file ceiling; shorten the TTL; sweep the directory on a timer; add a configurable budget key; carry a running byte counter.
+- 선택한 방식: A constant aggregate ceiling checked at the end of the existing prune, evicting oldest-first, with the total recomputed per prune rather than carried as a counter.
+- 다른 대안 대신 이 방식을 선택한 이유: Per-file or TTL changes alter retention semantics other bounds depend on; a timer adds a second owner for eviction; a config key would surface a knob the sibling bounds (count, TTL, per-file) do not have; and a running counter could silently disable the cap if any of the several insertion paths missed an increment, where a walk over at most 1000 entries cannot drift.
+- 장점, 단점 및 영향: Disk use stops tracking client request rate. Ordinary traffic is unaffected because the count cap binds at a comparable point for median-sized payloads; a workload of unusually large continuations loses its oldest spills earlier than the TTL would, surfacing as the existing `previous_response_not_found` continuation miss.
+
 Response-state loading performs a bounded recovery pass for interrupted snapshot writes. It only
 matches regular files named `responses-state.json.ocx.<pid>.<sequence>.tmp`, waits at least 15
 minutes, and skips the current or any live PID. Eligible files are truncated before unlinking so a
