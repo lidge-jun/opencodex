@@ -101,6 +101,9 @@ export function recoverNativeMainRefreshPublication(context: NativeProfileContex
   const { staged, previous } = journalPaths(journal);
   const canonical = readExact(journal.targetPath);
   const stagedBytes = readExact(staged);
+  const displacedPath = process.platform === "win32" ? previous : staged;
+  const rollbackPath = process.platform === "win32" ? staged : previous;
+  const displacedBytes = readExact(displacedPath);
   if (!canonical) throw new NativeMainRefreshPublicationError();
   if (digest(canonical) === journal.expectedSha256 && stagedBytes && digest(stagedBytes) === journal.replacementSha256) {
     try {
@@ -112,6 +115,20 @@ export function recoverNativeMainRefreshPublication(context: NativeProfileContex
     return;
   }
   if (digest(canonical) === journal.replacementSha256) {
+    if (journal.phase === "prepared") {
+      if (!displacedBytes) throw new NativeMainRefreshPublicationError();
+      if (digest(displacedBytes) !== journal.expectedSha256) {
+        try {
+          restoreFilePreservingTarget(displacedPath, journal.targetPath, rollbackPath);
+          const restored = readExact(journal.targetPath);
+          if (!restored || !restored.equals(displacedBytes)) throw new NativeMainRefreshPublicationError();
+          cleanup(context, journal);
+        } catch (cause) {
+          throw new NativeMainRefreshPublicationError({ cause });
+        }
+        return;
+      }
+    }
     try { cleanup(context, journal); } catch (cause) { throw new NativeMainRefreshPublicationError({ cause }); }
     return;
   }
@@ -157,6 +174,7 @@ export function publishNativeMainRefresh(
           targetPath,
           process.platform === "win32" ? staged : previous,
         );
+        cleanup(context, journal);
       }
       throw new NativeMainRefreshPublicationError();
     }

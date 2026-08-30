@@ -512,6 +512,68 @@ describe("native main token refresh", () => {
     expect(existsSync(join(home, stagedBasename))).toBe(true);
   });
 
+  test("restores an external writer displaced by an interrupted prepared exchange", () => {
+    const authPath = join(home, "auth.json");
+    const transactionId = "11111111-1111-4111-8111-111111111111";
+    const stagedBasename = `.opencodex-native-main-refresh.${transactionId}.new`;
+    const previousBasename = `.opencodex-native-main-refresh.${transactionId}.previous`;
+    const stagedPath = join(home, stagedBasename);
+    const previousPath = join(home, previousBasename);
+    const journalPath = join(home, ".opencodex-native-main-refresh.json");
+    const original = JSON.stringify({ tokens: { access_token: "old-access", refresh_token: "old-refresh" } });
+    const replacement = JSON.stringify({ tokens: { access_token: "new-access", refresh_token: "new-refresh" } });
+    const external = JSON.stringify({ tokens: { access_token: "external-access", refresh_token: "external-refresh" } });
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    writeFileSync(authPath, replacement);
+    writeFileSync(process.platform === "win32" ? previousPath : stagedPath, external);
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      transactionId,
+      targetPath: authPath,
+      stagedBasename,
+      previousBasename,
+      phase: "prepared",
+      expectedSha256: digest(original),
+      replacementSha256: digest(replacement),
+    }));
+
+    recoverNativeMainRefreshPublication(resolveNativeProfileContext());
+
+    expect(readFileSync(authPath, "utf8")).toBe(external);
+    expect(existsSync(journalPath)).toBe(false);
+    expect(existsSync(stagedPath)).toBe(false);
+    expect(existsSync(previousPath)).toBe(false);
+  });
+
+  test("retains an unprovable prepared replacement without a displaced artifact", () => {
+    const authPath = join(home, "auth.json");
+    const transactionId = "11111111-1111-4111-8111-111111111111";
+    const stagedBasename = `.opencodex-native-main-refresh.${transactionId}.new`;
+    const previousBasename = `.opencodex-native-main-refresh.${transactionId}.previous`;
+    const journalPath = join(home, ".opencodex-native-main-refresh.json");
+    const original = JSON.stringify({ tokens: { access_token: "old-access", refresh_token: "old-refresh" } });
+    const replacement = JSON.stringify({ tokens: { access_token: "new-access", refresh_token: "new-refresh" } });
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    writeFileSync(authPath, replacement);
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      transactionId,
+      targetPath: authPath,
+      stagedBasename,
+      previousBasename,
+      phase: "prepared",
+      expectedSha256: digest(original),
+      replacementSha256: digest(replacement),
+    }));
+
+    expect(() => recoverNativeMainRefreshPublication(resolveNativeProfileContext())).toThrow(
+      "Native credential refresh could not be published",
+    );
+
+    expect(readFileSync(authPath, "utf8")).toBe(replacement);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
   test("cleans committed recovery journals with zero, one, and multiple exact remnants", () => {
     const original = JSON.stringify({ tokens: { refresh_token: "old-refresh", account_id: "account-main" } });
     const replacement = JSON.stringify({ tokens: { access_token: "access-b", refresh_token: "refresh-b", account_id: "account-main" } });
