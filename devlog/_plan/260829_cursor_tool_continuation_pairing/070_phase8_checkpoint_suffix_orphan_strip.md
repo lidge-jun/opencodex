@@ -646,3 +646,43 @@ it absent. Rounds 5 through 10 were each triggered by the previous round's own f
 arguments about whether a guard could fire — one dropped correctly, one dropped wrongly and restored here —
 which suggests the code's real difficulty is that its budget arithmetic has several axes and any single sweep
 silently fixes all but one of them.
+
+## Audit round 11: PASS, and the two notes it left
+
+Round 11 found no blocker. It confirmed `syntheticCountRaw` can only be 0 or 1 — one push site, once per
+request — so the conjunct reduces to `historyLimit >= 2` when the note exists, and checked that threshold in
+both directions: at 1 the single free slot belongs to the result, at 2 both fit exactly at 192 roots. It
+audited all 25 budget references and found gross values only in the affordability test itself, which is
+where they belong. Across 5040 checkpoint configurations and 200-turn feedback growth at five call widths:
+no throw, no overrun, no lost newest result, no orphaned call.
+
+Its attribution rig is the more useful artifact. Driving HEAD, the parent, and base `dev` through identical
+576-position grids: HEAD is never worse than its parent anywhere, and the 8 positions where HEAD throws and
+`dev` did not are all 192 system prompts, where the prompts alone exceed the envelope and HEAD throws with
+or without the note. On those same positions `dev` emitted 192 roots carrying **zero** tool results — the
+re-run loop this unit exists to end. Totals: HEAD 104 throws / 232 newest-lost, parent 112 / 232, `dev`
+96 / 372.
+
+### The threshold is now pinned from the tight side too
+
+Round 11's one actionable note: tightening `>= 1` to `>= 2` left all 212 tests green. Over-conservative is
+safer than over-eager, but a suite that cannot tell a correct bound from an unnecessarily strict one is
+exactly the gap that cost round 14. A case at two free slots now asserts that the note and the answer both
+arrive at exactly 192 roots: relaxing the bound reddens 4, tightening it reddens 1.
+
+### A claim in the round 10 record was wrong
+
+That record said the reservation had been pinned at the append site only, and that neutering
+`syntheticCount`/`syntheticBytes` left the suite green. On the parent commit that mutation already reddens
+6, all of them pre-existing round 8 and 9 cases. The count-conjunct finding stands on its own evidence; this
+secondary claim did not, and the root-count case is not what closed it.
+
+### Remaining known gap, scoped out deliberately
+
+On the extreme byte axis — a single system prompt near 523 KB — the note can be kept while the result
+truncates to a marker, which inverts this unit's stated priority order. That band is identical on the parent
+(24 positions) and far worse on `dev` (180), so it is pre-existing and improved here rather than introduced.
+Full replay has no abandon branch to rescue it, which makes it a genuine follow-up rather than a
+non-problem, and it belongs to its own phase.
+
+Four-suite total is 213 pass / 0 fail; `cursor-blob` alone 127.

@@ -3035,6 +3035,63 @@ describe("Cursor external replay envelope", () => {
   });
 
   /**
+   * Audit r15. The case above pins the affordability threshold from the loose side only: relaxing it
+   * reddens, but TIGHTENING `historyLimit - syntheticCountRaw >= 1` to `>= 2` left all 212 tests green.
+   * Over-conservative is safer than over-eager, but this unit has already dropped a guard as inert and had
+   * to restore it, so a suite that cannot tell a correct bound from an unnecessarily strict one is exactly
+   * the gap that cost round 14.
+   *
+   * Two free slots is the tight case: the result takes one, the note takes the other, and both must arrive.
+   */
+  test("a note that exactly fits the last free slot is kept, not dropped", () => {
+    // 190 system roots leaves two free slots out of 192: one for the result, one for the note.
+    const systemCount = CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - 2;
+    const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+      { role: "user", content: "Go.", timestamp: 1 },
+    ];
+    let timestamp = 2;
+    for (let r = 0; r < 4; r++) {
+      rawMessages!.push({ role: "assistant", content: [{ type: "text", text: "Same." }], timestamp: timestamp++ });
+    }
+    rawMessages!.push({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_exact", name: "exec_command", arguments: { cmd: "echo E" } }],
+      timestamp: timestamp++,
+    });
+    rawMessages!.push({
+      role: "toolResult",
+      toolCallId: "call_exact",
+      toolName: "exec_command",
+      content: "EXACT_FIT_OUT",
+      isError: false,
+      timestamp: timestamp++,
+    });
+    const prepared = prepareCursorRunRequest({
+      modelId: "grok-4.6",
+      conversationId: "cursor_note_exact_fit",
+      system: Array.from({ length: systemCount }, (_, i) => `S${i}`),
+      messages: [{ role: "tool", content: "result" }],
+      rawMessages,
+    });
+    const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+    const run = message.message.case === "runRequest" ? message.message.value : undefined;
+    const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+    const blob = roots.map(id => {
+      try {
+        const parsed = JSON.parse(new TextDecoder().decode(blobData(id))) as { content?: string | [{ text?: string }] };
+        const content = parsed.content;
+        return typeof content === "string" ? content : (content?.[0]?.text ?? "");
+      } catch {
+        return "";
+      }
+    }).join("\n");
+    expect(roots.length).toBe(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    // Both arrive. Dropping either one at an exact fit is a defect in a different direction.
+    expect(blob).toContain("EXACT_FIT_OUT");
+    expect(blob).toContain("[context note]");
+  });
+
+  /**
    * Audit r10 finding 2. `outputElided` on the marker-only return had no coverage: removing the flag left
    * all 191 tests green, and `tests/` is not typechecked (`tsconfig` include is `["src"]`), so nothing would
    * have caught its removal. A result reduced to the truncation marker answers its call with nothing, which
