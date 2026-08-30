@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { decideDevVersion } from "../scripts/bump-dev-version";
 
 /**
@@ -108,6 +108,44 @@ describe("dev version bump rule", () => {
     // would open a pull request with a diff and no version change.
     expect(readFileSync(path, "utf8")).toBe(before);
     expect(new TextDecoder().decode(proc.stdout)).toContain('"changed":false');
+  });
+
+  test("the rewrite is atomic and leaves no debris", () => {
+    // package.json is package metadata, so a partial write corrupts a checkout and this
+    // script is also the documented manual recovery path - it runs on developer machines
+    // where an interrupt or a full disk mid-write would strand an unusable file.
+    // scripts/AGENTS.md requires atomic replacement for exactly this class of file.
+    const path = tempPackageJson("2.36.0");
+    const dir = dirname(path);
+    const proc = Bun.spawnSync(["bun", CLI, "2.36.0", path]);
+    expect(proc.exitCode).toBe(0);
+    // The temp sibling must be gone: a leftover .tmp-<pid> means the rename never
+    // happened and the write was not atomic.
+    expect(readdirSync(dir).filter(f => f.includes(".tmp-"))).toEqual([]);
+    expect(readdirSync(dir)).toEqual(["package.json"]);
+    // And the surviving file is complete, not truncated.
+    const after = readFileSync(path, "utf8");
+    expect(JSON.parse(after).version).toBe("2.37.0");
+    expect(JSON.parse(after).name).toBe("@bitkyc08/opencodex");
+    expect(after.endsWith("}\n")).toBe(true);
+  });
+
+  test("an unwritable target fails closed with the original intact", () => {
+    // The atomic path must not destroy the original when the write itself fails. A
+    // read-only directory makes both the temp write and the rename impossible.
+    const path = tempPackageJson("2.36.0");
+    const before = readFileSync(path, "utf8");
+    const dir = dirname(path);
+    chmodSync(dir, 0o500);
+    try {
+      const proc = Bun.spawnSync(["bun", CLI, "2.36.0", path]);
+      expect(proc.exitCode).not.toBe(0);
+      // Byte-identical: the failure path must leave the checkout installable.
+      expect(readFileSync(path, "utf8")).toBe(before);
+      expect(readdirSync(dir).filter(f => f.includes(".tmp-"))).toEqual([]);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
   });
 
   test("the CLI fails without writing when the released version is malformed", () => {

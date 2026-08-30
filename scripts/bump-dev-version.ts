@@ -52,6 +52,8 @@
  * inputs by the repository's own comparator.
  */
 
+import { existsSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+
 import { compareReleaseTags } from "./release-notes";
 
 /**
@@ -173,7 +175,25 @@ if (import.meta.main) {
       console.error("✗ could not locate the version line to rewrite");
       process.exit(1);
     }
-    await Bun.write(packageJsonPath, rewritten);
+    // Atomic replacement, per scripts/AGENTS.md: package metadata is exactly the class of
+    // file whose partial write corrupts a checkout. This script is also the documented
+    // manual recovery path, so it can run on a developer machine where an interrupt or a
+    // full disk mid-write would leave a truncated package.json and no way to install.
+    // Write a sibling temp file, rename it into place (atomic within one filesystem), and
+    // remove the temp on any failure so a crash leaves no debris.
+    const temp = `${packageJsonPath}.tmp-${process.pid}`;
+    try {
+      writeFileSync(temp, rewritten, "utf8");
+      renameSync(temp, packageJsonPath);
+    } catch (err) {
+      try {
+        if (existsSync(temp)) unlinkSync(temp);
+      } catch {
+        // Nothing more to do: the original file is untouched, which is the point.
+      }
+      console.error(`✗ could not write ${packageJsonPath}: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
   }
 
   // A machine contract, not prose: the workflow branches on these values.

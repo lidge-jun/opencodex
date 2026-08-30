@@ -108,17 +108,36 @@ jobs:
             exit 0
           fi
 
+          # An existing branch is NOT terminal. If a previous run pushed the branch and then
+          # failed at `gh pr create`, exiting here would leave the repair permanently unqueued
+          # while every rerun reports success - the exact failure mode a reviewer caught. So
+          # reuse the branch and fall through to pull-request creation instead.
           if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
-            echo "::notice::${branch} already exists; nothing to do"
-            exit 0
-          fi
+            echo "::notice::${branch} exists without an open pull request; validating it"
+            git fetch origin "${branch}"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b "${branch}"
-          git add package.json
-          git commit -m "fix(release): move dev to ${NEXT_VERSION} after ${RELEASED_VERSION}"
-          git push origin "${branch}"
+            # Fail closed on unexpected content. The branch carries the bot's own one-line
+            # bump, so anything else on it means a human or another job is using that name and
+            # this job must not push to it or open a pull request from it.
+            changed_files="$(git diff --name-only "origin/dev...origin/${branch}")"
+            if [ "${changed_files}" != "package.json" ]; then
+              echo "::error::${branch} touches unexpected files: ${changed_files:-<none>}"
+              exit 1
+            fi
+            branch_version="$(git show "origin/${branch}:package.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")"
+            if [ "${branch_version}" != "${NEXT_VERSION}" ]; then
+              echo "::error::${branch} carries ${branch_version}, expected ${NEXT_VERSION}"
+              exit 1
+            fi
+            git checkout -B "${branch}" "origin/${branch}"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git checkout -b "${branch}"
+            git add package.json
+            git commit -m "fix(release): move dev to ${NEXT_VERSION} after ${RELEASED_VERSION}"
+            git push origin "${branch}"
+          fi
 
           gh pr create \
             --base dev \
