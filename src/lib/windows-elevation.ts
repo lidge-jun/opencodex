@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, ptr, type Pointer } from "bun:ffi";
+import { isTestHomeGuardArmed } from "./test-home-guard";
 
 type ElevationSpawn = (
   command: string,
@@ -526,6 +527,19 @@ export function startPowerShellCommand(commandScript: string): WindowsElevationE
       completion: Promise.reject(new WindowsElevationError(
         "launch-failed",
         "Windows elevation is only supported on Windows.",
+      )),
+    };
+  }
+
+  // HOME isolation cannot contain UAC children or other machine-global effects. Keep the
+  // final process boundary closed while the real launcher is installed; explicitly injected
+  // launchers remain available to tests that exercise the elevation protocol in memory.
+  if (isTestHomeGuardArmed() && elevationSpawn === spawn) {
+    return {
+      launcherPid: null,
+      completion: Promise.reject(new WindowsElevationError(
+        "launch-failed",
+        "Refusing to launch a live Windows elevation process from an armed test process; inject the elevation launcher instead.",
       )),
     };
   }

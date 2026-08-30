@@ -1034,6 +1034,32 @@ describe("launchd service plist", () => {
 });
 
 describe("service lifecycle cleanup ordering", () => {
+  test("an armed test cannot fall through to a live Task Scheduler mutation", async () => {
+    mkdirSync(TEST_DIR, { recursive: true });
+    const attemptNonce = "test-home-guard-registration";
+    const xmlPath = join(TEST_DIR, "guarded-task.xml");
+    writeFileSync(
+      xmlPath,
+      `\uFEFF${buildWindowsTaskXml(undefined, undefined, attemptNonce)}`,
+      { encoding: "utf16le" },
+    );
+    const observedCalls: string[][] = [];
+    serviceModule.setQuerySchtasksForTests(args => {
+      observedCalls.push([...args]);
+      return "";
+    });
+    try {
+      await expect(registerFreshWindowsSchedulerTask(xmlPath, attemptNonce)).rejects.toThrow(
+        "refusing to mutate the machine-global Windows Task Scheduler from an armed test process",
+      );
+      // The guard runs before even the test recorder. Before this regression fix the recorder
+      // receives `/create /tn opencodex-proxy ... /f`, proving the live runner was reachable.
+      expect(observedCalls).toEqual([]);
+    } finally {
+      serviceModule.setQuerySchtasksForTests(null);
+    }
+  });
+
   test("native service switch treats unknown as installed and requires confirmed absence", () => {
     const calls: string[] = [];
     const statuses: Array<"unknown" | "stopped" | "nonexistent"> = [

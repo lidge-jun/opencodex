@@ -50,6 +50,7 @@ import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { killWindowsSchedulerWrappers } from "./lib/windows-service-wrappers";
 import { maybeShowStarPrompt } from "./cli/star-prompt";
 import { systemdProperty } from "./service-manager-probe";
+import { isTestHomeGuardArmed } from "./lib/test-home-guard";
 
 const LABEL = "com.opencodex.proxy";
 const TASK = "opencodex-proxy";
@@ -900,6 +901,20 @@ function windowsWscript(): string {
 let querySchtasksForTests: ((args: string[]) => string) | null = null;
 
 function querySchtasks(args: string[]): string {
+  // The repository preload isolates HOME and OPENCODEX_HOME, but Task Scheduler is
+  // machine-global. A partially-faked service test once fell through here and replaced the
+  // user's real `opencodex-proxy` task with a launcher inside its temporary test home; the
+  // test passed and cleanup deleted that launcher. Queries are observation-only, but every
+  // other operation must be injected while the explicit test-home guard is armed.
+  if (
+    isTestHomeGuardArmed()
+    && args[0]?.trim().toLowerCase() !== "/query"
+  ) {
+    throw new Error(
+      "refusing to mutate the machine-global Windows Task Scheduler from an armed test process; "
+      + "inject the scheduler operation instead of calling the live manager.",
+    );
+  }
   if (querySchtasksForTests) return querySchtasksForTests(args);
   return runFile(windowsSchtasks(), args);
 }

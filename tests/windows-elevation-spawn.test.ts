@@ -82,6 +82,16 @@ describe("runWindowsElevated spawn contract", () => {
     return child;
   }
 
+  test("an armed test cannot launch the live Windows elevation boundary", async () => {
+    // The probe is deliberately inert: if the guard regresses, it can only start an
+    // non-RunAs PowerShell executing a fixed exit 0, never UAC or Task Scheduler mutation.
+    const execution = startPowerShellCommand("exit 0");
+    expect(execution.launcherPid).toBeNull();
+    await expect(execution.completion).rejects.toThrow(
+      "Refusing to launch a live Windows elevation process from an armed test process",
+    );
+  });
+
   test("returns exit code 0", async () => {
     fakeChild({ code: 0 });
     await expect(runWindowsElevated("schtasks.exe", ["/query"])).resolves.toBe(0);
