@@ -40,6 +40,10 @@ account before the request is forwarded upstream. The rule is intentionally spli
 - **Quota and failure signals feed routing.** The dashboard can force a quota refresh with
   `GET /api/codex-auth/accounts?refresh=1`; successful upstream responses capture quota headers,
   429 puts an account in cooldown, and 401/403 marks it for reauthentication.
+- **Idle rolling windows can be activated on time.** Each account card offers default-off 5-hour
+  and weekly switches only for windows that account actually reports. At reset, opencodex reuses
+  its minimal non-stored account warmup request, records the reset timestamp to avoid ordinary
+  restart duplicates, and refreshes quota for the next schedule.
 
 ## Sub-agent model selection
 
