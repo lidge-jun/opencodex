@@ -141,8 +141,9 @@ async function chooseOrder(selectId: string, value: string): Promise<void> {
   });
 }
 
-test("a saved selection order reports in the ok tone", async () => {
+test("a legacy account without quota activation data keeps selection order usable", async () => {
   const saved: { id: string; priority: number | null }[] = [];
+  expect(account.quotaAutoRefresh).toBeUndefined();
   await mountPool(makeController({
     setAccountPriority: async (id, priority) => {
       saved.push({ id, priority });

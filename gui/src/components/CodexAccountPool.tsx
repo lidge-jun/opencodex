@@ -21,6 +21,7 @@ import { accountNeedsReauth } from "../oauth-health-display";
 import { useCopyFeedback } from "./use-copy-feedback";
 import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../account-pool-strategy";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
+import { quotaAutoRefreshAvailability } from "../codex-quota-utils";
 
 // Single definition lives with the controller that owns this data (WP3).
 export type { CodexAccountEntry } from "../hooks/useCodexAccountPool";
@@ -356,15 +357,20 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const displayAccounts = useMemo(() => accounts.map(account => {
     const setting = quotaAutoRefreshSettings?.[account.id];
+    const fallback = account.quotaAutoRefresh ?? {
+      ...quotaAutoRefreshAvailability(account.quota),
+      fiveHourEnabled: false,
+      weeklyEnabled: false,
+    };
     return {
       ...account,
       quotaAutoRefresh: {
-        ...account.quotaAutoRefresh,
+        ...fallback,
         fiveHourEnabled: quotaAutoRefreshSettings === null
-          ? account.quotaAutoRefresh.fiveHourEnabled
+          ? fallback.fiveHourEnabled
           : setting?.fiveHour === true,
         weeklyEnabled: quotaAutoRefreshSettings === null
-          ? account.quotaAutoRefresh.weeklyEnabled
+          ? fallback.weeklyEnabled
           : setting?.weekly === true,
       },
     };
