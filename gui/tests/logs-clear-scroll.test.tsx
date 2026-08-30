@@ -340,7 +340,7 @@ test("Logs: clear view after apiBase change resets boundary", async () => {
   await act(async () => { root2.unmount(); });
 });
 
-// ─── New tests: clear + no-requestId, mixed, eviction, surface filter, buffer counts ───
+// ─── RequestId-based clear tests: identity, eviction, filter, buffer counts ───
 
 test("Logs: clear works for entries with unique requestIds", async () => {
   // All entries now have required requestId from the server (ocx-${randomBytes(16).hex}).
@@ -386,23 +386,11 @@ test("Logs: clear works for entries with unique requestIds", async () => {
   await act(async () => { root.unmount(); });
 });
 
-test("Logs: clear works for mixed requestId/no-requestId entries", async () => {
-  const noId = {
-    timestamp: 1_700_000_000_000,
-    model: "gpt-test",
-    provider: "openai",
-    status: 200,
-    durationMs: 42,
-    usageStatus: "reported",
-    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
-    displayMetrics: {
-      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
-      cost: { kind: "unavailable", reason: "price_unmatched" },
-    },
-  };
-  const withId = makeLog("r-mix", 1_700_000_001_000);
+test("Logs: entries with different requestIds are independently cleared", async () => {
+  const entry1 = makeLog("r-mix-1", 1_700_000_000_000);
+  const entry2 = makeLog("r-mix-2", 1_700_000_001_000);
 
-  // After clear: one old (with id, still in buffer) + two brand-new
+  // After clear: one old (entry2) + two brand-new
   const newLog1 = makeLog("r-new1", 1_700_000_005_000);
   const newLog2 = makeLog("r-new2", 1_700_000_006_000);
 
@@ -410,23 +398,23 @@ test("Logs: clear works for mixed requestId/no-requestId entries", async () => {
   globalThis.fetch = (async (input) => {
     if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
     callCount++;
-    if (callCount <= 1) return jsonResponse([withId, noId]);
-    return jsonResponse([newLog2, newLog1, withId, noId]);
+    if (callCount <= 1) return jsonResponse([entry2, entry1]);
+    return jsonResponse([newLog2, newLog1, entry2, entry1]);
   }) as typeof fetch;
 
   const { root, container } = await mountLogs();
   await flushMicrotasks();
 
-  expect(hasLogRow(container, "r-mix")).toBe(true);
-  expect(hasLogRow(container, "gpt-test")).toBe(true);
+  expect(hasLogRow(container, "r-mix-1")).toBe(true);
+  expect(hasLogRow(container, "r-mix-2")).toBe(true);
 
   const btn = findClearButton(container)!;
   await act(async () => { btn.click(); });
   await flushMicrotasks();
 
-  // Both with and without requestId should be hidden
-  expect(hasLogRow(container, "r-mix")).toBe(false);
-  expect(hasLogRow(container, "gpt-test")).toBe(false);
+  // Both old entries should be hidden
+  expect(hasLogRow(container, "r-mix-1")).toBe(false);
+  expect(hasLogRow(container, "r-mix-2")).toBe(false);
 
   // New poll
   await act(async () => { jest.advanceTimersByTime(2000); });
@@ -441,9 +429,10 @@ test("Logs: clear works for mixed requestId/no-requestId entries", async () => {
   await act(async () => { root.unmount(); });
 });
 
-test("Logs: same timestamp different entries are not merged", async () => {
-  // Two logs with IDENTICAL timestamp but different model/provider/status
+test("Logs: same timestamp different requestIds are independent", async () => {
+  // Two logs with IDENTICAL timestamp but different requestIds
   const logA = {
+    requestId: "r-same-ts-1",
     timestamp: 1_700_000_000_000,
     model: "model-alpha",
     provider: "provider-x",
@@ -452,11 +441,12 @@ test("Logs: same timestamp different entries are not merged", async () => {
     usageStatus: "reported",
     usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
     displayMetrics: {
-      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
-      cost: { kind: "unavailable", reason: "price_unmatched" },
+      tokPerSecond: { kind: "unavailable" as const, reason: "invalid_duration" },
+      cost: { kind: "unavailable" as const, reason: "price_unmatched" },
     },
   };
   const logB = {
+    requestId: "r-same-ts-2",
     timestamp: 1_700_000_000_000, // same timestamp
     model: "model-beta",
     provider: "provider-y",
@@ -465,8 +455,8 @@ test("Logs: same timestamp different entries are not merged", async () => {
     usageStatus: "reported",
     usage: { inputTokens: 2, outputTokens: 2, totalTokens: 4 },
     displayMetrics: {
-      tokPerSecond: { kind: "unavailable", reason: "invalid_duration" },
-      cost: { kind: "unavailable", reason: "price_unmatched" },
+      tokPerSecond: { kind: "unavailable" as const, reason: "invalid_duration" },
+      cost: { kind: "unavailable" as const, reason: "price_unmatched" },
     },
   };
 
@@ -486,7 +476,7 @@ test("Logs: same timestamp different entries are not merged", async () => {
   await act(async () => { btn.click(); });
   await flushMicrotasks();
 
-  // Both hidden despite same timestamp (different composite keys)
+  // Both hidden despite same timestamp (different requestIds)
   expect(hasLogRow(container, "model-alpha")).toBe(false);
   expect(hasLogRow(container, "model-beta")).toBe(false);
 

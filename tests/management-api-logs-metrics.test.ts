@@ -229,4 +229,31 @@ describe("GET /api/logs display metrics", () => {
     }
   });
 });
+
+describe("GET /api/logs requestId contract", () => {
+  test("every returned entry has a non-empty, unique requestId", async () => {
+    // Add multiple entries with different requestIds
+    const ids = ["req-contract-a", "req-contract-b", "req-contract-c"];
+    for (const id of ids) {
+      addRequestLog(baseEntry({ requestId: id }));
+    }
+
+    const logs = await readLogs();
+    expect(logs.length).toBeGreaterThanOrEqual(ids.length);
+
+    // Every entry must have a non-empty string requestId
+    const requestIds = logs.map(e => e.requestId);
+    for (const rid of requestIds) {
+      expect(typeof rid).toBe("string");
+      expect(rid.length).toBeGreaterThan(0);
+    }
+
+    // All injected requestIds are present and unique
+    for (const id of ids) {
+      expect(requestIds).toContain(id);
+    }
+    expect(new Set(requestIds).size).toBe(requestIds.length);
+  });
+});
+
 import { ManagementRequest as Request } from "./helpers/management-auth";
