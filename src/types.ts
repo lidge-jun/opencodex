@@ -92,6 +92,7 @@ export type {
   VercelGatewayRouting,
   ResponsesItemIdRepairConfig,
   RateLimitRetryPolicy,
+  TransientRetryPolicy,
   ProviderCostOverlay,
   RequestPacingRule,
   ProviderRequestPacingConfig,

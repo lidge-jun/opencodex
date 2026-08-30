@@ -42,6 +42,25 @@ export interface ResponsesItemIdRepairConfig {
 }
 
 /**
+ * Opt-in retry for pre-stream transient upstream statuses (500/502/503/504/520/521/522) on
+ * `providers.<name>.transientRetryOn5xx`.
+ *
+ * Disabled unless the object is present; a bare `{}` opts in with defaults. Separate from
+ * `retryOn429`, which handles rate limiting with its own waits.
+ */
+export interface TransientRetryPolicy {
+  /** Master switch. Presence of the object also enables the policy (default true). */
+  enabled?: boolean;
+  /**
+   * TOTAL upstream sends allowed for one request, including the first (1..10, default 3).
+   *
+   * Not a per-layer retry count: the connection-reset and transient-status recovery layers
+   * share this single budget, so `3` means at most three real requests reach the provider.
+   */
+  attempts?: number;
+}
+
+/**
  * Same-target 429 wait-and-retry policy (`providers.<name>.retryOn429`). When present and not
  * explicitly disabled, the proxy waits and replays the identical request on the same key before
  * any key failover. All fields optional; the runtime applies defaults (attempts=3,
@@ -556,6 +575,12 @@ export interface OcxProviderConfig {
    * before any response bytes are relayed, so the replay is lossless.
    */
   retryOn429?: RateLimitRetryPolicy;
+  /**
+   * Opt-in retry for pre-stream transient upstream statuses
+   * (`providers.<name>.transientRetryOn5xx`). Disabled unless present; a bare `{}` opts in
+   * with defaults. Key-auth `openai-chat` only.
+   */
+  transientRetryOn5xx?: TransientRetryPolicy;
   /**
    * Model ids whose OpenAI-compatible chat endpoint accepts `reasoning_split: true` and returns
    * thinking separately in `reasoning_content` / `reasoning_details` instead of visible content.

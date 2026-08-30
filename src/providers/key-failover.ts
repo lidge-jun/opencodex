@@ -9,7 +9,7 @@
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
 import { saveConfigPreservingClaudeCode } from "../config";
-import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy } from "../types";
+import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, TransientRetryPolicy } from "../types";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 
@@ -33,6 +33,15 @@ const DEFAULT_RATE_LIMIT_RETRY = {
   maxIntervalMs: 60_000,
   respectRetryAfter: true,
 } as const satisfies Required<RateLimitRetryPolicy>;
+
+/**
+ * Default transient-5xx retry used when a provider opts in with a bare
+ * `transientRetryOn5xx: {}`. `attempts` is a TOTAL send budget, not extra retries.
+ */
+const DEFAULT_TRANSIENT_RETRY = {
+  enabled: true,
+  attempts: 3,
+} as const satisfies Required<TransientRetryPolicy>;
 
 /** Map<`${providerName}\0${keyId}`, KeyCooldown> */
 const keyCooldowns = new Map<string, KeyCooldown>();
@@ -111,6 +120,29 @@ export function rateLimitRetryPolicyFor(
     intervalMs: policy.intervalMs ?? DEFAULT_RATE_LIMIT_RETRY.intervalMs,
     maxIntervalMs: policy.maxIntervalMs ?? DEFAULT_RATE_LIMIT_RETRY.maxIntervalMs,
     respectRetryAfter: policy.respectRetryAfter ?? DEFAULT_RATE_LIMIT_RETRY.respectRetryAfter,
+  };
+}
+
+/**
+ * Normalize a provider's `transientRetryOn5xx` policy, or return null when it is absent,
+ * explicitly disabled, not key-auth, or not the `openai-chat` adapter.
+ *
+ * The adapter gate is part of the accepted scope, not incidental: this first version covers
+ * key-auth `openai-chat` only, and without an explicit check any generic key-auth adapter
+ * could opt in. Auth mode follows the same fail-closed rule as `rateLimitRetryPolicyFor` —
+ * explicit `key` or the documented omitted default, never OAuth, forward, local, or an
+ * unknown value.
+ */
+export function transientRetryPolicyFor(
+  provider: Pick<OcxProviderConfig, "transientRetryOn5xx" | "authMode" | "adapter">,
+): Required<TransientRetryPolicy> | null {
+  const policy = provider.transientRetryOn5xx;
+  if (!policy || policy.enabled === false) return null;
+  if (provider.adapter !== "openai-chat") return null;
+  if (provider.authMode !== undefined && provider.authMode !== "key") return null;
+  return {
+    enabled: policy.enabled ?? DEFAULT_TRANSIENT_RETRY.enabled,
+    attempts: policy.attempts ?? DEFAULT_TRANSIENT_RETRY.attempts,
   };
 }
 
