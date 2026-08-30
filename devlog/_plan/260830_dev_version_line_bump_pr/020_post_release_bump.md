@@ -184,3 +184,19 @@ compared `dev` against the CANDIDATE, which is the wrong question: a `dev` at
 the candidate `2.37.0`, so the script would have "repaired" a healthy tree and
 downgraded a legitimate prerelease line. It now compares against the released version,
 which is the same question `release-version-line.test.ts` asks.
+
+A security review of the shipped workflow also found one gap worth recording. The
+idempotency guard originally checked only whether the bump BRANCH existed. An open bump
+pull request whose head branch had been deleted leaves that check passing, so the job
+would recreate the branch and then fail on `gh pr create` with "already exists" - turning
+a successful release red for a repair that was already queued. It now checks for an open
+pull request first, then the branch.
+
+Two residual gaps are accepted rather than fixed, and named so a later reader does not
+mistake them for oversights:
+
+- `Bun.write` to `$GITHUB_OUTPUT` truncates rather than appends. That is equivalent to a
+  first write today because the step emits nothing else, but it is not append-safe if a
+  later edit adds a second output in the same step.
+- There is no test that exercises the `$GITHUB_OUTPUT` path itself; the tests cover the
+  decision and the file rewrite.

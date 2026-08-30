@@ -96,6 +96,18 @@ jobs:
 
           # Idempotent: a second publish, a re-run, or a manual repair must not turn a
           # successful release into a red job.
+          #
+          # Check the PULL REQUEST as well as the branch, not just the branch. A security
+          # review caught that: an open bump pull request whose head branch was deleted
+          # leaves the branch check passing, so the job would recreate the branch and then
+          # fail on `gh pr create` with "already exists" — turning a successful release red
+          # for a repair that was already queued.
+          open_prs="$(gh pr list --base dev --head "${branch}" --state open --json number --jq 'length')"
+          if [ "${open_prs}" != "0" ]; then
+            echo "::notice::a bump pull request for ${branch} is already open; nothing to do"
+            exit 0
+          fi
+
           if git ls-remote --exit-code --heads origin "${branch}" >/dev/null 2>&1; then
             echo "::notice::${branch} already exists; nothing to do"
             exit 0
