@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
-import { LAYER_INVENTORY, readPromptLayers } from "../src/codex/prompt-layers";
+import { encodeBasicString, LAYER_INVENTORY, readPromptLayers } from "../src/codex/prompt-layers";
 import {
   promptTextProbeSpawnAttemptsForTests,
   resetPromptTextProbeForTests,
@@ -1132,14 +1132,17 @@ describe("020 coverage completions", () => {
    */
   test("34. editing an external base prompt invalidates an in-flight text probe", async () => {
     const fx = fixture("model = \"x\"\n");
-    const externalPath = join(fx.decoyHome, "external-base.md");
+    // A literal backslash makes the Windows path condition reproducible on POSIX:
+    // interpolating this path raw would create an invalid TOML escape and make the
+    // fingerprint silently classify the selection as default.
+    const externalPath = join(fx.decoyHome, "external\\base.md");
     writeFileSync(externalPath, "old-external", "utf8");
     await call("PUT", "/api/codex-prompt/base/select", fx, {
       kind: "external", path: externalPath, revision: await revision(fx),
     });
     // Selection through the route is not assumed: the fixture config is what the
     // fingerprint reads, so assert the state this case depends on.
-    writeFileSync(fx.configPath, `model_instructions_file = "${externalPath}"\n`, "utf8");
+    writeFileSync(fx.configPath, `model_instructions_file = ${encodeBasicString(externalPath)}\n`, "utf8");
 
     const startedPath = join(fx.decoyHome, "external-probe-starts.txt");
     const source = [
