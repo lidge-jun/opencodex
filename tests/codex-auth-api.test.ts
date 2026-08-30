@@ -17,6 +17,7 @@ import {
   clearCodexQuotaPrimeState, primeCodexPoolQuotas, seedCodexAuthAdmissionForTests,
   type CodexAuthAccountDto,
   listCodexAuthAccounts,
+  isCodexQuotaRefreshFlightCurrentForTests,
   setAccountQuotaFromParsed,
 } from "../src/codex/auth-api";
 import {
@@ -24,8 +25,10 @@ import {
   listCodexAccountIds,
   readCodexAccountRecord,
   saveCodexAccountCredential,
+  saveCodexAccountCredentialIfGeneration,
 } from "../src/codex/account-store";
 import * as accountStoreModule from "../src/codex/account-store";
+import * as quotaRecoveryModule from "../src/codex/quota-401-recovery";
 import {
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
@@ -272,6 +275,7 @@ beforeEach(() => {
   clearCodexWebSocketRegistry();
   resetMainCodexAccountIdentityTrackingForTests();
   resetJwtPlanNotesForTests();
+  clearCodexQuotaPrimeState();
 });
 
 afterEach(() => {
@@ -286,6 +290,7 @@ afterEach(() => {
   clearThreadAccountMap();
   clearPoolRotationState();
   clearCodexWebSocketRegistry();
+  clearCodexQuotaPrimeState();
   globalThis.fetch = previousFetch;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
@@ -1430,6 +1435,451 @@ describe("codex-auth API", () => {
     }
   });
 
+  test("a time-valid pool token rejected by WHAM refreshes and retries once", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-plan-upgrade",
+      email: "pool-plan-upgrade@example.com",
+      plan: "plus",
+      accessToken: "old-plan-access",
+      refreshToken: "old-plan-refresh",
+      chatgptAccountId: "acct-plan-upgrade",
+      expiresAt: Date.now() + 24 * 60 * 60_000,
+    });
+    saveConfig(structuredClone(config));
+    const startGeneration = readCodexAccountRecord("pool-plan-upgrade")!.generation;
+    const refreshedAccess = chatgptPlanJwt("prolite", "acct-plan-upgrade");
+    let whamCalls = 0;
+    let refreshCalls = 0;
+
+    globalThis.fetch = (async (input, init) => {
+      const target = String(input);
+      if (target === "https://auth.openai.com/oauth/token") {
+        refreshCalls += 1;
+        expect(String(init?.body)).toContain("refresh_token=old-plan-refresh");
+        return Response.json({
+          access_token: refreshedAccess,
+          refresh_token: "new-plan-refresh",
+          expires_in: 3600,
+        });
+      }
+      if (target === "https://chatgpt.com/backend-api/wham/usage") {
+        whamCalls += 1;
+        const authorization = new Headers(init?.headers).get("Authorization");
+        if (whamCalls === 1) {
+          expect(authorization).toBe("Bearer old-plan-access");
+          return new Response("", { status: 401 });
+        }
+        expect(authorization).toBe(`Bearer ${refreshedAccess}`);
+        return Response.json({
+          plan_type: "prolite",
+          rate_limit: { primary_window: { used_percent: 21, reset_at: 1782628379 } },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
+    }) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1", { method: "GET" });
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    const data = await resp!.json() as {
+      accounts: Array<{ id: string; plan?: string; needsReauth?: boolean; quota?: { weeklyPercent?: number } }>;
+    };
+    const account = data.accounts.find(candidate => candidate.id === "pool-plan-upgrade");
+
+    expect(account).toMatchObject({ plan: "prolite", needsReauth: false, quota: { weeklyPercent: 21 } });
+    expect(whamCalls).toBe(2);
+    expect(refreshCalls).toBe(1);
+    expect(readCodexAccountRecord("pool-plan-upgrade")?.generation).toBe(startGeneration + 1);
+    expect(getCodexAccountCredential("pool-plan-upgrade")?.accessToken).toBe(refreshedAccess);
+    expect(config.codexAccounts?.find(candidate => candidate.id === "pool-plan-upgrade")).toMatchObject({
+      plan: "prolite",
+      planSource: "wham",
+      planCredentialGeneration: startGeneration + 1,
+    });
+    expect(loadConfig().codexAccounts?.find(candidate => candidate.id === "pool-plan-upgrade")).toMatchObject({
+      plan: "prolite",
+      planSource: "wham",
+      planCredentialGeneration: startGeneration + 1,
+    });
+  });
+
+  test("terminal refresh or WHAM evidence is memoized for the affected credential generation", async () => {
+    for (const scenario of [
+      { id: "pool-terminal-first", terminalAt: "initial" as const, expectedWhamCalls: 1, expectedRefreshCalls: 0 },
+      { id: "pool-invalid-grant", terminalAt: "refresh" as const, expectedWhamCalls: 1, expectedRefreshCalls: 1 },
+      { id: "pool-terminal-retry", terminalAt: "retry" as const, terminalStatus: 403, expectedWhamCalls: 2, expectedRefreshCalls: 1 },
+    ]) {
+      const config = makeConfig();
+      const oldAccess = `old-${scenario.id}`;
+      const refreshedAccess = `new-${scenario.id}`;
+      seedPoolAccount(config, {
+        id: scenario.id,
+        email: `${scenario.id}@example.com`,
+        plan: "plus",
+        accessToken: oldAccess,
+        refreshToken: `refresh-${scenario.id}`,
+        chatgptAccountId: `acct-${scenario.id}`,
+        expiresAt: Date.now() + 24 * 60 * 60_000,
+      });
+      let refreshCalls = 0;
+      const authorizations: Array<string | null> = [];
+      globalThis.fetch = (async (input, init) => {
+        const target = String(input);
+        if (target === "https://auth.openai.com/oauth/token") {
+          refreshCalls += 1;
+          if (scenario.terminalAt === "refresh") {
+            return Response.json({ error: "invalid_grant" }, { status: 400 });
+          }
+          return Response.json({
+            access_token: refreshedAccess,
+            refresh_token: `rotated-${scenario.id}`,
+            expires_in: 3600,
+          });
+        }
+        if (target === "https://chatgpt.com/backend-api/wham/usage") {
+          authorizations.push(new Headers(init?.headers).get("Authorization"));
+          if (scenario.terminalAt === "initial") {
+            return Response.json({ detail: { code: "invalid_refresh_token" } }, { status: 401 });
+          }
+          if (authorizations.length === 1) return new Response("", { status: 401 });
+          return Response.json({ code: "invalid_workspace_selected" }, { status: scenario.terminalStatus ?? 401 });
+        }
+        throw new Error(`Unexpected fetch: ${target}`);
+      }) as typeof fetch;
+
+      const list = async () => (await listCodexAuthAccounts(config, true))
+        .find(account => account.id === scenario.id);
+      expect(await list()).toMatchObject({ needsReauth: true });
+      expect(authorizations).toHaveLength(scenario.expectedWhamCalls);
+      expect(refreshCalls).toBe(scenario.expectedRefreshCalls);
+      expect(await list()).toMatchObject({ needsReauth: true });
+      expect(authorizations).toHaveLength(scenario.expectedWhamCalls);
+      expect(refreshCalls).toBe(scenario.expectedRefreshCalls);
+    }
+  });
+
+  test("bare WHAM failures spend one exchange without falsely expiring the credential", async () => {
+    for (const scenario of [
+      { id: "pool-same-bearer", sameBearer: true, expectedWhamCalls: 1 },
+      { id: "pool-second-bare-401", sameBearer: false, expectedWhamCalls: 2 },
+      { id: "pool-expiry-refresh-then-401", sameBearer: false, expired: true, expectedWhamCalls: 1 },
+    ]) {
+      const config = makeConfig();
+      const oldAccess = `old-${scenario.id}`;
+      const refreshedAccess = scenario.sameBearer ? oldAccess : `new-${scenario.id}`;
+      seedPoolAccount(config, {
+        id: scenario.id,
+        email: `${scenario.id}@example.com`,
+        plan: "plus",
+        accessToken: oldAccess,
+        refreshToken: `refresh-${scenario.id}`,
+        chatgptAccountId: `acct-${scenario.id}`,
+        expiresAt: scenario.expired ? 0 : Date.now() + 24 * 60 * 60_000,
+      });
+      let refreshCalls = 0;
+      const authorizations: Array<string | null> = [];
+      globalThis.fetch = (async (input, init) => {
+        const target = String(input);
+        if (target === "https://auth.openai.com/oauth/token") {
+          refreshCalls += 1;
+          return Response.json({
+            access_token: refreshedAccess,
+            refresh_token: `rotated-${scenario.id}`,
+            expires_in: 3600,
+          });
+        }
+        if (target === "https://chatgpt.com/backend-api/wham/usage") {
+          authorizations.push(new Headers(init?.headers).get("Authorization"));
+          return new Response("", { status: 401 });
+        }
+        throw new Error(`Unexpected fetch: ${target}`);
+      }) as typeof fetch;
+
+      const list = async (forceRefresh: boolean) => (await listCodexAuthAccounts(config, forceRefresh))
+        .find(account => account.id === scenario.id);
+      expect(await list(true)).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+      expect(authorizations).toHaveLength(scenario.expectedWhamCalls);
+      expect(refreshCalls).toBe(1);
+      expect(await list(false)).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+      expect(authorizations).toHaveLength(scenario.expectedWhamCalls);
+      expect(refreshCalls).toBe(1);
+      expect(await list(true)).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+      expect(authorizations).toHaveLength(scenario.expectedWhamCalls + 1);
+      expect(refreshCalls).toBe(1);
+      expect(await list(false)).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+      expect(authorizations).toHaveLength(scenario.expectedWhamCalls + 1);
+      expect(refreshCalls).toBe(1);
+    }
+  });
+
+  test("an ambiguous token refresh is not repeated, and the same bearer is re-probed after backoff", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-transient-refresh",
+      email: "pool-transient-refresh@example.com",
+      plan: "plus",
+      accessToken: "old-transient-access",
+      refreshToken: "old-transient-refresh",
+      chatgptAccountId: "acct-transient-refresh",
+      expiresAt: Date.now() + 24 * 60 * 60_000,
+    });
+    saveConfig(structuredClone(config));
+    let whamCalls = 0;
+    let refreshCalls = 0;
+    const authorizations: Array<string | null> = [];
+    globalThis.fetch = (async (input, init) => {
+      const target = String(input);
+      if (target === "https://auth.openai.com/oauth/token") {
+        refreshCalls += 1;
+        return Response.json({ error: "server_error" }, { status: 503 });
+      }
+      if (target === "https://chatgpt.com/backend-api/wham/usage") {
+        whamCalls += 1;
+        authorizations.push(new Headers(init?.headers).get("Authorization"));
+        if (whamCalls === 1) return new Response("", { status: 401 });
+        return Response.json({
+          plan_type: "prolite",
+          rate_limit: { primary_window: { used_percent: 18, reset_at: 1782628379 } },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
+    }) as typeof fetch;
+
+    const list = async (forceRefresh: boolean) => (await listCodexAuthAccounts(config, forceRefresh))
+      .find(account => account.id === "pool-transient-refresh");
+
+    expect(await list(true)).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+    expect(whamCalls).toBe(1);
+    expect(refreshCalls).toBe(1);
+    expect(await list(false)).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+    expect(whamCalls).toBe(1);
+    expect(refreshCalls).toBe(1);
+    const now = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(now + 5 * 60_000 + 1);
+    try {
+      const recovered = await list(false);
+      expect(recovered).toMatchObject({
+        plan: "prolite",
+        needsReauth: false,
+        quota: { weeklyPercent: 18 },
+      });
+      expect(recovered?.quotaProbeSkipped).toBeUndefined();
+      expect(whamCalls).toBe(2);
+      expect(refreshCalls).toBe(1);
+      expect(authorizations).toEqual([
+        "Bearer old-transient-access",
+        "Bearer old-transient-access",
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("reauthenticated credentials do not inherit a prior generation's terminal quota verdict", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-terminal-replaced",
+      email: "pool-terminal-replaced@example.com",
+      accessToken: "terminal-old",
+      chatgptAccountId: "acct-terminal-old",
+    });
+    let whamCalls = 0;
+    globalThis.fetch = (async (_input, init) => {
+      whamCalls += 1;
+      const authorization = new Headers(init?.headers).get("Authorization");
+      if (whamCalls === 1) {
+        expect(authorization).toBe("Bearer terminal-old");
+        return Response.json({ detail: { code: "invalid_refresh_token" } }, { status: 401 });
+      }
+      expect(authorization).toBe("Bearer terminal-replacement");
+      return Response.json({
+        plan_type: "prolite",
+        rate_limit: { primary_window: { used_percent: 7 } },
+      });
+    }) as typeof fetch;
+
+    const list = async () => (await listCodexAuthAccounts(config, true))
+      .find(account => account.id === "pool-terminal-replaced");
+    expect(await list()).toMatchObject({ needsReauth: true });
+    saveCodexAccountCredential("pool-terminal-replaced", {
+      accessToken: "terminal-replacement",
+      refreshToken: "terminal-replacement-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-terminal-replacement",
+    });
+    expect(await list()).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 7 } });
+    expect(whamCalls).toBe(2);
+  });
+
+  test("a pre-resolution external replacement keeps its own WHAM recovery budget", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-pre-resolution-replacement",
+      email: "pool-pre-resolution-replacement@example.com",
+      accessToken: "pre-resolution-old",
+      refreshToken: "pre-resolution-old-grant",
+      chatgptAccountId: "acct-pre-resolution-old",
+    });
+    const realGetValidWithLineage = accountStoreModule.getValidCodexTokenWithLineage;
+    let replacementWritten = false;
+    const lineageSpy = spyOn(accountStoreModule, "getValidCodexTokenWithLineage").mockImplementation(async id => {
+      if (!replacementWritten && id === "pool-pre-resolution-replacement") {
+        replacementWritten = true;
+        saveCodexAccountCredential(id, {
+          accessToken: "pre-repl",
+          refreshToken: "pre-resolution-replacement-grant",
+          expiresAt: Date.now() + 3600_000,
+          chatgptAccountId: "acct-pre-resolution-replacement",
+        });
+      }
+      return realGetValidWithLineage(id);
+    });
+    let whamCalls = 0;
+    let refreshCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const target = String(input);
+      if (target === "https://auth.openai.com/oauth/token") {
+        refreshCalls += 1;
+        return Response.json({
+          access_token: "pre-new",
+          refresh_token: "pre-resolution-refreshed-grant",
+          expires_in: 3600,
+        });
+      }
+      if (target === "https://chatgpt.com/backend-api/wham/usage") {
+        whamCalls += 1;
+        const authorization = new Headers(init?.headers).get("Authorization");
+        if (whamCalls <= 2) {
+          expect(authorization).toBe("Bearer pre-repl");
+          return new Response("", { status: 401 });
+        }
+        expect(authorization).toBe("Bearer pre-new");
+        return Response.json({ rate_limit: { primary_window: { used_percent: 9 } } });
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
+    }) as typeof fetch;
+
+    try {
+      const list = async () => (await listCodexAuthAccounts(config, true))
+        .find(account => account.id === "pool-pre-resolution-replacement");
+      expect(await list()).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+      expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 1, refreshCalls: 0 });
+      expect(await list()).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 9 } });
+      expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 3, refreshCalls: 1 });
+    } finally {
+      lineageSpy.mockRestore();
+    }
+  });
+
+  test("a spent verdict cannot cross an outer-read credential replacement", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-spent-outer-replacement",
+      email: "pool-spent-outer-replacement@example.com",
+      accessToken: "spent-outer-old",
+      refreshToken: "spent-outer-old-grant",
+      chatgptAccountId: "acct-spent-outer-old",
+    });
+    const oldGeneration = readCodexAccountRecord("pool-spent-outer-replacement")!.generation;
+    quotaRecoveryModule.setPoolQuota401Recovery("pool-spent-outer-replacement", {
+      generation: oldGeneration,
+      disposition: "spent",
+      retryAt: 0,
+    });
+    const realGetRecovery = quotaRecoveryModule.getLivePoolQuota401Recovery;
+    let replacementWritten = false;
+    const recoverySpy = spyOn(quotaRecoveryModule, "getLivePoolQuota401Recovery").mockImplementation((id, generation) => {
+      const result = realGetRecovery(id, generation);
+      if (!replacementWritten && id === "pool-spent-outer-replacement") {
+        replacementWritten = true;
+        saveCodexAccountCredential(id, {
+          accessToken: "spent-outer-replacement",
+          refreshToken: "spent-outer-replacement-grant",
+          expiresAt: Date.now() + 3600_000,
+          chatgptAccountId: "acct-spent-outer-replacement",
+        });
+      }
+      return result;
+    });
+    let whamCalls = 0;
+    let refreshCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const target = String(input);
+      if (target === "https://auth.openai.com/oauth/token") {
+        refreshCalls += 1;
+        return Response.json({
+          access_token: "spent-outer-refreshed",
+          refresh_token: "spent-outer-refreshed-grant",
+          expires_in: 3600,
+        });
+      }
+      if (target === "https://chatgpt.com/backend-api/wham/usage") {
+        whamCalls += 1;
+        const authorization = new Headers(init?.headers).get("Authorization");
+        if (whamCalls === 1) {
+          expect(authorization).toBe("Bearer spent-outer-replacement");
+          return new Response("", { status: 401 });
+        }
+        expect(authorization).toBe("Bearer spent-outer-refreshed");
+        return Response.json({ rate_limit: { primary_window: { used_percent: 12 } } });
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
+    }) as typeof fetch;
+
+    try {
+      const account = (await listCodexAuthAccounts(config, true))
+        .find(candidate => candidate.id === "pool-spent-outer-replacement");
+      expect(account).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 12 } });
+      expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 2, refreshCalls: 1 });
+    } finally {
+      recoverySpy.mockRestore();
+    }
+  });
+
+  test("quota flights join only an intact refresh-owned G to G+1 settlement window", () => {
+    const credential = {
+      accessToken: "flight-old",
+      refreshToken: "flight-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-flight-lineage",
+    };
+    saveCodexAccountCredential("pool-flight-lineage", credential);
+    const start = readCodexAccountRecord("pool-flight-lineage")!;
+    const baseState = {
+      startCredentialGeneration: start.generation,
+      startCredentialReplacedAt: start.replacedAt,
+      startChatgptAccountId: credential.chatgptAccountId,
+    };
+    expect(saveCodexAccountCredentialIfGeneration("pool-flight-lineage", start.generation, {
+      ...credential,
+      accessToken: "flight-refreshed",
+      refreshToken: "flight-refreshed-grant",
+    })).toBe(true);
+    expect(isCodexQuotaRefreshFlightCurrentForTests("pool-flight-lineage", baseState)).toBe(true);
+    expect(isCodexQuotaRefreshFlightCurrentForTests("pool-flight-lineage", {
+      ...baseState,
+      resolvedCredentialGeneration: start.generation,
+    })).toBe(true);
+
+    saveCodexAccountCredential("pool-flight-external", credential);
+    const externalStart = readCodexAccountRecord("pool-flight-external")!;
+    const externalState = {
+      startCredentialGeneration: externalStart.generation,
+      startCredentialReplacedAt: externalStart.replacedAt,
+      startChatgptAccountId: credential.chatgptAccountId,
+    };
+    saveCodexAccountCredential("pool-flight-external", {
+      ...credential,
+      accessToken: "external-replacement",
+      refreshToken: "external-replacement-grant",
+    });
+    expect(isCodexQuotaRefreshFlightCurrentForTests("pool-flight-external", externalState)).toBe(false);
+    expect(isCodexQuotaRefreshFlightCurrentForTests("pool-flight-external", {
+      ...externalState,
+      resolvedCredentialGeneration: externalStart.generation,
+    })).toBe(false);
+  });
+
   test("GET /api/codex-auth/accounts reconciles and persists a fresh pool plan on a cache miss", async () => {
     const config = makeConfig();
     seedPoolAccount(config, {
@@ -1535,12 +1985,12 @@ describe("codex-auth API", () => {
       id: "pool-plan-unchanged",
       email: "pool-plan-unchanged@example.com",
       plan: "plus",
-      // Provenance already stamped: steady state. The FIRST WHAM observation after the
-      // provenance feature landed performs one migration write; that case is covered by
-      // the WHAM-wins gate tests. Steady-state refreshes must stay write-free.
-      planSource: "wham",
-      planCredentialGeneration: 1,
     });
+    const account = config.codexAccounts?.find(candidate => candidate.id === "pool-plan-unchanged")!;
+    account.planSource = "wham";
+    account.planCredentialGeneration = readCodexAccountRecord("pool-plan-unchanged")!.generation;
+    // Provenance is already stamped for the live generation. The first WHAM observation
+    // after the provenance feature landed may migrate metadata, but steady state is write-free.
     saveConfig(structuredClone(config));
     let configCommits = 0;
     setPersistedConfigMutationBeforeCommitForTests(() => { configCommits += 1; });

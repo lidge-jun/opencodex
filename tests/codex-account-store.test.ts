@@ -700,6 +700,70 @@ describe("codex-account-store CRUD", () => {
     }
   });
 
+  test("a shared-grant flight never copies credentials across ChatGPT account identities", async () => {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    const originalFetch = globalThis.fetch;
+    try {
+      for (const scenario of [
+        { suffix: "different", ownerIdentity: "acct-owner", joinerIdentity: "acct-joiner" },
+        { suffix: "empty", ownerIdentity: "", joinerIdentity: "" },
+      ]) {
+        const ownerId = `identity-owner-${scenario.suffix}`;
+        const joinerId = `identity-joiner-${scenario.suffix}`;
+        const grant = `identity-shared-grant-${scenario.suffix}`;
+        const expiresAt = Date.now() + 3600_000;
+        saveCodexAccountCredential(ownerId, {
+          accessToken: `owner-rejected-${scenario.suffix}`,
+          refreshToken: grant,
+          expiresAt,
+          chatgptAccountId: scenario.ownerIdentity,
+        });
+        saveCodexAccountCredential(joinerId, {
+          accessToken: `joiner-rejected-${scenario.suffix}`,
+          refreshToken: grant,
+          expiresAt,
+          chatgptAccountId: scenario.joinerIdentity,
+        });
+        const ownerGeneration = readCodexAccountRecord(ownerId)!.generation;
+        const joinerGeneration = readCodexAccountRecord(joinerId)!.generation;
+        let calls = 0;
+        let releaseOwner!: () => void;
+        const ownerStarted = new Promise<void>(resolve => {
+          globalThis.fetch = (async () => {
+            calls += 1;
+            if (calls === 1) {
+              resolve();
+              await new Promise<void>(release => { releaseOwner = release; });
+              return Response.json({ access_token: `owner-new-${scenario.suffix}`, refresh_token: `owner-grant-${scenario.suffix}`, expires_in: 3600 });
+            }
+            return Response.json({ access_token: `joiner-new-${scenario.suffix}`, refresh_token: `joiner-grant-${scenario.suffix}`, expires_in: 3600 });
+          }) as typeof fetch;
+        });
+
+        const owner = forceRefreshCodexPoolToken(ownerId, {
+          rejectedGeneration: ownerGeneration,
+          rejectedAccessToken: `owner-rejected-${scenario.suffix}`,
+        });
+        await ownerStarted;
+        const joiner = forceRefreshCodexPoolToken(joinerId, {
+          rejectedGeneration: joinerGeneration,
+          rejectedAccessToken: `joiner-rejected-${scenario.suffix}`,
+        });
+        releaseOwner();
+
+        const [ownerResult, joinerResult] = await Promise.all([owner, joiner]);
+        expect(calls).toBe(2);
+        expect(ownerResult).toMatchObject({ accessToken: `owner-new-${scenario.suffix}`, chatgptAccountId: scenario.ownerIdentity });
+        expect(joinerResult).toMatchObject({ accessToken: `joiner-new-${scenario.suffix}`, chatgptAccountId: scenario.joinerIdentity });
+        expect(readCodexAccountRecord(ownerId)?.credential?.accessToken).toBe(`owner-new-${scenario.suffix}`);
+        expect(readCodexAccountRecord(joinerId)?.credential?.accessToken).toBe(`joiner-new-${scenario.suffix}`);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   /*
    * #2892 gap 2. Flights are shared: a later caller on the same grant joins the
    * running promise instead of opening its own. The flight's abort signal used to

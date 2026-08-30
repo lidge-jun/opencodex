@@ -376,7 +376,13 @@ function withCredentialMutationLockSync<T>(fn: () => T): T {
   }
 }
 
-type CodexTokenResult = { accessToken: string; chatgptAccountId: string; generation: number };
+type CodexTokenResult = {
+  accessToken: string;
+  chatgptAccountId: string;
+  generation: number;
+  /** This call's own generation CAS produced the returned credential. */
+  selfRefreshed?: boolean;
+};
 type CodexRefreshResult = CodexTokenResult & {
   credential?: CodexAccountCredentials;
   /**
@@ -609,6 +615,17 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
   };
 }
 
+/** Quota recovery also needs to distinguish this call's refresh from an external replacement. */
+export async function getValidCodexTokenWithLineage(id: string): Promise<CodexTokenResult> {
+  const result = await resolveCodexToken(id);
+  return {
+    accessToken: result.accessToken,
+    chatgptAccountId: result.chatgptAccountId,
+    generation: result.generation,
+    ...(result.selfRefreshed !== undefined ? { selfRefreshed: result.selfRefreshed } : {}),
+  };
+}
+
 async function resolveCodexToken(
   id: string,
   forced?: ForcedRefreshFence,
@@ -697,6 +714,11 @@ async function resolveCodexToken(
         // the owner's own credential was replaced while it waited for the lock. Adopting
         // that would copy another account's access and refresh tokens onto this one.
         refreshed.resolvedGrantFingerprint === refreshGrantFingerprint &&
+        // A shared refresh grant is not an identity proof. The joined flight's
+        // credential may belong to another ChatGPT account, so require the same
+        // non-empty upstream identity before copying the complete credential.
+        !!currentCred.chatgptAccountId &&
+        currentCred.chatgptAccountId === refreshed.credential.chatgptAccountId &&
         // A joined flight that resolved to the rejected token proves nothing; fall
         // through and open a real refresh instead of bumping the generation.
         !(forced !== undefined && refreshed.credential.accessToken === forced.rejectedAccessToken) &&

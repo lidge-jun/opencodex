@@ -22,6 +22,12 @@ import {
   sweepDeadOcxStartProcessCache,
 } from "../src/config";
 import { STATE_STORE_REGISTRATIONS } from "../src/lib/state-store-registrations";
+import { readCodexAccountRecord, saveCodexAccountCredential } from "../src/codex/account-store";
+import {
+  clearPoolQuota401RecoveryForTests,
+  getLivePoolQuota401Recovery,
+  setPoolQuota401Recovery,
+} from "../src/codex/quota-401-recovery";
 import { getAccountSet, saveCredential } from "../src/oauth/store";
 import {
   clearAccountQuotaCache,
@@ -79,12 +85,14 @@ beforeEach(() => {
   resetAppOwnedMemoryForTests();
   clearResponseStateMemoryForTests();
   __resetAntigravityReplayCache();
+  clearPoolQuota401RecoveryForTests();
 });
 afterEach(() => {
   resetStateStoreSweeperForTests();
   resetAppOwnedMemoryForTests();
   clearResponseStateMemoryForTests();
   __resetAntigravityReplayCache();
+  clearPoolQuota401RecoveryForTests();
   setOcxStartProcessCacheForTests([]);
   setOcxStartProcessProbeForTests(null);
   if (previousSweeperHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -109,6 +117,7 @@ describe("state-store sweeper", () => {
       "combo-warning-memos",
       "router-warning-memos",
       "codex-quota",
+      "codex-quota-401-recovery",
       "provider-quota-history",
       "codex-routing-health",
       "model-cache-history",
@@ -122,6 +131,32 @@ describe("state-store sweeper", () => {
       "oauth-flow-state",
       "ocx-start-process-cache",
     ]);
+  });
+
+  test("Codex quota 401 recovery rows are removed when their account leaves live config", () => {
+    saveCodexAccountCredential("swept-quota-account", {
+      accessToken: "swept-access",
+      refreshToken: "swept-refresh",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-swept",
+    });
+    const generation = readCodexAccountRecord("swept-quota-account")!.generation;
+    setPoolQuota401Recovery("swept-quota-account", {
+      generation,
+      disposition: "spent",
+      retryAt: Date.now() + 300_000,
+    });
+    expect(getLivePoolQuota401Recovery("swept-quota-account", generation)).toBeDefined();
+
+    const registration = STATE_STORE_REGISTRATIONS
+      .find(candidate => candidate.name === "codex-quota-401-recovery")!;
+    registerStateStore(registration);
+    expect(reconcileStateGeneration(context(1, {
+      codexAccountIds: new Set(["swept-quota-account"]),
+    })).rowsRemoved).toBe(0);
+    expect(getLivePoolQuota401Recovery("swept-quota-account", generation)).toBeDefined();
+    expect(reconcileStateGeneration(context(2)).rowsRemoved).toBe(1);
+    expect(getLivePoolQuota401Recovery("swept-quota-account", generation)).toBeUndefined();
   });
 
   test("a sweeper tick expires continuation and Antigravity rows without store traffic", () => {

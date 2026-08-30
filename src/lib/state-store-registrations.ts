@@ -9,6 +9,7 @@ import { reconcileProviderFetchWarnings } from "../codex/catalog/provider-fetch"
 import { reconcileModelCacheGeneration } from "../codex/model-cache";
 import { reconcilePoolRotationState } from "../codex/pool-rotation";
 import { reconcileCodexQuotaAccounts } from "../codex/quota";
+import { reconcilePoolQuota401Recovery } from "../codex/quota-401-recovery";
 import {
   listLiveCodexAccountIds,
   reconcileCodexRoutingHealth,
@@ -98,6 +99,7 @@ export const STATE_STORE_REGISTRATIONS = [
   { name: "combo-warning-memos", reconcileGeneration: (context: GenerationContext) => reconcileComboWarningMemos(context.generation) },
   { name: "router-warning-memos", reconcileGeneration: (context: GenerationContext) => reconcileRouterWarningMemos(context.generation) },
   { name: "codex-quota", reconcileGeneration: reconcileCodexQuotaAccounts },
+  { name: "codex-quota-401-recovery", reconcileGeneration: reconcilePoolQuota401Recovery },
   { name: "provider-quota-history", reconcileGeneration: reconcileProviderAccountQuotaRows },
   { name: "codex-routing-health", reconcileGeneration: reconcileCodexRoutingHealth },
   { name: "model-cache-history", reconcileGeneration: reconcileModelCacheGeneration },
