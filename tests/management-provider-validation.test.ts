@@ -795,6 +795,77 @@ describe("provider management validation", () => {
   });
 
   // #1409: the add/edit form's payload type has no member for contextWindow or
+  test("provider POST overwrite preserves an explicit annotateEmptyToolOutputs: false", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "deepseek",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.deepseek.com/v1",
+            apiKey: "sk-deepseek-test",
+            annotateEmptyToolOutputs: false,
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+      expect(loadConfig().providers.deepseek?.annotateEmptyToolOutputs).toBe(false);
+
+      // DeepSeek carries a registry default of `true`. An overwrite that says nothing about
+      // annotation must not resurrect it: the operator turned the annotation OFF on purpose,
+      // and enrichment cannot tell "client omitted" from "registry supplied" once it has run.
+      const overwrite = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "deepseek",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.deepseek.com/v1",
+            apiKey: "sk-deepseek-rotated",
+          },
+        }),
+      });
+      expect(overwrite.status).toBe(200);
+      expect(loadConfig().providers.deepseek?.annotateEmptyToolOutputs).toBe(false);
+
+      // The stored value is only half the contract — assert the RUNTIME resolution too, since
+      // router.ts backfills the registry default beneath user entries at resolve time.
+      const { routedProviderConfig } = await import("../src/router");
+      const stored = loadConfig().providers.deepseek;
+      expect(stored).toBeDefined();
+      expect(routedProviderConfig("deepseek", stored!).annotateEmptyToolOutputs).toBe(false);
+
+      // An explicit `true` must still win, and a fresh row must still receive the default.
+      const reenable = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "deepseek",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.deepseek.com/v1",
+            apiKey: "sk-deepseek-rotated",
+            annotateEmptyToolOutputs: true,
+          },
+        }),
+      });
+      expect(reenable.status).toBe(200);
+      expect(loadConfig().providers.deepseek?.annotateEmptyToolOutputs).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // #1409: the add/edit form's payload type has no member for contextWindow or
   // modelContextWindows, so an overwrite arrives without them. Registry enrichment then fills
   // the absent fields from the seed and the stored row loses the user's values — for
   // opencode-go the seed is exactly {"kimi-k3": 262144}, which is what the reporter found in
