@@ -7,8 +7,8 @@ after its final response has already been delivered.
 
 | Host | Proxy | Version | Checkout | Kiro attempt rows |
 | --- | --- | --- | --- | --- |
-| local (this machine) | PID 99470, port 10100 | 2.36.0 | `/Users/jun/Developer/new/700_projects/opencodex` | 4080 |
-| `macmini-cf` | PID 96671, port 10100 | 2.35.0 | `/Users/junny/opencodex` | 0 |
+| local (this machine) | PID 99470, port 10100 | 2.36.0 | primary source checkout | 4080 |
+| `macmini-cf` | PID 96671, port 10100 | 2.35.0 | `~/opencodex` | 0 |
 
 `macmini-cf` carries no Kiro attempt diagnostics at all, so every behavioral
 row below comes from the local 2.36.0 proxy. The remote host is one release
