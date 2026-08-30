@@ -12,6 +12,7 @@ import {
 } from "../../codex/auth-context";
 import {
   MAIN_CODEX_ACCOUNT_ID,
+  MainAccountRefreshCancelledError,
   MainAccountTokenRefreshError,
   MainAuthJsonChangedDuringRefreshError,
 } from "../../codex/main-account";
@@ -22,6 +23,9 @@ export interface CodexAuthContextErrorResponseOptions {
 }
 
 export function nativeMainRefreshFailureResponse(error: unknown): Response {
+  if (error instanceof MainAccountRefreshCancelledError) {
+    return formatErrorResponse(499, "client_cancelled", "Client cancelled native credential refresh");
+  }
   if (error instanceof MainAccountTokenRefreshError && error.reason === "reauth") {
     return formatErrorResponse(401, "authentication_error", "Codex main account needs reauthentication");
   }

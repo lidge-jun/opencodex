@@ -6,18 +6,22 @@ import {
   decodeJwtPayload,
   extractAccountId,
   refreshChatGPTToken,
+  ChatGPTTokenRefreshError,
 } from "../oauth/chatgpt";
 import type { OAuthCredentials } from "../oauth/types";
 import { extractChatgptPlanType } from "./plan";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
-import {
-  refreshGrantFingerprintForToken,
-  withCodexRefreshFileLock,
-} from "./account-store";
-import { atomicWriteFile, resolveWriteTarget } from "../config/atomic-write";
 import { resolveCodexHomeDir } from "./home";
 import { assertNotRealCodexHomeUnderTest } from "../lib/test-home-guard";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
+import { withNativeMainExclusiveClaim } from "./native-main-claim";
+import { withNativeMainOwnerOperation } from "./native-main-owner";
+import { resolveNativeProfileContext, type NativeProfileContext } from "./native-profile-store";
+import {
+  NativeMainRefreshPublicationError,
+  publishNativeMainRefresh,
+  recoverNativeMainRefreshPublication,
+} from "./native-main-refresh-publication";
 
 export { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
@@ -29,10 +33,13 @@ export { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 let mainAccountPlan: string | null = null;
 let jwtPlanAttempted = false;
 const MAIN_TOKEN_REFRESH_SKEW_MS = 60_000;
+const NATIVE_MAIN_REFRESH_WAIT_MS = 30_000;
+const MAX_NATIVE_MAIN_REFRESH_FLIGHTS = 32;
 let beforeMainAuthJsonRenameForTests: (() => void) | null = null;
 
 type MainAuthJsonCredential = {
   path: string;
+  raw: string;
   rawSha256: string;
   root: Record<string, unknown>;
   tokens: Record<string, unknown>;
@@ -45,6 +52,15 @@ export interface NativeMainRefreshDependencies {
   refreshToken?: (refreshToken: string, options: { signal: AbortSignal }) => Promise<OAuthCredentials>;
   signal?: AbortSignal;
 }
+
+type NativeMainRefreshFlight = {
+  controller: AbortController;
+  deadline: ReturnType<typeof setTimeout>;
+  waiters: number;
+  promise: Promise<{ accessToken: string; chatgptAccountId: string }>;
+};
+
+const nativeMainRefreshFlights = new Map<string, NativeMainRefreshFlight>();
 
 export class MainAuthJsonChangedDuringRefreshError extends Error {
   constructor() {
@@ -62,16 +78,19 @@ export class MainAccountTokenRefreshError extends Error {
   }
 }
 
+export class MainAccountRefreshCancelledError extends Error {
+  constructor() {
+    super("Native credential refresh was cancelled.");
+    this.name = "MainAccountRefreshCancelledError";
+  }
+}
+
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function readMainAuthJsonCredential(): MainAuthJsonCredential | null {
-  const path = resolveWriteTarget(join(resolveCodexHomeDir(), "auth.json"));
+  const path = join(resolveCodexHomeDir(), "auth.json");
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
@@ -94,7 +113,8 @@ function readMainAuthJsonCredential(): MainAuthJsonCredential | null {
       ?? "";
     return {
       path,
-      rawSha256: sha256(raw),
+      raw,
+      rawSha256: createHash("sha256").update(raw).digest("hex"),
       root,
       tokens,
       ...(accessToken ? { accessToken } : {}),
@@ -131,6 +151,7 @@ function assertMainAuthJsonSnapshotUnchanged(expected: MainAuthJsonCredential): 
 }
 
 function persistRefreshedMainAuthJson(
+  context: NativeProfileContext,
   expected: MainAuthJsonCredential,
   refreshed: OAuthCredentials,
 ): { accessToken: string; chatgptAccountId: string } {
@@ -146,20 +167,12 @@ function persistRefreshedMainAuthJson(
     refresh_token: refreshToken,
     account_id: chatgptAccountId,
   };
-  atomicWriteFile(
-    expected.path,
-    JSON.stringify({ ...expected.root, tokens }, null, 2) + "\n",
-    undefined,
-    {
-      beforeRename: () => {
-        assertMainAuthJsonSnapshotUnchanged(expected);
-        const hook = beforeMainAuthJsonRenameForTests;
-        beforeMainAuthJsonRenameForTests = null;
-        hook?.();
-      },
-      validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
-    },
-  );
+  assertMainAuthJsonSnapshotUnchanged(expected);
+  const hook = beforeMainAuthJsonRenameForTests;
+  beforeMainAuthJsonRenameForTests = null;
+  hook?.();
+  assertMainAuthJsonSnapshotUnchanged(expected);
+  publishNativeMainRefresh(context, expected.raw, JSON.stringify({ ...expected.root, tokens }, null, 2) + "\n");
   return { accessToken, chatgptAccountId };
 }
 
@@ -185,41 +198,91 @@ async function resolveMainAccountToken(
       : null;
   }
 
-  const signal = dependencies.signal
-    ? AbortSignal.any([dependencies.signal, AbortSignal.timeout(30_000)])
-    : AbortSignal.timeout(30_000);
-  const lockKey = refreshGrantFingerprintForToken(initial.refreshToken);
-  return withCodexRefreshFileLock(lockKey, signal, async () => {
-    const locked = readMainAuthJsonCredential();
-    if (!locked) throw new MainAuthJsonChangedDuringRefreshError();
-    if (!locked.refreshToken
-      || refreshGrantFingerprintForToken(locked.refreshToken) !== lockKey) {
-      if (locked.accessToken !== rejectedAccessToken
-        && mainAccessTokenFresh(locked.accessToken, Date.now(), 0)) {
-        return { accessToken: locked.accessToken!, chatgptAccountId: locked.chatgptAccountId };
-      }
-      throw new MainAuthJsonChangedDuringRefreshError();
-    }
-    if (locked.accessToken !== rejectedAccessToken
-      && mainAccessTokenFresh(locked.accessToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
-      return { accessToken: locked.accessToken!, chatgptAccountId: locked.chatgptAccountId };
-    }
-    const refresh = dependencies.refreshToken
-      ?? ((refreshToken: string, options: { signal: AbortSignal }) => refreshChatGPTToken(refreshToken, options));
-    let refreshed: OAuthCredentials;
-    try {
-      refreshed = await refresh(locked.refreshToken, { signal });
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message.toLowerCase() : "";
-      const reason = /invalid_grant|invalidated|revoked|expired/.test(message)
-        ? "reauth" as const
-        : "transient" as const;
-      throw new MainAccountTokenRefreshError(reason, { cause });
-    }
-    const result = persistRefreshedMainAuthJson(locked, refreshed);
-    clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
-    return result;
-  });
+  const context = resolveNativeProfileContext();
+  const current = nativeMainRefreshFlights.get(context.homeId);
+  if (current) return await waitForNativeMainRefresh(current, dependencies.signal);
+  if (nativeMainRefreshFlights.size >= MAX_NATIVE_MAIN_REFRESH_FLIGHTS) {
+    throw new MainAccountTokenRefreshError("transient");
+  }
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(new Error("Native credential refresh timed out")), NATIVE_MAIN_REFRESH_WAIT_MS);
+  const flight: NativeMainRefreshFlight = {
+    controller,
+    deadline,
+    waiters: 0,
+    promise: runNativeMainRefreshFlight(context, dependencies, rejectedAccessToken, controller.signal),
+  };
+  nativeMainRefreshFlights.set(context.homeId, flight);
+  flight.promise.finally(() => {
+    clearTimeout(flight.deadline);
+    if (nativeMainRefreshFlights.get(context.homeId) === flight) nativeMainRefreshFlights.delete(context.homeId);
+  }).catch(() => undefined);
+  return await waitForNativeMainRefresh(flight, dependencies.signal);
+}
+
+function abortError(_signal: AbortSignal): MainAccountRefreshCancelledError {
+  return new MainAccountRefreshCancelledError();
+}
+
+async function waitForNativeMainRefresh(
+  flight: NativeMainRefreshFlight,
+  signal: AbortSignal | undefined,
+): Promise<{ accessToken: string; chatgptAccountId: string }> {
+  flight.waiters += 1;
+  try {
+    if (!signal) return await flight.promise;
+    if (signal.aborted) throw abortError(signal);
+    return await Promise.race([
+      flight.promise,
+      new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(abortError(signal)), { once: true })),
+    ]);
+  } finally {
+    flight.waiters -= 1;
+    if (flight.waiters === 0) flight.controller.abort();
+  }
+}
+
+async function runNativeMainRefreshFlight(
+  context: NativeProfileContext,
+  dependencies: NativeMainRefreshDependencies,
+  rejectedAccessToken: string | undefined,
+  signal: AbortSignal,
+): Promise<{ accessToken: string; chatgptAccountId: string }> {
+  try {
+    return await withNativeMainOwnerOperation(context, async () => await withNativeMainExclusiveClaim(
+      context,
+      async () => {
+        recoverNativeMainRefreshPublication(context);
+        const locked = readMainAuthJsonCredential();
+        if (!locked) throw new MainAuthJsonChangedDuringRefreshError();
+        if (locked.accessToken !== rejectedAccessToken
+          && mainAccessTokenFresh(locked.accessToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
+          return { accessToken: locked.accessToken!, chatgptAccountId: locked.chatgptAccountId };
+        }
+        if (!locked.refreshToken) throw new MainAuthJsonChangedDuringRefreshError();
+        const refresh = dependencies.refreshToken
+          ?? ((token: string, options: { signal: AbortSignal }) => refreshChatGPTToken(token, options));
+        let refreshed: OAuthCredentials;
+        try {
+          refreshed = await refresh(locked.refreshToken, { signal });
+        } catch (cause) {
+          const terminal = cause instanceof ChatGPTTokenRefreshError
+            && cause.code === "invalid_grant"
+            && (cause.status === 400 || cause.status === 401);
+          throw new MainAccountTokenRefreshError(terminal ? "reauth" : "transient", { cause });
+        }
+        if (signal.aborted) throw new MainAccountTokenRefreshError("transient");
+        const result = persistRefreshedMainAuthJson(context, locked, refreshed);
+        clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+        return result;
+      },
+      { waitMs: NATIVE_MAIN_REFRESH_WAIT_MS },
+    ));
+  } catch (cause) {
+    if (cause instanceof MainAccountTokenRefreshError || cause instanceof MainAuthJsonChangedDuringRefreshError) throw cause;
+    if (cause instanceof NativeMainRefreshPublicationError) throw new MainAccountTokenRefreshError("transient", { cause });
+    throw new MainAccountTokenRefreshError("transient", { cause });
+  }
 }
 
 /** Refresh the CLI-owned native credential before upstream I/O and publish it atomically. */

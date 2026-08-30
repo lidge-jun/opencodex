@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   getValidMainAccountToken,
+  MainAccountTokenRefreshError,
   setMainAuthJsonBeforeRenameHookForTests,
 } from "../src/codex/main-account";
 
@@ -116,5 +117,59 @@ describe("native main token refresh", () => {
 
     expect(readFileSync(authPath)).toEqual(original);
     expect(readdirSync(home).filter(name => name.includes(".tmp"))).toEqual([]);
+  });
+
+  test("does not classify an unstructured invalid_grant description as terminal", async () => {
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: expiredJwt(),
+        refresh_token: "old-refresh",
+        account_id: "account-main",
+      },
+    }));
+
+    const failure = await getValidMainAccountToken({
+      refreshToken: async () => { throw new Error("invalid_grant"); },
+    }).catch(error => error);
+
+    expect(failure).toBeInstanceOf(MainAccountTokenRefreshError);
+    expect((failure as MainAccountTokenRefreshError).reason).toBe("transient");
+  });
+
+  test("keeps a joiner alive when the refresh owner cancels", async () => {
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: expiredJwt(),
+        refresh_token: "old-refresh",
+        account_id: "account-main",
+      },
+    }));
+    const owner = new AbortController();
+    let attempts = 0;
+    let entered!: () => void;
+    const enteredRefresh = new Promise<void>(resolve => { entered = resolve; });
+    let complete!: (value: { access: string; refresh: string; expires: number; accountId: string }) => void;
+    const remoteResult = new Promise<{ access: string; refresh: string; expires: number; accountId: string }>(resolve => {
+      complete = resolve;
+    });
+    const refreshToken = async (_refresh: string, options: { signal: AbortSignal }) => {
+      attempts += 1;
+      entered();
+      return await Promise.race([
+        remoteResult,
+        new Promise<never>((_resolve, reject) => {
+          options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+        }),
+      ]);
+    };
+    const cancelled = getValidMainAccountToken({ signal: owner.signal, refreshToken });
+    await enteredRefresh;
+    const joined = getValidMainAccountToken({ refreshToken });
+    owner.abort(new Error("caller cancelled"));
+    complete({ access: "new-access", refresh: "new-refresh", expires: Date.now() + 3_600_000, accountId: "account-main" });
+
+    await expect(cancelled).rejects.toBeDefined();
+    await expect(joined).resolves.toEqual({ accessToken: "new-access", chatgptAccountId: "account-main" });
+    expect(attempts).toBe(1);
   });
 });

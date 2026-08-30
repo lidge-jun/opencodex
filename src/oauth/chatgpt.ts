@@ -10,6 +10,13 @@ const CALLBACK_PORT = 1455;
 const CALLBACK_PATH = "/auth/callback";
 const ORIGINATOR = "opencodex";
 
+export class ChatGPTTokenRefreshError extends Error {
+  constructor(readonly status: number, readonly code: string | undefined) {
+    super("ChatGPT token refresh failed.");
+    this.name = "ChatGPTTokenRefreshError";
+  }
+}
+
 export function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   const parts = token.split(".");
   if (parts.length !== 3 || !parts[1]) return undefined;
@@ -135,6 +142,15 @@ function safeErrorDescription(resp: Response): Promise<string> {
   });
 }
 
+async function oauthErrorCode(resp: Response): Promise<string | undefined> {
+  try {
+    const parsed = await resp.json() as { error?: unknown };
+    return typeof parsed.error === "string" ? parsed.error : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function loginChatGPT(ctrl: OAuthController, opts?: { forceLogin?: boolean }): Promise<OAuthCredentials> {
   const flow = new ChatGPTOAuthFlow(ctrl);
   if (opts?.forceLogin) flow.forceLogin = true;
@@ -158,8 +174,7 @@ export async function refreshChatGPTToken(
     signal: options.signal,
   });
   if (!resp.ok) {
-    const errDesc = await safeErrorDescription(resp);
-    throw new Error(`ChatGPT refresh failed: ${resp.status} ${errDesc}`);
+    throw new ChatGPTTokenRefreshError(resp.status, await oauthErrorCode(resp));
   }
   return credsFromToken((await resp.json()) as Record<string, unknown>);
 }
