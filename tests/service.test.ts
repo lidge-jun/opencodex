@@ -479,11 +479,32 @@ describe("Windows service task", () => {
     // Present but disabled is not recovery either, and the Enabled/StateChange pair must be
     // matched within ONE element rather than found in two unrelated ones.
     const disabled = xml.replace(
-      /<SessionStateChangeTrigger>\s*<Enabled>true<\/Enabled>\s*<StateChange>RemoteConnect<\/StateChange>\s*<\/SessionStateChangeTrigger>/i,
+      /<SessionStateChangeTrigger>(?:(?!<\/SessionStateChangeTrigger>)[\s\S])*?<StateChange>RemoteConnect<\/StateChange>[\s\S]*?<\/SessionStateChangeTrigger>/i,
       "<SessionStateChangeTrigger><Enabled>false</Enabled><StateChange>RemoteConnect</StateChange></SessionStateChangeTrigger>",
     );
     expect(disabled).toContain("<StateChange>RemoteConnect</StateChange>");
+    expect(disabled).toContain("<Enabled>false</Enabled>");
     expect(windowsTaskRegistrationHealthy(disabled, wscript, launcher)).toBe(false);
+  });
+
+  /**
+   * `UserId` is optional in the schema, and omitting it makes a SessionStateChangeTrigger fire
+   * for any account's session change. Scope it to the installing account when that account is
+   * known. The builder is synchronous and cannot force an account lookup, so an unknown
+   * account degrades to the unscoped trigger — the same position the pre-existing
+   * `LogonTrigger` is already in, and still better than having no recovery trigger at all.
+   */
+  test("scopes session-recovery triggers to the installing account when it is known", () => {
+    const scoped = buildWindowsTaskXml("s.cmd", "l.vbs", undefined, "MACHINE\\installer");
+    const elements = scoped.match(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>/gi) ?? [];
+    expect(elements).toHaveLength(3);
+    for (const element of elements) expect(element).toContain("<UserId>MACHINE\\installer</UserId>");
+
+    // Unknown account: unscoped rather than absent. Passed explicitly because the parameter
+    // defaults to a process-cached identity that other tests in this file may have populated.
+    const unscoped = buildWindowsTaskXml("s.cmd", "l.vbs", undefined, "");
+    expect(unscoped).toContain("<StateChange>RemoteConnect</StateChange>");
+    expect(unscoped).not.toContain("<UserId>");
   });
 
   test("validates the registered scheduler action, trigger, principal, and settings", () => {

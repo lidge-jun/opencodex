@@ -46,6 +46,7 @@ import {
   hardenSecretPath,
 } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
+import { cachedCurrentWindowsIdentity } from "./lib/windows-user-principal";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { killWindowsSchedulerWrappers } from "./lib/windows-service-wrappers";
 import { maybeShowStarPrompt } from "./cli/star-prompt";
@@ -1784,11 +1785,21 @@ export function buildWindowsTaskXml(
   script = windowsServiceScriptPath(),
   launcher = windowsLauncherVbsPath(),
   attemptNonce?: string,
+  sessionTriggerUserId = cachedCurrentWindowsIdentity()?.name,
 ): string {
   const escapedWscript = taskXmlString(windowsWscript());
   // Escape the launcher path independently for the <Arguments> element; quoting it
   // keeps spaces intact, and /b (batch mode) suppresses script error popups.
   const escapedLauncherArgs = taskXmlString(`/b /nologo "${launcher}"`);
+  // `UserId` is optional in the schema, and omitting it makes a SessionStateChangeTrigger
+  // fire for ANY account's session change. Scope it to the installing account when that
+  // account is already known. The lookup is never forced here: this builder is synchronous
+  // and its output is validated before registration, so a failed or unavailable lookup must
+  // degrade to the unscoped trigger rather than leave the task with no recovery at all.
+  // `LogonTrigger` above is unscoped for the same reason and predates this change.
+  const sessionUserIdElement = sessionTriggerUserId
+    ? `\n      <UserId>${taskXmlString(sessionTriggerUserId)}</UserId>`
+    : "";
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -1800,7 +1811,7 @@ export function buildWindowsTaskXml(
     </LogonTrigger>
     ${WINDOWS_SESSION_RECOVERY_STATE_CHANGES.map(stateChange => `<SessionStateChangeTrigger>
       <Enabled>true</Enabled>
-      <StateChange>${stateChange}</StateChange>
+      <StateChange>${stateChange}</StateChange>${sessionUserIdElement}
     </SessionStateChangeTrigger>`).join("\n    ")}
   </Triggers>
   <Principals>
@@ -1938,12 +1949,27 @@ export function windowsTaskRegistrationOwnedByAttempt(xml: string, attemptNonce:
  * carrying one disabled trigger plus a different enabled one must not pass because the two
  * halves were found in unrelated elements.
  */
-function windowsTaskHasSessionRecoveryTriggers(triggers: string): boolean {
+function windowsTaskHasSessionRecoveryTriggers(triggers: string, expectedUserId: string | undefined): boolean {
   const scoped = triggers.match(/<SessionStateChangeTrigger(?:\s[^>]*)?>[\s\S]*?<\/SessionStateChangeTrigger>/gi) ?? [];
   return WINDOWS_SESSION_RECOVERY_STATE_CHANGES.every(stateChange =>
     scoped.some(element =>
       taskXmlDecodedValueEquals(element, "StateChange", stateChange)
-      && taskXmlOptionalValueEquals(element, "Enabled", "true")));
+      && taskXmlOptionalValueEquals(element, "Enabled", "true")
+      && windowsTaskTriggerScopeAcceptable(element, expectedUserId)));
+}
+
+/**
+ * A trigger's scope is acceptable when it is unscoped, or names the expected account.
+ *
+ * An unscoped trigger is accepted rather than rejected: the schema makes `UserId` optional,
+ * the pre-existing `LogonTrigger` is unscoped for the same reason, and rejecting it would
+ * mean an installation whose account lookup is unavailable loses session recovery entirely.
+ * A trigger naming a DIFFERENT account is rejected, which is the case that actually matters.
+ */
+function windowsTaskTriggerScopeAcceptable(element: string, expectedUserId: string | undefined): boolean {
+  if (taskXmlElementCount(element, "UserId") === 0) return true;
+  if (expectedUserId === undefined) return true;
+  return taskXmlDecodedValueEquals(element, "UserId", expectedUserId);
 }
 
 /** Validate the security/lifecycle-critical fields of the registered scheduler task. */
@@ -1970,7 +1996,7 @@ export function windowsTaskRegistrationHealthy(
     // Without these the task can only recover at the next logon, so a disconnected session
     // leaves the proxy down indefinitely. Treating their absence as unhealthy is what lets
     // an already-registered task from an older install get repaired instead of staying broken.
-    && windowsTaskHasSessionRecoveryTriggers(triggers)
+    && windowsTaskHasSessionRecoveryTriggers(triggers, cachedCurrentWindowsIdentity()?.name)
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
     && taskXmlRunLevelAcceptable(principal)
     && taskXmlOptionalValueEquals(settings, "Enabled", "true")
