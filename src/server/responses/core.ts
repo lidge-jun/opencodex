@@ -86,7 +86,7 @@ import {
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
-import { modelInList, namespacedToolName } from "../../types";
+import { CODE_MODE_EXEC_TOOL_NAME, modelInList, namespacedToolName } from "../../types";
 import type {
   AdapterEvent,
   OcxConfig,
@@ -3677,7 +3677,19 @@ async function handleResponsesInner(
       // however, the parsed maps also contain historical catalog entries, so only the bounded
       // current-turn wire snapshot above may authorize a call.
       if (replayedInputPrefixLength === 0) {
-        for (const name of toolBridgeMaps.declaredToolNames) declaredWireToolNames.add(name);
+        for (const name of toolBridgeMaps.declaredToolNames) {
+          // `buildToolBridgeMaps` also aliases a namespaced tool under its bare name when the
+          // caller's `tool_choice` selected it unambiguously, which the bridge needs to route the
+          // call back. For `exec` alone that alias would also switch on nested-helper
+          // normalization and re-authorize `exec_command`/`shell_command`/`apply_patch`, so it is
+          // admitted here only when the caller's own catalog declared a bare `exec`. Selecting an
+          // MCP `exec` is not a declaration of the code-mode shell tool.
+          if (
+            name === CODE_MODE_EXEC_TOOL_NAME
+            && !clientDeclaredWireToolNames.has(CODE_MODE_EXEC_TOOL_NAME)
+          ) continue;
+          declaredWireToolNames.add(name);
+        }
       }
       undeclaredToolGuardActive = (
         declaredWireToolNames.size > 0
