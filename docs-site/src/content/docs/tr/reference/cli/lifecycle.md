@@ -247,9 +247,9 @@ yapılandırmasını dalgalandırmaz.
 
 | Alt komut | Eylem |
 | --- | --- |
-| none | Servis yoksa kurup başlatın; varsa yeniden kaydetmeden yenileyip yeniden başlatın. |
+| none | Servis yoksa kurup başlatın; varsa yenileyip yeniden başlatın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
 | `install` | Servisi oluşturun ve başlatın. Kaydeder, bu da Windows'ta yükseltme gerektirir. |
-| `repair` | Kurulu bir servisi yerinde yenileyin ve yeniden kaydetmeden yeniden başlatın. |
+| `repair` | Kurulu bir servisi yerinde yenileyin ve yeniden başlatın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
 | `restart` | `repair` komutunun takma adıdır. |
 | `start` | Kurulu bir servisi başlatın. |
 | `stop` | Servisi durdurun ve yerel Codex'i geri yükleyin. |

@@ -154,9 +154,9 @@ Exécute opencodex comme service d’arrière-plan géré à l’ouverture de se
 
 | Sous-commande | Action |
 | --- | --- |
-| aucune | Installe et démarre le service s’il est absent ; sinon, actualise et redémarre le service existant sans le réenregistrer. |
+| aucune | Installe et démarre le service s’il est absent ; sinon, actualise et redémarre le service existant. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
 | `install` | Crée et démarre le service. L’enregistrement exige une élévation sous Windows. |
-| `repair` | Actualise sur place un service installé et le redémarre, sans le réenregistrer. |
+| `repair` | Actualise sur place un service installé et le redémarre. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
 | `restart` | Alias de `repair`. |
 | `start` | Démarre un service installé. |
 | `stop` | Arrête le service et rétablit le fonctionnement natif de Codex. |

@@ -420,6 +420,7 @@ describe("Windows service task", () => {
     expect(args).not.toContain("/tr");
     expect(args).not.toContain("/sc");
     expect(args).not.toContain("/du");
+    expect(buildWindowsSchtasksCreateArgsForXml("recovery.xml", false)).not.toContain("/f");
     expect(args).not.toContain("/rl");
     expect(args).not.toContain("highest");
     expect(args.join(" ")).toContain("a&b");
@@ -1243,7 +1244,7 @@ describe("service lifecycle cleanup ordering", () => {
     const calls: string[] = [];
     const parent = mkdtempSync(join(tmpdir(), "ocx-service-fixed-create-"));
     const stagedXml = join(parent, "attempt.xml");
-    const expectedArgs = buildWindowsSchtasksCreateArgsForXml(stagedXml);
+    const expectedArgs = buildWindowsSchtasksCreateArgsForXml(stagedXml, false);
     const expectedXml = buildWindowsTaskXml(undefined, undefined, registrationAttemptNonce);
     try {
       writeFileSync(stagedXml, `\uFEFF${expectedXml}`, "utf16le");
@@ -1252,9 +1253,11 @@ describe("service lifecycle cleanup ordering", () => {
           calls.push(`create:${args.join(" ")}`);
           throw new WindowsSchtasksError("create", "access-denied", "denied");
         },
-        elevate: async (taskName, xml) => {
+        elevate: async (taskName, xml, replace, previousXml) => {
           calls.push(`elevate:${taskName}`);
           expect(xml).toBe(expectedXml.trimEnd());
+          expect(replace).toBe(false);
+          expect(previousXml).toBeUndefined();
         },
         probe: () => ({ status: "present", detail: "present" }),
         queryXml: () => expectedXml,
@@ -1418,6 +1421,7 @@ describe("service lifecycle cleanup ordering", () => {
       prepare: async () => { calls.push("prepare:stop-managers-and-proxy"); },
       removeNativeService: () => { calls.push("remove-native-service"); },
       publishAssets: () => { calls.push("publish-assets"); },
+      verifyBeforeRun: nonce => { expect(nonce).toBe(stagedNonce); calls.push("verify-before-run"); },
       runTask: () => { calls.push("run-task"); },
       writeState: () => { calls.push("write-state"); },
       rollbackTask: async () => { calls.push("rollback-task"); return null; },
@@ -1432,6 +1436,7 @@ describe("service lifecycle cleanup ordering", () => {
       "prepare:stop-managers-and-proxy",
       "remove-native-service",
       "publish-assets",
+      "verify-before-run",
       "run-task",
       "write-state",
     ]);
@@ -1465,6 +1470,7 @@ describe("service lifecycle cleanup ordering", () => {
         prepare: async () => {},
         removeNativeService: () => {},
         publishAssets: () => {},
+        verifyBeforeRun: () => {},
         runTask: () => {},
         writeState: () => {},
         rollbackTask: async () => null,
@@ -1602,6 +1608,7 @@ describe("service lifecycle cleanup ordering", () => {
         prepare: async () => {},
         removeNativeService: () => {},
         publishAssets: () => {},
+        verifyBeforeRun: () => {},
         runTask: () => {},
         writeState: () => {},
         rollbackTask: async () => null,
@@ -1660,6 +1667,39 @@ describe("service lifecycle cleanup ordering", () => {
     }
   });
 
+  test("a fresh install that changes before start is preserved and never run", async () => {
+    const calls: string[] = [];
+    await expect(installFreshWindowsSchedulerSafely({
+      stageRegistrationXml: () => "attempt.xml",
+      register: async () => { calls.push("register"); },
+      recordOwnership: () => { calls.push("record-ownership"); return true; },
+      prepare: async () => { calls.push("prepare"); },
+      removeNativeService: () => { calls.push("remove-native-service"); },
+      publishAssets: () => { calls.push("publish-assets"); },
+      verifyBeforeRun: () => {
+        calls.push("verify-before-run");
+        throw new Error("The fresh Task Scheduler registration changed before start; it was preserved and not run.");
+      },
+      runTask: () => { calls.push("run-task"); },
+      writeState: () => { calls.push("write-state"); },
+      rollbackTask: async () => { calls.push("rollback-task"); return null; },
+      removeStagedXml: () => { calls.push("remove-stage"); },
+    })).rejects.toThrow(/changed before start; it was preserved and not run/);
+
+    // The task is never started and install state is never published, so a task that another
+    // process registered under the fixed name cannot be adopted as this attempt's own.
+    expect(calls).toEqual([
+      "register",
+      "remove-stage",
+      "record-ownership",
+      "prepare",
+      "remove-native-service",
+      "publish-assets",
+      "verify-before-run",
+      "rollback-task",
+    ]);
+  });
+
   test("a state-write failure leaves the already-started task for explicit diagnosis", async () => {
     const calls: string[] = [];
     await expect(installFreshWindowsSchedulerSafely({
@@ -1669,6 +1709,7 @@ describe("service lifecycle cleanup ordering", () => {
       prepare: async () => { calls.push("prepare"); },
       removeNativeService: () => { calls.push("remove-native-service"); },
       publishAssets: () => { calls.push("publish-assets"); },
+      verifyBeforeRun: () => { calls.push("verify-before-run"); },
       runTask: () => { calls.push("run-task"); },
       writeState: () => { calls.push("write-state"); throw new Error("state write failed"); },
       rollbackTask: async () => { calls.push("rollback-task"); return null; },
@@ -1682,6 +1723,7 @@ describe("service lifecycle cleanup ordering", () => {
       "prepare",
       "remove-native-service",
       "publish-assets",
+      "verify-before-run",
       "run-task",
       "write-state",
     ]);
@@ -2248,9 +2290,10 @@ describe("service repair", () => {
    */
   test("repair re-registers a scheduler task whose registered definition is stale", async () => {
     const calls: string[] = [];
-    const stale = buildWindowsTaskXml("s.cmd", "l.vbs")
+    let attemptNonce = "";
+    const stale = buildWindowsTaskXml()
       .replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
-    expect(windowsTaskRegistrationHealthy(stale, "s.cmd", "l.vbs")).toBe(false);
+    expect(windowsTaskRegistrationHealthy(stale)).toBe(false);
     await repairService({
       platform: "win32",
       diagnose: () => baseDiag,
@@ -2258,8 +2301,14 @@ describe("service repair", () => {
       assertAuth: () => { calls.push("auth"); },
       stopScheduler: () => { calls.push("stop"); },
       writeSchedulerAssets: () => { calls.push("assets"); },
-      readSchedulerXml: () => stale,
-      reregisterScheduler: async () => { calls.push("reregister"); },
+      readSchedulerXml: () => attemptNonce
+        ? buildWindowsTaskXml(undefined, undefined, attemptNonce)
+        : stale,
+      reregisterScheduler: async (nonce, previousXml) => {
+        calls.push("reregister");
+        expect(previousXml).toBe(stale);
+        attemptNonce = nonce;
+      },
       startScheduler: () => { calls.push("start"); },
       writeSchedulerState: () => { calls.push("state"); },
       repairNative: async () => { calls.push("native"); },
@@ -2288,32 +2337,63 @@ describe("service repair", () => {
     expect(calls).toEqual(["env", "auth", "stop", "assets", "start", "state"]);
   });
 
-  test("repair does not re-register when the registered XML cannot be read", async () => {
-    // An unreadable query is not evidence of staleness, and re-registering on it would raise
-    // a UAC prompt on every repair. Empty means "unknown", so leave the registration alone.
-    const calls: string[] = [];
-    await repairService({
-      platform: "win32",
-      diagnose: () => baseDiag,
-      assertEnv: () => { calls.push("env"); },
-      assertAuth: () => { calls.push("auth"); },
-      stopScheduler: () => { calls.push("stop"); },
-      writeSchedulerAssets: () => { calls.push("assets"); },
-      readSchedulerXml: () => "",
-      reregisterScheduler: async () => { calls.push("reregister"); },
-      startScheduler: () => { calls.push("start"); },
-      writeSchedulerState: () => { calls.push("state"); },
-      repairNative: async () => { calls.push("native"); },
-      repairSystemd: () => { calls.push("systemd"); },
+  /**
+   * Only a recognizable OpenCodex definition that predates session triggers may be replaced
+   * automatically. Anything else registered under the fixed task name belongs to someone
+   * else, so repair preserves it instead of overwriting it with `/create /f`.
+   */
+  for (const [label, xml] of [
+    ["a foreign definition", "<Task><Actions><Exec><Command>notepad.exe</Command></Exec></Actions></Task>"],
+    ["a partially recognizable definition", buildWindowsTaskXml().replace(/<Principals>[\s\S]*?<\/Principals>/i, "")],
+  ] as const) {
+    test(`repair preserves ${label} instead of replacing it`, async () => {
+      const calls: string[] = [];
+      expect(windowsTaskRegistrationHealthy(xml)).toBe(false);
+      await expect(repairService({
+        platform: "win32",
+        diagnose: () => baseDiag,
+        assertEnv: () => { calls.push("env"); },
+        assertAuth: () => { calls.push("auth"); },
+        stopScheduler: () => { calls.push("stop"); },
+        writeSchedulerAssets: () => { calls.push("assets"); },
+        readSchedulerXml: () => { calls.push("read"); return xml; },
+        reregisterScheduler: async () => { throw new Error("an unrecognized definition must not be replaced"); },
+        restoreSchedulerIfAbsent: async () => { throw new Error("an unrecognized definition must not be restored over"); },
+        startScheduler: () => { calls.push("start"); },
+        writeSchedulerState: () => { calls.push("state"); },
+      })).rejects.toThrow(/not a recognized legacy OpenCodex definition/);
+
+      // Nothing was stopped, rewritten, replaced, or started.
+      expect(calls).toEqual(["env", "auth", "read"]);
     });
-    expect(calls).toEqual(["env", "auth", "stop", "assets", "start", "state"]);
-  });
+  }
+
+  for (const [label, read] of [
+    ["is empty", () => ""],
+    ["throws", () => { throw new Error("query denied"); }],
+  ] as const) {
+    test(`repair fails closed before stopping when the registered XML ${label}`, async () => {
+      const calls: string[] = [];
+      await expect(repairService({
+        platform: "win32",
+        diagnose: () => baseDiag,
+        assertEnv: () => { calls.push("env"); },
+        assertAuth: () => { calls.push("auth"); },
+        stopScheduler: () => { calls.push("stop"); },
+        writeSchedulerAssets: () => { calls.push("assets"); },
+        readSchedulerXml: () => { calls.push("read"); return read(); },
+        reregisterScheduler: async () => { calls.push("reregister"); },
+        startScheduler: () => { calls.push("start"); },
+        writeSchedulerState: () => { calls.push("state"); },
+      })).rejects.toThrow(/could not be read|empty or unreadable/i);
+      expect(calls).toEqual(["env", "auth", "read"]);
+    });
+  }
 
   /**
    * Repair stops the task before replacing a stale definition, so a failed replacement must
-   * not exit while the proxy is down. `schtasks /create /f` can be rejected outright and an
-   * elevation prompt can be cancelled; either one used to leave a previously runnable proxy
-   * stopped, which is strictly worse than the stale registration the user started with.
+   * preserve whichever verified definition now owns the fixed task name. It may restart an
+   * exact prior or healthy successor, but never overwrite or run foreign/unknown state.
    */
   for (const [label, failure] of [
     ["registration is rejected", new Error("ERROR: Access is denied.")],
@@ -2322,9 +2402,9 @@ describe("service repair", () => {
     test(`repair restarts the existing task when ${label}`, async () => {
       const calls: string[] = [];
       let reads = 0;
-      const stale = buildWindowsTaskXml("s.cmd", "l.vbs")
+      const stale = buildWindowsTaskXml()
         .replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
-      expect(windowsTaskRegistrationHealthy(stale, "s.cmd", "l.vbs")).toBe(false);
+      expect(windowsTaskRegistrationHealthy(stale)).toBe(false);
 
       await expect(repairService({
         platform: "win32",
@@ -2338,61 +2418,161 @@ describe("service repair", () => {
           reads += 1;
           return reads === 1 ? stale : `\uFEFF\r\n${stale.replace(/\n/g, "\r\n")}\r\n`;
         },
-        reregisterScheduler: async () => { calls.push("reregister"); throw failure; },
-        restoreScheduler: async () => { throw new Error("unchanged registration must not be restored"); },
+        reregisterScheduler: async nonce => {
+          calls.push("reregister");
+          expect(nonce).toMatch(/^[0-9a-f-]{36}$/);
+          throw failure;
+        },
+        restoreSchedulerIfAbsent: async () => { throw new Error("unchanged registration must not be restored"); },
         startScheduler: () => { calls.push("start"); },
         writeSchedulerState: () => { calls.push("state"); },
         repairNative: async () => { calls.push("native"); },
         repairSystemd: () => { calls.push("systemd"); },
       })).rejects.toThrow(failure.message);
 
-      // The proxy is running again on the definition that is still registered, and the
-      // install state is NOT rewritten. Skipping restore also avoids a second UAC prompt.
-      expect(calls).toEqual(["env", "auth", "stop", "assets", "read", "reregister", "read", "start"]);
+      // The definition is read before the task is stopped, so an unreadable registration
+      // never costs the user a running proxy. The proxy is then running again on whatever
+      // definition is still registered, and the install state is NOT rewritten. Skipping
+      // restore also avoids a second UAC prompt.
+      expect(calls).toEqual(["env", "auth", "read", "stop", "assets", "reregister", "read", "read", "start"]);
     });
   }
 
-  for (const [label, secondRead] of [
-    ["is absent", () => ""],
-    ["changed", () => "<Task>foreign</Task>"],
-    ["is unreadable", () => { throw new Error("query denied"); }],
-  ] as const) {
-    test(`repair restores the prior task when post-failure registration ${label}`, async () => {
-      const calls: string[] = [];
-      let reads = 0;
-      const stale = buildWindowsTaskXml("s.cmd", "l.vbs")
-        .replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
-      const failure = new Error("replacement failed");
-
-      await expect(repairService({
-        platform: "win32",
-        diagnose: () => baseDiag,
-        assertEnv: () => { calls.push("env"); },
-        assertAuth: () => { calls.push("auth"); },
-        stopScheduler: () => { calls.push("stop"); },
-        writeSchedulerAssets: () => { calls.push("assets"); },
-        readSchedulerXml: () => {
-          calls.push("read");
-          reads += 1;
-          return reads === 1 ? stale : secondRead();
-        },
-        reregisterScheduler: async () => { calls.push("reregister"); throw failure; },
-        restoreScheduler: async xml => {
-          calls.push("restore");
-          expect(xml).toBe(stale);
-        },
-        startScheduler: () => { calls.push("start"); },
-        writeSchedulerState: () => { calls.push("state"); },
-      })).rejects.toThrow(failure.message);
-
-      expect(calls).toEqual(["env", "auth", "stop", "assets", "read", "reregister", "read", "restore", "start"]);
-    });
-  }
-
-  test("repair still attempts restart and reports both failures when rollback publication fails", async () => {
+  test("repair recreates the prior task only after proven absence", async () => {
     const calls: string[] = [];
     let reads = 0;
-    const stale = buildWindowsTaskXml("s.cmd", "l.vbs")
+    const stale = buildWindowsTaskXml()
+      .replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+    const failure = new Error("replacement failed");
+    await expect(repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => { calls.push("env"); },
+      assertAuth: () => { calls.push("auth"); },
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => {
+        calls.push("read");
+        reads += 1;
+        return reads === 1 || reads === 3 ? stale : "";
+      },
+      probeScheduler: () => { calls.push("probe"); return { status: "absent" }; },
+      reregisterScheduler: async () => { calls.push("reregister"); throw failure; },
+      restoreSchedulerIfAbsent: async xml => { calls.push("restore"); expect(xml).toBe(stale); },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+    })).rejects.toThrow(failure.message);
+    expect(calls).toEqual(["env", "auth", "read", "stop", "assets", "reregister", "read", "probe", "restore", "read", "start"]);
+  });
+
+  test("repair preserves but does not start a healthy concurrent successor", async () => {
+    const calls: string[] = [];
+    let reads = 0;
+    const stale = buildWindowsTaskXml().replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+    const successor = buildWindowsTaskXml();
+    const failure = new Error("replacement failed");
+    const result = repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => { calls.push("env"); },
+      assertAuth: () => { calls.push("auth"); },
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => { calls.push("read"); reads += 1; return reads === 1 ? stale : successor; },
+      reregisterScheduler: async () => { calls.push("reregister"); throw failure; },
+      restoreSchedulerIfAbsent: async () => { throw new Error("concurrent registration must not be overwritten"); },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+    });
+    await expect(result).rejects.toBeInstanceOf(AggregateError);
+    await result.catch(error => {
+      expect((error as AggregateError).errors[0]).toBe(failure);
+      expect((error as AggregateError).errors[1]).toHaveProperty("message", expect.stringContaining("different healthy"));
+    });
+    expect(calls).toEqual(["env", "auth", "read", "stop", "assets", "reregister", "read"]);
+  });
+
+  test("repair does not start or publish when a successful refresh changes before restart", async () => {
+    const calls: string[] = [];
+    let reads = 0;
+    let attemptNonce = "";
+    const stale = buildWindowsTaskXml().replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+    await expect(repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => {},
+      assertAuth: () => {},
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => {
+        reads += 1;
+        if (reads === 1) return stale;
+        if (reads === 2) return buildWindowsTaskXml(undefined, undefined, attemptNonce);
+        return buildWindowsTaskXml(undefined, undefined, "newer-attempt");
+      },
+      reregisterScheduler: async nonce => { calls.push("reregister"); attemptNonce = nonce; },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+    })).rejects.toThrow(/changed before restart/i);
+    expect(calls).toEqual(["stop", "assets", "reregister"]);
+  });
+
+  test("repair preserves and restarts a healthy residual owned by its attempt nonce", async () => {
+    const calls: string[] = [];
+    let reads = 0;
+    let attemptNonce = "";
+    const stale = buildWindowsTaskXml().replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+    const failure = new Error("verification failed");
+    await expect(repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => {},
+      assertAuth: () => {},
+      stopScheduler: () => {},
+      writeSchedulerAssets: () => {},
+      readSchedulerXml: () => {
+        reads += 1;
+        return reads === 1 ? stale : buildWindowsTaskXml(undefined, undefined, attemptNonce);
+      },
+      reregisterScheduler: async nonce => { calls.push("reregister"); attemptNonce = nonce; throw failure; },
+      restoreSchedulerIfAbsent: async () => { throw new Error("attempt-owned task must not be overwritten"); },
+      startScheduler: () => { calls.push("start"); },
+    })).rejects.toThrow(failure.message);
+    expect(attemptNonce).not.toBe("");
+    expect(calls).toEqual(["reregister", "start"]);
+  });
+
+  for (const [label, secondRead, probe] of [
+    ["is foreign", () => "<Task>foreign</Task>", undefined],
+    ["is unreadable", () => { throw new Error("query denied"); }, undefined],
+    ["has unknown presence", () => "", () => ({ status: "unknown" as const, detail: "query denied" })],
+  ] as const) {
+    test(`repair preserves post-failure state and does not start it when it ${label}`, async () => {
+      const calls: string[] = [];
+      let reads = 0;
+      const stale = buildWindowsTaskXml().replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+      const result = repairService({
+        platform: "win32",
+        diagnose: () => baseDiag,
+        assertEnv: () => {},
+        assertAuth: () => {},
+        stopScheduler: () => {},
+        writeSchedulerAssets: () => {},
+        readSchedulerXml: () => { reads += 1; return reads === 1 ? stale : secondRead(); },
+        ...(probe ? { probeScheduler: () => { calls.push("probe"); return probe(); } } : {}),
+        reregisterScheduler: async () => { calls.push("reregister"); throw new Error("replacement failed"); },
+        restoreSchedulerIfAbsent: async () => { calls.push("restore"); },
+        startScheduler: () => { calls.push("start"); },
+      });
+      await expect(result).rejects.toBeInstanceOf(AggregateError);
+      expect(calls).toEqual(probe ? ["reregister", "probe"] : ["reregister"]);
+    });
+  }
+
+  test("repair reports both replacement and absent-task recovery failures", async () => {
+    const calls: string[] = [];
+    let reads = 0;
+    const stale = buildWindowsTaskXml()
       .replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
     const registrationFailure = new Error("registration rejected");
     const rollbackFailure = new Error("rollback rejected");
@@ -2409,8 +2589,9 @@ describe("service repair", () => {
         reads += 1;
         return reads === 1 ? stale : "";
       },
+      probeScheduler: () => { calls.push("probe"); return { status: "absent" }; },
       reregisterScheduler: async () => { calls.push("reregister"); throw registrationFailure; },
-      restoreScheduler: async () => { calls.push("restore"); throw rollbackFailure; },
+      restoreSchedulerIfAbsent: async () => { calls.push("restore"); throw rollbackFailure; },
       startScheduler: () => { calls.push("start"); },
       writeSchedulerState: () => { calls.push("state"); },
     });
@@ -2420,7 +2601,7 @@ describe("service repair", () => {
       expect(error).toBeInstanceOf(AggregateError);
       expect((error as AggregateError).errors).toEqual([registrationFailure, rollbackFailure]);
     });
-    expect(calls).toEqual(["env", "auth", "stop", "assets", "read", "reregister", "read", "restore", "start"]);
+    expect(calls).toEqual(["env", "auth", "read", "stop", "assets", "reregister", "read", "probe", "restore"]);
   });
 
   test("repair rejects when nothing is installed", async () => {

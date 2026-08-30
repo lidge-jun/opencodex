@@ -246,9 +246,9 @@ themselves — once the old executable is deleted, no opencodex code runs to fix
 
 | Subcommand | Action |
 | --- | --- |
-| none | Install and start when absent; otherwise refresh and restart the existing service without re-registering it. |
+| none | Install and start when absent; otherwise refresh and restart the existing service. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
 | `install` | Create and start the service. Registers it, which on Windows needs elevation. |
-| `repair` | Refresh an installed service in place and restart it, without re-registering it. |
+| `repair` | Refresh an installed service in place and restart it. A healthy Windows scheduler definition is reused; a stale definition may be re-registered and require elevation. |
 | `restart` | Alias of `repair`. |
 | `start` | Start an installed service. |
 | `stop` | Stop the service and restore native Codex. |

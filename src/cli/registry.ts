@@ -65,7 +65,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Run as a background service.",
     details: [
       "With no subcommand, installs when absent or repairs/restarts an existing service.",
-      "`restart` is an alias of `repair` and does not re-register an installed service.",
+      "`restart` aliases `repair`; healthy Windows tasks are reused, while stale definitions may re-register and elevate.",
       "Use `ocx service status` to see diagnostics and log paths.",
     ],
   },

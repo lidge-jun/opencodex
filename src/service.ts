@@ -49,6 +49,7 @@ import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from ".
 import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal } from "./lib/windows-user-principal";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { killWindowsSchedulerWrappers } from "./lib/windows-service-wrappers";
+import { withWindowsServiceMutationLock } from "./lib/windows-service-mutation-lock";
 import { maybeShowStarPrompt } from "./cli/star-prompt";
 import { systemdProperty } from "./service-manager-probe";
 
@@ -324,11 +325,10 @@ export function readServiceBackend(): ServiceBackend {
 /**
  * The `ocx` argv that refreshes an already-installed service after an update.
  *
- * `repair` discovers the installed backend itself and, on Windows scheduler installs,
- * rewrites the wrapper assets and restarts the existing task WITHOUT `schtasks /create`
- * (see repairService below). `install` always reaches `/create`, which requires
- * elevation — so an ordinary non-elevated `ocx update` used to stop a working proxy and
- * then fail to bring its service back.
+ * `repair` discovers the installed backend itself. A healthy Windows scheduler task only
+ * gets refreshed assets plus a restart; a stale live definition is re-registered and may
+ * require elevation. `install` always reaches `/create`, so using repair here avoids an
+ * unnecessary admin prompt for the common healthy update path.
  *
  * The historical export name is kept for callers outside this module.
  */
@@ -723,11 +723,11 @@ async function reportServiceServing(
 }
 
 /**
- * The command that repairs the CURRENTLY INSTALLED backend without re-registering it.
+ * The command that repairs the CURRENTLY INSTALLED backend without switching it.
  *
  * `ocx service repair` reads the recorded backend itself, so it cannot silently switch a
- * WinSW install to Task Scheduler the way a plain `ocx service install` would, and on
- * Windows it needs no elevation because it never calls `schtasks /create`.
+ * WinSW install to Task Scheduler the way a plain `ocx service install` would. A healthy
+ * scheduler definition needs no elevation; a stale definition can be re-registered and prompt.
  */
 function serviceRepairCommand(): string {
   return "ocx service repair";
@@ -1732,8 +1732,8 @@ export function buildWindowsSchtasksCreateArgs(script = windowsServiceScriptPath
 }
 
 /** Build the fixed scheduler-create command from an explicit staged XML document. */
-export function buildWindowsSchtasksCreateArgsForXml(xml: string): string[] {
-  return ["/create", "/tn", TASK, "/xml", xml, "/f"];
+export function buildWindowsSchtasksCreateArgsForXml(xml: string, replace = true): string[] {
+  return ["/create", "/tn", TASK, "/xml", xml, ...(replace ? ["/f"] : [])];
 }
 
 /**
@@ -1982,12 +1982,11 @@ function windowsTaskTriggerScopeAcceptable(element: string, expectedUserId: stri
   return taskXmlDecodedValueEquals(element, "UserId", expectedUserId);
 }
 
-/** Validate the security/lifecycle-critical fields of the registered scheduler task. */
-export function windowsTaskRegistrationHealthy(
+/** Validate the stable OpenCodex action, principal, settings, and logon trigger. */
+function windowsTaskRegistrationBaseHealthy(
   xml: string,
   wscript = windowsWscript(),
   launcher = windowsLauncherVbsPath(),
-  expectedUserId: string | null = cachedCurrentWindowsIdentity()?.name ?? null,
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   // taskXmlSection() takes the FIRST match and the schema allows arbitrary XML under
@@ -2004,10 +2003,6 @@ export function windowsTaskRegistrationHealthy(
   // itself — scoped to <Triggers> so a decoy elsewhere cannot satisfy it.
   return taskXmlElementCount(triggers, "LogonTrigger") > 0
     && taskXmlOptionalValueEquals(trigger, "Enabled", "true")
-    // Without these the task can only recover at the next logon, so a disconnected session
-    // leaves the proxy down indefinitely. Treating their absence as unhealthy is what lets
-    // an already-registered task from an older install get repaired instead of staying broken.
-    && windowsTaskHasSessionRecoveryTriggers(triggers, expectedUserId ?? undefined)
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
     && taskXmlRunLevelAcceptable(principal)
     && taskXmlOptionalValueEquals(settings, "Enabled", "true")
@@ -2019,6 +2014,35 @@ export function windowsTaskRegistrationHealthy(
     // Case-insensitive: elevated `schtasks /create` may rewrite System32 casing.
     && taskXmlDecodedValueEquals(action, "Command", wscript)
     && taskXmlDecodedValueEquals(action, "Arguments", `/b /nologo "${launcher}"`);
+}
+
+/** Validate the security/lifecycle-critical fields of the registered scheduler task. */
+export function windowsTaskRegistrationHealthy(
+  xml: string,
+  wscript = windowsWscript(),
+  launcher = windowsLauncherVbsPath(),
+  expectedUserId: string | null = cachedCurrentWindowsIdentity()?.name ?? null,
+): boolean {
+  const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
+  const triggers = taskXmlSection(scrubbed, "Triggers");
+  return windowsTaskRegistrationBaseHealthy(xml, wscript, launcher)
+    // Without these the task can only recover at the next logon, so a disconnected session
+    // leaves the proxy down indefinitely. Treating their absence as unhealthy is what lets
+    // an already-registered task from an older install get repaired instead of staying broken.
+    && windowsTaskHasSessionRecoveryTriggers(triggers, expectedUserId ?? undefined);
+}
+
+/**
+ * The only stale definition repair may replace automatically: the previous OpenCodex task
+ * shape whose action/principal/settings are still exact and which has no session triggers yet.
+ * Arbitrary unhealthy or partially modified fixed-name tasks are preserved for manual review.
+ */
+function windowsTaskRegistrationRefreshableLegacy(xml: string): boolean {
+  const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
+  const triggers = taskXmlSection(scrubbed, "Triggers");
+  return windowsTaskRegistrationBaseHealthy(xml)
+    && taskXmlElementCount(triggers, "SessionStateChangeTrigger") === 0
+    && !taskXmlHasPrefixedTag(triggers, "SessionStateChangeTrigger");
 }
 
 export interface WindowsSchedulerXmlState {
@@ -2189,8 +2213,8 @@ function writeServiceAssetWithRetry(path: string, content: string, encoding: "ut
 }
 
 /**
- * Rewrite on-disk scheduler assets (script/VBS/XML) without re-registering the task.
- * Used by fresh install (before schtasks /create) and by repair (no elevation).
+ * Rewrite on-disk scheduler assets (script/VBS/XML) without itself registering the task.
+ * Fresh install creates it afterwards; repair does so only when the live definition is stale.
  */
 function writeWindowsSchedulerAssets(): void {
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
@@ -2311,9 +2335,15 @@ function removeWindowsSchedulerRegistrationStage(xmlPath: string): void {
 
 export interface FreshWindowsSchedulerRegistrationDeps {
   create?: (args: string[]) => void;
-  elevate?: (taskName: string, xml: string) => Promise<void>;
+  elevate?: (
+    taskName: string,
+    xml: string,
+    replace: boolean,
+    expectedExistingXml?: string,
+  ) => Promise<void>;
   probe?: () => WindowsSchedulerTaskProbe;
   queryXml?: () => string;
+  readExistingXml?: () => string;
   rollback?: () => Promise<string | null>;
 }
 
@@ -2321,8 +2351,27 @@ export async function registerFreshWindowsSchedulerTask(
   xmlPath: string,
   attemptNonce: string,
   deps: FreshWindowsSchedulerRegistrationDeps = {},
+  expectedExistingXml?: string,
 ): Promise<void> {
-  const args = buildWindowsSchtasksCreateArgsForXml(xmlPath);
+  const replace = expectedExistingXml !== undefined;
+  const readExistingXml = deps.readExistingXml ?? statusWindowsXml;
+  const assertReplacementPrecondition = (): void => {
+    if (!replace) return;
+    if (!expectedExistingXml?.trim()) {
+      throw new Error("Task Scheduler replacement requires a non-empty captured registration.");
+    }
+    let currentXml = "";
+    try {
+      currentXml = readExistingXml();
+    } catch {
+      throw new Error("Task Scheduler replacement was refused because the current registration could not be read.");
+    }
+    if (!windowsSchedulerRegistrationMatchesSnapshot(currentXml, expectedExistingXml)) {
+      throw new Error("Task Scheduler replacement was refused because the current registration changed.");
+    }
+  };
+  assertReplacementPrecondition();
+  const args = buildWindowsSchtasksCreateArgsForXml(xmlPath, replace);
   // Capture and validate the exact definition before an access-denied attempt can
   // cross the UAC boundary. The elevated fallback receives these immutable bytes,
   // never the caller-writable staging pathname.
@@ -2345,11 +2394,24 @@ export async function registerFreshWindowsSchedulerTask(
     }
     // Register from the captured XML string inside the elevated process. Another
     // same-user process can mutate its own temp files, but cannot change this command.
-    const elevate = deps.elevate ?? (async (taskName: string, xml: string) => {
-      const exitCode = await runWindowsElevatedScheduledTaskRegistration(taskName, xml);
+    // UAC can remain open for an arbitrary amount of time. Recheck the captured predecessor
+    // before launch; the elevated helper repeats the same check after consent and before Force.
+    assertReplacementPrecondition();
+    const elevate = deps.elevate ?? (async (
+      taskName: string,
+      xml: string,
+      replaceCurrent: boolean,
+      previousXml?: string,
+    ) => {
+      const exitCode = await runWindowsElevatedScheduledTaskRegistration(
+        taskName,
+        xml,
+        replaceCurrent,
+        previousXml,
+      );
       if (exitCode !== 0) throw new Error(`Background service install failed with exit code ${exitCode}.`);
     });
-    await elevate(TASK, expectedXml);
+    await elevate(TASK, expectedXml, replace, expectedExistingXml);
   }
 
   const rollbackTask = deps.rollback ?? (() => rollbackWindowsSchedulerTaskOwnedByAttempt(attemptNonce, TASK));
@@ -2449,11 +2511,13 @@ function installWindows(): void {
  * validation applies and an access-denied `schtasks /create` still escalates through the
  * existing elevated fallback. The staged XML is removed on every exit.
  */
-async function reregisterWindowsSchedulerTask(): Promise<void> {
-  const attemptNonce = randomUUID();
+async function reregisterWindowsSchedulerTask(
+  attemptNonce: string,
+  expectedExistingXml: string,
+): Promise<void> {
   const stagedXml = stageWindowsSchedulerRegistrationXml(attemptNonce);
   try {
-    await registerFreshWindowsSchedulerTask(stagedXml, attemptNonce);
+    await registerFreshWindowsSchedulerTask(stagedXml, attemptNonce, {}, expectedExistingXml);
   } finally {
     removeWindowsSchedulerRegistrationStage(stagedXml);
   }
@@ -2489,17 +2553,34 @@ function stageWindowsSchedulerRestoreXml(registeredXml: string): string {
   }
 }
 
+/** Compare two live scheduler snapshots conservatively without treating formatting as mutation. */
+function windowsSchedulerRegistrationMatchesSnapshot(currentXml: string, previousXml: string): boolean {
+  const normalize = (xml: string) => xml
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+  const current = normalize(currentXml);
+  const previous = normalize(previousXml);
+  return current.length > 0 && previous.length > 0 && current === previous;
+}
+
 /**
- * Put back the exact live registration captured before a stale-task repair.
+ * Restore the captured registration only while the fixed task name is still absent.
  *
- * Fresh registration is transactional only for a fresh install: its failed verification
- * rolls back the attempt-owned task, which can leave no registration at all during repair.
- * This path republishes the pre-repair XML before the caller restarts the task.
+ * Both publication paths deliberately omit force: another writer appearing after the
+ * absence probe must make this operation fail instead of being overwritten. Exact live
+ * XML readback is required before the caller may restart the recovered task.
  */
-async function restoreWindowsSchedulerTask(registeredXml: string): Promise<void> {
+async function restoreWindowsSchedulerTaskIfAbsent(registeredXml: string): Promise<void> {
+  const before = probeWindowsSchedulerTask(TASK);
+  if (before.status !== "absent") {
+    throw new Error(before.status === "present"
+      ? "A Task Scheduler registration appeared before recovery and was preserved."
+      : `Task Scheduler absence could not be re-verified before recovery (${before.detail}).`);
+  }
   const stagedXml = stageWindowsSchedulerRestoreXml(registeredXml);
   try {
-    const args = buildWindowsSchtasksCreateArgsForXml(stagedXml);
+    const args = buildWindowsSchtasksCreateArgsForXml(stagedXml, false);
     try {
       schtasks(args);
     } catch (error) {
@@ -2510,33 +2591,18 @@ async function restoreWindowsSchedulerTask(registeredXml: string): Promise<void>
       ) {
         throw error;
       }
-      const exitCode = await runWindowsElevatedScheduledTaskRegistration(TASK, registeredXml);
+      const exitCode = await runWindowsElevatedScheduledTaskRegistration(TASK, registeredXml, false);
       if (exitCode !== 0) {
         throw new Error(`Task Scheduler rollback failed with exit code ${exitCode}.`);
       }
     }
-    const probe = probeWindowsSchedulerTask(TASK);
-    if (probe.status !== "present") {
-      throw new Error(
-        probe.status === "unknown"
-          ? `The previous Task Scheduler registration could not be verified after rollback (${probe.detail}).`
-          : "The previous Task Scheduler registration is absent after rollback.",
-      );
+    const recoveredXml = statusWindowsXml();
+    if (!windowsSchedulerRegistrationMatchesSnapshot(recoveredXml, registeredXml)) {
+      throw new Error("The recovered Task Scheduler registration did not match the captured definition.");
     }
   } finally {
     removeWindowsSchedulerRegistrationStage(stagedXml);
   }
-}
-
-/** Compare two live scheduler snapshots conservatively without treating formatting as mutation. */
-function windowsSchedulerRegistrationMatchesSnapshot(currentXml: string, previousXml: string): boolean {
-  const normalize = (xml: string) => xml
-    .replace(/^\uFEFF/, "")
-    .replace(/\r\n?/g, "\n")
-    .trim();
-  const current = normalize(currentXml);
-  const previous = normalize(previousXml);
-  return current.length > 0 && previous.length > 0 && current === previous;
 }
 
 export interface RepairServiceDeps {
@@ -2553,18 +2619,20 @@ export interface RepairServiceDeps {
   repairSystemd?: () => void;
   /** Reads live registered task XML; may be called again after failure, empty when unreadable. */
   readSchedulerXml?: () => string;
+  /** Proves fixed-name task presence when its live XML is empty or unreadable. */
+  probeScheduler?: () => WindowsSchedulerTaskProbe;
   /** Re-registers the task from freshly staged XML. Used only when the definition is stale. */
-  reregisterScheduler?: () => Promise<void>;
-  /** Restores the exact registration captured before a failed replacement. */
-  restoreScheduler?: (registeredXml: string) => Promise<void>;
+  reregisterScheduler?: (attemptNonce: string, expectedExistingXml: string) => Promise<void>;
+  /** Publishes the captured registration only when the fixed task name remains absent. */
+  restoreSchedulerIfAbsent?: (registeredXml: string) => Promise<void>;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
 }
 
 /**
- * Repair an already-installed background service without Task Scheduler re-registration.
+ * Repair the already-installed background-service backend without switching managers.
  *
- * Windows scheduler: rewrite assets + stop/start — no `schtasks /create`, no UAC.
+ * Windows scheduler: rewrite assets + stop/start; stale definitions are refreshed and may elevate.
  * Windows native: WinSW asset rewrite + restart (skips `install /p` when present).
  * macOS/Linux: re-run the user-level install/reload path.
  */
@@ -2594,6 +2662,26 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       (deps.writeNativeState ?? (() => writeServiceInstallState("native")))();
       return;
     }
+    const readSchedulerXml = deps.readSchedulerXml ?? statusWindowsXml;
+    let registeredXml = "";
+    try {
+      registeredXml = readSchedulerXml();
+    } catch {
+      throw new Error(
+        "Task Scheduler registration could not be read; repair stopped before changing or starting the service.",
+      );
+    }
+    if (!registeredXml.trim()) {
+      throw new Error(
+        "Task Scheduler registration is empty or unreadable; repair stopped before changing or starting the service.",
+      );
+    }
+    const registrationHealthy = windowsTaskRegistrationHealthy(registeredXml);
+    if (!registrationHealthy && !windowsTaskRegistrationRefreshableLegacy(registeredXml)) {
+      throw new Error(
+        "Task Scheduler registration is not a recognized legacy OpenCodex definition; it was preserved for manual review.",
+      );
+    }
     try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
     (deps.writeSchedulerAssets ?? writeWindowsSchedulerAssets)();
     // Rewriting the on-disk assets does not touch the definition Task Scheduler holds, so a
@@ -2601,48 +2689,116 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     // stale, tells the user to run repair, and repair changes nothing it complains about.
     // Re-register only when the registered XML is actually stale, so the ordinary repair
     // stays free of `schtasks /create` and its UAC prompt.
-    const readSchedulerXml = deps.readSchedulerXml ?? statusWindowsXml;
-    const registeredXml = readSchedulerXml();
-    if (registeredXml.length > 0 && !windowsTaskRegistrationHealthy(registeredXml)) {
+    let startExpectedXml = registeredXml;
+    if (!registrationHealthy) {
       // The task was stopped above, so a failed replacement must not exit here: `/create /f`
       // can be rejected, elevation can be cancelled, and staging or verification can fail.
       // Any of those would leave a previously runnable proxy stopped and the user worse off
       // than before the repair. Restart the definition still registered and surface the
       // original failure instead.
+      const attemptNonce = randomUUID();
       try {
-        await (deps.reregisterScheduler ?? reregisterWindowsSchedulerTask)();
-      } catch (err) {
-        let restoreError: unknown;
-        let restartError: unknown;
-        let previousRegistrationStillPresent = false;
+        await (deps.reregisterScheduler ?? reregisterWindowsSchedulerTask)(attemptNonce, registeredXml);
+        let replacementXml = "";
         try {
-          previousRegistrationStillPresent = windowsSchedulerRegistrationMatchesSnapshot(
-            readSchedulerXml(),
-            registeredXml,
-          );
+          replacementXml = readSchedulerXml();
         } catch {
-          // An unreadable post-failure state is not evidence that the prior definition survived.
+          throw new Error("The refreshed Task Scheduler registration could not be read back.");
         }
-        if (!previousRegistrationStillPresent) {
-          try {
-            await (deps.restoreScheduler ?? restoreWindowsSchedulerTask)(registeredXml);
-          } catch (error) {
-            restoreError = error;
+        if (
+          !windowsTaskRegistrationHealthy(replacementXml)
+          || !windowsTaskRegistrationOwnedByAttempt(replacementXml, attemptNonce)
+        ) {
+          throw new Error(
+            "The refreshed Task Scheduler registration failed live shape or attempt-ownership verification.",
+          );
+        }
+        startExpectedXml = replacementXml;
+      } catch (err) {
+        const recoveryErrors: unknown[] = [];
+        let restartExpectedXml: string | null = null;
+        let currentXml: string | null = null;
+        try {
+          currentXml = readSchedulerXml();
+        } catch {
+          recoveryErrors.push(new Error(
+            "Task Scheduler state became unreadable after the failed replacement; it was preserved and not started.",
+          ));
+        }
+
+        if (currentXml !== null) {
+          if (windowsSchedulerRegistrationMatchesSnapshot(currentXml, registeredXml)) {
+            restartExpectedXml = registeredXml;
+          } else if (currentXml.trim()) {
+            const attemptOwned = windowsTaskRegistrationOwnedByAttempt(currentXml, attemptNonce);
+            if (attemptOwned && windowsTaskRegistrationHealthy(currentXml)) {
+              restartExpectedXml = currentXml;
+            } else {
+              recoveryErrors.push(new Error(
+                attemptOwned
+                  ? "The failed repair left an unhealthy attempt-owned registration; it was preserved and not started."
+                  : windowsTaskRegistrationHealthy(currentXml)
+                    ? "A different healthy OpenCodex Task Scheduler registration appeared during repair; it was preserved and not started."
+                    : "A different or unhealthy Task Scheduler registration appeared during repair; it was preserved and not started.",
+              ));
+            }
+          } else {
+            let probe: WindowsSchedulerTaskProbe;
+            try {
+              probe = (deps.probeScheduler ?? (() => probeWindowsSchedulerTask(TASK)))();
+            } catch {
+              probe = { status: "unknown", detail: "presence probe failed" };
+            }
+            if (probe.status === "absent") {
+              try {
+                await (deps.restoreSchedulerIfAbsent ?? restoreWindowsSchedulerTaskIfAbsent)(registeredXml);
+                restartExpectedXml = registeredXml;
+              } catch (error) {
+                recoveryErrors.push(error);
+              }
+            } else {
+              recoveryErrors.push(new Error(probe.status === "present"
+                ? "A Task Scheduler registration is present but its XML is unreadable; it was preserved and not started."
+                : `Task Scheduler state is unknown after the failed replacement (${probe.detail}); no registration was overwritten or started.`));
+            }
           }
         }
-        try {
-          (deps.startScheduler ?? startWindows)();
-        } catch (error) {
-          restartError = error;
+
+        if (restartExpectedXml !== null) {
+          try {
+            const restartXml = readSchedulerXml();
+            if (!windowsSchedulerRegistrationMatchesSnapshot(restartXml, restartExpectedXml)) {
+              recoveryErrors.push(new Error(
+                "The Task Scheduler registration changed again before restart; the newer definition was preserved and not started.",
+              ));
+            } else {
+              (deps.startScheduler ?? startWindows)();
+            }
+          } catch (error) {
+            recoveryErrors.push(error);
+          }
         }
-        if (restoreError || restartError) {
+        if (recoveryErrors.length > 0) {
           throw new AggregateError(
-            [err, restoreError, restartError].filter(error => error !== undefined),
-            "Task Scheduler repair failed and the previous service could not be fully resumed.",
+            [err, ...recoveryErrors],
+            "Task Scheduler repair failed; concurrent or unverified scheduler state was preserved.",
           );
         }
         throw err;
       }
+    }
+    let beforeStartXml = "";
+    try {
+      beforeStartXml = readSchedulerXml();
+    } catch {
+      throw new Error(
+        "Task Scheduler registration became unreadable before restart; it was preserved and not started.",
+      );
+    }
+    if (!windowsSchedulerRegistrationMatchesSnapshot(beforeStartXml, startExpectedXml)) {
+      throw new Error(
+        "Task Scheduler registration changed before restart; the current definition was preserved and not started.",
+      );
     }
     (deps.startScheduler ?? startWindows)();
     (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();
@@ -3249,6 +3405,7 @@ export interface FreshWindowsSchedulerInstallDeps {
   prepare?: () => Promise<void>;
   removeNativeService?: () => void;
   publishAssets?: () => void;
+  verifyBeforeRun?: (attemptNonce: string) => void;
   runTask?: () => void;
   writeState?: () => void;
   rollbackTask?: (attemptNonce: string) => Promise<string | null>;
@@ -3272,6 +3429,17 @@ export async function installFreshWindowsSchedulerSafely(
   const prepare = deps.prepare ?? (() => prepareServiceInstall("scheduler"));
   const removeNativeService = deps.removeNativeService ?? removeNativeWindowsServiceForScheduler;
   const publishAssets = deps.publishAssets ?? writeWindowsSchedulerAssets;
+  const verifyBeforeRun = deps.verifyBeforeRun ?? ((nonce: string) => {
+    const liveXml = statusWindowsXml();
+    if (
+      !windowsTaskRegistrationHealthy(liveXml)
+      || !windowsTaskRegistrationOwnedByAttempt(liveXml, nonce)
+    ) {
+      throw new Error(
+        "The fresh Task Scheduler registration changed before start; it was preserved and not run.",
+      );
+    }
+  });
   const runTask = deps.runTask ?? startWindows;
   const writeState = deps.writeState ?? (() => writeServiceInstallState("scheduler"));
   const rollbackTask = deps.rollbackTask ?? ((attemptNonce: string) => (
@@ -3306,6 +3474,7 @@ export async function installFreshWindowsSchedulerSafely(
     await prepare();
     removeNativeService();
     publishAssets();
+    verifyBeforeRun(attemptNonce);
     runTask();
     started = true;
     writeState();
@@ -3766,7 +3935,8 @@ export function probeServiceInstallation(
 /**
  * A bare invocation is an idempotent "make the installed service current"
  * operation. First-time setup still installs, but an existing registration must
- * use the repair path so Windows does not re-run the elevated `schtasks /create`.
+ * use the repair path so Windows avoids unconditional elevated registration; repair may
+ * still refresh a stale scheduler definition.
  * Backend flags remain an explicit install request because they select which
  * registration mechanism to create.
  */
@@ -3843,12 +4013,15 @@ export function parseServiceArgs(args: string[]): ParsedServiceArgs {
 
 export async function serviceCommand(...args: (string | undefined)[]): Promise<void> {
   const filteredArgs = args.filter((a): a is string => Boolean(a));
-  const plan = planServiceCommand(filteredArgs);
-  if (!plan.ok) {
-    console.error(plan.message);
-    process.exit(1);
-  }
-  const { parsed, command } = plan;
+  const execute = async (): Promise<void> => {
+    // Planning reads manager state. Repeat it only after the writer lock is held, otherwise a
+    // bare command can choose install from a snapshot another service command already changed.
+    const plan = planServiceCommand(filteredArgs);
+    if (!plan.ok) {
+      console.error(plan.message);
+      process.exit(1);
+    }
+    const { parsed, command } = plan;
   if (command === "repair") {
     assertServiceEnvironmentMatchesInstall();
     assertServiceAuthEnvironment();
@@ -3987,9 +4160,20 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     default:
       console.error("Usage: ocx service [install|repair|restart|start|stop|status|uninstall|remove] [--native|--scheduler]");
       console.error("       With no subcommand, installs when absent or repairs/restarts an existing service.");
-      console.error("       repair: refresh assets and restart an already-installed service (no admin re-prompt).");
+      console.error("       repair: refresh and restart the installed backend; stale Windows tasks may request admin approval.");
       console.error("       restart: alias of repair.");
       console.error("       --native (Windows only): register a real SCM service via WinSW instead of Task Scheduler.");
       process.exit(1);
   }
+  };
+
+  const preliminary = parseServiceArgs(filteredArgs);
+  const windowsMutation = process.platform === "win32"
+    && preliminary.invalid.length === 0
+    && preliminary.sub !== "status";
+  if (windowsMutation) {
+    await withWindowsServiceMutationLock(execute);
+    return;
+  }
+  await execute();
 }

@@ -155,10 +155,9 @@ function runNpmSelfUpdate() {
     process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
   );
   /**
-   * Refresh the existing service without re-registering it. `service repair` discovers
-   * the installed backend itself and, on Windows scheduler installs, rewrites the wrapper
-   * assets and restarts the existing task without `schtasks /create` — the elevation a
-   * non-admin `ocx update` does not have.
+   * Refresh the existing service in place. `service repair` discovers the installed backend;
+   * healthy Windows scheduler registrations avoid `schtasks /create`, while stale definitions
+   * may be re-registered and require elevation.
    */
   function serviceRefreshArgs() {
     return [launcher, "service", "repair"];
@@ -290,7 +289,8 @@ function runNpmSelfUpdate() {
         }
       }
       if (needDirectStart) {
-        // A repair needs no elevation, but it can still fail — or exit 0 while leaving
+        // Repair normally avoids elevation for a healthy registration, but a stale Windows
+        // scheduler definition can require it. It can also fail — or exit 0 while leaving
         // a non-viable manager. Fall back to a direct detached proxy start so the
         // update never leaves the user without a running proxy.
         console.warn(
