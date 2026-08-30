@@ -1,6 +1,6 @@
 /** Read-only, privacy-safe Windows policy diagnosis for Claude Desktop 3P. */
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { win32 } from "node:path";
 import { resolveTrustedWindowsSystemDirectory } from "../lib/windows-elevation";
 import { decodeWindowsTextBytes } from "../lib/windows-text";
 
@@ -80,7 +80,7 @@ export function probeClaudeDesktopPolicy(
   let regExe: string;
   try {
     const systemDirectory = (options.resolveSystemDirectory ?? resolveTrustedWindowsSystemDirectory)();
-    regExe = join(systemDirectory, "reg.exe");
+    regExe = win32.join(systemDirectory, "reg.exe");
   } catch {
     return "unknown";
   }

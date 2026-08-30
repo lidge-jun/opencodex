@@ -33,9 +33,23 @@ test("a present Windows Claude policy degrades Desktop 3P health", () => {
     state: "present",
   });
   expect(calls).toEqual([{
-    file: "/trusted/System32/reg.exe",
+    file: "\\trusted\\System32\\reg.exe",
     args: ["query", "HKLM\\SOFTWARE\\Policies\\Claude", "/reg:64"],
   }]);
+});
+
+test("Windows policy probing constructs the trusted executable with Windows path semantics", () => {
+  let executable = "";
+  probeClaudeDesktopPolicy({
+    platform: "win32",
+    resolveSystemDirectory: () => "C:\\trusted\\System32",
+    run: (file) => {
+      executable = file;
+      return result();
+    },
+  });
+
+  expect(executable).toBe("C:\\trusted\\System32\\reg.exe");
 });
 
 test("an unreadable Windows Claude policy stays unknown and degrades health", () => {
