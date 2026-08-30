@@ -89,6 +89,24 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(source).toContain("typeof process.env[name] === \"string\" && process.env[name] !== \"\"");
   });
 
+  /**
+   * Windows caps a process environment block at 32,767 characters. The inspection snapshot
+   * already carries the manager-root slots as proof-bound values, so inheriting them again
+   * spends that budget twice and a large-but-valid shell environment could stop the Bun
+   * child from spawning at all — the inspection command would exit before reporting.
+   */
+  test("the inspection child does not inherit a duplicate copy of the snapshotted manager roots", () => {
+    expect(source).toContain("const inheritedEnv = { ...process.env };");
+    expect(source).toContain("for (const name of CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS) delete inheritedEnv[name];");
+    expect(source).toContain("...inheritedEnv,");
+    // The spawn must no longer splat the raw environment, or the delete above is pointless.
+    const spawnStart = source.indexOf("const child = spawn(bun, [cliPath,");
+    expect(spawnStart).toBeGreaterThan(-1);
+    expect(source.slice(spawnStart)).not.toContain("...process.env,");
+    // PATH and PATHEXT stay inherited: the child still needs them to resolve its own tooling.
+    expect(source.slice(spawnStart)).not.toContain("delete inheritedEnv.PATH");
+  });
+
   test("valid Bun overrides are selected before the bundled runtime", () => {
     expect(source).toContain('const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";');
     expect(source).toContain("const overridePath = resolve(override);");

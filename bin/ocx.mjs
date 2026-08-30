@@ -588,6 +588,15 @@ const launchContext = JSON.stringify({
     configDir: configDir(),
   } : null,
 });
+// Only the manager-root slots are dropped from the inherited environment: the snapshot above
+// already carries them as proof-bound values, and duplicating them counts twice against the
+// 32,767-character Windows environment block. PATH and PATHEXT are intentionally still
+// inherited, because the child needs them to resolve its own tooling; the snapshot copy is
+// what the inspection reads, so it must stay a pre-dotenv capture rather than a live lookup.
+const inheritedEnv = { ...process.env };
+if (codexCliUpdateInspection) {
+  for (const name of CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS) delete inheritedEnv[name];
+}
 const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2)], {
   stdio: "inherit",
   // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no
@@ -595,7 +604,7 @@ const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, 
   // the long-running Bun child, and closing that window kills the proxy (#1236).
   windowsHide: true,
   env: {
-    ...process.env,
+    ...inheritedEnv,
     [NODE_LAUNCH_CONTEXT_ENV]: launchContext,
     [BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source,
     [BUN_RUNTIME_PATH_ENV]: bunRuntime.path,
