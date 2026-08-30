@@ -1766,6 +1766,7 @@ describe("codex-auth API", () => {
       expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 1, refreshCalls: 0 });
       expect(await list()).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 9 } });
       expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 3, refreshCalls: 1 });
+      expect(lineageSpy).toHaveBeenCalledWith("pool-pre-resolution-replacement");
     } finally {
       lineageSpy.mockRestore();
     }
@@ -1831,6 +1832,7 @@ describe("codex-auth API", () => {
         .find(candidate => candidate.id === "pool-spent-outer-replacement");
       expect(account).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 12 } });
       expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 2, refreshCalls: 1 });
+      expect(recoverySpy).toHaveBeenCalledWith("pool-spent-outer-replacement", oldGeneration);
     } finally {
       recoverySpy.mockRestore();
     }

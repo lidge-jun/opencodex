@@ -757,7 +757,9 @@ describe("codex-account-store CRUD", () => {
         expect(ownerResult).toMatchObject({ accessToken: `owner-new-${scenario.suffix}`, chatgptAccountId: scenario.ownerIdentity });
         expect(joinerResult).toMatchObject({ accessToken: `joiner-new-${scenario.suffix}`, chatgptAccountId: scenario.joinerIdentity });
         expect(readCodexAccountRecord(ownerId)?.credential?.accessToken).toBe(`owner-new-${scenario.suffix}`);
+        expect(readCodexAccountRecord(ownerId)?.credential?.refreshToken).toBe(`owner-grant-${scenario.suffix}`);
         expect(readCodexAccountRecord(joinerId)?.credential?.accessToken).toBe(`joiner-new-${scenario.suffix}`);
+        expect(readCodexAccountRecord(joinerId)?.credential?.refreshToken).toBe(`joiner-grant-${scenario.suffix}`);
       }
     } finally {
       globalThis.fetch = originalFetch;
