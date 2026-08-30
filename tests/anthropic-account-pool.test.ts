@@ -533,6 +533,28 @@ describe("anthropic account pool quota window scoring", () => {
     )).toBe(bId);
   });
 
+  test("five-hour default does not adopt known-before-unknown ranking", async () => {
+    // The known-first rule belongs to the opt-in windows. Under the legacy five-hour default
+    // a measured 100% account must NOT outrank an unmeasured one just for having a reading —
+    // that would change routing for operators who never opted into anything.
+    const { bId, cId } = await seedThreeAccounts();
+    setCachedProviderAccountQuotaForTests("anthropic", bId, {
+      fiveHourPercent: 100,
+      updatedAt: Date.now(),
+    });
+
+    // Omitted window (legacy default) and the explicit five-hour spelling must agree, and
+    // neither may promote the exhausted-but-measured account the way max-utilization does.
+    expect(rotateAnthropicAccountOn429(cfg(true, 80), cId, "30", "five-hour-default-known"))
+      .not.toBe(bId);
+    expect(rotateAnthropicAccountOn429(
+      cfg(true, 80, { quotaWindow: "five-hour" }),
+      cId,
+      "30",
+      "five-hour-explicit-known",
+    )).not.toBe(bId);
+  });
+
   test("omitted quotaWindow equals explicit five-hour", async () => {
     const { aId, bId } = await seedTwoAccounts();
     const updatedAt = Date.now();
