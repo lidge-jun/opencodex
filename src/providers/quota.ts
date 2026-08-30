@@ -104,7 +104,23 @@ export function setProviderQuotaBeforePublishForTests(
   providerQuotaBeforePublishForTests = hook;
 }
 const TERMINAL_QUOTA_FAILURE = Symbol("terminal-quota-failure");
-type ProviderQuotaProbeResult = ProviderQuotaReport | null | typeof TERMINAL_QUOTA_FAILURE;
+/**
+ * The probe succeeded and the upstream authoritatively reported NO model-quota windows.
+ *
+ * Distinct from `null`, which means "this probe told us nothing" and deliberately preserves
+ * the last-good row for up to 30 minutes. Collapsing the two would let a stale report outlive
+ * the authoritative answer that replaced it: a GLM plan whose payload carries only MCP
+ * `TIME_LIMIT` rows has no model windows, and the dashboard and quota-aware routing must stop
+ * showing the previous token windows rather than keep them for another half hour.
+ *
+ * Suppression is shared with `TERMINAL_QUOTA_FAILURE`; only the reason differs.
+ */
+const AUTHORITATIVE_EMPTY_QUOTA = Symbol("authoritative-empty-quota");
+type ProviderQuotaProbeResult =
+  | ProviderQuotaReport
+  | null
+  | typeof TERMINAL_QUOTA_FAILURE
+  | typeof AUTHORITATIVE_EMPTY_QUOTA;
 
 export interface ProviderQuotaReport {
   provider: string;
@@ -754,10 +770,16 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
   const body = asRecord(await readQuotaJson(response));
   if (!body || body.success === false) return null;
   const data = asRecord(body.data) ?? body;
-  const quota = Array.isArray(data?.limits)
-    ? parseZaiQuotaLimits(data)
-    : parseZaiQuotaLegacyFields(data);
-  return quota ? report(provider, "zai:quota-limit", quota) : null;
+  if (Array.isArray(data?.limits)) {
+    const quota = parseZaiQuotaLimits(data);
+    // A well-formed `limits[]` we fully understood is authoritative even when it yields no
+    // model window — for example a plan reporting only the monthly MCP `TIME_LIMIT` row.
+    // Returning `null` here would preserve the previous token windows for up to 30 minutes
+    // and keep quota-aware routing acting on a report the provider has already superseded.
+    return quota ? report(provider, "zai:quota-limit", quota) : AUTHORITATIVE_EMPTY_QUOTA;
+  }
+  const legacy = parseZaiQuotaLegacyFields(data);
+  return legacy ? report(provider, "zai:quota-limit", legacy) : null;
 }
 
 /**
@@ -2322,9 +2344,18 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
         maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
       )),
     );
-    const fresh = probeResults.filter((item): item is ProviderQuotaReport => item !== null && item !== TERMINAL_QUOTA_FAILURE);
+    const fresh = probeResults.filter((item): item is ProviderQuotaReport => (
+      item !== null && item !== TERMINAL_QUOTA_FAILURE && item !== AUTHORITATIVE_EMPTY_QUOTA
+    ));
+    // Both sentinels suppress the previous row. A terminal failure means the response was
+    // invalid; an authoritative empty means the response was valid and said there are no
+    // model windows. Either way the old row is no longer true, which is what separates them
+    // from `null` (told us nothing — keep the last-good row).
     const terminalFailures = new Set(
-      Object.keys(config.providers).filter((_, index) => probeResults[index] === TERMINAL_QUOTA_FAILURE),
+      Object.keys(config.providers).filter((_, index) => (
+        probeResults[index] === TERMINAL_QUOTA_FAILURE
+        || probeResults[index] === AUTHORITATIVE_EMPTY_QUOTA
+      )),
     );
     await providerQuotaBeforePublishForTests?.();
     let commitKey: string | null = null;

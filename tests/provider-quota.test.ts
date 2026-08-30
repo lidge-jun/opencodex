@@ -1193,6 +1193,36 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports[0]?.quota.monthlyResetAt).toBeUndefined();
   });
 
+  test("a later MCP-only refresh clears the cached Z.AI model windows", async () => {
+    // Sequential forced refreshes. The first returns real token windows, so a last-good row
+    // exists; the second is a SUCCESSFUL response that authoritatively reports no model
+    // windows. Treating that as a transient failure would preserve the stale token windows
+    // for up to 30 minutes, so the dashboard and quota-aware routing would keep acting on a
+    // report the provider has already superseded.
+    let call = 0;
+    globalThis.fetch = (async () => {
+      call += 1;
+      const limits = call === 1
+        ? [
+          { type: "TOKENS_LIMIT", unit: 3, number: 5, percentage: 40, nextResetTime: 1789000000000 },
+          { type: "TOKENS_LIMIT", unit: 6, number: 1, percentage: 52, nextResetTime: 1789600000000 },
+        ]
+        : [
+          { type: "TIME_LIMIT", unit: 5, number: 1, usage: 100, currentValue: 20, remaining: 80, percentage: 20, nextResetTime: 1788921262994 },
+        ];
+      return new Response(JSON.stringify({ success: true, data: { limits, level: "lite" } }), { status: 200 });
+    }) as typeof fetch;
+
+    const cfg = keyQuotaConfig("zhipu-bigmodel-coding", "https://open.bigmodel.cn/api/coding/paas/v4", "zai-secret");
+
+    const first = await fetchProviderQuotaReports(cfg, true);
+    expect(first.reports).toHaveLength(1);
+    expect(first.reports[0]?.quota).toMatchObject({ fiveHourPercent: 40, weeklyPercent: 52 });
+
+    const second = await fetchProviderQuotaReports(cfg, true);
+    expect(second.reports).toEqual([]);
+  });
+
   test("Z.AI quota reports no model window when the payload carries only an MCP TIME_LIMIT row", async () => {
     // A BigModel V1 Lite plan whose MCP allowance is fully spent but whose model tokens
     // are untouched. Before issue #1168 this produced monthlyPercent: 100, and because
