@@ -74,7 +74,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
   const [quotaAutoRefreshBusy, setQuotaAutoRefreshBusy] = useState<string | null>(null);
-  const [quotaAutoRefreshSettings, setQuotaAutoRefreshSettings] = useState<QuotaAutoRefreshSettings>({});
+  const [quotaAutoRefreshSettings, setQuotaAutoRefreshSettings] = useState<QuotaAutoRefreshSettings | null>(null);
+  const quotaAutoRefreshMutationRevisionRef = useRef(0);
   // undefined until /api/settings answers: the switch must not render a guessed position and
   // then visibly correct itself a moment later.
   const [sparkVisible, setSparkVisible] = useState<boolean | undefined>(undefined);
@@ -237,6 +238,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const toggleQuotaAutoRefresh = async (account: CodexAccountEntry, window: "fiveHour" | "weekly") => {
     if (quotaAutoRefreshBusy) return;
+    quotaAutoRefreshMutationRevisionRef.current += 1;
     const enabled = window === "fiveHour"
       ? !account.quotaAutoRefresh.fiveHourEnabled
       : !account.quotaAutoRefresh.weeklyEnabled;
@@ -262,6 +264,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     // AbortController rather than a `cancelled` flag: the in-flight request is actually torn
     // down on unmount, and the state update lands in a .then() the linter can see is guarded.
     const abort = new AbortController();
+    const mutationRevision = quotaAutoRefreshMutationRevisionRef.current;
     fetch(`${apiBase}/api/settings`, { signal: abort.signal })
       .then(response => (response.ok ? response.json() : null))
       .then((payload: {
@@ -270,7 +273,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       } | null) => {
         if (abort.signal.aborted || !payload) return;
         if (typeof payload.showCodexSparkQuota === "boolean") setSparkVisible(payload.showCodexSparkQuota);
-        setQuotaAutoRefreshSettings(payload.codexQuotaAutoRefresh ?? {});
+        if (quotaAutoRefreshMutationRevisionRef.current === mutationRevision) {
+          setQuotaAutoRefreshSettings(payload.codexQuotaAutoRefresh ?? {});
+        }
       })
       // A settings read failure leaves the switch unrendered rather than guessing a position.
       .catch(() => {});
@@ -350,13 +355,17 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   };
 
   const displayAccounts = useMemo(() => accounts.map(account => {
-    const setting = quotaAutoRefreshSettings[account.id];
+    const setting = quotaAutoRefreshSettings?.[account.id];
     return {
       ...account,
       quotaAutoRefresh: {
         ...account.quotaAutoRefresh,
-        fiveHourEnabled: setting?.fiveHour === true,
-        weeklyEnabled: setting?.weekly === true,
+        fiveHourEnabled: quotaAutoRefreshSettings === null
+          ? account.quotaAutoRefresh.fiveHourEnabled
+          : setting?.fiveHour === true,
+        weeklyEnabled: quotaAutoRefreshSettings === null
+          ? account.quotaAutoRefresh.weeklyEnabled
+          : setting?.weekly === true,
       },
     };
   }), [accounts, quotaAutoRefreshSettings]);

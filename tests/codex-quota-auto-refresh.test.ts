@@ -154,6 +154,18 @@ describe("Codex quota window auto refresh", () => {
     });
   });
 
+  test("does not schedule pool-account warmups in Direct mode", async () => {
+    const cfg = config();
+    cfg.providers.openai.codexAccountMode = "direct";
+    const warmed: string[] = [];
+    await runCodexQuotaAutoRefresh(cfg, NOW, {
+      getQuota: id => id === "pool-a" ? quota() : null,
+      warmAccount: async (_config, id) => { warmed.push(id); },
+      persistCompleted: recordMarkers,
+    });
+    expect(warmed).toEqual([]);
+  });
+
   test("retries a failed marker write without sending a second warmup", async () => {
     const cfg = config();
     let warmups = 0;
@@ -233,6 +245,34 @@ describe("Codex quota window auto refresh", () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("automatic quota-window activation is disabled"));
     } finally {
       warn.mockRestore();
+    }
+  });
+
+  test("loads valid quota settings and rejects malformed entries without discarding config", () => {
+    const valid = config();
+    valid.codexQuotaAutoRefresh = {
+      "pool-a": { fiveHour: true, lastFiveHourResetAt: RESET_SECONDS },
+    };
+    writeFileSync(join(testHome, "config.json"), JSON.stringify(valid));
+    expect(readConfigDiagnostics().config.codexQuotaAutoRefresh).toEqual(valid.codexQuotaAutoRefresh);
+    expect(validateConfigCandidate(valid)).toMatchObject({ ok: true });
+
+    for (const codexQuotaAutoRefresh of [
+      { "pool-a": true },
+      { "pool-a": { weekly: true, lastWeeklyResetAt: -1 } },
+      { "bad/id": { weekly: true } },
+    ]) {
+      const malformed = { ...config(), codexQuotaAutoRefresh };
+      writeFileSync(join(testHome, "config.json"), JSON.stringify(malformed));
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.config.codexQuotaAutoRefresh).toBeUndefined();
+      expect(diagnostics.warnings).toContainEqual(
+        expect.stringContaining("automatic quota-window activation is disabled"),
+      );
+      expect(validateConfigCandidate(malformed)).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("codexQuotaAutoRefresh"),
+      });
     }
   });
 });

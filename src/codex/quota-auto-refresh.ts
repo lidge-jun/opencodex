@@ -1,6 +1,7 @@
 import { mutatePersistedConfig } from "../config";
 import { registerStateSweepAfterTick } from "../lib/state-store-sweeper";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { providerCodexAccountMode } from "../providers/registry";
 import type { OcxConfig } from "../types";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import { isCodexAccountPaused } from "./account-pause";
@@ -151,6 +152,7 @@ export async function runCodexQuotaAutoRefresh(
 ): Promise<void> {
   const openai = config.providers[OPENAI_CODEX_PROVIDER_ID];
   if (!openai || openai.disabled === true || !isCanonicalOpenAiForwardProvider(openai)) return;
+  if (providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool") return;
   if (inFlight) return inFlight;
   const quotaFor = deps.getQuota ?? getAccountQuota;
   const warm = deps.warmAccount ?? warmAccount;
