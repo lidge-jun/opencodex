@@ -1948,6 +1948,67 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     }
   });
 
+  test("the issue reproduction uses the effective model alias for the picker label", async () => {
+    clearModelCache("google-antigravity");
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "google-antigravity",
+        providers: {
+          "google-antigravity": {
+            adapter: "google",
+            baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+            authMode: "oauth",
+            liveModels: false,
+            models: ["gemini-3.7-flash"],
+            modelAliases: { "gemini-3.7-flash": "gemini-3.7" },
+          },
+        },
+      });
+      const row = buildCatalogEntries(nativeTemplate(), [], models)
+        .find(entry => entry.slug === "google-antigravity/gemini-3.7-flash");
+
+      expect(row?.display_name).toBe("google-antigravity/gemini-3.7");
+      expect(row?.slug).toBe("google-antigravity/gemini-3.7-flash");
+    } finally {
+      clearModelCache("google-antigravity");
+    }
+  });
+
+  test("an explicit custom displayName wins over an effective model alias", async () => {
+    clearModelCache("google-antigravity");
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "google-antigravity",
+        providers: {
+          "google-antigravity": {
+            adapter: "google",
+            baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+            authMode: "oauth",
+            liveModels: false,
+            models: ["gemini-3.7-flash"],
+            modelAliases: { "gemini-3.7-flash": "gemini-3.7" },
+          },
+        },
+        customModels: [{
+          id: "custom-gemini",
+          provider: "google-antigravity",
+          modelId: "gemini-3.7-flash",
+          displayName: "My Gemini",
+          addedAt: "2026-01-01T00:00:00.000Z",
+        }],
+      });
+      const row = buildCatalogEntries(nativeTemplate(), [], models)
+        .find(entry => entry.slug === "google-antigravity/gemini-3.7-flash");
+
+      expect(row?.display_name).toBe("My Gemini");
+      expect(row?.slug).toBe("google-antigravity/gemini-3.7-flash");
+    } finally {
+      clearModelCache("google-antigravity");
+    }
+  });
+
   test("a custom row clamps its soft budget to the provider max-input ceiling", async () => {
     const models = await gatherRoutedModels({
       port: 10100,
