@@ -24,6 +24,7 @@ import {
 } from "../src/codex/main-account";
 import {
   recoverNativeMainRefreshPublication,
+  setNativeMainBeforeDisplacedRestoreHookForTests,
   setNativeMainBeforeRecoveryReplaceHookForTests,
 } from "../src/codex/native-main-refresh-publication";
 import { resolveNativeProfileContext } from "../src/codex/native-profile-store";
@@ -57,6 +58,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setMainAuthJsonBeforeRenameHookForTests(null);
+  setNativeMainBeforeDisplacedRestoreHookForTests(null);
   setNativeMainBeforeRecoveryReplaceHookForTests(null);
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
@@ -581,6 +583,42 @@ describe("native main token refresh", () => {
     expect(existsSync(journalPath)).toBe(false);
     expect(existsSync(stagedPath)).toBe(false);
     expect(existsSync(previousPath)).toBe(false);
+  });
+
+  test("retains a second external writer that races displaced credential restoration", () => {
+    const authPath = join(home, "auth.json");
+    const transactionId = "11111111-1111-4111-8111-111111111111";
+    const stagedBasename = `.opencodex-native-main-refresh.${transactionId}.new`;
+    const previousBasename = `.opencodex-native-main-refresh.${transactionId}.previous`;
+    const stagedPath = join(home, stagedBasename);
+    const previousPath = join(home, previousBasename);
+    const journalPath = join(home, ".opencodex-native-main-refresh.json");
+    const original = JSON.stringify({ tokens: { access_token: "old-access", refresh_token: "old-refresh" } });
+    const replacement = JSON.stringify({ tokens: { access_token: "new-access", refresh_token: "new-refresh" } });
+    const firstExternal = JSON.stringify({ tokens: { access_token: "external-a", refresh_token: "external-a-refresh" } });
+    const secondExternal = JSON.stringify({ tokens: { access_token: "external-b", refresh_token: "external-b-refresh" } });
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    writeFileSync(authPath, replacement);
+    writeFileSync(process.platform === "win32" ? previousPath : stagedPath, firstExternal);
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      transactionId,
+      targetPath: authPath,
+      stagedBasename,
+      previousBasename,
+      phase: "prepared",
+      expectedSha256: digest(original),
+      replacementSha256: digest(replacement),
+    }));
+    setNativeMainBeforeDisplacedRestoreHookForTests(() => writeFileSync(authPath, secondExternal));
+
+    expect(() => recoverNativeMainRefreshPublication(resolveNativeProfileContext())).toThrow(
+      "Native credential refresh could not be published",
+    );
+
+    expect(readFileSync(authPath, "utf8")).toBe(firstExternal);
+    expect(readFileSync(stagedPath, "utf8")).toBe(secondExternal);
+    expect(existsSync(journalPath)).toBe(true);
   });
 
   test("retains an unprovable prepared replacement without a displaced artifact", () => {

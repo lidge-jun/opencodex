@@ -8,6 +8,7 @@ import type { NativeProfileContext } from "./native-profile-store";
 const JOURNAL = ".opencodex-native-main-refresh.json";
 const TRANSACTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 let beforeRecoveryReplaceForTests: (() => void) | null = null;
+let beforeDisplacedRestoreForTests: (() => void) | null = null;
 
 type Journal = {
   version: 1;
@@ -100,9 +101,16 @@ function settlePreparedReplacement(
   const displaced = readExact(displacedPath);
   if (!displaced) throw new NativeMainRefreshPublicationError();
   if (digest(displaced) !== journal.expectedSha256) {
+    const hook = beforeDisplacedRestoreForTests;
+    beforeDisplacedRestoreForTests = null;
+    hook?.();
     restoreFilePreservingTarget(displacedPath, journal.targetPath, rollbackPath);
     const restored = readExact(journal.targetPath);
     if (!restored || !restored.equals(displaced)) throw new NativeMainRefreshPublicationError();
+    const replaced = readExact(process.platform === "win32" ? rollbackPath : displacedPath);
+    if (!replaced || digest(replaced) !== journal.replacementSha256) {
+      throw new NativeMainRefreshPublicationError();
+    }
   }
   cleanup(context, journal);
 }
@@ -207,4 +215,8 @@ export function nativeMainRefreshJournalBasename(): string {
 
 export function setNativeMainBeforeRecoveryReplaceHookForTests(hook: (() => void) | null): void {
   beforeRecoveryReplaceForTests = hook;
+}
+
+export function setNativeMainBeforeDisplacedRestoreHookForTests(hook: (() => void) | null): void {
+  beforeDisplacedRestoreForTests = hook;
 }
