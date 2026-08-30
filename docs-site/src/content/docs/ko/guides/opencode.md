@@ -16,7 +16,7 @@ ocx opencode
 ```
 
 이 명령은 프록시가 실행 중임을 보장하고, 그 프로세스에는 생성된
-`provider.opencodex` 블록만 주입한 채 opencode를 실행합니다. 추가 인자는 그대로
+`provider.opencodex`와 `providers.opencodex` 블록을 주입한 채 opencode를 실행합니다. 추가 인자는 그대로
 전달됩니다: `ocx opencode run "hello"`.
 
 라우팅된 모델은 선택기에서 `opencodex` 공급자 아래에 나타납니다:
@@ -30,11 +30,11 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 
 런처는 `~/.config/opencode/opencode.json`, 프로젝트의 `opencode.json` /
 `opencode.jsonc`, 그리고 그 밖의 어떤 디스크상의 구성 레이어도 복사하거나 다시
-쓰지 않습니다. 전역 또는 프로젝트 구성을 읽어 `provider.opencodex` 재정의가 있는지만
+쓰지 않습니다. 전역 또는 프로젝트 구성을 읽어 `provider.opencodex` 또는 `providers.opencodex` 재정의가 있는지만
 확인할 수 있으며, 기존의 공급자, 에이전트, 키 바인딩, MCP 항목, 그리고 상대 경로
 `{file:…}` 참조는 계속 원래 파일을 기준으로 해석됩니다.
 
-이번 실행에서만 opencodex는 생성된 `provider.opencodex` 블록을 OpenCode의 인라인
+이번 실행에서만 opencodex는 생성된 `provider.opencodex`와 `providers.opencodex` 블록을 OpenCode의 인라인
 런타임 레이어를 통해 추가합니다. 이 레이어는 전역/사용자 지정/프로젝트 구성 뒤에
 병합되며, 자식 프로세스에서는 충돌하는 키만 덮어씁니다.
 
@@ -44,7 +44,7 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 | 인라인 런타임 (`OPENCODE_CONFIG_CONTENT`) | 생성된 `provider.opencodex`와 `providers.opencodex` 블록만 받습니다 |
 | 상대 `{file:…}` 경로 | 원래 정의된 구성 파일을 기준으로 계속 해석됩니다 |
 
-전역 또는 프로젝트 구성에도 `provider.opencodex`가 정의되어 있으면, 런처는 안내
+전역 또는 프로젝트 구성에도 `provider.opencodex` 또는 `providers.opencodex`가 정의되어 있으면, 런처는 안내
 메시지를 출력합니다. `ocx opencode`의 런타임 레이어가 이번 실행에서는 그것을
 덮어씁니다.
 

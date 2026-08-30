@@ -15,8 +15,10 @@ visible catalog, and injects it through OpenCode's inline runtime layer
 ocx opencode
 ```
 
-This ensures the proxy is running and launches opencode with only the generated
-`provider.opencodex` block injected for that process. Extra arguments pass through:
+This ensures the proxy is running and launches opencode with the generated
+`provider.opencodex` and `providers.opencodex` blocks injected for that process — the
+legacy spelling opencode V1 reads, and the V2 spelling that carries the reasoning-effort
+variants. Extra arguments pass through:
 `ocx opencode run "hello"`.
 
 Routed models appear in the picker under the `opencodex` provider:
@@ -29,8 +31,9 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ## Reasoning effort
 
 opencode exposes reasoning effort as model *variants*. opencodex writes one variant per
-declared effort for every model that advertises a ladder, so the effort is selectable in
-opencode's model picker instead of being pinned by the proxy.
+declared effort for every model that advertises a ladder — `none` is skipped, because the
+chat ingress has no wire effort for it — so the effort is selectable in opencode's model
+picker instead of being pinned by the proxy.
 
 Two provider blocks are generated for this:
 
@@ -52,12 +55,12 @@ in force instead of being frozen into the config.
 
 The launcher does not copy or rewrite `~/.config/opencode/opencode.json`,
 project `opencode.json` / `opencode.jsonc`, or any other on-disk config layer. It may
-read global or project config to detect a `provider.opencodex` override, while your
-existing providers, agents, keybinds, MCP entries, and relative `{file:…}` references
-keep resolving from their original files.
+read global or project config to detect a provider override — under `provider.opencodex`
+or `providers.opencodex` — while your existing providers, agents, keybinds, MCP entries,
+and relative `{file:…}` references keep resolving from their original files.
 
-For this launch only, opencodex adds the generated `provider.opencodex` block through
-OpenCode's inline runtime layer. That layer merges after global/custom/project config
+For this launch only, opencodex adds both generated blocks — `provider.opencodex` and
+`providers.opencodex` — through OpenCode's inline runtime layer. That layer merges after global/custom/project config
 and overrides only conflicting keys for the child process.
 
 | Layer | Behavior with `ocx opencode` |
@@ -66,8 +69,9 @@ and overrides only conflicting keys for the child process.
 | Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Receives only the generated `provider.opencodex` and `providers.opencodex` blocks |
 | Relative `{file:…}` paths | Still resolve against the config file that originally defined them |
 
-If a global or project config also defines `provider.opencodex`, the launcher prints an
-informational note: the runtime layer from `ocx opencode` overrides it for that launch.
+If a global or project config also defines the provider under `provider.opencodex` or
+`providers.opencodex`, the launcher prints an informational note: the runtime layer from
+`ocx opencode` overrides it for that launch.
 
 ## Putting the block into your own config
 

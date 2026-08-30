@@ -11,7 +11,7 @@ opencode 從合併的 JSON 設定層讀取供應商，而不是環境變數，�
 ocx opencode
 ```
 
-這會確保代理程式正在執行，並僅以產生的 `provider.opencodex` 區塊啟動該次 opencode 程序。額外引數會原樣傳遞：`ocx opencode run "hello"`。
+這會確保代理程式正在執行，並以產生的 `provider.opencodex` 與 `providers.opencodex` 區塊啟動該次 opencode 程序。額外引數會原樣傳遞：`ocx opencode run "hello"`。
 
 路由模型會出現在選擇器的 `opencodex` 供應商底下：
 
@@ -22,9 +22,9 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 
 ## 你自己的設定絕不會被修改
 
-啟動器不會複製或改寫 `~/.config/opencode/opencode.json`、專案的 `opencode.json` / `opencode.jsonc`，或任何其他磁碟上的設定層。它可能會讀取全域或專案設定以偵測 `provider.opencodex` 覆寫，而你既有的供應商、agents、keybinds、MCP 項目，以及相對路徑的 `{file:…}` 參考，仍會從原本的檔案解析。
+啟動器不會複製或改寫 `~/.config/opencode/opencode.json`、專案的 `opencode.json` / `opencode.jsonc`，或任何其他磁碟上的設定層。它可能會讀取全域或專案設定以偵測 `provider.opencodex` 或 `providers.opencodex` 覆寫，而你既有的供應商、agents、keybinds、MCP 項目，以及相對路徑的 `{file:…}` 參考，仍會從原本的檔案解析。
 
-僅就此啟動，opencodex 會透過 OpenCode 的內嵌 runtime 層加入產生的 `provider.opencodex` 區塊。該層在全域／自訂／專案設定之後合併，且只覆寫子程序中衝突的鍵。
+僅就此啟動，opencodex 會透過 OpenCode 的內嵌 runtime 層加入產生的 `provider.opencodex` 與 `providers.opencodex` 區塊。該層在全域／自訂／專案設定之後合併，且只覆寫子程序中衝突的鍵。
 
 | 層 | 搭配 `ocx opencode` 的行為 |
 | --- | --- |
@@ -32,7 +32,7 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 | 內嵌 runtime（`OPENCODE_CONFIG_CONTENT`） | 只接收產生的 `provider.opencodex` 與 `providers.opencodex` 兩個區塊 |
 | 相對 `{file:…}` 路徑 | 仍相對於原本定義它們的設定檔解析 |
 
-若全域或專案設定也定義了 `provider.opencodex`，啟動器會印出資訊提示：該次啟動由 `ocx opencode` 提供的 runtime 層會覆寫它。
+若全域或專案設定也定義了 `provider.opencodex` 或 `providers.opencodex`，啟動器會印出資訊提示：該次啟動由 `ocx opencode` 提供的 runtime 層會覆寫它。
 
 ## 把區塊放進你自己的設定
 

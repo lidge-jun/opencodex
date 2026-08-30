@@ -145,10 +145,10 @@ managed integration for now.
 `opencodex-loopback` placeholder rather than a key. No real credential is ever written
 into any client config.
 
-**For `ocx opencode`, the launcher's provider block wins.** That launcher injects
-`provider.opencodex` through `OPENCODE_CONFIG_CONTENT`, which outranks the same entry on
-disk — the rest of your opencode config still applies as usual. The switch here is what
-matters when you launch `opencode` directly.
+**For `ocx opencode`, the launcher's provider blocks win.** That launcher injects
+`provider.opencodex` and `providers.opencodex` through `OPENCODE_CONFIG_CONTENT`, which
+outranks the same entries on disk — the rest of your opencode config still applies as
+usual. The switch here is what matters when you launch `opencode` directly.
 
 ## From the terminal
 

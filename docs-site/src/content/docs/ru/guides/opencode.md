@@ -15,7 +15,7 @@ ocx opencode
 ```
 
 Команда убеждается, что прокси запущен, и запускает opencode, внедряя для этого процесса только
-сгенерированный блок `provider.opencodex`. Дополнительные аргументы передаются дальше:
+сгенерированные блоки `provider.opencodex` и `providers.opencodex`. Дополнительные аргументы передаются дальше:
 `ocx opencode run "hello"`.
 
 Маршрутизируемые модели появляются в picker под провайдером `opencodex`:
@@ -30,10 +30,10 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 Лончер не копирует и не переписывает `~/.config/opencode/opencode.json`,
 проектные `opencode.json` / `opencode.jsonc` и любые другие конфигурационные слои на диске. Он
 может читать глобальную или проектную конфигурацию, чтобы обнаружить override
-`provider.opencodex`, но ваши существующие провайдеры, агенты, keybind'ы, записи MCP и
+`provider.opencodex` или `providers.opencodex`, но ваши существующие провайдеры, агенты, keybind'ы, записи MCP и
 относительные ссылки `{file:…}` продолжают разрешаться из исходных файлов.
 
-Только для этого запуска opencodex добавляет сгенерированный блок `provider.opencodex` через
+Только для этого запуска opencodex добавляет сгенерированные блоки `provider.opencodex` и `providers.opencodex` через
 inline runtime layer OpenCode. Этот слой сливается после глобальной/custom/project-конфигурации и
 переопределяет только конфликтующие ключи дочернего процесса.
 
@@ -43,7 +43,7 @@ inline runtime layer OpenCode. Этот слой сливается после �
 | Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Получает только сгенерированные блоки `provider.opencodex` и `providers.opencodex` |
 | Relative `{file:…}` paths | Всё так же разрешаются относительно конфигурационного файла, где были определены |
 
-Если глобальная или проектная конфигурация тоже определяет `provider.opencodex`, лончер печатает
+Если глобальная или проектная конфигурация тоже определяет `provider.opencodex` или `providers.opencodex`, лончер печатает
 информационное замечание: runtime layer из `ocx opencode` переопределяет её только для этого
 запуска.
 

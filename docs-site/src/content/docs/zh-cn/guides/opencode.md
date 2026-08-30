@@ -11,7 +11,7 @@ opencode 从合并后的 JSON 配置层读取 provider，而不是从环境变�
 ocx opencode
 ```
 
-这会确保代理正在运行，并只为该进程注入生成的 `provider.opencodex` block 来启动 opencode。额外参数会原样透传：`ocx opencode run "hello"`。
+这会确保代理正在运行，并为该进程注入生成的 `provider.opencodex` 和 `providers.opencodex` block 来启动 opencode。额外参数会原样透传：`ocx opencode run "hello"`。
 
 路由模型会在选择器里作为 `opencodex` provider 出现：
 
@@ -22,9 +22,9 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 
 ## 你的配置绝不会被修改
 
-启动器不会复制或重写 `~/.config/opencode/opencode.json`、项目中的 `opencode.json` / `opencode.jsonc`，也不会处理任何其他磁盘上的配置层。它可能会读取全局或项目配置，以检测是否存在 `provider.opencodex` 覆盖；而你现有的 providers、agents、keybinds、MCP 条目以及相对路径的 `{file:…}` 引用，都会继续从它们原本的文件中解析。
+启动器不会复制或重写 `~/.config/opencode/opencode.json`、项目中的 `opencode.json` / `opencode.jsonc`，也不会处理任何其他磁盘上的配置层。它可能会读取全局或项目配置，以检测是否存在 `provider.opencodex` 或 `providers.opencodex` 覆盖；而你现有的 providers、agents、keybinds、MCP 条目以及相对路径的 `{file:…}` 引用，都会继续从它们原本的文件中解析。
 
-仅在这次启动中，opencodex 会通过 OpenCode 的内联运行时层添加生成的 `provider.opencodex` block。该层会在全局/自定义/项目配置之后合并，并且只会对这个子进程覆盖冲突的键。
+仅在这次启动中，opencodex 会通过 OpenCode 的内联运行时层添加生成的 `provider.opencodex` 和 `providers.opencodex` block。该层会在全局/自定义/项目配置之后合并，并且只会对这个子进程覆盖冲突的键。
 
 | Layer | `ocx opencode` 下的行为 |
 | --- | --- |
@@ -32,7 +32,7 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 | Inline runtime (`OPENCODE_CONFIG_CONTENT`) | 只接收生成的 `provider.opencodex` 和 `providers.opencodex` 两个 block |
 | Relative `{file:…}` paths | 仍然按最初定义它们的配置文件来解析 |
 
-如果全局或项目配置里也定义了 `provider.opencodex`，启动器会打印一条提示信息：`ocx opencode` 的运行时层会在这次启动中覆盖它。
+如果全局或项目配置里也定义了 `provider.opencodex` 或 `providers.opencodex`，启动器会打印一条提示信息：`ocx opencode` 的运行时层会在这次启动中覆盖它。
 
 ## 把这个 block 放进你自己的配置里
 
