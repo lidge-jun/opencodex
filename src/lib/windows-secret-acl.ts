@@ -33,6 +33,7 @@ import { existsSync, statSync } from "node:fs";
 import { env, platform } from "node:process";
 import { resolveTrustedWindowsIcaclsExe } from "./windows-elevation";
 import {
+  cachedCurrentWindowsIdentity,
   resolveCurrentWindowsPrincipal,
   resolveCurrentWindowsPrincipalAsync,
   setSyntheticWindowsPrincipalForTests,
@@ -500,6 +501,69 @@ function grantAce(user: string, directory: boolean): string {
   return directory ? `${user}:(OI)(CI)(F)` : `${user}:(F)`;
 }
 
+function existingAclIsCompliant(
+  targetPath: string,
+  directory: boolean,
+  stdout: string,
+  ownerName: string,
+): boolean {
+  const lines = stdout.replaceAll("\r", "").split("\n");
+  const first = lines.shift();
+  if (!first || first.slice(0, targetPath.length).toLowerCase() !== targetPath.toLowerCase()) {
+    return false;
+  }
+  const separator = first[targetPath.length];
+  if (separator !== undefined && !/\s/.test(separator)) return false;
+
+  const aceLines: string[] = [];
+  const firstAce = first.slice(targetPath.length).trim();
+  if (firstAce) aceLines.push(firstAce);
+  for (const line of lines) {
+    if (!line.trim()) break;
+    // Localized summary text is not indented like a continuation ACE.
+    if (!/^\s/.test(line)) break;
+    aceLines.push(line.trim());
+  }
+  if (aceLines.length !== 1) return false;
+
+  const match = /^([^:]+):((?:\([A-Z]+\))+)$/.exec(aceLines[0]!);
+  if (!match || match[1]!.trim().toLowerCase() !== ownerName.toLowerCase()) return false;
+  const rights = [...match[2]!.matchAll(/\(([A-Z]+)\)/g)].map(part => part[1]);
+  const expected = directory ? ["OI", "CI", "F"] : ["F"];
+  return rights.length === expected.length && rights.every((right, index) => right === expected[index]);
+}
+
+function shouldVerifyExistingAcl(): boolean {
+  return env["OPENCODEX_ACL_VERIFY_EXISTING"] === "1";
+}
+
+function existingAclAlreadyCompliant(targetPath: string, directory: boolean): boolean {
+  if (!shouldVerifyExistingAcl()) return false;
+  const identity = cachedCurrentWindowsIdentity();
+  if (!identity) return false;
+  try {
+    const result = icaclsRunner([targetPath], resolveHardenDeadlineMs());
+    return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
+  } catch {
+    return false;
+  }
+}
+
+async function existingAclAlreadyCompliantAsync(
+  targetPath: string,
+  directory: boolean,
+): Promise<boolean> {
+  if (!shouldVerifyExistingAcl()) return false;
+  const identity = cachedCurrentWindowsIdentity();
+  if (!identity) return false;
+  try {
+    const result = await asyncIcaclsRunner([targetPath], resolveHardenDeadlineMs());
+    return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
+  } catch {
+    return false;
+  }
+}
+
 function runIcacls(targetPath: string, directory: boolean, deadline: number): void {
   const principal = currentWindowsPrincipal(deadline);
 
@@ -724,6 +788,7 @@ function hardenEntry(
   if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
+  if (existingAclAlreadyCompliant(targetPath, directory)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
   if (timeoutMemoError) {
@@ -776,6 +841,7 @@ async function hardenEntryAsync(
   if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
+  if (await existingAclAlreadyCompliantAsync(targetPath, directory)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
   if (timeoutMemoError) {

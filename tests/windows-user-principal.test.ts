@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import {
+  cachedCurrentWindowsIdentity,
   resetWindowsPrincipalForTests,
   resolveCurrentWindowsPrincipal,
   resolveCurrentWindowsPrincipalAsync,
@@ -14,7 +15,7 @@ import {
   WindowsSystemDirectoryFfiUnavailableError,
 } from "../src/lib/windows-elevation";
 
-const ok = (stdout = "S-1-5-21-111-222-333-1001\r\n") => ({
+const ok = (stdout = "S-1-5-21-111-222-333-1001\r\nEXAMPLE\\Owner\r\n") => ({
   success: true,
   exitCode: 0,
   timedOut: false,
@@ -38,7 +39,7 @@ describe("Windows effective ACL principal", () => {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+      "$identity=[System.Security.Principal.WindowsIdentity]::GetCurrent();$identity.User.Value;$identity.Name",
     ]);
   });
 
@@ -206,6 +207,21 @@ describe("Windows effective ACL principal", () => {
     expect(resolveCurrentWindowsPrincipal(1_000)).toMatch(/^\*S-1-/);
     expect(resolveCurrentWindowsPrincipal(1_000)).toMatch(/^\*S-1-/);
     expect(calls).toBe(1);
+    expect(cachedCurrentWindowsIdentity()).toEqual({
+      sid: "S-1-5-21-111-222-333-1001",
+      name: "EXAMPLE\\Owner",
+    });
+    expect(resolveCurrentWindowsPrincipal(0)).toBe("*S-1-5-21-111-222-333-1001");
+  });
+
+  test("a cache-only identity read never starts the resolver", () => {
+    let calls = 0;
+    setWindowsPrincipalRunnerForTests(() => {
+      calls += 1;
+      return ok();
+    });
+    expect(cachedCurrentWindowsIdentity()).toBeNull();
+    expect(calls).toBe(0);
   });
 
   test("invalid output fails closed and is retried rather than cached", () => {

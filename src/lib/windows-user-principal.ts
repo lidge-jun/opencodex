@@ -29,8 +29,8 @@ import {
 } from "./windows-elevation";
 
 const SID_PATTERN = /^S-1-(?:\d+-)+\d+$/i;
-const SID_EXPRESSION =
-  "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value";
+const IDENTITY_EXPRESSION =
+  "$identity=[System.Security.Principal.WindowsIdentity]::GetCurrent();$identity.User.Value;$identity.Name";
 const DEFAULT_WINDOWS_ARM64_POWERSHELL = windowsPath.join(
   "C:\\Windows\\System32",
   "WindowsPowerShell",
@@ -106,7 +106,7 @@ const POWERSHELL_ARGS = [
   "-NoProfile",
   "-NonInteractive",
   "-Command",
-  SID_EXPRESSION,
+  IDENTITY_EXPRESSION,
 ] as const;
 
 function windowsPrincipalPowerShellCommand(): string[] {
@@ -167,7 +167,12 @@ async function defaultAsyncWindowsPrincipalRunner(
 
 let principalRunner: WindowsPrincipalRunner = defaultWindowsPrincipalRunner;
 let asyncPrincipalRunner: AsyncWindowsPrincipalRunner = defaultAsyncWindowsPrincipalRunner;
-let cachedPrincipal: string | null = null;
+export interface WindowsPrincipalIdentity {
+  readonly sid: string;
+  readonly name: string;
+}
+
+let cachedIdentity: WindowsPrincipalIdentity | null = null;
 let asyncLookupInFlight: Promise<string> | null = null;
 
 /**
@@ -191,7 +196,7 @@ let syntheticPrincipalForTests: string | null = null;
  */
 export function setSyntheticWindowsPrincipalForTests(principal: string | null): void {
   syntheticPrincipalForTests = principal;
-  cachedPrincipal = null;
+  cachedIdentity = null;
 }
 
 /** True when an explicit runner override is installed and must take precedence. */
@@ -211,17 +216,27 @@ function identityError(reason: string): NodeJS.ErrnoException {
   return error;
 }
 
-function principalFromResult(result: WindowsPrincipalLookupResult): string {
+function identityFromResult(result: WindowsPrincipalLookupResult): WindowsPrincipalIdentity {
   if (!result.success) {
     throw identityError(result.timedOut
       ? "timed out"
       : `exited ${result.exitCode ?? "null"}`);
   }
-  const sid = result.stdout.trim();
+  const lines = result.stdout.trim().split(/\r?\n/);
+  const sid = lines[0]?.trim() ?? "";
+  const name = lines[1]?.trim() ?? "";
   if (!SID_PATTERN.test(sid)) {
     throw identityError(sid ? "returned an invalid SID" : "returned an empty SID");
   }
-  return `*${sid.toUpperCase()}`;
+  if (!name || lines.length !== 2) {
+    throw identityError(name ? "returned an ambiguous account name" : "returned an empty account name");
+  }
+  return Object.freeze({ sid: sid.toUpperCase(), name });
+}
+
+/** Read the effective-token identity only when an earlier lookup already cached it. */
+export function cachedCurrentWindowsIdentity(): WindowsPrincipalIdentity | null {
+  return cachedIdentity;
 }
 
 /** Resolve and process-cache the effective token SID for synchronous ACL paths. */
@@ -229,7 +244,7 @@ export function resolveCurrentWindowsPrincipal(timeoutMs: number): string {
   // Order matters: an explicitly injected runner outranks the synthetic value,
   // so a test can inject a FAILURE on a POSIX host. See the seam comment above.
   if (hasSyncRunnerOverride()) {
-    if (cachedPrincipal) return cachedPrincipal;
+    if (cachedIdentity) return `*${cachedIdentity.sid}`;
     if (timeoutMs <= 0) throw identityError("had no remaining deadline");
     let overridden: WindowsPrincipalLookupResult;
     try {
@@ -237,11 +252,10 @@ export function resolveCurrentWindowsPrincipal(timeoutMs: number): string {
     } catch {
       throw identityError("could not start");
     }
-    const principal = principalFromResult(overridden);
-    cachedPrincipal = principal;
-    return principal;
+    cachedIdentity = identityFromResult(overridden);
+    return `*${cachedIdentity.sid}`;
   }
-  if (cachedPrincipal) return cachedPrincipal;
+  if (cachedIdentity) return `*${cachedIdentity.sid}`;
   if (syntheticPrincipalForTests) return syntheticPrincipalForTests;
   if (timeoutMs <= 0) throw identityError("had no remaining deadline");
   let result: WindowsPrincipalLookupResult;
@@ -250,9 +264,8 @@ export function resolveCurrentWindowsPrincipal(timeoutMs: number): string {
   } catch {
     throw identityError("could not start");
   }
-  const principal = principalFromResult(result);
-  cachedPrincipal = principal;
-  return principal;
+  cachedIdentity = identityFromResult(result);
+  return `*${cachedIdentity.sid}`;
 }
 
 async function waitForExistingLookup(
@@ -284,7 +297,7 @@ async function waitForExistingLookup(
  */
 export async function resolveCurrentWindowsPrincipalAsync(timeoutMs: number): Promise<string> {
   const overridden = hasAsyncRunnerOverride();
-  if (cachedPrincipal) return cachedPrincipal;
+  if (cachedIdentity) return `*${cachedIdentity.sid}`;
   if (asyncLookupInFlight) return waitForExistingLookup(asyncLookupInFlight, timeoutMs);
   // Same precedence rule as the sync path: an injected runner beats the synthetic.
   if (!overridden && syntheticPrincipalForTests) return syntheticPrincipalForTests;
@@ -297,9 +310,8 @@ export async function resolveCurrentWindowsPrincipalAsync(timeoutMs: number): Pr
     } catch {
       throw identityError("could not start");
     }
-    const principal = principalFromResult(result);
-    cachedPrincipal = principal;
-    return principal;
+    cachedIdentity = identityFromResult(result);
+    return `*${cachedIdentity.sid}`;
   })();
   asyncLookupInFlight = lookup;
   try {
@@ -317,7 +329,7 @@ export function setWindowsPrincipalRunnerForTests(
     throw new Error("Cannot replace the Windows principal runner while a lookup is in flight.");
   }
   principalRunner = runner ?? defaultWindowsPrincipalRunner;
-  cachedPrincipal = null;
+  cachedIdentity = null;
 }
 
 /** Test seam: replace the async resolver process and clear its successful cache. */
@@ -328,7 +340,7 @@ export function setAsyncWindowsPrincipalRunnerForTests(
     throw new Error("Cannot replace the Windows principal runner while a lookup is in flight.");
   }
   asyncPrincipalRunner = runner ?? defaultAsyncWindowsPrincipalRunner;
-  cachedPrincipal = null;
+  cachedIdentity = null;
 }
 
 /** Test seam: clear only process-local principal state. */
@@ -336,6 +348,6 @@ export function resetWindowsPrincipalForTests(): void {
   if (asyncLookupInFlight) {
     throw new Error("Cannot reset the Windows principal while a lookup is in flight.");
   }
-  cachedPrincipal = null;
+  cachedIdentity = null;
   syntheticPrincipalForTests = null;
 }

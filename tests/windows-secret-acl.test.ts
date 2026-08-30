@@ -38,6 +38,7 @@ import { nativeMainClaimPath, withNativeMainSharedClaim } from "../src/codex/nat
 import { NATIVE_MAIN_OWNER_DB, retainNativeMainOwner } from "../src/codex/native-main-owner";
 import {
   resetWindowsPrincipalForTests,
+  resolveCurrentWindowsPrincipal,
   setAsyncWindowsPrincipalRunnerForTests,
   setWindowsPrincipalRunnerForTests,
 } from "../src/lib/windows-user-principal";
@@ -49,16 +50,21 @@ let testDir = "";
 // budget pins it explicitly, and a stray value in the developer's environment cannot change
 // what any of these assert.
 let previousAclTimeout: string | undefined;
+let previousAclVerifyExisting: string | undefined;
 
 beforeEach(() => {
   previousAclTimeout = process.env.OPENCODEX_ACL_TIMEOUT_MS;
+  previousAclVerifyExisting = process.env.OPENCODEX_ACL_VERIFY_EXISTING;
   delete process.env.OPENCODEX_ACL_TIMEOUT_MS;
+  delete process.env.OPENCODEX_ACL_VERIFY_EXISTING;
   testDir = mkdtempSync(join(tmpdir(), "ocx-acl-test-"));
 });
 
 afterEach(() => {
   if (previousAclTimeout === undefined) delete process.env.OPENCODEX_ACL_TIMEOUT_MS;
   else process.env.OPENCODEX_ACL_TIMEOUT_MS = previousAclTimeout;
+  if (previousAclVerifyExisting === undefined) delete process.env.OPENCODEX_ACL_VERIFY_EXISTING;
+  else process.env.OPENCODEX_ACL_VERIFY_EXISTING = previousAclVerifyExisting;
   if (testDir && existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
   testDir = "";
 });
@@ -303,6 +309,147 @@ describe("effective Windows principal integration", () => {
       if (oldUser === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = oldUser;
     }
+  });
+});
+
+describe("opt-in existing ACL proof", () => {
+  const ownerSid = "S-1-5-21-111-222-333-1001";
+  const ownerName = "EXAMPLE\\Owner";
+  const success = (stdout = ""): IcaclsResult => ({
+    success: true,
+    exitCode: 0,
+    timedOut: false,
+    stdout,
+  });
+
+  function seedIdentity(): void {
+    setWindowsPrincipalRunnerForTests(() => ({
+      ...success(`${ownerSid}\r\n${ownerName}\r\n`),
+    }));
+    expect(resolveCurrentWindowsPrincipal(1_000)).toBe(`*${ownerSid}`);
+  }
+
+  beforeEach(() => {
+    resetHardenedStateForTests();
+    resetWindowsPrincipalForTests();
+    setPlatformForTests("win32");
+    process.env.OPENCODEX_ACL_VERIFY_EXISTING = "1";
+    seedIdentity();
+  });
+
+  afterEach(() => {
+    setIcaclsRunnerForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
+    setPlatformForTests(null);
+    resetHardenedStateForTests();
+    setWindowsPrincipalRunnerForTests(null);
+    setAsyncWindowsPrincipalRunnerForTests(null);
+    resetWindowsPrincipalForTests();
+  });
+
+  test("a same-line explicit owner ACE skips sync mutation", () => {
+    const target = join(testDir, "already-private.json");
+    writeFileSync(target, "secret");
+    const calls: string[][] = [];
+    setIcaclsRunnerForTests(args => {
+      calls.push(args);
+      return success(`${target} ${ownerName}:(F)\r\n\r\nSuccessfully processed 1 files; Failed processing 0 files\r\n`);
+    });
+
+    expect(hardenSecretPath(target, { required: true })).toEqual({ ok: true });
+    expect(calls).toEqual([[target]]);
+  });
+
+  test("localized summary text and case-varied owner skip async directory mutation", async () => {
+    const target = join(testDir, "already-private-dir");
+    mkdirSync(target);
+    const calls: string[][] = [];
+    setAsyncWindowsPrincipalRunnerForTests(async () => success(`${ownerSid}\n${ownerName}\n`));
+    seedIdentity();
+    setAsyncIcaclsRunnerForTests(async args => {
+      calls.push(args);
+      return success(`${target} ${ownerName.toLowerCase()}:(OI)(CI)(F)\r\n\r\n1 archivos procesados correctamente; error al procesar 0 archivos\r\n`);
+    });
+
+    expect(await hardenSecretDirAsync(target, { required: true })).toEqual({ ok: true });
+    expect(calls).toEqual([[target]]);
+  });
+
+  test("an inherited owner ACE falls through to the mutation sequence", () => {
+    const target = join(testDir, "inherited.json");
+    writeFileSync(target, "secret");
+    const calls: string[][] = [];
+    setIcaclsRunnerForTests(args => {
+      calls.push(args);
+      if (calls.length === 1) return success(`${target} ${ownerName}:(I)(F)\r\n`);
+      return success();
+    });
+
+    expect(hardenSecretPath(target, { required: true })).toEqual({ ok: true });
+    expect(calls.map(args => args[1] ?? "read")).toEqual(["read", "/grant:r", "/inheritance:r", "/remove:g"]);
+  });
+
+  test("an unexpected broad principal falls through to mutation", () => {
+    const target = join(testDir, "broad.json");
+    writeFileSync(target, "secret");
+    const calls: string[][] = [];
+    setIcaclsRunnerForTests(args => {
+      calls.push(args);
+      if (calls.length === 1) {
+        return success(`${target} ${ownerName}:(F)\r\n        BUILTIN\\Users:(RX)\r\n`);
+      }
+      return success();
+    });
+
+    expect(hardenSecretPath(target, { required: true })).toEqual({ ok: true });
+    expect(calls.map(args => args[1] ?? "read")).toEqual(["read", "/grant:r", "/inheritance:r", "/remove:g"]);
+  });
+
+  test("an identity cache miss performs no read and uses the existing harden path", () => {
+    const target = join(testDir, "cold-identity.json");
+    writeFileSync(target, "secret");
+    resetWindowsPrincipalForTests();
+    let identityCalls = 0;
+    const calls: string[][] = [];
+    setWindowsPrincipalRunnerForTests(() => {
+      identityCalls += 1;
+      return { ...success(`${ownerSid}\n${ownerName}\n`) };
+    });
+    setIcaclsRunnerForTests(args => { calls.push(args); return success(); });
+
+    expect(hardenSecretPath(target, { required: true })).toEqual({ ok: true });
+    expect(identityCalls).toBe(1);
+    expect(calls.map(args => args[1])).toEqual(["/grant:r", "/inheritance:r", "/remove:g"]);
+  });
+
+  test("read-only success never enters the post-mutation memo", () => {
+    const target = join(testDir, "memo-free.json");
+    writeFileSync(target, "secret");
+    setIcaclsRunnerForTests(() => success(`${target} ${ownerName}:(F)\r\n`));
+
+    expect(hardenSecretPath(target, { required: true })).toEqual({ ok: true });
+    expect(hardenedSecretPathCountForTests()).toBe(0);
+    delete process.env.OPENCODEX_ACL_VERIFY_EXISTING;
+    const mutations: string[][] = [];
+    setIcaclsRunnerForTests(args => { mutations.push(args); return success(); });
+    expect(hardenSecretPath(target, { required: true })).toEqual({ ok: true });
+    expect(mutations.map(args => args[1])).toEqual(["/grant:r", "/inheritance:r", "/remove:g"]);
+    expect(hardenedSecretPathCountForTests()).toBe(1);
+  });
+
+  test("the default flag-off path preserves the exact mutation sequence", () => {
+    const target = join(testDir, "default-mutation.json");
+    writeFileSync(target, "secret");
+    delete process.env.OPENCODEX_ACL_VERIFY_EXISTING;
+    const calls: string[][] = [];
+    setIcaclsRunnerForTests(args => { calls.push(args); return success(); });
+
+    expect(hardenSecretPath(target, { required: true })).toEqual({ ok: true });
+    expect(calls).toEqual([
+      [target, "/grant:r", `*${ownerSid}:(F)`],
+      [target, "/inheritance:r"],
+      [target, "/remove:g", "*S-1-1-0", "*S-1-5-11", "*S-1-5-32-545"],
+    ]);
   });
 });
 
