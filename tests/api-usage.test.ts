@@ -578,6 +578,10 @@ describe("GET /api/usage", () => {
       expect(malformed.status).toBe(400);
       expect(await malformed.json()).toMatchObject({ error: "invalid_since" });
 
+      const invalidClock = await fetch(new URL("/api/usage?range=all&since=today%2023:99", server.url));
+      expect(invalidClock.status).toBe(400);
+      expect(await invalidClock.json()).toMatchObject({ error: "invalid_since" });
+
       const reversed = await fetch(new URL("/api/usage?range=all&since=2000&until=1000", server.url));
       expect(reversed.status).toBe(400);
       expect(await reversed.json()).toMatchObject({ error: "invalid_time_range" });

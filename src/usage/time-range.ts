@@ -13,6 +13,14 @@ const RELATIVE_TIME_RE = /^(\d+)\s*(m|min|minute|minutes|h|hr|hour|hours|d|day|d
 const TIME_OF_DAY_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
 const DATE_TIME_TO_MINUTE_RE = /^\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}$/;
 
+function clockFields(match: RegExpMatchArray, isEndOfWindow: boolean): [number, number, number, number] | null {
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = match[3] === undefined ? (isEndOfWindow ? 59 : 0) : Number(match[3]);
+  if (hour > 23 || minute > 59 || second > 59) return null;
+  return [hour, minute, second, isEndOfWindow ? 999 : 0];
+}
+
 function startOfLocalDay(ts: number, dayOffset = 0): number {
   const d = new Date(ts);
   d.setHours(0, 0, 0, 0);
@@ -57,9 +65,10 @@ export function parseTimeBoundary(input: string | number | null | undefined, now
     if (!rest) return isEndOfWindow ? endOfLocalDay(now, 0) : base;
     const match = rest.match(TIME_OF_DAY_RE);
     if (match) {
-      const [_, h, m, s] = match;
+      const fields = clockFields(match, isEndOfWindow);
+      if (!fields) return null;
       const d = new Date(base);
-      d.setHours(Number(h), Number(m), s ? Number(s) : (isEndOfWindow ? 59 : 0), isEndOfWindow ? 999 : 0);
+      d.setHours(...fields);
       return d.getTime();
     }
   }
@@ -71,9 +80,10 @@ export function parseTimeBoundary(input: string | number | null | undefined, now
     if (!rest) return isEndOfWindow ? endOfLocalDay(now, -1) : base;
     const match = rest.match(TIME_OF_DAY_RE);
     if (match) {
-      const [_, h, m, s] = match;
+      const fields = clockFields(match, isEndOfWindow);
+      if (!fields) return null;
       const d = new Date(base);
-      d.setHours(Number(h), Number(m), s ? Number(s) : (isEndOfWindow ? 59 : 0), isEndOfWindow ? 999 : 0);
+      d.setHours(...fields);
       return d.getTime();
     }
   }

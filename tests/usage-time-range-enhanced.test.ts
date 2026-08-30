@@ -37,6 +37,19 @@ describe("Time Range Parsing & Resolution", () => {
     expect(twoHoursAgo).toBe(fixedNow - 2 * 3600 * 1000);
   });
 
+  it("rejects out-of-range clock fields in today and yesterday expressions", () => {
+    for (const input of [
+      "today 24:00",
+      "today 23:60",
+      "today 23:59:60",
+      "yesterday 24:00",
+      "yesterday 23:60",
+      "yesterday 23:59:60",
+    ]) {
+      expect(parseTimeBoundary(input, fixedNow)).toBeNull();
+    }
+  });
+
   it("resolves time range window bounds correctly", () => {
     const custom = resolveTimeRange({
       since: "2026-08-29 09:17",
