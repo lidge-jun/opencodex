@@ -442,7 +442,7 @@ async function runTestLane(lane: BunTestLane, runId: string, capture = false): P
  *
  * `.github/workflows/ci.yml` already installs them explicitly for exactly this reason; the local
  * runner had no equivalent. Install on demand rather than fail, because the tests genuinely
- * require the directory and `gui/node_modules` is a gitignored build artifact, not source.
+ * require the dependency and `gui/node_modules` is a gitignored build artifact, not source.
  */
 export function ensureGuiDependencies(io: {
   cwd?: string;
@@ -455,9 +455,9 @@ export function ensureGuiDependencies(io: {
   const log = io.log ?? (message => console.warn(message));
   const guiDir = join(cwd, "gui");
   if (!exists(join(guiDir, "package.json"))) return { kind: "absent" };
-  if (exists(join(guiDir, "node_modules"))) return { kind: "present" };
+  if (exists(join(guiDir, "node_modules", "react", "package.json"))) return { kind: "present" };
 
-  log("[test] gui/node_modules is missing; installing it so the tests that import gui/src can resolve React.");
+  log("[test] gui dependencies are missing or incomplete; installing them so tests importing gui/src can resolve React.");
   const install = io.install ?? ((dir: string) => {
     const result = Bun.spawnSync(["bun", "install", "--frozen-lockfile"], {
       cwd: dir,
