@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, posix, win32 } from "node:path";
 import {
   changedSelectionFailure,
   createIsolatedTestEnvironment,
@@ -14,7 +14,9 @@ import {
 import {
   acquireTestRunLock,
   resolveBareTestRunIdentity,
+  resolveDefaultTestRunLockPath,
   TEST_RUN_NO_QUEUE_ENV,
+  type TestRunRuntimeFileSystem,
 } from "../scripts/test-run-lock";
 import {
   decodeWindowsIdentityPowerShellOutputForTests,
@@ -36,6 +38,28 @@ function runGit(cwd: string, ...args: string[]): string {
 // allow-listed, so writing it whole fails the repository's own privacy gate. The bytes
 // handed to git are identical either way.
 const FIXTURE_COMMIT_EMAIL = ["test", "opencodex.invalid"].join("@");
+
+function pathIsContainedBy(parent: string, candidate: string, platform: "posix" | "win32"): boolean {
+  const path = platform === "win32" ? win32 : posix;
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return relative === "" || (!relative.startsWith(`..${path.sep}`)
+    && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function acceptingRuntimeFileSystem(uid: number, writable = true): TestRunRuntimeFileSystem {
+  return {
+    lstatSync: () => ({
+      uid,
+      mode: 0o700,
+      isDirectory: () => true,
+      isSymbolicLink: () => false,
+    }),
+    mkdirSync: () => {},
+    accessSync: () => {
+      if (!writable) throw Object.assign(new Error("denied"), { code: "EACCES" });
+    },
+  };
+}
 
 function commitFixture(cwd: string, path: string, contents: string, message: string): string {
   writeFileSync(join(cwd, path), contents);
@@ -361,7 +385,111 @@ describe("bun test argv", () => {
   });
 });
 
-describe("bun test machine lock", () => {
+describe("bun test user lock", () => {
+  test("distinct POSIX users receive distinct temp-runtime locks", () => {
+    const common = { env: {}, tempDir: "/tmp", hostName: "builder-1", platform: "linux" as const };
+    const alice = resolveDefaultTestRunLockPath({
+      ...common,
+      uid: 1001,
+      fileSystem: acceptingRuntimeFileSystem(1001),
+    });
+    const bob = resolveDefaultTestRunLockPath({
+      ...common,
+      uid: 1002,
+      fileSystem: acceptingRuntimeFileSystem(1002),
+    });
+
+    expect(alice).not.toBe(bob);
+    expect(pathIsContainedBy("/tmp/opencodex-test-runtime-1001", alice, "posix")).toBe(true);
+    expect(pathIsContainedBy("/tmp/opencodex-test-runtime-1002", bob, "posix")).toBe(true);
+  });
+
+  test("a shared home cannot couple locks from distinct hosts", () => {
+    const common = {
+      env: { HOME: "/network/users/alice" },
+      uid: 1001,
+      tempDir: "/tmp",
+      platform: "linux" as const,
+      fileSystem: acceptingRuntimeFileSystem(1001),
+    };
+    const firstHost = resolveDefaultTestRunLockPath({ ...common, hostName: "builder-1" });
+    const secondHost = resolveDefaultTestRunLockPath({ ...common, hostName: "builder-2" });
+
+    expect(firstHost).not.toBe(secondHost);
+    expect(pathIsContainedBy(common.env.HOME, firstHost, "posix")).toBe(false);
+    expect(pathIsContainedBy(common.env.HOME, secondHost, "posix")).toBe(false);
+  });
+
+  test("Windows uses the OS temp/profile result when USER is absent", () => {
+    const common = {
+      platform: "win32" as const,
+      tempDir: "C:\\Users\\Alice\\AppData\\Local\\Temp",
+      hostName: "desktop-1",
+      fileSystem: acceptingRuntimeFileSystem(0),
+    };
+    const withoutUser = resolveDefaultTestRunLockPath({ ...common, env: {} });
+    const withUnrelatedUser = resolveDefaultTestRunLockPath({
+      ...common,
+      env: { USER: "someone-else" },
+    });
+
+    expect(withoutUser).toBe(withUnrelatedUser);
+    expect(pathIsContainedBy(common.tempDir, withoutUser, "win32")).toBe(true);
+  });
+
+  test("falls back from an unsafe XDG root to a validated mode-0700 UID directory", () => {
+    if (process.platform === "win32" || typeof process.getuid !== "function") return;
+    const root = mkdtempSync(join(tmpdir(), "opencodex-runtime-fallback-"));
+    const unsafeXdg = join(root, "not-a-directory");
+    writeFileSync(unsafeXdg, "unsafe\n");
+    try {
+      const lockPath = resolveDefaultTestRunLockPath({
+        env: { XDG_RUNTIME_DIR: unsafeXdg },
+        uid: process.getuid(),
+        tempDir: root,
+        hostName: "builder-1",
+      });
+      const runtimeRoot = dirname(lockPath);
+      const entry = statSync(runtimeRoot);
+
+      expect(runtimeRoot).toBe(join(root, `opencodex-test-runtime-${process.getuid()}`));
+      expect(entry.isDirectory()).toBe(true);
+      expect(entry.uid).toBe(process.getuid());
+      expect(entry.mode & 0o777).toBe(0o700);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails immediately with actionable guidance when every runtime root is unwritable", () => {
+    expect(() => resolveDefaultTestRunLockPath({
+      platform: "linux",
+      env: { XDG_RUNTIME_DIR: "/run/user/1001" },
+      uid: 1001,
+      tempDir: "/tmp",
+      hostName: "builder-1",
+      fileSystem: acceptingRuntimeFileSystem(1001, false),
+    })).toThrow(
+      "Cannot resolve a safe user-scoped Bun test lock. Ensure XDG_RUNTIME_DIR",
+    );
+  });
+
+  test("containment checks do not confuse path string prefixes on POSIX or Windows", () => {
+    const home = "/home/alice";
+    const lockPath = resolveDefaultTestRunLockPath({
+      platform: "linux",
+      env: { HOME: home },
+      uid: 1001,
+      tempDir: "/home",
+      hostName: "builder-1",
+      fileSystem: acceptingRuntimeFileSystem(1001),
+    });
+
+    expect(home.startsWith("/home")).toBe(true);
+    expect(pathIsContainedBy(home, lockPath, "posix")).toBe(false);
+    expect(pathIsContainedBy("C:\\Users\\Ann", "C:\\Users\\Anna\\lock", "win32")).toBe(false);
+  });
+
   test("independent bare runners do not inherit a shared long-lived parent identity", () => {
     expect(resolveBareTestRunIdentity({ pid: 101, ppid: 50 })).toEqual({
       ownerPid: 101,

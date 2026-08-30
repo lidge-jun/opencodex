@@ -452,10 +452,10 @@ if (import.meta.main) {
     const lock = await acquireTestRunLock({
       runId,
       onWait: owner => console.warn(
-        `[test] another Bun test run${owner ? ` (pid ${owner.pid})` : ""} holds the machine lock; waiting. `
+        `[test] another Bun test run${owner ? ` (pid ${owner.pid})` : ""} holds the user lock; waiting. `
         + "Set OCX_TEST_NO_QUEUE=1 only for intentional overlap.",
       ),
-      onAcquiredAfterWait: elapsedMs => console.warn(`[test] acquired the machine lock after ${Math.round(elapsedMs / 1000)}s.`),
+      onAcquiredAfterWait: elapsedMs => console.warn(`[test] acquired the user lock after ${Math.round(elapsedMs / 1000)}s.`),
     });
     const startedAt = Date.now();
     try {
