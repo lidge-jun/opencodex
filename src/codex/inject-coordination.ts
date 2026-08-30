@@ -205,10 +205,28 @@ export const CODEX_PROVENANCE_MAX_TRANSACTIONS = 16;
  * base64 and re-serialized on every append, so a single oversized file turns a 16-transaction
  * window into a multi-gigabyte write.
  *
- * 1 MiB holds a normal 16-transaction window many times over, so ordinary evidence is never
- * touched and only the pathological case is refused.
+ * The size is derived from the window above rather than picked: the 25 KB `config.toml` that
+ * comment describes measures 100.8 KiB per transaction, so a full 16-transaction window is
+ * 1.58 MiB. 4 MiB leaves that ordinary window untouched with room to spare while still refusing
+ * the pathological case, and a regression test pins the ordinary window so the two cannot drift
+ * apart silently.
  */
-export const CODEX_PROVENANCE_MAX_BYTES = 1024 * 1024;
+export const CODEX_PROVENANCE_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Measure the representation the integration-record writer actually emits.
+ *
+ * The minimal wrapper reproduces the final indentation depth of `provenance.entries`, including
+ * structured unknown extension fields preserved from older records. Its fixed wrapper makes this
+ * slightly conservative as a ledger-only ceiling, which is preferable to admitting an entry that
+ * expands past the limit when `JSON.stringify(record, null, 2)` writes it.
+ */
+function serializedProvenanceBytes(entries: readonly CodexProvenanceEntry[]): number {
+  return Buffer.byteLength(`${JSON.stringify({
+    version: 1,
+    provenance: { entries },
+  }, null, 2)}\n`, "utf-8");
+}
 
 function provenanceBaseline(bytes: string | null): CodexProvenanceEntry["baseline"] {
   if (bytes === null) return { kind: "absent" };
@@ -245,20 +263,45 @@ export function boundProvenanceEntries(
   maxTransactions = CODEX_PROVENANCE_MAX_TRANSACTIONS,
   maxBytes = CODEX_PROVENANCE_MAX_BYTES,
 ): readonly CodexProvenanceEntry[] {
-  const order: string[] = [];
-  for (const entry of entries) if (!order.includes(entry.txId)) order.push(entry.txId);
+  const transactions = new Map<string, CodexProvenanceEntry[]>();
+  for (const entry of entries) {
+    const transaction = transactions.get(entry.txId);
+    if (transaction) transaction.push(entry);
+    else transactions.set(entry.txId, [entry]);
+  }
+  const order = [...transactions.keys()];
   const windowed = order.length <= maxTransactions
     ? order
     : order.slice(order.length - maxTransactions);
+  if (windowed.length === order.length) {
+    const baselineBytes = entries.reduce(
+      (total, entry) => total + (entry.baseline.kind === "present" ? entry.baseline.bytesBase64.length : 0),
+      0,
+    );
+    if (baselineBytes <= maxBytes && serializedProvenanceBytes(entries) <= maxBytes) return entries;
+  }
   // Newest first, so the transactions anyone diagnoses against are the ones that fit.
   const keep = new Set<string>();
-  let bytes = 0;
+  let baselineBytes = 0;
   for (let i = windowed.length - 1; i >= 0; i--) {
     const txId = windowed[i]!;
-    const txEntries = entries.filter(entry => entry.txId === txId);
-    const txBytes = Buffer.byteLength(JSON.stringify(txEntries), "utf-8");
-    if (bytes + txBytes > maxBytes) continue;
-    bytes += txBytes;
+    const txEntries = transactions.get(txId)!;
+    // Measure the embedded pre-images first: a pathological baseline is refused without
+    // serializing it, so the ceiling does not itself allocate the payload it exists to reject.
+    const transactionBaselineBytes = txEntries.reduce(
+      (total, entry) => total + (entry.baseline.kind === "present" ? entry.baseline.bytesBase64.length : 0),
+      0,
+    );
+    if (baselineBytes + transactionBaselineBytes > maxBytes) continue;
+    const candidateKeep = new Set(keep);
+    candidateKeep.add(txId);
+    // Reuse the already-grouped transactions: this avoids another full-ledger filter on each
+    // iteration while preserving the original transaction and entry order.
+    const candidateEntries = windowed.flatMap(id =>
+      candidateKeep.has(id) ? transactions.get(id)! : []
+    );
+    if (serializedProvenanceBytes(candidateEntries) > maxBytes) continue;
+    baselineBytes += transactionBaselineBytes;
     keep.add(txId);
   }
   if (keep.size === order.length) return entries;

@@ -209,7 +209,17 @@ function mergeLedger(previous: CodexProvenanceLedger, next: CodexProvenanceLedge
       && candidate.txId === entry.txId
       && candidate.at === entry.at
       && knownArtifactIdentity(candidate.artifact) === knownArtifactIdentity(entry.artifact));
-    if (previousIndex < 0 && unused.has(nextIndex)) previousIndex = nextIndex;
+    if (previousIndex < 0 && unused.has(nextIndex)) {
+      const positional = previous.entries[nextIndex]!;
+      // Position alone is not provenance identity: a bounded ledger may drop an oversized
+      // transaction, shifting a newly appended transaction into its slot. Preserve extensions
+      // positionally only within the same transaction; otherwise an omitted transaction's
+      // unknown evidence would be falsely attached to the replacement and could regrow the
+      // record past the byte ceiling.
+      if (positional.txId === entry.txId && positional.at === entry.at) {
+        previousIndex = nextIndex;
+      }
+    }
     if (previousIndex < 0) return entry;
     unused.delete(previousIndex);
     return mergeEntry(previous.entries[previousIndex]!, entry);

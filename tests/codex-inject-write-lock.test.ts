@@ -18,6 +18,7 @@ import {
 import {
   boundProvenanceEntries,
   CODEX_PROVENANCE_MAX_BYTES,
+  CODEX_PROVENANCE_MAX_TRANSACTIONS,
   STABLE_ZERO_BYTE_COORDINATOR_AGE_MS,
 } from "../src/codex/inject-coordination";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
@@ -517,15 +518,23 @@ describe("provenance ledger bound", () => {
     // The native artifacts sit outside this proxy's trust boundary, so a `config.toml` grown to
     // an arbitrary size would otherwise be copied into the record as base64 and re-serialized on
     // every append — the transaction window alone does not bound that.
-    const huge = (txId: string) => transaction(txId).map(entry => ({
-      ...entry,
+    const huge = transaction("tx-huge");
+    huge[0] = {
+      ...huge[0]!,
       baseline: {
         kind: "present" as const,
         sha256: "0".repeat(64),
-        bytesBase64: "A".repeat(CODEX_PROVENANCE_MAX_BYTES),
+        bytesBase64: "A".repeat(CODEX_PROVENANCE_MAX_BYTES + 1),
       },
-    }));
-    const entries = [...transaction("tx-small"), ...huge("tx-huge")];
+    };
+    // The baseline-size prefilter must reject this transaction before JSON.stringify reaches
+    // the tripwire. Only one sibling is oversized; all three must still be omitted together.
+    Object.defineProperty(huge[0]!, "toJSON", {
+      value: () => {
+        throw new Error("oversized transaction was serialized");
+      },
+    });
+    const entries = [...transaction("tx-small"), ...huge];
 
     const bounded = boundProvenanceEntries(entries, 16);
 
@@ -540,20 +549,68 @@ describe("provenance ledger bound", () => {
       baseline: {
         kind: "present" as const,
         sha256: "0".repeat(64),
-        bytesBase64: "A".repeat(120 * 1024),
+        bytesBase64: "A".repeat(Math.floor(CODEX_PROVENANCE_MAX_BYTES / 4)),
       },
     }));
-    const entries = Array.from({ length: 6 }, (_, i) => padded(`tx-${i}`)).flat();
+    const entries = Array.from({ length: 4 }, (_, i) => padded(`tx-${i}`)).flat();
 
     const bounded = boundProvenanceEntries(entries, 16);
     const kept = [...new Set(bounded.map(e => e.txId))];
 
     expect(kept.length).toBeGreaterThan(0);
-    expect(kept.length).toBeLessThan(6);
+    expect(kept.length).toBeLessThan(4);
     // Newest survive; the dropped ones are the oldest, and each survivor is whole.
-    expect(kept.at(-1)).toBe("tx-5");
+    expect(kept.at(-1)).toBe("tx-3");
     for (const txId of kept) expect(bounded.filter(e => e.txId === txId)).toHaveLength(3);
     expect(Buffer.byteLength(JSON.stringify(bounded), "utf-8"))
       .toBeLessThanOrEqual(CODEX_PROVENANCE_MAX_BYTES);
+  });
+
+  test("the ceiling measures structured extensions in the pretty-printed record shape", () => {
+    const extended = (txId: string) => transaction(txId).map((entry, index) => ({
+      ...entry,
+      // Integration records preserve unknown structured fields. Compact JSON can fit while the
+      // writer's two-space indentation does not, so the bound must use the actual write shape.
+      extension: index === 0
+        ? { rows: Array.from({ length: 400 }, () => ({ left: "x", right: "y" })) }
+        : undefined,
+    }));
+    const entries = [...extended("tx-old"), ...extended("tx-new")];
+    const oneTransactionBytes = Buffer.byteLength(`${JSON.stringify({
+      version: 1,
+      provenance: { entries: extended("tx-new") },
+    }, null, 2)}\n`, "utf-8");
+    const bothCompactBytes = Buffer.byteLength(JSON.stringify(entries), "utf-8");
+    const bothPrettyBytes = Buffer.byteLength(`${JSON.stringify({
+      version: 1,
+      provenance: { entries },
+    }, null, 2)}\n`, "utf-8");
+    const maxBytes = Math.max(oneTransactionBytes, bothCompactBytes);
+
+    expect(bothPrettyBytes).toBeGreaterThan(maxBytes);
+    const bounded = boundProvenanceEntries(entries, 16, maxBytes);
+
+    expect([...new Set(bounded.map(entry => entry.txId))]).toEqual(["tx-new"]);
+  });
+
+  test("a full window of ordinary transactions is still kept whole", () => {
+    // The ceiling exists to refuse pathological artifacts, not to shrink the window above it.
+    // This pins the two together: the 25 KB `config.toml` the window comment describes measures
+    // about 100 KiB per transaction, so a full window is roughly 1.6 MiB and must survive intact.
+    const ordinary = Buffer.from("x".repeat(25 * 1024)).toString("base64");
+    const entries = Array.from(
+      { length: CODEX_PROVENANCE_MAX_TRANSACTIONS },
+      (_, i) => transaction(`tx-${i}`).map(entry => ({
+        ...entry,
+        baseline: { kind: "present" as const, sha256: "0".repeat(64), bytesBase64: ordinary },
+        postImage: "0".repeat(64),
+      })),
+    ).flat();
+
+    const bounded = boundProvenanceEntries(entries);
+
+    expect(bounded).toBe(entries);
+    expect(new Set(bounded.map(e => e.txId)).size).toBe(CODEX_PROVENANCE_MAX_TRANSACTIONS);
+    expect(bounded).toHaveLength(entries.length);
   });
 });
