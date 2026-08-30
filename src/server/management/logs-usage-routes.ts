@@ -54,6 +54,7 @@ import {
 } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
 import { USAGE_RANGES, USAGE_SURFACES, parseRange, parseUsageSurface, projectUsageSummary, rangeWindow, summarizeUsage, type UsageRange, type UsageSummary, type UsageSurface } from "../../usage/summary";
+import { parseTimeBoundary, resolveTimeRange } from "../../usage/time-range";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -193,8 +194,22 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   }
 
   if (url.pathname === "/api/usage" && req.method === "GET") {
+    const sinceInput = url.searchParams.get("since");
+    const untilInput = url.searchParams.get("until");
+    const customWindowRequested = sinceInput !== null || untilInput !== null;
+    const now = Date.now();
+    const customSince = parseTimeBoundary(sinceInput, now, false);
+    const customUntil = parseTimeBoundary(untilInput, now, true);
+    if (sinceInput !== null && customSince === null) return jsonResponse({ error: "invalid_since" }, 400);
+    if (untilInput !== null && customUntil === null) return jsonResponse({ error: "invalid_until" }, 400);
+    if (customSince !== null && customUntil !== null && customSince > customUntil) {
+      return jsonResponse({ error: "invalid_time_range" }, 400);
+    }
     const range = parseRange(url.searchParams.get("range"));
     const surface = parseUsageSurface(url.searchParams.get("surface"));
+    const rangeLabel = customWindowRequested
+      ? resolveTimeRange({ since: sinceInput, until: untilInput, now }).rangeLabel
+      : range;
     // Applied to the OUTGOING payload only. A filtered summary must never reach
     // the cache or the warm loop below: the key is `range:surface`, so a
     // filtered entry stored under it would be served to the next unfiltered
@@ -206,7 +221,6 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     const project = <T extends UsageSummary>(summary: T, entries?: PersistedUsageEntry[]) =>
       projectUsageSummary(summary, filter, entries);
     const filterRequested = Boolean(filter.provider ?? filter.model);
-    const now = Date.now();
     try {
       const cacheKey = `${range}:${surface}`;
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
@@ -221,6 +235,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         // re-summarisation replaced. The unfiltered cache stays warm either
         // way; only the filtered caller pays for the read.
         && !filterRequested
+        && !customWindowRequested
         && cached.identityKey === identityKey
         && cached.maxReadBytes === effectiveReadLimit
         && cached.overlayVersion === userCostOverlayVersion()
@@ -229,7 +244,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         && observedSize >= cached.lastSeenSize) {
         return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
       }
-      if (cached && !filterRequested) discardUsageSummaryCacheEntry(cacheKey);
+      if (cached && !filterRequested && !customWindowRequested) discardUsageSummaryCacheEntry(cacheKey);
       // Capture the overlay version BEFORE reading/computing: the cache entry
       // must be stamped with the version the summary was priced under. Reading
       // it again at stamp time could cache an old-price summary as current,
@@ -240,7 +255,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const revisionReadAt = Date.now();
       const window = snapshotWindow(snapshot.entries);
       const summary = {
-        ...summarizeUsage(snapshot.entries, range, now, surface),
+        ...summarizeUsage(snapshot.entries, range, now, surface, customSince, customUntil, rangeLabel),
         historyTruncated: snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated,
         truncatedPrefixBytes: snapshot.truncatedPrefixBytes,
         entriesTruncated: snapshot.entriesTruncated,
@@ -267,7 +282,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const surfaces: readonly UsageSurface[] = USAGE_SURFACES;
       for (const nextRange of ranges) {
         for (const nextSurface of surfaces) {
-          const nextSummary = nextRange === range && nextSurface === surface ? summary : {
+          const nextSummary = !customWindowRequested && nextRange === range && nextSurface === surface ? summary : {
             ...summarizeUsage(snapshot.entries, nextRange, now, nextSurface),
             historyTruncated: summary.historyTruncated,
             truncatedPrefixBytes: summary.truncatedPrefixBytes,

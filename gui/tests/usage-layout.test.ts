@@ -254,3 +254,17 @@ test("Usage source marks keep brand colors and invert only the monochrome Grok m
   expect(css).toContain(':root:not([data-theme="light"]) .usage-source-mark--mono { filter: invert(1); }');
   expect(css).not.toContain(':root:not([data-theme="light"]) .usage-source-mark { filter: invert(1); }');
 });
+
+test("Usage custom range is an anchored floating popover, not an in-flow panel", async () => {
+  const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
+  const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
+
+  expect(page).toContain('className="usage-custom-popover"');
+  expect(page).toContain('role="dialog"');
+  expect(page).toContain('className={`usage-custom-quick-btn');
+  expect(page).not.toContain('id="usage-custom-quick"');
+  expect(css).toMatch(/\.usage-filters-wrap\s*\{[^}]*position:\s*relative/s);
+  expect(css).toMatch(/\.usage-custom-popover\s*\{[^}]*position:\s*absolute/s);
+  expect(css).toMatch(/\.usage-custom-popover\s*\{[^}]*z-index:/s);
+  expect(css).toMatch(/\.usage-custom-quick-btn\s*\{[^}]*border-radius:\s*var\(--radius-pill\)/s);
+});

@@ -226,7 +226,7 @@ import { projectUsageSummary } from "../src/usage/summary";
 
 describe("canonical range and surface constants", () => {
   test("the exported members match what the parsers accept", () => {
-    expect([...USAGE_RANGES]).toEqual(["today", "7d", "30d", "all"]);
+    expect([...USAGE_RANGES]).toEqual(["today", "yesterday", "7d", "30d", "all"]);
     expect([...USAGE_SURFACES]).toEqual(["all", "codex", "claude", "grok"]);
     for (const range of USAGE_RANGES) expect(parseRange(range)).toBe(range);
     for (const surface of USAGE_SURFACES) expect(parseUsageSurface(surface)).toBe(surface);

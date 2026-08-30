@@ -99,9 +99,13 @@ Token and estimated-cost report over a time range.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--range` | string | today | 1d | 7d | 30d | all |
+| `--range` | string | today | yesterday | 1d | 7d | 30d | all |
+| `--since` | string | Inclusive custom start date/time bound. |
+| `--until` | string | Inclusive custom end date/time bound. |
 | `--provider` | string | Restrict to one provider. |
 | `--model` | string | Restrict to one model id. |
+| `--offline` | boolean | Read the bounded local usage ledger without a running proxy. |
+| `--format` | string | table | markdown | json |
 | `--json` | boolean | Emit the usage report as JSON. |
 
 JSON mode: `payload`.

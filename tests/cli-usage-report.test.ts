@@ -159,6 +159,32 @@ describe("ocx usage command", () => {
     expect(new URL(urls[0]!).searchParams.get("range")).toBe("1d");
   });
 
+  test("forwards custom since and until bounds", async () => {
+    const { code, urls } = await run([
+      "usage", "--since", "2026-08-29 09:17", "--until", "2026-08-30 04:23",
+    ], payload());
+    expect(code).toBe(0);
+    const url = new URL(urls[0]!);
+    expect(url.searchParams.get("since")).toBe("2026-08-29 09:17");
+    expect(url.searchParams.get("until")).toBe("2026-08-30 04:23");
+  });
+
+  test("does not hide a non-503 management error behind offline fallback", async () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+    try {
+      const code = await handleObserveCommand(["usage"], {
+        baseUrl: "http://cli.test",
+        fetchImpl: async () => Response.json({ error: "invalid_since" }, { status: 400 }),
+      });
+      expect(code).toBe(1);
+      expect(errors.join("\n")).toContain("invalid_since");
+    } finally {
+      console.error = originalError;
+    }
+  });
+
   test("rejects an unknown range and names today as valid", async () => {
     const errors: string[] = [];
     const originalError = console.error;

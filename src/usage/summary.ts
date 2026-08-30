@@ -1,8 +1,10 @@
 import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
-import { isCodexUsageAccountLogLabel, type PersistedUsageEntry, type UsageStatus } from "./log";
+import { isCodexUsageAccountLogLabel, readUsageSnapshotForManagement, type PersistedUsageEntry, type UsageStatus } from "./log";
 import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, serviceTierContext, type ServiceTierContext } from "./cost";
+import { resolveTimeRange } from "./time-range";
+import { readFileSync } from "node:fs";
 
 /**
  * Canonical range members. The warm-up loop in the management usage route
@@ -11,7 +13,7 @@ import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estim
  * range added to the union but forgotten in the loop was never warmed and
  * never invalidated alongside its siblings.
  */
-export const USAGE_RANGES = ["today", "7d", "30d", "all"] as const;
+export const USAGE_RANGES = ["today", "yesterday", "7d", "30d", "all"] as const;
 export type UsageRange = typeof USAGE_RANGES[number];
 export const USAGE_SURFACES = ["all", "codex", "claude", "grok"] as const;
 export type UsageSurface = typeof USAGE_SURFACES[number];
@@ -136,8 +138,10 @@ export interface UsageAccount {
 
 export interface UsageSummary {
   range: UsageRange;
+  rangeLabel?: string;
   surface: UsageSurface;
   since: number | null;
+  until?: number | null;
   generatedAt: number;
   summary: UsageSummaryTotals;
   days: UsageDay[];
@@ -250,7 +254,7 @@ export function parseRange(input: string | null | undefined): UsageRange {
   // member would need its own cache slot, its own grid arm and its own test
   // matrix for no user-visible gain.
   if (input === "today" || input === "1d") return "today";
-  if (input === "7d" || input === "30d" || input === "all") return input;
+  if (input === "yesterday" || input === "7d" || input === "30d" || input === "all") return input;
   return "30d";
 }
 
@@ -265,23 +269,29 @@ function startOfLocalDay(ts: number): number {
   return d.getTime();
 }
 
-export function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
-  // Handled before the others because the fallthrough below is the `all`
-  // window: a range that reaches it is silently reported as all-time history,
-  // which for a cost surface is a plausible-looking wrong answer rather than a
-  // visible failure.
-  if (range === "today") return { since: startOfLocalDay(now), days: 1 };
-  if (range === "7d") {
-    const start = new Date(startOfLocalDay(now));
-    start.setDate(start.getDate() - 6);
-    return { since: start.getTime(), days: 7 };
+function localCalendarDayCount(since: number, until: number): number {
+  const cursor = new Date(startOfLocalDay(since));
+  const end = startOfLocalDay(until);
+  let days = 1;
+  while (cursor.getTime() < end) {
+    cursor.setDate(cursor.getDate() + 1);
+    days += 1;
   }
-  if (range === "30d") {
-    const start = new Date(startOfLocalDay(now));
-    start.setDate(start.getDate() - 29);
-    return { since: start.getTime(), days: 30 };
-  }
-  return { since: null, days: 0 };
+  return days;
+}
+
+export function rangeWindow(range: UsageRange, now: number, customSince?: number | null, customUntil?: number | null): { since: number | null; until: number | null; days: number } {
+  const { since, until } = resolveTimeRange({
+    range,
+    since: customSince,
+    until: customUntil,
+    now,
+  });
+  return {
+    since,
+    until,
+    days: since === null ? 0 : localCalendarDayCount(since, until ?? now),
+  };
 }
 
 function localDateKey(ts: number): string {
@@ -504,9 +514,11 @@ function addEstimatedCost(
   totals.estimatedCostUsd += costInfo.costTotal;
 }
 
-function buildDayGrid(range: UsageRange, since: number | null, now: number, entries: PersistedUsageEntry[], costMap: Map<PersistedUsageEntry, EntryCostInfo>): UsageDay[] {
-  const window = rangeWindow(range, now);
-  const days = range === "all" ? dayCountForAllRange(entries, now) : window.days;
+function buildDayGrid(range: UsageRange, since: number | null, until: number | null, now: number, entries: PersistedUsageEntry[], costMap: Map<PersistedUsageEntry, EntryCostInfo>): UsageDay[] {
+  const gridEnd = until ?? now;
+  const days = since !== null
+    ? localCalendarDayCount(since, gridEnd)
+    : (range === "all" ? dayCountForAllRange(entries, gridEnd) : rangeWindow(range, now).days);
   const grid = new Map<string, UsageDay>();
   // Per-day model breakdown accumulator, keyed by day then provider/model, so the 7d bar chart can
   // render a per-model stacked bar with a hover tooltip without a second pass over the entries.
@@ -552,7 +564,7 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     }
     m.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
   };
-  const startOfToday = startOfLocalDay(now);
+  const startOfToday = startOfLocalDay(gridEnd);
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(startOfToday);
     d.setDate(d.getDate() - i);
@@ -1087,10 +1099,14 @@ export function summarizeUsage(
   range: UsageRange,
   now: number,
   surface: UsageSurface = "all",
+  customSince?: number | null,
+  customUntil?: number | null,
+  rangeLabel?: string,
 ): UsageSummary {
-  const { since } = rangeWindow(range, now);
+  const { since, until } = rangeWindow(range, now, customSince, customUntil);
   const filteredEntries = entries.filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
+    if (until !== null && entry.timestamp > until) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "grok") return entry.surface === "grok";
     // Codex = the historical unlabelled bucket. Before the grok tag existed every
@@ -1113,11 +1129,13 @@ export function summarizeUsage(
   finalizeCoverage(totals);
   return {
     range,
+    rangeLabel: rangeLabel ?? range,
     surface,
     since,
+    until,
     generatedAt: now,
     summary: totals,
-    days: buildDayGrid(range, since, now, filteredEntries, costMap),
+    days: buildDayGrid(range, since, until, now, filteredEntries, costMap),
     models: buildModels(filteredEntries, totals.totalTokens, costMap),
     providers: buildProviders(filteredEntries, totals.totalTokens, costMap),
     accounts: buildAccounts(filteredEntries, costMap),
@@ -1184,7 +1202,18 @@ export function projectUsageSummary<T extends UsageSummary>(
     filtered.push({ ...withoutParentUsage, attempts, ...projectedComboUsage(attempts) });
   }
 
-  const projected = summarizeUsage(filtered, summary.range, summary.generatedAt, summary.surface);
+  const projected = summarizeUsage(
+    filtered,
+    summary.range,
+    summary.generatedAt,
+    summary.surface,
+    summary.since,
+    summary.until,
+    summary.rangeLabel,
+  );
+  // matched reflects usage inside the requested WINDOW, not anywhere in the
+  // log: summarizeUsage applies the range and surface predicates, and the CLI
+  // uses this flag to decide between a table and "no usage recorded".
   const matched = projected.summary.requests > 0;
   const models = projected.models.filter(row => matches(row.provider, row.model));
   const retainedProviders = new Set(models.map(row => row.provider));
@@ -1197,4 +1226,48 @@ export function projectUsageSummary<T extends UsageSummary>(
     accounts: [],
     filter: { provider, model, matched, comboOverlap },
   };
+}
+
+
+export async function summarizeUsageFromLogFile(options: {
+  filePath?: string;
+  range?: UsageRange;
+  since?: string | number | null;
+  until?: string | number | null;
+  surface?: UsageSurface;
+  provider?: string | null;
+  model?: string | null;
+  now?: number;
+}): Promise<UsageSummary & { filter?: UsageFilterEcho }> {
+  const now = options.now ?? Date.now();
+  const resolved = resolveTimeRange({
+    range: options.range,
+    since: options.since,
+    until: options.until,
+    now,
+  });
+
+  let entries: PersistedUsageEntry[];
+  if (options.filePath) {
+    const content = readFileSync(options.filePath, "utf-8");
+    entries = [];
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try { entries.push(JSON.parse(trimmed)); } catch { /* malformed rows are skipped like the canonical reader */ }
+    }
+  } else {
+    entries = (await readUsageSnapshotForManagement()).entries;
+  }
+
+  const summary = summarizeUsage(
+    entries,
+    options.range ?? "30d",
+    now,
+    options.surface ?? "all",
+    resolved.since,
+    resolved.until,
+    resolved.rangeLabel,
+  );
+  return projectUsageSummary(summary, { provider: options.provider, model: options.model }, entries);
 }

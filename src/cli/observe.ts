@@ -1,5 +1,6 @@
 import {
   CliUsageError,
+  RuntimeApiError,
   printData,
   rejectArgs,
   runCliAction,
@@ -10,7 +11,9 @@ import {
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
-import { formatUsageReport } from "./usage-report";
+import { formatUsageReport, formatUsageMarkdownReport } from "./usage-report";
+import { summarizeUsageFromLogFile } from "../usage/summary";
+import { parseTimeBoundary } from "../usage/time-range";
 import { USAGE_RANGES, USAGE_SURFACES } from "../usage/summary";
 
 const USAGE = `Usage:
@@ -19,8 +22,9 @@ const USAGE = `Usage:
   ocx logs explain <request-id> [--json]
   ocx logs rebuild-index
   ocx logs index-status
-  ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>]
-      [--provider <name>] [--model <id>] [--json]
+  ocx observe usage [--range <today|yesterday|1d|7d|30d|all>] [--since <time>] [--until <time>]
+      [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>]
+      [--offline] [--format <table|markdown|json>] [--json]
   ocx observe storage [codex-logs [status|protect|unprotect|repair|compact] [--mode <compat|quiet>]] [--json]
   ocx observe memory [--json]
   ocx observe debug [--json]
@@ -140,25 +144,65 @@ async function indexStatus(argv: string[], deps: RuntimeApiDeps): Promise<void> 
 async function usage(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const wantsJson = takeFlag(args, "--json");
-  const range = takeOption(args, "--range") ?? "30d";
+  const wantsOffline = takeFlag(args, "--offline");
+  const formatOpt = takeOption(args, "--format") || (wantsJson ? "json" : "table");
+  const sinceOpt = takeOption(args, "--since");
+  const untilOpt = takeOption(args, "--until");
+  const range = takeOption(args, "--range") || (sinceOpt || untilOpt ? "custom" : "30d");
   const surface = takeOption(args, "--surface") ?? "all";
   const provider = takeOption(args, "--provider");
   const model = takeOption(args, "--model");
+  const now = Date.now();
+  const parsedSince = parseTimeBoundary(sinceOpt, now, false);
+  const parsedUntil = parseTimeBoundary(untilOpt, now, true);
+  if (sinceOpt !== undefined && parsedSince === null) throw new CliUsageError("--since must be a valid date/time", USAGE);
+  if (untilOpt !== undefined && parsedUntil === null) throw new CliUsageError("--until must be a valid date/time", USAGE);
+  if (parsedSince !== null && parsedUntil !== null && parsedSince > parsedUntil) {
+    throw new CliUsageError("--since must not be later than --until", USAGE);
+  }
+  if (!["table", "markdown", "json"].includes(formatOpt)) {
+    throw new CliUsageError("--format must be table, markdown, or json", USAGE);
+  }
   // `1d` is accepted here as well as server-side so the CLI does not reject an
   // alias the API would have understood.
-  const ranges = [...USAGE_RANGES, "1d"];
-  if (!ranges.includes(range)) throw new CliUsageError(`--range must be one of ${USAGE_RANGES.join(", ")} (1d aliases today)`, USAGE);
+  const ranges = [...USAGE_RANGES, "1d", "custom"];
+  if (!ranges.includes(range as any) && !sinceOpt && !untilOpt) {
+    throw new CliUsageError(`--range must be one of ${USAGE_RANGES.join(", ")} (1d aliases today)`, USAGE);
+  }
   if (!USAGE_SURFACES.includes(surface as (typeof USAGE_SURFACES)[number])) {
     throw new CliUsageError(`--surface must be one of ${USAGE_SURFACES.join(", ")}`, USAGE);
   }
   rejectArgs(args, USAGE);
-  const result = await runtimeRequest(`/api/usage${query({ range, surface, provider, model })}`, {}, deps);
-  // Built only when it will be printed: JavaScript evaluates arguments before
-  // the call, so passing formatUsageReport(...) inline would run the human
-  // renderer during --json and let its assumptions affect a path that is meant
-  // to bypass it entirely.
-  if (wantsJson) printData(result, true);
-  else printData(result, false, formatUsageReport(result as Parameters<typeof formatUsageReport>[0]));
+  let result: unknown;
+  let isOffline = wantsOffline;
+  if (!wantsOffline) {
+    try {
+      const qp: Record<string, string | undefined> = { range, surface, provider, model };
+      if (sinceOpt) qp.since = sinceOpt;
+      if (untilOpt) qp.until = untilOpt;
+      result = await runtimeRequest(`/api/usage${query(qp)}`, {}, deps);
+    } catch (error) {
+      if (error instanceof RuntimeApiError && error.status === 503) isOffline = true;
+      else throw error;
+    }
+  }
+  if (isOffline) {
+    result = await summarizeUsageFromLogFile({
+      range: range === "custom" ? "all" : (range as any),
+      since: sinceOpt,
+      until: untilOpt,
+      surface: surface as any,
+      provider,
+      model,
+    });
+  }
+  if (formatOpt === "json" || wantsJson) {
+    printData(result, true);
+  } else if (formatOpt === "markdown") {
+    printData(result, false, formatUsageMarkdownReport(result as any));
+  } else {
+    printData(result, false, formatUsageReport(result as any));
+  }
 }
 
 async function simple(path: string, argv: string[], deps: RuntimeApiDeps): Promise<void> {
