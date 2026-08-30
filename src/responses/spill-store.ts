@@ -17,7 +17,15 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
-import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import {
+  forgetEphemeralSecretPath,
+  forgetHardenedSecretPath,
+  hardenSecretDir,
+  hardenSecretDirAsync,
+  hardenSecretPath,
+  hardenSecretPathAsync,
+  windowsSecretAclApplies,
+} from "../lib/windows-secret-acl";
 import { isValidProviderContinuationOwner } from "./provider-continuation";
 import type { OcxProviderContinuationState } from "../types";
 
@@ -189,6 +197,20 @@ function harden(path: string, mode: number): void {
   }
 }
 
+async function hardenAsync(path: string, mode: number, retryTimedOutOnce = false): Promise<void> {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    if (!windowsSecretAclApplies()) throw new Error("Response spill permission hardening failed");
+  }
+  if (windowsSecretAclApplies()) {
+    const result = mode === 0o700
+      ? await hardenSecretDirAsync(path, { required: true, retryTimedOutOnce })
+      : await hardenSecretPathAsync(path, { required: true, retryTimedOutOnce });
+    if (!result.ok) throw new Error("Response spill permission hardening failed");
+  }
+}
+
 function writeAll(fd: number, bytes: Uint8Array): void {
   if (spillIoForTest?.write) spillIoForTest.write(fd, bytes);
   else {
@@ -261,6 +283,78 @@ function publishNoReplace(tempPath: string, destinationPath: string): void {
   record("publish");
 }
 
+async function publishNoReplaceAsync(
+  tempPath: string,
+  destinationPath: string,
+  retryTimedOutOnce: boolean,
+): Promise<void> {
+  try {
+    if (spillIoForTest?.link) spillIoForTest.link(tempPath, destinationPath);
+    else linkSync(tempPath, destinationPath);
+  } catch (error) {
+    if (isErrno(error, "EEXIST")) throw error;
+    if (!canUseExclusiveCopyFallback(error)) throw error;
+    let copied = false;
+    try {
+      if (spillIoForTest?.copyFileExcl) spillIoForTest.copyFileExcl(tempPath, destinationPath);
+      else copyFileSync(tempPath, destinationPath, constants.COPYFILE_EXCL);
+      copied = true;
+      await hardenAsync(destinationPath, 0o600, retryTimedOutOnce);
+      const copyFd = openSync(destinationPath, "r");
+      try {
+        if (spillIoForTest?.fsync) spillIoForTest.fsync(copyFd);
+        else fsyncSync(copyFd);
+      } finally {
+        closeSync(copyFd);
+      }
+    } catch (copyError) {
+      if (copied) {
+        try { unlink(destinationPath); } catch { /* startup GC reclaims an incomplete publication */ }
+      }
+      throw copyError;
+    }
+  }
+  record("publish");
+}
+
+function serializedSpill(
+  responseId: string,
+  state: Omit<ResponseSpillPayload, "version" | "responseId">,
+): {
+  bytes: Buffer;
+  digest: string;
+  idDigest: string;
+  contentDigest: string;
+} {
+  const payload: ResponseSpillPayload = {
+    version: 1,
+    responseId,
+    createdAt: state.createdAt,
+    ...(state.clientThreadId ? { clientThreadId: state.clientThreadId } : {}),
+    items: state.items,
+    ...(state.providerOutputStart !== undefined ? { providerOutputStart: state.providerOutputStart } : {}),
+    ...(state.providers ? { providers: state.providers } : {}),
+  };
+  const serialized = JSON.stringify(payload);
+  if (serialized === undefined) throw new Error("Response spill serialization failed");
+  const bytes = Buffer.from(serialized, "utf8");
+  const digest = sha256(bytes);
+  return {
+    bytes,
+    digest,
+    idDigest: sha256(responseId).slice(0, 12),
+    contentDigest: digest.slice(0, 24),
+  };
+}
+
+function responseSpillWriteError(cause: unknown): NodeJS.ErrnoException {
+  const error = new Error("Response spill write failed", { cause }) as NodeJS.ErrnoException;
+  if (cause && typeof cause === "object" && "code" in cause) {
+    error.code = String((cause as { code?: unknown }).code);
+  }
+  return error;
+}
+
 function validSpillRef(ref: ResponseSpillRef): boolean {
   return ref.version === 1
     && OWNED_SPILL_NAME.test(ref.fileName)
@@ -306,21 +400,7 @@ export function writeResponseSpillDurably(
   let tempPath: string | null = null;
   let fd: number | null = null;
   try {
-    const payload: ResponseSpillPayload = {
-      version: 1,
-      responseId,
-      createdAt: state.createdAt,
-      ...(state.clientThreadId ? { clientThreadId: state.clientThreadId } : {}),
-      items: state.items,
-      ...(state.providerOutputStart !== undefined ? { providerOutputStart: state.providerOutputStart } : {}),
-      ...(state.providers ? { providers: state.providers } : {}),
-    };
-    const serialized = JSON.stringify(payload);
-    if (serialized === undefined) throw new Error("Response spill serialization failed");
-    const bytes = Buffer.from(serialized, "utf8");
-    const digest = sha256(bytes);
-    const idDigest = sha256(responseId).slice(0, 12);
-    const contentDigest = digest.slice(0, 24);
+    const { bytes, digest, idDigest, contentDigest } = serializedSpill(responseId, state);
     const dir = responseSpillDirectory();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     harden(dir, 0o700);
@@ -352,14 +432,77 @@ export function writeResponseSpillDurably(
       }
     }
     throw new Error("Response spill publication retries exhausted");
-  } catch {
+  } catch (cause) {
     if (fd !== null) {
       try { closeSync(fd); } catch { /* best effort */ }
     }
     if (tempPath) {
       try { unlinkEphemeral(tempPath); } catch { /* best effort */ }
     }
-    throw new Error("Response spill write failed");
+    throw responseSpillWriteError(cause);
+  }
+}
+
+/**
+ * Windows runtime counterpart of `writeResponseSpillDurably`.
+ *
+ * The filesystem publication contract stays identical, but required NTFS ACL subprocesses are
+ * awaited through Bun.spawn instead of Bun.spawnSync. State ownership and serialization remain in
+ * `state.ts`; callers must compare the resident generation again before installing the returned
+ * reference because another response can replace it while ACL hardening is pending.
+ */
+export async function writeResponseSpillDurablyAsync(
+  responseId: string,
+  state: Omit<ResponseSpillPayload, "version" | "responseId">,
+  options: { retryTimedOutOnce?: boolean } = {},
+): Promise<ResponseSpillRef> {
+  let tempPath: string | null = null;
+  let fd: number | null = null;
+  try {
+    const { bytes, digest, idDigest, contentDigest } = serializedSpill(responseId, state);
+    const dir = responseSpillDirectory();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    await hardenAsync(dir, 0o700, options.retryTimedOutOnce === true);
+
+    tempPath = join(dir, `.response-spill.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
+    fd = openSync(tempPath, "wx", 0o600);
+    writeAll(fd, bytes);
+    fsyncFile(fd);
+    closeFile(fd);
+    fd = null;
+    await hardenAsync(tempPath, 0o600, options.retryTimedOutOnce === true);
+    record("harden");
+    const publishTempPath = tempPath;
+
+    for (let attempt = 0; attempt < RESPONSE_SPILL_PUBLISH_RETRIES; attempt++) {
+      spillGeneration += 1;
+      const fileName = `${sanitizeResponseId(responseId)}.${idDigest}.${contentDigest}.${spillGeneration}.${bytes.byteLength}.spill.json`;
+      if (!OWNED_SPILL_NAME.test(fileName)) throw new Error("Response spill name allocation failed");
+      const destinationPath = join(dir, fileName);
+      try {
+        await publishNoReplaceAsync(
+          publishTempPath,
+          destinationPath,
+          options.retryTimedOutOnce === true,
+        );
+        fsyncDirectoryBestEffort(dir);
+        unlinkEphemeral(publishTempPath);
+        tempPath = null;
+        return { version: 1, fileName, digest, payloadBytes: bytes.byteLength };
+      } catch (error) {
+        if (isErrno(error, "EEXIST")) continue;
+        throw error;
+      }
+    }
+    throw new Error("Response spill publication retries exhausted");
+  } catch (cause) {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* best effort */ }
+    }
+    if (tempPath) {
+      try { unlinkEphemeral(tempPath); } catch { /* best effort */ }
+    }
+    throw responseSpillWriteError(cause);
   }
 }
 

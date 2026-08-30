@@ -46,6 +46,8 @@ import {
   setResponseStateByteCapForTests,
   setResponseStatePersistAttemptHookForTests,
   getStoredResponseBytesForTests,
+  flushPendingResponseSpillsForTests,
+  pendingResponseSpillMetricsForTests,
 } from "../src/responses/state";
 import {
   readResponseSpill,
@@ -80,7 +82,9 @@ import {
   hardenSecretPath,
   hardenedSecretPathCountForTests,
   resetHardenedStateForTests,
+  setAsyncIcaclsRunnerForTests,
   setIcaclsRunnerForTests,
+  setNowForTests,
   setPlatformForTests,
   timedOutSecretPathCountForTests,
 } from "../src/lib/windows-secret-acl";
@@ -168,9 +172,12 @@ describe("Responses previous_response_id state", () => {
 
   afterEach(() => {
     setSpillIoForTest(null);
+    setAsyncIcaclsRunnerForTests(null);
     setIcaclsRunnerForTests(null);
+    setNowForTests(null);
     setPlatformForTests(null);
     resetHardenedStateForTests();
+    delete process.env.OPENCODEX_ACL_TIMEOUT_MS;
     setResponseStateByteCapForTests(null);
     clearResponseStateForTests();
     rmSync(home, { recursive: true, force: true });
@@ -708,6 +715,107 @@ describe("Responses previous_response_id state", () => {
     setResponseStateByteCapForTests(1_024);
     rememberLarge("resp_durable_order", "x".repeat(8_000));
     expect(events).toEqual(["write", "fsync", "close", "harden", "publish", "dir-fsync", "stub-swap"]);
+  });
+
+  test("Windows spill ACL hardening yields the event loop and swaps only after publication", async () => {
+    setPlatformForTests("win32");
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+      }
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+
+    rememberLarge("resp_async_acl", "x".repeat(8_000));
+    await started;
+    try {
+      let unrelatedTickRan = false;
+      setTimeout(() => { unrelatedTickRan = true; }, 0);
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(unrelatedTickRan).toBe(true);
+      expect(pendingResponseSpillMetricsForTests()).toMatchObject({ count: 1 });
+      expect(responseStateMetrics()).toMatchObject({ residentCount: 1, spillStubCount: 0, spillWriteFailures: 0 });
+      expect(JSON.stringify(expandPreviousResponseInput({ previous_response_id: "resp_async_acl", input: "next" })))
+        .toContain("xxxxxxxx");
+    } finally {
+      release();
+    }
+    await flushPendingResponseSpillsForTests();
+    expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1, spillWrites: 1, spillWriteFailures: 0 });
+  });
+
+  test("Windows spill retries one transient ACL timeout without installing a tombstone", async () => {
+    setPlatformForTests("win32");
+    process.env.OPENCODEX_ACL_TIMEOUT_MS = "1000";
+    let clock = 0;
+    let grantCalls = 0;
+    setNowForTests(() => clock);
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (args.includes("/grant:r")) {
+        grantCalls += 1;
+        if (grantCalls === 1) {
+          clock = 1_000;
+          return { success: false, exitCode: null, timedOut: true, stdout: "" };
+        }
+      }
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+
+    rememberLarge("resp_async_acl_retry", "r".repeat(8_000));
+    await flushPendingResponseSpillsForTests();
+
+    expect(grantCalls).toBeGreaterThanOrEqual(2);
+    expect(responseStateMetrics()).toMatchObject({
+      residentCount: 0,
+      spillStubCount: 1,
+      tombstoneCount: 0,
+      spillWrites: 1,
+      spillWriteFailures: 0,
+    });
+  });
+
+  test("Windows pending spill publication cannot overwrite a newer same-id generation", async () => {
+    setPlatformForTests("win32");
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+      }
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+
+    rememberLarge("resp_async_replace", `old-${"a".repeat(8_000)}`);
+    await started;
+    rememberLarge("resp_async_replace", `new-${"b".repeat(8_000)}`);
+    release();
+    await flushPendingResponseSpillsForTests();
+
+    const replay = JSON.stringify(expandPreviousResponseInput({
+      previous_response_id: "resp_async_replace",
+      input: "next",
+    }));
+    expect(replay).toContain("new-bbbbbbbb");
+    expect(replay).not.toContain("old-aaaaaaaa");
+    expect(spillFileNames(home)).toHaveLength(1);
+    expect(responseStateMetrics()).toMatchObject({ spillStubCount: 1, spillWriteFailures: 0 });
   });
 
   test("directory fsync follows spill unlink", () => {
