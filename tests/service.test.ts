@@ -58,6 +58,10 @@ function expectTextToContainPath(text: string, path: string): void {
   expect(pathVariants(path).some(candidate => text.includes(candidate))).toBe(true);
 }
 
+function expectTextNotToContainPath(text: string, path: string): void {
+  expect(pathVariants(path).every(candidate => !text.includes(candidate))).toBe(true);
+}
+
 describe("service listen-port bake", () => {
   test("service ownership state paths stay pinned to the captured OpenCodex home", () => {
     const pinned = join(TEST_DIR, "pinned-opencodex");
@@ -941,7 +945,7 @@ describe("launchd service plist", () => {
 
     // Without a launcher the unit keeps the previous shape, so source checkouts are unaffected.
     const direct = buildUnit(resolvedProxyEnv({}), { launcher: null });
-    expect(direct).toContain("cli/index.ts");
+    expectTextToContainPath(direct, join("cli", "index.ts"));
     expect(direct).toContain("OCX_BUN_RUNTIME_PATH");
   });
 
@@ -964,8 +968,14 @@ describe("launchd service plist", () => {
 
     // stableLauncherEntry finds the shim lexically from PATH — not its versioned target.
     const found = buildUnit(resolvedProxyEnv({}), { launcher: shim });
-    expect(found).toContain(shim);
-    expect(found).not.toContain(v1);
+    expectTextToContainPath(found, shim);
+    expectTextNotToContainPath(found, v1);
+
+    // Reproduce Windows' host-path serialization on every platform. systemdQuote() must
+    // escape each backslash in the unit, so raw path substring assertions are invalid.
+    const windowsShim = win32.join("C:\\Users\\runneradmin", "mise", "shims", "ocx");
+    const windowsUnit = buildUnit(resolvedProxyEnv({}), { launcher: windowsShim });
+    expectTextToContainPath(windowsUnit, windowsShim);
 
     expect(execFileSync(shim, ["start", "--port", "1"], { encoding: "utf8" })).toContain("V1");
 
