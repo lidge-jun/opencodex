@@ -465,7 +465,10 @@ describe("AUTH_MATRIX is true of the running server", () => {
           [row.xApiKey, { "x-api-key": key }],
         ];
         for (const [disposition, headers] of cases) {
-          const isGet = row.endpoint === "/v1/models";
+          // Read-only endpoints must be exercised with GET: sending POST would draw a 405
+          // from routing and the assertions below would be testing the method guard rather
+          // than admission. /v1/catalog joined this set in #809.
+          const isGet = row.endpoint === "/v1/models" || row.endpoint === "/v1/catalog";
           const res = await fetch(new URL(row.endpoint, server.url), {
             method: isGet ? "GET" : "POST",
             headers: { "content-type": "application/json", ...headers },
@@ -489,6 +492,10 @@ describe("AUTH_MATRIX is true of the running server", () => {
             // cell pass vacuously, so the two are told apart by their code.
             const body = await res.clone().json().catch(() => ({})) as { error?: { code?: string } };
             expect(body.error?.code).not.toBe("not_found");
+            // /v1/catalog has its own honest 404 (no materialized catalog in this fixture),
+            // which is admission proof rather than a missing route. Pin the distinguishing
+            // code so a deleted route still cannot pass here.
+            if (row.endpoint === "/v1/catalog") expect(body.error?.code).toBe("catalog_not_found");
           }
           const admitted = res.status !== 401;
           expect({ endpoint: row.endpoint, headers: Object.keys(headers)[0], admitted })
