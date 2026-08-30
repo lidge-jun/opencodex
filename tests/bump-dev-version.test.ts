@@ -130,7 +130,12 @@ describe("dev version bump rule", () => {
     expect(after.endsWith("}\n")).toBe(true);
   });
 
-  test("an unwritable target fails closed with the original intact", () => {
+  // Skipped on Windows: `chmod 0500` is not access control there, so the write would
+  // succeed and this test would fail red for a reason that has nothing to do with the
+  // behavior under test. Same guard as tests/codex-native-residue.test.ts uses for its
+  // EACCES case. The POSIX runners still cover the failure path.
+  const unwritableTest = process.platform === "win32" ? test.skip : test;
+  unwritableTest("an unwritable target fails closed with the original intact", () => {
     // The atomic path must not destroy the original when the write itself fails. A
     // read-only directory makes both the temp write and the rename impossible.
     const path = tempPackageJson("2.36.0");
