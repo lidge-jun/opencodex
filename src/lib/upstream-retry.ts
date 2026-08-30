@@ -246,6 +246,12 @@ export interface ResetRetryOptions {
 export interface TransientRetryOptions extends ResetRetryOptions {
   /** Test seam: per-attempt slow budget override (defaults to TRANSIENT_RETRY_SLOW_ATTEMPT_MS). */
   slowAttemptMs?: number;
+  /**
+   * Reports how many upstream sends this call actually consumed, so a caller that spans
+   * several legs of one request (initial send, then a 429/account-recovery refetch) can
+   * keep them on ONE budget instead of handing each leg a fresh one.
+   */
+  onSendsConsumed?: (sends: number) => void;
 }
 
 export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
@@ -381,6 +387,10 @@ export async function fetchWithTransientRetry(
   // Floor of 1 keeps the inner call legal once the budget is spent; the loop condition, not a
   // zero-attempt inner call, is what actually stops the retries.
   const remaining = () => Math.max(1, budget - sent);
+  // Reported in `finally` rather than at each exit: this function returns from five places
+  // and throws from one, and a caller sharing the budget across request legs must be told the
+  // real count on every one of them.
+  try {
   let attemptStart = Date.now();
   let res = await fetchWithResetRetry(countedFetch, { ...opts, attempts: remaining() });
   for (let attempt = 0; sent < budget; attempt++) {
@@ -413,4 +423,7 @@ export async function fetchWithTransientRetry(
   }
   // Budget exhausted: the last response is returned with its body intact.
   return res;
+  } finally {
+    opts.onSendsConsumed?.(sent);
+  }
 }
