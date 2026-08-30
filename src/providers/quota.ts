@@ -636,10 +636,19 @@ async function fetchClineQuota(provider: string, config: OcxProviderConfig): Pro
  * same rows `CREDIT_LIMIT`) and `TIME_LIMIT` rows. `TOKENS_LIMIT`/`CREDIT_LIMIT`
  * rows carry the window length as `unit`/`number`: unit 3 is hours (number 5 →
  * the rolling five-hour window), unit 6 is weeks (number 1 → the weekly
- * window). `TIME_LIMIT` rows are the monthly MCP tool budget (Web Search / Web
- * Reader / Zread). Every row's `percentage` is the consumed share (falling
+ * window). Every row's `percentage` is the consumed share (falling
  * back to `currentValue`/`usage` when absent) and `nextResetTime` (unix ms)
  * the window reset.
+ *
+ * `TIME_LIMIT` rows are deliberately ignored (issue #1168). They are the shared
+ * monthly MCP *call* allowance for Web Search / Web Reader / Zread — not a
+ * model-token budget — and `ProviderQuota.monthlyPercent` is consumed as a
+ * model-capacity signal: `headroomOf()` in `src/oauth/account-quota-rank.ts`
+ * takes the MAX across every window, so a user who spent their MCP search
+ * allowance would be ranked as having no model capacity left, and the dashboard
+ * would draw a full monthly bar for a plan whose model tokens are untouched.
+ * A payload carrying only `TIME_LIMIT` rows therefore reports no quota at all,
+ * which is the honest answer rather than a fabricated one.
  */
 export function parseZaiQuotaLimits(data: Record<string, unknown> | null): ProviderQuota | null {
   const limits = Array.isArray(data?.limits) ? data.limits as unknown[] : null;
@@ -649,6 +658,9 @@ export function parseZaiQuotaLimits(data: Record<string, unknown> | null): Provi
   for (const raw of limits) {
     const row = asRecord(raw);
     if (!row) continue;
+    // Gate on row type before deriving a percentage: an MCP row must not even
+    // contribute a parsed value to a model-quota report.
+    if (row.type !== "TOKENS_LIMIT" && row.type !== "CREDIT_LIMIT") continue;
     const resetAt = normalizeResetAt(row.nextResetTime);
     let percent = normalizePercent(row.percentage);
     if (percent === undefined) {
@@ -659,21 +671,15 @@ export function parseZaiQuotaLimits(data: Record<string, unknown> | null): Provi
       }
     }
     if (percent === undefined) continue;
-    if (row.type === "TOKENS_LIMIT" || row.type === "CREDIT_LIMIT") {
-      const unit = toFiniteNumber(row.unit);
-      const number = toFiniteNumber(row.number);
-      if (unit === 3 && number === 5) {
-        quota.fiveHourPercent = percent;
-        if (resetAt !== undefined) quota.fiveHourResetAt = resetAt;
-        windows += 1;
-      } else if (unit === 6 && number === 1) {
-        quota.weeklyPercent = percent;
-        if (resetAt !== undefined) quota.weeklyResetAt = resetAt;
-        windows += 1;
-      }
-    } else if (row.type === "TIME_LIMIT") {
-      quota.monthlyPercent = percent;
-      if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
+    const unit = toFiniteNumber(row.unit);
+    const number = toFiniteNumber(row.number);
+    if (unit === 3 && number === 5) {
+      quota.fiveHourPercent = percent;
+      if (resetAt !== undefined) quota.fiveHourResetAt = resetAt;
+      windows += 1;
+    } else if (unit === 6 && number === 1) {
+      quota.weeklyPercent = percent;
+      if (resetAt !== undefined) quota.weeklyResetAt = resetAt;
       windows += 1;
     }
   }
@@ -715,9 +721,16 @@ function parseZaiQuotaLegacyFields(data: Record<string, unknown> | null): Provid
 
 /**
  * Fetches the Z.AI GLM Coding Plan quota — on whichever region the provider
- * points at (api.z.ai or open.bigmodel.cn). Authenticates with the API key as
- * a Bearer token per Z.AI's API reference. The `limits` array shape is
+ * points at (api.z.ai or open.bigmodel.cn). The `limits` array shape is
  * preferred; older field-name payloads fall back to the legacy parser.
+ *
+ * Authentication differs by host (issue #1168). `api.z.ai` takes the API key as
+ * a Bearer token per Z.AI's API reference; `open.bigmodel.cn` expects the key
+ * directly in `Authorization` with no scheme prefix and answers a Bearer header
+ * with an auth error, which is why BigModel Coding Plan quota never rendered.
+ * The host is already canonicalized by `isCanonicalZaiBaseUrl` above and
+ * `redirect: "error"` stays set, so the bare key cannot travel to a lookalike
+ * host or follow a redirect off-origin.
  */
 async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalZaiBaseUrl(config.baseUrl)) return null;
@@ -727,8 +740,9 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
   const monitorHost = normalized === ZAI_BASE_URL || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`
     ? ZAI_BASE_URL
     : ZAI_CN_BASE_URL;
+  const authorization = monitorHost === ZAI_CN_BASE_URL ? apiKey : `Bearer ${apiKey}`;
   const response = await fetch(`${monitorHost}/api/monitor/usage/quota/limit`, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    headers: { Accept: "application/json", Authorization: authorization },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
