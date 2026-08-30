@@ -66,3 +66,16 @@ Causality is not claimed as proven. The pre-change selection rate is recorded at
 same measurement on traffic served by a proxy running `f5a625cf3` or later.
 Both hosts were on older builds at measurement time (local 2.36.0, `macmini-cf`
 2.35.0), so a restart onto current `dev` is the precondition for that comparison.
+
+## Landed-state verification
+
+Checked against `origin/dev` after both merges (`6f75616f0`), reading the files
+out of the remote ref rather than the working tree:
+
+- `src/adapters/kiro.ts` contains the terminal schema description.
+- `src/adapters/kiro-constants.ts` contains the appended terminal clause.
+- `tests/kiro-adapter.test.ts` contains the both-surfaces regression test.
+- This unit's close-out record is present.
+
+Merge trail: `f5a625cf3` (#3012, the contract change) and `6f75616f0`
+(#3014, this record).
