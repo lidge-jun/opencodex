@@ -371,6 +371,7 @@ import { responsesJsonToSseStream } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
 import {
   emptyCompletionRetryEnabled,
+  emptyCompletionNotice,
   observeEmptyCompletion,
   guardEmptyCompletionEventStream,
 } from "./empty-completion-guard";
@@ -5271,10 +5272,7 @@ async function handleResponsesInner(
         // result (#2472). Retrying by default would re-send a turn that may already have had
         // billable side effects, so the honest default is observability, not recovery.
         : observeEmptyCompletion(eventSource, () => {
-          console.warn(
-            `[opencodex] ${route.providerName}/${route.modelId} completed with no output text `
-            + "and no tool call. Set \"emptyCompletionRetry\": true to retry such turns once.",
-          );
+          console.warn(emptyCompletionNotice(route.providerName, route.modelId));
         });
       const sseStream = bridgeToResponsesSSE(
         guardedSource, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,

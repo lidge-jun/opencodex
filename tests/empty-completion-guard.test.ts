@@ -3,6 +3,7 @@ import {
   EMPTY_COMPLETION_RETRY_ENV,
   EMPTY_COMPLETION_RETRY_FAILED_CODE,
   emptyCompletionRetryEnabled,
+  emptyCompletionNotice,
   guardEmptyCompletionEventStream,
   isContentEvent,
   observeEmptyCompletion,
@@ -443,5 +444,28 @@ describe("#2472 an empty turn is observable even when the retry guard is off", (
     const { empties } = await drain([]);
     expect(empties).toBe(1);
   });
-});
 
+  test("the notice cannot be forged through the caller-supplied provider or model label", () => {
+    // Both labels come from the request. Interpolated raw, a model name carrying newlines or
+    // terminal escapes writes extra lines into whatever reads this warning, so a caller could
+    // fabricate log records it never produced.
+    const notice = emptyCompletionNotice(
+      "fixture",
+      "model\r\n[opencodex] forged: injected\u001b[31m",
+    );
+
+    expect(notice).not.toContain("\n");
+    expect(notice).not.toContain("\r");
+    expect(notice).not.toContain("\u001b");
+    expect(notice).toContain("completed with no output text and no tool call");
+    // The forged text may survive as inert characters; what must not survive is its ability to
+    // become a separate record, so the notice stays exactly one line.
+    expect(notice.split(/\r|\n|\u2028|\u2029/)).toHaveLength(1);
+  });
+
+  test("the notice still names an ordinary route and degrades to a stated placeholder", () => {
+    expect(emptyCompletionNotice("fixture", "gpt-5.4")).toContain("fixture/gpt-5.4");
+    // An unusable label must not silently vanish into an empty slot in the sentence.
+    expect(emptyCompletionNotice(undefined, "")).toContain("unknown/unknown");
+  });
+});
