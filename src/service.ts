@@ -2452,6 +2452,75 @@ async function reregisterWindowsSchedulerTask(): Promise<void> {
   }
 }
 
+function stageWindowsSchedulerRestoreXml(registeredXml: string): string {
+  if (!registeredXml.trim()) {
+    throw new Error("Cannot restore an empty Task Scheduler registration.");
+  }
+  const stageDir = mkdtempSync(join(tmpdir(), WINDOWS_SCHEDULER_STAGE_PREFIX));
+  const xmlPath = join(stageDir, "task.xml");
+  try {
+    try { chmodSync(stageDir, 0o700); } catch { /* required Windows ACL is authoritative */ }
+    hardenSecretDir(stageDir, { required: true });
+    writeFileSync(
+      xmlPath,
+      `\uFEFF${registeredXml.replace(/^\uFEFF/, "")}`,
+      { encoding: "utf16le", flag: "wx", mode: 0o600 },
+    );
+    hardenSecretPath(xmlPath, { required: true });
+    ownedWindowsSchedulerStages.add(xmlPath);
+    return xmlPath;
+  } catch (error) {
+    try {
+      cleanupWindowsSchedulerStage(stageDir, xmlPath, path => { rmdirSync(path); });
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Task Scheduler rollback staging failed and could not be cleaned up.",
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Put back the exact live registration captured before a stale-task repair.
+ *
+ * Fresh registration is transactional only for a fresh install: its failed verification
+ * rolls back the attempt-owned task, which can leave no registration at all during repair.
+ * This path republishes the pre-repair XML before the caller restarts the task.
+ */
+async function restoreWindowsSchedulerTask(registeredXml: string): Promise<void> {
+  const stagedXml = stageWindowsSchedulerRestoreXml(registeredXml);
+  try {
+    const args = buildWindowsSchtasksCreateArgsForXml(stagedXml);
+    try {
+      schtasks(args);
+    } catch (error) {
+      if (
+        !(error instanceof WindowsSchtasksError)
+        || error.operation !== "create"
+        || error.reason !== "access-denied"
+      ) {
+        throw error;
+      }
+      const exitCode = await runWindowsElevatedScheduledTaskRegistration(TASK, registeredXml);
+      if (exitCode !== 0) {
+        throw new Error(`Task Scheduler rollback failed with exit code ${exitCode}.`);
+      }
+    }
+    const probe = probeWindowsSchedulerTask(TASK);
+    if (probe.status !== "present") {
+      throw new Error(
+        probe.status === "unknown"
+          ? `The previous Task Scheduler registration could not be verified after rollback (${probe.detail}).`
+          : "The previous Task Scheduler registration is absent after rollback.",
+      );
+    }
+  } finally {
+    removeWindowsSchedulerRegistrationStage(stagedXml);
+  }
+}
+
 export interface RepairServiceDeps {
   diagnose?: () => ServiceDiagnostic;
   assertEnv?: () => void;
@@ -2468,6 +2537,8 @@ export interface RepairServiceDeps {
   readSchedulerXml?: () => string;
   /** Re-registers the task from freshly staged XML. Used only when the definition is stale. */
   reregisterScheduler?: () => Promise<void>;
+  /** Restores the exact registration captured before a failed replacement. */
+  restoreScheduler?: (registeredXml: string) => Promise<void>;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
 }
@@ -2527,7 +2598,24 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       try {
         await (deps.reregisterScheduler ?? reregisterWindowsSchedulerTask)();
       } catch (err) {
-        try { (deps.startScheduler ?? startWindows)(); } catch { /* nothing left to preserve */ }
+        let restoreError: unknown;
+        let restartError: unknown;
+        try {
+          await (deps.restoreScheduler ?? restoreWindowsSchedulerTask)(registeredXml);
+        } catch (error) {
+          restoreError = error;
+        }
+        try {
+          (deps.startScheduler ?? startWindows)();
+        } catch (error) {
+          restartError = error;
+        }
+        if (restoreError || restartError) {
+          throw new AggregateError(
+            [err, restoreError, restartError].filter(error => error !== undefined),
+            "Task Scheduler repair failed and the previous registration could not be fully restored.",
+          );
+        }
         throw err;
       }
     }

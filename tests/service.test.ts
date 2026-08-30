@@ -509,10 +509,9 @@ describe("Windows service task", () => {
 
   /**
    * sessionStateChangeTriggerType orders its children as optional `UserId`, optional `Delay`,
-   * then required `StateChange`. Emitting `StateChange` first still satisfies the local string
-   * validator, so only an order assertion catches it — and `schtasks /create` rejects the
-   * document, which means the scoped install and the stale-task repair both fail on a real
-   * Windows host while every unit test stays green.
+   * then required `StateChange`. Keep the generated document in schema order even though
+   * some Windows builds accept and normalize the reversed form; a local string validator
+   * alone cannot prove that a document is portable across Task Scheduler implementations.
    */
   test("emits UserId before StateChange so a scoped task passes schema validation", () => {
     const scoped = buildWindowsTaskXml("s.cmd", "l.vbs", undefined, "MACHINE\\installer");
@@ -2130,6 +2129,10 @@ describe("service repair", () => {
       assertAuth: () => { calls.push("auth"); },
       stopScheduler: () => { calls.push("stop"); },
       writeSchedulerAssets: () => { calls.push("assets"); },
+      // This test owns every repair dependency. Leaving either default live probe/re-register
+      // here would cross the temporary test home into the machine-global Task Scheduler.
+      readSchedulerXml: () => buildWindowsTaskXml(),
+      reregisterScheduler: async () => { calls.push("reregister"); },
       startScheduler: () => { calls.push("start"); },
       writeSchedulerState: () => { calls.push("state"); },
       repairNative: async () => { calls.push("native"); },
@@ -2233,6 +2236,10 @@ describe("service repair", () => {
         writeSchedulerAssets: () => { calls.push("assets"); },
         readSchedulerXml: () => stale,
         reregisterScheduler: async () => { calls.push("reregister"); throw failure; },
+        restoreScheduler: async xml => {
+          calls.push("restore");
+          expect(xml).toBe(stale);
+        },
         startScheduler: () => { calls.push("start"); },
         writeSchedulerState: () => { calls.push("state"); },
         repairNative: async () => { calls.push("native"); },
@@ -2241,9 +2248,38 @@ describe("service repair", () => {
 
       // The proxy is running again on the definition that is still registered, and the
       // install state is NOT rewritten because the replacement did not happen.
-      expect(calls).toEqual(["env", "auth", "stop", "assets", "reregister", "start"]);
+      expect(calls).toEqual(["env", "auth", "stop", "assets", "reregister", "restore", "start"]);
     });
   }
+
+  test("repair still attempts restart and reports both failures when rollback publication fails", async () => {
+    const calls: string[] = [];
+    const stale = buildWindowsTaskXml("s.cmd", "l.vbs")
+      .replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+    const registrationFailure = new Error("registration rejected");
+    const rollbackFailure = new Error("rollback rejected");
+
+    const result = repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => { calls.push("env"); },
+      assertAuth: () => { calls.push("auth"); },
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => stale,
+      reregisterScheduler: async () => { calls.push("reregister"); throw registrationFailure; },
+      restoreScheduler: async () => { calls.push("restore"); throw rollbackFailure; },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+    });
+
+    await expect(result).rejects.toBeInstanceOf(AggregateError);
+    await result.catch(error => {
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([registrationFailure, rollbackFailure]);
+    });
+    expect(calls).toEqual(["env", "auth", "stop", "assets", "reregister", "restore", "start"]);
+  });
 
   test("repair rejects when nothing is installed", async () => {
     await expect(repairService({
