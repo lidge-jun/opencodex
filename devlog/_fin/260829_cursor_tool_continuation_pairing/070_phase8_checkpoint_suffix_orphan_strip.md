@@ -686,3 +686,29 @@ Full replay has no abandon branch to rescue it, which makes it a genuine follow-
 non-problem, and it belongs to its own phase.
 
 Four-suite total is 213 pass / 0 fail; `cursor-blob` alone 127.
+
+## Terminal outcome
+
+PR #2940 landed on `dev` as squash commit `62df78d8dd2451accdc0ddd615b9fad080d64a60`, from head
+`0340d17599b65dda8b739a30107f59297e0d145b`, with CI green at that exact head. The remote gate on
+`ssh lidge` was re-run against the merge commit itself and reported exit 0 with 16359 pass / 0 fail /
+16 skip, so the landed tree is verified rather than only the pre-merge head.
+
+Round 11 is the closing verdict: PASS, with two minor notes, both addressed in `0340d1759` before the
+merge — a threshold case pinned from the tight side, and the correction of a wrong secondary claim in
+the round 10 record. Rounds 1 through 10 each found a genuine blocker, and rounds 5 through 10 were
+each triggered by the previous round's own fix. That is the finding worth carrying forward: every one
+of those fixes added a fact to the pruning code without asking which existing block had assumed that
+fact absent.
+
+Three items were scoped out on purpose and are not defects of this unit. The `envelope_exhausted`
+reason still does not reach the checkpoint store, and the spread copy in `live-transport.ts` makes it
+provably inert rather than merely unobserved; propagating it needs a signature change on a shared
+prepare path. On the extreme byte axis near a 523 KB system prompt the repetition note can survive
+while the result truncates to a marker, which is pre-existing and measurably better here than on the
+parent. And `composer-2.5` assembles 194 roots because it is a hybrid — `echoToolResultInRoot` true
+with `externalModel` false — which places it outside the envelope guard; that behaviour is identical
+on `dev` and predates this work.
+
+This unit moves to `_fin` under the rule in `AGENTS.md`: the work it records is now visible in public
+git history.
