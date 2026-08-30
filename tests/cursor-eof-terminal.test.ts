@@ -235,8 +235,8 @@ describe("Cursor clean-EOF terminal gate", () => {
 
   test("clean Connect END_STREAM preserves a drained client-tool terminal before its grace timer", async () => {
     await withH2Server(respondWith([
-      toolCallStartedFrame("call_client_1", "echo_a"),
-      clientToolArgsFrame("call_client_1", "echo_a", "A"),
+      toolCallStartedFrame("call_client_1", "ocx_client_echo_a"),
+      clientToolArgsFrame("call_client_1", "ocx_client_echo_a", "A"),
       cleanConnectEndFrame(),
     ]), async baseUrl => {
       const { messages, failure } = await drain(baseUrl, runRequest(ECHO_TOOL));
@@ -250,8 +250,8 @@ describe("Cursor clean-EOF terminal gate", () => {
 
   test("clean Connect END_STREAM keeps a later open sibling fail-closed after a client-tool drain", async () => {
     await withH2Server(respondWith([
-      toolCallStartedFrame("call_client_2", "echo_a"),
-      clientToolArgsFrame("call_client_2", "echo_a", "A"),
+      toolCallStartedFrame("call_client_2", "ocx_client_echo_a"),
+      clientToolArgsFrame("call_client_2", "ocx_client_echo_a", "A"),
       toolCallStartedFrame("call_open_2", "apply_patch"),
       cleanConnectEndFrame(),
     ]), async baseUrl => {

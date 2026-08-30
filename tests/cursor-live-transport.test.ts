@@ -18,6 +18,7 @@ import {
   setBackgroundShellRuntimeForTests,
 } from "../src/adapters/cursor/native-exec-shell";
 import { BackgroundShellSpawnArgsSchema, ExecServerMessageSchema } from "../src/adapters/cursor/gen/agent_pb";
+import type { CursorProtobufEventState } from "../src/adapters/cursor/protobuf-events";
 
 class TransportFakeChild extends EventEmitter {
   readonly stdin = new PassThrough();
@@ -339,21 +340,24 @@ describe("Cursor live transport context estimate wiring (#373)", () => {
   async function captureOpen(request: Record<string, unknown>): Promise<{
     encoded: Uint8Array | undefined;
     estimate: number | undefined;
+    state: CursorProtobufEventState | undefined;
   }> {
     const transport = makeTransport();
     const internals = transport as unknown as {
       open(
         encodedRequest: Uint8Array,
         signal: AbortSignal | undefined,
-        state: { estimatedInputTokens?: number },
+        state: CursorProtobufEventState,
         ...rest: unknown[]
       ): void;
     };
     let encoded: Uint8Array | undefined;
     let estimate: number | undefined;
+    let capturedState: CursorProtobufEventState | undefined;
     internals.open = (encodedRequest, _signal, state) => {
       encoded = encodedRequest;
       estimate = state.estimatedInputTokens;
+      capturedState = state;
       throw new Error("stop-after-open");
     };
 
@@ -361,7 +365,7 @@ describe("Cursor live transport context estimate wiring (#373)", () => {
       for await (const _ of transport.run(request as never)) { /* not reached */ }
     } catch { /* open() throws by design */ }
     transport.close?.();
-    return { encoded, estimate };
+    return { encoded, estimate, state: capturedState };
   }
 
   const baseRequest = {
@@ -394,5 +398,22 @@ describe("Cursor live transport context estimate wiring (#373)", () => {
     // Still no checkpoint was ever observed (open() aborts before any frame), so the
     // estimate stays on. This pins the condition rather than the tracker's contents.
     expect(first).toBeGreaterThan(0);
+  });
+
+  test("wire-isolated freeform tools keep client-name validation and return mapping", async () => {
+    const { state } = await captureOpen({
+      ...baseRequest,
+      conversationId: "c-wire-freeform",
+      tools: [{
+        name: "script",
+        description: "Run a script",
+        parameters: {},
+        freeform: true,
+      }],
+    });
+
+    expect(state?.clientToolNames?.has("ocx_client_script")).toBe(true);
+    expect(state?.freeformToolNames?.has("script")).toBe(true);
+    expect(state?.cursorToolNameMap?.get("ocx_client_script")).toBe("script");
   });
 });

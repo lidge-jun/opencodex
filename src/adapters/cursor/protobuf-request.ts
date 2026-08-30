@@ -56,6 +56,7 @@ import {
   cursorToolsForActivePrompt,
   buildCursorToolGuidanceSystemNote,
   buildCursorToolDefinitions,
+  cursorToolWireName,
   cursorRequestHasShellAlias,
   CURSOR_SHELL_ALIAS_SYSTEM_NOTE,
   OCX_RESPONSES_TOOL_PROVIDER,
@@ -1091,7 +1092,9 @@ function toolCallStep(
 ): Uint8Array {
   const args: Record<string, Uint8Array> = {};
   for (const [key, value] of Object.entries(part.arguments ?? {})) args[key] = argBytes(value);
-  const toolName = namespacedToolName(part.namespace, part.name);
+  // Replay the same provider-isolated identity advertised in this request. Returned calls are
+  // restored to the client name, so transcript parts carry the client name again on the next turn.
+  const toolName = cursorToolWireName(part);
   const decodedResult = result ? decodeResultParts(result) : undefined;
   const serialize = (maxImages: number): Uint8Array => toBinary(ConversationStepSchema, create(ConversationStepSchema, {
     message: {

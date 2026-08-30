@@ -404,8 +404,8 @@ describe("Cursor HTTP/1.1 compatibility transport", () => {
                   case: "mcpToolCall",
                   value: create(McpToolCallSchema, {
                     args: create(McpArgsSchema, {
-                      name: "get_time",
-                      toolName: "get_time",
+                      name: "ocx_client_get_time",
+                      toolName: "ocx_client_get_time",
                       toolCallId: "call_1",
                       providerIdentifier: "opencodex-responses",
                     }),

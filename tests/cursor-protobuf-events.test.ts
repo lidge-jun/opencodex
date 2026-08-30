@@ -123,6 +123,84 @@ describe("Cursor protobuf tool-call events", () => {
     ]);
   });
 
+  test("maps a provider-isolated Cursor client-tool alias back to Claude Desktop's bare tool name", () => {
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["ocx_client_read"],
+      toolSchemas: new Map([[
+        "ocx_client_read",
+        { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      ]]),
+      cursorToolNameMap: new Map([["ocx_client_read", "read"]]),
+    });
+    const toolCall = mcpToolCall("ocx_client_read", { path: "README.md" });
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_read", modelCallId: "model_read", toolCall }),
+    }), state)).toEqual([
+      { type: "tool_call_start", id: "call_read", name: "read" },
+      { type: "tool_call_delta", arguments: "{\"path\":\"README.md\"}" },
+      { type: "tool_call_end", id: "call_read" },
+    ]);
+  });
+
+  test("rejects malformed freeform arguments after restoring a provider-isolated alias", () => {
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["ocx_client_script"],
+      freeformToolNames: ["script"],
+      cursorToolNameMap: new Map([["ocx_client_script", "script"]]),
+    });
+    const toolCall = mcpToolCall("ocx_client_script", { wrong_key: "not a wrapper" });
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, {
+        callId: "call_bad_freeform", modelCallId: "model_bad_freeform", toolCall,
+      }),
+    }), state)).toEqual([
+      { type: "error", message: "script call had invalid freeform arguments; expected {input:string}" },
+    ]);
+    expect(state.openToolCalls.has("call_bad_freeform")).toBe(false);
+    expect(state.completedToolCalls.has("call_bad_freeform")).toBe(true);
+  });
+
+  test("keeps an aliased partial freeform wrapper open for native arguments", () => {
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["ocx_client_script"],
+      freeformToolNames: ["script"],
+      cursorToolNameMap: new Map([["ocx_client_script", "script"]]),
+    });
+    const toolCall = mcpToolCall("ocx_client_script", {});
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, {
+        callId: "call_partial_alias", modelCallId: "model_partial_alias", toolCall,
+      }),
+    }), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "partialToolCall",
+      value: create(PartialToolCallUpdateSchema, {
+        callId: "call_partial_alias",
+        modelCallId: "model_partial_alias",
+        toolCall,
+        argsTextDelta: '{"inpu',
+      }),
+    }), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, {
+        callId: "call_partial_alias", modelCallId: "model_partial_alias", toolCall,
+      }),
+    }), state)).toEqual([]);
+    expect(state.openToolCalls.get("call_partial_alias")).toMatchObject({
+      name: "script",
+      args: '{"inpu',
+      awaitingNativeArgs: true,
+    });
+    expect(state.completedToolCalls.has("call_partial_alias")).toBe(false);
+  });
+
   test("keeps genuine run_shell tool name when no exec_command alias was advertised", () => {
     const state = createCursorProtobufEventState({
       clientToolNames: ["run_shell"],
