@@ -2395,6 +2395,12 @@ describe("fetchProviderQuotaReports", () => {
     });
     expect(parseXaiCreditsResponse({
       config: {
+        creditUsagePercent: 42,
+        currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: 1e20 },
+      },
+    })).toEqual({ percent: 42 });
+    expect(parseXaiCreditsResponse({
+      config: {
         creditUsagePercent: 10,
         currentPeriod: { type: "USAGE_PERIOD_TYPE_MONTHLY", end: "2026-08-15T13:05:52.277209Z" },
       },
