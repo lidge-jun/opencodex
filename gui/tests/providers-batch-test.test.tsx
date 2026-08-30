@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Providers from "../src/pages/Providers";
+import type { ProvidersConfig } from "../src/pages/providers-shared";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -654,7 +655,8 @@ test("14. max concurrency refills immediately after one request completes", asyn
 
 // ─── Config / apiBase change cancellation tests ───
 
-test("15. apiBase change aborts old batch signal", async () => {
+test("15. re-rendering with new apiBase aborts old batch signal", async () => {
+  // Uses root.render (same instance) instead of unmount to verify the apiBase effect.
   const signals: AbortSignal[] = [];
   const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" } } };
   const d = defer<Response>();
@@ -673,56 +675,96 @@ test("15. apiBase change aborts old batch signal", async () => {
   const btn = findTestAllButton(container)!;
   await act(async () => { btn.click(); });
 
-  // Wait for first request to register
   for (let i = 0; i < 5; i++) {
     await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
   }
-
-  // Unmount while batch is in progress to trigger apiBase-like cancellation
-  // (unmount calls activeBatchRef.current.controller.abort())
-  await act(async () => { root.unmount(); });
-
   expect(signals.length).toBeGreaterThanOrEqual(1);
-  for (const sig of signals) {
-    expect(sig.aborted).toBe(true);
-  }
+
+  // Re-render with new apiBase on the SAME root — triggers the apiBase useEffect
+  await act(async () => {
+    root.render(
+      <LanguageProvider>
+        <Providers apiBase="http://localhost:9999" />
+      </LanguageProvider>,
+    );
+  });
+
+  expect(signals.some(s => s.aborted)).toBe(true);
 
   await act(async () => { d.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
+  await driveAsyncBatch();
+  await act(async () => { root.unmount(); });
 });
 
-test("16. configSnapshot changes when provider baseUrl changes (same name)", () => {
-  // Verify the snapshot derivation detects content changes, not just name changes.
-  // This is the mechanism that triggers configSnapshot → useEffect → controller.abort().
-  function configSnapshot(config: { providers: Record<string, { adapter: string; baseUrl: string }> }): string {
-    return Object.entries(config.providers)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, p]) => `${name}:${p.adapter}:${p.baseUrl}`)
-      .join(";");
-  }
+test("16. providerTestInputSnapshot detects all test-relevant config changes", async () => {
+  // Imports the shared production function — no duplicated algorithm.
+  const { providerTestInputSnapshot } = await import("../src/pages/providers-shared");
 
-  const cfgA = { providers: { openai: { adapter: "openai", baseUrl: "https://old.example.com" } } };
-  const cfgB = { providers: { openai: { adapter: "openai", baseUrl: "https://new.example.com" } } };
+  const base: ProvidersConfig = {
+    port: 10100,
+    defaultProvider: "openai",
+    providers: {
+      openai: { adapter: "openai", baseUrl: "https://api.openai.com" },
+    },
+  };
 
-  // Same name, different baseUrl → different snapshot
-  expect(configSnapshot(cfgA)).not.toBe(configSnapshot(cfgB));
+  // baseUrl change → different snapshot
+  const baseUrlChanged: ProvidersConfig = {
+    ...base,
+    providers: {
+      openai: { adapter: "openai", baseUrl: "https://api.openai.com/v2" },
+    },
+  };
+  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(baseUrlChanged));
 
-  // Same name, same baseUrl → same snapshot
-  expect(configSnapshot(cfgA)).toBe(configSnapshot(cfgA));
+  // adapter change → different snapshot
+  const adapterChanged: ProvidersConfig = {
+    ...base,
+    providers: {
+      openai: { adapter: "openai-alt", baseUrl: "https://api.openai.com" },
+    },
+  };
+  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(adapterChanged));
 
-  // Different adapter, same name → different snapshot
-  const cfgC = { providers: { openai: { adapter: "openai-alt", baseUrl: "https://old.example.com" } } };
-  expect(configSnapshot(cfgA)).not.toBe(configSnapshot(cfgC));
+  // disabled change → different snapshot
+  const disabledChanged: ProvidersConfig = {
+    ...base,
+    providers: {
+      openai: { adapter: "openai", baseUrl: "https://api.openai.com", disabled: true },
+    },
+  };
+  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(disabledChanged));
 
-  // Different set of names → different snapshot
-  const cfgD = { providers: {
-    openai: { adapter: "openai", baseUrl: "https://old.example.com" },
-    anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com" },
-  } };
-  expect(configSnapshot(cfgA)).not.toBe(configSnapshot(cfgD));
+  // authMode change → different snapshot
+  const authModeChanged: ProvidersConfig = {
+    ...base,
+    providers: {
+      openai: { adapter: "openai", baseUrl: "https://api.openai.com", authMode: "oauth" },
+    },
+  };
+  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(authModeChanged));
 
-  // Empty config → different snapshot
-  const empty = { providers: {} as Record<string, { adapter: string; baseUrl: string }> };
-  expect(configSnapshot(cfgA)).not.toBe(configSnapshot(empty));
+  // liveModels change → different snapshot
+  const liveModelsChanged: ProvidersConfig = {
+    ...base,
+    providers: {
+      openai: { adapter: "openai", baseUrl: "https://api.openai.com", liveModels: false },
+    },
+  };
+  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(liveModelsChanged));
+
+  // Same config → same snapshot (idempotent)
+  expect(providerTestInputSnapshot(base)).toBe(providerTestInputSnapshot(base));
+
+  // Provider added → different snapshot
+  const added: ProvidersConfig = {
+    ...base,
+    providers: {
+      ...base.providers,
+      anthropic: { adapter: "anthropic", baseUrl: "https://api.anthropic.com" },
+    },
+  };
+  expect(providerTestInputSnapshot(base)).not.toBe(providerTestInputSnapshot(added));
 });
 
 test("17. stale batch does not show toast, new batch completes with own results", async () => {

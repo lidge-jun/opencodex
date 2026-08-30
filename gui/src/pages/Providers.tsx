@@ -14,6 +14,7 @@ import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
 import { useKeyedClientResource } from "../client-resource";
 import { readSessionListCache } from "../session-list-cache";
 import type { ProvidersConfig } from "./providers-shared";
+import { providerTestInputSnapshot } from "./providers-shared";
 import { useProvidersOAuth } from "./use-providers-oauth";
 import { useProvidersCrud } from "./use-providers-crud";
 import { useProvidersFetch } from "./use-providers-fetch";
@@ -73,7 +74,13 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   }, []);
 
   /** Identity of the currently-active batch; stale callbacks see a mismatch and bail out. */
-  const activeBatchRef = useRef<{ id: number; controller: AbortController }>({ id: 0, controller: new AbortController() });
+  const activeBatchRef = useRef<{ id: number; controller: AbortController } | null>(null);
+
+  /** Abort the active batch if one exists. */
+  const abortActiveBatch = useCallback(() => {
+    activeBatchRef.current?.controller.abort();
+    activeBatchRef.current = null;
+  }, []);
 
   const testAllProviders = useCallback(async () => {
     if (!config || batchTesting) return;
@@ -81,8 +88,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     if (names.length === 0) return;
 
     // Cancel any in-flight batch before starting a new one.
-    activeBatchRef.current.controller.abort();
-    const batchId = activeBatchRef.current.id + 1;
+    abortActiveBatch();
+    const batchId = (activeBatchRef.current?.id ?? 0) + 1;
     const controller = new AbortController();
     activeBatchRef.current = { id: batchId, controller };
 
@@ -100,7 +107,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     try {
       await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
     } finally {
-      const isStale = activeBatchRef.current.id !== batchId;
+      const isStale = activeBatchRef.current?.id !== batchId;
       // Only the active batch clears busy and shows toast.
       if (!isStale && aliveRef.current) {
         setBatchTesting(false);
@@ -116,39 +123,31 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         }
       }
     }
-  }, [config, batchTesting, apiBase, notify, t]);
+  }, [config, batchTesting, apiBase, notify, t, abortActiveBatch]);
 
   // Cancel batch on unmount.
   useEffect(() => {
-    return () => {
-      activeBatchRef.current.controller.abort();
-    };
+    return () => { activeBatchRef.current?.controller.abort(); };
   }, []);
 
   // Cancel batch when apiBase changes.
   const prevApiBaseRef = useRef(apiBase);
   useEffect(() => {
     if (prevApiBaseRef.current !== apiBase) {
-      activeBatchRef.current.controller.abort();
+      abortActiveBatch();
       prevApiBaseRef.current = apiBase;
     }
-  }, [apiBase]);
+  }, [apiBase, abortActiveBatch]);
 
-  // Cancel batch when provider config content changes (names, adapters, baseUrl).
-  // A lightweight snapshot of only the fields the test endpoint depends on.
-  const configSnapshot = config
-    ? Object.entries(config.providers)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([name, p]) => `${name}:${p.adapter}:${p.baseUrl}`)
-        .join(";")
-    : "";
+  // Cancel batch when provider config content changes.
+  const configSnapshot = config ? providerTestInputSnapshot(config) : "";
   const prevConfigSnapshotRef = useRef(configSnapshot);
   useEffect(() => {
     if (prevConfigSnapshotRef.current !== configSnapshot) {
-      activeBatchRef.current.controller.abort();
+      abortActiveBatch();
       prevConfigSnapshotRef.current = configSnapshot;
     }
-  }, [configSnapshot]);
+  }, [configSnapshot, abortActiveBatch]);
 
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
     if (completion.catalogRefreshPending) {
