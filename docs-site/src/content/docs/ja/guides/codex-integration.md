@@ -168,8 +168,8 @@ ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-windo
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
 tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
+curl -fsS -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
+  "https://proxy.example.com/v1/catalog" > "$tmp" \
   && mv "$tmp" "$dest"
 ocx sync-cache
 ```
@@ -177,6 +177,8 @@ ocx sync-cache
 応答は生の `opencodex-catalog.json` ドキュメント (プロバイダーの資格情報なし) です。利用可能な場合、`x-opencodex-codex-version` ヘッダーはサーバー上の Codex ランタイム バージョンを報告するため、クライアントはバージョンの偏りを特定できます。
 
 管理 API (`POST /api/custom-models`、`PUT /api/custom-models/<id>` と `displayName` 文字列) および Web ダッシュボードを通じて設定または編集することもできます。 `/` は、配線済みスラグ セパレータと衝突する可能性があるため拒否されます。
+
+`GET /v1/catalog` は、モデル一覧の読み取りに管理トークンを必要としないために存在します。読み取り専用（`GET` と `HEAD`）で、`x-opencodex-api-key`、bearer トークン、`x-api-key` を受け付け、管理ルートとまったく同じバイト列を返します。レスポンスには強い `ETag` が付き、`If-None-Match` で送り返すと全文ではなく `304` が返ります。また `Cache-Control: private, no-cache` が設定されます。ここで許可されたデータプレーンキーは、管理プレーンでは**何も**得られません。`/api/catalog` を含むすべての `/api/*` ルートは、引き続き管理トークンまたはダッシュボードセッションを要求します。
 
 表示名は **表示専用であり、再生成しても安定しています**。 `ocx sync` およびカタログが更新されるたびに、`config.json` (`customModels` を含む) からルーティングされたエントリが再取得されるため、設定された名前はルーティングされたスラッグに戻るのではなく、再適用されます。管理対象サービスの再起動でも、プロキシのバインド直後にこの同期が試行されます。オフライン ログイン中など、ベストエフォート型ブート同期が失敗した場合、以前に永続化されたカタログが保持され、次に成功した `ocx sync` が構成された名前を再適用します。本物のアップストリーム ネイティブ名 (例: `gpt-5.6-sol` → "GPT-5.6-Sol") は、固定されたアップストリーム スナップショットから取得され、カスタム表示名によって上書きされることはありません。
 

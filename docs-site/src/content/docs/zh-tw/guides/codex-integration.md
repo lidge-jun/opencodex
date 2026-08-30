@@ -225,8 +225,8 @@ token：
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
 tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
+curl -fsS -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
+  "https://proxy.example.com/v1/catalog" > "$tmp" \
   && mv "$tmp" "$dest"
 ocx sync-cache
 ```
@@ -236,6 +236,8 @@ ocx sync-cache
 
 也可以透過管理 API（`POST /api/custom-models`、`PUT /api/custom-models/<id>`，搭配 `displayName`
 字串）與 web 儀表板設定或編輯。`/` 會被拒絕，因為它會與路由 slug 的分隔符衝突。
+
+`GET /v1/catalog` 的存在是為了讓讀取模型清單不再需要管理員權杖。該路由為唯讀（`GET` 與 `HEAD`），接受 `x-opencodex-api-key`、bearer 權杖或 `x-api-key`，並回傳與管理路由完全相同的位元組。回應帶有強 `ETag`——以 `If-None-Match` 回傳即可重新驗證並取得 `304` 而非完整文件——同時設定 `Cache-Control: private, no-cache`。在此被接納的資料平面金鑰在管理平面上**不會**取得任何權限：`/api/catalog` 以及所有 `/api/*` 路由仍要求管理員權杖或儀表板工作階段。
 
 顯示名稱**只用於顯示，且在重新產生時保持穩定**。每次 `ocx sync` 與目錄 refresh 都會從
 `config.json`（包含 `customModels`）重新推導路由條目，因此會重新套用已設定名稱，而不會漂移回路由

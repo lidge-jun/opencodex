@@ -218,8 +218,8 @@ ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-windo
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
 tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
+curl -fsS -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
+  "https://proxy.example.com/v1/catalog" > "$tmp" \
   && mv "$tmp" "$dest"
 ocx sync-cache
 ```
@@ -229,6 +229,8 @@ ocx sync-cache
 
 你也可以通过管理 API（`POST /api/custom-models`、带 `displayName` 字符串的 `PUT /api/custom-models/<id>`）
 以及 web dashboard 来设置或编辑它。因为会与路由 slug 分隔符冲突，所以 `/` 会被拒绝。
+
+`GET /v1/catalog` 的存在是为了让读取模型列表不再需要管理员令牌。该路由为只读（`GET` 与 `HEAD`），接受 `x-opencodex-api-key`、bearer 令牌或 `x-api-key`，并返回与管理路由完全相同的字节。响应携带强 `ETag`——通过 `If-None-Match` 回传即可重新验证并获得 `304` 而非完整文档——同时设置 `Cache-Control: private, no-cache`。在此被接纳的数据面密钥在管理面上**不会**获得任何权限：`/api/catalog` 以及所有 `/api/*` 路由仍然要求管理员令牌或仪表板会话。
 
 display name 是 **仅用于显示且在重新生成时保持稳定的**。每一次 `ocx sync` 和 catalog refresh 都会从
 `config.json`（包括 `customModels`）重新派生路由条目，因此配置过的名称会重新应用，而不是漂回路由 slug。
