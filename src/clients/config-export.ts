@@ -152,6 +152,11 @@ const OPENCODE_PROVIDER_NPM = "@ai-sdk/openai-compatible";
  * opencode V2's spelling of the same runtime. V2 resolves providers through its own
  * package table and ignores the V1 `npm` field, so a V2 block has to name this package
  * or the provider is not loaded at all.
+ *
+ * Verified end-to-end against opencode 0.0.0-beta-18684: `GET /api/model` resolves this
+ * package for the provider and applies the per-model `variants`. opencode changes its
+ * provider package table between releases, so re-verify the supported range whenever it
+ * moves; a stale string breaks only the V2 block, silently.
  */
 const OPENCODE_V2_PROVIDER_PACKAGE = "@opencode-ai/ai/providers/openai-compatible";
 
