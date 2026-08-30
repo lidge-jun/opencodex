@@ -155,6 +155,11 @@ describe("Codex CLI install provenance", () => {
     expect(isCodexCliUpdateVersionManagerPath("/home/u/.nvm/../outside/codex", "linux")).toBe(false);
     expect(isCodexCliUpdateVersionManagerPath("/opt/plain\\.nvm\\bin/codex", "linux")).toBe(false);
     expect(isAppBundledCodexPath("/opt/plain\\flatpak\\codex", "linux")).toBe(false);
+    expect(isAppBundledCodexPath("/opt/flatpak/tools/bin/codex", "linux")).toBe(false);
+    expect(isAppBundledCodexPath(
+      "/var/lib/flatpak/app/com.openai.Codex/x86_64/stable/active/files/bin/codex",
+      "linux",
+    )).toBe(true);
     expect(isCodexCliUpdateVersionManagerPath("/usr/local/bin/codex", "linux")).toBe(false);
   });
 
@@ -221,6 +226,25 @@ describe("Codex CLI install provenance", () => {
     });
     expect(JSON.stringify(report)).not.toContain(prefix);
     expect(JSON.stringify(report)).not.toContain("authority");
+  });
+
+  test.skipIf(process.platform !== "linux")("does not mistake a flatpak path component for an app bundle", async () => {
+    const prefix = join(tempRoot("ocx-codex-flatpak-component-"), "flatpak", "tools");
+    const { launcher } = createPosixNpmGlobal(prefix);
+    const report = await inspectCodexCliInstall({
+      platform: "linux",
+      env: { CODEX_CLI_PATH: launcher, PATH: "" },
+      inspectShim: () => ({ status: "not-tracked" }),
+    });
+
+    expect(report.provenance).toBe("npm-global");
+    expect(report.reason).toBe("selection_unattested");
+    expect(report.packageVersion).toBe("1.2.3");
+    expect(report.evidence).toEqual(expect.arrayContaining([
+      "package_manifest",
+      "package_manifest_digest",
+      "global_npm_layout",
+    ]));
   });
 
   test.skipIf(process.platform === "win32")("proves a POSIX npm global through a symlinked prefix", async () => {

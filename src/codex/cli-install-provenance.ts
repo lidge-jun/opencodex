@@ -317,7 +317,7 @@ export function isAppBundledCodexPath(path: string, platform: NodeJS.Platform): 
       || normalized.includes("/packages/openai.codex_");
   }
   if (platform === "darwin") return /[.]app\/contents\//i.test(normalized);
-  return normalized.startsWith("/snap/") || normalized.includes("/flatpak/");
+  return normalized.startsWith("/snap/") || normalized.includes("/flatpak/app/");
 }
 
 /** Updater ownership is intentionally broader than shim-repair refusal. */
