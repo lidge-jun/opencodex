@@ -98,9 +98,11 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
    */
   test("the inspection child does not inherit a duplicate copy of the snapshotted values", () => {
     expect(source).toContain("const inheritedEnv = { ...process.env };");
-    expect(source).toContain('for (const name of ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS]) {');
-    expect(source).toContain("delete inheritedEnv[name];");
     expect(source).toContain("...inheritedEnv,");
+    // Windows spells the variable `Path` in practice, so an upper-case-only delete would
+    // leave the duplicate behind. The match must be on the lowercase form of every key.
+    expect(source).toContain("if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];");
+    expect(source).toContain('["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase())');
 
     // The de-duplication is scoped to the one-shot inspection launch; every other launch
     // must still inherit PATH, or the long-running proxy child loses its tooling lookup.
@@ -111,6 +113,19 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     const spawnStart = source.indexOf("const child = spawn(bun, [cliPath,");
     expect(spawnStart).toBeGreaterThan(-1);
     expect(source.slice(spawnStart)).not.toContain("...process.env,");
+  });
+
+  /**
+   * A bare `CODEX_CLI_PATH` such as `codex` is an executable-lookup name, not a relative
+   * path. Resolving it against the launch cwd would make the inspector treat it as an
+   * explicit path and stop searching the proof-captured PATH, so a working configuration
+   * would report as unavailable.
+   */
+  test("only separator-bearing configured Codex paths are resolved against the launch cwd", () => {
+    expect(source).toContain("const preBunCodexCliPath = configuredCodexCliPath !== null");
+    expect(source).toContain('configuredCodexCliPath.includes("/") || configuredCodexCliPath.includes("\\\\") || /^[A-Za-z]:/.test(configuredCodexCliPath)');
+    expect(source).toContain("? resolve(configuredCodexCliPath)");
+    expect(source).toContain(": configuredCodexCliPath;");
   });
 
   test("valid Bun overrides are selected before the bundled runtime", () => {

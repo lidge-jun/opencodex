@@ -34,17 +34,23 @@ function installSummary(report: CodexCliInstallReport): string[] {
 }
 
 export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCliUpdateArgs {
-  if (argv[0] !== "check") {
-    throw new CliUsageError("codex-cli-update action must be check", CODEX_CLI_UPDATE_USAGE);
-  }
+  // `--json` is accepted in any argv position CLI-wide, so remove it before positional
+  // validation. Requiring `check` at index 0 first would reject `--json check`, which
+  // automation that puts output flags ahead of the subcommand legitimately produces.
   let json = false;
-  for (let index = 1; index < argv.length; index += 1) {
-    const token = argv[index]!;
+  const positional: string[] = [];
+  for (const token of argv) {
     if (isJsonOption(token)) {
       if (json) throw new CliUsageError("--json may be specified only once", CODEX_CLI_UPDATE_USAGE);
       json = true;
       continue;
     }
+    positional.push(token);
+  }
+  if (positional[0] !== "check") {
+    throw new CliUsageError("codex-cli-update action must be check", CODEX_CLI_UPDATE_USAGE);
+  }
+  if (positional.length > 1) {
     throw new CliUsageError("unsupported codex-cli-update argument", CODEX_CLI_UPDATE_USAGE);
   }
   return Object.freeze({ json });

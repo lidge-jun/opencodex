@@ -34,6 +34,21 @@ describe("Codex CLI update CLI", () => {
     ]) expect(() => parseCodexCliUpdateArgs(args)).toThrow();
   });
 
+  /**
+   * `--json` is accepted in any argv position CLI-wide, so automation that puts output
+   * flags ahead of the subcommand must not get a usage error.
+   */
+  test("the JSON flag is accepted before the check action", () => {
+    for (const flag of ["--json", "--json=true", "-json", "—json"]) {
+      expect(parseCodexCliUpdateArgs([flag, "check"])).toEqual({ json: true });
+    }
+    // Duplicate detection and positional validation still hold in that order.
+    expect(() => parseCodexCliUpdateArgs(["--json", "check", "--json"])).toThrow();
+    expect(() => parseCodexCliUpdateArgs(["--json"])).toThrow();
+    expect(() => parseCodexCliUpdateArgs(["--json", "apply"])).toThrow();
+    expect(() => parseCodexCliUpdateArgs(["--json", "check", "extra"])).toThrow();
+  });
+
   test("malformed input performs no inspection", async () => {
     let inspectedCalls = 0;
     const code = await handleCodexCliUpdateCommand(["apply"], {

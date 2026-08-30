@@ -566,11 +566,19 @@ const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTH
   .filter(name => typeof process.env[name] === "string" && process.env[name] !== "");
 // A configured CODEX_CLI_PATH may legitimately be cwd-relative (`./tools/codex`), which the
 // ordinary runtime resolver accepts. Inspection only trusts absolute local paths, so capture
-// the absolute form here, in the launcher, while the original cwd is still authoritative.
-// Resolving it later would silently reinterpret it against a different working directory.
-const preBunCodexCliPath = typeof process.env.CODEX_CLI_PATH === "string" && process.env.CODEX_CLI_PATH !== ""
-  ? resolve(process.env.CODEX_CLI_PATH)
+// the absolute form here, in the launcher, while the original cwd is still authoritative;
+// resolving it later would silently reinterpret it against a different working directory.
+//
+// A bare command with no separator (`codex`) is NOT a relative path: the runtime resolver
+// deliberately hands those to executable lookup along PATH. Rewriting it to `<cwd>/codex`
+// would make the inspector treat it as an explicit path and stop searching PATH entirely.
+const configuredCodexCliPath = typeof process.env.CODEX_CLI_PATH === "string" && process.env.CODEX_CLI_PATH !== ""
+  ? process.env.CODEX_CLI_PATH
   : null;
+const preBunCodexCliPath = configuredCodexCliPath !== null
+    && (configuredCodexCliPath.includes("/") || configuredCodexCliPath.includes("\\") || /^[A-Za-z]:/.test(configuredCodexCliPath))
+  ? resolve(configuredCodexCliPath)
+  : configuredCodexCliPath;
 const preBunPath = typeof process.env.PATH === "string" ? process.env.PATH : null;
 const preBunPathExt = typeof process.env.PATHEXT === "string" ? process.env.PATHEXT : null;
 const preBunCodexCliManagerRoots = Object.fromEntries(
@@ -598,10 +606,17 @@ const launchContext = JSON.stringify({
 // environment block twice, so a large-but-valid shell environment could stop the Bun child
 // from spawning and fail the command before it reports anything. Drop the duplicates for the
 // one-shot inspection launch only; every other launch inherits the environment unchanged.
+// Windows environment names are case-insensitive, but this spread produces an ordinary
+// case-sensitive object, and a real Windows environment commonly spells the variable `Path`.
+// Deleting only the canonical upper-case spelling would silently leave that copy behind and
+// reintroduce the duplication this block exists to prevent, so match on the lowercase form.
 const inheritedEnv = { ...process.env };
 if (codexCliUpdateInspection) {
-  for (const name of ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS]) {
-    delete inheritedEnv[name];
+  const snapshotted = new Set(
+    ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase()),
+  );
+  for (const name of Object.keys(inheritedEnv)) {
+    if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];
   }
 }
 const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2)], {
