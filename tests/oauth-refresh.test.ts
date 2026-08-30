@@ -517,6 +517,31 @@ describe("oauth refresh hardening", () => {
     expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBe(true);
   });
 
+  /**
+   * A non-terminal refresh failure is reported as retryable, but the refresh intent outlived
+   * it. The next attempt then hit the pending-intent branch and raised OAuthLoginRequiredError,
+   * so a single 503 or timeout locked the account out of refresh until manual re-authentication
+   * even after upstream recovered. The replay guard is unaffected: an intent whose outcome is
+   * genuinely unknown is reported `uncertain` by the store and is still never cleared here.
+   */
+  test("a transient Anthropic failure leaves the account refreshable", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const transient = new AnthropicTokenError("server", 503, undefined);
+    await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+      ...OAUTH_PROVIDERS.anthropic!,
+      refresh: async () => { throw transient; },
+    }, getAccountCredential("anthropic", id)!)).rejects.toBe(transient);
+    expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+
+    // Upstream recovers: the retry the caller was promised must actually succeed.
+    await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+      ...OAUTH_PROVIDERS.anthropic!,
+      refresh: async () => ({ access: "fresh", refresh: "rt-fresh", expires: Date.now() + 3_600_000 }),
+    }, getAccountCredential("anthropic", id)!)).resolves.toBe("fresh");
+    expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)!.needsReauth).toBeUndefined();
+  });
+
   test("Anthropic post-dispatch stale flight replacement stays retryable without replay or reauth", async () => {
     await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
     const id = getAccountSet("anthropic")!.activeAccountId;

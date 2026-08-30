@@ -694,8 +694,20 @@ export async function refreshAnthropicAccountWithLock(
       clearOAuthRefreshIntent(provider, accountId, generation);
       return fresh.access;
     } catch (error) {
-      if (error instanceof OAuthMutationBusyError) throw error;
-      if (!terminal(error)) throw error;
+      if (error instanceof OAuthMutationBusyError || error instanceof OAuthTokenRefreshStaleError) throw error;
+      if (!terminal(error)) {
+        // A non-terminal failure means the credential was never rejected, so the caller is
+        // told to retry. Leaving the intent behind contradicted that: the next attempt hit
+        // the pending-intent branch above and raised OAuthLoginRequiredError, so one 503 or
+        // timeout locked the account out of refresh entirely until manual re-auth — even
+        // once upstream recovered. Clear it so the promised retry can actually happen.
+        //
+        // The replay guard is preserved by `uncertain`: a refresh whose outcome is genuinely
+        // unknown surfaces as an uncertain intent from the store, which this path never
+        // clears, and a superseded owner still leaves through OAuthTokenRefreshStaleError.
+        clearOAuthRefreshIntent(provider, accountId, generation);
+        throw error;
+      }
       await markAccountNeedsReauthIfGeneration(provider, accountId, generation, writerGeneration);
       clearOAuthRefreshIntent(provider, accountId, generation);
       throw new OAuthLoginRequiredError(provider);
