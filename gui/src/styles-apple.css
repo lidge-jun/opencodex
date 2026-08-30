@@ -1,0 +1,215 @@
+/* PaohupByPaoZa — Apple HIG overlay. Tokens only; layout and behavior stay intact. */
+
+:root {
+  --bg:           light-dark(#f5f5f7, #000000);
+  --rail:         light-dark(#f2f2f7, #1c1c1e);
+  --surface:      light-dark(#ffffff, #1c1c1e);
+  --raised:       light-dark(#ffffff, #2c2c2e);
+  --raised-hover: light-dark(#f2f2f7, #3a3a3c);
+  --border:       light-dark(rgba(60, 60, 67, 0.12), rgba(84, 84, 88, 0.65));
+  --border-soft:  light-dark(rgba(60, 60, 67, 0.08), rgba(84, 84, 88, 0.45));
+  --hover:        light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.06));
+
+  --text:  light-dark(#1d1d1f, #f5f5f7);
+  --muted: light-dark(#6e6e73, #98989d);
+  --faint: light-dark(#86868b, #8e8e93);
+
+  --accent:       light-dark(#007aff, #0a84ff);
+  --accent-hover: light-dark(#0066d6, #409cff);
+  --accent-ink:   #ffffff;
+  --accent-soft:  light-dark(rgba(0, 122, 255, 0.12), rgba(10, 132, 255, 0.22));
+  --accent-ring:  light-dark(rgba(0, 122, 255, 0.45), rgba(10, 132, 255, 0.55));
+
+  --green:      light-dark(#34c759, #30d158);
+  --green-soft: light-dark(rgba(52, 199, 89, 0.14), rgba(48, 209, 88, 0.18));
+  --red:        light-dark(#ff3b30, #ff453a);
+  --red-soft:   light-dark(rgba(255, 59, 48, 0.12), rgba(255, 69, 58, 0.16));
+  --amber:      light-dark(#ff9f0a, #ffd60a);
+  --amber-soft: light-dark(rgba(255, 159, 10, 0.14), rgba(255, 214, 10, 0.16));
+  --blue:       light-dark(#007aff, #0a84ff);
+  --blue-soft:  light-dark(rgba(0, 122, 255, 0.12), rgba(10, 132, 255, 0.18));
+
+  --radius-2xs: 6px;
+  --radius: 12px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+  --radius-lg: 18px;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Sarabun", "Noto Sans Thai", "Segoe UI", system-ui, sans-serif;
+  --font-code: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  --font: var(--font-ui);
+  --mono: var(--font-code);
+
+  --shadow: 0 1px 2px light-dark(rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.55)),
+    0 12px 32px light-dark(rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.45));
+  --shadow-sm: 0 1px 2px light-dark(rgba(0, 0, 0, 0.05), rgba(0, 0, 0, 0.4));
+
+  --toggle-on-bg: light-dark(#34c759, #30d158);
+  --toggle-off-bg: light-dark(#e5e5ea, #39393d);
+  --toggle-dot-color: #ffffff;
+
+  --glass-rail:  light-dark(rgba(242, 242, 247, 0.78), rgba(28, 28, 30, 0.72));
+  --glass-panel: light-dark(rgba(255, 255, 255, 0.82), rgba(44, 44, 46, 0.78));
+  --glass-blur:  saturate(180%) blur(28px);
+}
+
+body::before {
+  background:
+    radial-gradient(42% 38% at 8% 0%, light-dark(rgba(0, 122, 255, 0.16), rgba(10, 132, 255, 0.14)), transparent 70%),
+    radial-gradient(46% 42% at 92% 12%, light-dark(rgba(94, 92, 230, 0.12), rgba(94, 92, 230, 0.12)), transparent 70%),
+    radial-gradient(40% 36% at 70% 96%, light-dark(rgba(52, 199, 89, 0.10), rgba(48, 209, 88, 0.08)), transparent 72%);
+}
+
+.app { grid-template-columns: 248px 1fr; }
+
+.sidebar {
+  padding: 20px 12px 16px;
+  border-right-color: var(--border);
+}
+
+.brand { padding: 4px 8px 16px; gap: 10px; align-items: flex-start; }
+
+.brand-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.brand-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: linear-gradient(180deg, #64d2ff 0%, #007aff 58%, #5856d6 100%);
+  -webkit-mask: none;
+  mask: none;
+  box-shadow: 0 1px 2px rgba(0, 122, 255, 0.28);
+  position: relative;
+}
+
+.brand-logo::after {
+  content: "P";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 650;
+  font-size: 15px;
+  letter-spacing: -0.03em;
+  font-family: var(--font-ui);
+  line-height: 1;
+}
+
+.brand .name {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.brand .ver {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: transparent;
+  font-family: var(--font-ui);
+  font-weight: 600;
+}
+
+.nav-item {
+  padding: 9px 12px;
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.nav-item:hover { background: var(--hover); }
+
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-item.active svg { color: var(--accent); }
+
+.btn {
+  border-radius: 980px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.btn-primary {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.24) inset, 0 1px 2px rgba(0, 122, 255, 0.28);
+}
+
+input, select, textarea, .field, .select, .select-trigger {
+  border-radius: 10px;
+}
+
+.panel, .card, .notice, .modal, .drawer {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.page-tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.main { background: transparent; }
+
+.page-head h2 {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+html[lang="th"] .page-head h2 {
+  letter-spacing: 0;
+  font-size: 26px;
+}
+
+.page-sub { color: var(--muted); }
+
+.lang-toggle,
+.theme-toggle {
+  border-radius: 10px;
+}
+
+.sidebar-foot {
+  gap: 6px;
+  padding-top: 14px;
+}
+
+.sidebar-orb {
+  border: none;
+  background: var(--hover);
+}
+
+.mobile-topbar {
+  background: var(--glass-rail);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: 1px solid var(--border);
+}
+
+.select-trigger {
+  background: var(--raised);
+  border-color: transparent;
+}
+
+html[lang="th"] body {
+  font-feature-settings: "kern" 1;
+  line-height: 1.55;
+}
+
+html[lang="th"] .brand .name,
+html[lang="th"] .nav-item,
+html[lang="th"] .btn {
+  letter-spacing: 0;
+}

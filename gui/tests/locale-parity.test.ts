@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-const LOCALES = ["en", "de", "fr", "ja", "ko", "ru", "tr", "zh", "zh-TW"] as const;
+const LOCALES = ["en", "de", "fr", "ja", "ko", "ru", "tr", "th", "zh", "zh-TW"] as const;
 
 async function readDict(locale: string): Promise<Map<string, string>> {
   const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
@@ -40,6 +40,7 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "provider.name.volcengineAgentPlan",
   "provider.name.volcengineCodingPlan",
   // Backend/brand names
+  "app.brand",
   "dash.backendAnthropic",
   "dash.backendOpenAI",
   // Claude app labels
@@ -132,6 +133,7 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   // locale would make the same badge unrecognizable across a screenshot or a bug report for
   // no gain in comprehension.
   "logs.badge.interceptedHelper",
+  "brain.webmcp.label",
   "models.v2Mode_default",
   "models.v2Mode_v1",
   "models.v2Mode_v2",
@@ -181,7 +183,7 @@ const DSH_VISIBLE_COPY: Record<(typeof LOCALES)[number], readonly [string, strin
   en: [
     "DeepSeek Harness (DSH)",
     "DeepSeek Harness (DSH)",
-    "OpenCodex manages only llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH hot reloads this provider; your default model and deepseek-official stay unchanged. Currently loopback-only; no real credential is written.",
+    "PaohupByPaoZa manages only llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH hot reloads this provider; your default model and deepseek-official stay unchanged. Currently loopback-only; no real credential is written.",
   ],
   fr: [
     "DeepSeek Harness (DSH)",
@@ -212,6 +214,11 @@ const DSH_VISIBLE_COPY: Record<(typeof LOCALES)[number], readonly [string, strin
     "DeepSeek Harness (DSH)",
     "DeepSeek Harness (DSH)",
     "OpenCodex yalnızca $DSH_HOME/settings.yaml içindeki llm-pi-ai.providers.opencodex bölümünü yönetir. DSH bu sağlayıcıyı çalışırken yeniden yükler; varsayılan modeliniz ve deepseek-official değişmez. Şimdilik yalnızca geri döngü desteklenir; gerçek kimlik bilgisi yazılmaz.",
+  ],
+  th: [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "PaohupByPaoZa จัดการเฉพาะ llm-pi-ai.providers.opencodex ใน $DSH_HOME/settings.yaml DSH โหลดผู้ให้บริการนี้แบบร้อน โมเดลเริ่มต้นและ deepseek-official ไม่เปลี่ยน ขณะนี้เฉพาะลูปแบ็ก ไม่เขียนข้อมูลรับรองจริง",
   ],
   zh: [
     "DeepSeek Harness (DSH)",

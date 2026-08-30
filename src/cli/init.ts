@@ -88,7 +88,7 @@ export function cleanupOpenAiTierBackupAfterInit(configPath = getConfigPath()): 
 export async function runInit(): Promise<void> {
   const prompt = createPrompt();
   try {
-    console.log("\n🔧 opencodex (ocx) setup\n");
+    console.log("\n🔧 PaohupByPaoZa (paohup / ocx) setup\n");
 
     const providers = buildInitProviders();
     printMenu(providers);

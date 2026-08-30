@@ -109,7 +109,7 @@ function Start-OcxCommand([string[]]$CommandArgs, [switch]$TrackExit) {
     return $true
   } catch {
     Write-ActionLog "launch failed: $($_.Exception.GetType().Name)"
-    $notify.ShowBalloonTip(5000, "opencodex action failed", "The action could not start. Open the logs folder or run ocx doctor.", [System.Windows.Forms.ToolTipIcon]::Error)
+    $notify.ShowBalloonTip(5000, "PaohupByPaoZa action failed", "The action could not start. Open the logs folder or run ocx doctor.", [System.Windows.Forms.ToolTipIcon]::Error)
     return $false
   }
 }
@@ -210,10 +210,10 @@ function Complete-PendingAction([bool]$Success) {
   }
   if ($Success) {
     Write-ActionLog "$action completed (port=$($script:port), pid=$($script:proxyPid))"
-    $notify.ShowBalloonTip(2500, "opencodex", "$action completed.", [System.Windows.Forms.ToolTipIcon]::Info)
+    $notify.ShowBalloonTip(2500, "PaohupByPaoZa", "$action completed.", [System.Windows.Forms.ToolTipIcon]::Info)
   } else {
     Write-ActionLog "$action failed to reach the expected state"
-    $notify.ShowBalloonTip(5000, "opencodex action failed", "$action did not reach the expected state. Open the logs folder or run ocx doctor.", [System.Windows.Forms.ToolTipIcon]::Error)
+    $notify.ShowBalloonTip(5000, "PaohupByPaoZa action failed", "$action did not reach the expected state. Open the logs folder or run ocx doctor.", [System.Windows.Forms.ToolTipIcon]::Error)
   }
 }
 
@@ -228,7 +228,7 @@ function Update-TrayState {
   $script:proxyPid = if ($script:online) { [int]$health.pid } else { $null }
   if ($script:online) {
     $statusItem.Text = "Proxy: Online (port $($script:port))"
-    $notify.Text = "opencodex: Online"
+    $notify.Text = "PaohupByPaoZa: Online"
     $startItem.Enabled = $false
     $stopItem.Enabled = $true
     $restartItem.Enabled = $true
@@ -244,7 +244,7 @@ function Update-TrayState {
   } else {
     $statusItem.Text = "Proxy: Offline"
     $safetyItem.Text = "Restart safety: start the proxy to inspect"
-    $notify.Text = "opencodex: Offline"
+    $notify.Text = "PaohupByPaoZa: Offline"
     $notify.Icon = $offlineIcon
     $startItem.Enabled = $true
     $stopItem.Enabled = $false
@@ -341,7 +341,7 @@ $timer.add_Tick({
 $notify.ContextMenuStrip = $menu
 $notify.Icon = $offlineIcon
 $notify.Visible = $true
-$notify.Text = "opencodex: Checking..."
+$notify.Text = "PaohupByPaoZa: Checking..."
 
 try {
   Update-TrayState

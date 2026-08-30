@@ -58,4 +58,9 @@ export const ROUTING_COMPATIBILITY_FIELD_LABELS: Record<Locale, CompatibilityFie
     unknownEvidence: "Bilinmeyen kanıt",
     degradedEvidence: "Bozulmuş kanıt",
   },
+  th: {
+    maxEvidenceAgeMs: "อายุหลักฐานสูงสุด (ms)",
+    unknownEvidence: "หลักฐานที่ไม่ทราบ",
+    degradedEvidence: "หลักฐานที่ลดคุณภาพ",
+  },
 };

@@ -64,6 +64,9 @@ async function mount(options: { path?: string; onClose?: () => void; onConfirm?:
 
 test("renders the four Korean slots in order with the live path and no side effect", async () => {
   const livePath = "/custom/grok-home/config.toml";
+  // The product now defaults to Thai regardless of navigator language (Thai-first
+  // rebrand), so pin the locale explicitly instead of relying on ko-KR detection.
+  testWindow.localStorage.setItem("ocx-lang", "ko");
   await mount({ path: livePath });
 
   const title = container.querySelector("h3")!;

@@ -1,7 +1,7 @@
 {
-  "name": "@bitkyc08/opencodex",
-  "version": "2.27.0",
-  "description": "Universal provider proxy for OpenAI Codex & Claude Code — use any LLM with Codex CLI/App/SDK and Claude Code",
+  "name": "paohupbypaoza",
+  "version": "2.62.0",
+  "description": "PaohupByPaoZa — Apple-styled local LLM proxy dashboard for Codex, Claude Code, and Grok Build",
   "type": "module",
   "main": "./bin/package-main.mjs",
   "exports": {
@@ -12,6 +12,8 @@
     "./package.json": "./package.json"
   },
   "bin": {
+    "paohup": "./bin/ocx.mjs",
+    "paohupbypaoza": "./bin/ocx.mjs",
     "opencodex": "./bin/ocx.mjs",
     "ocx": "./bin/ocx.mjs"
   },

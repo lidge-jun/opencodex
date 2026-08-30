@@ -1061,10 +1061,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     },
 
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
+      const googleMode: OcxProviderConfig["googleMode"] = provider.googleMode;
       // Cloud Code Assist exposes only the SSE transport. Unary callers still use this
       // buffered adapter entry point, so collect the exact same events parseStream emits
       // instead of maintaining a second CCA JSON parser.
-      if (provider.googleMode === "cloud-code-assist") {
+      if (googleMode === "cloud-code-assist") {
         const events: AdapterEvent[] = [];
         for await (const event of this.parseStream(response, budget)) events.push(event);
         retainTranslatedEventBatch(events, budget);
@@ -1181,9 +1182,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const parts = rawParts as GoogleResponsePart[];
         // Non-streaming Google-family response: observe thought signatures for the next turn,
         // using the same transport-scoped namespace as the streaming path.
-        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
-        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
-        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+        // CCA never reaches the buffered path (delegated to parseStream above), so only the
+        // Vertex replay namespace applies here.
+        const replayModel = vertexReplayModel;
+        const replaySession = vertexReplaySession;
+        if (googleMode === "vertex"
           && replayModel && replaySession) {
           observeAntigravityReplay(replayModel, replaySession, parts as unknown[]);
         }
@@ -1226,7 +1229,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
       // Fail-closed truncation, same as the stream path: a non-stream turn cut off mid tool call
       // (MAX_TOKENS / MALFORMED_FUNCTION_CALL) surfaces an error instead of a silent done.
-      if ((provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist")
+      if (googleMode === "vertex"
         && isVertexTruncatedTurn(candidate.finishReason, toolCallsStarted)) {
         return finish([{ type: "error", message: vertexTruncationErrorMessage(candidate.finishReason) }]);
       }

@@ -1,6 +1,6 @@
 import type { TKey } from "./en";
 
-export type LabLocale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr";
+export type LabLocale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "th";
 export type LabCatalogKey = Exclude<Extract<TKey, `lab.${string}`>, `lab.production.${string}`>;
 export type LabSupplementKey =
   | "subjectKindUnknown"
@@ -314,6 +314,56 @@ const ru: Record<LabCatalogKey, string> = {
   "lab.layer.task_effectiveness": "Эффективность задач",
 };
 
+const th: Record<LabCatalogKey, string> = {
+  "lab.title": "ห้องทดลองความเข้ากันได้",
+  "lab.subtitle": "เมทริกซ์ผลการตรวจสอบความเข้ากันได้แบบอ่านอย่างเดียว จากหลักฐานของโปรเจกชันแล็บ",
+  "lab.loadFailed": "โหลดข้อมูลห้องทดลองความเข้ากันไม่ได้",
+  "lab.projectionUnavailable": "โปรเจกชันแล็บยังไม่พร้อม รันการทดสอบความสอดคล้องหรือไลฟ์โพรบก่อน",
+  "lab.projectionIncompatible": "สคีมาโปรเจกชันแล็บไม่เข้ากัน สร้างโปรเจกชันใหม่",
+  "lab.statusTitle": "สถานะโปรเจกชัน",
+  "lab.matrixTitle": "เมทริกซ์ความเข้ากันได้",
+  "lab.verdictsTitle": "บันทึกผลการตัดสิน",
+  "lab.filter.layer": "ชั้นหลักฐาน",
+  "lab.filter.verdict": "ผลการตัดสิน",
+  "lab.filter.subject": "รหัสหัวข้อ",
+  "lab.filter.all": "ทั้งหมด",
+  "lab.col.subject": "หัวข้อ",
+  "lab.col.layer": "ชั้น",
+  "lab.col.suite": "ชุดทดสอบ",
+  "lab.col.verdict": "ผลการตัดสิน",
+  "lab.col.asOf": "ณ วันที่",
+  "lab.col.protocol": "ความสอดคล้องของโปรโตคอล",
+  "lab.col.live": "ความเข้ากันได้ของเส้นทางจริง",
+  "lab.col.task": "ประสิทธิผลของงาน",
+  "lab.empty": "ยังไม่มีผลการตัดสินความเข้ากันได้ในโปรเจกชัน",
+  "lab.subjectKind": "ชนิด",
+  "lab.observationCount": "การสังเกต",
+  "lab.eventCount": "เหตุการณ์",
+  "lab.verdictCount": "ผลการตัดสิน",
+  "lab.subjectCount": "หัวข้อ",
+  "lab.builtAt": "สร้างเมื่อ",
+  "lab.loading": "กำลังโหลดหลักฐานความเข้ากันได้…",
+  "lab.loadMore": "โหลดเพิ่ม",
+  "lab.detailTitle": "รายละเอียดผลการตัดสิน",
+  "lab.detailClose": "ปิด",
+  "lab.detailSubject": "หัวข้อ",
+  "lab.detailObservations": "การสังเกต",
+  "lab.detailEvents": "เหตุการณ์หลักฐาน",
+  "lab.detailArtifacts": "เมตาดาต้าอาร์ติแฟกต์",
+  "lab.detailLoadFailed": "โหลดรายละเอียดผลการตัดสินไม่ได้",
+  "lab.refresh": "รีเฟรช",
+  "lab.verdict.UNKNOWN": "ไม่ทราบ",
+  "lab.verdict.CLAIMED": "อ้างแล้ว",
+  "lab.verdict.PROBED": "โพรบแล้ว",
+  "lab.verdict.VERIFIED": "ยืนยันแล้ว",
+  "lab.verdict.DEGRADED": "ลดคุณภาพ",
+  "lab.verdict.BLOCKED": "ถูกบล็อก",
+  "lab.verdict.UNSUPPORTED": "ไม่รองรับ",
+  "lab.layer.protocol_conformance": "ความสอดคล้องของโปรโตคอล",
+  "lab.layer.live_route_compatibility": "ความเข้ากันได้ของเส้นทางจริง",
+  "lab.layer.task_effectiveness": "ประสิทธิผลของงาน",
+};
+
 const tr: Record<LabCatalogKey, string> = {
   "lab.title": "Uyumluluk Laboratuvarı",
   "lab.subtitle": "Laboratuvar projeksiyonu kanıtlarından oluşturulan salt okunur uyumluluk karar matrisi.",
@@ -474,6 +524,7 @@ export const LAB_CATALOG_OVERRIDES: Record<LabLocale, Record<LabCatalogKey, stri
   ru,
   ja,
   tr,
+  th,
 };
 
 const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
@@ -584,6 +635,18 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "community.bundles": "Paketler",
     "community.activeRecords": "Etkin kayıtlar",
     "community.revokedRecords": "Geri çekilen kayıtlar",
+  },
+  th: {
+    subjectKindUnknown: "ไม่ทราบ",
+    "artifact.present": "มีอยู่",
+    "artifact.corrupt": "เสียหาย",
+    "artifact.purged_unavailable": "ถูกล้าง / ใช้ไม่ได้",
+    selectVerdict: "ดูผลการตัดสินของ {subject}",
+    "community.title": "หลักฐานจากชุมชน",
+    "community.notLocalVerdict": "บริบทอ่านอย่างเดียวที่ไม่น่าเชื่อถือ ไม่นับในผลการตัดสินท้องถิ่นนี้",
+    "community.bundles": "ชุดหลักฐาน",
+    "community.activeRecords": "บันทึกที่ใช้งาน",
+    "community.revokedRecords": "บันทึกที่เพิกถอน",
   },
 };
 

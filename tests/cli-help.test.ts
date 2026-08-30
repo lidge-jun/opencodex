@@ -39,7 +39,7 @@ describe("CLI subcommand help", () => {
       expectSpawnFinished(result, `ocx ${args.join(" ")}`);
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
-      expect(result.stdout.trim()).toMatch(/^opencodex \d+\.\d+\.\d+/);
+      expect(result.stdout.trim()).toMatch(/^(opencodex|PaohupByPaoZa) \d+\.\d+\.\d+/);
       expect(result.stdout.trim().split("\n")).toHaveLength(1);
     }
 
@@ -51,7 +51,7 @@ describe("CLI subcommand help", () => {
     });
     expectSpawnFinished(binResult, "bin/ocx.mjs --version");
     expect(binResult.status).toBe(0);
-    expect(binResult.stdout.trim()).toMatch(/^opencodex \d+\.\d+\.\d+/);
+    expect(binResult.stdout.trim()).toMatch(/^(opencodex|PaohupByPaoZa) \d+\.\d+\.\d+/);
     expect(binResult.stdout.trim().split("\n")).toHaveLength(1);
   });
 
@@ -108,7 +108,7 @@ describe("CLI subcommand help", () => {
         const result = runCli(args, { OPENCODEX_HOME: opencodexHome, PATH: binDir });
         expectSpawnFinished(result, `ocx ${args.join(" ") || "(no args)"}`);
         expect(result.status).toBe(0);
-        expect(result.stdout).toContain("opencodex (ocx)");
+        expect(result.stdout).toMatch(/opencodex \(ocx\)|PaohupByPaoZa \(paohup \/ ocx\)/);
         expect(readFileSync(wrapper, "utf8")).toBe(replacement);
         expect(readFileSync(backup)).toEqual(backupBefore);
         expect(readFileSync(statePath)).toEqual(stateBefore);
@@ -132,7 +132,7 @@ describe("CLI subcommand help", () => {
     expectSpawnFinished(result, "ocx foobar --help");
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Unknown command: foobar");
-    expect(result.stdout).toContain("opencodex (ocx)");
+    expect(result.stdout).toMatch(/opencodex \(ocx\)|PaohupByPaoZa \(paohup \/ ocx\)/);
   });
 
   test("status prints diagnostics without starting the proxy", () => {

@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
+import { setActiveLocale } from "../src/i18n/shared";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Logs from "../src/pages/Logs";
 
@@ -90,6 +91,8 @@ beforeEach(() => {
     navigator: { configurable: true, value: testWindow.navigator },
     localStorage: { configurable: true, value: testWindow.localStorage },
   });
+  testWindow.localStorage.setItem("ocx-lang", "en");
+  setActiveLocale("en");
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   installLayoutStubs(testWindow);
   jest.useFakeTimers({ now: 1_700_000_000_000 });

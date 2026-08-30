@@ -9,10 +9,12 @@ import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
 import CodexAuth from "./pages/CodexAuth";
 import Integrations from "./pages/Integrations";
+import BrainUniverse from "./pages/BrainUniverse";
+import DemoController from "./pages/DemoController";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh, IconTicket, IconPlay } from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
@@ -37,6 +39,8 @@ const PAGE_TKEY: Record<Page, TKey> = {
   storage: "nav.storage",
   "codex-auth": "nav.codexAuth",
   integrations: "nav.integrations",
+  brain: "nav.brain",
+  demo: "nav.demo",
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -66,6 +70,8 @@ const NAV: NavEntry[] = [
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
   { id: "integrations", tkey: "nav.integrations", Icon: IconGlobe },
+  { id: "brain", tkey: "nav.brain", Icon: IconTicket },
+  { id: "demo", tkey: "nav.demo", Icon: IconPlay },
 ];
 
 const THEME_ICON = { light: IconSun, dark: IconMoon, system: IconMonitor } as const;
@@ -101,6 +107,10 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
   const { locale, setLocale } = useI18n();
   const t = useT();
+
+  useEffect(() => {
+    document.title = `${t("app.brand")} · ${t(PAGE_TKEY[page])}`;
+  }, [page, t]);
 
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
@@ -197,8 +207,10 @@ export default function App() {
   const brand = (
     <div className="brand">
       <span className="brand-logo" role="img" aria-label={t("app.logoAria")} />
-      <span className="name">opencodex</span>
-      <span className="ver">v{displayedVersion}</span>
+      <div className="brand-copy">
+        <span className="name">{t("app.brand")}</span>
+        <span className="ver">v{displayedVersion}</span>
+      </div>
     </div>
   );
 
@@ -338,6 +350,8 @@ export default function App() {
             {page === "storage" && <Storage apiBase={API_BASE} />}
             {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
             {page === "integrations" && <Integrations apiBase={API_BASE} />}
+            {page === "brain" && <BrainUniverse apiBase={API_BASE} />}
+            {page === "demo" && <DemoController apiBase={API_BASE} />}
           </ErrorBoundary>
         </div>
       </main>

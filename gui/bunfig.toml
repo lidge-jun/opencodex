@@ -1,0 +1,8 @@
+# Scope gui test runs and pin the test locale.
+#
+# The product default locale is Thai (see gui/src/i18n/shared.ts), but most DOM
+# tests assert English catalog strings. The preload answers the ocx-lang
+# storage read with "en" so UI tests stay locale-deterministic without changing
+# product behavior. See gui/tests/preload.ts for the rationale.
+[test]
+preload = ["./tests/preload.ts"]

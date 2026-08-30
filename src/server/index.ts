@@ -1750,7 +1750,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   boundPort = actualPort;
   setCorsOrigin(actualPort);
 
-  console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
+  console.log(`🚀 PaohupByPaoZa proxy running on http://localhost:${actualPort}`);
   console.log(`   POST /v1/responses → provider translation`);
   console.log(`   POST /v1/chat/completions → OpenAI-compatible clients`);
   console.log(`   GET  /healthz      → health check`);

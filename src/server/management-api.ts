@@ -71,6 +71,7 @@ import { handleSystemRoutes } from "./management/system-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
+import { handleAgentOsRoutes } from "./management/agent-os-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal } from "./management-auth";
 export type { ManagementApiDeps } from "./management/context";
@@ -231,6 +232,7 @@ export async function handleManagementAPI(
     ??     (await handleComboRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
     ??     (await handleLabRoutesOnDemand(ctx))
+    ??     (await handleAgentOsRoutes(ctx))
       ?? (await handleSidebarRoutes(ctx));
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);

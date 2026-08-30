@@ -1,0 +1,325 @@
+/* Brain Universe observatory panel — dark control-center grammar, flat surfaces. */
+
+.brain {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.brain-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.brain-head h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.brain-sub {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.brain-ask {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+.brain-ask input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.brain-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.brain-tab {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.brain-tab--active {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+
+.brain-count {
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.brain-body {
+  min-height: 200px;
+}
+
+.brain-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.brain-table th,
+.brain-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.brain-table th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.8rem;
+}
+
+.brain-chip {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.75rem;
+  border: 1px solid var(--line);
+}
+
+.brain-chip-ok { color: var(--ok, #2e7d32); border-color: currentColor; }
+.brain-chip-warn { color: var(--warn, #b26a00); border-color: currentColor; }
+.brain-chip-bad { color: var(--bad, #c62828); border-color: currentColor; }
+
+.brain-memories {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.brain-memories p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.brain-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.brain-issue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--warn, #b26a00);
+  font-size: 0.85rem;
+}
+
+.brain-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--bad, #c62828);
+}
+
+.brain-approvals {
+  border: 1px solid var(--warn, #b26a00);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.brain-approvals h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--warn, #b26a00);
+}
+
+.brain-approvals .brain-issue {
+  flex-wrap: wrap;
+}
+
+.brain-approvals .btn {
+  margin-left: auto;
+}
+
+.brain-loading {
+  color: var(--muted);
+}
+.brain-policies {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.brain-policy-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.brain-policy-add select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 6px 10px;
+}
+
+.brain-policy-add input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 6px 10px;
+  flex: 1;
+  min-width: 160px;
+}
+
+.brain-graph-panel,
+.brain-graph-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.brain-graph-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.brain-graph-summary span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 9px;
+}
+
+.brain-graph-scroll {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: auto;
+  min-height: 300px;
+  max-height: min(66vh, 760px);
+  background:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.brain-graph-svg {
+  width: 100%;
+  min-width: 900px;
+  min-height: 300px;
+}
+
+.brain-graph-edges line {
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+
+.brain-graph-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.brain-graph-node rect {
+  fill: var(--bg);
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+
+.brain-graph-node text {
+  fill: var(--fg);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.brain-graph-node--universe rect { stroke: #8b5cf6; }
+.brain-graph-node--project rect { stroke: #3b82f6; }
+.brain-graph-node--folder rect { stroke: #f59e0b; }
+.brain-graph-node--file rect { stroke: #10b981; }
+.brain-graph-node:hover rect,
+.brain-graph-node:focus rect {
+  stroke-width: 3;
+}
+
+.brain-graph-detail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.brain-graph-detail span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.demo {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.demo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.demo-message {
+  border: 1px solid var(--ok, #2e7d32);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--ok, #2e7d32);
+}
+
+.demo-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.demo-step strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.demo-step p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}

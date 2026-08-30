@@ -36,7 +36,7 @@ test("renders stable password-manager-compatible sign-in fields", async () => {
   const password = form?.elements.namedItem("password") as HTMLInputElement | null;
 
   expect(dialog).not.toBeNull();
-  expect(dialog?.querySelector("h3")?.textContent).toBe("OpenCodex admin token (OPENCODEX_ADMIN_AUTH_TOKEN)");
+  expect(dialog?.querySelector("h3")?.textContent).toBe("PaohupByPaoZa admin token (OPENCODEX_ADMIN_AUTH_TOKEN)");
   expect(form?.method).toBe("post");
   expect(form?.autocomplete).toBe("on");
   expect(username?.id).toBe("opencodex-admin-token-dialog-username");

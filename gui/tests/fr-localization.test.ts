@@ -15,6 +15,9 @@ const PLACEHOLDER_RE = /\{([a-zA-Z0-9_]+)\}/g;
 
 const INTENTIONAL_ENGLISH = new Set<TKey>([
   // Units, symbols, protocol values, machine labels, and product names.
+  "nav.brain",
+  "app.brand",
+  "brain.webmcp.label",
   "uptime.hour",
   "uptime.second",
   "common.github",

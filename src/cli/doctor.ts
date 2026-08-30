@@ -846,7 +846,7 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     return;
   }
 
-  console.log("opencodex doctor\n");
+  console.log("PaohupByPaoZa doctor\n");
 
   // Ordering note: the memory/runtime section renders after "Running proxy
   // process proxy env" below; helpers live above runDoctor for testability.

@@ -12,11 +12,11 @@ function packageVersion(): string {
 }
 
 export function printVersion(): void {
-  console.log(`opencodex ${packageVersion()}`);
+  console.log(`PaohupByPaoZa ${packageVersion()}`);
 }
 
 export function printUsage(): void {
-  console.log(`opencodex (ocx) — Universal provider proxy for Codex
+  console.log(`PaohupByPaoZa (paohup / ocx) — Universal provider proxy for Codex
 
 Usage:
   ocx setup                   Interactive setup (alias: init)
@@ -41,8 +41,8 @@ Usage:
   ocx debug <scope>           provider/usage/injection/claude on|off|status|reset
   ocx login <provider>        OAuth or API-key provider login
   ocx logout <provider>       Remove a stored OAuth login
-  ocx gui                     Open the opencodex dashboard
-  ocx update [--tag <tag>]    Update opencodex (keeps preview installs on @preview)
+  ocx gui                     Open the PaohupByPaoZa dashboard
+  ocx update [--tag <tag>]    Update PaohupByPaoZa (keeps preview installs on @preview)
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|keep-native-v1|threads|mode-hint)
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)

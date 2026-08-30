@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
 import {
   OPENCODE_API_KEY_ENV,
@@ -319,7 +320,7 @@ describe("GET /api/client-config", () => {
       const response = await clientConfigApi(baseConfig(), "?client=pi");
       expect(response.status).toBe(200);
       const body = await response.json() as ClientConfigEnvelope;
-      expect(body.destination).toBe("/tmp/opencodex-pi-route-fixture/models.json");
+      expect(body.destination).toBe(join("/tmp/opencodex-pi-route-fixture", "models.json"));
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;

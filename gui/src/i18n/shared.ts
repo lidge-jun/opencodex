@@ -4,6 +4,7 @@ import { DICTS, localeDisplayName, type Locale, type TKey } from "./catalogs";
 export { DICTS, localeDisplayName, type Locale, type TKey };
 
 export const LOCALES: { code: Locale; htmlLang: string }[] = [
+  { code: "th", htmlLang: "th" },
   { code: "en", htmlLang: "en" },
   { code: "de", htmlLang: "de" },
   { code: "fr", htmlLang: "fr" },
@@ -22,28 +23,9 @@ let activeLocale: Locale | null = null;
 export function detectInitial(): Locale {
   try {
     const stored = localStorage.getItem(LANG_KEY);
-    if (stored === "en" || stored === "de" || stored === "fr" || stored === "ko" || stored === "zh" || stored === "zh-TW" || stored === "ru" || stored === "ja" || stored === "tr") return stored;
+    if (stored === "th" || stored === "en" || stored === "de" || stored === "fr" || stored === "ko" || stored === "zh" || stored === "zh-TW" || stored === "ru" || stored === "ja" || stored === "tr") return stored;
   } catch { /* ignore */ }
-  const nav = typeof navigator !== "undefined" && navigator?.language ? navigator.language.toLowerCase() : "en";
-  if (nav.startsWith("de")) return "de";
-  if (nav.startsWith("fr")) return "fr";
-  if (nav.startsWith("ko")) return "ko";
-  if (nav.startsWith("zh")) {
-    // zh-TW / zh-HK / zh-MO / zh-Hant → Traditional; everything else → Simplified.
-    if (
-      nav.includes("tw") ||
-      nav.includes("hk") ||
-      nav.includes("mo") ||
-      nav.includes("hant")
-    ) {
-      return "zh-TW";
-    }
-    return "zh";
-  }
-  if (nav.startsWith("ru")) return "ru";
-  if (nav.startsWith("ja")) return "ja";
-  if (nav.startsWith("tr")) return "tr";
-  return "en";
+  return "th";
 }
 
 /** Current LanguageProvider locale for non-React UI such as the auth fetch dialog. */

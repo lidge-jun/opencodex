@@ -56,6 +56,11 @@ const LABELS: Record<Locale, StateLabels> = {
     protection: { off: "Kapalı", active: "Etkin", drifted: "Onarım gerekli", unsupported: "Desteklenmiyor", unknown: "Bilinmiyor" },
     mode: { off: "Kapalı", compat: "Uyumluluk", quiet: "Sessiz", collision: "Bilinmiyor" },
   },
+  th: {
+    schema: { compatible: "เข้ากันได้", missing: "ไม่พบฐานข้อมูล", unreadable: "อ่านฐานข้อมูลไม่ได้", unsupported: "ไม่รองรับ" },
+    protection: { off: "ปิด", active: "ใช้งาน", drifted: "ต้องซ่อม", unsupported: "ไม่รองรับ", unknown: "ไม่ทราบ" },
+    mode: { off: "ปิด", compat: "ความเข้ากันได้", quiet: "เงียบ", collision: "ไม่ทราบ" },
+  },
 };
 
 export function logGuardSchemaStateLabel(locale: Locale, state: LogGuardSchemaState): string {

@@ -121,6 +121,18 @@ const LABELS: Record<Locale, Record<LogGuardOperationLabelKey, string>> = {
     "error.auto_vacuum_not_incremental": "Bu Codex gunluk veritabani artimli vacuum icin yapilandirilmamis; tam yeniden olusturma olmadan alan geri kazanilamaz.",
     "error.integrity_check_failed": "Codex gunluk veritabani butunluk denetiminden gecemedi. Alan geri kazanilmadi.",
   },
+  th: {
+    applying: "กำลังใช้การเปลี่ยนแปลง Log Guard…",
+    "error.generic": "อัปเดตที่เก็บบันทึก Codex ไม่ได้",
+    "error.codex_running": "ปิด Codex ก่อนเปลี่ยนที่เก็บบันทึก Codex",
+    "error.process_enumeration_failed": "ยืนยันไม่ได้ว่า Codex ปิดแล้ว จึงยังไม่เริ่มการทำงานของ Log Guard",
+    "error.busy": "ฐานข้อมูลบันทึก Codex ไม่ว่าง ปิด Codex แล้วลองใหม่",
+    "error.unsupported_schema": "สคีมาบันทึก Codex นี้ไม่รองรับการทำงานนี้",
+    "error.unsafe_path": "พาธฐานข้อมูลบันทึก Codex ไม่ผ่านการตรวจความปลอดภัย",
+    "error.database_error": "อัปเดตฐานข้อมูลบันทึก Codex ไม่ได้",
+    "error.auto_vacuum_not_incremental": "ฐานข้อมูลบันทึก Codex นี้ไม่ได้ตั้งค่า incremental vacuum จึงคืนพื้นที่ไม่ได้ถ้าไม่สร้างใหม่ทั้งก้อน",
+    "error.integrity_check_failed": "ฐานข้อมูลบันทึก Codex ไม่ผ่านการตรวจความสมบูรณ์ จึงยังไม่คืนพื้นที่",
+  },
 };
 
 export function logGuardOperationLabel(locale: Locale, key: LogGuardOperationLabelKey): string {

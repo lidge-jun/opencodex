@@ -186,7 +186,7 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
       ...(reservedLoopbackPort !== undefined ? { reservedPort: reservedLoopbackPort } : {}),
     });
     if (preferred > 0 && selected !== preferred) {
-      console.log(`⚠️  Port ${preferred} is busy; starting opencodex on ${selected}.`);
+      console.log(`⚠️  Port ${preferred} is busy; starting PaohupByPaoZa on ${selected}.`);
     }
     if (shouldPersistSelectedPort(config.port, selected, preferred)) {
       config.port = selected;
@@ -357,7 +357,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     }
     shuttingDown = true;
     shutdownStartedAt = now;
-    console.log("\n🛑 Shutting down opencodex proxy...");
+    console.log("\n🛑 Shutting down PaohupByPaoZa proxy...");
     void (async () => {
       try {
         await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);

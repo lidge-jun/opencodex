@@ -13,6 +13,7 @@
 @import "./styles/provider-workspace-settings.css";
 @import "./styles/login-url-block.css";
 @import "./styles/provider-overview-dashboard.css";
+@import "./styles/brain-universe.css";
 @import "./styles-combos-workspace.css";
 @import "./styles-models-workspace.css";
 @import "./styles-dashboard-workspace.css";
@@ -23,6 +24,7 @@
 @import "./styles-claudecode-workspace.css";
 @import "./styles-apikeys-workspace.css";
 @import "./styles-compatibility-matrix.css";
+@import "./styles-apple.css";
 
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */

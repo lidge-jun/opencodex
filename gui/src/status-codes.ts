@@ -1,6 +1,6 @@
 export interface StatusCodeInfo { label: string; description: string }
 
-type Locale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr";
+type Locale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "th";
 type LocalizedInfo = Record<Locale, StatusCodeInfo>;
 
 const STATUS_CODES: Record<number, LocalizedInfo> = {
@@ -14,6 +14,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Некорректный запрос", description: "Прокси не смог интерпретировать запрос. Перед повторной попыткой проверьте модель, формат сообщений, заголовки и тело JSON." },
     ja: { label: "不正なリクエスト", description: "プロキシがリクエストを解釈できませんでした。再試行前にモデル、メッセージ形式、ヘッダー、JSON 本文を確認してください。" },
     tr: { label: "Hatalı istek", description: "Proxy isteği anlayamadı. Yeniden denemeden önce modeli, mesaj yapısını, başlıkları ve JSON gövdesini kontrol edin." },
+    th: { label: "คำขอไม่ถูกต้อง", description: "พร็อกซีไม่เข้าใจคำขอ ตรวจโมเดล รูปข้อความ เฮดเดอร์ และ JSON ก่อนลองใหม่" },
   },
   401: {
     en: { label: "Unauthorized", description: "Credentials are missing, expired, or invalid. Re-login or refresh the account/provider credentials used by opencodex." },
@@ -25,6 +26,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Не авторизован", description: "Учётные данные отсутствуют, истекли или недействительны. Войдите заново или обновите учётные данные аккаунта или провайдера, которые использует opencodex." },
     ja: { label: "認証が必要", description: "認証情報が不在・期限切れ・無効です。opencodex が使用するアカウントまたはプロバイダー認証情報を再ログインまたは更新してください。" },
     tr: { label: "Yetkisiz erişim", description: "Kimlik bilgileri eksik, süresi dolmuş veya geçersiz. opencodex tarafından kullanılan hesap veya sağlayıcı kimlik bilgilerini yeniden doğrulayın." },
+    th: { label: "ยังไม่ได้รับอนุญาต", description: "ข้อมูลรับรองขาด หมดอายุ หรือไม่ถูกต้อง เข้าสู่ระบบใหม่หรือรีเฟรชบัญชี/ผู้ให้บริการที่ PaohupByPaoZa ใช้" },
   },
   402: {
     en: { label: "Payment required", description: "The upstream provider rejected the request because billing, credits, or plan access is not available. Add credits, update billing, or switch provider." },
@@ -36,6 +38,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Требуется оплата", description: "Вышестоящий провайдер отклонил запрос из-за проблем с оплатой, кредитами или доступом по тарифному плану. Пополните баланс, обновите платёжные данные или переключитесь на другого провайдера." },
     ja: { label: "支払いが必要", description: "課金、クレジット、プランアクセスが利用できないため上流プロバイダーがリクエストを拒否しました。クレジット追加、支払い情報更新、プロバイダー切替が必要です。" },
     tr: { label: "Ödeme gerekli", description: "Yukarı akış sağlayıcısı faturalandırma, kredi veya plan erişimi bulunmadığından isteği reddetti. Kredi ekleyin, ödeme bilgilerini güncelleyin veya sağlayıcı değiştirin." },
+    th: { label: "ต้องชำระเงิน", description: "ผู้ให้บริการต้นทางปฏิเสธเพราะบิล เครดิต หรือแพ็กเกจใช้ไม่ได้ เติมเครดิต อัปเดตบิล หรือเปลี่ยนผู้ให้บริการ" },
   },
   403: {
     en: { label: "Forbidden", description: "The account is authenticated but not allowed to use this model or operation. Often a plan/subscription gate (e.g. Ollama Cloud Pro), org policy, or model permission — not necessarily a bad API key." },
@@ -47,6 +50,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Доступ запрещён", description: "Аккаунт аутентифицирован, но не имеет права использовать эту модель или операцию. Часто причина — ограничение тарифа или подписки (например, Ollama Cloud Pro), политика организации или права доступа к модели, а не обязательно неверный API-ключ." },
     ja: { label: "アクセス禁止", description: "アカウントは認証済みですがこのモデルや操作の使用が許可されていません。多くはプラン/サブスクリプション制限（例: Ollama Cloud Pro）、組織ポリシー、モデル権限であり、API キーが不正とは限りません。" },
     tr: { label: "Erişim yasaklandı", description: "Hesabın kimliği doğrulandı ancak bu modeli veya işlemi kullanma izni yok. Genellikle plan/abonelik sınırı (örn. Ollama Cloud Pro), organizasyon politikası veya model izni kaynaklıdır." },
+    th: { label: "ห้ามเข้าถึง", description: "บัญชียืนยันตัวแล้วแต่ใช้โมเดลหรือการทำงานนี้ไม่ได้ มักเป็นข้อจำกัดแพ็กเกจ/สมัครสมาชิก นโยบายองค์กร หรือสิทธิ์โมเดล ไม่จำเป็นต้องเป็น API key ผิด" },
   },
   404: {
     en: { label: "Not found", description: "The requested route, model, account, or upstream resource was not found. Verify the model name and opencodex provider configuration." },
@@ -58,6 +62,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Не найдено", description: "Запрошенный маршрут, модель, аккаунт или вышестоящий ресурс не найден. Проверьте имя модели и конфигурацию провайдера в opencodex." },
     ja: { label: "見つかりません", description: "要求されたルート、モデル、アカウント、上流リソースが見つかりませんでした。モデル名と opencodex プロバイダー設定を確認してください。" },
     tr: { label: "Bulunamadı", description: "İstenen rota, model, hesap veya yukarı akış kaynağı bulunamadı. Model adını ve opencodex sağlayıcı yapılandırmasını doğrulayın." },
+    th: { label: "ไม่พบ", description: "ไม่พบเส้นทาง โมเดล บัญชี หรือทรัพยากรต้นทางที่ขอ ตรวจชื่อโมเดลและการตั้งค่าผู้ให้บริการใน PaohupByPaoZa" },
   },
   408: {
     en: { label: "Request timeout", description: "The request took too long before the proxy or upstream provider could complete it. Retry with a smaller request or a different provider." },
@@ -69,6 +74,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Тайм-аут запроса", description: "Обработка запроса заняла слишком много времени, и прокси или вышестоящий провайдер не успел её завершить. Повторите попытку с меньшим запросом или через другого провайдера." },
     ja: { label: "リクエストタイムアウト", description: "プロキシまたは上流プロバイダーがリクエストを完了する前に時間切れになりました。より小さいリクエストで再試行するか、別のプロバイダーに切り替えてください。" },
     tr: { label: "İstek zaman aşımı", description: "Proxy veya yukarı akış sağlayıcısı isteği tamamlayamadan zaman aşımına uğradı. Daha küçük bir istek veya farklı bir sağlayıcı ile tekrar deneyin." },
+    th: { label: "คำขอหมดเวลา", description: "คำขอใช้เวลานานเกินกว่าที่พร็อกซีหรือผู้ให้บริการต้นทางจะทำเสร็จ ลองใหม่ด้วยคำขอที่เล็กกว่าหรือผู้ให้บริการอื่น" },
   },
   409: {
     en: { label: "Conflict", description: "The request conflicts with the current account, session, or provider state. Refresh the session or retry after the active operation finishes." },
@@ -80,6 +86,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Конфликт", description: "Запрос конфликтует с текущим состоянием аккаунта, сессии или провайдера. Обновите сессию или повторите попытку после завершения текущей операции." },
     ja: { label: "状態の衝突", description: "リクエストが現在のアカウント、セッション、プロバイダー状態と衝突しています。セッションを更新するか、進行中の操作が終わった後に再試行してください。" },
     tr: { label: "Durum çakışması", description: "İstek mevcut hesap, oturum veya sağlayıcı durumuyla çakışıyor. Oturumu yenileyin veya aktif işlem bittikten sonra tekrar deneyin." },
+    th: { label: "ขัดแย้ง", description: "คำขอขัดกับสถานะบัญชี เซสชัน หรือผู้ให้บริการปัจจุบัน รีเฟรชเซสชันหรือรอให้การทำงานที่กำลังทำอยู่จบก่อน" },
   },
   413: {
     en: { label: "Request too large", description: "The prompt, attachments, or generated payload exceeds a proxy or upstream limit. Reduce tokens, file size, or conversation history." },
@@ -91,6 +98,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Слишком большой запрос", description: "Промпт, вложения или сформированная полезная нагрузка превышают лимит прокси или вышестоящего провайдера. Сократите количество токенов, размер файлов или историю диалога." },
     ja: { label: "リクエストが大きすぎます", description: "プロンプト、添付ファイル、生成ペイロードがプロキシまたは上流の制限を超えました。トークン、ファイルサイズ、会話履歴を減らしてください。" },
     tr: { label: "İstek çok büyük", description: "İstemi, ekler veya oluşturulan veri proxy ya da yukarı akış sınırını aşıyor. Jeton sayısını, dosya boyutunu veya sohbet geçmişini azaltın." },
+    th: { label: "เพย์โหลดใหญ่เกินไป", description: "เนื้อหาคำขอใหญ่เกินขีดจำกัดของพร็อกซีหรือผู้ให้บริการต้นทาง ลดขนาดแล้วลองใหม่" },
   },
   422: {
     en: { label: "Invalid content", description: "The provider accepted the request format but rejected its contents. Check model options, tool definitions, message roles, and unsupported fields." },
@@ -102,6 +110,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Недопустимое содержимое", description: "Провайдер принял формат запроса, но отклонил его содержимое. Проверьте параметры модели, определения инструментов, роли сообщений и неподдерживаемые поля." },
     ja: { label: "内容の検証失敗", description: "プロバイダーはリクエスト形式を受け付けましたが内容を拒否しました。モデルオプション、ツール定義、メッセージロール、未サポートのフィールドを確認してください。" },
     tr: { label: "Geçersiz içerik", description: "Sağlayıcı istek formatını kabul etti ancak içeriğini reddetti. Model seçeneklerini, araç tanımlarını, mesaj rollerini ve desteklenmeyen alanları kontrol edin." },
+    th: { label: "เนื้อหาประมวลผลไม่ได้", description: "ไวยากรณ์ถูกต้องแต่ความหมายใช้ไม่ได้ ตรวจรูปร่างข้อความ ชื่อโมเดล และการตั้งค่าผู้ให้บริการ" },
   },
   424: {
     en: { label: "Provider dependency failed", description: "A required upstream dependency failed while opencodex was routing the request. Retry later or switch to another configured provider." },
@@ -113,6 +122,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Сбой зависимости провайдера", description: "Необходимая вышестоящая зависимость дала сбой, пока opencodex маршрутизировал запрос. Повторите попытку позже или переключитесь на другого настроенного провайдера." },
     ja: { label: "プロバイダー依存の失敗", description: "opencodex がリクエストをルーティング中に必要な上流依存が失敗しました。後で再試行するか、別の設定済みプロバイダーに切り替えてください。" },
     tr: { label: "Sağlayıcı bağımlılığı başarısız", description: "opencodex isteği yönlendirirken gerekli bir yukarı akış bağımlılığı başarısız oldu. Daha sonra tekrar deneyin veya başka bir sağlayıcıya geçin." },
+    th: { label: "พึ่งพาล้มเหลว", description: "ขั้นตอนต้นทางที่คำขอนี้ต้องพึ่งพาล้มเหลว ลองใหม่หรือส่งไปผู้ให้บริการอื่น" },
   },
   429: {
     en: { label: "Rate limited", description: "The upstream provider rate or quota limit has been reached. Wait for the quota window to reset or switch account/provider." },
@@ -124,6 +134,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Превышен лимит запросов", description: "Достигнут лимит скорости или квота вышестоящего провайдера. Дождитесь сброса окна квоты или переключитесь на другой аккаунт или провайдера." },
     ja: { label: "レート制限", description: "上流プロバイダーのレートまたはクォータ制限に達しました。クォータウィンドウがリセットされるまで待つか、アカウント/プロバイダーを切り替えてください。" },
     tr: { label: "Oran sınırı aşıldı", description: "Yukarı akış sağlayıcısının hız veya kota sınırına ulaşıldı. Kota penceresinin sıfırlanmasını bekleyin ya da hesap/sağlayıcı değiştirin." },
+    th: { label: "คำขอบ่อยเกินไป", description: "ผู้ให้บริการต้นทางจำกัดอัตรา รอสักครู่หรือลดความถี่ก่อนลองใหม่" },
   },
   499: {
     en: { label: "Client closed request", description: "The client disconnected or canceled the request before opencodex finished routing it. Retry if the cancellation was accidental." },
@@ -135,6 +146,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Запрос закрыт клиентом", description: "Клиент отключился или отменил запрос до того, как opencodex завершил его маршрутизацию. Если отмена была случайной, повторите попытку." },
     ja: { label: "クライアントがリクエストをクローズ", description: "opencodex がルーティングを終える前にクライアントが切断またはキャンセルしました。意図しないキャンセルなら再試行してください。" },
     tr: { label: "İstemci isteği kapattı", description: "opencodex yönlendirmeyi bitirmeden önce istemci bağlantıyı kesti veya isteği iptal etti. İptal kazara yapıldıysa tekrar deneyin." },
+    th: { label: "ยกเลิกโดยไคลเอนต์", description: "ไคลเอนต์ปิดคำขอก่อนที่พร็อกซีจะตอบกลับ การยกเลิกนี้ตั้งใจ ไม่ใช่ความล้มเหลวของอัปสตรีม" },
   },
   500: {
     en: { label: "Proxy error", description: "opencodex hit an internal error while handling the request. Retry once, then check proxy logs if it repeats." },
@@ -146,6 +158,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Ошибка прокси", description: "В opencodex произошла внутренняя ошибка при обработке запроса. Повторите попытку один раз; если ошибка повторяется, проверьте логи прокси." },
     ja: { label: "プロキシエラー", description: "opencodex がリクエスト処理中に内部エラーに遭遇しました。1 回再試行し、繰り返す場合はプロキシログを確認してください。" },
     tr: { label: "Proxy hatası", description: "opencodex isteği işlerken dahili bir hatayla karşılaştı. Bir kez tekrar deneyin, tekrarlarsa proxy günlüklerini kontrol edin." },
+    th: { label: "ข้อผิดพลาดภายในเซิร์ฟเวอร์", description: "PaohupByPaoZa หรือผู้ให้บริการต้นทางล้มเหลวขณะประมวลผล ลองใหม่ในภายหลังหรือเปลี่ยนเส้นทาง" },
   },
   502: {
     en: { label: "Bad upstream response", description: "The upstream provider returned an invalid or failed response through the proxy. Retry or route the request to another provider." },
@@ -157,6 +170,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Некорректный ответ провайдера", description: "Вышестоящий провайдер вернул через прокси недействительный или ошибочный ответ. Повторите попытку или направьте запрос другому провайдеру." },
     ja: { label: "上流レスポンス不良", description: "上流プロバイダーがプロキシ経由で無効または失敗したレスポンスを返しました。再試行するか、リクエストを別のプロバイダーにルーティングしてください。" },
     tr: { label: "Kötü yukarı akış yanıtı", description: "Yukarı akış sağlayıcısı proxy üzerinden geçersiz veya başarısız bir yanıt döndürdü. Tekrar deneyin veya isteği başka bir sağlayıcıya yönlendirin." },
+    th: { label: "เกตเวย์ไม่ถูกต้อง", description: "ผู้ให้บริการต้นทางตอบกลับไม่ถูกต้องหรือขาดช่วง ตรวจการตั้งค่าผู้ให้บริการแล้วลองใหม่" },
   },
   503: {
     en: { label: "Provider unavailable", description: "The proxy or upstream provider is temporarily unavailable or overloaded. Wait briefly, then retry or switch provider." },
@@ -168,6 +182,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Провайдер недоступен", description: "Прокси или вышестоящий провайдер временно недоступен или перегружен. Немного подождите, затем повторите попытку или смените провайдера." },
     ja: { label: "プロバイダー利用不可", description: "プロキシまたは上流プロバイダーが一時的に利用不可または過負荷です。少し待ってから再試行するか、プロバイダーを切り替えてください。" },
     tr: { label: "Sağlayıcı kullanılamıyor", description: "Proxy veya yukarı akış sağlayıcısı geçici olarak kullanılamıyor veya aşırı yüklü. Kısa bir süre bekleyip tekrar deneyin ya da sağlayıcı değiştirin." },
+    th: { label: "บริการไม่พร้อม", description: "พร็อกซีหรือผู้ให้บริการต้นทางยังไม่พร้อมให้บริการ รอแล้วลองใหม่หรือเปลี่ยนผู้ให้บริการ" },
   },
   504: {
     en: { label: "Upstream timeout", description: "The upstream provider did not respond before the proxy timeout. Retry with a smaller request or choose a faster provider." },
@@ -179,6 +194,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Тайм-аут вышестоящего провайдера", description: "Вышестоящий провайдер не ответил до истечения тайм-аута прокси. Повторите попытку с меньшим запросом или выберите более быстрого провайдера." },
     ja: { label: "上流タイムアウト", description: "上流プロバイダーがプロキシタイムアウト前に応答しませんでした。より小さいリクエストで再試行するか、より速いプロバイダーを選んでください。" },
     tr: { label: "Yukarı akış zaman aşımı", description: "Yukarı akış sağlayıcısı proxy zaman aşımı süresinden önce yanıt vermedi. Daha küçük bir istekle tekrar deneyin veya daha hızlı bir sağlayıcı seçin." },
+    th: { label: "เกตเวย์หมดเวลา", description: "ผู้ให้บริการต้นทางไม่ตอบภายในเวลา ลองใหม่หรือเปลี่ยนเส้นทางไปผู้ให้บริการอื่น" },
   },
   529: {
     en: { label: "Provider overloaded", description: "The upstream provider is overloaded or capacity-limited. Wait and retry, or switch to another account/provider." },
@@ -190,6 +206,7 @@ const STATUS_CODES: Record<number, LocalizedInfo> = {
     ru: { label: "Провайдер перегружен", description: "Вышестоящий провайдер перегружен или ограничен по мощности. Подождите и повторите попытку либо переключитесь на другой аккаунт или провайдера." },
     ja: { label: "プロバイダー過負荷", description: "上流プロバイダーが過負荷または容量制限されています。待ってから再試行するか、別のアカウント/プロバイダーに切り替えてください。" },
     tr: { label: "Sağlayıcı aşırı yüklü", description: "Yukarı akış sağlayıcısı aşırı yüklü veya kapasitesi sınırlı. Bekleyip tekrar deneyin veya başka bir hesap/sağlayıcıya geçin." },
+    th: { label: "ไซต์โอเวอร์โหลด", description: "ผู้ให้บริการต้นทางโอเวอร์โหลด รอแล้วลองใหม่" },
   },
 };
 
@@ -204,6 +221,7 @@ const GENERIC_STATUS: { client: LocalizedInfo; server: LocalizedInfo } = {
     ru: { label: "Ошибка запроса", description: "Прокси или вышестоящий провайдер отклонил запрос. Проверьте структуру запроса, учётные данные, имя модели и конфигурацию провайдера." },
     ja: { label: "リクエストエラー", description: "プロキシまたは上流プロバイダーがリクエストを拒否しました。リクエスト形式、認証情報、モデル名、プロバイダー設定を確認してください。" },
     tr: { label: "İstek hatası", description: "Proxy veya yukarı akış sağlayıcısı isteği reddetti. İstek yapısını, kimlik bilgilerini, model adını ve sağlayıcı yapılandırmasını kontrol edin." },
+    th: { label: "ข้อผิดพลาดของคำขอ", description: "พร็อกซีหรือผู้ให้บริการต้นทางปฏิเสธคำขอ ตรวจรูปแบบคำขอ ข้อมูลรับรอง ชื่อโมเดล และการตั้งค่าผู้ให้บริการ" },
   },
   server: {
     en: { label: "Server or upstream error", description: "opencodex or an upstream provider failed while processing the request. Retry later or route the request to another provider." },
@@ -215,11 +233,13 @@ const GENERIC_STATUS: { client: LocalizedInfo; server: LocalizedInfo } = {
     ru: { label: "Ошибка сервера или провайдера", description: "opencodex или вышестоящий провайдер завершил обработку запроса с ошибкой. Повторите попытку позже или направьте запрос другому провайдеру." },
     ja: { label: "サーバーまたは上流エラー", description: "opencodex または上流プロバイダーがリクエスト処理中に失敗しました。後で再試行するか、リクエストを別のプロバイダーにルーティングしてください。" },
     tr: { label: "Sunucu veya yukarı akış hatası", description: "opencodex veya bir yukarı akış sağlayıcısı isteği işlerken başarısız oldu. Daha sonra tekrar deneyin veya isteği başka bir sağlayıcıya yönlendirin." },
+    th: { label: "ข้อผิดพลาดของเซิร์ฟเวอร์หรือต้นทาง", description: "PaohupByPaoZa หรือผู้ให้บริการต้นทางล้มเหลวขณะประมวลผลคำขอ ลองใหม่ภายหลังหรือส่งไปผู้ให้บริการอื่น" },
   },
 };
 
 function normalizeLocale(locale: string): Locale {
   if (locale.toLowerCase().startsWith("fr")) return "fr";
+  if (locale.toLowerCase().startsWith("th")) return "th";
   return locale === "de" || locale === "ko" || locale === "zh" || locale === "zh-TW" || locale === "ru" || locale === "ja" || locale === "tr" ? locale : "en";
 }
 

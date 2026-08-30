@@ -82,7 +82,9 @@ function reservedTriggers(databasePath: string): Array<{ name: string; sql: stri
 }
 
 describe("CodeRabbit protection regressions", () => {
-  test("compatible but unsafe trigger path reports unknown protection state", () => {
+  // #2143 re-canonicalizes requested Windows paths, so a junction to the same Codex home
+  // is the same identity (like 8.3 expansion). POSIX still refuses ancestor redirections.
+  test.skipIf(process.platform === "win32")("compatible but unsafe trigger path reports unknown protection state", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-log-guard-cr-symlink-"));
     roots.push(root);
     const codexHome = join(root, "codex-home");
@@ -229,7 +231,9 @@ describe("log guard path identity survives OS canonicalization", () => {
 
   // The guard this widening must not weaken: a redirection resolves somewhere else, and
   // "somewhere else" is still refused.
-  test("a symlinked database is still refused", () => {
+  // POSIX still refuses a symlink by string disagreement. On Windows, #2143 treats a
+  // symlink that realpath-resolves to the same file as OS canonicalization, not a redirect.
+  test.skipIf(process.platform === "win32")("a symlinked database is still refused", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-log-guard-identity-"));
     roots.push(root);
     const real = join(root, "real.sqlite");
