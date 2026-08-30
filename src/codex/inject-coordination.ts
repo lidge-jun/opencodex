@@ -254,8 +254,8 @@ function provenancePostImage(path: string): string | null {
  *
  * Trimming by ENTRY count would cut a transaction in half and leave evidence that says a
  * transaction touched two artifacts when it touched three — worse than dropping it outright,
- * because a partial record still reads as complete. Order is preserved; only whole leading
- * transactions are removed.
+ * because a partial record still reads as complete. Order is preserved; only whole transactions
+ * are removed.
  *
  * The byte ceiling applies the same rule: a transaction that does not fit is omitted whole,
  * including the newest one — a record silently truncated to fit would be read as a faithful
@@ -275,10 +275,7 @@ export function boundProvenanceEntries(
     else transactions.set(entry.txId, [entry]);
   }
   const order = [...transactions.keys()];
-  const windowed = order.length <= maxTransactions
-    ? order
-    : order.slice(order.length - maxTransactions);
-  if (windowed.length === order.length) {
+  if (order.length <= maxTransactions) {
     const baselineBytes = entries.reduce(
       (total, entry) => total + (entry.baseline.kind === "present" ? entry.baseline.bytesBase64.length : 0),
       0,
@@ -291,8 +288,8 @@ export function boundProvenanceEntries(
   // Newest first, so the transactions anyone diagnoses against are the ones that fit.
   const keep = new Set<string>();
   let baselineBytes = 0;
-  for (let i = windowed.length - 1; i >= 0; i--) {
-    const txId = windowed[i]!;
+  for (let i = order.length - 1; i >= 0 && keep.size < maxTransactions; i--) {
+    const txId = order[i]!;
     const txEntries = transactions.get(txId)!;
     // Measure the embedded pre-images first: a pathological baseline is refused without
     // serializing it, so the ceiling does not itself allocate the payload it exists to reject.
@@ -305,7 +302,7 @@ export function boundProvenanceEntries(
     candidateKeep.add(txId);
     // Reuse the already-grouped transactions: this avoids another full-ledger filter on each
     // iteration while preserving the original transaction and entry order.
-    const candidateEntries = windowed.flatMap(id =>
+    const candidateEntries = order.flatMap(id =>
       candidateKeep.has(id) ? transactions.get(id)! : []
     );
     if (serializedProvenanceBytes(candidateEntries, ledger) > maxBytes) continue;

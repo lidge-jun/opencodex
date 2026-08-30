@@ -592,6 +592,29 @@ describe("provenance ledger bound", () => {
       .toBeLessThanOrEqual(CODEX_PROVENANCE_MAX_BYTES);
   });
 
+  test("backfills the transaction window after an oversized newest transaction is skipped", () => {
+    const maxBytes = 64 * 1024;
+    const oversized = transaction("tx-16");
+    oversized[0] = {
+      ...oversized[0]!,
+      baseline: {
+        kind: "present" as const,
+        sha256: "0".repeat(64),
+        bytesBase64: "A".repeat(maxBytes + 1),
+      },
+    };
+    const entries = [
+      ...Array.from({ length: 16 }, (_, i) => transaction(`tx-${i}`)).flat(),
+      ...oversized,
+    ];
+
+    const bounded = boundProvenanceEntries(entries, 16, maxBytes);
+    const kept = [...new Set(bounded.map(entry => entry.txId))];
+
+    expect(kept).toEqual(Array.from({ length: 16 }, (_, i) => `tx-${i}`));
+    for (const txId of kept) expect(bounded.filter(entry => entry.txId === txId)).toHaveLength(3);
+  });
+
   test("the byte ceiling drops whole transactions, oldest first", () => {
     const padded = (txId: string) => transaction(txId).map(entry => ({
       ...entry,
