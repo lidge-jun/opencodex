@@ -518,6 +518,49 @@ describe("native main token refresh", () => {
     expect(existsSync(join(home, stagedBasename))).toBe(true);
   });
 
+  test.skipIf(!canSymlink)("refuses recovery when the auth symlink is retargeted before replacement", () => {
+    const authPath = join(home, "auth.json");
+    const firstTarget = join(home, "first-auth.json");
+    const secondTarget = join(home, "second-auth.json");
+    const transactionId = "11111111-1111-4111-8111-111111111111";
+    const stagedBasename = `.opencodex-native-main-refresh.${transactionId}.new`;
+    const previousBasename = `.opencodex-native-main-refresh.${transactionId}.previous`;
+    const stagedPath = join(home, stagedBasename);
+    const journalPath = join(home, ".opencodex-native-main-refresh.json");
+    const original = JSON.stringify({ tokens: { refresh_token: "old-refresh", account_id: "account-main" } });
+    const replacement = JSON.stringify({ tokens: { access_token: "new-access", refresh_token: "new-refresh" } });
+    const external = JSON.stringify({ tokens: { access_token: "external-access" } });
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    writeFileSync(firstTarget, original);
+    writeFileSync(secondTarget, external);
+    symlinkSync(firstTarget, authPath);
+    writeFileSync(stagedPath, replacement);
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      transactionId,
+      targetPath: firstTarget,
+      stagedBasename,
+      previousBasename,
+      phase: "prepared",
+      expectedSha256: digest(original),
+      replacementSha256: digest(replacement),
+    }));
+    setNativeMainBeforeRecoveryReplaceHookForTests(() => {
+      unlinkSync(authPath);
+      symlinkSync(secondTarget, authPath);
+    });
+
+    expect(() => recoverNativeMainRefreshPublication(resolveNativeProfileContext())).toThrow(
+      "Native credential refresh could not be published",
+    );
+
+    expect(readlinkSync(authPath)).toBe(secondTarget);
+    expect(readFileSync(firstTarget, "utf8")).toBe(original);
+    expect(readFileSync(secondTarget, "utf8")).toBe(external);
+    expect(existsSync(journalPath)).toBe(true);
+    expect(readFileSync(stagedPath, "utf8")).toBe(replacement);
+  });
+
   test("restores an external writer displaced by an interrupted prepared exchange", () => {
     const authPath = join(home, "auth.json");
     const transactionId = "11111111-1111-4111-8111-111111111111";

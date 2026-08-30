@@ -134,6 +134,7 @@ export function recoverNativeMainRefreshPublication(context: NativeProfileContex
       const hook = beforeRecoveryReplaceForTests;
       beforeRecoveryReplaceForTests = null;
       hook?.();
+      assertAuthTarget(context, journal.targetPath);
       replaceFilePreservingTarget(staged, journal.targetPath, previous);
       settlePreparedReplacement(context, journal, displacedPath, rollbackPath);
     } catch (cause) {
