@@ -44,6 +44,8 @@ account before the request is forwarded upstream. The rule is intentionally spli
   and weekly switches only for windows that account actually reports. At reset, opencodex reuses
   its minimal non-stored account warmup request, records the reset timestamp to avoid ordinary
   restart duplicates, and refreshes quota for the next schedule.
+  This is separate from reset-window routing: routing chooses an account for incoming work, while
+  activation sends one request to a specific opted-in account only after its own reset is due.
 
 ## Sub-agent model selection
 

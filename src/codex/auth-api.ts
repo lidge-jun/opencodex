@@ -1367,6 +1367,7 @@ const quotaAutoRefreshRetryAfter = new Map<string, number>();
 const QUOTA_AUTO_REFRESH_RETRY_MS = 5 * 60_000;
 
 function quotaResetAtMs(resetAt: number): number {
+  // WHAM currently reports epoch seconds; header/cache paths may already contain epoch ms.
   return resetAt < 100_000_000_000 ? resetAt * 1000 : resetAt;
 }
 
@@ -1417,15 +1418,11 @@ async function warmCodexQuotaAccount(config: OcxConfig, accountId: string): Prom
   await warmCodexAccount(await getValidCodexToken(accountId));
 }
 
-function recordCompletedQuotaAutoRefresh(
+function persistCompletedQuotaAutoRefresh(
   config: OcxConfig,
   accountId: string,
   completed: { fiveHour?: number; weekly?: number },
 ): void {
-  quotaAutoRefreshCompleted.set(accountId, {
-    ...quotaAutoRefreshCompleted.get(accountId),
-    ...completed,
-  });
   try {
     const outcome = mutatePersistedConfig(persisted => {
       const saved = persisted.codexQuotaAutoRefresh?.[accountId];
@@ -1447,7 +1444,27 @@ function recordCompletedQuotaAutoRefresh(
       [accountId]: outcome.value,
     };
   } catch {
-    // The process-local marker still prevents duplicate sends until a later restart.
+    // Keep the process-local marker; the next sweep retries only this config write.
+  }
+}
+
+function recordCompletedQuotaAutoRefresh(
+  config: OcxConfig,
+  accountId: string,
+  completed: { fiveHour?: number; weekly?: number },
+): void {
+  const merged = { ...quotaAutoRefreshCompleted.get(accountId), ...completed };
+  quotaAutoRefreshCompleted.set(accountId, merged);
+  persistCompletedQuotaAutoRefresh(config, accountId, merged);
+}
+
+function retryPendingQuotaAutoRefreshMarkers(config: OcxConfig): void {
+  for (const [accountId, completed] of quotaAutoRefreshCompleted) {
+    const saved = config.codexQuotaAutoRefresh?.[accountId];
+    if (!saved) continue;
+    if ((completed.fiveHour === undefined || saved.lastFiveHourResetAt === completed.fiveHour)
+      && (completed.weekly === undefined || saved.lastWeeklyResetAt === completed.weekly)) continue;
+    persistCompletedQuotaAutoRefresh(config, accountId, completed);
   }
 }
 
@@ -1456,6 +1473,7 @@ export async function runCodexQuotaAutoRefresh(config: OcxConfig, now = Date.now
   if (!openai || openai.disabled === true || !isCanonicalOpenAiForwardProvider(openai)) return;
   if (quotaAutoRefreshInFlight) return quotaAutoRefreshInFlight;
   quotaAutoRefreshInFlight = (async () => {
+    retryPendingQuotaAutoRefreshMarkers(config);
     const accountIds = [
       MAIN_CODEX_ACCOUNT_ID,
       ...(config.codexAccounts ?? []).filter(isSelectableCodexPoolAccount).map(account => account.id),
@@ -2066,6 +2084,12 @@ export async function handleCodexAuthAPI(
       || (runtimeConfig.codexAccounts ?? []).some(account => isSelectableCodexPoolAccount(account) && account.id === id);
     if (!exists) return jsonResponse({ error: "Account not found" }, 404);
 
+    const quota = getAccountQuota(id);
+    const available = quotaAutoRefreshDto(runtimeConfig, id, quota);
+    if (body.enabled && !available[body.window === "fiveHour" ? "fiveHourAvailable" : "weeklyAvailable"]) {
+      return jsonResponse({ error: "Quota window is not available for this account" }, 409);
+    }
+
     const next = { ...(runtimeConfig.codexQuotaAutoRefresh?.[id] ?? {}) };
     if (body.enabled) next[body.window] = true;
     else delete next[body.window];
@@ -2079,7 +2103,7 @@ export async function handleCodexAuthAPI(
     return jsonResponse({
       ok: true,
       id,
-      quotaAutoRefresh: quotaAutoRefreshDto(runtimeConfig, id, getAccountQuota(id)),
+      quotaAutoRefresh: quotaAutoRefreshDto(runtimeConfig, id, quota),
     });
   }
 
