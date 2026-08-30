@@ -31,6 +31,41 @@ function configWithRawProxy(proxy: unknown, noProxy?: unknown): OcxConfig {
 }
 
 describe("applyProxyEnv with values the schema does not constrain", () => {
+  test("warns once per discarded proxy setting without exposing its raw value", () => {
+    const secret = "raw-proxy-credential-sentinel-2947";
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      const invalidProxy = { secret };
+      applyProxyEnv(configWithRawProxy(invalidProxy));
+      applyProxyEnv(configWithRawProxy(invalidProxy));
+      expect(process.env.HTTP_PROXY).toBeUndefined();
+      expect(process.env.HTTPS_PROXY).toBeUndefined();
+
+      const invalidNoProxy = { secret };
+      applyProxyEnv(configWithRawProxy("http://proxy.corp:8080", invalidNoProxy));
+      applyProxyEnv(configWithRawProxy("http://proxy.corp:8080", invalidNoProxy));
+      expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1,::1,[::1]");
+
+      const invalidElement = { secret };
+      applyProxyEnv(configWithRawProxy("http://proxy.corp:8080", ["internal.example", invalidElement]));
+      applyProxyEnv(configWithRawProxy("http://proxy.corp:8080", ["internal.example", invalidElement]));
+      expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1,::1,[::1],internal.example");
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]).toContain("config.json proxy was discarded");
+    expect(warnings[0]).toContain("direct egress");
+    expect(warnings[1]).toContain("config.json noProxy was discarded");
+    expect(warnings[1]).toContain("existing NO_PROXY and loopback bypasses remain");
+    expect(warnings[2]).toContain("config.json noProxy contains invalid elements");
+    expect(warnings[2]).toContain("invalid elements were ignored");
+    expect(warnings.join("\n")).not.toContain(secret);
+  });
+
   // applyProxyEnv runs at every process entry point that makes outbound requests, so a
   // throw here is a startup crash rather than a degraded proxy.
   test("a non-string proxy does not throw and sets no proxy env", () => {
