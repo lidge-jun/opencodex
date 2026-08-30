@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, posix, win32 } from "node:path";
+import { pathToFileURL } from "node:url";
 import * as serviceModule from "../src/service";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
@@ -956,15 +957,24 @@ describe("launchd service plist", () => {
     const shimDir = join(root, "shims");
     const v1 = join(root, "installs", "2.35.0 package's");
     const v2 = join(root, "installs", "2.36.0 package's");
-    const quoteForSh = (value: string): string => `'${value.replaceAll("'", "'\"'\"'")}'`;
     mkdirSync(shimDir, { recursive: true });
     mkdirSync(v1, { recursive: true });
     mkdirSync(v2, { recursive: true });
-    writeFileSync(join(v1, "ocx"), "#!/bin/sh\necho V1 \"$@\"\n", { mode: 0o755 });
-    writeFileSync(join(v2, "ocx"), "#!/bin/sh\necho V2 \"$@\"\n", { mode: 0o755 });
+    const v1Entry = join(v1, "ocx");
+    const v2Entry = join(v2, "ocx");
+    writeFileSync(v1Entry, 'console.log("V1", Bun.argv.slice(2).join(" "));\n');
+    writeFileSync(v2Entry, 'console.log("V2", Bun.argv.slice(2).join(" "));\n');
 
     const shim = join(shimDir, "ocx");
-    writeFileSync(shim, `#!/bin/sh\nexec ${quoteForSh(join(v1, "ocx"))} "\$@"\n`, { mode: 0o755 });
+    const retargetShim = (target: string): void => {
+      writeFileSync(shim, `await import(${JSON.stringify(pathToFileURL(target).href)});\n`);
+    };
+    const runShim = (): string => execFileSync(
+      process.execPath,
+      [shim, "start", "--port", "1"],
+      { encoding: "utf8" },
+    );
+    retargetShim(v1Entry);
 
     // stableLauncherEntry finds the shim lexically from PATH — not its versioned target.
     const found = buildUnit(resolvedProxyEnv({}), { launcher: shim });
@@ -977,13 +987,15 @@ describe("launchd service plist", () => {
     const windowsUnit = buildUnit(resolvedProxyEnv({}), { launcher: windowsShim });
     expectTextToContainPath(windowsUnit, windowsShim);
 
-    expect(execFileSync(shim, ["start", "--port", "1"], { encoding: "utf8" })).toContain("V1");
+    // Exercise the retarget through Bun on every host. Directly executing the old
+    // extensionless #!/bin/sh fixture was itself a POSIX-only assumption.
+    expect(runShim()).toContain("V1");
 
     // The upgrade: shim retargeted, old version removed.
-    writeFileSync(shim, `#!/bin/sh\nexec ${quoteForSh(join(v2, "ocx"))} "\$@"\n`, { mode: 0o755 });
+    retargetShim(v2Entry);
     rmSync(v1, { recursive: true, force: true });
-    expect(existsSync(join(v1, "ocx"))).toBe(false);
-    expect(execFileSync(shim, ["start", "--port", "1"], { encoding: "utf8" })).toContain("V2");
+    expect(existsSync(v1Entry)).toBe(false);
+    expect(runShim()).toContain("V2");
 
     rmSync(root, { recursive: true, force: true });
   });
