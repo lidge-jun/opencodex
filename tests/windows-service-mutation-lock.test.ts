@@ -51,8 +51,19 @@ beforeEach(() => {
   lockPath = join(testRoot, "windows-service-mutation.sqlite");
 });
 
-afterEach(() => {
-  rmSync(testRoot, { recursive: true, force: true });
+afterEach(async () => {
+  // Windows keeps the SQLite file mapped briefly after a child exits, so a single
+  // immediate remove can still see EBUSY. Retry, then leave the temp dir behind rather
+  // than failing an otherwise green assertion on a cleanup race.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      rmSync(testRoot, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "EBUSY") throw error;
+      await Bun.sleep(25);
+    }
+  }
 });
 
 test("a second service mutation is refused while another process holds the lock", async () => {

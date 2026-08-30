@@ -2517,6 +2517,40 @@ describe("service repair", () => {
     expect(calls).toEqual(["stop", "assets", "reregister"]);
   });
 
+  /**
+   * The default read turns a failed `schtasks /query` into an empty string, so an
+   * unreadable pre-start readback must not be mistaken for a concurrent replacement.
+   * The task was already stopped by this point, so aborting there would leave a
+   * previously running proxy down for a purely transient query failure.
+   */
+  test("repair still restarts when the pre-start readback is only transiently unreadable", async () => {
+    const calls: string[] = [];
+    let reads = 0;
+    let attemptNonce = "";
+    const stale = buildWindowsTaskXml().replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+    await repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => {},
+      assertAuth: () => {},
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => {
+        reads += 1;
+        if (reads === 1) return stale;
+        if (reads === 2) return buildWindowsTaskXml(undefined, undefined, attemptNonce);
+        // The verified replacement is already in place; only this last query fails.
+        return "";
+      },
+      reregisterScheduler: async nonce => { calls.push("reregister"); attemptNonce = nonce; },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+    });
+
+    // The proxy is running again on the definition this attempt verified.
+    expect(calls).toEqual(["stop", "assets", "reregister", "start", "state"]);
+  });
+
   test("repair preserves and restarts a healthy residual owned by its attempt nonce", async () => {
     const calls: string[] = [];
     let reads = 0;

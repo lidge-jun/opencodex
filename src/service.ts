@@ -2625,6 +2625,8 @@ export interface RepairServiceDeps {
   reregisterScheduler?: (attemptNonce: string, expectedExistingXml: string) => Promise<void>;
   /** Publishes the captured registration only when the fixed task name remains absent. */
   restoreSchedulerIfAbsent?: (registeredXml: string) => Promise<void>;
+  /** Resolves the account the registered triggers must match; null when it cannot be resolved. */
+  resolveExpectedUserId?: (registeredXml: string) => string | null;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
 }
@@ -2676,10 +2678,27 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
         "Task Scheduler registration is empty or unreadable; repair stopped before changing or starting the service.",
       );
     }
-    const registrationHealthy = windowsTaskRegistrationHealthy(registeredXml);
+    // Judge the definition against the same effective account the diagnostic uses. Relying on
+    // the cached identity alone would make a scoped task this very version wrote look foreign
+    // in a fresh process, and the message below would then name the wrong cause.
+    const expectedUserId = (deps.resolveExpectedUserId ?? resolveWindowsTaskDiagnosticUserId)(registeredXml);
+    const registrationHealthy = windowsTaskRegistrationHealthy(
+      registeredXml,
+      undefined,
+      undefined,
+      expectedUserId,
+    );
     if (!registrationHealthy && !windowsTaskRegistrationRefreshableLegacy(registeredXml)) {
+      const scopedButUnresolved = expectedUserId === null
+        && taskXmlElementCount(
+          taskXmlSection(taskXmlWithoutCommentsAndCdata(registeredXml), "Triggers"),
+          "UserId",
+        ) > 0;
       throw new Error(
-        "Task Scheduler registration is not a recognized legacy OpenCodex definition; it was preserved for manual review.",
+        scopedButUnresolved
+          ? "The registered Task Scheduler triggers name an account, but the current Windows identity could not be resolved, so the registration could not be verified. "
+            + "It was preserved and not replaced; re-run repair once the account can be resolved."
+          : "Task Scheduler registration is not a recognized legacy OpenCodex definition; it was preserved for manual review.",
       );
     }
     try { (deps.stopScheduler ?? stopWindows)(); } catch { /* not running */ }
@@ -2795,7 +2814,12 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
         "Task Scheduler registration became unreadable before restart; it was preserved and not started.",
       );
     }
-    if (!windowsSchedulerRegistrationMatchesSnapshot(beforeStartXml, startExpectedXml)) {
+    // An unreadable pre-start readback is not evidence that the definition changed: the
+    // default read turns a failed `schtasks /query` into an empty string. Treating that as
+    // a mismatch would abort after the task was already stopped and leave a previously
+    // running proxy down — the exact availability regression this repair path must avoid.
+    // Only a definition we can actually read, and that differs, blocks the restart.
+    if (beforeStartXml.trim() && !windowsSchedulerRegistrationMatchesSnapshot(beforeStartXml, startExpectedXml)) {
       throw new Error(
         "Task Scheduler registration changed before restart; the current definition was preserved and not started.",
       );
