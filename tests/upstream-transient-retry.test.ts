@@ -67,6 +67,53 @@ describe("fetchWithTransientRetry", () => {
     expect((res as Response & { __wasCancelled: () => boolean }).__wasCancelled()).toBe(false);
   });
 
+  test("onSendsConsumed reports the real count so callers can share one budget", async () => {
+    // A Responses request can send several times across legs: the initial send, then a
+    // 429/account-recovery refetch. Each leg calls this helper separately, so the only way
+    // the total stays bounded is if the helper reports what it spent and the next leg
+    // receives the remainder. Without this the legs each get a fresh budget.
+    const reported: number[] = [];
+    let sends = 0;
+
+    // Leg 1: the initial send burns two of three (503 then 200).
+    await fetchWithTransientRetry(async () => {
+      sends += 1;
+      return bodyResponse(sends === 1 ? 503 : 200);
+    }, { attempts: 3, slowAttemptMs: 60_000, onSendsConsumed: n => reported.push(n) });
+    expect(reported).toEqual([2]);
+
+    // Leg 2 (the recovery refetch) gets only the remaining budget: 3 - 2 = 1 send.
+    const remaining = Math.max(1, 3 - reported[0]!);
+    expect(remaining).toBe(1);
+    let legTwoSends = 0;
+    const res = await fetchWithTransientRetry(async () => {
+      legTwoSends += 1;
+      return bodyResponse(503);
+    }, { attempts: remaining, slowAttemptMs: 60_000, onSendsConsumed: n => reported.push(n) });
+
+    // One send, not a fresh three: the request-scoped total stays at the configured 3.
+    expect(legTwoSends).toBe(1);
+    expect(reported).toEqual([2, 1]);
+    expect(reported.reduce((a, b) => a + b, 0)).toBe(3);
+    expect(res.status).toBe(503);
+  });
+
+  test("onSendsConsumed still reports when the helper throws", async () => {
+    // The evidence-error path is a throw, not a return. If it skipped reporting, a caller
+    // sharing the budget would under-count and hand the next leg too much.
+    const reported: number[] = [];
+    let sends = 0;
+    await expect(fetchWithTransientRetry(async () => {
+      sends += 1;
+      if (sends === 1) return bodyResponse(503);
+      const err = new Error("socket hang up") as Error & { code?: string };
+      err.code = "ECONNRESET";
+      throw err;
+    }, { attempts: 3, slowAttemptMs: 60_000, onSendsConsumed: n => reported.push(n) })).rejects.toThrow();
+    expect(reported.length).toBe(1);
+    expect(reported[0]!).toBeGreaterThan(0);
+  });
+
   test("a connection reset and a transient status share the same budget", async () => {
     // Mixed recovery: the reset layer and the transient layer draw from one pool. With a
     // per-layer count the reset retries would have been free, so this would emit more than 3.
