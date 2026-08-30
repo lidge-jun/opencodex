@@ -260,10 +260,10 @@ interface ScoredAccount {
 }
 
 function compareScoredAccounts(a: ScoredAccount, b: ScoredAccount): number {
-  // known-before-unknown belongs to the OPT-IN weekly selector, not the legacy default.
-  // Applying it unconditionally changed five-hour ordering for operators who never opted in:
-  // an account measured at 100% would sort ahead of an unmeasured one purely because it had
-  // a reading. The accepted scope preserves the five-hour default exactly.
+  // known-before-unknown belongs to the OPT-IN windows (weekly, max-utilization), not the
+  // legacy five-hour default. Applying it unconditionally changed ordering for operators who
+  // never opted in: an account measured at 100% would sort ahead of an unmeasured one purely
+  // because it had a reading. The accepted scope preserves the five-hour default exactly.
   if (a.knownFirst && b.knownFirst && a.hasKnownUsage !== b.hasKnownUsage) {
     return a.hasKnownUsage ? -1 : 1;
   }
@@ -281,7 +281,9 @@ function pickLowestUsage(config: OcxConfig, excludeId: string | undefined, now: 
     hasKnownUsage: hasKnownUsage(config, accountId),
     score: usageScore(config, accountId),
     fiveHourTieBreak: window === "five-hour" ? 0 : fiveHourScore(accountId),
-    knownFirst: window === "weekly",
+    // Every window EXCEPT the legacy five-hour default is an explicit opt-in, so
+    // known-before-unknown applies to all of them and to none of the default path.
+    knownFirst: window !== "five-hour",
   }));
   let best = scored[0]!;
   for (let i = 1; i < scored.length; i++) {
