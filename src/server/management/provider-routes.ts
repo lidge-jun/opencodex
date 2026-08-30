@@ -951,12 +951,17 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         message: `Connected — ${models} model${models === 1 ? "" : "s"} available.`,
       });
     } catch (err) {
+      // Do not leak client-abort reasons (e.g. user navigation, tab close) into
+      // the response body; surface a neutral message instead.
+      const isAbort = err instanceof DOMException && err.name === "AbortError";
       return jsonResponse({
         ok: false,
         latencyMs: Date.now() - started,
-        error: err instanceof ProviderOutboundPolicyError
-          ? `upstream /models blocked by destination policy: ${err.message}`
-          : err instanceof Error ? err.message : "Connection test failed",
+        error: isAbort
+          ? "Connection test aborted"
+          : err instanceof ProviderOutboundPolicyError
+            ? `upstream /models blocked by destination policy: ${err.message}`
+            : err instanceof Error ? err.message : "Connection test failed",
       });
     }
   }

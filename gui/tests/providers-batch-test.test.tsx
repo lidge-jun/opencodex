@@ -135,6 +135,8 @@ afterEach(() => {
 });
 
 async function mountProviders(fetchFn: typeof fetch): Promise<{ root: Root; container: HTMLElement }> {
+  // Register test hook so Providers can expose fetchConfig for same-base config-refresh tests.
+  (globalThis as Record<string, unknown>).__OCX_TEST_HOOKS ??= {};
   globalThis.fetch = fetchFn;
   const { createRoot } = await import("react-dom/client");
   const container = document.createElement("div");
@@ -148,15 +150,27 @@ async function mountProviders(fetchFn: typeof fetch): Promise<{ root: Root; cont
       </LanguageProvider>,
     );
   });
-  // Let config fetch resolve + render
-  for (let i = 0; i < 5; i++) {
+  // Let config fetch resolve + render + test hook effect fire
+  for (let i = 0; i < 10; i++) {
     await act(async () => {
       jest.advanceTimersByTime(0);
+      await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
     });
   }
   return { root, container };
+}
+
+/** Read the test-only Providers batch state exposed by the component's effect. */
+function getTestHook() {
+  const obj = (globalThis as Record<string, unknown>).__OCX_TEST_HOOKS as Record<string, unknown> | undefined;
+  return obj?.providersBatch as {
+    fetchConfig: () => Promise<void>;
+    providerConfigGeneration: number;
+    cancelMountedBatch: () => void;
+    activeBatchRef: { id: number; controller: AbortController } | null;
+  } | null;
 }
 
 /** Drive the component through multiple act cycles so async batch completes + state commits. */
@@ -774,16 +788,17 @@ test("15. apiBase change aborts batch and exits Testing UI, then new batch works
   await act(async () => { root.unmount(); });
 });
 
-test("16. config refresh bumps generation and cancels in-flight batch", async () => {
-  // Tests the production generation mechanism: fetchConfig bumps generation,
-  // which triggers cancelMountedBatch via useEffect([providerConfigGeneration]).
-  // We verify this by mounting, starting a batch, then re-rendering with a
-  // new apiBase that causes fetchConfig to run and return changed config.
+test("16. same-base config refresh bumps generation and cancels in-flight batch", async () => {
+  // Verifies the production generation mechanism WITHOUT changing apiBase:
+  // fetchConfig() → generation++ → useEffect([generation]) → cancelMountedBatch().
+  // Uses the test hook exposed by Providers to call fetchConfig directly
+  // (the same function called by JSON editor save, provider add, etc.).
   const cfgA = { providers: { openai: { adapter: "openai", baseUrl: "https://a" } } };
   const cfgB = { providers: { openai: { adapter: "openai", baseUrl: "https://b-changed" } } };
   const d1 = defer<Response>();
   const d2 = defer<Response>();
 
+  let configCallCount = 0;
   let testCallCount = 0;
   const origFetch = globalThis.fetch;
 
@@ -792,8 +807,9 @@ test("16. config refresh bumps generation and cancels in-flight batch", async ()
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.includes("/api/config")) {
-      // Return cfgA for the initial mount fetch, cfgB for any subsequent fetches
-      return jsonResponse(cfgA);
+      configCallCount++;
+      // First call (mount bootstrap) returns cfgA. Subsequent calls return cfgB.
+      return jsonResponse(configCallCount === 1 ? cfgA : cfgB);
     }
     if (url.includes("/api/providers/test")) {
       testCallCount++;
@@ -812,50 +828,39 @@ test("16. config refresh bumps generation and cancels in-flight batch", async ()
   }
   expect(testCallCount).toBe(1);
 
-  // Re-render with same apiBase but modified config response.
-  // The bootstrap guard prevents refetch, so generation does NOT bump.
-  // This verifies that spurious renders don't cancel batches.
-  await act(async () => {
-    root.render(
-      <LanguageProvider>
-        <Providers apiBase="http://localhost" />
-      </LanguageProvider>,
-    );
-  });
+  // Invoke the real fetchConfig through the test hook (same function called
+  // by JSON editor save, provider add, Codex account add, etc.).
+  // apiBase is unchanged — this is a same-base config refresh.
+  const genBefore = getTestHook()!.providerConfigGeneration;
+  await act(async () => { getTestHook()!.fetchConfig(); });
+  // Re-read hook after fetchConfig commits its state update.
+  const hook = getTestHook()!;
+  // Flush React's concurrent batch so the generation effect fires and cancels the batch.
   for (let i = 0; i < 5; i++) {
     await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
   }
 
-  // Batch should still be running (generation didn't bump, no config refresh)
-  expect(findTestingButton(container)).not.toBeNull();
+  // cfgB was accepted → generation bumped → cancelMountedBatch fired
+  expect(hook.providerConfigGeneration).toBe(genBefore + 1);
+  expect(hook.activeBatchRef).toBeNull(); // batch A's signal was aborted
 
-  // Now re-render with a NEW apiBase — this triggers fetchConfig with cfgA,
-  // which bumps generation, which triggers cancelMountedBatch.
-  await act(async () => {
-    root.render(
-      <LanguageProvider>
-        <Providers apiBase="http://localhost:9999" />
-      </LanguageProvider>,
-    );
-  });
+  // UI must have exited Testing state
+  expect(findTestingButton(container)).toBeNull();
+  expect(btn.disabled).toBe(false);
 
-  // Generation bumped → cancelMountedBatch called → Testing UI exits
-  const btnAfter = findTestAllButton(container);
-  expect(btnAfter).not.toBeNull();
-  expect(btnAfter!.disabled).toBe(false);
-
-  // Old deferred d1 resolves — stale, no toast
+  // Stale resolve of d1: no toast, no state corruption
   await act(async () => { d1.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });
   await driveAsyncBatch();
   expect(pageText()).not.toContain("healthy");
+  expect(pageText()).not.toContain("Testing");
 
-  // Start batch B on new apiBase
-  await act(async () => { btnAfter!.click(); });
+  // Start batch B on the same apiBase
+  await act(async () => { btn.click(); });
   for (let i = 0; i < 5; i++) {
     await act(async () => { await Promise.resolve(); jest.advanceTimersByTime(0); });
   }
 
-  // Both deferreds consumed (batch A's d1 + batch B's d2)
+  // Batch B request fires
   expect(testCallCount).toBe(2);
 
   await act(async () => { d2.resolve(jsonResponse({ ok: true, latencyMs: 10 })); });

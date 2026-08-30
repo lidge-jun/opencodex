@@ -378,6 +378,63 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     const { status } = await probe(config, "ghost");
     expect(status).toBe(404);
   });
+
+  test("client abort propagates to the upstream outbound fetch signal", async () => {
+    // Verifies that when the GUI aborts /api/providers/test, the server's
+    // upstream model-discovery fetch also receives the abort signal.
+    const controller = new AbortController();
+    const abortReason = "gui-user-cancelled-test-probe";
+
+    let outboundSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      outboundSignal = (init as RequestInit & { signal?: AbortSignal })?.signal;
+      // If the signal is already aborted, throw immediately.
+      if (outboundSignal!.aborted) throw outboundSignal!.reason as Error;
+      // Hold the response open so we can abort mid-flight.
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 30_000);
+        outboundSignal!.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(outboundSignal!.reason);
+        }, { once: true });
+      });
+      return Response.json({ models: [] });
+    }) as typeof fetch;
+
+    const config = baseConfig({
+      testprov: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "sk-x" },
+    });
+
+    // Fire the request with an explicit AbortController signal.
+    const req = new Request(
+      "http://127.0.0.1/api/providers/test?name=testprov",
+      { method: "POST", signal: controller.signal },
+    );
+    const handlerPromise = handleManagementAPI(req, new URL(req.url), config, {});
+
+    // Let the route start the outbound fetch.
+    await new Promise(r => setTimeout(r, 50));
+    expect(outboundSignal).toBeDefined();
+    expect(outboundSignal!.aborted).toBe(false);
+
+    // Abort the client-side request — this should propagate via AbortSignal.any
+    // to the upstream fetch and cause it to reject.
+    controller.abort(new DOMException(abortReason, "AbortError"));
+
+    // The handler must resolve quickly (not wait the full 8 s timeout).
+    const res = await handlerPromise;
+    expect(res).not.toBeNull();
+    const body = await res!.json() as Record<string, unknown>;
+    expect(body.ok).toBe(false);
+    expect(typeof body.error).toBe("string");
+
+    // The abort reason must NOT leak into the error response.
+    expect(String(body.error)).not.toContain(abortReason);
+    expect(String(body.error)).not.toContain("AbortError");
+
+    // The outbound signal must have been aborted.
+    expect(outboundSignal!.aborted).toBe(true);
+  });
 });
 
 describe("POST /api/oauth/login/cancel (WP040)", () => {

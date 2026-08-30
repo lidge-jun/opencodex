@@ -238,7 +238,23 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     configCacheKey,
   });
 
-  // WP3: one Codex account controller for the whole Providers page, shared by the
+  // TEST HOOK: expose internal state for same-base config-refresh regression tests.
+  // Uses a mutable ref so tests always read the current value.
+  // Only active when __OCX_TEST_HOOKS is defined (set by the test harness before mount).
+  const testBatchState = useRef<{
+    fetchConfig: () => Promise<void>;
+    providerConfigGeneration: number;
+    cancelMountedBatch: () => void;
+    activeBatchRef: { id: number; controller: AbortController } | null;
+  } | null>(null);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/no-update
+    testBatchState.current = { fetchConfig, providerConfigGeneration, cancelMountedBatch, activeBatchRef: activeBatchRef.current };
+    const h = (globalThis as Record<string, unknown>).__OCX_TEST_HOOKS as Record<string, unknown> | undefined;
+    if (h) h.providersBatch = testBatchState.current;
+  }); // no deps — re-run after every render to keep values fresh
+
+  // WP3, shared by the
   // Overview tab and the Accounts tab so a mutation on either is instantly visible on
   // both. Mounting CodexAccountPool twice used to fork this state.
   const codexPool = useCodexAccountPool(apiBase);
