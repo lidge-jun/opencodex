@@ -29,7 +29,7 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 | 層 | 搭配 `ocx opencode` 的行為 |
 | --- | --- |
 | 全域／自訂／專案設定 | 磁碟上維持你寫下的原樣 |
-| 內嵌 runtime（`OPENCODE_CONFIG_CONTENT`） | 只接收產生的 `provider.opencodex` 與 `providers.opencodex` 兩個區塊 |
+| 內嵌 runtime（`OPENCODE_CONFIG_CONTENT`） | 接收產生的 `provider.opencodex` 與 `providers.opencodex` 兩個區塊（與繼承的內嵌設定合併） |
 | 相對 `{file:…}` 路徑 | 仍相對於原本定義它們的設定檔解析 |
 
 若全域或專案設定也定義了 `provider.opencodex` 或 `providers.opencodex`，啟動器會印出資訊提示：該次啟動由 `ocx opencode` 提供的 runtime 層會覆寫它。

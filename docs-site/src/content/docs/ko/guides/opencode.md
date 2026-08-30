@@ -41,7 +41,7 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 | 레이어 | `ocx opencode`에서의 동작 |
 | --- | --- |
 | 전역 / 사용자 지정 / 프로젝트 구성 | 사용자가 쓴 그대로 디스크에 남습니다 |
-| 인라인 런타임 (`OPENCODE_CONFIG_CONTENT`) | 생성된 `provider.opencodex`와 `providers.opencodex` 블록만 받습니다 |
+| 인라인 런타임 (`OPENCODE_CONFIG_CONTENT`) | 생성된 `provider.opencodex`와 `providers.opencodex` 블록을 받습니다(상속된 인라인 config에 병합됨) |
 | 상대 `{file:…}` 경로 | 원래 정의된 구성 파일을 기준으로 계속 해석됩니다 |
 
 전역 또는 프로젝트 구성에도 `provider.opencodex` 또는 `providers.opencodex`가 정의되어 있으면, 런처는 안내

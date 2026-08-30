@@ -40,7 +40,7 @@ inline runtime layer OpenCode. Этот слой сливается после �
 | Слой | Поведение с `ocx opencode` |
 | --- | --- |
 | Global / custom / project config | Остаётся на диске ровно в том виде, в каком вы её записали |
-| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Получает только сгенерированные блоки `provider.opencodex` и `providers.opencodex` |
+| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Получает сгенерированные блоки `provider.opencodex` и `providers.opencodex` (объединяются с уже заданной inline-конфигурацией) |
 | Relative `{file:…}` paths | Всё так же разрешаются относительно конфигурационного файла, где были определены |
 
 Если глобальная или проектная конфигурация тоже определяет `provider.opencodex` или `providers.opencodex`, лончер печатает

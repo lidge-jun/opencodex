@@ -29,7 +29,7 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 |レイヤー | `ocx opencode` での動作 |
 | --- | --- |
 |グローバル / カスタム / プロジェクト構成 |書き込んだとおりにディスク上に残ります |
-|インライン ランタイム (`OPENCODE_CONFIG_CONTENT`) |生成された `provider.opencodex` ブロックと `providers.opencodex` ブロックのみを受信します。|
+|インライン ランタイム (`OPENCODE_CONFIG_CONTENT`) |生成された `provider.opencodex` ブロックと `providers.opencodex` ブロックを受信します（継承されたインライン設定にマージされます）。|
 |相対 `{file:…}` パス |最初に定義した設定ファイルに対して引き続き解決します。|
 
 グローバルまたはプロジェクト設定でも `provider.opencodex` または `providers.opencodex` が定義されている場合、ランチャーは情報メモを出力します。`ocx opencode` のランタイム層がその起動に対してそれをオーバーライドします。

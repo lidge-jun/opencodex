@@ -44,7 +44,7 @@ genel/özel/proje yapılandırmasından sonra birleşir ve alt süreç için yal
 | Katman | `ocx opencode` ile Davranış |
 | --- | --- |
 | Genel / özel / proje yapılandırması | Tam olarak yazdığınız gibi diskte bırakılır |
-| Satır içi çalışma zamanı (`OPENCODE_CONFIG_CONTENT`) | Yalnızca oluşturulan `provider.opencodex` ve `providers.opencodex` bloklarını alır |
+| Satır içi çalışma zamanı (`OPENCODE_CONFIG_CONTENT`) | Oluşturulan `provider.opencodex` ve `providers.opencodex` bloklarını alır (devralınan satır içi yapılandırmayla birleştirilir) |
 | Göreli `{file:…}` yolları | Yine de bunları ilk tanımlayan yapılandırma dosyasına göre çözümlenir |
 
 Bir genel veya proje yapılandırması da `provider.opencodex` veya `providers.opencodex` tanımlıyorsa,

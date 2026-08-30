@@ -29,7 +29,7 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 | Layer | `ocx opencode` 下的行为 |
 | --- | --- |
 | Global / custom / project config | 原样保留在磁盘上，不做任何改动 |
-| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | 只接收生成的 `provider.opencodex` 和 `providers.opencodex` 两个 block |
+| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | 接收生成的 `provider.opencodex` 和 `providers.opencodex` 两个 block（与继承的内联配置合并） |
 | Relative `{file:…}` paths | 仍然按最初定义它们的配置文件来解析 |
 
 如果全局或项目配置里也定义了 `provider.opencodex` 或 `providers.opencodex`，启动器会打印一条提示信息：`ocx opencode` 的运行时层会在这次启动中覆盖它。
