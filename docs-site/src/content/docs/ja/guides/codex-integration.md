@@ -163,7 +163,7 @@ CLI から表示名を追加します (プロキシは、ライブ時にカタ�
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-リモート Codex クライアントは、管理 API 経由で同じ生成されたカタログをフェッチできます (他の `/api/*` ルートと同じアドミッション トークン)。
+リモート Codex クライアントは、通常のデータプレーン キー（管理者トークンではなく、`/v1/responses` で既に使用しているものと同じ資格情報）で同じ生成済みカタログを取得できます。
 
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"

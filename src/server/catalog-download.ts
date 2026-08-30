@@ -13,12 +13,20 @@
 import { createHash } from "node:crypto";
 
 /**
- * Upper bound on a serialized catalog we are willing to hold in memory and hand
- * to a remote client. A materialized catalog is a few hundred KiB; anything past
- * this is a corrupt or hostile file, and streaming it would be worse than
- * refusing it.
+ * Upper bound for the REMOTE route only.
+ *
+ * The first version of this used 32 MiB and applied it to both routes, which was
+ * wrong twice over. The repository supports up to 2,000 discovered models, and a
+ * 2,000-row catalog serializes to roughly 92 MB — so 32 MiB rejected a valid
+ * supported catalog, and applying it to `/api/catalog` turned a working
+ * management response into a 507 for those operators.
+ *
+ * 256 MiB clears the supported bound with room to spare while still refusing a
+ * file that could only be corrupt or hostile. The management route is not
+ * subject to it at all: it is a local dashboard read whose behavior predates
+ * this module and must not change.
  */
-export const MAX_REMOTE_CATALOG_BYTES = 32 * 1024 * 1024;
+export const MAX_REMOTE_CATALOG_BYTES = 256 * 1024 * 1024;
 
 export interface SerializedCatalog {
   /** Serialized catalog JSON, or null when no catalog could be materialized. */
@@ -27,8 +35,6 @@ export interface SerializedCatalog {
   etag?: string;
   /** Byte length of `body`, present only when `body` is. */
   bytes?: number;
-  /** True when the catalog materialized but exceeds `MAX_REMOTE_CATALOG_BYTES`. */
-  tooLarge?: boolean;
 }
 
 export function catalogEtag(body: string): string {
@@ -42,6 +48,9 @@ export function catalogEtag(body: string): string {
  * file, malformed JSON — because `readCatalog` already collapses those into
  * `null` and the routes render them identically as a 404. Distinguishing them
  * here would invite one route to leak a filesystem path in an error message.
+ *
+ * Deliberately does NOT apply a size ceiling: a size policy belongs to the route
+ * that serves the bytes, not to the shared serializer both planes depend on.
  */
 export async function serializePersistedCatalog(): Promise<SerializedCatalog> {
   const { readCatalog, readCodexCatalogPath } = await import("../codex/catalog");
@@ -49,7 +58,6 @@ export async function serializePersistedCatalog(): Promise<SerializedCatalog> {
   if (!catalog) return { body: null };
   const body = JSON.stringify(catalog);
   const bytes = Buffer.byteLength(body, "utf8");
-  if (bytes > MAX_REMOTE_CATALOG_BYTES) return { body: null, tooLarge: true, bytes };
   return { body, etag: catalogEtag(body), bytes };
 }
 

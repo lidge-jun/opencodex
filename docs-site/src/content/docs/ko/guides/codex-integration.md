@@ -153,7 +153,7 @@ CLI에서 표시 이름을 추가할 수 있습니다(proxy가 live 상태면 ca
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-원격 Codex client는 management API로 같은 생성된 catalog를 가져올 수 있습니다(다른 `/api/*` 경로와 같은 admission token을 사용합니다):
+원격 Codex client는 관리자 토큰이 아니라 일반 데이터 플레인 키(`/v1/responses`에 이미 사용하는 것과 같은 자격 증명)로 같은 생성된 catalog를 가져올 수 있습니다:
 
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"

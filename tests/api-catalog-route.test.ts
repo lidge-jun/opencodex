@@ -193,6 +193,43 @@ describe("GET|HEAD /v1/catalog least-privilege data-plane route (#809)", () => {
     }
   });
 
+  test("serves a supported large catalog on both planes", async () => {
+    // The repo supports up to 2,000 discovered models. A 2,000-row catalog serializes to
+    // roughly 92 MB, so an earlier 32 MiB ceiling in the shared serializer rejected a VALID
+    // catalog — and, because both routes shared it, turned the pre-existing /api/catalog
+    // response into a 507 for those operators. The ceiling now belongs to the remote route
+    // alone and clears the supported bound.
+    isolatedCodexHome = installIsolatedCodexHome("ocx-v1-catalog-large-");
+    const template = catalogFixture.models[0]!;
+    const big = {
+      models: Array.from({ length: 2000 }, (_, i) => ({
+        ...template,
+        slug: `mock/test-model-${i}`,
+        display_name: `Mock Test ${i}`,
+        // Pad so the serialized document clears 32 MiB, matching a real large catalog's
+        // per-row instruction text rather than a synthetic blob.
+        base_instructions: template.base_instructions + " ".repeat(20000),
+      })),
+    };
+    writeFileSync(join(isolatedCodexHome.path, "opencodex-catalog.json"), JSON.stringify(big));
+    saveConfig(dataPlaneConfig());
+
+    const { serializePersistedCatalog, MAX_REMOTE_CATALOG_BYTES } = await import("../src/server/catalog-download");
+    const serialized = await serializePersistedCatalog();
+    expect(serialized.body).not.toBeNull();
+    expect(serialized.bytes!).toBeGreaterThan(32 * 1024 * 1024);
+    expect(serialized.bytes!).toBeLessThan(MAX_REMOTE_CATALOG_BYTES);
+
+    // The management route must still answer 200 for it.
+    const mgmtUrl = new URL("http://localhost/api/catalog");
+    const mgmt = await handleManagementAPI(
+      new ManagementRequest(mgmtUrl, { headers: managementHeaders() }),
+      mgmtUrl,
+      loadConfig(),
+    );
+    expect(mgmt?.status).toBe(200);
+  });
+
   test("reports a distinguishable code when no catalog is materialized", async () => {
     isolatedCodexHome = installIsolatedCodexHome("ocx-v1-catalog-missing-");
     saveConfig(dataPlaneConfig());

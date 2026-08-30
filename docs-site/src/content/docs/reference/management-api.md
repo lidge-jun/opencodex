@@ -152,7 +152,7 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET /api/catalog` | Return the installed Codex catalog document. Remote clients should prefer the data-plane `GET /v1/catalog`, which needs no admin token. | 404 catalog not found |
+| `GET /api/catalog` | Return the installed Codex catalog document. Remote clients should prefer the data-plane `GET /v1/catalog`, which still requires an ordinary data-plane credential but not an admin token. | 404 catalog not found |
 | `GET /api/models` | Return the dashboard/CLI model rows | `catalog_busy` when gathering is saturated |
 | `GET /api/client-config?client=...` | Build a read-only client config for any supported file integration | 400 unsupported client; 503 catalog unavailable |
 | `PUT /api/disabled-models` | Replace the shared disabled-model list | 400 invalid JSON |

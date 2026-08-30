@@ -213,7 +213,7 @@ Browser 或 Computer Use。原生 OpenAI 条目会保持其上游 tool mode 不�
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-远程 Codex 客户端也可以通过管理 API 拉取同一个生成好的 catalog（与其他 `/api/*` 路由使用相同的 admission token）：
+远程 Codex 客户端可以使用普通的数据面密钥（与 `/v1/responses` 所用凭据相同，而非管理员令牌）拉取同一个生成好的 catalog：
 
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"

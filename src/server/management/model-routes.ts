@@ -336,11 +336,9 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     // Shared with GET|HEAD /v1/catalog (#809) so both planes emit identical bytes.
     const { serializePersistedCatalog, persistedCodexVersion } = await import("../catalog-download");
     const serialized = await serializePersistedCatalog();
-    if (serialized.body === null) {
-      return serialized.tooLarge
-        ? jsonResponse({ error: "catalog too large" }, 507, req, config)
-        : jsonResponse({ error: "catalog not found" }, 404, req, config);
-    }
+    // No size ceiling here on purpose: this route's behavior predates the shared serializer
+    // and a 2,000-model catalog (~92 MB, within the supported bound) must keep working.
+    if (serialized.body === null) return jsonResponse({ error: "catalog not found" }, 404, req, config);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...corsHeaders(req, config),
