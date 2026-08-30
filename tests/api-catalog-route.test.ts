@@ -79,10 +79,15 @@ describe("GET /api/catalog route (#709)", () => {
 describe("GET|HEAD /v1/catalog least-privilege data-plane route (#809)", () => {
   const DATA_KEY = "ocx_data_catalogreadonly";
 
+  /**
+   * Binds 0.0.0.0 deliberately. `isApiAuthRequired` returns false for a loopback bind, so a
+   * 127.0.0.1 server admits every data-plane request as `kind: "loopback"` and an auth test
+   * against it would pass while asserting nothing.
+   */
   function dataPlaneConfig(): OcxConfig {
     return {
       port: 0,
-      hostname: "127.0.0.1",
+      hostname: "0.0.0.0",
       defaultProvider: "mock",
       providers: {
         mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true, models: ["test-model"] },
