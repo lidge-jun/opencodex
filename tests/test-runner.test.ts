@@ -465,7 +465,16 @@ describe("ensureGuiDependencies", () => {
   // `gui` is not a workspace, so a root `bun install` leaves gui/node_modules absent and the
   // twenty-five tests importing gui/src die on `Cannot find package 'react'` — an "Unhandled error
   // between tests" that names no test. CI already installs them; this closes the local gap.
-  const paths = (present: string[]) => (path: string) => present.some(entry => path.endsWith(entry));
+  const paths = (present: string[]) => {
+    const normalized = present.map(path => path.replaceAll("\\", "/"));
+    return (path: string) => normalized.some(entry => path.replaceAll("\\", "/").endsWith(entry));
+  };
+
+  test("mocked paths match POSIX and Windows separators", () => {
+    const exists = paths(["gui/package.json"]);
+    expect(exists("/repo/gui/package.json")).toBe(true);
+    expect(exists("C:\\repo\\gui\\package.json")).toBe(true);
+  });
 
   test("installs when gui/package.json exists but node_modules does not", () => {
     const installed: string[] = [];
@@ -479,14 +488,27 @@ describe("ensureGuiDependencies", () => {
 
     expect(result).toEqual({ kind: "installed" });
     expect(installed).toEqual([join("/repo", "gui")]);
-    expect(logged[0]).toContain("gui/node_modules is missing");
+    expect(logged[0]).toContain("gui dependencies are missing or incomplete");
   });
 
-  test("does nothing when node_modules is already there", () => {
+  test("retries when node_modules exists without the required dependency", () => {
     let installs = 0;
     const result = ensureGuiDependencies({
       cwd: "/repo",
       exists: paths(["gui/package.json", "gui/node_modules"]),
+      install: () => { installs += 1; return { ok: true, detail: "" }; },
+      log: () => {},
+    });
+
+    expect(result).toEqual({ kind: "installed" });
+    expect(installs).toBe(1);
+  });
+
+  test("does nothing when the required dependency is already there", () => {
+    let installs = 0;
+    const result = ensureGuiDependencies({
+      cwd: "/repo",
+      exists: paths(["gui/package.json", "gui/node_modules/react/package.json"]),
       install: () => { installs += 1; return { ok: true, detail: "" }; },
       log: () => {},
     });
