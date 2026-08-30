@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -134,6 +135,68 @@ describe("native main token refresh", () => {
 
     expect(failure).toBeInstanceOf(MainAccountTokenRefreshError);
     expect((failure as MainAccountTokenRefreshError).reason).toBe("transient");
+  });
+
+  test("rejects a recovery journal whose basenames do not belong to its transaction", async () => {
+    const authPath = join(home, "auth.json");
+    const original = JSON.stringify({ tokens: { refresh_token: "old-refresh", account_id: "account-main" } });
+    const replacement = JSON.stringify({ tokens: { access_token: "new-access", refresh_token: "new-refresh" } });
+    const fileTransactionId = "11111111-1111-4111-8111-111111111111";
+    const stagedBasename = `.opencodex-native-main-refresh.${fileTransactionId}.new`;
+    const journalPath = join(home, ".opencodex-native-main-refresh.json");
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    writeFileSync(authPath, original);
+    writeFileSync(join(home, stagedBasename), replacement);
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      transactionId: "22222222-2222-4222-8222-222222222222",
+      stagedBasename,
+      previousBasename: `.opencodex-native-main-refresh.${fileTransactionId}.previous`,
+      phase: "prepared",
+      expectedSha256: digest(original),
+      replacementSha256: digest(replacement),
+    }));
+    let attempts = 0;
+
+    const failure = await getValidMainAccountToken({
+      refreshToken: async () => {
+        attempts += 1;
+        throw new Error("must not refresh through malformed recovery state");
+      },
+    }).catch(error => error);
+
+    expect(failure).toBeInstanceOf(MainAccountTokenRefreshError);
+    expect((failure as MainAccountTokenRefreshError).reason).toBe("transient");
+    expect(attempts).toBe(0);
+    expect(readFileSync(authPath, "utf8")).toBe(original);
+    expect(existsSync(journalPath)).toBe(true);
+  });
+
+  test("rejects hash-ambiguous recovery state without consuming it", async () => {
+    const authPath = join(home, "auth.json");
+    const original = JSON.stringify({ tokens: { refresh_token: "old-refresh", account_id: "account-main" } });
+    const transactionId = "11111111-1111-4111-8111-111111111111";
+    const stagedBasename = `.opencodex-native-main-refresh.${transactionId}.new`;
+    const journalPath = join(home, ".opencodex-native-main-refresh.json");
+    const hash = createHash("sha256").update(original).digest("hex");
+    writeFileSync(authPath, original);
+    writeFileSync(join(home, stagedBasename), original);
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      transactionId,
+      stagedBasename,
+      previousBasename: `.opencodex-native-main-refresh.${transactionId}.previous`,
+      phase: "prepared",
+      expectedSha256: hash,
+      replacementSha256: hash,
+    }));
+
+    const failure = await getValidMainAccountToken().catch(error => error);
+
+    expect(failure).toBeInstanceOf(MainAccountTokenRefreshError);
+    expect((failure as MainAccountTokenRefreshError).reason).toBe("transient");
+    expect(readFileSync(authPath, "utf8")).toBe(original);
+    expect(existsSync(journalPath)).toBe(true);
   });
 
   test("keeps a joiner alive when the refresh owner cancels", async () => {

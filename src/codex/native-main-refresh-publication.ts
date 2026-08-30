@@ -6,8 +6,7 @@ import { PreservingReplaceError, replaceFilePreservingTarget, restoreFilePreserv
 import type { NativeProfileContext } from "./native-profile-store";
 
 const JOURNAL = ".opencodex-native-main-refresh.json";
-const NEW = /^\.opencodex-native-main-refresh\.[0-9a-f-]+\.new$/;
-const PREVIOUS = /^\.opencodex-native-main-refresh\.[0-9a-f-]+\.previous$/;
+const TRANSACTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 type Journal = {
   version: 1;
@@ -42,13 +41,15 @@ function journalPath(context: NativeProfileContext): string {
 function validJournal(value: unknown): value is Journal {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
+  const transactionId = typeof item.transactionId === "string" ? item.transactionId : "";
   return item.version === 1
-    && typeof item.transactionId === "string"
-    && NEW.test(String(item.stagedBasename))
-    && PREVIOUS.test(String(item.previousBasename))
+    && TRANSACTION_ID.test(transactionId)
+    && item.stagedBasename === `.opencodex-native-main-refresh.${transactionId}.new`
+    && item.previousBasename === `.opencodex-native-main-refresh.${transactionId}.previous`
     && (item.phase === "prepared" || item.phase === "replaced")
     && /^[0-9a-f]{64}$/.test(String(item.expectedSha256))
-    && /^[0-9a-f]{64}$/.test(String(item.replacementSha256));
+    && /^[0-9a-f]{64}$/.test(String(item.replacementSha256))
+    && item.expectedSha256 !== item.replacementSha256;
 }
 
 function readExact(path: string): Buffer | null {
@@ -129,7 +130,11 @@ export function publishNativeMainRefresh(
     if (!displaced || digest(displaced) !== journal.expectedSha256) {
       const canonical = readExact(context.authPath);
       if (canonical && digest(canonical) === journal.replacementSha256) {
-        restoreFilePreservingTarget(process.platform === "win32" ? previous : staged, context.authPath, previous);
+        restoreFilePreservingTarget(
+          process.platform === "win32" ? previous : staged,
+          context.authPath,
+          process.platform === "win32" ? staged : previous,
+        );
       }
       throw new NativeMainRefreshPublicationError();
     }

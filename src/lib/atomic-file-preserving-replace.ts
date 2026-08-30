@@ -74,7 +74,7 @@ export function replaceFilePreservingTarget(source: string, target: string, back
   throw new PreservingReplaceError();
 }
 
-/** Used only to restore a verified displaced Unix entry. */
+/** Restore a verified displaced entry while preserving the canonical target. */
 export function restoreFilePreservingTarget(source: string, target: string, backup: string): void {
   replaceFilePreservingTarget(source, target, backup);
 }
