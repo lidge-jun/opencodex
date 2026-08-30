@@ -1230,7 +1230,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.catalogRefreshPending": "Die Änderung wurde gespeichert, aber die Aktualisierung des Codex-Modellkatalogs steht noch aus. Führe ocx sync aus, um es erneut zu versuchen.",
   "anthropicPool.title": "Claude-Kontenpool (experimentell)",
   "anthropicPool.enabledDesc": "Bei 429 wird das Konto gekühlt und umgeschaltet. Neue Sitzungen bevorzugen Nutzung unter {threshold}% ({window}).",
-  "anthropicPool.enabledNoQuotaDesc": "Bei 429 wird das Konto gekühlt und umgeschaltet. Die kontingentbasierte Auswahl neuer Sitzungen ist deaktiviert; gesunde Affinitäten und das aktive Konto bleiben bestehen.",
+  "anthropicPool.enabledNoProactiveDesc": "Bei 429 wird das Konto gekühlt und umgeschaltet. Proaktives nutzungsbasiertes Umschalten ist bei Schwellenwert 0 deaktiviert, aber die Auswahl neuer Sitzungen und die 429-Wiederherstellung verwenden weiterhin das Fenster {window}.",
   "anthropicPool.disabledDesc": "Nutzt nur das aktive Claude-Konto. Nur aktivieren, wenn experimentelles Routing akzeptabel ist.",
   "anthropicPool.experimentalWarning": "Experimentell und nicht kampferprobt. Anthropic kann Konten einschränken, die wie automatische Multi-Konto-Rotation wirken. Dieselbe Organisation kann Kontingent teilen — Pooling hilft dann nicht. Ausgeschaltet lassen, sofern das Risiko unklar ist.",
   "anthropicPool.needTwoAccounts": "Füge mindestens zwei Claude-OAuth-Konten hinzu, bevor du den Pool aktivierst.",

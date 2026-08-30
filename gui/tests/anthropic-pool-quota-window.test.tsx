@@ -144,7 +144,7 @@ describe("Anthropic account pool quota window", () => {
     expect(windowTrigger(fillHost).disabled).toBe(false);
   });
 
-  test("quota window selector is disabled for round-robin and for fill-first with threshold 0", async () => {
+  test("quota window selector is disabled only for round-robin", async () => {
     stubPool({
       enabled: true,
       autoSwitchThreshold: 80,
@@ -165,11 +165,13 @@ describe("Anthropic account pool quota window", () => {
     });
     const drainedHost = await mountPool();
 
-    // fill-first only drains against a threshold; at 0 there is no bar to score.
-    expect(windowTrigger(drainedHost).disabled).toBe(true);
+    // A 0 threshold disables PROACTIVE usage-based switching only. New-session selection and
+    // 429 recovery still consult the configured window, so disabling the selector here told
+    // the operator the setting was inert while it still governed two routing stages.
+    expect(windowTrigger(drainedHost).disabled).toBe(false);
   });
 
-  test("threshold zero description says quota-based new-session selection is off", async () => {
+  test("threshold zero says proactive switching is off, not all quota routing", async () => {
     stubPool({
       enabled: true,
       autoSwitchThreshold: 0,
@@ -179,7 +181,9 @@ describe("Anthropic account pool quota window", () => {
     });
     const host = await mountPool();
 
-    expect(host.textContent).toContain("Quota-based new-session selection is off");
+    expect(host.textContent).toContain("Proactive usage-based switching is off");
+    // The stages that still run must be named, and the window must still be identified.
+    expect(host.textContent).toContain("new-session selection and 429 recovery");
     expect(host.textContent).not.toContain("prefer usage under 0%");
   });
 

@@ -1697,7 +1697,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.catalogRefreshPending": "La modification a été enregistrée, mais l’actualisation du catalogue de modèles Codex est en attente. Exécutez ocx sync pour réessayer.",
   "anthropicPool.title": "Groupe de comptes Claude (expérimental)",
   "anthropicPool.enabledDesc": "En cas de 429, met le compte en délai de récupération et bascule vers un autre. Les nouvelles sessions privilégient une utilisation inférieure à {threshold}% ({window}).",
-  "anthropicPool.enabledNoQuotaDesc": "En cas de 429, met le compte en délai de récupération et bascule vers un autre. La sélection des nouvelles sessions par quota est désactivée ; les affinités saines et le compte actif sont conservés.",
+  "anthropicPool.enabledNoProactiveDesc": "En cas de 429, met le compte en délai de récupération et bascule. Le basculement proactif basé sur l'usage est désactivé au seuil 0, mais la sélection des nouvelles sessions et la récupération après 429 utilisent toujours la fenêtre {window}.",
   "anthropicPool.disabledDesc": "Utilise uniquement le compte Claude actif. Activez cette option seulement si vous acceptez le routage expérimental.",
   "anthropicPool.experimentalWarning": "Fonctionnalité expérimentale et peu éprouvée. Anthropic peut restreindre les comptes présentant une rotation multicomptes automatisée. Les comptes d’une même organisation peuvent partager un quota — leur mise en groupe n’apportera rien. Laissez cette option désactivée si vous n’en comprenez pas les risques.",
   "anthropicPool.needTwoAccounts": "Ajoutez au moins deux comptes OAuth Claude avant d’activer le groupe.",

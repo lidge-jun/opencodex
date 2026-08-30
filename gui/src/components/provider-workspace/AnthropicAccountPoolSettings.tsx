@@ -161,9 +161,13 @@ export default function AnthropicAccountPoolSettings({
   const strategy = state?.strategy ?? DEFAULT_ACCOUNT_POOL_STRATEGY;
   const stickyLimit = state?.stickyLimit ?? DEFAULT_ACCOUNT_POOL_STICKY_LIMIT;
   const quotaWindow = state?.quotaWindow ?? DEFAULT_ACCOUNT_POOL_QUOTA_WINDOW;
-  // Only quota scores a usage bar; fill-first scores one too, but a 0 threshold turns its
-  // drain point off. Neither reads a bar under round-robin, so the window is inert there.
-  const quotaWindowInert = strategy !== "quota" && !(strategy === "fill-first" && threshold > 0);
+  // The window is inert ONLY under round-robin, which never scores a usage bar at any stage.
+  //
+  // A 0 threshold is not inertness: it disables PROACTIVE usage-based switching, but
+  // new-session selection and 429 recovery still consult the configured window (see
+  // pickLowestUsage / rotateAnthropicAccountOn429). Treating fill-first + threshold 0 as
+  // inert told operators the window had no effect when it still governed two routing stages.
+  const quotaWindowInert = strategy === "round-robin";
   const loading = state === null && !loadError;
   // Always allow turning the pool off; only block enabling when fewer than 2 accounts.
   const toggleDisabled = loading || saving || loadError || (!enabled && accountCount < 2);
@@ -180,7 +184,9 @@ export default function AnthropicAccountPoolSettings({
                 ? t("common.loading")
                 : enabled
                   ? threshold === 0
-                    ? t("anthropicPool.enabledNoQuotaDesc")
+                    ? t("anthropicPool.enabledNoProactiveDesc", {
+                        window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
+                      })
                     : t("anthropicPool.enabledDesc", {
                         threshold,
                         window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),

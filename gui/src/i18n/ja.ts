@@ -1658,7 +1658,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.catalogRefreshPending": "変更は保存されましたが、Codex モデルカタログの更新が保留中です。ocx sync を実行して再試行してください。",
   "anthropicPool.title": "Claude アカウントプール（実験的）",
   "anthropicPool.enabledDesc": "429 時にアカウントをクールダウンしてフェイルオーバーします。新規セッションは{window}の使用率が {threshold}% 未満のアカウントを優先します。",
-  "anthropicPool.enabledNoQuotaDesc": "429 時にアカウントをクールダウンしてフェイルオーバーします。クォータに基づく新規セッション選択は無効で、正常な affinity とアクティブアカウントのルーティングを維持します。",
+  "anthropicPool.enabledNoProactiveDesc": "429 時にアカウントをクールダウンしてフェイルオーバーします。しきい値 0 では使用量に基づく事前切り替えは無効ですが、新規セッション選択と 429 復旧では引き続き {window} ウィンドウを使用します。",
   "anthropicPool.disabledDesc": "アクティブな Claude アカウントのみを使用します。実験的ルーティングを受け入れる場合のみ有効にしてください。",
   "anthropicPool.experimentalWarning": "実験的で十分に検証されていません。自動的な複数アカウント回転に見える行為は Anthropic により制限される可能性があります。同一組織はクォータを共有することがあり、その場合プールしても効果がありません。リスクを理解していない場合はオフのままにしてください。",
   "anthropicPool.needTwoAccounts": "プールを有効にする前に、Claude OAuth アカウントを 2 つ以上追加してください。",

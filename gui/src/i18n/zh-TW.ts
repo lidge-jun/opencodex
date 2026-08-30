@@ -1329,7 +1329,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.pausedHint": "恢復前不會參與自動切換、重試、冷卻恢復或手動選擇。",
   "anthropicPool.title": "Claude 帳號池（實驗性）",
   "anthropicPool.enabledDesc": "遇到 429 時冷卻該帳號並故障轉移。新會話優先使用{window}低於 {threshold}% 的帳號。",
-  "anthropicPool.enabledNoQuotaDesc": "遇到 429 時冷卻該帳號並故障轉移。依配額選擇新會話的功能已關閉，健康的 affinity 與目前帳號路由會維持不變。",
+  "anthropicPool.enabledNoProactiveDesc": "429 時將帳號冷卻並切換。門檻為 0 時停用主動的用量切換，但新工作階段選擇與 429 復原仍會使用 {window} 視窗。",
   "anthropicPool.disabledDesc": "僅使用當前活躍的 Claude 帳號。僅在接受實驗性路由時啟用。",
   "anthropicPool.experimentalWarning": "實驗性功能，尚未充分驗證。看起來像自動多帳號輪換的行為可能導致 Anthropic 限制帳號。同一組織可能共享配額——對這些帳號做池化沒有幫助。除非瞭解風險，否則請保持關閉。",
   "anthropicPool.needTwoAccounts": "啟用帳號池前請至少新增兩個 Claude OAuth 帳號。",
