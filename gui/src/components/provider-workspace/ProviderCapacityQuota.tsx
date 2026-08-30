@@ -32,6 +32,14 @@ function bcp47(locale: Locale): string {
   }
 }
 
+// `Intl.DateTimeFormat.format()` throws a RangeError on a time value outside ±8.64e15 ms.
+// These timestamps come from provider APIs and persisted cache, so one unrepresentable value
+// would take down the whole capacity panel. Resolve to null and omit the line instead.
+function asDate(value: number): Date | null {
+  const date = new Date(value > 10_000_000_000 ? value : value * 1000);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
 export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuotaReportView; pending: boolean }) {
   const t = useT();
   const { locale } = useI18n();
@@ -56,13 +64,6 @@ export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuo
     ...(aggregation.customWindows ?? []).map((window, index) => ({ key: index + 3, label: window.label, window })),
   ] : [];
   const formatPercent = (value: number) => new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value);
-  // `Intl.DateTimeFormat.format()` throws a RangeError on a time value outside ±8.64e15 ms.
-  // These timestamps come from provider APIs and persisted cache, so one unrepresentable value
-  // would take down the whole capacity panel. Resolve to null and omit the line instead.
-  const asDate = (value: number): Date | null => {
-    const date = new Date(value > 10_000_000_000 ? value : value * 1000);
-    return Number.isFinite(date.getTime()) ? date : null;
-  };
   const formatRecoveryAt = (value: number) => {
     const date = asDate(value);
     return date === null ? null : new Intl.DateTimeFormat(locale, {
