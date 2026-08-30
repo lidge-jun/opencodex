@@ -18,7 +18,11 @@ import {
   rotateAnthropicAccountOn429,
 } from "../src/oauth/anthropic-routing";
 import { getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
-import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../src/providers/quota";
+import {
+  clearAccountQuotaCache,
+  getFreshCachedProviderAccountQuota,
+  setCachedProviderAccountQuotaForTests,
+} from "../src/providers/quota";
 import type { OcxAccountPoolQuotaWindow, OcxAccountPoolResetOrder, OcxAccountPoolRotationStrategy, OcxConfig } from "../src/types";
 
 const originalHome = process.env.OPENCODEX_HOME;
