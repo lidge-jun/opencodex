@@ -19,7 +19,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret } from "../config";
+import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret, withConfigMutationLockSync } from "../config";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { MAX_PENDING_OAUTH_MUTATIONS } from "../lib/translator-budget";
@@ -67,23 +67,113 @@ export function getAuthRefreshIntentLockPath(provider: string, accountId: string
 export function getAuthRefreshIntentPath(provider: string, accountId: string): string {
   return `${getAuthRefreshIntentLockPath(provider, accountId)}.json`;
 }
-export interface OAuthRefreshIntent { version: 1; provider: string; accountId: string; generation: string; createdAt: number; flightId?: string; staleOwner?: true; uncertain?: true }
+export type OAuthRefreshIntentCleanupPending = "pre-dispatch" | "definitive-rejection";
+export interface OAuthRefreshIntent {
+  version: 1;
+  provider: string;
+  accountId: string;
+  generation: string;
+  createdAt: number;
+  attemptId?: string;
+  flightId?: string;
+  staleOwner?: true;
+  uncertain?: true;
+  cleanupPending?: OAuthRefreshIntentCleanupPending;
+}
+
+export class OAuthRefreshIntentIOError extends Error {
+  readonly code = "OAUTH_REFRESH_INTENT_IO";
+  constructor(
+    readonly operation: "write-intent" | "mark-cleanup-pending" | "clear-cleanup-pending" | "resume-cleanup",
+    cause?: unknown,
+    readonly refreshError?: unknown,
+  ) {
+    super(`OAuth refresh intent ${operation} failed`, cause ? { cause } : undefined);
+    this.name = "OAuthRefreshIntentIOError";
+  }
+}
+
+interface OAuthRefreshIntentFileSnapshot {
+  raw: string;
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  size: number;
+}
+
+export interface OAuthRefreshIntentMutationHooks {
+  beforeMarkCommit?: () => void;
+  beforeClearRecheck?: () => void;
+}
+
+class OAuthRefreshIntentChangedError extends Error {}
+
+function uncertainOAuthRefreshIntent(provider: string, accountId: string): OAuthRefreshIntent {
+  return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
+}
+
+function snapshotOAuthRefreshIntentFile(path: string): OAuthRefreshIntentFileSnapshot {
+  const raw = readFileSync(path, "utf8");
+  const stat = statSync(path);
+  return { raw, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, size: stat.size };
+}
+
+function sameOAuthRefreshIntentFileSnapshot(
+  left: OAuthRefreshIntentFileSnapshot,
+  right: OAuthRefreshIntentFileSnapshot,
+): boolean {
+  return left.raw === right.raw
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.mtimeMs === right.mtimeMs
+    && left.size === right.size;
+}
+
 function parseOAuthRefreshIntent(
   provider: string,
   accountId: string,
   raw: string,
 ): OAuthRefreshIntent {
-  const value = JSON.parse(raw) as Partial<OAuthRefreshIntent>;
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return uncertainOAuthRefreshIntent(provider, accountId);
+  }
+  const value = parsed as Partial<OAuthRefreshIntent>;
   if (
     value.version !== 1
     || value.provider !== provider
     || value.accountId !== accountId
     || typeof value.generation !== "string"
+    || !/^[0-9a-f]{64}$/.test(value.generation)
     || typeof value.createdAt !== "number"
-    || (value.flightId !== undefined && typeof value.flightId !== "string")
+    || !Number.isFinite(value.createdAt)
+    || !Number.isInteger(value.createdAt)
+    || value.createdAt < 0
+    || (
+      value.attemptId !== undefined
+      && (typeof value.attemptId !== "string" || value.attemptId.length === 0 || value.attemptId.length > 128)
+    )
+    || (
+      value.flightId !== undefined
+      && (typeof value.flightId !== "string" || value.flightId.length === 0 || value.flightId.length > 128)
+    )
     || (value.staleOwner !== undefined && value.staleOwner !== true)
+    || (value.uncertain !== undefined && value.uncertain !== true)
+    || (
+      value.cleanupPending !== undefined
+      && value.cleanupPending !== "pre-dispatch"
+      && value.cleanupPending !== "definitive-rejection"
+    )
+    || (
+      value.cleanupPending !== undefined
+      && (
+        value.attemptId === undefined
+        || value.uncertain === true
+        || value.staleOwner === true
+      )
+    )
   ) {
-    return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
+    return uncertainOAuthRefreshIntent(provider, accountId);
   }
   return value as OAuthRefreshIntent;
 }
@@ -96,7 +186,7 @@ export function readOAuthRefreshIntent(provider: string, accountId: string): OAu
     return parseOAuthRefreshIntent(provider, accountId, readFileSync(path, "utf8"));
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
-    return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
+    return uncertainOAuthRefreshIntent(provider, accountId);
   }
 }
 
@@ -107,27 +197,159 @@ export function peekOAuthRefreshIntent(provider: string, accountId: string): OAu
     return parseOAuthRefreshIntent(provider, accountId, readFileSync(path, "utf8"));
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
-    return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
+    return uncertainOAuthRefreshIntent(provider, accountId);
   }
 }
-export function writeOAuthRefreshIntent(provider: string, accountId: string, generation: string, createdAt = Date.now(), flightId?: string): void {
+export function writeOAuthRefreshIntent(provider: string, accountId: string, generation: string, createdAt = Date.now(), flightId?: string): OAuthRefreshIntent {
   const dir = getConfigDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   hardenConfigDir();
-  const intent: OAuthRefreshIntent = { version: 1, provider, accountId, generation, createdAt, ...(flightId ? { flightId } : {}) };
-  atomicWriteFile(getAuthRefreshIntentPath(provider, accountId), `${JSON.stringify(intent)}\n`);
+  const intent: OAuthRefreshIntent = {
+    version: 1,
+    provider,
+    accountId,
+    generation,
+    createdAt,
+    attemptId: randomUUID(),
+    ...(flightId ? { flightId } : {}),
+  };
+  return withConfigMutationLockSync(() => {
+    if (readOAuthRefreshIntent(provider, accountId) !== undefined) {
+      throw new OAuthRefreshIntentIOError(
+        "write-intent",
+        new Error("An OAuth refresh intent already exists; refusing to overwrite its replay guard"),
+      );
+    }
+    atomicWriteFile(getAuthRefreshIntentPath(provider, accountId), `${JSON.stringify(intent)}\n`);
+    return intent;
+  });
 }
+
+function sameOAuthRefreshIntentAttempt(current: OAuthRefreshIntent, expected: OAuthRefreshIntent): boolean {
+  return current.provider === expected.provider
+    && current.accountId === expected.accountId
+    && current.generation === expected.generation
+    && current.createdAt === expected.createdAt
+    && current.attemptId === expected.attemptId
+    && current.flightId === expected.flightId;
+}
+
+function exactOAuthRefreshIntentFile(
+  provider: string,
+  accountId: string,
+): { intent: OAuthRefreshIntent; snapshot: OAuthRefreshIntentFileSnapshot } | undefined {
+  const path = getAuthRefreshIntentPath(provider, accountId);
+  try {
+    hardenConfigDir();
+    hardenExistingSecret(path);
+    const file = snapshotOAuthRefreshIntentFile(path);
+    let intent: OAuthRefreshIntent;
+    try { intent = parseOAuthRefreshIntent(provider, accountId, file.raw); }
+    catch { intent = uncertainOAuthRefreshIntent(provider, accountId); }
+    return { intent, snapshot: file };
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+export function markOAuthRefreshIntentCleanupPending(
+  provider: string,
+  accountId: string,
+  expected: OAuthRefreshIntent,
+  cleanupPending: OAuthRefreshIntentCleanupPending,
+  hooks: OAuthRefreshIntentMutationHooks = {},
+): OAuthRefreshIntent | undefined {
+  return withConfigMutationLockSync(() => {
+    const path = getAuthRefreshIntentPath(provider, accountId);
+    const observed = exactOAuthRefreshIntentFile(provider, accountId);
+    const current = observed?.intent;
+    if (
+      !observed
+      || !current
+      || expected.attemptId === undefined
+      || current.uncertain
+      || current.staleOwner
+      || !sameOAuthRefreshIntentAttempt(current, expected)
+      || (current.cleanupPending !== undefined && current.cleanupPending !== cleanupPending)
+    ) return undefined;
+    const marked: OAuthRefreshIntent = { ...current, cleanupPending };
+    try {
+      atomicWriteFile(path, `${JSON.stringify(marked)}\n`, undefined, {
+        beforeRename: hooks.beforeMarkCommit,
+        validateBeforeRename: targetPath => {
+          let latest: OAuthRefreshIntentFileSnapshot;
+          try { latest = snapshotOAuthRefreshIntentFile(targetPath); }
+          catch (error) {
+            throw new OAuthRefreshIntentChangedError("OAuth refresh intent changed before marker commit", { cause: error });
+          }
+          if (!sameOAuthRefreshIntentFileSnapshot(observed.snapshot, latest)) {
+            throw new OAuthRefreshIntentChangedError("OAuth refresh intent changed before marker commit");
+          }
+        },
+      });
+    } catch (error) {
+      if (error instanceof OAuthRefreshIntentChangedError) return undefined;
+      throw error;
+    }
+    return marked;
+  });
+}
+
+export function clearOAuthRefreshIntentIfMatch(
+  provider: string,
+  accountId: string,
+  expected: OAuthRefreshIntent,
+  hooks: OAuthRefreshIntentMutationHooks = {},
+): boolean {
+  return withConfigMutationLockSync(() => {
+    const path = getAuthRefreshIntentPath(provider, accountId);
+    const observed = exactOAuthRefreshIntentFile(provider, accountId);
+    if (!observed) return true;
+    const current = observed.intent;
+    if (
+      current.uncertain
+      || expected.uncertain
+      || current.attemptId === undefined
+      || expected.attemptId === undefined
+      || current.uncertain !== expected.uncertain
+      || current.staleOwner !== expected.staleOwner
+      || current.cleanupPending !== expected.cleanupPending
+      || !sameOAuthRefreshIntentAttempt(current, expected)
+    ) return false;
+    hooks.beforeClearRecheck?.();
+    let latest: OAuthRefreshIntentFileSnapshot;
+    try { latest = snapshotOAuthRefreshIntentFile(path); }
+    catch (error) {
+      if (errorCode(error) === "ENOENT") return true;
+      throw error;
+    }
+    if (!sameOAuthRefreshIntentFileSnapshot(observed.snapshot, latest)) return false;
+    try { unlinkSync(path); return true; }
+    catch (error) { if (errorCode(error) === "ENOENT") return true; throw error; }
+  });
+}
+
 export function markOAuthRefreshIntentStaleOwner(provider: string, accountId: string, generation: string, flightId: string): boolean {
-  const current = readOAuthRefreshIntent(provider, accountId);
-  if (current?.uncertain || current?.generation !== generation || current.flightId !== flightId) return false;
-  atomicWriteFile(getAuthRefreshIntentPath(provider, accountId), `${JSON.stringify({ ...current, staleOwner: true })}\n`);
-  return true;
+  return withConfigMutationLockSync(() => {
+    const current = readOAuthRefreshIntent(provider, accountId);
+    if (
+      current?.uncertain
+      || current?.cleanupPending
+      || current?.generation !== generation
+      || current.flightId !== flightId
+    ) return false;
+    atomicWriteFile(getAuthRefreshIntentPath(provider, accountId), `${JSON.stringify({ ...current, staleOwner: true })}\n`);
+    return true;
+  });
 }
 export function clearOAuthRefreshIntent(provider: string, accountId: string, generation: string): boolean {
-  const current = readOAuthRefreshIntent(provider, accountId);
-  if (!current || current.generation !== generation) return false;
-  try { unlinkSync(getAuthRefreshIntentPath(provider, accountId)); return true; }
-  catch (error) { if (errorCode(error) === "ENOENT") return false; throw error; }
+  return withConfigMutationLockSync(() => {
+    const current = readOAuthRefreshIntent(provider, accountId);
+    if (!current || current.generation !== generation) return false;
+    try { unlinkSync(getAuthRefreshIntentPath(provider, accountId)); return true; }
+    catch (error) { if (errorCode(error) === "ENOENT") return false; throw error; }
+  });
 }
 export function credentialGeneration(cred: OAuthCredentials): string {
   return createHash("sha256").update(JSON.stringify([cred.refresh, cred.access, cred.expires])).digest("hex");
