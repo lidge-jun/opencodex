@@ -21,6 +21,14 @@ async function geminiBody(parsed: OcxParsedRequest): Promise<Record<string, unkn
   return JSON.parse(body);
 }
 
+function systemInstructionText(body: Record<string, unknown>): string {
+  const instruction = body.systemInstruction as { parts?: Array<{ text?: string }> } | undefined;
+  return instruction?.parts?.[0]?.text ?? "";
+}
+
+const REJECTED_CLAUDE_SDK_PARAGRAPH =
+  "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+
 describe("google adapter — tool result images", () => {
   test("tool-result screenshots ride along as inline_data beside the functionResponse", async () => {
     const contents = await geminiContents(parsedWith([
@@ -236,6 +244,57 @@ describe("google adapter — tool-call ids on the wire", () => {
     const contents = envelope.request.contents as { role: string; parts: Record<string, unknown>[] }[];
     const fc = (contents.find(c => c.role === "model")!.parts.find(p => "functionCall" in p) as { functionCall: { id?: string } }).functionCall.id;
     expect(fc).toBe("call_xyz");
+  });
+});
+
+describe("google adapter — Antigravity system prompt compatibility", () => {
+  const ccaProvider = {
+    ...provider,
+    googleMode: "cloud-code-assist",
+    baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+    project: "proj-123",
+  } as const;
+
+  function systemPromptParsed(modelId: string): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      options: {},
+      context: {
+        systemPrompt: [`prefix\n\n${REJECTED_CLAUDE_SDK_PARAGRAPH}\n\nsuffix`],
+        messages: [{ role: "user", content: "hi" }],
+        tools: [],
+      },
+    } as unknown as OcxParsedRequest;
+  }
+
+  test("removes only the rejected standalone paragraph for CCA Gemini 3.7 Flash", async () => {
+    const parsed = systemPromptParsed("gemini-3.7-flash");
+    const ccaEnvelope = JSON.parse((await createGoogleAdapter(ccaProvider).buildRequest(parsed)).body) as {
+      request: Record<string, unknown>;
+    };
+    const directBody = await geminiBody(parsed);
+    const directText = systemInstructionText(directBody);
+
+    expect(systemInstructionText(ccaEnvelope.request)).toBe(
+      directText.replace(`${REJECTED_CLAUDE_SDK_PARAGRAPH}\n\n`, ""),
+    );
+    expect(systemInstructionText(ccaEnvelope.request)).not.toContain(REJECTED_CLAUDE_SDK_PARAGRAPH);
+  });
+
+  test("preserves the paragraph for another Cloud Code Assist model", async () => {
+    const parsed = systemPromptParsed("gemini-3.6-flash");
+    const envelope = JSON.parse((await createGoogleAdapter(ccaProvider).buildRequest(parsed)).body) as {
+      request: Record<string, unknown>;
+    };
+
+    expect(systemInstructionText(envelope.request)).toContain(REJECTED_CLAUDE_SDK_PARAGRAPH);
+  });
+
+  test("preserves the paragraph outside Cloud Code Assist", async () => {
+    const body = await geminiBody(systemPromptParsed("gemini-3.7-flash"));
+
+    expect(systemInstructionText(body)).toContain(REJECTED_CLAUDE_SDK_PARAGRAPH);
   });
 });
 

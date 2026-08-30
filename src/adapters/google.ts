@@ -54,6 +54,16 @@ const GOOGLE_BREVITY_INSTRUCTION = [
   "- This applies only to intermediate progress text. Your final answer after the work is done is exempt: write it in full and at whatever length the task requires.",
 ].join("\n");
 
+const ANTIGRAVITY_REJECTED_CLAUDE_SDK_PARAGRAPH =
+  "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
+
+function stripAntigravityRejectedClaudeSdkParagraph(systemText: string): string {
+  return systemText
+    .split("\n\n")
+    .filter(paragraph => paragraph !== ANTIGRAVITY_REJECTED_CLAUDE_SDK_PARAGRAPH)
+    .join("\n\n");
+}
+
 /**
  * Documented output ceiling for a Google-surface model, or `undefined` when the id is not
  * recognized.
@@ -227,15 +237,19 @@ function geminiOrphanToolResultParts(msg: OcxToolResultMessage): unknown[] {
 function messagesToGeminiFormat(
   parsed: OcxParsedRequest,
   identityModelId: string,
+  stripRejectedClaudeSdkParagraph = false,
 ): { systemInstruction?: unknown; contents: unknown[]; replayedCallIds: string[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
   const toolCatalogNudge = buildNonOpenAIToolCatalogNudgeForTools(parsed.context.tools, parsed.options.toolChoice);
-  const systemText = identifyRoutedModel([
+  const identifiedSystemText = identifyRoutedModel([
     ...(parsed.context.systemPrompt ?? []),
     ...(toolCatalogNudge ? [toolCatalogNudge] : []),
     GOOGLE_BREVITY_INSTRUCTION,
   ].join("\n\n"), identityModelId);
+  const systemText = stripRejectedClaudeSdkParagraph
+    ? stripAntigravityRejectedClaudeSdkParagraph(identifiedSystemText)
+    : identifiedSystemText;
   const systemInstruction = { parts: [{ text: systemText }] };
 
   const contents: unknown[] = [];
@@ -733,7 +747,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
       const identityModelId = provider.googleMode === "cloud-code-assist" ? routedModelId : parsed.modelId;
-      const { systemInstruction, contents, replayedCallIds } = messagesToGeminiFormat(parsed, identityModelId);
+      const stripRejectedClaudeSdkParagraph = provider.googleMode === "cloud-code-assist"
+        && parsed.modelId === "gemini-3.7-flash";
+      const { systemInstruction, contents, replayedCallIds } = messagesToGeminiFormat(
+        parsed,
+        identityModelId,
+        stripRejectedClaudeSdkParagraph,
+      );
       lastInjectedCallIds = [...replayedCallIds];
       lastReasoningReplayScope = parsed._reasoningReplayScope;
       const tools = toolsToGeminiFormat(parsed);
