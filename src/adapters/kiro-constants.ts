@@ -35,7 +35,7 @@ export const KIRO_ANSWER_DELIVERED_MESSAGE =
   "The previous final answer was delivered to the user and that task is closed. No new request has been made yet. Do not repeat, revise, or continue that work; wait for the user's next instruction.";
 
 export const KIRO_COMPLETION_INSTRUCTIONS =
-  `When tools are available, ordinary assistant text is mid-task commentary and does not end the turn. Continue using tools after progress updates. When the task is fully complete and no more tool calls are needed, call ${KIRO_COMPLETION_TOOL_NAME} exactly once with the complete user-facing final answer in \`answer\`. Do not provide the final answer as ordinary assistant text.`;
+  `When tools are available, ordinary assistant text is mid-task commentary and does not end the turn. Continue using tools after progress updates. When the task is fully complete and no more tool calls are needed, call ${KIRO_COMPLETION_TOOL_NAME} exactly once with the complete user-facing final answer in \`answer\`. Do not provide the final answer as ordinary assistant text. This completion tool is not an ordinary work tool. When the task is complete, call it instead of emitting answer-shaped ordinary assistant text. The call is terminal and is the exception to generic tool-result counting: it is complete when issued, ends the turn, returns no tool result, and no text or tool call may follow it.`;
 
 export type KiroCompletionMode = "disabled" | "required" | "text_fallback";
 
