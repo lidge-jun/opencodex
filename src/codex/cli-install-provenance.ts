@@ -341,8 +341,10 @@ export function isCodexCliUpdateVersionManagerPath(
     || normalized.includes("/.fnm/")
     || normalized.includes("/fnm/node-versions/")
     || normalized.includes("/fnm_multishells/")
-    || normalized.includes("/scoop/apps/")
-    || normalized.includes("/scoop/shims/");
+    || (platform === "win32" && (
+      normalized.includes("/scoop/apps/")
+      || normalized.includes("/scoop/shims/")
+    ));
 }
 
 function configuredVersionManagerRoots(

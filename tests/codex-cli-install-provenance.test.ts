@@ -154,6 +154,7 @@ describe("Codex CLI install provenance", () => {
     expect(isCodexCliUpdateVersionManagerPath("/opt/tools/image/node/22/codex", "linux")).toBe(false);
     expect(isCodexCliUpdateVersionManagerPath("/home/u/.nvm/../outside/codex", "linux")).toBe(false);
     expect(isCodexCliUpdateVersionManagerPath("/opt/plain\\.nvm\\bin/codex", "linux")).toBe(false);
+    expect(isCodexCliUpdateVersionManagerPath("/opt/scoop/apps/tools/bin/codex", "linux")).toBe(false);
     expect(isAppBundledCodexPath("/opt/plain\\flatpak\\codex", "linux")).toBe(false);
     expect(isAppBundledCodexPath("/opt/flatpak/tools/bin/codex", "linux")).toBe(false);
     expect(isAppBundledCodexPath(
@@ -230,6 +231,25 @@ describe("Codex CLI install provenance", () => {
 
   test.skipIf(process.platform !== "linux")("does not mistake a flatpak path component for an app bundle", async () => {
     const prefix = join(tempRoot("ocx-codex-flatpak-component-"), "flatpak", "tools");
+    const { launcher } = createPosixNpmGlobal(prefix);
+    const report = await inspectCodexCliInstall({
+      platform: "linux",
+      env: { CODEX_CLI_PATH: launcher, PATH: "" },
+      inspectShim: () => ({ status: "not-tracked" }),
+    });
+
+    expect(report.provenance).toBe("npm-global");
+    expect(report.reason).toBe("selection_unattested");
+    expect(report.packageVersion).toBe("1.2.3");
+    expect(report.evidence).toEqual(expect.arrayContaining([
+      "package_manifest",
+      "package_manifest_digest",
+      "global_npm_layout",
+    ]));
+  });
+
+  test.skipIf(process.platform !== "linux")("does not mistake a Scoop path component for a version manager", async () => {
+    const prefix = join(tempRoot("ocx-codex-scoop-component-"), "scoop", "apps", "tools");
     const { launcher } = createPosixNpmGlobal(prefix);
     const report = await inspectCodexCliInstall({
       platform: "linux",
