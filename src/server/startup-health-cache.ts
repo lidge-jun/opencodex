@@ -41,6 +41,15 @@ let cached: { timestamp: number; value: StartupHealth } | null = null;
 let inflight: Promise<StartupHealth> | null = null;
 let generation = 0;
 
+export interface StartupHealthCacheDeps {
+  now?: () => number;
+  probe?: (config: Pick<OcxConfig, "codexAutoStart">) => Promise<StartupHealth>;
+  waitForProbe?: (
+    probe: Promise<StartupHealth>,
+    timeoutMs: number,
+  ) => Promise<StartupHealth | null>;
+}
+
 export function markStartupHealthDiagnosticStale(value: StartupHealth): StartupHealth {
   if (!value.localRoutingDependency) return { ...value, diagnosticStale: true };
   return {
@@ -119,11 +128,16 @@ function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHea
   });
 }
 
-function refreshInBackground(config: Pick<OcxConfig, "codexAutoStart">): void {
+function refreshInBackground(
+  config: Pick<OcxConfig, "codexAutoStart">,
+  deps: StartupHealthCacheDeps,
+): void {
   if (inflight) return;
   const startedGeneration = generation;
-  const probe = runProbe(config).then(value => {
-    if (startedGeneration === generation) cached = { timestamp: Date.now(), value };
+  const probe = (deps.probe ?? runProbe)(config).then(value => {
+    if (startedGeneration === generation) {
+      cached = { timestamp: (deps.now ?? Date.now)(), value };
+    }
     return value;
   });
   inflight = probe.finally(() => {
@@ -132,18 +146,25 @@ function refreshInBackground(config: Pick<OcxConfig, "codexAutoStart">): void {
 }
 
 /** Stale-while-revalidate: service-manager probes never hold open a model/UI request. */
-export async function getCachedStartupHealth(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHealth> {
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) return cached.value;
-  refreshInBackground(config);
+export async function getCachedStartupHealth(
+  config: Pick<OcxConfig, "codexAutoStart">,
+  deps: StartupHealthCacheDeps = {},
+): Promise<StartupHealth> {
+  const now = deps.now ?? Date.now;
+  if (cached && now() - cached.timestamp < CACHE_TTL_MS) return cached.value;
+  refreshInBackground(config, deps);
   // An expired or empty read is an explicit protection check. Wait for the
   // isolated probe instead of presenting a synthetic failure while that probe
   // is still running. The probe remains child-process isolated and hard-capped
-  // at 5s; stale state is returned only if that bounded probe cannot settle.
+  // by the platform-specific deadline; stale state is returned only if that
+  // bounded probe cannot settle.
   if (inflight) {
-    const settled = await Promise.race([
-      inflight,
-      new Promise<null>(resolve => setTimeout(() => resolve(null), INITIAL_PROBE_WAIT_MS)),
-    ]);
+    const settled = await (deps.waitForProbe
+      ? deps.waitForProbe(inflight, INITIAL_PROBE_WAIT_MS)
+      : Promise.race([
+          inflight,
+          new Promise<null>(resolve => setTimeout(() => resolve(null), INITIAL_PROBE_WAIT_MS)),
+        ]));
     if (settled) return settled;
   }
   return cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config);
