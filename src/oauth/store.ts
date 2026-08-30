@@ -93,13 +93,10 @@ export class OAuthRefreshIntentIOError extends Error {
   }
 }
 
-interface OAuthRefreshIntentFileSnapshot {
-  raw: string;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  size: number;
-}
+// Both compare-and-swap sites in this file — the OAuth file lock and the refresh-intent
+// file — must agree on what "the same file" means, so they share one snapshot shape and
+// one identity check (`snapshot`/`sameSnapshot` below) rather than two copies that can drift.
+type OAuthRefreshIntentFileSnapshot = LockSnapshot;
 
 export interface OAuthRefreshIntentMutationHooks {
   beforeMarkCommit?: () => void;
@@ -110,23 +107,6 @@ class OAuthRefreshIntentChangedError extends Error {}
 
 function uncertainOAuthRefreshIntent(provider: string, accountId: string): OAuthRefreshIntent {
   return { version: 1, provider, accountId, generation: "", createdAt: 0, uncertain: true };
-}
-
-function snapshotOAuthRefreshIntentFile(path: string): OAuthRefreshIntentFileSnapshot {
-  const raw = readFileSync(path, "utf8");
-  const stat = statSync(path);
-  return { raw, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, size: stat.size };
-}
-
-function sameOAuthRefreshIntentFileSnapshot(
-  left: OAuthRefreshIntentFileSnapshot,
-  right: OAuthRefreshIntentFileSnapshot,
-): boolean {
-  return left.raw === right.raw
-    && left.dev === right.dev
-    && left.ino === right.ino
-    && left.mtimeMs === right.mtimeMs
-    && left.size === right.size;
 }
 
 function parseOAuthRefreshIntent(
@@ -242,9 +222,9 @@ function exactOAuthRefreshIntentFile(
   try {
     hardenConfigDir();
     hardenExistingSecret(path);
-    const file = snapshotOAuthRefreshIntentFile(path);
+    const file = snapshot(path);
     let intent: OAuthRefreshIntent;
-    try { intent = parseOAuthRefreshIntent(provider, accountId, file.raw); }
+    try { intent = parseOAuthRefreshIntent(provider, accountId, file.bytes); }
     catch { intent = uncertainOAuthRefreshIntent(provider, accountId); }
     return { intent, snapshot: file };
   } catch (error) {
@@ -279,11 +259,11 @@ export function markOAuthRefreshIntentCleanupPending(
         beforeRename: hooks.beforeMarkCommit,
         validateBeforeRename: targetPath => {
           let latest: OAuthRefreshIntentFileSnapshot;
-          try { latest = snapshotOAuthRefreshIntentFile(targetPath); }
+          try { latest = snapshot(targetPath); }
           catch (error) {
             throw new OAuthRefreshIntentChangedError("OAuth refresh intent changed before marker commit", { cause: error });
           }
-          if (!sameOAuthRefreshIntentFileSnapshot(observed.snapshot, latest)) {
+          if (!sameSnapshot(observed.snapshot, latest)) {
             throw new OAuthRefreshIntentChangedError("OAuth refresh intent changed before marker commit");
           }
         },
@@ -319,12 +299,12 @@ export function clearOAuthRefreshIntentIfMatch(
     ) return false;
     hooks.beforeClearRecheck?.();
     let latest: OAuthRefreshIntentFileSnapshot;
-    try { latest = snapshotOAuthRefreshIntentFile(path); }
+    try { latest = snapshot(path); }
     catch (error) {
       if (errorCode(error) === "ENOENT") return true;
       throw error;
     }
-    if (!sameOAuthRefreshIntentFileSnapshot(observed.snapshot, latest)) return false;
+    if (!sameSnapshot(observed.snapshot, latest)) return false;
     try { unlinkSync(path); return true; }
     catch (error) { if (errorCode(error) === "ENOENT") return true; throw error; }
   });

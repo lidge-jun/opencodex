@@ -797,11 +797,13 @@ export async function refreshAnthropicAccountWithLock(
         afterPrePersistRead: deps.afterPrePersistRead,
       });
       if (outcome.superseded) {
-        if (pendingIntent) clearObservedAnthropicRefreshIntent(provider, accountId, pendingIntent);
+        // The disk credential is already durable here, so cleanup is secondary: an unlink
+        // failure must not mask a committed credential by throwing over the return below.
+        if (pendingIntent) clearAnthropicRefreshIntentBestEffort(provider, accountId, pendingIntent);
         if (outcome.stored.expires > now() + REFRESH_SKEW_MS) return outcome.stored.access;
         throw new OAuthLoginRequiredError(provider);
       }
-      if (pendingIntent) clearObservedAnthropicRefreshIntent(provider, accountId, pendingIntent);
+      if (pendingIntent) clearAnthropicRefreshIntentBestEffort(provider, accountId, pendingIntent);
       return disk.access;
     }
     if (!pendingIntent?.uncertain && pendingIntent?.generation === generation) {

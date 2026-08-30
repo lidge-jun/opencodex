@@ -1201,6 +1201,41 @@ describe("oauth refresh hardening", () => {
     expect(getCredential("anthropic")?.refresh).toBe("rt-new");
   });
 
+  /**
+   * The disk credential is committed before the observed intent is cleaned up. Cleanup is a
+   * secondary durability concern, so an unlink failure must not throw over the committed
+   * credential and turn a successful adoption into a caller-visible refresh error.
+   */
+  test("a cleanup failure after adopting a disk credential does not mask the committed token", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, source: "local-cli" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const stored = getAccountCredential("anthropic", id)!;
+    writeOAuthRefreshIntent("anthropic", id, credentialGeneration(stored));
+    expect(readOAuthRefreshIntent("anthropic", id)).toBeDefined();
+
+    seedClaudeCredentials("disk", "rt-new", Date.now() + 3600_000);
+    const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
+
+    // The intent carries an attemptId, so cleanup runs through the exact-match clear.
+    // Fail it the way a locked or read-only file would.
+    let cleanupAttempts = 0;
+    const cleanupSpy = spyOn(storeModule, "clearOAuthRefreshIntentIfMatch").mockImplementation(() => {
+      cleanupAttempts += 1;
+      throw new OAuthRefreshIntentIOError("clear-intent", new Error("forced cleanup failure (EROFS)"));
+    });
+    try {
+      await expect(getValidAccessToken("anthropic")).resolves.toBe("disk");
+    } finally {
+      cleanupSpy.mockRestore();
+    }
+
+    // The adoption committed and no network refresh was attempted; only the guard survives.
+    expect(cleanupAttempts).toBeGreaterThan(0);
+    expect(mock.count()).toBe(0);
+    expect(getCredential("anthropic")?.refresh).toBe("rt-new");
+    expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+  });
+
   test("marked Anthropic local-cli account lazily recovers only from a newer disk generation", async () => {
     await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, source: "local-cli" });
     const id = getAccountSet("anthropic")!.activeAccountId;
