@@ -67,6 +67,11 @@ export interface OpencodeCatalogModel {
   displayName?: string;
   /** Declared effort ladder. Exported as opencode model variants where the client reads them. */
   reasoningEfforts?: readonly string[];
+  /**
+   * Declared default effort. Carried so every client export reads one deduped, visibility-
+   * filtered ladder per model. The opencode serializer deliberately does NOT turn it into a
+   * model-level setting — see {@link opencodeEffortVariants} for why.
+   */
   defaultReasoningEffort?: string;
 }
 
@@ -112,6 +117,16 @@ export interface OpencodeV2ProviderBlock {
   name: string;
   settings: OpencodeProviderConnection;
   models: Record<string, OpencodeV2ModelEntry>;
+}
+
+/**
+ * Both generations, always built together: they are one document's two fragments and must
+ * agree on the model set, the names, and the connection. Building them in one pass is what
+ * makes that a fact rather than a convention.
+ */
+export interface OpencodeProviderBlocks {
+  v1: OpencodeProviderBlock;
+  v2: OpencodeV2ProviderBlock;
 }
 
 export interface OpencodeGeneratedConfig {
@@ -715,12 +730,17 @@ function opencodeProviderConnection(baseURL: string, config: OcxConfig): Opencod
  * its own configured default when a request carries no effort, and pinning one here would
  * override a default the user controls in opencodex. Variants are opt-in per selection,
  * which is the same reason we never emit `defaultModel` for MCode.
+ *
+ * `none` is dropped even when a ladder declares it. It is a valid *declared* effort, but the
+ * chat ingress filters wire efforts against `OUTPUT_CONFIG_EFFORTS`, which has no `none`, so
+ * selecting it would send no effort at all and silently fall back to the proxy default — a
+ * selectable value that cannot do what its label says. Same call MCode makes for its picker.
  */
 function opencodeEffortVariants(model: OpencodeCatalogModel): OpencodeModelVariant[] | undefined {
   if (model.reasoningEfforts === undefined) return undefined;
   // Canonical order (none, minimal, then low..ultra) and dedupe, so the picker order does
   // not depend on whatever order a provider listed its efforts in.
-  const efforts = canonicalizeReasoningEfforts(model.reasoningEfforts);
+  const efforts = canonicalizeReasoningEfforts(model.reasoningEfforts).filter(effort => effort !== "none");
   if (efforts.length === 0) return undefined;
   return efforts.map(effort => ({ id: effort, settings: { reasoningEffort: effort } }));
 }
@@ -738,11 +758,11 @@ function opencodeEffortVariants(model: OpencodeCatalogModel): OpencodeModelVaria
  * working: V2 merges them by provider id and model id, so a model listed in both blocks
  * appears once, with the V2 entry's name, connection, and variants.
  */
-function opencodeProviderBlocks(
+export function opencodeProviderBlocks(
   baseURL: string,
   catalogModels: readonly OpencodeCatalogModel[],
   config: OcxConfig,
-): { v1: OpencodeProviderBlock; v2: OpencodeV2ProviderBlock } {
+): OpencodeProviderBlocks {
   const v1Models: Record<string, OpencodeModelEntry> = {};
   const v2Models: Record<string, OpencodeV2ModelEntry> = {};
   for (const model of catalogModels) {
@@ -755,7 +775,13 @@ function opencodeProviderBlocks(
     }
     v1Models[key] = entry;
     const variants = opencodeEffortVariants(model);
-    v2Models[key] = variants === undefined ? { ...entry } : { ...entry, variants };
+    // Own `limit` object, not a shared reference: the two blocks are serialized and reasoned
+    // about separately, and an in-place edit of one must never move the other.
+    v2Models[key] = {
+      ...entry,
+      ...(entry.limit ? { limit: { ...entry.limit } } : {}),
+      ...(variants ? { variants } : {}),
+    };
   }
   return {
     v1: {
@@ -825,8 +851,10 @@ export function normalizeExportModels(models: readonly ExportModel[]): ExportMod
 /**
  * OpenCode document: both provider generations plus `$schema`, and nothing else.
  *
- * The V2 block is last so a V2 reader's merge leaves it authoritative, and first-wins
- * ordering inside `providers` mirrors `provider`.
+ * The order below fixes the order of the emitted keys and nothing else: the two blocks are
+ * disjoint top-level keys, and which generation opencode prefers when it merges them is
+ * opencode's decision, not a consequence of where we write it. Both blocks are generated in
+ * one pass so they cannot disagree about the model set, the names, or the connection.
  */
 function buildOpencodeClientConfig(ctx: ExportContext): OpencodeGeneratedConfig {
   const models = normalizeExportModels(ctx.models);
@@ -1541,8 +1569,9 @@ function buildOpencodeContribution(ctx: ExportContext): ManagedContribution {
   return {
     clientId: "opencode",
     fragments: [
-      // Legacy block first. opencode V1 reads only `provider`; V2 reads both and lets the
-      // `providers` block win, which is the only generation whose variants it applies.
+      // Legacy block first, so the emitted JSON reads the way a config migration does.
+      // opencode V1 reads only `provider`, V2 reads both, and the generation that wins the
+      // merge is decided by opencode — what we control is that both name the same models.
       { path: ["provider", OPENCODE_PROVIDER_ID], value: doc.provider[OPENCODE_PROVIDER_ID] },
       { path: ["providers", OPENCODE_PROVIDER_ID], value: doc.providers[OPENCODE_PROVIDER_ID] },
     ],

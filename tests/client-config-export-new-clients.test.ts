@@ -272,9 +272,10 @@ describe("contributions name every fragment we own", () => {
     }
   });
 
-  test("opencode owns both provider generations, V2 last so it wins the merge", () => {
+  test("opencode owns both provider generations, legacy block first", () => {
     // opencode V2 reads `providers` and V1 reads `provider`; only the V2 block's variants
     // are applied, so both have to be written and both have to be ours to keep in sync.
+    // Which generation wins the merge is opencode's call — this pins the paths we own.
     expect(buildClientContribution("opencode", ctx()).fragments.map(f => f.path)).toEqual([
       ["provider", OPENCODE_PROVIDER_ID],
       ["providers", OPENCODE_PROVIDER_ID],

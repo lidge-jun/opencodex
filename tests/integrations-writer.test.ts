@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildClientContribution, type ExportModel } from "../src/clients/config-export";
 import { fileIO, type IntegrationIO } from "../src/integrations/config-io";
+import { canonicalContribution, fingerprint } from "../src/integrations/ownership";
 import { protectedContributionFingerprint } from "../src/integrations/ownership-policy";
 import { INTEGRATION_CLIENTS } from "../src/integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../src/integrations/store";
@@ -106,6 +107,14 @@ function installZcode(): string {
   return configPath;
 }
 
+function installOpencode(): string {
+  const spec = INTEGRATION_CLIENTS.opencode;
+  mkdirSync(spec.detectDir(TEST_ENV, home), { recursive: true });
+  const configPath = spec.configPath(TEST_ENV, home);
+  mkdirSync(dirname(configPath), { recursive: true });
+  return configPath;
+}
+
 function input(overrides: Partial<IntegrationWriteInput> = {}): IntegrationWriteInput {
   return {
     clientId: "hermes",
@@ -150,6 +159,92 @@ describe("apply", () => {
     expect(rows[0]!.kind).toBe("apply");
     // Nothing existed before, so there is nothing to restore TO.
     expect(rows[0]!.snapshot.kind).toBe("none");
+  });
+
+  /**
+   * opencode owns two fragments now, and only the V2 one carries the reasoning-effort
+   * variants. None of the other clients exercise a two-block document, so the writer has to
+   * be shown putting the variants on disk — not just building them.
+   */
+  test("opencode writes the reasoning-effort variants and keeps them on refresh", () => {
+    const configPath = installOpencode();
+    const models: ExportModel[] = [
+      {
+        namespaced: "opencode-go/glm-5.3",
+        provider: "opencode-go",
+        id: "glm-5.3",
+        contextWindow: 1_000_000,
+        reasoningEfforts: ["max", "low", "high"],
+      },
+      { namespaced: "openai/gpt-5.5", provider: "openai", id: "gpt-5.5", contextWindow: 400_000 },
+    ];
+    const request = input({ clientId: "opencode", models });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const doc = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: { opencodex: { models: Record<string, Record<string, unknown>> } };
+      providers: {
+        opencodex: { models: Record<string, { variants?: Array<{ id: string }> }> };
+      };
+    };
+    expect(doc.providers.opencodex.models["opencode-go/glm-5.3"]!.variants!.map(v => v.id))
+      .toEqual(["low", "high", "max"]);
+    // The legacy block stays variant-free, and a model without a ladder gets no key at all.
+    expect(doc.provider.opencodex.models["opencode-go/glm-5.3"]).not.toHaveProperty("variants");
+    expect(doc.providers.opencodex.models["openai/gpt-5.5"]!.variants).toBeUndefined();
+
+    expect(readIntegrationState(request)).toMatchObject({ state: "current" });
+    expect(applyIntegration(request).ok).toBe(true);
+    const after = JSON.parse(readFileSync(configPath, "utf8")) as typeof doc;
+    expect(after.providers.opencodex.models["opencode-go/glm-5.3"]!.variants!.map(v => v.id))
+      .toEqual(["low", "high", "max"]);
+  });
+
+  /**
+   * Every opencode installation that predates the second block has a one-fragment record, so
+   * this is the migration path every existing user takes. Kimi has an equivalent test; opencode
+   * is the client that actually meets it in the field.
+   */
+  test("a legacy opencode record migrates to two fragments and disables cleanly", () => {
+    const configPath = installOpencode();
+    const request = input({ clientId: "opencode" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    // Rewind the file and the record to the pre-V2 shape: one fragment, one container, and
+    // fingerprints computed from exactly that state — a record whose fingerprints disagree
+    // with its own fragments is a foreign edit, which is a different (and correct) refusal.
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: { opencodex: unknown };
+    };
+    delete (document as Record<string, unknown>).providers;
+    const legacyText = `${JSON.stringify(document, null, 2)}\n`;
+    writeFileSync(configPath, legacyText);
+
+    const legacy = { ...store.readRecords().opencode! };
+    legacy.fragmentPaths = [["provider", "opencodex"]];
+    legacy.createdContainers = ["provider"];
+    legacy.fileFingerprint = fingerprint(legacyText);
+    legacy.blockFingerprint = fingerprint(canonicalContribution({
+      clientId: "opencode",
+      fragments: [{ path: ["provider", "opencodex"], value: document.provider.opencodex }],
+    }));
+    store.putRecord(legacy);
+
+    expect(readIntegrationState(request)).toMatchObject({ state: "stale" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const migrated = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    expect(migrated.providers).toBeDefined();
+    expect(store.readRecords().opencode!.fragmentPaths).toEqual([
+      ["provider", "opencodex"],
+      ["providers", "opencodex"],
+    ]);
+
+    // Disabling has to take both fragments with it, including the container we created.
+    expect(disableIntegration(request).ok).toBe(true);
+    const after = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    expect(after.provider).toBeUndefined();
+    expect(after.providers).toBeUndefined();
   });
 
   test("is idempotent: applying twice changes nothing the second time", () => {

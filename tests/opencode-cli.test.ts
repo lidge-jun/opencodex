@@ -14,6 +14,7 @@ import {
   buildOpencodeEnv,
   buildOpencodeProviderBlock,
   buildOpencodeProviderBlockFromCatalog,
+  buildOpencodeProviderBlocksFromCatalog,
   buildOpencodeV2ProviderBlock,
   fetchOpencodeProxyModels,
   isOpencodeRuntimeConfigError,
@@ -176,7 +177,7 @@ describe("ocx opencode runtime config", () => {
     const routed = [{ provider: "kiro", id: "glm-5" }];
     const block = buildOpencodeProviderBlock(10100, [], routed);
     const v2Block = buildOpencodeV2ProviderBlock(10100, [], routed);
-    const merged = mergeOpencodeRuntimeConfig(inherited, block, v2Block);
+    const merged = mergeOpencodeRuntimeConfig(inherited, { v1: block, v2: v2Block });
     expect(isOpencodeRuntimeConfigError(merged)).toBe(false);
     if (isOpencodeRuntimeConfigError(merged)) return;
     expect(merged.model).toBe("other/default");
@@ -190,13 +191,14 @@ describe("ocx opencode runtime config", () => {
   test("rejects invalid inherited OPENCODE_CONFIG_CONTENT", () => {
     const block = buildOpencodeProviderBlock(10100, [], []);
     const v2Block = buildOpencodeV2ProviderBlock(10100, [], []);
-    expect(mergeOpencodeRuntimeConfig("{ not json", block, v2Block))
+    const blocks = { v1: block, v2: v2Block };
+    expect(mergeOpencodeRuntimeConfig("{ not json", blocks))
       .toEqual({ error: "OPENCODE_CONFIG_CONTENT is not valid JSON." });
-    expect(mergeOpencodeRuntimeConfig("[]", block, v2Block))
+    expect(mergeOpencodeRuntimeConfig("[]", blocks))
       .toEqual({ error: "OPENCODE_CONFIG_CONTENT must be a JSON object." });
-    expect(mergeOpencodeRuntimeConfig(JSON.stringify({ provider: "bad" }), block, v2Block))
+    expect(mergeOpencodeRuntimeConfig(JSON.stringify({ provider: "bad" }), blocks))
       .toEqual({ error: "OPENCODE_CONFIG_CONTENT provider must be a JSON object when present." });
-    expect(mergeOpencodeRuntimeConfig(JSON.stringify({ providers: "bad" }), block, v2Block))
+    expect(mergeOpencodeRuntimeConfig(JSON.stringify({ providers: "bad" }), blocks))
       .toEqual({ error: "OPENCODE_CONFIG_CONTENT providers must be a JSON object when present." });
   });
 });
@@ -324,6 +326,44 @@ describe("ocx opencode proxy model catalog", () => {
     }
   });
 
+  test("carries /api/models effort ladders into the V2 block the launcher injects", () => {
+    // The launcher's own path: proxy rows -> catalog -> blocks. A renamed field here would
+    // ship a launcher without selectable efforts while every unit test stayed green.
+    const rows = [
+      { namespaced: "opencode-go/glm-5.3", provider: "opencode-go", id: "glm-5.3", reasoningEfforts: ["max", "low", "high"] },
+      { namespaced: "opencode-go/plain", provider: "opencode-go", id: "plain" },
+      { namespaced: "opencode-go/hidden", provider: "opencode-go", id: "hidden", disabled: true, reasoningEfforts: ["low"] },
+    ];
+    const catalog = opencodeCatalogFromProxyRows(rows, cfg());
+    const blocks = buildOpencodeProviderBlocksFromCatalog(10100, catalog, undefined, cfg());
+
+    expect(blocks.v2.models["opencode-go/glm-5.3"]!.variants).toEqual([
+      { id: "low", settings: { reasoningEffort: "low" } },
+      { id: "high", settings: { reasoningEffort: "high" } },
+      { id: "max", settings: { reasoningEffort: "max" } },
+    ]);
+    expect(blocks.v2.models["opencode-go/plain"]!.variants).toBeUndefined();
+    // The legacy block never carries variants, and both generations describe the same models:
+    // that is what makes opencode's merge produce one entry per model.
+    expect(blocks.v1.models["opencode-go/glm-5.3"]).not.toHaveProperty("variants");
+    expect(Object.keys(blocks.v2.models)).toEqual(Object.keys(blocks.v1.models));
+    expect(Object.keys(blocks.v1.models)).not.toContain("opencode-go/hidden");
+  });
+
+  test("the launcher's V1 and V2 blocks share one connection", () => {
+    const blocks = buildOpencodeProviderBlocksFromCatalog(
+      10100,
+      [{ namespaced: "opencode-go/glm-5.3", provider: "opencode-go", id: "glm-5.3" }],
+      "192.168.4.10",
+      cfg({ hostname: "0.0.0.0" }),
+    );
+    // Built in one pass, so a later tweak to one generation cannot desync the endpoint.
+    expect(blocks.v2.settings).toEqual(blocks.v1.options);
+    expect(blocks.v2.settings.headers).toEqual({
+      "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF,
+    });
+  });
+
   test("fetchOpencodeProxyModels aborts stalled /api/models fetch and body reads", async () => {
     const live = { port: 10100, hostname: "127.0.0.1", pid: 1 };
     const stall = (init?: RequestInit) => new Promise<Response>((_, reject) => {
@@ -416,7 +456,16 @@ describe("ocx opencode native slug selection", () => {
   });
 });
 
+/**
+ * Every case passes an empty env and a temp home. Without them the global branch reads the
+ * developer's real ~/.config/opencode/opencode.json, so on a machine that has the integration
+ * applied these tests would assert against that machine instead of their own fixture.
+ */
 describe("ocx opencode project-layer detection", () => {
+  function detect(cwd: string, home: string): string | null {
+    return opencodeProviderOverridePath(cwd, {}, home);
+  }
+
   test("detects a global config that redefines our provider key", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-opencode-global-"));
     const globalDir = join(home, ".config", "opencode");
@@ -430,7 +479,15 @@ describe("ocx opencode project-layer detection", () => {
   test("detects a project config that redefines our provider key", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-opencode-proj-"));
     writeFileSync(join(dir, "opencode.json"), JSON.stringify({ provider: { [OPENCODE_PROVIDER_ID]: { npm: "x" } } }));
-    expect(projectConfigOverridesProvider(dir)).toBe(join(dir, "opencode.json"));
+    expect(detect(dir, dir)).toBe(join(dir, "opencode.json"));
+  });
+
+  test("detects a project config that defines only the V2 provider key", () => {
+    // The launcher overwrites `providers.opencodex` as well, so a V2-only config has to warn
+    // exactly like the legacy spelling does.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-opencode-proj-"));
+    writeFileSync(join(dir, "opencode.json"), JSON.stringify({ providers: { [OPENCODE_PROVIDER_ID]: { package: "x" } } }));
+    expect(detect(dir, dir)).toBe(join(dir, "opencode.json"));
   });
 
   test("detects opencode.jsonc and parent directories up to the git root", () => {
@@ -441,7 +498,7 @@ describe("ocx opencode project-layer detection", () => {
       // project override
       "provider": { "${OPENCODE_PROVIDER_ID}": { "npm": "x" } }
     }`);
-    expect(projectConfigOverridesProvider(join(root, "packages", "app"))).toBe(join(root, "packages", "opencode.jsonc"));
+    expect(detect(join(root, "packages", "app"), root)).toBe(join(root, "packages", "opencode.jsonc"));
   });
 
   test("does not walk above the git root", () => {
@@ -451,18 +508,18 @@ describe("ocx opencode project-layer detection", () => {
     mkdirSync(repo, { recursive: true });
     mkdirSync(join(repo, ".git"));
     writeFileSync(join(root, "opencode.json"), JSON.stringify({ provider: { [OPENCODE_PROVIDER_ID]: { npm: "x" } } }));
-    expect(projectConfigOverridesProvider(join(repo, "src"))).toBeNull();
+    expect(detect(join(repo, "src"), root)).toBeNull();
   });
 
   test("ignores a project config that defines other providers", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-opencode-proj-"));
     writeFileSync(join(dir, "opencode.json"), JSON.stringify({ provider: { other: { npm: "x" } } }));
-    expect(projectConfigOverridesProvider(dir)).toBeNull();
+    expect(detect(dir, dir)).toBeNull();
   });
 
   test("no project config is not a warning", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-opencode-proj-"));
-    expect(projectConfigOverridesProvider(dir)).toBeNull();
+    expect(detect(dir, dir)).toBeNull();
   });
 });
 

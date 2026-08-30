@@ -142,7 +142,7 @@ describe("ocx export human output (accept criterion 2)", () => {
     expect(result.code).toBe(0);
     expect(result.stdout.startsWith("{\n")).toBe(true);
     expect(result.stdout).toContain(join("opencode", "opencode.json"));
-    expect(result.stdout).toContain("Merge this provider block into that file; do not replace it.");
+    expect(result.stdout).toContain("Merge these provider blocks into that file; do not replace it.");
     expect(result.stdout).toContain("export OPENCODEX_OPENCODE_API_KEY=");
     // Three visible models; only `custom/no-context` lacks an authoritative window.
     expect(result.stdout).toContain("3 models; 1 omit context limits");

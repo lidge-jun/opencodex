@@ -165,10 +165,14 @@ describe("OpenCode V2 block (reasoning-effort variants)", () => {
   const LADDER_ROWS: ExportModel[] = [
     // Deliberately out of canonical order, with a duplicate and an unknown value.
     { namespaced: "opencode-go/glm-5.3", provider: "opencode-go", id: "glm-5.3", reasoningEfforts: ["max", "low", "high", "low", "turbo"], contextWindow: 1_000_000 },
-    // `none`/`minimal` are declared sentinels, not ladder members, and sort first.
+    // `none` is a declared sentinel, but the chat ingress has no such wire effort, so it is
+    // dropped: offering it would be a selection that silently falls back to the proxy default.
+    // `minimal` is a real wire effort and stays.
     { namespaced: "opencode-go/deepseek-v4-flash", provider: "opencode-go", id: "deepseek-v4-flash", reasoningEfforts: ["high", "minimal", "none"], contextWindow: 1_000_000 },
     { namespaced: "opencode-go/no-ladder", provider: "opencode-go", id: "no-ladder", contextWindow: 1_000_000 },
     { namespaced: "opencode-go/empty-ladder", provider: "opencode-go", id: "empty-ladder", reasoningEfforts: [], contextWindow: 1_000_000 },
+    // A ladder made only of the dropped sentinel leaves nothing selectable.
+    { namespaced: "opencode-go/none-only", provider: "opencode-go", id: "none-only", reasoningEfforts: ["none"], contextWindow: 1_000_000 },
   ];
 
   function ladderCtx(config: OcxConfig = cfg()): ExportContext {
@@ -184,10 +188,18 @@ describe("OpenCode V2 block (reasoning-effort variants)", () => {
       { id: "max", settings: { reasoningEffort: "max" } },
     ]);
     expect(models["opencode-go/deepseek-v4-flash"]!.variants).toEqual([
-      { id: "none", settings: { reasoningEffort: "none" } },
       { id: "minimal", settings: { reasoningEffort: "minimal" } },
       { id: "high", settings: { reasoningEffort: "high" } },
     ]);
+  });
+
+  test("`none` is never offered: it has no wire effort and would silently no-op", () => {
+    const models = (buildClientConfig("opencode", ladderCtx()) as OpencodeGeneratedConfig)
+      .providers.opencodex!.models;
+    const ids = models["opencode-go/deepseek-v4-flash"]!.variants!.map(variant => variant.id);
+    expect(ids).not.toContain("none");
+    // A ladder consisting only of `none` leaves nothing selectable at all.
+    expect(models["opencode-go/none-only"]!.variants).toBeUndefined();
   });
 
   test("a model without a usable ladder carries no variants key at all", () => {
