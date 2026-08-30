@@ -40,7 +40,7 @@ inline runtime layer OpenCode. Этот слой сливается после �
 | Слой | Поведение с `ocx opencode` |
 | --- | --- |
 | Global / custom / project config | Остаётся на диске ровно в том виде, в каком вы её записали |
-| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Получает только сгенерированный блок `provider.opencodex` |
+| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | Получает только сгенерированные блоки `provider.opencodex` и `providers.opencodex` |
 | Relative `{file:…}` paths | Всё так же разрешаются относительно конфигурационного файла, где были определены |
 
 Если глобальная или проектная конфигурация тоже определяет `provider.opencodex`, лончер печатает
@@ -66,10 +66,10 @@ ocx export --client opencode
 вашим действием.
 
 :::caution[Сливать, а не заменять]
-Слейте блок `provider.opencodex` со своей существующей конфигурацией. Если заменить им весь файл,
+Слейте оба блока — `provider.opencodex` и `providers.opencodex` — со своей существующей конфигурацией. Если заменить ими весь файл,
 вы уничтожите остальные провайдеры, агенты, keybind'ы и записи MCP. Именно поэтому
 `ocx export --out` отказывается перезаписывать существующий файл, так что указывайте `--out` на
-временный путь и потом переносите только нужный блок:
+временный путь и потом переносите только нужные блоки:
 
 ```bash
 ocx export --client opencode --out ~/opencodex-opencode.json

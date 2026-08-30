@@ -177,9 +177,9 @@ eder. Claude Code ayarları için `ocx claude config <status|set> ...` kullanın
 ### `ocx opencode [opencode argumanlari...]`
 
 Proxy'nin çalıştığından emin olun, ardından OpenCode'un satır içi çalışma zamanı
-katmanında (`OPENCODE_CONFIG_CONTENT`) üretilen bir `provider.opencodex`
-bloğuyla opencode'u başlatın. Mevcut satır içi yapılandırma korunur ve bu
-başlatma için yalnızca `provider.opencodex` değiştirilir. Mevcut bir geçersiz
+katmanında (`OPENCODE_CONFIG_CONTENT`) üretilen `provider.opencodex` ve
+`providers.opencodex` bloklarıyla opencode'u başlatın. Mevcut satır içi yapılandırma korunur ve bu
+başlatma için yalnızca bu iki anahtar değiştirilir. Mevcut bir geçersiz
 kılma hakkında uyarmak için genel veya proje `opencode.json` dosyaları
 okunabilir, ancak diskteki dosyalar asla değiştirilmez. Yönlendirilen modeller
 `opencodex/<saglayici>/<model>` olarak görünür. Daha sonra düz `opencode`

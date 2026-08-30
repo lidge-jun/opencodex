@@ -121,7 +121,7 @@ ocx claude desktop import <path> [--apply]         驗證並匯入 JSON
 
 ### `ocx opencode [opencode args...]`
 
-確保代理正在執行，然後在 OpenCode 的內嵌執行階段層（`OPENCODE_CONFIG_CONTENT`）中以生成的 `provider.opencodex` 區塊啟動 opencode。既有的內嵌設定會被保留，本次啟動僅替換 `provider.opencodex`。全域或專案的 `opencode.json` 檔案可能被讀取以警告既有的覆寫，但磁碟上的檔案永不修改。路由模型以
+確保代理正在執行，然後在 OpenCode 的內嵌執行階段層（`OPENCODE_CONFIG_CONTENT`）中以生成的 `provider.opencodex` 與 `providers.opencodex` 區塊啟動 opencode。既有的內嵌設定會被保留，本次啟動僅替換這兩個鍵。全域或專案的 `opencode.json` 檔案可能被讀取以警告既有的覆寫，但磁碟上的檔案永不修改。路由模型以
 `opencodex/<provider>/<model>` 出現。之後啟動普通 `opencode` 的行為與之前完全相同。
 
 ### `ocx grok <status|exclude|include|set|clear|apply> ...`

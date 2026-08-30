@@ -41,7 +41,7 @@ et ne remplace que les clés en conflit pour le processus enfant.
 | Couche | Comportement avec `ocx opencode` |
 | --- | --- |
 | Configuration globale/personnalisée/de projet | Conservée sur disque exactement telle que vous l’avez écrite |
-| Exécution en ligne (`OPENCODE_CONFIG_CONTENT`) | Reçoit uniquement le bloc `provider.opencodex` généré |
+| Exécution en ligne (`OPENCODE_CONFIG_CONTENT`) | Reçoit uniquement les blocs `provider.opencodex` et `providers.opencodex` générés |
 | Chemins relatifs `{file:…}` | Toujours résolus par rapport au fichier de configuration qui les a définis à l’origine |
 
 Si une configuration globale ou de projet définit également `provider.opencodex`, le lanceur affiche une
@@ -64,10 +64,10 @@ avertissement et la ligne d'exportation env. Il ne touche jamais à ce fichier �
 déplacer le bloc dans votre configuration est votre acte explicite.
 
 :::caution[Fusionnez, ne remplacez jamais]
-Fusionnez le bloc `provider.opencodex` dans votre configuration existante. Remplacer tout le fichier par le
+Fusionnez les deux blocs — `provider.opencodex` et `providers.opencodex` — dans votre configuration existante. Remplacer tout le fichier par le
 celui exporté détruit vos autres fournisseurs, agents, raccourcis clavier et entrées MCP. `ocx export --out`
 refuse d'écraser un fichier existant exactement pour cette raison, alors pointez `--out` sur un chemin de travail
-et copiez le bloc sur :
+et copiez les blocs :
 
 ```bash
 ocx export --client opencode --out ~/opencodex-opencode.json

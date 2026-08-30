@@ -41,7 +41,7 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 | 레이어 | `ocx opencode`에서의 동작 |
 | --- | --- |
 | 전역 / 사용자 지정 / 프로젝트 구성 | 사용자가 쓴 그대로 디스크에 남습니다 |
-| 인라인 런타임 (`OPENCODE_CONFIG_CONTENT`) | 생성된 `provider.opencodex` 블록만 받습니다 |
+| 인라인 런타임 (`OPENCODE_CONFIG_CONTENT`) | 생성된 `provider.opencodex`와 `providers.opencodex` 블록만 받습니다 |
 | 상대 `{file:…}` 경로 | 원래 정의된 구성 파일을 기준으로 계속 해석됩니다 |
 
 전역 또는 프로젝트 구성에도 `provider.opencodex`가 정의되어 있으면, 런처는 안내
@@ -66,7 +66,7 @@ ocx export --client opencode
 사용자가 직접 하는 일입니다.
 
 :::caution[병합하고, 절대 교체하지 마세요]
-기존 구성에 `provider.opencodex` 블록을 병합하세요. 내보낸 파일로 전체를 바꾸면
+기존 구성에 `provider.opencodex`와 `providers.opencodex` 두 블록을 모두 병합하세요. 내보낸 파일로 전체를 바꾸면
 기존의 공급자, 에이전트, 키 바인딩, MCP 항목이 모두 사라집니다.
 `ocx export --out`이 이미 존재하는 파일을 덮어쓰지 못하게 막는 이유가 바로 이것입니다.
 그러니 `--out`은 임시 경로를 가리키게 두고, 블록만 옮겨 담으세요:

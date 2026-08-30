@@ -29,7 +29,7 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 | Layer | `ocx opencode` 下的行为 |
 | --- | --- |
 | Global / custom / project config | 原样保留在磁盘上，不做任何改动 |
-| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | 只接收生成的 `provider.opencodex` block |
+| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | 只接收生成的 `provider.opencodex` 和 `providers.opencodex` 两个 block |
 | Relative `{file:…}` paths | 仍然按最初定义它们的配置文件来解析 |
 
 如果全局或项目配置里也定义了 `provider.opencodex`，启动器会打印一条提示信息：`ocx opencode` 的运行时层会在这次启动中覆盖它。
@@ -45,7 +45,7 @@ ocx export --client opencode
 代理必须正在运行。该命令会打印配置、规范目标路径（`~/.config/opencode/opencode.json`，如果设置了 `XDG_CONFIG_HOME` 则位于其下）、合并警告，以及环境变量导出行。它绝不会修改那个文件 - 上面的说明依然成立，而把这个 block 挪进你的配置是你明确做出的动作。
 
 :::caution[合并，不要替换]
-请把 `provider.opencodex` block 合并进你现有的配置。用导出的文件直接替换整个配置会破坏你其他的 providers、agents、keybinds 和 MCP 条目。`ocx export --out` 会明确拒绝覆盖已存在的文件，原因正是如此，因此请把 `--out` 指向一个临时路径，然后把 block 复制过去：
+请把 `provider.opencodex` 和 `providers.opencodex` 两个 block 都合并进你现有的配置。用导出的文件直接替换整个配置会破坏你其他的 providers、agents、keybinds 和 MCP 条目。`ocx export --out` 会明确拒绝覆盖已存在的文件，原因正是如此，因此请把 `--out` 指向一个临时路径，然后把这两个 block 复制过去：
 
 ```bash
 ocx export --client opencode --out ~/opencodex-opencode.json

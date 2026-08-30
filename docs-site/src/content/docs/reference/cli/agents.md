@@ -193,11 +193,13 @@ remain supported. Use `ocx claude config <status|set> ...` for Claude Code setti
 
 ### `ocx opencode [opencode args...]`
 
-Ensure the proxy is running, then launch opencode with a generated `provider.opencodex` block in
-OpenCode's inline runtime layer (`OPENCODE_CONFIG_CONTENT`). Existing inline config is preserved and
-only `provider.opencodex` is replaced for this launch. Global or project `opencode.json` files may be
-read to warn about an existing override, but on-disk files are never modified. Routed models appear
-as `opencodex/<provider>/<model>`. Launching plain `opencode` later behaves exactly as before.
+Ensure the proxy is running, then launch opencode with the generated `provider.opencodex` and
+`providers.opencodex` blocks in OpenCode's inline runtime layer (`OPENCODE_CONFIG_CONTENT`). The
+legacy block keeps V1 clients working; the V2 block is the one carrying the selectable
+reasoning-effort variants. Existing inline config is preserved and only those two keys are replaced
+for this launch. Global or project `opencode.json` files may be read to warn about an existing
+override, but on-disk files are never modified. Routed models appear as
+`opencodex/<provider>/<model>`. Launching plain `opencode` later behaves exactly as before.
 
 ### `ocx grok <status|exclude|include|set|clear|apply> ...`
 

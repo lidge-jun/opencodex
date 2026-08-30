@@ -139,9 +139,9 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ### `ocx opencode [opencode args...]`
 
-Убедиться, что прокси запущен, и затем запустить opencode со сгенерированным блоком
-`provider.opencodex` в inline runtime layer OpenCode (`OPENCODE_CONFIG_CONTENT`). Существующая
-inline-конфигурация сохраняется, а только `provider.opencodex` заменяется для этого запуска.
+Убедиться, что прокси запущен, и затем запустить opencode со сгенерированными блоками
+`provider.opencodex` и `providers.opencodex` в inline runtime layer OpenCode (`OPENCODE_CONFIG_CONTENT`). Существующая
+inline-конфигурация сохраняется, а для этого запуска заменяются только эти два ключа.
 Глобальные или проектные `opencode.json` могут читаться, чтобы выдать warning о существующем
 override, но файлы на диске никогда не меняются. Маршрутизируемые модели появляются как
 `opencodex/<provider>/<model>`. Последующий запуск обычного `opencode` работает ровно как раньше.

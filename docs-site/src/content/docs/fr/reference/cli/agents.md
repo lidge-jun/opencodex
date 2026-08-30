@@ -156,7 +156,7 @@ restent soutenus. Utilisez `ocx claude config <status|set> ...` pour les réglag
 
 ### `ocx opencode [opencode args...]`
 
-Vérifiez que le proxy est actif, puis lancez opencode avec un bloc `provider.opencodex` généré dans la couche d’exécution intégrée d’OpenCode (`OPENCODE_CONFIG_CONTENT`). La configuration intégrée existante est préservée et seul `provider.opencodex` est remplacé pour ce lancement. Les fichiers `opencode.json` globaux ou propres au projet peuvent être lus afin de signaler une substitution existante, mais les fichiers sur disque ne sont jamais modifiés. Les modèles routés apparaissent sous la forme `opencodex/<provider>/<model>`. Un lancement ultérieur de `opencode` sans intermédiaire se comporte exactement comme auparavant.
+Vérifiez que le proxy est actif, puis lancez opencode avec les blocs `provider.opencodex` et `providers.opencodex` générés dans la couche d’exécution intégrée d’OpenCode (`OPENCODE_CONFIG_CONTENT`). La configuration intégrée existante est préservée et seules ces deux clés sont remplacées pour ce lancement. Les fichiers `opencode.json` globaux ou propres au projet peuvent être lus afin de signaler une substitution existante, mais les fichiers sur disque ne sont jamais modifiés. Les modèles routés apparaissent sous la forme `opencodex/<provider>/<model>`. Un lancement ultérieur de `opencode` sans intermédiaire se comporte exactement comme auparavant.
 
 ### `ocx grok <status|exclude|include|set|clear|apply> ...`
 
