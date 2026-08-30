@@ -469,7 +469,13 @@ function kiroCompletionTool(): Record<string, unknown> {
   return {
     toolSpecification: {
       name: KIRO_COMPLETION_TOOL_NAME,
-      description: "Finish the task and return the complete user-facing final answer. Call only when no more work or tool calls are needed.",
+      // The shared tool-catalog nudge enumerates this name next to ordinary tools and tells every
+      // listed name to count a call only after its tool result returns. Nothing returns a result
+      // here: a valid call becomes the turn's terminal. Left undescribed, the model reads one more
+      // deferrable work tool and keeps calling tools with a finished answer already written as
+      // commentary. So the description states the distinction, the obligation, and the terminality
+      // where the model is actually choosing between tools.
+      description: "Terminal completion channel, not an ordinary work tool. When the task is fully complete and no more work or tool calls are needed, you must call this tool exactly once instead of providing the final answer as ordinary assistant text. Put the complete user-facing final answer in `answer`. The call is complete when issued: it ends the turn, returns no tool result, and no text or tool call may follow it.",
       inputSchema: {
         json: {
           type: "object",

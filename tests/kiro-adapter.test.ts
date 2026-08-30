@@ -544,6 +544,43 @@ describe("kiro adapter — buildRequest", () => {
     expect(JSON.stringify(disabled)).not.toContain("codex_kiro_final_answer");
   });
 
+  // The private completion tool is enumerated by the shared tool-catalog nudge alongside ordinary
+  // tools, and that nudge tells every listed name to "count a tool call only after its tool result
+  // returns". Nothing returns a result for this one: the adapter converts the call into the turn's
+  // terminal. Without an explicit terminal statement the model reads a deferrable ordinary tool and
+  // keeps working instead of completing, which is measurable as a selection failure (25 completion
+  // calls across 4069 required-mode attempts) and shows up as finished answers delivered as
+  // commentary with more tool calls after them.
+  //
+  // Both injected surfaces have to carry it. The schema description travels with the tool object the
+  // model is choosing between; the prose contract must not contradict it.
+  test("the completion tool is advertised as terminal on both injected surfaces", async () => {
+    const state = JSON.parse((await createKiroAdapter(provider).buildRequest(
+      parsedWith([{ role: "user", content: "hi" }], [bashTool]),
+    )).body).conversationState;
+    const current = state.currentMessage.userInputMessage;
+    const firstUser = state.history?.find((entry: { userInputMessage?: unknown }) => entry.userInputMessage)?.userInputMessage
+      ?? current;
+    const completion = current.userInputMessageContext.tools
+      .find((tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name === "codex_kiro_final_answer");
+
+    const description: string = completion.toolSpecification.description;
+    expect(description).toContain("not an ordinary work tool");
+    expect(description).toContain("ends the turn");
+    expect(description).toContain("returns no tool result");
+    expect(description).toContain("no text or tool call may follow it");
+
+    const injected: string = firstUser.content;
+    expect(injected).toContain("This completion tool is not an ordinary work tool.");
+    expect(injected).toContain("exception to generic tool-result counting");
+    expect(injected).toContain("ends the turn, returns no tool result, and no text or tool call may follow it");
+
+    // The mid-task contract must survive: commentary still does not end the turn, and the model must
+    // still keep using tools before it completes. Only what happens AFTER the call is constrained.
+    expect(injected).toContain("ordinary assistant text is mid-task commentary");
+    expect(injected).toContain("Continue using tools after progress updates.");
+  });
+
   test("namespaced (MCP) tools advertise + replay the full wire name", async () => {
     const adapter = createKiroAdapter(provider);
     // Tool spec advertised to Kiro must carry the full namespaced name so the bridge's toolNsMap
