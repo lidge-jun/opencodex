@@ -1060,6 +1060,32 @@ describe("service lifecycle cleanup ordering", () => {
     }
   });
 
+  test("an armed partial install cannot fall through to live native-service removal", async () => {
+    const calls: string[] = [];
+    await expect(installFreshWindowsSchedulerSafely({
+      stageRegistrationXml: () => { calls.push("stage"); return "attempt.xml"; },
+      register: async () => { calls.push("register"); },
+      recordOwnership: () => { calls.push("record-ownership"); return true; },
+      prepare: async () => { calls.push("prepare"); },
+      // Intentionally omit removeNativeService: the production default must fail closed.
+      publishAssets: () => { calls.push("publish-assets"); },
+      runTask: () => { calls.push("run-task"); },
+      writeState: () => { calls.push("write-state"); },
+      rollbackTask: async () => { calls.push("rollback-task"); return null; },
+      removeStagedXml: () => { calls.push("remove-stage"); },
+    })).rejects.toThrow(
+      "refusing to mutate the machine-global Windows native service from an armed test process",
+    );
+    expect(calls).toEqual([
+      "stage",
+      "register",
+      "remove-stage",
+      "record-ownership",
+      "prepare",
+      "rollback-task",
+    ]);
+  });
+
   test("native service switch treats unknown as installed and requires confirmed absence", () => {
     const calls: string[] = [];
     const statuses: Array<"unknown" | "stopped" | "nonexistent"> = [

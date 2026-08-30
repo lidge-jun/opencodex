@@ -2343,8 +2343,17 @@ export interface RemoveNativeWindowsServiceDeps {
 export function removeNativeWindowsServiceForScheduler(
   deps: RemoveNativeWindowsServiceDeps = {},
 ): void {
-  const status = deps.status ?? statusWinswRaw;
   const uninstall = deps.uninstall ?? uninstallWinswService;
+  // The test home cannot contain SCM. A partially mocked scheduler install must inject
+  // the native-service mutation too; otherwise it can stop/delete the user's live WinSW
+  // registration even though every filesystem path points at the isolated test home.
+  if (isTestHomeGuardArmed() && uninstall === uninstallWinswService) {
+    throw new Error(
+      "refusing to mutate the machine-global Windows native service from an armed test process; "
+      + "inject the native-service removal instead of calling the live manager.",
+    );
+  }
+  const status = deps.status ?? statusWinswRaw;
   const sleep = deps.sleep ?? Bun.sleepSync;
   const settleChecks = Math.max(1, deps.settleChecks ?? 20);
   // Transactional backend switch: installing the scheduler backend removes a native
