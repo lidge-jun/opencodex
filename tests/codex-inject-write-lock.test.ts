@@ -251,6 +251,55 @@ describe("the lock is on the production path", () => {
       .toBe("{ malformed");
   });
 
+  test("irreducible ledger extension overhead refuses the append without rewriting", () => {
+    seedNative();
+    const recordPath = join(opencodexHome, "integrations", "codex.json");
+    mkdirSync(join(opencodexHome, "integrations"), { recursive: true });
+    writeFileSync(recordPath, JSON.stringify({
+      version: 1,
+      provenance: {
+        futureLedger: "x".repeat(CODEX_PROVENANCE_MAX_BYTES + 1),
+        entries: [{
+          artifact: { kind: "config" },
+          baseline: { kind: "absent" },
+          postImage: null,
+          txId: "tx-existing",
+          at: "2026-08-30T00:00:00.000Z",
+        }],
+      },
+    }));
+    const before = readFileSync(recordPath, "utf8");
+
+    const result = parseChildJson<{ kind?: string; entryCount?: number }>(
+      runChild(["--eval", `
+        const {
+          captureCodexPreImages,
+          recordCodexNativeTransactionProvenance,
+        } = require("./src/codex/inject-coordination");
+        const result = recordCodexNativeTransactionProvenance(
+          captureCodexPreImages(),
+          "tx-must-not-append",
+        );
+        console.log(JSON.stringify({
+          kind: result.kind,
+          entryCount: result.kind === "updated"
+            ? result.record.provenance?.entries?.length
+            : undefined,
+        }));
+      `], {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        OPENCODEX_HOME: opencodexHome,
+      }),
+      "irreducible ledger extension overhead",
+    );
+
+    expect(result.kind).toBe("updated");
+    expect(result.entryCount).toBe(1);
+    // Exact bytes, not just semantics: a no-op must not pretty-print/rewrite the oversized file.
+    expect(readFileSync(recordPath, "utf8")).toBe(before);
+  });
+
   /**
    * The contention proof. A real second process holds N through the production
    * lock module while a real injection runs; the injection must report busy and

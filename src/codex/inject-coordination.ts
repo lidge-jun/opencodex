@@ -336,6 +336,14 @@ export function recordCodexNativeTransactionProvenance(
   }));
   return updateIntegrationRecord(record => {
     const previousLedger = record.provenance;
+    // Unknown ledger extensions are forward-compatible and must be preserved. If those fixed
+    // fields alone exceed the ceiling, no entry selection can make the write compliant. Keep the
+    // existing record byte-for-byte instead of deleting all known evidence and rewriting the
+    // same oversized extension on every native transaction.
+    if (
+      previousLedger
+      && serializedProvenanceBytes([], previousLedger) > CODEX_PROVENANCE_MAX_BYTES
+    ) return record;
     return {
       ...record,
       provenance: {

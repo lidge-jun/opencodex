@@ -255,6 +255,11 @@ export const updateIntegrationRecord = (
       if (read.kind === "invalid") return read;
       const previous: CodexIntegrationRecord = read.kind === "ready" ? read.record : { version: 1 };
       const proposed = mutate(previous);
+      // The mutator can explicitly decline an update by returning the exact record it received.
+      // This matters when a preserved forward-compatible extension already exceeds a caller's
+      // write budget: rewriting the same oversized bytes would amplify I/O while deleting known
+      // entries cannot make that irreducible overhead fit.
+      if (proposed === previous) return { kind: "updated" as const, record: previous };
       if (!validateRecord(proposed)) {
         return { kind: "invalid", message: "Codex integration record update produced a malformed v1 shape" };
       }
