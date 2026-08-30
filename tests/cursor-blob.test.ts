@@ -2906,6 +2906,75 @@ describe("Cursor external replay envelope", () => {
   });
 
   /**
+   * Audit r13. The note's reservation is a subtraction clamped at zero, so it cannot represent a DEFICIT:
+   * when the note costs more than the budget has left, `Math.max(0, …)` reported "the note costs nothing"
+   * and the tail was appended anyway. An envelope with 26 bytes free emitted a 246-byte note and overran
+   * by 220, throwing the non-retryable 400 this unit exists to remove.
+   *
+   * Every fixture in this file is a tool continuation, and a trailing tool result HIDES this: the abandon
+   * check's survival disjuncts rescue that shape. The exposed shape is a turn that does not end in a
+   * result — an ordinary user interjection after a repetitive stretch — where nothing else bounds the
+   * tail. Measured 13 of 42 carried-byte positions throwing with the note armed and none without it.
+   *
+   * The note is dropped when it cannot be paid for, which is this unit's priority order: a missing
+   * instruction is recoverable, a missing tool result restarts the loop.
+   */
+  test.each([0, 100, 220, 400])("an unaffordable repetition note is dropped, not sent past the envelope (deficit=%i)", deficit => {
+    const build = (armed: boolean) => {
+      const checkpoint = create(ConversationStateStructureSchema, {
+        rootPromptMessagesJson: [storeCursorBlob(new Uint8Array(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - deficit).fill(65))],
+        turns: [new Uint8Array(32).fill(8)],
+      });
+      const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+        { role: "user", content: "Go.", timestamp: 1 },
+      ];
+      let timestamp = 2;
+      for (let r = 0; r < (armed ? 4 : 2); r++) {
+        rawMessages!.push({ role: "assistant", content: [{ type: "text", text: "Same." }], timestamp: timestamp++ });
+      }
+      rawMessages!.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_deficit", name: "exec_command", arguments: { cmd: "echo D" } }],
+        timestamp: timestamp++,
+      });
+      rawMessages!.push({
+        role: "toolResult",
+        toolCallId: "call_deficit",
+        toolName: "exec_command",
+        content: "DEFICIT_OUT",
+        isError: false,
+        timestamp: timestamp++,
+      });
+      // The shape the suite never had: the turn ends with a plain user message, so the abandon check's
+      // result-survival disjuncts cannot fire and nothing else bounds the appended note.
+      rawMessages!.push({ role: "user", content: "Actually, try something else.", timestamp: timestamp++ });
+      const prepared = prepareCursorRunRequest({
+        modelId: "grok-4.6",
+        conversationId: `cursor_note_deficit_${deficit}_${armed}`,
+        system: ["Be brief."],
+        messages: [{ role: "user", content: "next" }],
+        rawMessages,
+        checkpointBytes: toBinary(ConversationStateStructureSchema, checkpoint),
+        continuationMode: "checkpoint",
+        checkpointSuffixStart: 1,
+      });
+      const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+      const run = message.message.case === "runRequest" ? message.message.value : undefined;
+      const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+      const bytes = roots.reduce((sum, id) => sum + blobData(id).byteLength, 0);
+      return { roots: roots.length, bytes };
+    };
+    // Arming the note must not push the request past the envelope, and must not throw at all: the guard
+    // raises a 400 the caller cannot retry.
+    const armed = build(true);
+    expect(armed.bytes).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+    expect(armed.roots).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BLOB_LIMIT);
+    // And the un-armed request is unaffected, so the bound is the note's cost rather than a blanket cut.
+    const plain = build(false);
+    expect(plain.bytes).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+  });
+
+  /**
    * Audit r10 finding 2. `outputElided` on the marker-only return had no coverage: removing the flag left
    * all 191 tests green, and `tests/` is not typechecked (`tsconfig` include is `["src"]`), so nothing would
    * have caught its removal. A result reduced to the truncation marker answers its call with nothing, which

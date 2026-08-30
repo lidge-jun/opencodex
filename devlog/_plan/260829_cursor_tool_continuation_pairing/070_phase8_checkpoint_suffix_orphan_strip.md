@@ -554,3 +554,50 @@ created by the previous fix. The through-line is not carelessness about the cond
 added a fact to the pruning code (`carriedRoots`, a count bound, a root-space run, a synthetic tail) without
 asking which existing block already assumed that fact absent. The last fix is the first that removes a
 distinction rather than adding one.
+
+## Audit round 9: a subtraction clamped at zero cannot say "unaffordable"
+
+The reservation was `Math.max(0, historyBudget - syntheticBytes)`, and the tail was appended
+unconditionally. Those two facts are compatible only while the difference is non-negative. Below that the
+clamp reports "the note costs nothing", every pruning block correctly reasons about a budget of zero and
+emits nothing, and the note is appended anyway — so the payload lands over the limit by exactly the deficit
+the clamp erased. With 26 bytes free and a 246-byte note, 220 bytes over and a non-retryable 400.
+
+Holding the tail out of `historyEntries` is what made it unrecoverable. No block below could see it, so
+none could charge it.
+
+Ninth iteration of the same pattern, and this time the new fact was *the tail is always appended*; the
+construct that assumed otherwise was the clamp introduced beside it.
+
+### Why every fixture missed it
+
+The exposed shape is a turn that does **not** end in a tool result — an ordinary user interjection after a
+repetitive stretch. With a trailing result the abandon check's survival disjuncts fire and rescue the turn;
+on a plain follow-up they structurally cannot, and nothing else bounded the tail. Every fixture in
+`cursor-blob` is a tool continuation. Measured across 42 carried-byte positions: 13 throws with the note
+armed, 0 without, all on the interjection tail.
+
+The note is now dropped when it cannot be paid for. That is this unit's own priority order, stated in the
+round 8 record and applied here: a missing instruction is recoverable, a missing tool result restarts the
+loop.
+
+### One inert condition removed rather than shipped
+
+The first version of the affordability test also required a free root slot. It could not be made to matter:
+60 boundary positions at and past the root limit behaved identically with and without it, because the count
+bound already stops at one surviving result. It is gone. Byte affordability alone decides.
+
+That is the second time in this unit an inert guard was written and then dropped, and the reason is worth
+recording: an envelope condition that cannot fail is indistinguishable from one that is wrong, so keeping it
+costs the next reader the same audit it cost this one.
+
+Also corrected: one `activeBytes > historyBudget` gate still read the gross budget while its body wrote the
+net one. Provably no behavioural difference — the entry has already been truncated to net by then — but it
+is the exact drift that seeded rounds 5 and 6.
+
+Mutation evidence: affordability removed → 3 red; tail appended regardless of affordability → 3 red.
+
+Four-suite total is 208 pass / 0 fail; `cursor-blob` alone 122. Every sweep re-run clean at this head: 42
+deficit positions, 60 count-boundary positions, 150 zero-budget boundary cases, 896 note-armed
+configurations, 1440-case call-answer invariant, 224-case count sweep, 78-position grid, 24 bare-call cases,
+and five multi-turn growth shapes surviving 200 turns.

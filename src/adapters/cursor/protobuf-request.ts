@@ -441,8 +441,30 @@ function rootPromptMessages(
     // and a block that divides the gross budget produces shares that cannot fit once it returns. Both
     // happened: the equal-share pass became structurally unfittable and fell through to deleting a whole
     // result, and the initiator-recovery block committed 51 bytes over the limit (audit r11, r12).
-    const syntheticCount = history.length - activeEnd;
-    const syntheticBytes = history.slice(activeEnd).reduce((sum, entry) => sum + entry.byteLength, 0);
+    // Affordability is decided BEFORE the reservation, because the reservation cannot represent a
+    // deficit. `Math.max(0, …)` turns "the note cannot be paid for" into "the note costs nothing", and
+    // the tail was appended regardless — so an envelope with 26 bytes free emitted a 246-byte note and
+    // overran by 220. Holding the tail out of `historyEntries` is what made that unrecoverable: no block
+    // below could see it to charge it.
+    //
+    // A trailing tool result hid this, because the abandon check's survival disjuncts rescue that shape.
+    // The exposed shape is a turn that does NOT end in a result — an ordinary user interjection after a
+    // repetitive stretch — where nothing else bounds the tail: 13 of 42 positions threw the
+    // non-retryable 400 with the note armed and none without it (audit r13).
+    //
+    // When it does not fit, the note is dropped. That is the unit's own priority order: a missing
+    // instruction is recoverable, a missing tool result restarts the loop this unit exists to end.
+    const syntheticEntries = history.slice(activeEnd);
+    const syntheticCountRaw = syntheticEntries.length;
+    const syntheticBytesRaw = syntheticEntries.reduce((sum, entry) => sum + entry.byteLength, 0);
+    // Bytes only. A count deficit cannot arise here: the count bound below already stops at one surviving
+    // result, so a slot for the tail is free whenever `historyLimit` is at least 1, and at 0 there is no
+    // history to append it to. Adding `historyLimit - syntheticCountRaw >= 1` made no difference across 60
+    // boundary positions at and past the root limit, and an inert condition on the envelope path is the
+    // same liability this unit removed once already (audit r13).
+    const syntheticAffordable = historyBudget - syntheticBytesRaw >= 0;
+    const syntheticCount = syntheticAffordable ? syntheticCountRaw : 0;
+    const syntheticBytes = syntheticAffordable ? syntheticBytesRaw : 0;
     const historyLimitForReal = Math.max(0, historyLimit - syntheticCount);
     const historyBudgetForReal = Math.max(0, historyBudget - syntheticBytes);
     const active = history
@@ -478,7 +500,7 @@ function rootPromptMessages(
       const dropped = active.shift();
       activeBytes -= dropped?.byteLength ?? 0;
     }
-    if (active.length === 1 && active[0] && activeBytes > historyBudget) {
+    if (active.length === 1 && active[0] && activeBytes > historyBudgetForReal) {
       const truncated = truncateToolResultBlob(active[0], historyBudgetForReal);
       if (truncated) {
         active[0] = truncated;
@@ -538,7 +560,7 @@ function rootPromptMessages(
       i = turnStart - 1;
     }
 
-    const trailingSynthetic = history.slice(activeEnd);
+    const trailingSynthetic = syntheticAffordable ? syntheticEntries : [];
     // Synthetic trailing roots — today only the repetition-breaker note — are held OUT of
     // `historyEntries` while the blocks below decide what survives, and appended once at assembly.
     //
