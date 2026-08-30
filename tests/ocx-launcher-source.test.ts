@@ -91,20 +91,26 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
 
   /**
    * Windows caps a process environment block at 32,767 characters. The inspection snapshot
-   * already carries the manager-root slots as proof-bound values, so inheriting them again
-   * spends that budget twice and a large-but-valid shell environment could stop the Bun
-   * child from spawning at all — the inspection command would exit before reporting.
+   * already carries PATH, PATHEXT, and the manager-root slots as proof-bound values, and
+   * `inspectCodexCliInstall` reads them from that snapshot rather than the live environment.
+   * Inheriting them again spends the budget twice, so a large-but-valid shell environment
+   * could stop the Bun child from spawning and fail the command before it reports anything.
    */
-  test("the inspection child does not inherit a duplicate copy of the snapshotted manager roots", () => {
+  test("the inspection child does not inherit a duplicate copy of the snapshotted values", () => {
     expect(source).toContain("const inheritedEnv = { ...process.env };");
-    expect(source).toContain("for (const name of CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS) delete inheritedEnv[name];");
+    expect(source).toContain('for (const name of ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS]) {');
+    expect(source).toContain("delete inheritedEnv[name];");
     expect(source).toContain("...inheritedEnv,");
-    // The spawn must no longer splat the raw environment, or the delete above is pointless.
+
+    // The de-duplication is scoped to the one-shot inspection launch; every other launch
+    // must still inherit PATH, or the long-running proxy child loses its tooling lookup.
+    const guard = source.indexOf("if (codexCliUpdateInspection) {", source.indexOf("const inheritedEnv"));
+    expect(guard).toBeGreaterThan(-1);
+
+    // The spawn must no longer splat the raw environment, or the deletes above are pointless.
     const spawnStart = source.indexOf("const child = spawn(bun, [cliPath,");
     expect(spawnStart).toBeGreaterThan(-1);
     expect(source.slice(spawnStart)).not.toContain("...process.env,");
-    // PATH and PATHEXT stay inherited: the child still needs them to resolve its own tooling.
-    expect(source.slice(spawnStart)).not.toContain("delete inheritedEnv.PATH");
   });
 
   test("valid Bun overrides are selected before the bundled runtime", () => {

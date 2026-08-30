@@ -564,8 +564,12 @@ const bun = bunRuntime.path;
 // interpolation and provider settings legitimately read the project environment.
 const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
   .filter(name => typeof process.env[name] === "string" && process.env[name] !== "");
+// A configured CODEX_CLI_PATH may legitimately be cwd-relative (`./tools/codex`), which the
+// ordinary runtime resolver accepts. Inspection only trusts absolute local paths, so capture
+// the absolute form here, in the launcher, while the original cwd is still authoritative.
+// Resolving it later would silently reinterpret it against a different working directory.
 const preBunCodexCliPath = typeof process.env.CODEX_CLI_PATH === "string" && process.env.CODEX_CLI_PATH !== ""
-  ? process.env.CODEX_CLI_PATH
+  ? resolve(process.env.CODEX_CLI_PATH)
   : null;
 const preBunPath = typeof process.env.PATH === "string" ? process.env.PATH : null;
 const preBunPathExt = typeof process.env.PATHEXT === "string" ? process.env.PATHEXT : null;
@@ -588,14 +592,17 @@ const launchContext = JSON.stringify({
     configDir: configDir(),
   } : null,
 });
-// Only the manager-root slots are dropped from the inherited environment: the snapshot above
-// already carries them as proof-bound values, and duplicating them counts twice against the
-// 32,767-character Windows environment block. PATH and PATHEXT are intentionally still
-// inherited, because the child needs them to resolve its own tooling; the snapshot copy is
-// what the inspection reads, so it must stay a pre-dotenv capture rather than a live lookup.
+// The inspection snapshot above already carries PATH, PATHEXT, and the manager-root slots as
+// proof-bound values, and `inspectCodexCliInstall` reads them from that snapshot rather than
+// from the live environment. Inheriting them again would spend the 32,767-character Windows
+// environment block twice, so a large-but-valid shell environment could stop the Bun child
+// from spawning and fail the command before it reports anything. Drop the duplicates for the
+// one-shot inspection launch only; every other launch inherits the environment unchanged.
 const inheritedEnv = { ...process.env };
 if (codexCliUpdateInspection) {
-  for (const name of CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS) delete inheritedEnv[name];
+  for (const name of ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS]) {
+    delete inheritedEnv[name];
+  }
 }
 const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2)], {
   stdio: "inherit",
