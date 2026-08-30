@@ -19,6 +19,39 @@ describe("isTransientUpstreamStatus", () => {
 });
 
 describe("fetchWithTransientRetry", () => {
+  test("attempts is one total-send budget, not a per-layer multiplier", async () => {
+    // The two layers used to multiply: attempts:3 meant 3 transient rounds each independently
+    // retrying 3 connection resets, so a single call could emit 9 upstream sends. This mixes
+    // resets and 503s precisely so a per-layer count would exceed the budget and be caught.
+    let sends = 0;
+    const script: Array<"reset" | number> = ["reset", 503, "reset", 503, 503, 503, 503, 503, 503];
+    const res = await fetchWithTransientRetry(async () => {
+      const step = script[sends++];
+      if (step === "reset") {
+        const err = new Error("socket hang up") as Error & { code?: string };
+        err.code = "ECONNRESET";
+        throw err;
+      }
+      return bodyResponse(step ?? 503);
+    }, { attempts: 3, slowAttemptMs: 60_000 });
+
+    // Exactly the budget: 3 real upstream requests, never 9.
+    expect(sends).toBe(3);
+    expect(res.status).toBe(503);
+    // Exhaustion returns the last response with its body intact.
+    expect((res as Response & { __wasCancelled: () => boolean }).__wasCancelled()).toBe(false);
+  });
+
+  test("a clean sequence still spends only what it needs", async () => {
+    let sends = 0;
+    const responses = [bodyResponse(503), bodyResponse(503), bodyResponse(200)];
+    const res = await fetchWithTransientRetry(async () => {
+      return responses[sends++]!;
+    }, { attempts: 3, slowAttemptMs: 60_000 });
+    expect(sends).toBe(3);
+    expect(res.status).toBe(200);
+  });
+
   test("retries a 502 then returns the 200; failed body is cancelled", async () => {
     const first = bodyResponse(502) as Response & { __wasCancelled: () => boolean };
     const responses = [first, bodyResponse(200)];
