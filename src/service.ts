@@ -46,7 +46,7 @@ import {
   hardenSecretPath,
 } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
-import { cachedCurrentWindowsIdentity } from "./lib/windows-user-principal";
+import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal } from "./lib/windows-user-principal";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { killWindowsSchedulerWrappers } from "./lib/windows-service-wrappers";
 import { maybeShowStarPrompt } from "./cli/star-prompt";
@@ -54,6 +54,7 @@ import { systemdProperty } from "./service-manager-probe";
 
 const LABEL = "com.opencodex.proxy";
 const TASK = "opencodex-proxy";
+const WINDOWS_TASK_DIAGNOSTIC_IDENTITY_TIMEOUT_MS = 5_000;
 
 export type ServiceBackend = "scheduler" | "native";
 
@@ -1964,7 +1965,9 @@ function windowsTaskHasSessionRecoveryTriggers(triggers: string, expectedUserId:
  * An unscoped trigger is accepted rather than rejected: the schema makes `UserId` optional,
  * the pre-existing `LogonTrigger` is unscoped for the same reason, and rejecting it would
  * mean an installation whose account lookup is unavailable loses session recovery entirely.
- * A trigger naming a DIFFERENT account is rejected, which is the case that actually matters.
+ * An explicitly scoped trigger is accepted only when the current account is known and matches.
+ * Treating an unknown expected identity as a wildcard would let a fresh status process accept a
+ * task bound to another user's session and suppress the repair that should replace it.
  */
 function windowsTaskTriggerScopeAcceptable(element: string, expectedUserId: string | undefined): boolean {
   // A prefixed `<t:UserId>` is a real scope this validator cannot read: taskXmlElementCount()
@@ -1972,8 +1975,10 @@ function windowsTaskTriggerScopeAcceptable(element: string, expectedUserId: stri
   // trigger would be accepted as unscoped even though it is bound to some other account.
   // Reject it outright rather than guess, and do so before the optional-field check.
   if (taskXmlHasPrefixedTag(element, "UserId")) return false;
-  if (taskXmlElementCount(element, "UserId") === 0) return true;
-  if (expectedUserId === undefined) return true;
+  const userIdCount = taskXmlElementCount(element, "UserId");
+  if (userIdCount === 0) return true;
+  if (userIdCount !== 1) return false;
+  if (expectedUserId === undefined) return false;
   return taskXmlDecodedValueEquals(element, "UserId", expectedUserId);
 }
 
@@ -1982,6 +1987,7 @@ export function windowsTaskRegistrationHealthy(
   xml: string,
   wscript = windowsWscript(),
   launcher = windowsLauncherVbsPath(),
+  expectedUserId: string | null = cachedCurrentWindowsIdentity()?.name ?? null,
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   // taskXmlSection() takes the FIRST match and the schema allows arbitrary XML under
@@ -2001,7 +2007,7 @@ export function windowsTaskRegistrationHealthy(
     // Without these the task can only recover at the next logon, so a disconnected session
     // leaves the proxy down indefinitely. Treating their absence as unhealthy is what lets
     // an already-registered task from an older install get repaired instead of staying broken.
-    && windowsTaskHasSessionRecoveryTriggers(triggers, cachedCurrentWindowsIdentity()?.name)
+    && windowsTaskHasSessionRecoveryTriggers(triggers, expectedUserId ?? undefined)
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
     && taskXmlRunLevelAcceptable(principal)
     && taskXmlOptionalValueEquals(settings, "Enabled", "true")
@@ -2030,6 +2036,7 @@ export function readWindowsSchedulerXmlState(
   xml: string,
   wscript?: string,
   launcher?: string,
+  expectedUserId: string | null = cachedCurrentWindowsIdentity()?.name ?? null,
 ): WindowsSchedulerXmlState {
   const installed = xml.length > 0;
   if (!installed) return { installed: false, enabled: false, registrationHealthy: false };
@@ -2039,7 +2046,7 @@ export function readWindowsSchedulerXmlState(
   return {
     installed: true,
     enabled: !hasData && taskXmlOptionalValueEquals(settings, "Enabled", "true"),
-    registrationHealthy: windowsTaskRegistrationHealthy(xml, wscript, launcher),
+    registrationHealthy: windowsTaskRegistrationHealthy(xml, wscript, launcher, expectedUserId),
   };
 }
 
@@ -2521,6 +2528,17 @@ async function restoreWindowsSchedulerTask(registeredXml: string): Promise<void>
   }
 }
 
+/** Compare two live scheduler snapshots conservatively without treating formatting as mutation. */
+function windowsSchedulerRegistrationMatchesSnapshot(currentXml: string, previousXml: string): boolean {
+  const normalize = (xml: string) => xml
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n?/g, "\n")
+    .trim();
+  const current = normalize(currentXml);
+  const previous = normalize(previousXml);
+  return current.length > 0 && previous.length > 0 && current === previous;
+}
+
 export interface RepairServiceDeps {
   diagnose?: () => ServiceDiagnostic;
   assertEnv?: () => void;
@@ -2533,7 +2551,7 @@ export interface RepairServiceDeps {
   repairNative?: () => void | Promise<void>;
   repairLaunchd?: () => void;
   repairSystemd?: () => void;
-  /** Reads the currently registered task XML; empty when it cannot be read. */
+  /** Reads live registered task XML; may be called again after failure, empty when unreadable. */
   readSchedulerXml?: () => string;
   /** Re-registers the task from freshly staged XML. Used only when the definition is stale. */
   reregisterScheduler?: () => Promise<void>;
@@ -2583,13 +2601,9 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     // stale, tells the user to run repair, and repair changes nothing it complains about.
     // Re-register only when the registered XML is actually stale, so the ordinary repair
     // stays free of `schtasks /create` and its UAC prompt.
-    const registeredXml = (deps.readSchedulerXml ?? statusWindowsXml)();
+    const readSchedulerXml = deps.readSchedulerXml ?? statusWindowsXml;
+    const registeredXml = readSchedulerXml();
     if (registeredXml.length > 0 && !windowsTaskRegistrationHealthy(registeredXml)) {
-      // The task was stopped above, so a failed replacement must not exit here: `/create /f`
-      // can be rejected, elevation can be cancelled, and staging or verification can fail.
-      // Any of those would leave a previously runnable proxy stopped and the user worse off
-      // than before the repair. Restart the definition still registered and surface the
-      // original failure instead.
       // The task was stopped above, so a failed replacement must not exit here: `/create /f`
       // can be rejected, elevation can be cancelled, and staging or verification can fail.
       // Any of those would leave a previously runnable proxy stopped and the user worse off
@@ -2600,10 +2614,21 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       } catch (err) {
         let restoreError: unknown;
         let restartError: unknown;
+        let previousRegistrationStillPresent = false;
         try {
-          await (deps.restoreScheduler ?? restoreWindowsSchedulerTask)(registeredXml);
-        } catch (error) {
-          restoreError = error;
+          previousRegistrationStillPresent = windowsSchedulerRegistrationMatchesSnapshot(
+            readSchedulerXml(),
+            registeredXml,
+          );
+        } catch {
+          // An unreadable post-failure state is not evidence that the prior definition survived.
+        }
+        if (!previousRegistrationStillPresent) {
+          try {
+            await (deps.restoreScheduler ?? restoreWindowsSchedulerTask)(registeredXml);
+          } catch (error) {
+            restoreError = error;
+          }
         }
         try {
           (deps.startScheduler ?? startWindows)();
@@ -2613,7 +2638,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
         if (restoreError || restartError) {
           throw new AggregateError(
             [err, restoreError, restartError].filter(error => error !== undefined),
-            "Task Scheduler repair failed and the previous registration could not be fully restored.",
+            "Task Scheduler repair failed and the previous service could not be fully resumed.",
           );
         }
         throw err;
@@ -3441,6 +3466,36 @@ export function serviceStartableFromTray(service: ServiceDiagnostic): boolean {
   return service.startable && !service.stale && !service.conflict;
 }
 
+export interface WindowsTaskDiagnosticIdentityDeps {
+  currentIdentity?: () => Readonly<{ name: string }> | null;
+  resolvePrincipal?: (timeoutMs: number) => string;
+}
+
+/**
+ * Resolve the effective account only when the registered task carries an explicit unprefixed
+ * trigger scope. Empty/unscoped tasks do not need identity and must not pay a repeated sync
+ * lookup timeout; prefixed scopes remain unreadable and fail closed in the XML validator.
+ */
+export function resolveWindowsTaskDiagnosticUserId(
+  schedulerXml: string,
+  deps: WindowsTaskDiagnosticIdentityDeps = {},
+): string | null {
+  const currentIdentity = deps.currentIdentity ?? cachedCurrentWindowsIdentity;
+  const cached = currentIdentity();
+  if (cached) return cached.name;
+
+  const scrubbed = taskXmlWithoutCommentsAndCdata(schedulerXml);
+  const triggers = taskXmlSection(scrubbed, "Triggers");
+  if (taskXmlElementCount(triggers, "UserId") === 0) return null;
+
+  try {
+    (deps.resolvePrincipal ?? resolveCurrentWindowsPrincipal)(WINDOWS_TASK_DIAGNOSTIC_IDENTITY_TIMEOUT_MS);
+  } catch {
+    return null;
+  }
+  return currentIdentity()?.name ?? null;
+}
+
 export interface WindowsServiceDiagnosticInputs {
   /**
    * Raw `schtasks /query /xml` output; empty when no task is registered. Passed as
@@ -3449,6 +3504,8 @@ export interface WindowsServiceDiagnosticInputs {
    * silently reintroduce the stale-status false positive (#432).
    */
   schedulerXml: string;
+  /** Resolved effective account for explicit scheduler trigger scopes; null means unknown. */
+  schedulerExpectedUserId?: string | null;
   /** Whether the on-disk service assets exist. A filesystem concern, not an XML one. */
   schedulerAssetsPresent: boolean;
   nativeStatus: "started" | "stopped" | "nonexistent" | "unknown";
@@ -3459,7 +3516,15 @@ export interface WindowsServiceDiagnosticInputs {
 }
 
 export function deriveWindowsServiceDiagnostic(inputs: WindowsServiceDiagnosticInputs): ServiceDiagnostic {
-  const schedulerState = readWindowsSchedulerXmlState(inputs.schedulerXml);
+  const expectedUserId = inputs.schedulerExpectedUserId === undefined
+    ? cachedCurrentWindowsIdentity()?.name ?? null
+    : inputs.schedulerExpectedUserId;
+  const schedulerState = readWindowsSchedulerXmlState(
+    inputs.schedulerXml,
+    undefined,
+    undefined,
+    expectedUserId,
+  );
   const schedulerInstalled = schedulerState.installed;
   const schedulerEnabled = schedulerState.enabled;
   const schedulerAssetsHealthy = inputs.schedulerAssetsPresent && schedulerState.registrationHealthy;
@@ -3505,6 +3570,17 @@ export function deriveWindowsServiceDiagnostic(inputs: WindowsServiceDiagnosticI
   };
 }
 
+/** Bind the live Windows identity to a scheduler snapshot before deriving service health. */
+export function deriveWindowsServiceDiagnosticForCurrentUser(
+  inputs: Omit<WindowsServiceDiagnosticInputs, "schedulerExpectedUserId">,
+  identityDeps: WindowsTaskDiagnosticIdentityDeps = {},
+): ServiceDiagnostic {
+  return deriveWindowsServiceDiagnostic({
+    ...inputs,
+    schedulerExpectedUserId: resolveWindowsTaskDiagnosticUserId(inputs.schedulerXml, identityDeps),
+  });
+}
+
 /**
  * Fail-closed restart diagnostic. Presence alone is never enough: conflicting
  * managers, stale baked paths, disabled registrations, and unknown/stopped
@@ -3532,7 +3608,7 @@ export function diagnoseService(): ServiceDiagnostic {
     const recordedBackend: ServiceBackend | null = !installState
       ? null
       : installState.backend === "native" ? "native" : "scheduler";
-    return deriveWindowsServiceDiagnostic({
+    return deriveWindowsServiceDiagnosticForCurrentUser({
       schedulerXml,
       schedulerAssetsPresent,
       nativeStatus,
