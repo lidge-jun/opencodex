@@ -344,7 +344,9 @@ describe("provider management validation", () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
-    saveConfig(config("127.0.0.1"));
+    // The canonical seed path only engages for the real forward seed, so the plain fixture
+    // provider would never reach the comparison this test exists to cover.
+    saveConfig({ ...config("127.0.0.1"), providers: poolProviders() });
 
     const server = startServer(0);
     try {
