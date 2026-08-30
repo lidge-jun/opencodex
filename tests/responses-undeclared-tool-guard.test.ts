@@ -1376,30 +1376,61 @@ describe("empty and absent tool catalogs", () => {
     expect(refusedBody.error.message).toContain('undeclared client tool "apply_patch"');
   });
 
-  test("a bare tool_choice selecting a namespaced exec does not authorize the helper names", () => {
-    // The bridge maps alias a namespaced tool under its bare name when `tool_choice` selected it
-    // unambiguously, and the live guard merges those maps into the declared set. For `exec` that
-    // alias would switch nested-helper normalization back on, so selecting an MCP `exec` would
-    // re-authorize the shell bridge the request never declared.
-    return post(
-      false,
-      [{
-        type: "namespace",
-        name: "mcp__functions",
-        tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+  test("a bare tool_choice restores only its unambiguous namespaced exec", async () => {
+    const tools = [{
+      type: "namespace",
+      name: "mcp__functions",
+      tools: [{ type: "function", name: "exec", description: "Run a command", parameters: { type: "object" } }],
+    }];
+    const toolChoice = { type: "function", name: "exec" };
+    const upstreamCall = (name: string) => () => Response.json({
+      id: `resp_${name}`,
+      status: "completed",
+      output: [{
+        type: "function_call",
+        id: `fc_${name}`,
+        call_id: `call_${name}`,
+        name,
+        arguments: "{}",
+        status: "completed",
       }],
-      jsonUpstream,
+    });
+
+    const accepted = await post(
+      false,
+      tools,
+      upstreamCall("exec"),
       undefined,
       config,
       [],
       "fixture/deepseek-v4-flash",
       undefined,
-      { type: "allowed_tools", mode: "required", tools: [{ type: "custom", name: "exec" }] },
-    ).then(async response => {
-      expect(response.status).toBe(502);
-      const body = await response.json() as { error: { message: string } };
-      expect(body.error.message).toContain('undeclared client tool "apply_patch"');
+      toolChoice,
+    );
+    expect(accepted.status).toBe(200);
+    const acceptedBody = await accepted.json() as { output: Array<Record<string, unknown>> };
+    expect(acceptedBody.output[0]).toMatchObject({
+      type: "function_call",
+      name: "exec",
+      namespace: "mcp__functions",
     });
+
+    for (const name of ["apply_patch", "exec_command", "shell_command"]) {
+      const refused = await post(
+        false,
+        tools,
+        upstreamCall(name),
+        undefined,
+        config,
+        [],
+        "fixture/deepseek-v4-flash",
+        undefined,
+        toolChoice,
+      );
+      expect(refused.status).toBe(502);
+      const body = await refused.json() as { error: { message: string } };
+      expect(body.error.message).toContain(`undeclared client tool "${name}"`);
+    }
   });
 
   test("a request that really declares a bare exec still accepts the helper names", () => {
