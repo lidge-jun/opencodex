@@ -196,6 +196,20 @@ export function captureCodexPreImages(): CodexPreImages {
  */
 export const CODEX_PROVENANCE_MAX_TRANSACTIONS = 16;
 
+/**
+ * How many serialized bytes of evidence the ledger keeps.
+ *
+ * The transaction window alone bounds the ledger only if each transaction is small, and a
+ * baseline embeds the artifact's exact bytes. Those artifacts sit outside this proxy's trust
+ * boundary: a native `config.toml` grown to hundreds of megabytes is copied into the record as
+ * base64 and re-serialized on every append, so a single oversized file turns a 16-transaction
+ * window into a multi-gigabyte write.
+ *
+ * 1 MiB holds a normal 16-transaction window many times over, so ordinary evidence is never
+ * touched and only the pathological case is refused.
+ */
+export const CODEX_PROVENANCE_MAX_BYTES = 1024 * 1024;
+
 function provenanceBaseline(bytes: string | null): CodexProvenanceEntry["baseline"] {
   if (bytes === null) return { kind: "absent" };
   return {
@@ -214,21 +228,40 @@ function provenancePostImage(path: string): string | null {
 }
 
 /**
- * Keep the newest `CODEX_PROVENANCE_MAX_TRANSACTIONS` transactions, whole.
+ * Keep the newest transactions that fit both the transaction window and the byte ceiling, whole.
  *
  * Trimming by ENTRY count would cut a transaction in half and leave evidence that says a
  * transaction touched two artifacts when it touched three — worse than dropping it outright,
  * because a partial record still reads as complete. Order is preserved; only whole leading
  * transactions are removed.
+ *
+ * The byte ceiling applies the same rule: a transaction that does not fit is omitted whole,
+ * including the newest one — a record silently truncated to fit would be read as a faithful
+ * pre-image. An oversized transaction is skipped rather than ending the scan, so one pathological
+ * artifact cannot erase the smaller transactions that still fit and are still diagnosable.
  */
 export function boundProvenanceEntries(
   entries: readonly CodexProvenanceEntry[],
   maxTransactions = CODEX_PROVENANCE_MAX_TRANSACTIONS,
+  maxBytes = CODEX_PROVENANCE_MAX_BYTES,
 ): readonly CodexProvenanceEntry[] {
   const order: string[] = [];
   for (const entry of entries) if (!order.includes(entry.txId)) order.push(entry.txId);
-  if (order.length <= maxTransactions) return entries;
-  const keep = new Set(order.slice(order.length - maxTransactions));
+  const windowed = order.length <= maxTransactions
+    ? order
+    : order.slice(order.length - maxTransactions);
+  // Newest first, so the transactions anyone diagnoses against are the ones that fit.
+  const keep = new Set<string>();
+  let bytes = 0;
+  for (let i = windowed.length - 1; i >= 0; i--) {
+    const txId = windowed[i]!;
+    const txEntries = entries.filter(entry => entry.txId === txId);
+    const txBytes = Buffer.byteLength(JSON.stringify(txEntries), "utf-8");
+    if (bytes + txBytes > maxBytes) continue;
+    bytes += txBytes;
+    keep.add(txId);
+  }
+  if (keep.size === order.length) return entries;
   return entries.filter(entry => keep.has(entry.txId));
 }
 

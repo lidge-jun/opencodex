@@ -15,7 +15,11 @@ import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
-import { boundProvenanceEntries, STABLE_ZERO_BYTE_COORDINATOR_AGE_MS } from "../src/codex/inject-coordination";
+import {
+  boundProvenanceEntries,
+  CODEX_PROVENANCE_MAX_BYTES,
+  STABLE_ZERO_BYTE_COORDINATOR_AGE_MS,
+} from "../src/codex/inject-coordination";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -507,5 +511,49 @@ describe("provenance ledger bound", () => {
   test("a ledger within the window is returned unchanged", () => {
     const entries = Array.from({ length: 16 }, (_, i) => transaction(`tx-${i}`)).flat();
     expect(boundProvenanceEntries(entries, 16)).toBe(entries);
+  });
+
+  test("an oversized baseline is omitted whole rather than amplified into the record", () => {
+    // The native artifacts sit outside this proxy's trust boundary, so a `config.toml` grown to
+    // an arbitrary size would otherwise be copied into the record as base64 and re-serialized on
+    // every append — the transaction window alone does not bound that.
+    const huge = (txId: string) => transaction(txId).map(entry => ({
+      ...entry,
+      baseline: {
+        kind: "present" as const,
+        sha256: "0".repeat(64),
+        bytesBase64: "A".repeat(CODEX_PROVENANCE_MAX_BYTES),
+      },
+    }));
+    const entries = [...transaction("tx-small"), ...huge("tx-huge")];
+
+    const bounded = boundProvenanceEntries(entries, 16);
+
+    expect(bounded.map(e => e.txId)).toEqual(["tx-small", "tx-small", "tx-small"]);
+    expect(Buffer.byteLength(JSON.stringify(bounded), "utf-8"))
+      .toBeLessThanOrEqual(CODEX_PROVENANCE_MAX_BYTES);
+  });
+
+  test("the byte ceiling drops whole transactions, oldest first", () => {
+    const padded = (txId: string) => transaction(txId).map(entry => ({
+      ...entry,
+      baseline: {
+        kind: "present" as const,
+        sha256: "0".repeat(64),
+        bytesBase64: "A".repeat(120 * 1024),
+      },
+    }));
+    const entries = Array.from({ length: 6 }, (_, i) => padded(`tx-${i}`)).flat();
+
+    const bounded = boundProvenanceEntries(entries, 16);
+    const kept = [...new Set(bounded.map(e => e.txId))];
+
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(6);
+    // Newest survive; the dropped ones are the oldest, and each survivor is whole.
+    expect(kept.at(-1)).toBe("tx-5");
+    for (const txId of kept) expect(bounded.filter(e => e.txId === txId)).toHaveLength(3);
+    expect(Buffer.byteLength(JSON.stringify(bounded), "utf-8"))
+      .toBeLessThanOrEqual(CODEX_PROVENANCE_MAX_BYTES);
   });
 });
