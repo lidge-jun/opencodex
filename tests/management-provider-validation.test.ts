@@ -809,7 +809,7 @@ describe("provider management validation", () => {
 
     const server = startServer(0);
     try {
-      const setFalse = await fetch(new URL("/api/providers/openai", server.url), {
+      const setFalse = await fetch(new URL("/api/providers?name=openai", server.url), {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ annotateEmptyToolOutputs: false }),
@@ -817,7 +817,7 @@ describe("provider management validation", () => {
       expect(setFalse.status).toBe(200);
       expect(loadConfig().providers.openai?.annotateEmptyToolOutputs).toBe(false);
 
-      const setTrue = await fetch(new URL("/api/providers/openai", server.url), {
+      const setTrue = await fetch(new URL("/api/providers?name=openai", server.url), {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ annotateEmptyToolOutputs: true }),
@@ -826,7 +826,7 @@ describe("provider management validation", () => {
       expect(loadConfig().providers.openai?.annotateEmptyToolOutputs).toBe(true);
 
       // null clears the overlay and returns the provider to registry-default behavior.
-      const clear = await fetch(new URL("/api/providers/openai", server.url), {
+      const clear = await fetch(new URL("/api/providers?name=openai", server.url), {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ annotateEmptyToolOutputs: null }),
