@@ -204,7 +204,7 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
       "",
       ...(out !== undefined ? [`Wrote ${out}`] : []),
       `Destination: ${spec.destination(process.env)}`,
-      "Merge these provider blocks into that file; do not replace it.",
+      "Merge this generated configuration into that file; do not replace it.",
       `Before launching: ${spec.exportHint}`,
       `${models.length} model${models.length === 1 ? "" : "s"}; ${degraded} omit context limits (the client applies its own defaults).`,
     ]);
