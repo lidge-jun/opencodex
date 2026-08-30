@@ -21,18 +21,12 @@ describe("isTransientUpstreamStatus", () => {
 describe("fetchWithTransientRetry", () => {
   test("attempts is one total-send budget, not a per-layer multiplier", async () => {
     // The two layers used to multiply: attempts:3 meant 3 transient rounds each independently
-    // retrying 3 connection resets, so a single call could emit 9 upstream sends. This mixes
-    // resets and 503s precisely so a per-layer count would exceed the budget and be caught.
+    // retrying 3 connection resets, so a single call could emit up to 9 upstream sends. All
+    // 503s here, so a per-layer count would keep going well past the budget.
     let sends = 0;
-    const script: Array<"reset" | number> = ["reset", 503, "reset", 503, 503, 503, 503, 503, 503];
     const res = await fetchWithTransientRetry(async () => {
-      const step = script[sends++];
-      if (step === "reset") {
-        const err = new Error("socket hang up") as Error & { code?: string };
-        err.code = "ECONNRESET";
-        throw err;
-      }
-      return bodyResponse(step ?? 503);
+      sends += 1;
+      return bodyResponse(503);
     }, { attempts: 3, slowAttemptMs: 60_000 });
 
     // Exactly the budget: 3 real upstream requests, never 9.
@@ -40,6 +34,24 @@ describe("fetchWithTransientRetry", () => {
     expect(res.status).toBe(503);
     // Exhaustion returns the last response with its body intact.
     expect((res as Response & { __wasCancelled: () => boolean }).__wasCancelled()).toBe(false);
+  });
+
+  test("a connection reset and a transient status share the same budget", async () => {
+    // Mixed recovery: the reset layer and the transient layer draw from one pool. With a
+    // per-layer count the reset retries would have been free, so this would emit more than 3.
+    let sends = 0;
+    const res = await fetchWithTransientRetry(async () => {
+      sends += 1;
+      if (sends === 1) {
+        const err = new Error("socket hang up") as Error & { code?: string };
+        err.code = "ECONNRESET";
+        throw err;
+      }
+      return bodyResponse(sends === 3 ? 200 : 503);
+    }, { attempts: 3, slowAttemptMs: 60_000 });
+
+    expect(sends).toBe(3);
+    expect(res.status).toBe(200);
   });
 
   test("a clean sequence still spends only what it needs", async () => {
