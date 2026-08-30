@@ -1810,8 +1810,8 @@ export function buildWindowsTaskXml(
       <Enabled>true</Enabled>
     </LogonTrigger>
     ${WINDOWS_SESSION_RECOVERY_STATE_CHANGES.map(stateChange => `<SessionStateChangeTrigger>
-      <Enabled>true</Enabled>
-      <StateChange>${stateChange}</StateChange>${sessionUserIdElement}
+      <Enabled>true</Enabled>${sessionUserIdElement}
+      <StateChange>${stateChange}</StateChange>
     </SessionStateChangeTrigger>`).join("\n    ")}
   </Triggers>
   <Principals>
@@ -1967,6 +1967,11 @@ function windowsTaskHasSessionRecoveryTriggers(triggers: string, expectedUserId:
  * A trigger naming a DIFFERENT account is rejected, which is the case that actually matters.
  */
 function windowsTaskTriggerScopeAcceptable(element: string, expectedUserId: string | undefined): boolean {
+  // A prefixed `<t:UserId>` is a real scope this validator cannot read: taskXmlElementCount()
+  // counts only unprefixed tags, so without this the element below would look ABSENT and the
+  // trigger would be accepted as unscoped even though it is bound to some other account.
+  // Reject it outright rather than guess, and do so before the optional-field check.
+  if (taskXmlHasPrefixedTag(element, "UserId")) return false;
   if (taskXmlElementCount(element, "UserId") === 0) return true;
   if (expectedUserId === undefined) return true;
   return taskXmlDecodedValueEquals(element, "UserId", expectedUserId);
@@ -2509,7 +2514,22 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     // stays free of `schtasks /create` and its UAC prompt.
     const registeredXml = (deps.readSchedulerXml ?? statusWindowsXml)();
     if (registeredXml.length > 0 && !windowsTaskRegistrationHealthy(registeredXml)) {
-      await (deps.reregisterScheduler ?? reregisterWindowsSchedulerTask)();
+      // The task was stopped above, so a failed replacement must not exit here: `/create /f`
+      // can be rejected, elevation can be cancelled, and staging or verification can fail.
+      // Any of those would leave a previously runnable proxy stopped and the user worse off
+      // than before the repair. Restart the definition still registered and surface the
+      // original failure instead.
+      // The task was stopped above, so a failed replacement must not exit here: `/create /f`
+      // can be rejected, elevation can be cancelled, and staging or verification can fail.
+      // Any of those would leave a previously runnable proxy stopped and the user worse off
+      // than before the repair. Restart the definition still registered and surface the
+      // original failure instead.
+      try {
+        await (deps.reregisterScheduler ?? reregisterWindowsSchedulerTask)();
+      } catch (err) {
+        try { (deps.startScheduler ?? startWindows)(); } catch { /* nothing left to preserve */ }
+        throw err;
+      }
     }
     (deps.startScheduler ?? startWindows)();
     (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();

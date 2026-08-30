@@ -507,7 +507,42 @@ describe("Windows service task", () => {
     expect(unscoped).not.toContain("<UserId>");
   });
 
+  /**
+   * sessionStateChangeTriggerType orders its children as optional `UserId`, optional `Delay`,
+   * then required `StateChange`. Emitting `StateChange` first still satisfies the local string
+   * validator, so only an order assertion catches it — and `schtasks /create` rejects the
+   * document, which means the scoped install and the stale-task repair both fail on a real
+   * Windows host while every unit test stays green.
+   */
+  test("emits UserId before StateChange so a scoped task passes schema validation", () => {
+    const scoped = buildWindowsTaskXml("s.cmd", "l.vbs", undefined, "MACHINE\\installer");
+    const elements = scoped.match(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>/gi) ?? [];
+    expect(elements).toHaveLength(3);
+    for (const element of elements) {
+      const userIdAt = element.indexOf("<UserId>");
+      const stateChangeAt = element.indexOf("<StateChange>");
+      expect(userIdAt).toBeGreaterThan(-1);
+      expect(stateChangeAt).toBeGreaterThan(-1);
+      expect(userIdAt).toBeLessThan(stateChangeAt);
+    }
+  });
+
   test("validates the registered scheduler action, trigger, principal, and settings", () => {
+    // Guard first: a prefixed <t:UserId> is a real scope the unprefixed element counter cannot
+    // see. Treating it as ABSENT would accept a task bound to somebody else's session as
+    // healthy, and repair would then leave that foreign scope in place.
+    const guardWscript = "C:\\Windows\\System32\\wscript.exe";
+    const guardLauncher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const guardXml = buildWindowsTaskXml("ignored.cmd", guardLauncher, undefined, "")
+      .replace(/<Command>.*?<\/Command>/, `<Command>${guardWscript}</Command>`);
+    expect(windowsTaskRegistrationHealthy(guardXml, guardWscript, guardLauncher)).toBe(true);
+    const foreignPrefixed = guardXml.replace(
+      /(<SessionStateChangeTrigger>\s*<Enabled>true<\/Enabled>)/i,
+      "$1\n      <t:UserId>OTHER\\\\account</t:UserId>",
+    );
+    expect(foreignPrefixed).toContain("<t:UserId>");
+    expect(windowsTaskRegistrationHealthy(foreignPrefixed, guardWscript, guardLauncher)).toBe(false);
+
     const wscript = "C:\\Windows\\System32\\wscript.exe";
     const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
     const xml = buildWindowsTaskXml("ignored.cmd", launcher).replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
@@ -2172,6 +2207,43 @@ describe("service repair", () => {
     });
     expect(calls).toEqual(["env", "auth", "stop", "assets", "start", "state"]);
   });
+
+  /**
+   * Repair stops the task before replacing a stale definition, so a failed replacement must
+   * not exit while the proxy is down. `schtasks /create /f` can be rejected outright and an
+   * elevation prompt can be cancelled; either one used to leave a previously runnable proxy
+   * stopped, which is strictly worse than the stale registration the user started with.
+   */
+  for (const [label, failure] of [
+    ["registration is rejected", new Error("ERROR: Access is denied.")],
+    ["elevation is cancelled", new Error("The operation was canceled by the user.")],
+  ] as const) {
+    test(`repair restarts the existing task when ${label}`, async () => {
+      const calls: string[] = [];
+      const stale = buildWindowsTaskXml("s.cmd", "l.vbs")
+        .replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+      expect(windowsTaskRegistrationHealthy(stale, "s.cmd", "l.vbs")).toBe(false);
+
+      await expect(repairService({
+        platform: "win32",
+        diagnose: () => baseDiag,
+        assertEnv: () => { calls.push("env"); },
+        assertAuth: () => { calls.push("auth"); },
+        stopScheduler: () => { calls.push("stop"); },
+        writeSchedulerAssets: () => { calls.push("assets"); },
+        readSchedulerXml: () => stale,
+        reregisterScheduler: async () => { calls.push("reregister"); throw failure; },
+        startScheduler: () => { calls.push("start"); },
+        writeSchedulerState: () => { calls.push("state"); },
+        repairNative: async () => { calls.push("native"); },
+        repairSystemd: () => { calls.push("systemd"); },
+      })).rejects.toThrow(failure.message);
+
+      // The proxy is running again on the definition that is still registered, and the
+      // install state is NOT rewritten because the replacement did not happen.
+      expect(calls).toEqual(["env", "auth", "stop", "assets", "reregister", "start"]);
+    });
+  }
 
   test("repair rejects when nothing is installed", async () => {
     await expect(repairService({
