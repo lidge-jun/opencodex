@@ -158,3 +158,29 @@ committing.
 `MAINTAINERS.md`: after a release publishes, a `dev` version-bump PR is opened
 automatically; merging it is part of closing out the release. Note that the workflow
 only runs once it is on `main`.
+
+## As implemented
+
+Shipped in `075a33be8`. Three deviations from the sketch above, recorded because each
+was forced by the tree rather than chosen:
+
+1. **Bun setup uses the repository's composite action**, `./.github/actions/setup-project-bun`,
+   not a hand-pinned `oven-sh/setup-bun` SHA. That action resolves the version from
+   `package.json` so the runtime source of truth stays in one place; an independently
+   pinned SHA here would have drifted from every other job. The first draft of the
+   workflow pinned its own and disagreed with the one already in the tree.
+2. **`parseReleaseTag` is not exported** from `release-notes.ts`, so the script does its
+   own shape parse rather than widening that module's surface for one caller. Only
+   `compareReleaseTags` is imported.
+3. **A `v`-prefix normaliser was required.** The workflow passes
+   `github.event.release.tag_name` (`v2.36.0`) while `package.json` holds a bare version,
+   so prefixing blindly built `vv2.36.0` and every comparison against it misordered. It
+   surfaced as the script rejecting a correct candidate: "candidate 2.37.0 does not rank
+   ahead of released v2.36.0". Now pinned by a test.
+
+The tests also caught a defect the plan did not anticipate. The ahead-check originally
+compared `dev` against the CANDIDATE, which is the wrong question: a `dev` at
+`2.37.0-preview.1` with `2.36.0` published is genuinely ahead of the release but behind
+the candidate `2.37.0`, so the script would have "repaired" a healthy tree and
+downgraded a legitimate prerelease line. It now compares against the released version,
+which is the same question `release-version-line.test.ts` asks.
