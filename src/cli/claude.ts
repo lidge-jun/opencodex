@@ -132,6 +132,10 @@ export function buildClaudeEnv(
         const replacement = `http://127.0.0.1:${port}`;
         console.error(`⚠ Replacing stale opencodex ANTHROPIC_BASE_URL ${parsed.origin} with ${replacement}.`);
         env.ANTHROPIC_BASE_URL = replacement;
+        // Credentials paired with the replaced local proxy belong to that old proxy.
+        // Let Claude Code use its own claude.ai OAuth for this subscription launch.
+        delete env.ANTHROPIC_AUTH_TOKEN;
+        delete env.ANTHROPIC_API_KEY;
       }
     } catch {
       // Preserve user-provided values that are not parseable URLs.
@@ -192,13 +196,14 @@ export function buildClaudeEnv(
   if (resolved.origin === "auto-unknown") {
     console.error("⚠ Claude 인증을 확인하지 못했습니다 — 구독 방식으로 진행합니다. GUI에서 인증 모드를 직접 지정하면 이 판단을 덮어쓸 수 있습니다.");
   }
-  // NOTE: do NOT set _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL here. While it enables
-  // Design/Remote Control, it DISABLES gateway model discovery (Claude Code's eligibility
-  // check returns false when isFirstPartyBaseUrl() is true). Model routing through the
-  // proxy is essential; Design/Remote Control are secondary features.
-  // Connectors still work because they check OAuth state ($o()), not base URL (Gd()).
-  // Native /model picker discovery ("From gateway", Claude Code >= 2.1.129).
-  setDefault("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
+  // Gateway discovery makes Claude Code build a much larger provider-mode prompt, even
+  // when the request is natively passed through. Preserve native prompt/cache accounting
+  // by default; users who disable native passthrough retain gateway model discovery.
+  if (config.claudeCode?.nativePassthrough !== false) {
+    setDefault("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL", "1");
+  } else {
+    setDefault("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
+  }
   // Host-managed routing guard (devlog 260720_claude_authmode_persist/020): with
   // this flag in the spawn env, Claude Code strips provider-managed vars
   // (ANTHROPIC_BASE_URL/AUTH_TOKEN/API_KEY, model slots) from settings-sourced

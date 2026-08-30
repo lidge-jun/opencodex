@@ -60,7 +60,7 @@ describe("ocx claude env assembly", () => {
     expect(notice).toContain("did not create an OS sandbox");
   });
 
-  test("injects base URL, discovery flag and model slots — NO auth token by default (subscription mode)", () => {
+  test("injects first-party mode and model slots — NO auth token by default (subscription mode)", () => {
     const env = buildClaudeEnv(cfg({
       claudeCode: { model: "claude-ocx-gemini--gemini-3-pro", smallFastModel: "gemini/gemini-3-flash" },
     }), 10123, {}, {}, AUTH_PRESENT);
@@ -68,13 +68,18 @@ describe("ocx claude env assembly", () => {
     // Setting ANTHROPIC_AUTH_TOKEN disables claude.ai connectors and kills subscription
     // OAuth — the launcher must leave it unset on an open loopback proxy.
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
-    expect(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("1");
+    expect(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBeUndefined();
     expect(env.ANTHROPIC_MODEL).toBe("claude-ocx-gemini--gemini-3-pro");
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("gemini/gemini-3-flash");
     expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe("gemini/gemini-3-flash");
     // Never both token vars (Claude Code auth-conflict warning, 003 E1).
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-    // Do NOT set _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL — it disables gateway model discovery.
+    expect(env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL).toBe("1");
+  });
+
+  test("disabling native passthrough restores gateway model discovery", () => {
+    const env = buildClaudeEnv(cfg({ claudeCode: { nativePassthrough: false } }), 10100, {}, {}, AUTH_PRESENT);
+    expect(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("1");
     expect(env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL).toBeUndefined();
   });
 
@@ -255,6 +260,20 @@ describe("ocx claude env assembly", () => {
     }), 10100, {}, windows);
     expect(env.ANTHROPIC_MODEL).toBe("mock/big");
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+  });
+
+  test("stale local proxy credentials do not override subscription OAuth", () => {
+    const env = buildClaudeEnv(cfg(), 10100, {
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:18765",
+      ANTHROPIC_AUTH_TOKEN: "old-proxy-token",
+      ANTHROPIC_API_KEY: "old-proxy-key",
+    }, {}, {
+      ...AUTH_PRESENT,
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    });
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
   });
 
   test("user-exported env always wins; unset slots stay unset", () => {
