@@ -30,7 +30,6 @@ export function useProviderBatchController(): ProviderBatchController {
   const nextBatchIdRef = useRef(0);
   /** Identity of the currently-active batch; stale callbacks see a mismatch and bail out. */
   const activeBatchRef = useRef<{ id: number; controller: AbortController } | null>(null);
-  const batchTestingRef = useRef(false);
   const [batchTestingState, setBatchTestingState] = useState(false);
 
   const cancelMountedBatch = useCallback(() => {
@@ -38,7 +37,6 @@ export function useProviderBatchController(): ProviderBatchController {
     if (!active) return;
     active.controller.abort();
     activeBatchRef.current = null;
-    batchTestingRef.current = false;
     setBatchTestingState(false);
   }, []);
 
@@ -53,7 +51,6 @@ export function useProviderBatchController(): ProviderBatchController {
     const batchId = ++nextBatchIdRef.current;
     const controller = new AbortController();
     activeBatchRef.current = { id: batchId, controller };
-    batchTestingRef.current = true;
     setBatchTestingState(true);
     return controller;
   }, []);

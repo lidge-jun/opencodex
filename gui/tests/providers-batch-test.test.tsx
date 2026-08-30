@@ -809,35 +809,32 @@ test("16. same-base config refresh cancels in-flight batch", async () => {
   const hc = hcRef!;
 
   // Start batch A
-  const controllerA = hc.startBatch();
-  // Force re-render by triggering a dummy state update
-  await act(async () => {
-    batchTestingRef = hc.batchTesting;
-  });
+  let controllerA!: AbortController;
+  await act(async () => { controllerA = hcRef!.startBatch(); });
+  await act(async () => { batchTestingRef = hcRef!.batchTesting; });
   expect(batchTestingRef).toBe(true);
   expect(controllerA.signal.aborted).toBe(false);
 
   // Simulate config refresh: call cancelMountedBatch (same effect as generation bump)
-  hc.cancelMountedBatch();
-  await act(async () => {
-    batchTestingRef = hc.batchTesting;
-  });
+  await act(async () => { hcRef!.cancelMountedBatch(); });
+  await act(async () => { batchTestingRef = hcRef!.batchTesting; });
   expect(batchTestingRef).toBe(false);
   expect(controllerA.signal.aborted).toBe(true);
-  expect(hc.isActiveBatch(controllerA)).toBe(false);
+  expect(hcRef!.isActiveBatch(controllerA)).toBe(false);
 
   // Start batch B
-  const controllerB = hc.startBatch();
+  let controllerB!: AbortController;
+  await act(async () => { controllerB = hcRef!.startBatch(); });
   await act(async () => {
-    batchTestingRef = hc.batchTesting;
+    batchTestingRef = hcRef!.batchTesting;
   });
   expect(batchTestingRef).toBe(true);
   expect(controllerB.signal.aborted).toBe(false);
-  expect(hc.isActiveBatch(controllerB)).toBe(true);
-  expect(hc.isActiveBatch(controllerA)).toBe(false);
+  expect(hcRef!.isActiveBatch(controllerB)).toBe(true);
+  expect(hcRef!.isActiveBatch(controllerA)).toBe(false);
 
   // Unmount cleanup
-  hc.abortBatchOnUnmount();
+  hcRef!.abortBatchOnUnmount();
   expect(controllerB.signal.aborted).toBe(true);
 
   await act(async () => { root.unmount(); });
