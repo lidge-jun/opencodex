@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { fetchWithTransientRetry, isTransientUpstreamStatus } from "../src/lib/upstream-retry";
+import { transientRetryPolicyFor } from "../src/providers/key-failover";
+import type { OcxProviderConfig } from "../src/types";
 
 function bodyResponse(status: number, headers?: Record<string, string>): Response {
   // ReadableStream body so cancel() is observable.
@@ -15,6 +17,35 @@ describe("isTransientUpstreamStatus", () => {
   test("classifies gateway/Cloudflare transients, excludes 4xx and 507", () => {
     for (const s of [500, 502, 503, 504, 520, 521, 522]) expect(isTransientUpstreamStatus(s)).toBe(true);
     for (const s of [200, 400, 401, 429, 499, 507, 529]) expect(isTransientUpstreamStatus(s)).toBe(false);
+  });
+});
+
+describe("transientRetryPolicyFor", () => {
+  const base = { adapter: "openai-chat", authMode: "key" } as unknown as OcxProviderConfig;
+
+  test("is off unless the provider opts in", () => {
+    expect(transientRetryPolicyFor(base)).toBeNull();
+    expect(transientRetryPolicyFor({ ...base, transientRetryOn5xx: { enabled: false } })).toBeNull();
+  });
+
+  test("a bare object opts in with defaults", () => {
+    expect(transientRetryPolicyFor({ ...base, transientRetryOn5xx: {} })).toEqual({ enabled: true, attempts: 3 });
+    expect(transientRetryPolicyFor({ ...base, transientRetryOn5xx: { attempts: 5 } })).toEqual({ enabled: true, attempts: 5 });
+  });
+
+  test("only key-auth openai-chat qualifies", () => {
+    // The adapter gate is the accepted scope, not an incidental detail: without it any
+    // generic key-auth provider would inherit the policy.
+    for (const adapter of ["openai-responses", "anthropic", "google"]) {
+      expect(transientRetryPolicyFor({ ...base, adapter, transientRetryOn5xx: {} } as unknown as OcxProviderConfig)).toBeNull();
+    }
+    // Fail closed on credential shape: OAuth/forward/local are never replayed here.
+    for (const authMode of ["oauth", "forward", "local"]) {
+      expect(transientRetryPolicyFor({ ...base, authMode, transientRetryOn5xx: {} } as unknown as OcxProviderConfig)).toBeNull();
+    }
+    // An omitted authMode is the documented key-auth default for custom providers.
+    expect(transientRetryPolicyFor({ adapter: "openai-chat", transientRetryOn5xx: {} } as unknown as OcxProviderConfig))
+      .toEqual({ enabled: true, attempts: 3 });
   });
 });
 
