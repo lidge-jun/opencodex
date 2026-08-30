@@ -518,13 +518,12 @@ describe("oauth refresh hardening", () => {
   });
 
   /**
-   * A non-terminal refresh failure is reported as retryable, but the refresh intent outlived
-   * it. The next attempt then hit the pending-intent branch and raised OAuthLoginRequiredError,
-   * so a single 503 or timeout locked the account out of refresh until manual re-authentication
-   * even after upstream recovered. The replay guard is unaffected: an intent whose outcome is
-   * genuinely unknown is reported `uncertain` by the store and is still never cleared here.
+   * A definitive non-terminal HTTP failure is retryable: the endpoint answered with a failure,
+   * so the durable intent must not turn that promised retry into OAuthLoginRequiredError.
+   * A timeout or unreadable response is different — the provider may already have rotated the
+   * token, so that post-dispatch intent remains as the replay guard.
    */
-  test("a transient Anthropic failure leaves the account refreshable", async () => {
+  test("a definitive transient Anthropic HTTP failure leaves the account refreshable", async () => {
     await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
     const id = getAccountSet("anthropic")!.activeAccountId;
     const transient = new AnthropicTokenError("server", 503, undefined);
@@ -540,6 +539,120 @@ describe("oauth refresh hardening", () => {
       refresh: async () => ({ access: "fresh", refresh: "rt-fresh", expires: Date.now() + 3_600_000 }),
     }, getAccountCredential("anthropic", id)!)).resolves.toBe("fresh");
     expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)!.needsReauth).toBeUndefined();
+  });
+
+  test("an Anthropic refresh with an uncertain post-dispatch outcome preserves its intent", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    const generation = credentialGeneration(credential);
+    const timeout = new AnthropicTokenError("timeout", undefined, undefined);
+
+    await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+      ...OAUTH_PROVIDERS.anthropic!,
+      refresh: async () => { throw timeout; },
+    }, credential)).rejects.toBe(timeout);
+
+    expect(readOAuthRefreshIntent("anthropic", id)).toMatchObject({ generation });
+    expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)!.needsReauth).toBeUndefined();
+  });
+
+  test("a pre-dispatch Anthropic abort clears its unconsumed refresh intent", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    const aborted = new Error("aborted before dispatch");
+    const controller = new AbortController();
+    controller.abort(aborted);
+    let calls = 0;
+
+    await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+      ...OAUTH_PROVIDERS.anthropic!,
+      refresh: async () => { calls += 1; throw new Error("must not run"); },
+    }, credential, { signal: controller.signal })).rejects.toBe(aborted);
+
+    expect(calls).toBe(0);
+    expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+  });
+
+  test("intent cleanup failure preserves the original Anthropic HTTP error", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    const generation = credentialGeneration(credential);
+    const transient = new AnthropicTokenError("server", 503, undefined);
+    const clearFailure = new Error("intent unlink failed");
+    const clearSpy = spyOn(storeModule, "clearOAuthRefreshIntent").mockImplementation(() => {
+      throw clearFailure;
+    });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+        ...OAUTH_PROVIDERS.anthropic!,
+        refresh: async () => { throw transient; },
+      }, credential)).rejects.toBe(transient);
+
+      expect(clearSpy).toHaveBeenCalled();
+      expect(readOAuthRefreshIntent("anthropic", id)).toMatchObject({ generation });
+      expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)!.needsReauth).toBeUndefined();
+    } finally {
+      warnSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  });
+
+  test("Anthropic persistence failure after provider success preserves the replay guard", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    const generation = credentialGeneration(credential);
+    const persistenceFailure = new Error("credential persistence failed");
+    const mergeSpy = spyOn(storeModule, "mergeAccountCredential").mockImplementation(async () => {
+      throw persistenceFailure;
+    });
+    try {
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+        ...OAUTH_PROVIDERS.anthropic!,
+        refresh: async () => ({
+          access: "fresh",
+          refresh: "rt-fresh",
+          expires: Date.now() + 3_600_000,
+        }),
+      }, credential)).rejects.toBe(persistenceFailure);
+
+      expect(readOAuthRefreshIntent("anthropic", id)).toMatchObject({ generation });
+      expect(getAccountCredential("anthropic", id)).toEqual(credential);
+      expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)!.needsReauth).toBeUndefined();
+    } finally {
+      mergeSpy.mockRestore();
+    }
+  });
+
+  test("post-persist intent cleanup failure does not turn Anthropic refresh success into failure", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    const oldGeneration = credentialGeneration(credential);
+    const clearSpy = spyOn(storeModule, "clearOAuthRefreshIntent").mockImplementation(() => {
+      throw new Error("intent unlink failed");
+    });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+        ...OAUTH_PROVIDERS.anthropic!,
+        refresh: async () => ({
+          access: "fresh",
+          refresh: "rt-fresh",
+          expires: Date.now() + 3_600_000,
+        }),
+      }, credential)).resolves.toBe("fresh");
+
+      expect(getAccountCredential("anthropic", id)?.access).toBe("fresh");
+      expect(readOAuthRefreshIntent("anthropic", id)).toMatchObject({ generation: oldGeneration });
+    } finally {
+      warnSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
   });
 
   test("Anthropic post-dispatch stale flight replacement stays retryable without replay or reauth", async () => {

@@ -562,6 +562,45 @@ function terminal(error:unknown):boolean{
   if (error instanceof RefreshIntentIOError) return false;
   return isTerminalRefreshError(error);
 }
+
+/**
+ * True when the token endpoint definitively answered and rejected the request.
+ *
+ * The Anthropic adapter attaches an HTTP status only to an explicit non-success response,
+ * which is the retryable rejection this PR handles. Everything else (timeout, dropped
+ * connection, a body that could not be read or parsed, or a local persistence fault) leaves
+ * the outcome unknown: the server may already have rotated the token, and a blind replay
+ * could trip refresh-token-reuse revocation. Those cases must keep the refresh intent.
+ *
+ * Deliberately narrower than `terminal()`, which asks whether the CREDENTIAL is dead.
+ * This asks the different question of whether the ATTEMPT is known to have failed.
+ */
+function definitivelyAnswered(error: unknown): boolean {
+  if (error instanceof AnthropicTokenError) return error.httpStatus !== undefined;
+  return false;
+}
+
+/**
+ * Intent cleanup is secondary to the refresh outcome it protects.
+ *
+ * A filesystem failure here must not replace a provider error, a pre-dispatch abort, or a
+ * successfully persisted credential. Leaving the intent in place is the conservative fallback:
+ * it blocks replay until the local persistence problem is repaired.
+ */
+function clearAnthropicRefreshIntentBestEffort(
+  provider: string,
+  accountId: string,
+  generation: string,
+): boolean {
+  try {
+    return clearOAuthRefreshIntent(provider, accountId, generation);
+  } catch {
+    console.warn(
+      "[opencodex] Anthropic refresh intent cleanup failed; preserving the durable replay guard.",
+    );
+    return false;
+  }
+}
 function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
 function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
   return {
@@ -677,9 +716,14 @@ export async function refreshAnthropicAccountWithLock(
       return stored.access;
     }
 
+    let refreshMayHaveReachedProvider = false;
     try {
       writeOAuthRefreshIntent(provider, accountId, generation, now(), deps.flight?.flightId);
       if (deps.signal?.aborted) throw deps.signal.reason;
+      // From this point on, even a synchronous client error is conservatively post-dispatch:
+      // the provider may have received and rotated the refresh token before the caller learned
+      // the outcome.
+      refreshMayHaveReachedProvider = true;
       if (deps.flight) deps.flight.dispatched = true;
       const fresh = merged(await def.refresh(stored.refresh, deps.signal), stored);
       const outcome = await mergeAccountCredential(provider, accountId, fresh, {
@@ -687,29 +731,35 @@ export async function refreshAnthropicAccountWithLock(
         afterPrePersistRead: deps.afterPrePersistRead,
       });
       if (outcome.superseded) {
-        clearOAuthRefreshIntent(provider, accountId, generation);
+        clearAnthropicRefreshIntentBestEffort(provider, accountId, generation);
         if (outcome.stored.expires > now() + REFRESH_SKEW_MS) return outcome.stored.access;
         throw new OAuthLoginRequiredError(provider);
       }
-      clearOAuthRefreshIntent(provider, accountId, generation);
+      // The rotated credential is durable now. A cleanup failure must not turn that committed
+      // success into a refresh failure; the old-generation intent remains a conservative guard.
+      clearAnthropicRefreshIntentBestEffort(provider, accountId, generation);
       return fresh.access;
     } catch (error) {
       if (error instanceof OAuthMutationBusyError || error instanceof OAuthTokenRefreshStaleError) throw error;
       if (!terminal(error)) {
-        // A non-terminal failure means the credential was never rejected, so the caller is
-        // told to retry. Leaving the intent behind contradicted that: the next attempt hit
-        // the pending-intent branch above and raised OAuthLoginRequiredError, so one 503 or
-        // timeout locked the account out of refresh entirely until manual re-auth — even
-        // once upstream recovered. Clear it so the promised retry can actually happen.
+        // A non-terminal failure tells the caller to retry, but the intent outlived it, so
+        // the next attempt hit the pending-intent branch above and raised
+        // OAuthLoginRequiredError. One 503 locked the account out of refresh until manual
+        // re-auth even after upstream recovered.
         //
-        // The replay guard is preserved by `uncertain`: a refresh whose outcome is genuinely
-        // unknown surfaces as an uncertain intent from the store, which this path never
-        // clears, and a superseded owner still leaves through OAuthTokenRefreshStaleError.
-        clearOAuthRefreshIntent(provider, accountId, generation);
+        // Only clear the intent when the server DEFINITIVELY answered and rejected the
+        // request. The adapter attaches an HTTP status only to that explicit non-success
+        // response. A timeout, a dropped connection, or an unreadable/unparseable body
+        // carries no status: the server may already have
+        // rotated the token, and replaying it could trip refresh-token-reuse revocation.
+        // Those outcomes keep the intent so the guard still refuses a blind replay.
+        if (!refreshMayHaveReachedProvider || definitivelyAnswered(error)) {
+          clearAnthropicRefreshIntentBestEffort(provider, accountId, generation);
+        }
         throw error;
       }
       await markAccountNeedsReauthIfGeneration(provider, accountId, generation, writerGeneration);
-      clearOAuthRefreshIntent(provider, accountId, generation);
+      clearAnthropicRefreshIntentBestEffort(provider, accountId, generation);
       throw new OAuthLoginRequiredError(provider);
     }
   } finally {
