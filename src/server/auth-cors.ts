@@ -578,6 +578,11 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     delete canonicalCandidate.modelContextWindows;
     // User-owned soft compaction policy; it does not alter the canonical transport seed.
     delete canonicalCandidate.modelAutoCompactTokenLimits;
+    // Same category: annotating empty tool outputs is a user-owned request-shaping preference,
+    // not part of the canonical transport seed. Without this the field is accepted by
+    // validation and then rejected by the seed comparison, so canonical OpenAI could never
+    // set OR clear it — the value was admitted and then refused in the same request.
+    delete canonicalCandidate.annotateEmptyToolOutputs;
     const canonical = seed && sameCanonicalProviderSeed(canonicalCandidate, seed);
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;

@@ -795,6 +795,48 @@ describe("provider management validation", () => {
   });
 
   // #1409: the add/edit form's payload type has no member for contextWindow or
+  test("canonical OpenAI can set, clear, and persist annotateEmptyToolOutputs via PATCH", async () => {
+    // The canonical seed comparison rejects any provider that diverges from the built-in
+    // transport seed, so a user-owned overlay must be stripped from the comparison candidate
+    // the same way contextWindow and modelAutoCompactTokenLimits already are. Without that,
+    // validation accepted this field and the seed check then refused the very same request.
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const setFalse = await fetch(new URL("/api/providers/openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: false }),
+      });
+      expect(setFalse.status).toBe(200);
+      expect(loadConfig().providers.openai?.annotateEmptyToolOutputs).toBe(false);
+
+      const setTrue = await fetch(new URL("/api/providers/openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: true }),
+      });
+      expect(setTrue.status).toBe(200);
+      expect(loadConfig().providers.openai?.annotateEmptyToolOutputs).toBe(true);
+
+      // null clears the overlay and returns the provider to registry-default behavior.
+      const clear = await fetch(new URL("/api/providers/openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: null }),
+      });
+      expect(clear.status).toBe(200);
+      expect(loadConfig().providers.openai?.annotateEmptyToolOutputs).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // #1409: the add/edit form's payload type has no member for contextWindow or
   test("provider POST overwrite preserves an explicit annotateEmptyToolOutputs: false", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
