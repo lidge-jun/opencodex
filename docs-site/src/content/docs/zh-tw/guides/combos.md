@@ -142,6 +142,18 @@ ocx combo set balanced \
 權重是相對的，不是百分比。權重 `2,1` 與 `200,100` 表達同一比例。偏好能傳達意圖的小數值。
 :::
 
+### `random`：每個請求各自進行加權抽選
+
+`random` 針對每個請求抽選一個合格目標，中選機率與 `weight` 成正比。每個請求都是獨立抽選，因此流量會分散至各目標，同時不會呈現 `round-robin` 的確定性模式或黏著性。`stickyLimit` 不影響此策略。
+
+### `least-used`：優先選擇成功次數最少的目標
+
+`least-used` 將每個請求路由至這個 opencodex 行程所記錄成功請求數最少的合格目標。重新啟動後，計數從零開始；若計數相同，則維持設定順序。`weight` 與 `stickyLimit` 不影響此策略。
+
+### `reset-window`：跟隨最早的配額重設
+
+`reset-window` 將每個請求路由至快取供應商配額快照顯示下一個時段最早重設的合格目標（五小時、每週、每月或自訂）。這會優先使用最早重新取得額度的供應商。沒有最新配額資料的目標，以及發生平手時，皆維持設定順序。`weight` 與 `stickyLimit` 不影響此策略。
+
 ## 目標失敗時會發生什麼
 
 Combo 失敗分為**跳轉**失敗與**終端**失敗。
@@ -253,9 +265,9 @@ Combo 儲存於頂層 `combos` 物件中，以 combo id 為 key：
 | 欄位 | 必填 | 預設值 | 規則 |
 | --- | --- | --- | --- |
 | `targets` | 是 | — | 已設定 `{ provider, model, weight? }` 目標的非空有序陣列。重複的供應商/模型對會被拒絕。 |
-| `targets[].weight` | 否 | `1` | 1 到 10,000 的整數。由 round-robin 使用；failover 忽略。 |
-| `strategy` | 否 | `"failover"` | `"failover"` 或 `"round-robin"`。 |
-| `stickyLimit` | 否 | `1` | 每次 round-robin 選擇的成功請求數，1 到 100 的整數。 |
+| `targets[].weight` | 否 | `1` | 1 到 10,000 的整數。由 `round-robin` 與 `random` 使用；`failover`、`least-used` 與 `reset-window` 忽略。 |
+| `strategy` | 否 | `"failover"` | 可用值為 `"failover"`、`"round-robin"`、`"random"`、`"least-used"`、`"reset-window"`。 |
+| `stickyLimit` | 否 | `1` | 僅適用於 `round-robin`：每次選擇的成功請求數，1 到 100 的整數。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；僅在呼叫者省略 effort 且目標宣告支援時套用。 |
 | `alias` | 否 | 無 | 可選的修剪後公開模型 id；使用上述別名規則。空值儲存為無別名。 |
 

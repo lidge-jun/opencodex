@@ -29,6 +29,16 @@ opencodex 依此順序解析請求的模型：
 
 已停用的供應商被排除。對已停用供應商的明確命名空間會失敗而非往下落。當規則可符合多個供應商時，供應商項目依其 JSON 插入順序檢查，因此裸模型有歧義時請使用明確命名空間。
 
+### 封鎖模型重新導向
+
+`blockedModelRedirects` 是選用的頂層 `Record<string, string>`，用於精確替換已解析的模型 id，預設不設定。它在上述解析順序後執行：符合時會保留已選取的供應商與帳號路由，僅替換上游模型 id，並記錄路由原因 `blocked-model-redirect`。省略此鍵時，路由維持不變。
+
+```json
+{
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+}
+```
+
 ## 精確 Codex 帳號選擇器
 
 `codexAccountNamespaces` 將一個公開選擇器（如 `side`）映射到一個已儲存的 Codex 帳號。對 `side/gpt-5.6-sol` 的請求僅使用該帳號——即使在 Direct 模式下標準的 `openai` 供應商亦然——並向上游發送裸的 `gpt-5.6-sol` 模型 id。選擇器之後只有裸的原生 OpenAI 家族 id 有效。
@@ -44,7 +54,7 @@ Codex Auth 頁面將此 picker 行為作為選擇加入功能暴露。停用它�
 | Key | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | 必填 | 有序的具體路由。`weight` 為 1–10000，預設 `1`。 |
-| `strategy?` | `"failover" \| "round-robin"` | `"failover"` | 選擇策略。目標順序為 failover 優先序；權重塑造平滑的加權 round-robin。 |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 選擇策略。目標順序為 `failover` 優先序；`weight` 塑造 `round-robin` 與 `random` 抽選；`least-used` 依循已記錄的成功次數；`reset-window` 依循最早的配額重設。 |
 | `stickyLimit?` | `number` | `1` | 在一個 round-robin 批次中保留的成功請求數。範圍 1–100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | 未設定 | 僅在呼叫者省略 effort 且所選目標廣告請求的階層時套用。 |
 | `alias?` | `string` | — | 可選的公開模型 id，取代標準 picker slug。 |
@@ -125,7 +135,7 @@ Dry-run 評估候選項而不發送任何上游請求。
 
 ### 組合 vs 政策設定檔
 
-- **combo** 是明確的有序／加權目標路由與 failover：設定的順序（或平滑加權 round-robin）決定，失敗會沿清單前進。
+- **combo** 是使用可選策略的明確目標路由（有序 `failover`、平滑加權 `round-robin` 或 `random` 平衡、`least-used` 或 `reset-window`）：由設定的策略決定，發生可重試失敗時則沿清單前進。
 - **政策設定檔** 是在設定候選項中的證據式選擇：硬性能力需求先過濾，再以確定性計分排列倖存者。
 
 兩者皆為附別名與碰撞驗證的虛擬命名空間；差異在所選候選項的**方式**。設定檔計分結合設定優先元件與健康（RI-06）、配額（RI-07）與成本（RI-08）計分維度（有證據時）；`latency` 權重併入優先份額而非獨立計分。成本也透過 `limits.maxEstimatedCostUsd` 上限強制執行：估計成本已知且超過上限的候選項被排除（`cost-limit`）。設定上限且估計未知時，預設 `limits.onUnknownCost: "allow"` 在路由決策軌跡上記錄 `cost.capOutcome: "unknown-allowed"` 而不做上限排除；設定 `onUnknownCost: "exclude"` 以取得 fail-closed 上限（`cost-limit-unknown`）。上限結果不是整體資格——`unknownEvidence.cost: "exclude"` 仍可新增 `unknown-price` 並將候選項標記為不合格。政策設定檔執行時會記錄 per-request 的路由決策軌跡。

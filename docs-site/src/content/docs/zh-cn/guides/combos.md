@@ -127,6 +127,18 @@ ocx combo set balanced \
 权重是相对值，不是百分比。权重 `2,1` 和 `200,100` 表达的是同样的比例。优先使用能清晰表达意图的小数值。
 :::
 
+### `random`：按请求进行加权抽取
+
+`random` 会按与 `weight` 成比例的概率，为每个请求抽取一个合格目标。每个请求都是独立抽取，因此流量会分散到各个目标，而不会形成 `round-robin` 的确定性模式或粘性。`stickyLimit` 不影响此策略。
+
+### `least-used`：优先成功次数最少的目标
+
+`least-used` 会将每个请求路由到合格目标中，由当前 opencodex 进程记录的成功请求数最少者。进程重启后计数从零开始，计数相同时保持配置顺序。`weight` 和 `stickyLimit` 不影响此策略。
+
+### `reset-window`：跟随最近的额度重置
+
+`reset-window` 会将每个请求路由到合格目标中，其缓存的提供商额度快照显示下一个窗口最早重置者（五小时、每周、每月或自定义窗口）。这样会优先消耗最先刷新额度的提供商。没有最新额度数据的目标以及并列目标会保持配置顺序。`weight` 和 `stickyLimit` 不影响此策略。
+
 ## 目标失败时会发生什么
 
 combo 失败分为 **跳转** 失败和 **终止** 失败。
@@ -248,9 +260,9 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | 字段 | 必填 | 默认值 | 规则 |
 | --- | --- | --- | --- |
 | `targets` | 是 | — | 非空、有顺序的数组，元素为已配置的 `{ provider, model, weight? }` 目标。重复的 provider/model 对会被拒绝。 |
-| `targets[].weight` | 否 | `1` | 1 到 10,000 的整数。轮询会使用它；故障切换会忽略它。 |
-| `strategy` | 否 | `"failover"` | `"failover"` 或 `"round-robin"`。 |
-| `stickyLimit` | 否 | `1` | 每次轮询选择可连续处理的成功请求数，范围为 1 到 100。 |
+| `targets[].weight` | 否 | `1` | 1 到 10,000 的整数。`round-robin` 和 `random` 会使用它；`failover`、`least-used` 和 `reset-window` 会忽略它。 |
+| `strategy` | 否 | `"failover"` | `"failover"`、`"round-robin"`、`"random"`、`"least-used"` 或 `"reset-window"`。 |
+| `stickyLimit` | 否 | `1` | 每次 `round-robin` 选择可连续处理 1 到 100 个成功请求。仅适用于 `round-robin`。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；仅当调用方省略 effort 且目标声明支持时才会应用。 |
 | `imageInput` | 否 | `"auto"` | `"auto"` 或 `"disabled"`。`"auto"` 仅在每个目标都支持图片时发布图片能力；`"disabled"` 强制仅文本（从对外能力中去掉图片，并在分发前拒绝带图请求）。 |
 | `alias` | 否 | 无 | 可选的、已修剪的公开模型 id；使用上面的别名规则。空值会以“无别名”形式存储。 |

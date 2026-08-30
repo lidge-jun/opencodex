@@ -171,6 +171,25 @@ Les poids sont relatifs et non en pourcentage. Les poids `2,1` et `200,100` expr
 petites valeurs qui communiquent l’intention.
 :::
 
+### `random` : tirage pondéré à chaque requête
+
+`random` tire une cible éligible par requête, avec une probabilité proportionnelle à `weight`. Chaque requête
+constitue un tirage indépendant, de sorte que le trafic se répartit entre les cibles sans le schéma déterministe ni
+la persistance de `round-robin`. `stickyLimit` n’affecte pas cette stratégie.
+
+### `least-used` : privilégier la cible ayant le moins de réussites
+
+`least-used` achemine chaque requête vers la cible éligible pour laquelle ce processus opencodex a enregistré le moins
+de requêtes réussies. Les compteurs repartent de zéro au redémarrage et, en cas d’égalité, l’ordre de configuration est
+conservé. `weight` et `stickyLimit` n’affectent pas cette stratégie.
+
+### `reset-window` : suivre la réinitialisation de quota la plus proche
+
+`reset-window` achemine chaque requête vers la cible éligible dont l’instantané mis en cache du quota du fournisseur
+indique la réinitialisation de fenêtre à venir la plus proche (cinq heures, hebdomadaire, mensuelle ou personnalisée).
+Le fournisseur dont le quota se renouvelle en premier est ainsi sollicité. Les cibles dépourvues de données de quota
+récentes et les égalités conservent l’ordre de configuration. `weight` et `stickyLimit` n’affectent pas cette stratégie.
+
 ## Que se passe-t-il lorsqu'une cible échoue
 
 Les échecs d’un combo se répartissent entre ceux qui entraînent un **basculement** et les échecs **terminaux**.
@@ -314,9 +333,9 @@ Les combos sont stockés dans l'objet `combos` de niveau supérieur, saisi par l
 | Champ | Obligatoire | Par défaut | Règles |
 | --- | --- | --- | --- |
 | `targets` | Oui | — | Tableau ordonné non vide de `{ provider, model, weight? }` cibles configurées. Les paires provider/model en double sont rejetées. |
-| `targets[].weight` | Non | `1` | Entier de 1 à 10 000. Utilisé en round-robin ; ignoré par le basculement. |
-| `strategy` | Non | `"failover"` | `"failover"` ou `"round-robin"`. |
-| `stickyLimit` | Non | `1` | Nombre entier de 1 à 100 requêtes réussies par sélection à tour de rôle. |
+| `targets[].weight` | Non | `1` | Entier de 1 à 10 000. Utilisé par `round-robin` et `random` ; ignoré par `failover`, `least-used` et `reset-window`. |
+| `strategy` | Non | `"failover"` | Valeurs autorisées : `"failover"`, `"round-robin"`, `"random"`, `"least-used"` et `"reset-window"`. |
+| `stickyLimit` | Non | `1` | Nombre entier de 1 à 100 requêtes réussies par sélection à tour de rôle. S’applique uniquement à `round-robin`. |
 | `defaultEffort` | Non | `null` | `low`, `medium`, `high`, `xhigh`, `max` ou `ultra` ; appliqué uniquement lorsque l'appelant omet ses efforts et que la cible annonce son soutien. |
 | `imageInput` | Non | `"auto"` | `"auto"` ou `"disabled"`. `"auto"` publie les images uniquement si toutes les cibles les prennent en charge ; `"disabled"` impose le texte seul, retire les images des modalités publiées et rejette les requêtes qui en contiennent avant leur distribution. |
 | `alias` | Non | aucun | Identifiant de modèle public tronqué facultatif ; utilisez les règles d'alias ci-dessus. Une valeur vide est stockée sans alias. |

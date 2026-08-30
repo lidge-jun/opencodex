@@ -34,6 +34,19 @@ Disabled providers are excluded. An explicit namespace for a disabled provider f
 falling through. Provider entries are checked in their JSON insertion order for rules that can match
 more than one provider, so use explicit namespaces when a bare model could be ambiguous.
 
+### Blocked-model redirects
+
+`blockedModelRedirects` is an optional top-level `Record<string, string>` of exact resolved
+model-id replacements, unset by default. It runs **after** the resolution order above: a match
+keeps the provider and account route already selected, replaces only the upstream model id, and
+records the route reason `blocked-model-redirect`. Omitting the key leaves routing unchanged.
+
+```json
+{
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+}
+```
+
 ## Exact Codex account selectors
 
 `codexAccountNamespaces` maps a public selector such as `side` to one stored Codex account. A
