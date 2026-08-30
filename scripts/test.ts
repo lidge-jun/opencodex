@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { acquireTestRunLock, TEST_RUN_ID_ENV } from "./test-run-lock";
+import {
+  acquireTestRunLock,
+  resolveWrappedTestRunLockPath,
+  TEST_RUN_ID_ENV,
+  TEST_RUN_LOCK_PATH_ENV,
+  TEST_RUN_LOCK_TOKEN_ENV,
+} from "./test-run-lock";
 
 export interface IsolatedTestEnvironment {
   root: string;
@@ -383,8 +389,18 @@ function waitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T |
   });
 }
 
-async function runTestLane(lane: BunTestLane, runId: string, capture = false): Promise<{ exitCode: number; output: string }> {
-  const isolated = createIsolatedTestEnvironment({ ...process.env, [TEST_RUN_ID_ENV]: runId });
+async function runTestLane(
+  lane: BunTestLane,
+  runId: string,
+  inheritedLock: { lockPath: string; ownerToken: string } | undefined,
+  capture = false,
+): Promise<{ exitCode: number; output: string }> {
+  const isolated = createIsolatedTestEnvironment({
+    ...process.env,
+    [TEST_RUN_ID_ENV]: runId,
+    [TEST_RUN_LOCK_PATH_ENV]: inheritedLock?.lockPath,
+    [TEST_RUN_LOCK_TOKEN_ENV]: inheritedLock?.ownerToken,
+  });
   const startedAt = Date.now();
   let interrupted: NodeJS.Signals | null = null;
   const child = Bun.spawn([process.execPath, "test", ...lane.args], {
@@ -501,8 +517,11 @@ if (import.meta.main) {
       );
     }
     const runId = randomUUID();
+    const lockPath = resolveWrappedTestRunLockPath({ env: process.env });
     const lock = await acquireTestRunLock({
       runId,
+      lockPath,
+      validatedRuntimePath: lockPath !== undefined,
       onWait: owner => console.warn(
         `[test] another Bun test run${owner ? ` (pid ${owner.pid})` : ""} holds the user lock; waiting. `
         + "Set OCX_TEST_NO_QUEUE=1 only for intentional overlap.",
@@ -511,10 +530,13 @@ if (import.meta.main) {
     });
     const startedAt = Date.now();
     try {
+      const inheritedLock = process.platform === "win32" && lockPath && lock.owner
+        ? { lockPath, ownerToken: lock.owner.token }
+        : undefined;
       let exitCode = 0;
       let captured = "";
       for (const lane of resolveBunTestPlan(requestedTests, changedRun?.comparisonCommit)) {
-        const result = await runTestLane(lane, runId, Boolean(changedRun));
+        const result = await runTestLane(lane, runId, inheritedLock, Boolean(changedRun));
         captured += result.output;
         if (result.exitCode !== 0 && exitCode === 0) exitCode = result.exitCode;
         if ([124, 130, 143].includes(result.exitCode)) break;

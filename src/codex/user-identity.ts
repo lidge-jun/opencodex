@@ -438,6 +438,18 @@ function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "
 }
 
 /**
+ * Resolve the canonical, effective-user runtime root shared by Codex lock domains.
+ *
+ * This is a directory, not a final lock or database path. Callers create their
+ * own named child so independent exclusion domains cannot self-contend.
+ */
+export function resolveEffectiveUserRuntimeRoot(identity: UserIdentity): string {
+  return identity.platform === "posix"
+    ? resolvePosixRuntimeRoot(identity.uid)
+    : resolveWindowsRuntimeRoot(identity);
+}
+
+/**
  * Windows path identity is case-insensitive; everywhere else it is exact.
  *
  * The lock modules compare a requested lock path against its own realpath, and
@@ -463,9 +475,7 @@ export const resolveCodexCoordinatorDatabasePath: ResolveCodexCoordinatorDatabas
   if (!isAbsolute(canonicalCodexHome)) {
     refuse("The canonical CODEX_HOME must be an absolute path.");
   }
-  const root = identity.platform === "posix"
-    ? resolvePosixRuntimeRoot(identity.uid)
-    : resolveWindowsRuntimeRoot(identity);
+  const root = resolveEffectiveUserRuntimeRoot(identity);
   const locks = join(root, "native-write-locks");
   if (identity.platform === "posix") ensurePrivatePosixDirectory(locks, identity.uid);
   else {
@@ -497,9 +507,7 @@ export const resolveCodexCatalogSerializationDatabasePath:
     if (!isAbsolute(canonicalCodexHome)) {
       refuse("The canonical CODEX_HOME must be an absolute path.");
     }
-    const root = identity.platform === "posix"
-      ? resolvePosixRuntimeRoot(identity.uid)
-      : resolveWindowsRuntimeRoot(identity);
+    const root = resolveEffectiveUserRuntimeRoot(identity);
     const locks = join(root, "catalog-write-locks");
     if (identity.platform === "posix") ensurePrivatePosixDirectory(locks, identity.uid);
     else {
@@ -536,9 +544,7 @@ export const resolveCodexHistorySerializationDatabasePath:
     if (!isAbsolute(canonicalStateDbPath)) {
       refuse("The canonical Codex state database must be an absolute path.");
     }
-    const root = identity.platform === "posix"
-      ? resolvePosixRuntimeRoot(identity.uid)
-      : resolveWindowsRuntimeRoot(identity);
+    const root = resolveEffectiveUserRuntimeRoot(identity);
     const locks = join(root, "history-write-locks");
     if (identity.platform === "posix") ensurePrivatePosixDirectory(locks, identity.uid);
     else {

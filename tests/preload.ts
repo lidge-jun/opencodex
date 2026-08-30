@@ -13,7 +13,12 @@
  */
 import { isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-home-guard";
 import { createIsolatedTestEnvironment } from "../scripts/test";
-import { acquireTestRunLock, resolveBareTestRunIdentity, TEST_RUN_ID_ENV } from "../scripts/test-run-lock";
+import {
+  acquireTestRunLock,
+  resolveBareTestRunIdentity,
+  resolveInheritedTestRunLock,
+  TEST_RUN_ID_ENV,
+} from "../scripts/test-run-lock";
 import { rmSync } from "node:fs";
 
 // `scripts/test.ts` owns the lock for wrapped runs. A bare `bun test` has no wrapper,
@@ -29,10 +34,17 @@ const bareIdentity = resolveBareTestRunIdentity({
   workerId: process.env.BUN_TEST_WORKER_ID,
 });
 const runId = wrappedRunId || bareIdentity.runId;
+const inheritedLock = resolveInheritedTestRunLock({
+  wrappedRunId,
+  env: process.env,
+});
 process.env[TEST_RUN_ID_ENV] = runId;
 await acquireTestRunLock({
   runId,
   ownerPid: bareIdentity.ownerPid,
+  lockPath: inheritedLock?.lockPath,
+  validatedRuntimePath: inheritedLock !== undefined,
+  joinExistingOwnerToken: inheritedLock?.ownerToken,
   onWait: owner => console.warn(
     `[test] bare Bun worker ${process.pid} is waiting for test run${owner ? ` pid ${owner.pid}` : ""} to release the user lock.`,
   ),
