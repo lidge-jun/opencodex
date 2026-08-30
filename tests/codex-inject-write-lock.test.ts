@@ -593,6 +593,29 @@ describe("provenance ledger bound", () => {
     expect([...new Set(bounded.map(entry => entry.txId))]).toEqual(["tx-new"]);
   });
 
+  test("unknown ledger extensions consume the same byte budget as entries", () => {
+    const entries = [...transaction("tx-old"), ...transaction("tx-new")];
+    const ledger = {
+      entries,
+      futureLedger: {
+        rows: Array.from({ length: 200 }, () => ({ left: "x", right: "y" })),
+      },
+    };
+    const writeBytes = (candidate: readonly (typeof entries)[number][]) =>
+      Buffer.byteLength(`${JSON.stringify({
+        version: 1,
+        provenance: { ...ledger, entries: candidate },
+      }, null, 2)}\n`, "utf-8");
+    const newest = transaction("tx-new");
+    const maxBytes = writeBytes(newest);
+
+    expect(writeBytes(entries)).toBeGreaterThan(maxBytes);
+    const bounded = boundProvenanceEntries(entries, 16, maxBytes, ledger);
+
+    expect([...new Set(bounded.map(entry => entry.txId))]).toEqual(["tx-new"]);
+    expect(writeBytes(bounded)).toBeLessThanOrEqual(maxBytes);
+  });
+
   test("a full window of ordinary transactions is still kept whole", () => {
     // The ceiling exists to refuse pathological artifacts, not to shrink the window above it.
     // This pins the two together: the 25 KB `config.toml` the window comment describes measures

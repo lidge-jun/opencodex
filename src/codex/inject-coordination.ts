@@ -16,6 +16,7 @@ import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
 import type {
   CodexArtifactId,
   CodexProvenanceEntry,
+  CodexProvenanceLedger,
 } from "./convergence-types";
 import {
   codexWriteCoordination,
@@ -221,10 +222,13 @@ export const CODEX_PROVENANCE_MAX_BYTES = 4 * 1024 * 1024;
  * slightly conservative as a ledger-only ceiling, which is preferable to admitting an entry that
  * expands past the limit when `JSON.stringify(record, null, 2)` writes it.
  */
-function serializedProvenanceBytes(entries: readonly CodexProvenanceEntry[]): number {
+function serializedProvenanceBytes(
+  entries: readonly CodexProvenanceEntry[],
+  ledger: CodexProvenanceLedger | undefined,
+): number {
   return Buffer.byteLength(`${JSON.stringify({
     version: 1,
-    provenance: { entries },
+    provenance: { ...ledger, entries },
   }, null, 2)}\n`, "utf-8");
 }
 
@@ -262,6 +266,7 @@ export function boundProvenanceEntries(
   entries: readonly CodexProvenanceEntry[],
   maxTransactions = CODEX_PROVENANCE_MAX_TRANSACTIONS,
   maxBytes = CODEX_PROVENANCE_MAX_BYTES,
+  ledger?: CodexProvenanceLedger,
 ): readonly CodexProvenanceEntry[] {
   const transactions = new Map<string, CodexProvenanceEntry[]>();
   for (const entry of entries) {
@@ -278,7 +283,10 @@ export function boundProvenanceEntries(
       (total, entry) => total + (entry.baseline.kind === "present" ? entry.baseline.bytesBase64.length : 0),
       0,
     );
-    if (baselineBytes <= maxBytes && serializedProvenanceBytes(entries) <= maxBytes) return entries;
+    if (
+      baselineBytes <= maxBytes
+      && serializedProvenanceBytes(entries, ledger) <= maxBytes
+    ) return entries;
   }
   // Newest first, so the transactions anyone diagnoses against are the ones that fit.
   const keep = new Set<string>();
@@ -300,7 +308,7 @@ export function boundProvenanceEntries(
     const candidateEntries = windowed.flatMap(id =>
       candidateKeep.has(id) ? transactions.get(id)! : []
     );
-    if (serializedProvenanceBytes(candidateEntries) > maxBytes) continue;
+    if (serializedProvenanceBytes(candidateEntries, ledger) > maxBytes) continue;
     baselineBytes += transactionBaselineBytes;
     keep.add(txId);
   }
@@ -326,13 +334,21 @@ export function recordCodexNativeTransactionProvenance(
     txId,
     at,
   }));
-  return updateIntegrationRecord(record => ({
-    ...record,
-    provenance: {
-      ...record.provenance,
-      entries: boundProvenanceEntries([...(record.provenance?.entries ?? []), ...entries]),
-    },
-  }));
+  return updateIntegrationRecord(record => {
+    const previousLedger = record.provenance;
+    return {
+      ...record,
+      provenance: {
+        ...previousLedger,
+        entries: boundProvenanceEntries(
+          [...(previousLedger?.entries ?? []), ...entries],
+          CODEX_PROVENANCE_MAX_TRANSACTIONS,
+          CODEX_PROVENANCE_MAX_BYTES,
+          previousLedger,
+        ),
+      },
+    };
+  });
 }
 
 /**
