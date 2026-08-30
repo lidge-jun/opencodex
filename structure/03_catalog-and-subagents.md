@@ -101,8 +101,9 @@ liveness contract.
 ## Entry shape
 
 Routed entries keep Codex-required metadata such as reasoning levels, shell type, API support flags,
-base instructions, modalities, auto-compact fields, and strict parser booleans. The public slug and
-display name use `provider/model`.
+base instructions, modalities, auto-compact fields, and strict parser booleans. The public slug uses
+the canonical `provider/model`; its display name uses the qualified provider/model alias when
+configured, without changing the routing slug.
 
 ## Native passthrough
 

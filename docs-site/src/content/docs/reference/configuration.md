@@ -46,7 +46,7 @@ Aliases are optional short request names. They never change the native model id 
 }
 ```
 
-Aliases match case-insensitively. A model alias works as `or/opus` or, when globally unique, bare `opus`; an ambiguous bare alias reports its qualified candidates. A provider's `defaultAliases` value overrides `defaultModelAliases`. Built-ins are skipped when multiple models in one provider match the same pattern.
+Aliases match case-insensitively. A model alias works as `or/opus` or, when globally unique, bare `opus`; an ambiguous bare alias reports its qualified candidates. Codex model pickers show the qualified alias while preserving the canonical `provider/model` routing id. A provider's `defaultAliases` value overrides `defaultModelAliases`. Built-ins are skipped when multiple models in one provider match the same pattern.
 
 Valid values in `config.json` override built-in defaults. Missing optional fields use the defaults
 documented on the domain pages. `OPENCODEX_HOME` takes precedence over the default configuration
