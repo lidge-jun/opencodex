@@ -35,6 +35,30 @@ const SNAPSHOT_DEBOUNCE_MAX_MS = 30_000;
  * continuation chains) stores the full expanded input each turn — ~quadratic bytes per chain —
  * so a count cap alone cannot bound memory. Oldest-first eviction applies past this mark. */
 export const MAX_STORED_RESPONSE_BYTES = 64 * 1024 * 1024;
+/**
+ * Aggregate ceiling for the durable spill directory: the disk-side counterpart to
+ * the RAM ceiling above. Without it the spilled set is bounded only per-file
+ * (MAX_RESPONSE_SPILL_PAYLOAD_BYTES, 256 MiB) and per-entry (MAX_STORED_RESPONSES,
+ * 1000), whose product is 250 GiB — larger than the disk of any host this runs on.
+ * The only effective bound was therefore RESPONSE_TTL_MS, which makes disk use a
+ * function of client request rate rather than of anything this process controls.
+ *
+ * Measured on one macOS host, 2026-08-30: a client spilling ~150 MB payloads at
+ * ~1.4/min held 6.8 GB after 44 minutes, still climbing toward the ~12 GB an
+ * hour-long window implies, and filled the volume. Retention itself was correct
+ * throughout — the TTL evicted that whole cohort an hour later — so what was
+ * missing is a budget, not a sweep.
+ *
+ * 1 GiB comes from the same sample (n=31), whose spilled sizes are strongly
+ * bimodal: median 1.1 MiB against a p90 of 198.7 MiB, near the per-file ceiling.
+ * At that median the count cap and this ceiling bind within 8% of each other
+ * (1000 x 1.1 MiB = 1.07 GiB), so ordinary traffic sees no eviction it would not
+ * already have seen and only the large tail is cut. Erring small is the safe
+ * direction: too low costs a replay miss, an already-handled path surfaced as
+ * previous_response_not_found, while too high costs the host's disk and every
+ * unrelated process on it.
+ */
+export const MAX_SPILLED_RESPONSE_BYTES = 1024 * 1024 * 1024;
 /** Legacy snapshot selection only. Spill demotion is governed solely by the RAM cap above. */
 const SNAPSHOT_ENTRY_MAX_BYTES = 2 * 1024 * 1024;
 const SNAPSHOT_TOTAL_MAX_BYTES = 24 * 1024 * 1024;
@@ -601,6 +625,41 @@ export function setResponseStateByteCapForTests(bytes: number | null): void {
 /** Test-only: current in-memory byte accounting (proves evictions release their bytes). */
 export function getStoredResponseBytesForTests(): number {
   return storedResponseBytes;
+}
+
+let spillByteCapOverride: number | null = null;
+
+function spillByteCap(): number {
+  return spillByteCapOverride ?? MAX_SPILLED_RESPONSE_BYTES;
+}
+
+/**
+ * Live total of durable spill payloads. Recomputed per call rather than carried as
+ * a running counter: spilled entries reach `states` through several insertion paths
+ * (demotion swap, direct oversized admission, snapshot reload), and one missed
+ * increment there would silently disable the cap, where an O(MAX_STORED_RESPONSES)
+ * walk cannot drift.
+ */
+function spilledResponseBytes(): number {
+  let total = 0;
+  for (const entry of states.values()) {
+    if (entry.kind === "spill") total += entry.spill.payloadBytes;
+  }
+  // Superseded generations awaiting a durable snapshot are still files on disk.
+  // Counting only `states` would let PENDING_SPILL_UNLINKS_MAX of them sit outside
+  // the budget while it reports itself satisfied.
+  for (const ref of pendingSpillUnlinks) total += ref.payloadBytes;
+  return total;
+}
+
+/** Test-only: lower/restore the durable spill cap (null restores the default). */
+export function setSpilledResponseByteCapForTests(bytes: number | null): void {
+  spillByteCapOverride = bytes;
+}
+
+/** Test-only: current durable spill accounting (proves evictions unlink their files). */
+export function getSpilledResponseBytesForTests(): number {
+  return spilledResponseBytes();
 }
 
 function serializedBytes(value: unknown): number | null {
@@ -1495,6 +1554,58 @@ export function replayOverlapSkipsForTests(): number {
   return replayOverlapSkips;
 }
 
+/**
+ * Bring the durable spill set inside MAX_SPILLED_RESPONSE_BYTES, and report the
+ * bytes released.
+ *
+ * One owner, three callers: mutation pruning, the lazy load that follows a
+ * restart, and the periodic sweep. The periodic caller is not redundant — the
+ * mutation path only runs when traffic arrives, and a process can come up over
+ * budget from a snapshot written under a larger ceiling and then sit idle. That
+ * was observed in production at 1.8 GiB against a 1 GiB cap, held until the first
+ * request.
+ *
+ * NOT covered here: spill files orphaned by a crash. They are absent from
+ * `states`, so this function can neither see nor price them, and they stay with
+ * recoverOrphanedResponseSpills and its RESPONSE_SPILL_ORPHAN_GRACE_MS window.
+ * This ceiling therefore bounds what the store owns, which is every file it can
+ * account for, and not the directory as a whole.
+ */
+function enforceSpilledResponseBudget(): number {
+  let spilledBytes = spilledResponseBytes();
+  if (spilledBytes <= spillByteCap()) return 0;
+  const before = spilledBytes;
+  // Deferred generations go first. They are already superseded, so releasing one
+  // costs only the crash window the queue exists to cover — the same trade
+  // PENDING_SPILL_UNLINKS_MAX already makes against unbounded disk. Evicting a
+  // live continuation to make room for a dead file would be the wrong order.
+  while (spilledBytes > spillByteCap() && pendingSpillUnlinks.length > 0) {
+    const ref = pendingSpillUnlinks.shift()!;
+    spilledBytes -= ref.payloadBytes;
+    deleteResponseSpill(ref);
+  }
+  // Ordered by createdAt, not by map order. `states` is not an age index:
+  // demotion and spill replacement delete and reinsert entries, and
+  // writeBoundedSnapshot serializes the map reversed, so map order can put a
+  // newer continuation first — and evicting that one spends a resume the older
+  // entry would not have cost. Sorting is O(k log k) over the spilled subset and
+  // runs only on a tick already over budget.
+  const spilled = [...states]
+    .filter((pair): pair is [string, SpilledResponseState] => pair[1].kind === "spill")
+    // createdAt is millisecond-resolution, so ties are ordinary under load. A
+    // stable sort would then fall back to insertion order — the very order this
+    // is avoiding — so break ties on the response id. Not localeCompare: the
+    // order must not depend on the host locale.
+    .sort((a, b) => a[1].createdAt - b[1].createdAt
+      || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  for (const [id, entry] of spilled) {
+    if (spilledBytes <= spillByteCap()) break;
+    spilledBytes -= entry.spill.payloadBytes;
+    deleteEntry(id);
+  }
+  return before - spilledBytes;
+}
+
 function pruneResponses(at = now()): void {
   for (const [id, state] of states) {
     if (at - state.createdAt > RESPONSE_TTL_MS) deleteEntry(id);
@@ -1537,6 +1648,7 @@ function pruneResponses(at = now()): void {
       replaceWithSpillFailure(oldestId, entry);
     }
   }
+  enforceSpilledResponseBudget();
 }
 
 /** Periodic TTL-only sweep; count/byte eviction remains owned by mutation paths. */
@@ -1547,7 +1659,10 @@ export function sweepExpiredResponseStates(at = now()): number {
     deleteEntry(id);
     removed += 1;
   }
-  if (removed > 0) schedulePersist();
+  // The disk ceiling needs a caller that does not depend on traffic. The return
+  // value stays the TTL count so this function's existing contract is unchanged.
+  const reclaimed = enforceSpilledResponseBudget();
+  if (removed > 0 || reclaimed > 0) schedulePersist();
   return removed;
 }
 
