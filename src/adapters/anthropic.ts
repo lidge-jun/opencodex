@@ -1028,9 +1028,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // Prompt caching: native Anthropic supports top-level automatic caching, which
       // follows the moving final block across turns. Keep one breakpoint slot free for it.
       const cc = resolveCacheControl(cacheRetention);
-      const automaticPromptCaching = cc && usesNativeAnthropicEndpoint(provider);
+      const volatileCallerSystemTail = usesNativeAnthropicEndpoint(provider) && callerSystemSegments >= 2;
+      const automaticPromptCaching = cc && usesNativeAnthropicEndpoint(provider) && !volatileCallerSystemTail;
       if (automaticPromptCaching) body.cache_control = cc;
-      const explicitLimit = automaticPromptCaching ? MAX_CACHE_BREAKPOINTS - 1 : MAX_CACHE_BREAKPOINTS;
+      // A cache point after Claude Code's volatile environment tail rewrites the entire history
+      // suffix every turn. Cache only tools and the stable system prefix in that shape.
+      const explicitLimit = volatileCallerSystemTail
+        ? (tools && tools.length > 0 ? 2 : 1)
+        : automaticPromptCaching ? MAX_CACHE_BREAKPOINTS - 1 : MAX_CACHE_BREAKPOINTS;
       // The final caller system segment is volatile; generated nudges are not caller segments.
       applyPromptCaching(body, cc, {
         maxExplicitBreakpoints: explicitLimit,

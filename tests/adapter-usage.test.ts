@@ -283,6 +283,58 @@ describe("adapter reasoning and usage details", () => {
     expect(second.at(-1)).not.toEqual(first.at(-1));
   });
 
+  test("Anthropic avoids cache checkpoints after a volatile Claude system tail", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic", baseUrl: "https://api.anthropic.com" });
+    const request = await adapter.buildRequest({
+      modelId: "claude-opus-4-1",
+      context: {
+        systemPrompt: ["You are Claude Code.", "CLAUDE.md contents", "env: modified=3 files"],
+        messages: [
+          { role: "user", content: "previous turn" },
+          { role: "user", content: "current turn" },
+        ],
+      },
+      stream: true,
+      options: {},
+    });
+    const body = JSON.parse(request.body) as {
+      cache_control?: unknown;
+      system?: Array<Record<string, unknown>>;
+      messages: Array<{ content: unknown }>;
+    };
+
+    expect(body.cache_control).toBeUndefined();
+    expect(body.system?.at(-2)?.cache_control).toEqual({ type: "ephemeral" });
+    expect(body.system?.at(-1)?.cache_control).toBeUndefined();
+    expect(body.messages.map(message => message.content)).toEqual(["previous turn", "current turn"]);
+  });
+
+  test("Anthropic-compatible requests retain user cache checkpoints after a volatile tail", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const request = await adapter.buildRequest({
+      modelId: "claude-opus-4-1",
+      context: {
+        systemPrompt: ["You are Claude Code.", "CLAUDE.md contents", "env: modified=3 files"],
+        messages: [
+          { role: "user", content: "previous turn" },
+          { role: "user", content: "current turn" },
+        ],
+      },
+      stream: true,
+      options: {},
+    });
+    const body = JSON.parse(request.body) as {
+      cache_control?: unknown;
+      messages: Array<{ content: unknown }>;
+    };
+
+    expect(body.cache_control).toBeUndefined();
+    expect(body.messages.map(message => message.content)).toEqual([
+      [{ type: "text", text: "previous turn", cache_control: { type: "ephemeral" } }],
+      [{ type: "text", text: "current turn", cache_control: { type: "ephemeral" } }],
+    ]);
+  });
+
   test("Anthropic cache marker ignores the appended tool nudge", async () => {
     const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic", baseUrl: "https://api.anthropic.com" });
     const request = await adapter.buildRequest({
