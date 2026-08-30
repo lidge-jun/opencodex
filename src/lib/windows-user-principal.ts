@@ -28,6 +28,13 @@ import {
   WindowsSystemDirectoryFfiUnavailableError,
 } from "./windows-elevation";
 
+/**
+ * Shared ceiling for a full effective-token identity lookup. PowerShell startup can
+ * legitimately take several seconds on loaded desktops as well as CI, so every caller
+ * that is not spending a smaller pre-existing deadline uses the same #2914-tested budget.
+ */
+export const WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS = 30_000;
+
 const SID_PATTERN = /^S-1-(?:\d+-)+\d+$/i;
 const IDENTITY_EXPRESSION =
   "$identity=[System.Security.Principal.WindowsIdentity]::GetCurrent();$identity.User.Value;$identity.Name";

@@ -2030,9 +2030,11 @@ describe("service diagnostics", () => {
     const unscoped = buildWindowsTaskXml(undefined, undefined, undefined, "");
     let identity: Readonly<{ name: string }> | null = null;
     let resolutions = 0;
+    const timeouts: number[] = [];
     const deps = {
       currentIdentity: () => identity,
-      resolvePrincipal: () => {
+      resolvePrincipal: (timeoutMs: number) => {
+        timeouts.push(timeoutMs);
         resolutions += 1;
         identity = { name: "MACHINE\\installer" };
         return "*S-1-5-21-111-222-333-1001";
@@ -2069,6 +2071,7 @@ describe("service diagnostics", () => {
       recordedBackend: "scheduler",
     }, deps)).toMatchObject({ viable: true, stale: false });
     expect(resolutions).toBe(1);
+    expect(timeouts).toEqual([30_000]);
   });
 
   test("keeps scoped diagnostics stale when identity resolution fails", () => {
@@ -2525,6 +2528,7 @@ describe("service repair", () => {
    */
   test("repair still restarts when the pre-start readback is only transiently unreadable", async () => {
     const calls: string[] = [];
+    const delays: number[] = [];
     let reads = 0;
     let attemptNonce = "";
     const stale = buildWindowsTaskXml().replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
@@ -2539,9 +2543,11 @@ describe("service repair", () => {
         reads += 1;
         if (reads === 1) return stale;
         if (reads === 2) return buildWindowsTaskXml(undefined, undefined, attemptNonce);
-        // The verified replacement is already in place; only this last query fails.
-        return "";
+        // The verified replacement is already in place; only the first final query fails.
+        if (reads === 3) throw new Error("query denied");
+        return buildWindowsTaskXml(undefined, undefined, attemptNonce);
       },
+      settleSchedulerRead: delayMs => { delays.push(delayMs); },
       reregisterScheduler: async nonce => { calls.push("reregister"); attemptNonce = nonce; },
       startScheduler: () => { calls.push("start"); },
       writeSchedulerState: () => { calls.push("state"); },
@@ -2549,6 +2555,94 @@ describe("service repair", () => {
 
     // The proxy is running again on the definition this attempt verified.
     expect(calls).toEqual(["stop", "assets", "reregister", "start", "state"]);
+    expect(delays).toEqual([50]);
+  });
+
+  for (const [label, unreadable] of [
+    ["is empty", () => ""],
+    ["throws", () => { throw new Error("query denied"); }],
+  ] as const) {
+    test(`repair does not start when the pre-start registration ${label} persistently`, async () => {
+      const calls: string[] = [];
+      const delays: number[] = [];
+      let reads = 0;
+      const healthy = buildWindowsTaskXml();
+      await expect(repairService({
+        platform: "win32",
+        diagnose: () => baseDiag,
+        assertEnv: () => {},
+        assertAuth: () => {},
+        stopScheduler: () => { calls.push("stop"); },
+        writeSchedulerAssets: () => { calls.push("assets"); },
+        readSchedulerXml: () => {
+          reads += 1;
+          return reads === 1 ? healthy : unreadable();
+        },
+        settleSchedulerRead: delayMs => { delays.push(delayMs); },
+        startScheduler: () => { calls.push("start"); },
+        writeSchedulerState: () => { calls.push("state"); },
+      })).rejects.toThrow(/became unreadable before restart/i);
+
+      expect(calls).toEqual(["stop", "assets"]);
+      expect(delays).toEqual([50, 150, 300, 600]);
+    });
+  }
+
+  test("failed replacement recovery retries a transiently unreadable pre-start snapshot", async () => {
+    const calls: string[] = [];
+    const delays: number[] = [];
+    let reads = 0;
+    const stale = buildWindowsTaskXml().replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+    const failure = new Error("replacement failed");
+    await expect(repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => {},
+      assertAuth: () => {},
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => {
+        reads += 1;
+        if (reads <= 2) return stale;
+        if (reads === 3) throw new Error("query denied");
+        return stale;
+      },
+      settleSchedulerRead: delayMs => { delays.push(delayMs); },
+      reregisterScheduler: async () => { calls.push("reregister"); throw failure; },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+    })).rejects.toThrow(failure.message);
+
+    expect(calls).toEqual(["stop", "assets", "reregister", "start"]);
+    expect(delays).toEqual([50]);
+  });
+
+  test("repair rejects a readable successor after an unreadable pre-start snapshot", async () => {
+    const calls: string[] = [];
+    const delays: number[] = [];
+    let reads = 0;
+    const healthy = buildWindowsTaskXml();
+    const successor = healthy.replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>");
+    await expect(repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => {},
+      assertAuth: () => {},
+      stopScheduler: () => { calls.push("stop"); },
+      writeSchedulerAssets: () => { calls.push("assets"); },
+      readSchedulerXml: () => {
+        reads += 1;
+        if (reads === 1) return healthy;
+        if (reads === 2) return "";
+        return successor;
+      },
+      settleSchedulerRead: delayMs => { delays.push(delayMs); },
+      startScheduler: () => { calls.push("start"); },
+      writeSchedulerState: () => { calls.push("state"); },
+    })).rejects.toThrow(/changed before restart/i);
+
+    expect(calls).toEqual(["stop", "assets"]);
+    expect(delays).toEqual([50]);
   });
 
   test("repair preserves and restarts a healthy residual owned by its attempt nonce", async () => {

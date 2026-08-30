@@ -46,7 +46,11 @@ import {
   hardenSecretPath,
 } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
-import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal } from "./lib/windows-user-principal";
+import {
+  cachedCurrentWindowsIdentity,
+  resolveCurrentWindowsPrincipal,
+  WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS,
+} from "./lib/windows-user-principal";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { killWindowsSchedulerWrappers } from "./lib/windows-service-wrappers";
 import { withWindowsServiceMutationLock } from "./lib/windows-service-mutation-lock";
@@ -55,7 +59,6 @@ import { systemdProperty } from "./service-manager-probe";
 
 const LABEL = "com.opencodex.proxy";
 const TASK = "opencodex-proxy";
-const WINDOWS_TASK_DIAGNOSTIC_IDENTITY_TIMEOUT_MS = 5_000;
 
 export type ServiceBackend = "scheduler" | "native";
 
@@ -2619,6 +2622,8 @@ export interface RepairServiceDeps {
   repairSystemd?: () => void;
   /** Reads live registered task XML; may be called again after failure, empty when unreadable. */
   readSchedulerXml?: () => string;
+  /** Bounded wait before retrying an unreadable live registration snapshot. */
+  settleSchedulerRead?: (delayMs: number) => void | Promise<void>;
   /** Proves fixed-name task presence when its live XML is empty or unreadable. */
   probeScheduler?: () => WindowsSchedulerTaskProbe;
   /** Re-registers the task from freshly staged XML. Used only when the definition is stale. */
@@ -2629,6 +2634,33 @@ export interface RepairServiceDeps {
   resolveExpectedUserId?: (registeredXml: string) => string | null;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
+}
+
+async function assertSchedulerSnapshotBeforeStart(
+  readSchedulerXml: () => string,
+  expectedXml: string,
+  settle: (delayMs: number) => void | Promise<void>,
+  changedMessage: string,
+  unreadableMessage: string,
+): Promise<void> {
+  for (let attempt = 0; attempt <= SCHEDULER_SETTLE_DELAYS_MS.length; attempt += 1) {
+    let beforeStartXml = "";
+    try {
+      beforeStartXml = readSchedulerXml();
+    } catch {
+      // Treat query errors like the default reader's empty result and retry below.
+    }
+    if (beforeStartXml.trim()) {
+      if (!windowsSchedulerRegistrationMatchesSnapshot(beforeStartXml, expectedXml)) {
+        throw new Error(changedMessage);
+      }
+      return;
+    }
+    const delayMs = SCHEDULER_SETTLE_DELAYS_MS[attempt];
+    if (delayMs === undefined) break;
+    await settle(delayMs);
+  }
+  throw new Error(unreadableMessage);
 }
 
 /**
@@ -2785,14 +2817,14 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
 
         if (restartExpectedXml !== null) {
           try {
-            const restartXml = readSchedulerXml();
-            if (!windowsSchedulerRegistrationMatchesSnapshot(restartXml, restartExpectedXml)) {
-              recoveryErrors.push(new Error(
-                "The Task Scheduler registration changed again before restart; the newer definition was preserved and not started.",
-              ));
-            } else {
-              (deps.startScheduler ?? startWindows)();
-            }
+            await assertSchedulerSnapshotBeforeStart(
+              readSchedulerXml,
+              restartExpectedXml,
+              deps.settleSchedulerRead ?? settleDelay,
+              "The Task Scheduler registration changed again before restart; the newer definition was preserved and not started.",
+              "Task Scheduler state remained unreadable before restart; the registration was preserved and not started.",
+            );
+            (deps.startScheduler ?? startWindows)();
           } catch (error) {
             recoveryErrors.push(error);
           }
@@ -2806,24 +2838,17 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
         throw err;
       }
     }
-    let beforeStartXml = "";
-    try {
-      beforeStartXml = readSchedulerXml();
-    } catch {
-      throw new Error(
-        "Task Scheduler registration became unreadable before restart; it was preserved and not started.",
-      );
-    }
-    // An unreadable pre-start readback is not evidence that the definition changed: the
-    // default read turns a failed `schtasks /query` into an empty string. Treating that as
-    // a mismatch would abort after the task was already stopped and leave a previously
-    // running proxy down — the exact availability regression this repair path must avoid.
-    // Only a definition we can actually read, and that differs, blocks the restart.
-    if (beforeStartXml.trim() && !windowsSchedulerRegistrationMatchesSnapshot(beforeStartXml, startExpectedXml)) {
-      throw new Error(
-        "Task Scheduler registration changed before restart; the current definition was preserved and not started.",
-      );
-    }
+    // The final live read is the proof that `/run` still targets the definition this repair
+    // verified. A failed `schtasks /query` becomes an empty string, so allow only a bounded
+    // retry for that unreadable state. A readable mismatch is authoritative and fails
+    // immediately; presence alone cannot prove that the fixed-name task still has our XML.
+    await assertSchedulerSnapshotBeforeStart(
+      readSchedulerXml,
+      startExpectedXml,
+      deps.settleSchedulerRead ?? settleDelay,
+      "Task Scheduler registration changed before restart; the current definition was preserved and not started.",
+      "Task Scheduler registration became unreadable before restart; it was preserved and not started.",
+    );
     (deps.startScheduler ?? startWindows)();
     (deps.writeSchedulerState ?? (() => writeServiceInstallState("scheduler")))();
     return;
@@ -3682,7 +3707,7 @@ export function resolveWindowsTaskDiagnosticUserId(
   if (taskXmlElementCount(triggers, "UserId") === 0) return null;
 
   try {
-    (deps.resolvePrincipal ?? resolveCurrentWindowsPrincipal)(WINDOWS_TASK_DIAGNOSTIC_IDENTITY_TIMEOUT_MS);
+    (deps.resolvePrincipal ?? resolveCurrentWindowsPrincipal)(WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS);
   } catch {
     return null;
   }
