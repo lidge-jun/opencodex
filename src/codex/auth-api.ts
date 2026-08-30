@@ -1377,11 +1377,35 @@ export async function primeCodexPoolQuotas(
         primeMain(),
         mapWithConcurrency(stale, POOL_QUOTA_REFRESH_CONCURRENCY, async a => {
           if (!getCodexAccountCredential(a.id)) return;
-          poolQuotaPrimeAttemptedAt.set(a.id, {
-            generation: readCodexAccountRecord(a.id)?.generation ?? 0,
-            at: Date.now(),
-          });
-          await fetchPoolAccountQuota(a.id, false, a.plan);
+          const attemptedAt = Date.now();
+          const startGeneration = readCodexAccountRecord(a.id)?.generation ?? 0;
+          try {
+            const result = await fetchPoolAccountQuota(a.id, false, a.plan);
+            // Credential admission can settle without sending WHAM (for example while
+            // another refresh owns the grant). Do not turn that local deferral into a
+            // five-minute upstream backoff.
+            if (result.quotaProbeSkipped) return;
+            poolQuotaPrimeAttemptedAt.set(a.id, {
+              // getValidCodexToken may rotate the credential before WHAM is sent.
+              // Bind the backoff to the generation that actually made the request;
+              // otherwise the next prime sees a false generation change and retries
+              // the same failed WHAM call immediately.
+              generation: result.credentialGeneration ?? startGeneration,
+              at: attemptedAt,
+            });
+          } catch (error) {
+            // Global quota-flight admission rejected this account before any WHAM
+            // request existed. Leave it immediately eligible for the next prime.
+            if (error instanceof PoolQuotaProbeBusyError) return;
+            // Unexpected failures are still bounded, but only against the credential
+            // whose attempt started; a concurrent replacement remains immediately
+            // eligible through the generation comparison above.
+            poolQuotaPrimeAttemptedAt.set(a.id, {
+              generation: startGeneration,
+              at: attemptedAt,
+            });
+            throw error;
+          }
         }),
       ]);
     } catch {
