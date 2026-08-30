@@ -649,6 +649,7 @@ export function trackSseForRequestLog(
   onCancel: () => void,
   logCtx?: RequestLogContext,
   onFirstOutput?: () => void,
+  inspectedSource?: "upstream" | "relay",
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let terminalReported = false;
@@ -665,6 +666,7 @@ export function trackSseForRequestLog(
     onTerminal: reportTerminal,
     logCtx,
     onFirstOutput,
+    inspectedSource,
   });
 
   return new ReadableStream<Uint8Array>({
@@ -709,6 +711,7 @@ export function responseWithDeferredRequestLog(
   start: number,
   logCtx: RequestLogContext,
   addLog: (entry: RequestLogEntry) => void = addRequestLog,
+  inspectedSource?: "upstream" | "relay",
 ): Response {
   if (logCtx.requestStartedAt === undefined) logCtx.requestStartedAt = start;
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
@@ -772,6 +775,7 @@ export function responseWithDeferredRequestLog(
     },
     logCtx,
     () => recordFirstOutput(logCtx, start),
+    inspectedSource,
   );
   return new Response(body, {
     status: response.status,
@@ -904,6 +908,11 @@ export type SseInspectorHandlers = {
    * between `response.created` and `response.completed`.
    */
   pinCompletedResponseIdToFirstSeen?: boolean;
+  /**
+   * Provenance of the stream being inspected.
+   * Raw upstream SSE defaults to "upstream"; adapter or bridge produced SSE uses "relay".
+   */
+  inspectedSource?: "upstream" | "relay";
 };
 
 type CompletedOutputItem = { item: unknown; sourceBytes: number };
@@ -1086,7 +1095,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       try { handlers.onParsedPayload(parsed); } catch { /* inspection must never throw into the pump */ }
     }
     reportFirstOutput.parsed(parsed);
-    if (handlers.logCtx && handlers.logCtx.firstOutputMs !== undefined) {
+    if (handlers.logCtx && firstOutputFromParsed(parsed)) {
       noteStreamTimelineEvent(handlers.logCtx, "upstreamFirstSemanticOutputMs");
     }
     const status = terminalStatusFromParsed(parsed);
@@ -1098,11 +1107,14 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       try {
         reported = true;
         if (handlers.logCtx) {
+          const source = handlers.inspectedSource ?? "upstream";
           handlers.logCtx.transportPhase = "terminal_sse";
-          handlers.logCtx.terminalSource = "upstream";
+          handlers.logCtx.terminalSource = source;
           if (status === "failed") {
-            handlers.logCtx.failureSide = "upstream";
-            handlers.logCtx.failureStage = "terminal_delivery";
+            handlers.logCtx.failureSide = handlers.logCtx.failureSide
+              ?? (source === "relay" ? "relay" : "upstream");
+            handlers.logCtx.failureStage = handlers.logCtx.failureStage
+              ?? (source === "relay" ? "relay_transform" : "terminal_delivery");
           }
         }
         handlers.onTerminal(status, policyTerminal ? 400 : undefined);
