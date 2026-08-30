@@ -204,22 +204,17 @@ function mergeEntry(previous: CodexProvenanceEntry, next: CodexProvenanceEntry):
 function mergeLedger(previous: CodexProvenanceLedger, next: CodexProvenanceLedger): CodexProvenanceLedger {
   const unused = new Set(previous.entries.map((_, index) => index));
   const entries = next.entries.map((entry, nextIndex) => {
-    let previousIndex = previous.entries.findIndex((candidate, index) =>
+    // Extensions follow provenance identity, never position. A bounded ledger may drop an
+    // oversized transaction, shifting an unrelated entry into that slot, and even within one
+    // transaction and timestamp the artifact may differ. Since this search already requires
+    // txId, timestamp, and artifact identity, any remaining positional match is by definition
+    // a different artifact, so preserving its unknown entry/artifact/baseline fields would
+    // attach false evidence and could regrow the record past the measured byte ceiling.
+    const previousIndex = previous.entries.findIndex((candidate, index) =>
       unused.has(index)
       && candidate.txId === entry.txId
       && candidate.at === entry.at
       && knownArtifactIdentity(candidate.artifact) === knownArtifactIdentity(entry.artifact));
-    if (previousIndex < 0 && unused.has(nextIndex)) {
-      const positional = previous.entries[nextIndex]!;
-      // Position alone is not provenance identity: a bounded ledger may drop an oversized
-      // transaction, shifting a newly appended transaction into its slot. Preserve extensions
-      // positionally only within the same transaction; otherwise an omitted transaction's
-      // unknown evidence would be falsely attached to the replacement and could regrow the
-      // record past the byte ceiling.
-      if (positional.txId === entry.txId && positional.at === entry.at) {
-        previousIndex = nextIndex;
-      }
-    }
     if (previousIndex < 0) return entry;
     unused.delete(previousIndex);
     return mergeEntry(previous.entries[previousIndex]!, entry);

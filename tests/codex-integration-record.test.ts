@@ -196,6 +196,45 @@ describe("Codex integration record", () => {
       .toBeLessThanOrEqual(maxBytes);
   });
 
+  test("does not move extensions onto a different artifact in the same transaction", () => {
+    const at = "2026-08-04T00:00:00.000Z";
+    writeRecord({
+      version: 1,
+      provenance: {
+        entries: [{
+          artifact: { kind: "config", futureArtifact: { owner: "config" } },
+          baseline: { kind: "absent", futureBaseline: { owner: "config" } },
+          postImage: null,
+          txId: "tx-same",
+          at,
+          futureEntry: { owner: "config" },
+        } as unknown as CodexProvenanceEntry],
+      },
+    });
+
+    const result = updateIntegrationRecord(record => ({
+      ...record,
+      provenance: {
+        ...record.provenance,
+        entries: [{
+          artifact: { kind: "generated-profile" },
+          baseline: { kind: "absent" },
+          postImage: null,
+          txId: "tx-same",
+          at,
+        }],
+      },
+    }));
+
+    expect(result.kind).toBe("updated");
+    const saved = persistedRecord();
+    const entries = (saved.provenance as { entries: Array<Record<string, unknown>> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.artifact).toEqual({ kind: "generated-profile" });
+    expect(entries[0]!.baseline).toEqual({ kind: "absent" });
+    expect(entries[0]).not.toHaveProperty("futureEntry");
+  });
+
   test("fails closed on unparseable bytes without invoking the mutator or resetting the file", () => {
     mkdirSync(join(opencodexHome, "integrations"), { recursive: true });
     writeFileSync(integrationRecordPath(), "{ definitely-not-json", "utf8");
