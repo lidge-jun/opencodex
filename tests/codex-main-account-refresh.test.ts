@@ -1,6 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +27,19 @@ import { resolveNativeProfileContext } from "../src/codex/native-profile-store";
 
 let home: string;
 let previousCodexHome: string | undefined;
+
+const canSymlink = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-main-refresh-symlink-probe-"));
+  try {
+    symlinkSync(join(dir, "probe-target"), join(dir, "probe-link"));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EPERM") return false;
+    throw error;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
 
 function expiredJwt(): string {
   const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) - 60 })).toString("base64url");
@@ -76,6 +101,73 @@ describe("native main token refresh", () => {
       },
     });
     expect(readdirSync(home).filter(name => name.includes(".tmp"))).toEqual([]);
+  });
+
+  test.skipIf(!canSymlink)("preserves a symlinked auth file and rotates its canonical target", async () => {
+    const managedDir = join(home, "dotfiles");
+    const targetPath = join(managedDir, "auth.json");
+    const authPath = join(home, "auth.json");
+    mkdirSync(managedDir);
+    writeFileSync(targetPath, JSON.stringify({
+      tokens: {
+        access_token: expiredJwt(),
+        refresh_token: "old-refresh",
+        account_id: "account-main",
+      },
+    }));
+    symlinkSync(targetPath, authPath);
+
+    await expect(getValidMainAccountToken({
+      refreshToken: async () => ({
+        access: "new-access",
+        refresh: "rotated-refresh",
+        expires: Date.now() + 3_600_000,
+        accountId: "account-main",
+      }),
+    })).resolves.toEqual({ accessToken: "new-access", chatgptAccountId: "account-main" });
+
+    expect(lstatSync(authPath).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(authPath)).toBe(targetPath);
+    expect(JSON.parse(readFileSync(targetPath, "utf8")).tokens).toMatchObject({
+      access_token: "new-access",
+      refresh_token: "rotated-refresh",
+    });
+    expect(readdirSync(managedDir).filter(name => name.startsWith(".opencodex-native-main-refresh."))).toEqual([]);
+  });
+
+  test.skipIf(!canSymlink)("fails closed when the auth symlink is retargeted during refresh", async () => {
+    const authPath = join(home, "auth.json");
+    const firstTarget = join(home, "first-auth.json");
+    const secondTarget = join(home, "second-auth.json");
+    const original = JSON.stringify({
+      tokens: {
+        access_token: expiredJwt(),
+        refresh_token: "old-refresh",
+        account_id: "account-main",
+      },
+    });
+    const external = JSON.stringify({ tokens: { access_token: "external-access" } });
+    writeFileSync(firstTarget, original);
+    writeFileSync(secondTarget, external);
+    symlinkSync(firstTarget, authPath);
+    setMainAuthJsonBeforeRenameHookForTests(() => {
+      unlinkSync(authPath);
+      symlinkSync(secondTarget, authPath);
+    });
+
+    await expect(getValidMainAccountToken({
+      refreshToken: async () => ({
+        access: "new-access",
+        refresh: "rotated-refresh",
+        expires: Date.now() + 3_600_000,
+        accountId: "account-main",
+      }),
+    })).rejects.toThrow("changed while its token was refreshing");
+
+    expect(lstatSync(authPath).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(authPath)).toBe(secondTarget);
+    expect(readFileSync(firstTarget, "utf8")).toBe(original);
+    expect(readFileSync(secondTarget, "utf8")).toBe(external);
   });
 
   test("refuses to overwrite an external auth writer after refresh", async () => {
@@ -154,6 +246,7 @@ describe("native main token refresh", () => {
     writeFileSync(journalPath, JSON.stringify({
       version: 1,
       transactionId: "22222222-2222-4222-8222-222222222222",
+      targetPath: authPath,
       stagedBasename,
       previousBasename: `.opencodex-native-main-refresh.${fileTransactionId}.previous`,
       phase: "prepared",
@@ -188,6 +281,7 @@ describe("native main token refresh", () => {
     writeFileSync(journalPath, JSON.stringify({
       version: 1,
       transactionId,
+      targetPath: authPath,
       stagedBasename,
       previousBasename: `.opencodex-native-main-refresh.${transactionId}.previous`,
       phase: "prepared",
@@ -346,6 +440,78 @@ describe("native main token refresh", () => {
     expect(attempts).toBe(2);
   });
 
+  test.skipIf(!canSymlink)("recovers a prepared publication through the original symlink target", () => {
+    const managedDir = join(home, "dotfiles-recovery");
+    const targetPath = join(managedDir, "auth.json");
+    const authPath = join(home, "auth.json");
+    const transactionId = "11111111-1111-4111-8111-111111111111";
+    const stagedBasename = `.opencodex-native-main-refresh.${transactionId}.new`;
+    const previousBasename = `.opencodex-native-main-refresh.${transactionId}.previous`;
+    const original = JSON.stringify({ tokens: { refresh_token: "old-refresh", account_id: "account-main" } });
+    const replacement = JSON.stringify({ tokens: { access_token: "new-access", refresh_token: "new-refresh" } });
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    mkdirSync(managedDir);
+    writeFileSync(targetPath, original);
+    symlinkSync(targetPath, authPath);
+    writeFileSync(join(managedDir, stagedBasename), replacement);
+    writeFileSync(join(home, ".opencodex-native-main-refresh.json"), JSON.stringify({
+      version: 1,
+      transactionId,
+      targetPath,
+      stagedBasename,
+      previousBasename,
+      phase: "prepared",
+      expectedSha256: digest(original),
+      replacementSha256: digest(replacement),
+    }));
+
+    recoverNativeMainRefreshPublication(resolveNativeProfileContext());
+
+    expect(lstatSync(authPath).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(authPath)).toBe(targetPath);
+    expect(readFileSync(targetPath, "utf8")).toBe(replacement);
+    expect(readdirSync(managedDir)).toEqual(["auth.json"]);
+    expect(existsSync(join(home, ".opencodex-native-main-refresh.json"))).toBe(false);
+  });
+
+  test.skipIf(!canSymlink)("refuses recovery after the auth symlink target changes", () => {
+    const authPath = join(home, "auth.json");
+    const firstTarget = join(home, "first-auth.json");
+    const secondTarget = join(home, "second-auth.json");
+    const transactionId = "11111111-1111-4111-8111-111111111111";
+    const stagedBasename = `.opencodex-native-main-refresh.${transactionId}.new`;
+    const previousBasename = `.opencodex-native-main-refresh.${transactionId}.previous`;
+    const journalPath = join(home, ".opencodex-native-main-refresh.json");
+    const original = JSON.stringify({ tokens: { refresh_token: "old-refresh", account_id: "account-main" } });
+    const replacement = JSON.stringify({ tokens: { access_token: "new-access", refresh_token: "new-refresh" } });
+    const external = JSON.stringify({ tokens: { access_token: "external-access" } });
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    writeFileSync(firstTarget, original);
+    writeFileSync(secondTarget, external);
+    symlinkSync(secondTarget, authPath);
+    writeFileSync(join(home, stagedBasename), replacement);
+    writeFileSync(journalPath, JSON.stringify({
+      version: 1,
+      transactionId,
+      targetPath: firstTarget,
+      stagedBasename,
+      previousBasename,
+      phase: "prepared",
+      expectedSha256: digest(original),
+      replacementSha256: digest(replacement),
+    }));
+
+    expect(() => recoverNativeMainRefreshPublication(resolveNativeProfileContext())).toThrow(
+      "Native credential refresh could not be published",
+    );
+
+    expect(readlinkSync(authPath)).toBe(secondTarget);
+    expect(readFileSync(firstTarget, "utf8")).toBe(original);
+    expect(readFileSync(secondTarget, "utf8")).toBe(external);
+    expect(existsSync(journalPath)).toBe(true);
+    expect(existsSync(join(home, stagedBasename))).toBe(true);
+  });
+
   test("cleans committed recovery journals with zero, one, and multiple exact remnants", () => {
     const original = JSON.stringify({ tokens: { refresh_token: "old-refresh", account_id: "account-main" } });
     const replacement = JSON.stringify({ tokens: { access_token: "access-b", refresh_token: "refresh-b", account_id: "account-main" } });
@@ -363,6 +529,7 @@ describe("native main token refresh", () => {
       writeFileSync(journalPath, JSON.stringify({
         version: 1,
         transactionId: testCase.transactionId,
+        targetPath: join(home, "auth.json"),
         stagedBasename: staged,
         previousBasename: previous,
         phase: "replaced",

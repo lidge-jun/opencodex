@@ -11,6 +11,7 @@ import {
 import type { OAuthCredentials } from "../oauth/types";
 import { extractChatgptPlanType } from "./plan";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
+import { resolveWriteTarget } from "../config/atomic-write";
 import { resolveCodexHomeDir } from "./home";
 import { assertNotRealCodexHomeUnderTest } from "../lib/test-home-guard";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
@@ -95,7 +96,7 @@ function nonEmptyString(value: unknown): string | undefined {
 }
 
 function readMainAuthJsonCredential(): MainAuthJsonCredential | null {
-  const path = join(resolveCodexHomeDir(), "auth.json");
+  const path = resolveWriteTarget(join(resolveCodexHomeDir(), "auth.json"));
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
@@ -177,7 +178,7 @@ function persistRefreshedMainAuthJson(
   beforeMainAuthJsonRenameForTests = null;
   hook?.();
   assertMainAuthJsonSnapshotUnchanged(expected);
-  publishNativeMainRefresh(context, expected.raw, JSON.stringify({ ...expected.root, tokens }, null, 2) + "\n");
+  publishNativeMainRefresh(context, expected.path, expected.raw, JSON.stringify({ ...expected.root, tokens }, null, 2) + "\n");
   return { accessToken, chatgptAccountId };
 }
 

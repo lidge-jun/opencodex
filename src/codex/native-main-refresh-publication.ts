@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, unlinkSync } from "node:fs";
-import { basename, join } from "node:path";
-import { atomicWriteFile } from "../config/atomic-write";
+import { basename, dirname, join } from "node:path";
+import { atomicWriteFile, resolveWriteTarget } from "../config/atomic-write";
 import { PreservingReplaceError, replaceFilePreservingTarget, restoreFilePreservingTarget } from "../lib/atomic-file-preserving-replace";
 import type { NativeProfileContext } from "./native-profile-store";
 
@@ -11,6 +11,7 @@ const TRANSACTION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-
 type Journal = {
   version: 1;
   transactionId: string;
+  targetPath: string;
   stagedBasename: string;
   previousBasename: string;
   phase: "prepared" | "replaced";
@@ -44,6 +45,8 @@ function validJournal(value: unknown): value is Journal {
   const transactionId = typeof item.transactionId === "string" ? item.transactionId : "";
   return item.version === 1
     && TRANSACTION_ID.test(transactionId)
+    && typeof item.targetPath === "string"
+    && item.targetPath.length > 0
     && item.stagedBasename === `.opencodex-native-main-refresh.${transactionId}.new`
     && item.previousBasename === `.opencodex-native-main-refresh.${transactionId}.previous`
     && (item.phase === "prepared" || item.phase === "replaced")
@@ -60,15 +63,28 @@ function removeExact(path: string): void {
   try { unlinkSync(path); } catch (cause) { throw new NativeMainRefreshPublicationError({ cause }); }
 }
 
-function journalPaths(context: NativeProfileContext, journal: Journal): { staged: string; previous: string } {
+function resolveAuthTarget(context: NativeProfileContext): string {
+  try {
+    return resolveWriteTarget(context.authPath);
+  } catch (cause) {
+    throw new NativeMainRefreshPublicationError({ cause });
+  }
+}
+
+function assertAuthTarget(context: NativeProfileContext, expectedTarget: string): void {
+  if (resolveAuthTarget(context) !== expectedTarget) throw new NativeMainRefreshPublicationError();
+}
+
+function journalPaths(journal: Journal): { staged: string; previous: string } {
+  const targetDir = dirname(journal.targetPath);
   return {
-    staged: join(context.codexHome, journal.stagedBasename),
-    previous: join(context.codexHome, journal.previousBasename),
+    staged: join(targetDir, journal.stagedBasename),
+    previous: join(targetDir, journal.previousBasename),
   };
 }
 
 function cleanup(context: NativeProfileContext, journal: Journal): void {
-  const { staged, previous } = journalPaths(context, journal);
+  const { staged, previous } = journalPaths(journal);
   for (const path of [staged, previous, journalPath(context)]) {
     if (existsSync(path)) removeExact(path);
   }
@@ -81,13 +97,14 @@ export function recoverNativeMainRefreshPublication(context: NativeProfileContex
   let journal: Journal;
   try { journal = JSON.parse(readFileSync(path, "utf8")) as Journal; } catch (cause) { throw new NativeMainRefreshPublicationError({ cause }); }
   if (!validJournal(journal)) throw new NativeMainRefreshPublicationError();
-  const { staged, previous } = journalPaths(context, journal);
-  const canonical = readExact(context.authPath);
+  assertAuthTarget(context, journal.targetPath);
+  const { staged, previous } = journalPaths(journal);
+  const canonical = readExact(journal.targetPath);
   const stagedBytes = readExact(staged);
   if (!canonical) throw new NativeMainRefreshPublicationError();
   if (digest(canonical) === journal.expectedSha256 && stagedBytes && digest(stagedBytes) === journal.replacementSha256) {
     try {
-      replaceFilePreservingTarget(staged, context.authPath, previous);
+      replaceFilePreservingTarget(staged, journal.targetPath, previous);
       cleanup(context, { ...journal, phase: "replaced" });
     } catch (cause) {
       throw new NativeMainRefreshPublicationError({ cause });
@@ -104,6 +121,7 @@ export function recoverNativeMainRefreshPublication(context: NativeProfileContex
 /** The sole native-main auth.json publisher. */
 export function publishNativeMainRefresh(
   context: NativeProfileContext,
+  targetPath: string,
   expected: string,
   replacement: string,
 ): void {
@@ -113,33 +131,36 @@ export function publishNativeMainRefresh(
   const journal: Journal = {
     version: 1,
     transactionId: tx,
+    targetPath,
     stagedBasename,
     previousBasename,
     phase: "prepared",
     expectedSha256: digest(expected),
     replacementSha256: digest(replacement),
   };
-  const staged = join(context.codexHome, stagedBasename);
-  const previous = join(context.codexHome, previousBasename);
+  const { staged, previous } = journalPaths(journal);
   try {
-    if (digest(readFileSync(context.authPath)) !== journal.expectedSha256) throw new NativeMainRefreshPublicationError();
+    assertAuthTarget(context, targetPath);
+    if (digest(readFileSync(targetPath)) !== journal.expectedSha256) throw new NativeMainRefreshPublicationError();
     atomicWriteFile(staged, replacement);
     fsync(staged);
     atomicWriteFile(journalPath(context), `${JSON.stringify(journal)}\n`);
-    replaceFilePreservingTarget(staged, context.authPath, previous);
+    assertAuthTarget(context, targetPath);
+    if (digest(readFileSync(targetPath)) !== journal.expectedSha256) throw new NativeMainRefreshPublicationError();
+    replaceFilePreservingTarget(staged, targetPath, previous);
     const displaced = readExact(process.platform === "win32" ? previous : staged);
     if (!displaced || digest(displaced) !== journal.expectedSha256) {
-      const canonical = readExact(context.authPath);
+      const canonical = readExact(targetPath);
       if (canonical && digest(canonical) === journal.replacementSha256) {
         restoreFilePreservingTarget(
           process.platform === "win32" ? previous : staged,
-          context.authPath,
+          targetPath,
           process.platform === "win32" ? staged : previous,
         );
       }
       throw new NativeMainRefreshPublicationError();
     }
-    const canonical = readExact(context.authPath);
+    const canonical = readExact(targetPath);
     if (!canonical || digest(canonical) !== journal.replacementSha256) {
       throw new NativeMainRefreshPublicationError();
     }
