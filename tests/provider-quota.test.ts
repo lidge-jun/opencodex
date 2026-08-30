@@ -1047,8 +1047,8 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports[0]?.quota).toMatchObject({
       fiveHourPercent: 40.5,
       weeklyPercent: 52,
+      monthlyPercent: 12.3,
     });
-    expect(result.reports[0]?.quota.monthlyPercent).toBeUndefined();
     expect(seen).toHaveLength(1);
     expect(seen[0]?.url).toBe("https://api.z.ai/api/monitor/usage/quota/limit");
   });
