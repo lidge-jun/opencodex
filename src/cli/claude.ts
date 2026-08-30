@@ -132,6 +132,18 @@ export function buildClaudeEnv(
         const replacement = `http://127.0.0.1:${port}`;
         console.error(`⚠ Replacing stale opencodex ANTHROPIC_BASE_URL ${parsed.origin} with ${replacement}.`);
         env.ANTHROPIC_BASE_URL = replacement;
+        // The credentials in this environment were paired with the destination we just
+        // replaced. An admission secret minted by that other proxy is not valid here, and
+        // leaving it in place makes Claude Code authenticate as a host-managed provider
+        // instead of using its own subscription OAuth — the launch then bypasses the
+        // subscription-preserving default below. Only OUR OWN admission forms are dropped:
+        // a genuine user `sk-ant-` credential is upstream auth that native passthrough
+        // needs (server/claude-messages.ts), so it must survive the destination rewrite.
+        for (const slot of ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"] as const) {
+          const value = env[slot]?.trim();
+          if (!value) continue;
+          if (value === PROXY_MARKER || isProxyAdmissionSecret(value, config)) delete env[slot];
+        }
       }
     } catch {
       // Preserve user-provided values that are not parseable URLs.

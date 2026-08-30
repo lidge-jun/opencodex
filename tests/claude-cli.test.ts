@@ -270,6 +270,48 @@ describe("ocx claude env assembly", () => {
     expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBeUndefined();
   });
 
+  // A stale loopback ANTHROPIC_BASE_URL is rewritten to this launch's port. The credentials
+  // in that environment were minted by the proxy we just stopped pointing at, so keeping
+  // them makes Claude Code launch as a host-managed provider instead of using its own
+  // subscription OAuth.
+  test("replacing a stale loopback base URL drops the admission credential paired with it", () => {
+    // This proxy requires no admission key, so the launch must stay in subscription mode.
+    // The inherited token was minted by the proxy on :19999 that we just stopped targeting.
+    const env = buildClaudeEnv(cfg(), 10100, {
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:19999",
+      ANTHROPIC_AUTH_TOKEN: "ocx_data_other_proxy_key",
+    }, {}, { ...AUTH_PRESENT, preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"] });
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
+    // A surviving token makes Claude Code authenticate as a host-managed provider and
+    // overrides the caller's own claude.ai OAuth.
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  test("a stale admission token is replaced by THIS proxy's key, never carried over", () => {
+    const env = buildClaudeEnv(
+      cfg({ apiKeys: [{ id: "k1", name: "local", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01T00:00:00Z" }] }),
+      10100,
+      {
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:19999",
+        ANTHROPIC_AUTH_TOKEN: "ocx_data_other_proxy_key",
+      },
+      {},
+      { ...AUTH_PRESENT, preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"] },
+    );
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("ocx_data_this_proxy_key");
+  });
+
+  test("a user sk-ant- credential survives the stale base-URL rewrite (native passthrough auth)", () => {
+    const env = buildClaudeEnv(cfg(), 10100, {
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:19999",
+      ANTHROPIC_API_KEY: "sk-ant-user-owned-key",
+    }, {}, { ...AUTH_PRESENT, preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"] });
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
+    expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user-owned-key");
+  });
+
 });
 
 describe("ocx claude Windows launch (devlog 260715_cross_platform_audit/020)", () => {
