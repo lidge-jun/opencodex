@@ -1760,6 +1760,26 @@ function windowsTaskDescription(attemptNonce?: string): string {
     : "OpenCodex proxy service wrapper";
 }
 
+/**
+ * Session transitions that must be able to bring the proxy back.
+ *
+ * The task runs under `InteractiveToken`, so the proxy lives inside the interactive session
+ * and Windows tears it down with that session — the wrapper records the kill as exit code
+ * 1073807364 (`STATUS_CONTROL_C_EXIT`). With `LogonTrigger` as the only trigger there was no
+ * recovery path short of a fresh logon, so signing out of a Remote Desktop session left the
+ * proxy down until the next interactive logon. On one machine's logs 19 such kills produced
+ * gaps of up to ~60 hours.
+ *
+ * These triggers do not stop the kill; they make it recoverable at the next connect. Console
+ * transitions are included because a local session can be disconnected the same way, and
+ * `MultipleInstancesPolicy=IgnoreNew` keeps a still-running proxy from being started twice.
+ */
+const WINDOWS_SESSION_RECOVERY_STATE_CHANGES = [
+  "RemoteConnect",
+  "SessionUnlock",
+  "ConsoleConnect",
+] as const;
+
 export function buildWindowsTaskXml(
   script = windowsServiceScriptPath(),
   launcher = windowsLauncherVbsPath(),
@@ -1778,6 +1798,10 @@ export function buildWindowsTaskXml(
     <LogonTrigger>
       <Enabled>true</Enabled>
     </LogonTrigger>
+    ${WINDOWS_SESSION_RECOVERY_STATE_CHANGES.map(stateChange => `<SessionStateChangeTrigger>
+      <Enabled>true</Enabled>
+      <StateChange>${stateChange}</StateChange>
+    </SessionStateChangeTrigger>`).join("\n    ")}
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -1907,6 +1931,21 @@ export function windowsTaskRegistrationOwnedByAttempt(xml: string, attemptNonce:
   );
 }
 
+/**
+ * Every session-recovery trigger present and enabled, scoped to <Triggers>.
+ *
+ * Each StateChange is matched inside its OWN <SessionStateChangeTrigger> element: a document
+ * carrying one disabled trigger plus a different enabled one must not pass because the two
+ * halves were found in unrelated elements.
+ */
+function windowsTaskHasSessionRecoveryTriggers(triggers: string): boolean {
+  const scoped = triggers.match(/<SessionStateChangeTrigger(?:\s[^>]*)?>[\s\S]*?<\/SessionStateChangeTrigger>/gi) ?? [];
+  return WINDOWS_SESSION_RECOVERY_STATE_CHANGES.every(stateChange =>
+    scoped.some(element =>
+      taskXmlDecodedValueEquals(element, "StateChange", stateChange)
+      && taskXmlOptionalValueEquals(element, "Enabled", "true")));
+}
+
 /** Validate the security/lifecycle-critical fields of the registered scheduler task. */
 export function windowsTaskRegistrationHealthy(
   xml: string,
@@ -1928,6 +1967,10 @@ export function windowsTaskRegistrationHealthy(
   // itself — scoped to <Triggers> so a decoy elsewhere cannot satisfy it.
   return taskXmlElementCount(triggers, "LogonTrigger") > 0
     && taskXmlOptionalValueEquals(trigger, "Enabled", "true")
+    // Without these the task can only recover at the next logon, so a disconnected session
+    // leaves the proxy down indefinitely. Treating their absence as unhealthy is what lets
+    // an already-registered task from an older install get repaired instead of staying broken.
+    && windowsTaskHasSessionRecoveryTriggers(triggers)
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
     && taskXmlRunLevelAcceptable(principal)
     && taskXmlOptionalValueEquals(settings, "Enabled", "true")

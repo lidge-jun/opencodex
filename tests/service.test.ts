@@ -446,6 +446,46 @@ describe("Windows service task", () => {
     expect(xml).not.toContain("<Command>C:\\Users\\a&amp;b\\.opencodex\\opencodex-service.cmd</Command>");
   });
 
+  /**
+   * The task runs under InteractiveToken, so Windows kills the proxy with the interactive
+   * session and the wrapper records exit code 1073807364 (STATUS_CONTROL_C_EXIT). With a lone
+   * LogonTrigger there was no way back before the next interactive logon, so signing out of a
+   * Remote Desktop session left the proxy down — observed gaps of up to ~60 hours in the
+   * wrapper log. These triggers do not prevent the kill; they make it recoverable on connect.
+   */
+  test("registers session-reconnect triggers so a disconnected session can restart the proxy", () => {
+    const xml = buildWindowsTaskXml("s.cmd", "l.vbs");
+    const triggers = /<Triggers>([\s\S]*?)<\/Triggers>/i.exec(xml)?.[1] ?? "";
+    // Logon recovery is kept; the session triggers are additive.
+    expect(triggers).toContain("<LogonTrigger>");
+    for (const stateChange of ["RemoteConnect", "SessionUnlock", "ConsoleConnect"]) {
+      expect(triggers).toContain(`<StateChange>${stateChange}</StateChange>`);
+    }
+    // Re-entry is safe only because a live proxy is not started twice.
+    expect(xml).toContain("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>");
+  });
+
+  test("a task registered without session-reconnect triggers reads as unhealthy", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher).replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    expect(windowsTaskRegistrationHealthy(xml, wscript, launcher)).toBe(true);
+
+    // A task left over from an older install must be repaired, not accepted as-is.
+    const legacy = xml.replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+    expect(legacy).not.toContain("SessionStateChangeTrigger");
+    expect(windowsTaskRegistrationHealthy(legacy, wscript, launcher)).toBe(false);
+
+    // Present but disabled is not recovery either, and the Enabled/StateChange pair must be
+    // matched within ONE element rather than found in two unrelated ones.
+    const disabled = xml.replace(
+      /<SessionStateChangeTrigger>\s*<Enabled>true<\/Enabled>\s*<StateChange>RemoteConnect<\/StateChange>\s*<\/SessionStateChangeTrigger>/i,
+      "<SessionStateChangeTrigger><Enabled>false</Enabled><StateChange>RemoteConnect</StateChange></SessionStateChangeTrigger>",
+    );
+    expect(disabled).toContain("<StateChange>RemoteConnect</StateChange>");
+    expect(windowsTaskRegistrationHealthy(disabled, wscript, launcher)).toBe(false);
+  });
+
   test("validates the registered scheduler action, trigger, principal, and settings", () => {
     const wscript = "C:\\Windows\\System32\\wscript.exe";
     const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
