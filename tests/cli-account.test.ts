@@ -589,12 +589,15 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(machine.output).not.toContain(RAW_SENTINEL);
   });
 
-  test("12: list kiro prints the single-slot replacement note", async () => {
+  test("12: list kiro does not claim a single login slot", async () => {
+    // Kiro pools multiple accounts since d82b3049d (quota-aware ranking + 429 rotation), so
+    // the old replacement-style note contradicted the runtime. Asserting its ABSENCE is what
+    // keeps the CLI and the docs from drifting apart again.
     const result = await run(["list", "kiro"]);
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("single login slot");
-    expect(result.stdout).toContain("re-login replaces the current account");
+    expect(result.stdout).not.toContain("single login slot");
+    expect(result.stdout).not.toContain("re-login replaces the current account");
   });
 
   test("13: bare account and use without an id return usage errors", async () => {
