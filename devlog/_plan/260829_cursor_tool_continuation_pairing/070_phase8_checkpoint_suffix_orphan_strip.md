@@ -485,3 +485,72 @@ Four-suite total is 198 pass / 0 fail; `cursor-blob` alone 115. Sweeps re-run cl
 configurations across narrated, bare-call, whitespace-text and parallel shapes with zero envelope overruns,
 zero orphaned calls and zero lost newest results; 78-position count-by-parallel grid clean; all five
 multi-turn growth shapes survive 200 turns.
+
+## Audit round 8: the note was inside the array every pruning block reasons about
+
+Round 7 re-appended the note into `historyEntries` before the pruning blocks ran, and from that point every
+one of them had to recognise a tail it could only identify by position. The initiator-recovery block could
+not. Its floor is "stop when one entry is left", so with `[toolResult, note]` it counted the note as the
+survivor and shifted off the **result**.
+
+What reached the model, one 600 KB result, three identical narrations instead of two the only difference:
+
+```
+PLAIN  roots=3  lens=[16, 24, 524067]   <- the answer
+ARMED  roots=3  lens=[16, 24, 193]      <- the note, and nothing else
+```
+
+193 bytes of "take a DIFFERENT action" in place of the output the model was waiting for. The result had
+already been truncated to fit; the recovery block deleted it anyway. This is the reported symptom exactly —
+no tool output, so the model runs the command again — re-entered through the fix for it.
+
+A second mechanism compounded it. `activeBytes` included `syntheticBytes` while the equal-share divisor did
+not, so shares summed to the entire budget and adding the note back always exceeded it. The
+shrink-toward-equal-share pass — whose whole purpose is "a missing result is worse than a truncated one" —
+became structurally unfittable, and control fell through to the loop that deletes a whole result. 246 bytes
+of note cost a 200 KB answer. Reviewer measured 166 of 432 byte-pressure configurations losing an answer.
+
+### The fix is structural, not another floor
+
+Adding `+ trailingSynthetic.length` to each floor would have worked and would have left the next block to
+discover the same trap. Instead the tail is held **out** of `historyEntries` entirely until assembly, and
+every budget below is expressed net of it: `historyLimitForReal` and `historyBudgetForReal` are computed
+once, before the first result is measured. The pruning blocks then reason only about real history and cannot
+mistake one kind of root for the other, and the reservation is what keeps the tail from overrunning the
+envelope when it returns.
+
+That the reservation is load-bearing was proved twice over: with it removed the same shapes 400 on the byte
+limit, and an intermediate version that held the tail out without reserving its bytes committed 51 bytes
+over.
+
+### Coverage, which was the round's second finding
+
+The entire `syntheticBytes` charge family had no test: neutralizing it in one edit left the suite green
+while a sweep against that mutation threw 148 envelope errors. That is the third uncovered hunk in this
+unit, and it landed in the same commit whose message drops `chargeableSystemBytes` for being uncovered —
+the argument was made and then not applied to the new code beside it.
+
+Mutation evidence at this head:
+
+- byte reservation removed → 2 red
+- count reservation removed → 3 red
+- note dropped from the payload → 4 red
+- `messageIndex` walk removed (r11 defect) → 3 red
+- note re-appended into `historyEntries` **and** the gross budget spent (r12 defect in full) → 2 red
+
+The last row is worth stating precisely: re-appending alone is now harmless, because the reservation
+prevents the loss on its own. The defect needed both halves, and the test catches the pair.
+
+Four-suite total is 201 pass / 0 fail; `cursor-blob` alone 118. Sweeps at this head: 896 note-armed
+configurations across four assistant shapes crossed with count and byte pressure, 1440-case
+call-answer-invariant sweep, 224-case count sweep, 78-position grid — zero overruns, zero orphaned calls,
+zero lost answers, zero notes lost. Five multi-turn growth shapes survive 200 turns.
+
+### What eight rounds actually found
+
+One defect, re-entering through each of its own fixes. Every round's patch was correct for the path it was
+written against and silent about a sibling path in the same condition — and three times the sibling was
+created by the previous fix. The through-line is not carelessness about the condition; it is that each fix
+added a fact to the pruning code (`carriedRoots`, a count bound, a root-space run, a synthetic tail) without
+asking which existing block already assumed that fact absent. The last fix is the first that removes a
+distinction rather than adding one.

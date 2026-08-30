@@ -436,9 +436,18 @@ function rootPromptMessages(
     while (activeEnd > 0 && history[activeEnd - 1]?.messageIndex === undefined) activeEnd -= 1;
     let activeStart = activeEnd;
     while (activeStart > 0 && history[activeStart - 1]?.role === "toolResult") activeStart -= 1;
+    // Reserve the synthetic tail's slots and bytes FIRST, and express every budget below net of it.
+    // The tail is appended after all pruning, so a block that spends its room overruns the envelope,
+    // and a block that divides the gross budget produces shares that cannot fit once it returns. Both
+    // happened: the equal-share pass became structurally unfittable and fell through to deleting a whole
+    // result, and the initiator-recovery block committed 51 bytes over the limit (audit r11, r12).
+    const syntheticCount = history.length - activeEnd;
+    const syntheticBytes = history.slice(activeEnd).reduce((sum, entry) => sum + entry.byteLength, 0);
+    const historyLimitForReal = Math.max(0, historyLimit - syntheticCount);
+    const historyBudgetForReal = Math.max(0, historyBudget - syntheticBytes);
     const active = history
       .slice(activeStart, activeEnd)
-      .map(entry => truncateToolResultBlob(entry, historyBudget))
+      .map(entry => truncateToolResultBlob(entry, historyBudgetForReal))
       .filter((entry): entry is RootBlobCandidate => entry !== null);
     // Record the run BEFORE any pruning below can shrink it, so the abandon decision downstream compares
     // against what pruning was asked to preserve rather than against a raw-message scan that cannot see
@@ -447,41 +456,36 @@ function rootPromptMessages(
       .slice(activeStart, activeEnd)
       .map(entry => entry.messageIndex)
       .filter((index): index is number => index !== undefined);
-    // Synthetic trailing roots are re-appended after pruning, so they must be PAID FOR here or the
-    // envelope is overrun by exactly their number: they are counted with the trailing run rather than
-    // added afterwards, which is the mistake the count budget already made once (audit r11).
-    const syntheticCount = history.length - activeEnd;
-    const syntheticBytes = history.slice(activeEnd).reduce((sum, entry) => sum + entry.byteLength, 0);
-    let activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0) + syntheticBytes;
+    let activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
     // Shrink every active result toward an equal share before dropping any of them. Review found
     // that the previous `active.shift()` loop DELETED whole results: three ~220 KB results emitted
     // only the last two, and `call_0` vanished with its tool call still in the transcript. A
     // missing result is worse than a truncated one — the model sees a call it never got an answer
     // to, which is the pairing break #1527 reports, and the caller cannot tell it happened.
-    if (active.length > 1 && activeBytes > historyBudget) {
-      const share = Math.floor(historyBudget / active.length);
+    if (active.length > 1 && activeBytes > historyBudgetForReal) {
+      const share = Math.floor(historyBudgetForReal / active.length);
       for (let index = 0; index < active.length; index++) {
         const entry = active[index];
         if (!entry || entry.byteLength <= share) continue;
         const shrunk = truncateToolResultBlob(entry, share);
         if (shrunk) active[index] = shrunk;
       }
-      activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0) + syntheticBytes;
+      activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
     }
     // Only when even an equal share cannot fit — the marker alone has a floor, so enough results
     // still overflow — fall back to dropping the oldest.
-    while (active.length > 1 && activeBytes > historyBudget) {
+    while (active.length > 1 && activeBytes > historyBudgetForReal) {
       const dropped = active.shift();
       activeBytes -= dropped?.byteLength ?? 0;
     }
     if (active.length === 1 && active[0] && activeBytes > historyBudget) {
-      const truncated = truncateToolResultBlob(active[0], Math.max(0, historyBudget - syntheticBytes));
+      const truncated = truncateToolResultBlob(active[0], historyBudgetForReal);
       if (truncated) {
         active[0] = truncated;
-        activeBytes = truncated.byteLength + syntheticBytes;
+        activeBytes = truncated.byteLength;
       } else {
         active.length = 0;
-        activeBytes = syntheticBytes;
+        activeBytes = 0;
       }
     }
     // COUNT-bound the trailing run, not only its bytes. `historyLimit` already subtracts what the
@@ -496,7 +500,7 @@ function rootPromptMessages(
     // Drop the OLDEST results first, matching the direction byte pressure already prunes, and keep
     // at least one: a continuation with no result is worthless, and the abandon decision downstream
     // reads `historyMessageIndexes` to notice exactly that and fall back to a full replay.
-    while (active.length > 1 && active.length + syntheticCount > historyLimit) {
+    while (active.length > 1 && active.length > historyLimitForReal) {
       const dropped = active.shift();
       activeBytes -= dropped?.byteLength ?? 0;
     }
@@ -513,9 +517,7 @@ function rootPromptMessages(
     // guard fix, because there was nothing left for that guard to strip. Admitting entry-by-entry keeps
     // as much recent history as fits instead of none (devlog 260829 070, audit r8 finding 2).
     let i = prior.length - 1;
-    // `syntheticCount` is charged here too: those roots are re-appended after this loop, so admitting
-    // prior history against a limit that ignores them overruns the envelope by their number.
-    while (i >= 0 && keptPrior.length + active.length + syntheticCount < historyLimit) {
+    while (i >= 0 && keptPrior.length + active.length < historyLimitForReal) {
       let turnStart = i;
       if (!suffixContinuesCoveredTurn) {
         // Root-blob roles are a closed set of four (system, user, assistant, toolResult): a
@@ -526,8 +528,8 @@ function rootPromptMessages(
       const turn = prior.slice(turnStart, i + 1);
       const turnBytes = turn.reduce((sum, entry) => sum + entry.byteLength, 0);
       if (
-        keptPrior.length + active.length + syntheticCount + turn.length > historyLimit
-        || priorBytes + activeBytes + turnBytes > historyBudget
+        keptPrior.length + active.length + turn.length > historyLimitForReal
+        || priorBytes + activeBytes + turnBytes > historyBudgetForReal
       ) {
         break;
       }
@@ -536,12 +538,19 @@ function rootPromptMessages(
       i = turnStart - 1;
     }
 
-    // The synthetic trailing roots excluded from the run above — today only the repetition-breaker note —
-    // are re-appended so telling the model to change strategy is not silently dropped by the very walk
-    // that stopped ignoring it. They are budgeted with `active`, which is why they sit inside the count
-    // bound rather than after it.
     const trailingSynthetic = history.slice(activeEnd);
-    const historyEntries = [...keptPrior, ...active, ...trailingSynthetic];
+    // Synthetic trailing roots — today only the repetition-breaker note — are held OUT of
+    // `historyEntries` while the blocks below decide what survives, and appended once at assembly.
+    //
+    // They were briefly appended here instead, and every subsequent block then had to recognise a tail
+    // it could not identify except by position. The initiator-recovery loop below could not: its floor
+    // is "stop when one entry is left", so with `[toolResult, note]` it counted the note as the
+    // survivor and shifted off the RESULT — a 600 KB tool output replaced by 193 bytes of note, leaving
+    // a prompt that instructs the model to change strategy while showing it nothing its command
+    // returned. Measured 166 of 432 byte-pressure configurations losing an answer that way. Keeping the
+    // tail out means those blocks stay purely about real history and cannot mistake one for the other;
+    // the budgets still charge for it, which is what stops it overrunning the envelope (audit r12).
+    const historyEntries = [...keptPrior, ...active];
     // Guard against orphan assistant / toolResult at the start of the retained suffix.
     //
     // Premised on `history` starting where the CONVERSATION starts: only then does a leading
@@ -554,9 +563,8 @@ function rootPromptMessages(
     // (devlog 260829 070).
     if (!suffixContinuesCoveredTurn) {
       while (historyEntries[0]?.role === "assistant" || historyEntries[0]?.role === "toolResult") {
-        // Never drop the sole active tool-result block. The floor counts the re-appended synthetic roots
-        // too, or the strip eats into the trailing run once a repetition note is present.
-        if (historyEntries.length <= active.length + trailingSynthetic.length) break;
+        // Never drop the sole active tool-result block.
+        if (historyEntries.length <= active.length) break;
         historyEntries.shift();
       }
     }
@@ -588,7 +596,7 @@ function rootPromptMessages(
       if (initiator) {
         const withInitiator = [initiator, ...historyEntries];
         const initiatorBytes = withInitiator.reduce((sum, entry) => sum + entry.byteLength, 0);
-        if (withInitiator.length <= historyLimit && initiatorBytes <= historyBudget) {
+        if (withInitiator.length <= historyLimitForReal && initiatorBytes <= historyBudgetForReal) {
           historyEntries.length = 0;
           historyEntries.push(...withInitiator);
         } else {
@@ -603,14 +611,14 @@ function rootPromptMessages(
           // already prunes, then truncate whatever survives. An instruction with fewer or shorter
           // results is answerable; results with no instruction are not.
           const kept = [...historyEntries];
-          while (kept.length > 1 && kept.length + 1 > historyLimit) kept.shift();
+          while (kept.length > 1 && kept.length + 1 > historyLimitForReal) kept.shift();
           let keptBytes = kept.reduce((sum, entry) => sum + entry.byteLength, 0);
-          while (kept.length > 1 && initiator.byteLength + keptBytes > historyBudget) {
+          while (kept.length > 1 && initiator.byteLength + keptBytes > historyBudgetForReal) {
             const dropped = kept.shift();
             keptBytes -= dropped?.byteLength ?? 0;
           }
-          if (kept.length === 1 && kept[0] && initiator.byteLength + keptBytes > historyBudget) {
-            const room = historyBudget - initiator.byteLength;
+          if (kept.length === 1 && kept[0] && initiator.byteLength + keptBytes > historyBudgetForReal) {
+            const room = historyBudgetForReal - initiator.byteLength;
             const shrunk = room > 0 ? truncateToolResultBlob(kept[0], room) : null;
             if (shrunk) {
               kept[0] = shrunk;
@@ -620,14 +628,17 @@ function rootPromptMessages(
           // Only commit when the initiator genuinely fits alongside what is left. If the system
           // prompt has consumed the budget so completely that not even a truncation marker fits,
           // there is nothing honest to send here; the envelope guard downstream owns that case.
-          if (kept.length + 1 <= historyLimit && initiator.byteLength + keptBytes <= historyBudget) {
+          if (kept.length + 1 <= historyLimitForReal && initiator.byteLength + keptBytes <= historyBudgetForReal) {
             historyEntries.length = 0;
             historyEntries.push(initiator, ...kept);
           }
         }
       }
     }
-    selected = [...systemEntries, ...historyEntries];
+    // The synthetic tail goes on last, after every pruning decision is made, so telling the model to
+    // change strategy is not dropped by the walk that stopped ignoring it — and so no pruning block has
+    // to distinguish it from a real result by position. Its slots and bytes were already reserved above.
+    selected = [...systemEntries, ...historyEntries, ...trailingSynthetic];
     const firstKept = historyEntries.find(entry => entry.messageIndex !== undefined);
     historyMessageStart = firstKept?.messageIndex ?? (messages.length);
   }

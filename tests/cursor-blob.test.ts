@@ -2816,6 +2816,96 @@ describe("Cursor external replay envelope", () => {
   });
 
   /**
+   * Audit r12. The note's BYTE reservation had no coverage at all: neutralizing every byte charge in one
+   * edit left the whole suite green, while a sweep against that same mutation produced 148
+   * `CursorRootEnvelopeLimitError` throws. Two distinct failures live here, and this case is built to
+   * catch both.
+   *
+   * The reservation must exist: the note is appended after pruning, so a budget that does not deduct it
+   * assembles past `CURSOR_EXTERNAL_ROOT_BYTE_LIMIT` and 400s non-retryably.
+   *
+   * And it must be deducted BEFORE the equal-share division, not after. Dividing the gross budget by
+   * `active.length` produces shares summing to the whole budget, so adding the note back always exceeds
+   * it: the shrink-toward-equal-share pass becomes structurally unfittable and control falls through to
+   * the loop that deletes a whole result. 246 bytes of note cost an entire 200 KB answer that way, and
+   * with a single large result the recovery block dropped it outright — the model received a 193-byte
+   * instruction to change strategy and no tool output whatsoever, which is precisely the re-execution
+   * loop this unit exists to end.
+   *
+   * Asserted as an A/B on the note alone, because the defect is a divergence: arming it must not cost an
+   * answer, and must not push the request out of the envelope.
+   */
+  test.each([
+    [1, 600_000],
+    [3, 200_000],
+    [4, 130_000],
+  ])("an armed repetition note costs no answer and no envelope room (results=%i, bytes=%i)", (results, resultBytes) => {
+    const build = (armed: boolean) => {
+      const rawMessages: Parameters<typeof prepareCursorRunRequest>[0]["rawMessages"] = [
+        { role: "user", content: "Run the plan and report.", timestamp: 1 },
+      ];
+      let timestamp = 2;
+      // Three consecutive identical narrations arm the breaker; two do not. Nothing else differs.
+      for (let r = 0; r < (armed ? 3 : 2); r++) {
+        rawMessages!.push({ role: "assistant", content: [{ type: "text", text: "Same line." }], timestamp: timestamp++ });
+      }
+      for (let i = 0; i < results; i++) {
+        rawMessages!.push({
+          role: "assistant",
+          content: [{ type: "toolCall", id: `call_byte_${i}`, name: "exec_command", arguments: { cmd: `echo B${i}` } }],
+          timestamp: timestamp++,
+        });
+        rawMessages!.push({
+          role: "toolResult",
+          toolCallId: `call_byte_${i}`,
+          toolName: "exec_command",
+          content: `BYTE_OUT_${i}_` + "y".repeat(resultBytes),
+          isError: false,
+          timestamp: timestamp++,
+        });
+      }
+      const prepared = prepareCursorRunRequest({
+        modelId: "grok-4.6",
+        conversationId: `cursor_note_bytes_${results}_${resultBytes}_${armed}`,
+        system: ["You are helpful."],
+        messages: [{ role: "tool", content: "result" }],
+        rawMessages,
+      });
+      const message = fromBinary(AgentClientMessageSchema, prepared.bytes);
+      const run = message.message.case === "runRequest" ? message.message.value : undefined;
+      const roots = run?.conversationState?.rootPromptMessagesJson ?? [];
+      let bytes = 0;
+      const texts = roots.map(id => {
+        const data = blobData(id);
+        bytes += data.byteLength;
+        try {
+          const parsed = JSON.parse(new TextDecoder().decode(data)) as { content?: string | [{ text?: string }] };
+          const content = parsed.content;
+          return typeof content === "string" ? content : (content?.[0]?.text ?? "");
+        } catch {
+          return "";
+        }
+      });
+      const blob = texts.join("\n");
+      return {
+        bytes,
+        note: blob.includes("[context note]"),
+        answered: Array.from({ length: results }, (_, i) => blob.includes(`BYTE_OUT_${i}_`)),
+      };
+    };
+    const plain = build(false);
+    const armed = build(true);
+    // The note reached the model, and paid for itself: still inside the byte envelope.
+    expect(armed.note).toBe(true);
+    expect(plain.note).toBe(false);
+    expect(armed.bytes).toBeLessThanOrEqual(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT);
+    // Every answer the un-armed request carried is still there. A truncated answer counts; a deleted one
+    // does not, which is the distinction the equal-share pass exists to make.
+    expect(armed.answered).toEqual(plain.answered);
+    expect(armed.answered.every(Boolean)).toBe(true);
+  });
+
+  /**
    * Audit r10 finding 2. `outputElided` on the marker-only return had no coverage: removing the flag left
    * all 191 tests green, and `tests/` is not typechecked (`tsconfig` include is `["src"]`), so nothing would
    * have caught its removal. A result reduced to the truncation marker answers its call with nothing, which
