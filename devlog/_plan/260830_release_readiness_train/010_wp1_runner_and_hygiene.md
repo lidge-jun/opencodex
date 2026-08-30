@@ -14,11 +14,17 @@ snapshot; the new blocks introduced by the PRs naturally have their own patch-re
 tarball`, lets every `package.json#files` entry authorize descendants. A regular file such as
 `assets/banner.png` or `LICENSE` can therefore vouch for a nonexistent path below it.
 
-Land commit `7b2fa9032a` without repair. In `tests/repo-hygiene.test.ts:2`, add `statSync`; at the
-existing asset filter at lines 247–253, derive `shippedDirectories` only from entries that exist
-and whose `statSync(...).isDirectory()` is true. Keep exact-file membership separate from directory
-prefix membership. Keep the two inline regression assertions for `assets/banner.png/missing.gif`
-and `LICENSE/missing.png`; no production file or new test file belongs to this PR.
+Commit `7b2fa9032a` landed without repair. In `tests/repo-hygiene.test.ts:2`, it adds `statSync`; at
+the existing asset filter at lines 247–253, it derives `shippedDirectories` only from entries that
+exist and whose `statSync(...).isDirectory()` is true. Exact-file membership remains separate from
+directory prefix membership. The two inline regression assertions for
+`assets/banner.png/missing.gif` and `LICENSE/missing.png` remain; no production file or new test file
+belongs to this PR.
+
+#2952 is DONE at `dca16949b`. Nothing was pushed to its contributor head, so its exact-head author
+attestation remained valid and it merged without returning to draft. That is the control case for
+the repaired candidates below: `maintainerCanModify` permits a push, but the push invalidates the
+review-readiness state needed to merge the contributor PR.
 
 ## `#2957`: bootstrap the dependency that the tests actually import
 
@@ -26,29 +32,38 @@ Commit `a238a7423b` inserts `ensureGuiDependencies` in `scripts/test.ts` immedia
 `import.meta.main` block at line 436. Keep its boundaries: no `gui/package.json` means no action;
 a source checkout gets CI's frozen install; install failure is reported before test discovery.
 
-Two details must be repaired on the contributor branch before merge.
+Both required details are repaired at #2957 head `08c5b5005`.
 
-First, `tests/test-runner.test.ts:4` imports `join`, but the new `paths` fixture at patch line 468
-compares native paths with hard-coded `/` suffixes. Windows asks for `\repo\gui\package.json`, so
-three cases return `absent`. Build every fixture suffix with `join("gui", "package.json")` and the
-dependency marker below, matching the path grammar used by production.
+First, `tests/test-runner.test.ts:4` imports `join`, and the repaired `paths` fixture at patch line
+468 normalizes both POSIX and Windows separators. Windows asks for `\repo\gui\package.json`; the
+dedicated separator case now proves that the fixture recognizes both path grammars used by
+production.
 
-Second, the new `ensureGuiDependencies` check at patch line 458 must not use the existence of
-`gui/node_modules` as proof of a successful install. `bun install` can leave that directory behind
-after interruption or failure; caching that partial tree as `present` suppresses every retry. Use
-`join(guiDir, "node_modules", "react", "package.json")` as the readiness marker because React is
-the dependency the GUI-importing tests require. Keep the source-tree gate, frozen install,
-actionable manual command, and bounded stderr/stdout detail unchanged.
+Second, the repaired `ensureGuiDependencies` check at patch line 458 no longer uses the existence
+of `gui/node_modules` as proof of a successful install. `bun install` can leave that directory
+behind after interruption or failure; caching that partial tree as `present` would suppress every
+retry. The repaired head uses `join(guiDir, "node_modules", "react", "package.json")` as the
+readiness marker because React is the dependency the GUI-importing tests require. The source-tree
+gate, frozen install, actionable manual command, and bounded stderr/stdout detail remain unchanged.
 
-Retain `describe("ensureGuiDependencies")` with these exact repaired case names:
+The landed repaired head retains `describe("ensureGuiDependencies")` with these exact case names:
 
-- `installs when gui/package.json exists but the React dependency marker does not`
-- `does nothing when the React dependency marker is already there`
+- `mocked paths match POSIX and Windows separators`
+- `installs when gui/package.json exists but node_modules does not`
+- `retries when node_modules exists without the required dependency`
+- `does nothing when the required dependency is already there`
 - `does nothing when there is no gui package`
 - `reports the failure detail instead of continuing`
 
-Add `retries installation when a partial node_modules directory exists`: report the package and
-`node_modules` present but omit React's marker, then assert `kind: "installed"` and one install.
+The retry case reports the package and `node_modules` present but omits React's marker, then asserts
+`kind: "installed"` and one install.
+
+The repair push reset #2957's exact-head checklist, so #2957 is now
+DRAFT/BLOCKED/REVIEW_REQUIRED and must not be re-attested by a maintainer. Cherry-pick the
+contributor's commits plus the repair onto a maintainer-owned branch; Git preserves the original
+author metadata. Open a maintainer PR that credits the contributor and explicitly names #2957 as
+the PR it carries, then close #2957 as carried. The maintainer PR, not the blocked contributor PR,
+is the landing vehicle for this phase.
 
 ## `#2949`: reimplement the default lock root
 

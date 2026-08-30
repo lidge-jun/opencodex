@@ -14,10 +14,23 @@ Windows job's deliberate `skipped` result, so that run proves Linux, macOS, and 
 shared gates, not the four Windows suite shards. Windows therefore has to be dispatched
 explicitly once against the train baseline and again against the final head.
 
-The baseline dispatch is run `33286530705` on full SHA
-`47b8d164366b9db9e4331b2bb8b542db22766910`; its terminal outcome belongs in the phase
-record because the run ID alone is not a pass. The final dispatch must expose jobs
-`windows 1/4` through `windows 4/4`, all completed successfully on the final SHA.
+The dispatch ref is part of that evidence. At `.github/workflows/ci.yml:52`, both `push`
+and `workflow_dispatch` runs enter a concurrency group keyed by `github.ref`, with
+`cancel-in-progress: true`. A Windows dispatch must therefore target a dedicated branch
+ref, never `dev`: the next merge's `dev` push is otherwise a competing run that cancels
+the dispatch and all four shards as collateral damage.
+
+That happened to the original baseline. Run `33286530705` on full SHA
+`47b8d164366b9db9e4331b2bb8b542db22766910` was cancelled at 02:02:16Z because #2952
+merged at 02:01:56Z and started a competing `dev` push run. All four Windows shards died
+with it. Record the `47b8d1643` baseline as unavailable, never as a Windows pass.
+
+Recovery was dispatched from the isolated branch `codex/win-gate-260830`: run
+`33287093789` on head `dca16949b`. No `dev` push can enter that branch's concurrency
+group. This is the post-#2952 baseline and must retain its own terminal outcome; it is a
+different baseline, not a substitute for the cancelled `47b8d1643` measurement. The
+final dispatch must likewise use a dedicated branch ref pointing at the frozen final SHA
+and expose jobs `windows 1/4` through `windows 4/4`, all completed successfully.
 
 ## The release-helper mismatch
 
@@ -86,18 +99,23 @@ Cross-platform CI must say `event=push`, match the full SHA, and have a successf
 and aggregate `ci` job. Service lifecycle must match that SHA and have all three jobs
 defined from `.github/workflows/service-lifecycle.yml:36` successful.
 
-Dispatch Windows only after the frozen SHA is still `origin/dev`, then inspect jobs rather
-than trusting the top-level row:
+Dispatch Windows only after the frozen SHA is still `origin/dev`. Create or update a
+dedicated branch ref to that exact SHA, let any same-ref push run reach a terminal state,
+do not move the branch again, and dispatch against that ref. Never dispatch against
+`dev`. Then inspect jobs rather than trusting the top-level row:
 
 ```bash
-gh workflow run ci.yml --ref dev
-gh run list --branch dev --workflow=ci.yml --event workflow_dispatch
+gh workflow run ci.yml --ref <dedicated-windows-branch>
+gh run list --branch <dedicated-windows-branch> --workflow=ci.yml --event workflow_dispatch
 gh run view <windows-run-id> --json event,headSha,status,conclusion,jobs
 ```
 
-The second dispatch satisfies wp6 only when its `headSha` equals the final SHA and all
-four `windows N/4` jobs succeed. Inspect run `33286530705` the same way. If `dev` moves,
-repeat the final push, service, and Windows evidence; mixed-head evidence is invalid.
+The final dispatch satisfies wp6 only when its `headSha` equals the final SHA, its ref is
+the dedicated Windows branch, and all four `windows N/4` jobs succeed. Run `33286530705`
+is already terminal evidence of an unavailable baseline; do not reinterpret cancellation
+as a pass. Inspect recovery run `33287093789` independently as the post-#2952 baseline.
+If `dev` moves, repeat the final push, service, and isolated-branch Windows evidence;
+mixed-head evidence is invalid.
 
 ## Focused verification and close-out
 

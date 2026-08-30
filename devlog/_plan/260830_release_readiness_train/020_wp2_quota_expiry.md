@@ -18,9 +18,16 @@ the valid weekly percentage and omit only the reset timestamp that no formatter 
 
 #2950 is the landing vehicle. Its first commit, `6fcd39ac0`, is byte-identical to the sole
 commit in #2951, so the two PRs are not independent changes and must not both land. Keep
-`6fcd39ac0` in #2950 unchanged, keep its existing GUI and screenshot commits unchanged, and add
-exactly one repair commit on top of `bcbc3ad5898bc56609ba1bfcb44ad553c4d80a84`. That repair
-commit owns only `src/providers/quota.ts` and `tests/provider-quota.test.ts`.
+`6fcd39ac0` in #2950 unchanged and keep its existing GUI and screenshot commits unchanged. The
+one repair commit already exists at repaired head `79b5eab34` and owns only
+`src/providers/quota.ts` and `tests/provider-quota.test.ts`.
+
+That repair push reset #2950's exact-head author checklist and returned it to
+DRAFT/BLOCKED/REVIEW_REQUIRED. A maintainer must not tick the contributor's attestation. Cherry-pick
+the contributor's commits plus the repair onto a maintainer-owned branch; the cherry-picks preserve
+the original author metadata. Open a maintainer PR that credits the contributor and explicitly names
+#2950 as the PR it carries, then close #2950 as carried. The carried maintainer PR supersedes #2951
+when it merges.
 
 The carried #2950 changes remain as authored:
 
@@ -47,14 +54,14 @@ The carried #2950 changes remain as authored:
   title mentions `gui`, `enforce-target` requires a screenshot in the PR description. The
   description already embeds this asset; preserve that image reference when updating the PR.
 
-## One repair commit
+## The repair commit
 
-In `src/providers/quota.ts`, change only `parseXaiCreditsResponse` at the snapshot's lines
-1150-1164. Keep the envelope and weekly-period checks at lines 1151-1155 unchanged. Compute
-`resetAt = normalizeResetAt(period.end)`, but do not return `null` when it is `undefined`.
-Independently derive `percent`: use `0` when `creditUsagePercent` is absent, preserving the
-documented proto3 default, otherwise pass the supplied value through `normalizePercent` and
-return `null` only when that percentage is invalid.
+At `79b5eab34`, `src/providers/quota.ts` changes only `parseXaiCreditsResponse` at the snapshot's
+lines 1150-1164. The envelope and weekly-period checks at lines 1151-1155 remain unchanged. The
+repair computes `resetAt = normalizeResetAt(period.end)` without returning `null` when it is
+`undefined`. It independently derives `percent`: `0` when `creditUsagePercent` is absent,
+preserving the documented proto3 default, otherwise the supplied value passes through
+`normalizePercent` and only an invalid percentage returns `null`.
 
 Return one object after those checks:
 
@@ -71,11 +78,11 @@ is still returned. Only an unrepresentable reset changes from discarding the who
 to returning its valid percentage without `resetAt`. `fetchXaiWeeklyCredits` already conditionally
 adds `weeklyResetAt` at `src/providers/quota.ts:1182-1185`, so no caller change is needed.
 
-In `tests/provider-quota.test.ts`, add the exact case
+At the same head, `tests/provider-quota.test.ts` adds the exact case
 `parseXaiCreditsResponse preserves weekly percent when reset is unrenderable` immediately after
 `parseXaiCreditsResponse maps weekly credits and rejects non-weekly periods` at lines 2378-2402
-and before the integration case beginning at line 2404. Pass a weekly envelope with
-`creditUsagePercent: 57.4` and `end: 1e20`, and assert strict equality with
+and before the integration case beginning at line 2404. It passes a weekly envelope with
+`creditUsagePercent: 57.4` and `end: 1e20`, and asserts strict equality with
 `{ percent: 57.4 }`. The absent `resetAt` assertion matters: accepting the percentage while
 leaking the invalid timestamp would merely move the original formatter crash downstream.
 
@@ -89,12 +96,13 @@ bun test tests/provider-quota.test.ts tests/command-code-quota.test.ts
 ```
 
 Do not run `bun run test`, `bun test tests`, or the full GUI suite locally in this phase. The
-train's exact-head cross-platform and Windows gates belong to wp6. Because the repair push changes
-the PR head, complete #2950's review-readiness checklist again against that new head before the
-merge; do not reuse the attestation attached to `bcbc3ad5898`.
+train's exact-head cross-platform and Windows gates belong to wp6. Do not attempt to restore #2950's
+author-bound checklist after the repair push; the maintainer-owned carry PR receives its own checks
+and review state.
 
-Merge #2950 only after the focused files pass and its required screenshot remains in the
-description. Once the merge is present on `dev`, close #2951 without merging it and leave the
-terminal note `Superseded by #2950, merged as <superseding merge SHA>.` The SHA named there must
-be the actual #2950 merge on `dev`, not `6fcd39ac0`, so the close-out points to the integration
-event that made #2951 redundant.
+Merge the maintainer-owned carry PR only after the focused files pass and the required screenshot
+is present in its description. Close #2950 as carried by that PR. Once the carried merge is present
+on `dev`, close #2951 without merging it and leave the terminal note
+`Superseded by the maintainer carry of #2950, merged as <superseding merge SHA>.` The SHA named
+there must be the actual carried merge on `dev`, not `6fcd39ac0`, so the close-out points to the
+integration event that made #2951 redundant.

@@ -3,6 +3,26 @@
 Snapshot: `dev@47b8d1643` (v2.36.0), open-PR/issue manifest taken 2026-08-30T01:46:46Z.
 Later arrivals are out of scope for this unit by construction; they queue for the next one.
 
+## Execution state
+
+The snapshot remains the audit boundary, but it is no longer the integration head. `origin/dev` is
+now `dca16949b` with #2952 merged. That PR landed cleanly because its head was left untouched after
+the contributor's author-bound review-readiness attestation.
+
+The planned repairs are already present at #2957 head `08c5b5005`, #2950 head `79b5eab34`, #2953
+head `12a4d92fa`, and #2947 head `be3d28706`. Those pushes also reset each exact-head checklist and
+returned all four contributor PRs to DRAFT/BLOCKED/REVIEW_REQUIRED. A maintainer cannot attest the
+author checklist on the contributor's behalf. The remaining landing work is therefore to cherry-pick
+each contributor's commits plus its repair onto a maintainer-owned branch, preserving Git author
+metadata, open a maintainer PR that credits the author and names the original PR it carries, and close
+the original as carried once that replacement is established.
+
+The original Windows baseline is unavailable. Run `33286530705` on `47b8d1643` was cancelled at
+02:02:16Z after #2952 merged at 02:01:56Z and its competing `dev` push run entered the same ref-keyed
+concurrency group; all four Windows shards died with it. Recovery has already been dispatched from
+the isolated branch `codex/win-gate-260830`: run `33287093789` on `dca16949b`. That post-#2952 run is
+a different baseline, not a substitute pass for `47b8d1643`.
+
 The goal is a `dev` that is ready to promote: every bug-class pull request in the snapshot
 has a terminal disposition, the priority issues that are actually fixable now are fixed,
 and the final head is green on the three gates that matter — Cross-platform CI on a
@@ -13,8 +33,9 @@ can start (`.github/workflows/ci.yml`, `platform-windows.if`).
 
 Of 56 open pull requests, eight are bug-class, target `dev`, are not drafts, and are small
 enough to audit to a verdict in one pass: #2947, #2949, #2950, #2951, #2952, #2953, #2955,
-#2957. Every one is a fork PR with `maintainerCanModify=true`, so a repair commit can be
-pushed to the contributor branch instead of re-cutting the work.
+#2957. Every one was a fork PR with `maintainerCanModify=true`, but that permission does not
+make a repaired contributor head mergeable: a push resets the exact-head author attestation.
+Repaired candidates use maintainer-owned carry PRs instead.
 
 The rest are excluded on stated grounds rather than by neglect: drafts under
 CHANGES_REQUESTED (#2939, #2921, #2860, #2881, #2954, #2956), maintainer stacks awaiting
@@ -61,13 +82,17 @@ rather than a conflict to resolve at merge time.
 
 ## Merge order
 
-1. #2952 — touches only `tests/repo-hygiene.test.ts`; collides with nothing.
-2. #2957 — after its two repairs. Lands the `scripts/test.ts` shape that #2949 rebuilds on.
+1. #2952 — DONE at `dca16949b`; touches only `tests/repo-hygiene.test.ts` and collides with nothing.
+2. #2957 — repairs DONE at `08c5b5005`; carry the contributor commits and repair through a
+   maintainer-owned PR. Lands the `scripts/test.ts` shape that #2949 rebuilds on.
 3. #2949 — reimplemented on top of #2957, so the runner surface has one author at a time.
-4. #2950 — with the xAI repair commit; #2951 closes as superseded by it.
+4. #2950 — repair DONE at `79b5eab34`; carry it through a maintainer-owned PR, then close #2951
+   as superseded by the carried merge.
 5. #2955 — first of the two `core.ts` PRs, because it is MERGE_AS_IS and adds no branch.
-6. #2953 — second on `core.ts`, after its bare-selector repair, rebased onto #2955.
-7. #2947 — with operator-warning repairs; only `src/config.ts`, no collision.
+6. #2953 — bare-selector repair DONE at `12a4d92fa`; carry it through a maintainer-owned PR
+   rebased onto #2955.
+7. #2947 — operator-warning repairs DONE at `be3d28706`; carry them through a maintainer-owned
+   PR. Only `src/config.ts`, no collision.
 
 `core.ts` is the one file two PRs both edit, and it is a core-path file: `src/router.ts`,
 `src/server/lifecycle.ts`, and `src/server/responses/core.ts` must not reach `src/lab`.
@@ -107,4 +132,7 @@ resolves it — a Windows measurement, not a patch decision.
 The local full suite is not run in this train; focused `bun test` files carry each change
 locally, and the merge-time evidence is remote CI on the exact head. The Windows leg is
 dispatched once at the start of the train and once on the final head, because a `push` run
-skips it and would otherwise leave the platform unmeasured across seven merges.
+skips it and would otherwise leave the platform unmeasured across seven merges. Every Windows
+dispatch targets a dedicated branch ref, never `dev`: `.github/workflows/ci.yml:52` groups both
+push and manual runs by `github.ref` with `cancel-in-progress: true`, so the next merge's `dev`
+push can cancel a `dev`-targeted dispatch and all four Windows shards with it.

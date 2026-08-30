@@ -8,13 +8,11 @@ even when the root already satisfies policy. #1298 measured 88 ms at 10 descenda
 9,438 ms at 20,000. Raising the 30-second envelope at `:233-265` only permits more work.
 
 The change is an opt-in proof shortcut, not a second ACL policy. With
-`OPENCODEX_ACL_VERIFY_EXISTING=1`, one non-recursive `icacls <path>` read may return
-success only when its complete ACE list proves one explicit effective-owner Full Control
-ACE, no inherited ACE, and no other principal. Any command, cache, parse, inheritance,
+`OPENCODEX_ACL_VERIFY_EXISTING=1`, one non-recursive `icacls <path>` read may return success
+only when its complete ACE list proves one explicit effective-owner Full Control ACE, no inherited ACE, and no other principal. Any command, cache, parse, inheritance,
 principal, or permission uncertainty enters the existing mutation sequence unchanged. The
 flag stays off by default because a parser false-positive could expose credentials;
 strict-parse-or-fall-through makes uncertainty pay the old cost instead of weakening policy.
-
 ## Patch boundary
 
 | Path | Action | Exact ownership |
@@ -32,8 +30,7 @@ required/optional failure branches unchanged.
 
 Replace the SID-only cache at `:168-171` with exported immutable
 `WindowsPrincipalIdentity { grantSid: string; accountName: string }`. Change
-`SID_EXPRESSION`/`POWERSHELL_ARGS` at `:31-33` and `:104-110` so the same trusted,
-non-elevated PowerShell process emits both
+`SID_EXPRESSION`/`POWERSHELL_ARGS` at `:31-33` and `:104-110` so the same trusted, non-elevated PowerShell process emits both
 `WindowsIdentity.GetCurrent().User.Value` and `WindowsIdentity.GetCurrent().Name` in an
 unambiguous two-field payload. `principalFromResult()` at `:214-225` rejects missing,
 extra, malformed, non-SID, or empty-name fields; it normalizes only `grantSid` and retains
@@ -60,8 +57,7 @@ and extra-field rows.
 ## `src/lib/windows-secret-acl.ts`
 
 Import `WindowsPrincipalIdentity` and the new identity resolver at `:35-39`. Add
-`existingAclVerificationEnabled()` beside `resolveHardenDeadlineMs()` (`:258-265`); it is
-true only when `env["OPENCODEX_ACL_VERIFY_EXISTING"] === "1"`. Add `cachedWindowsPrincipalIdentity()` beside
+`existingAclVerificationEnabled()` beside `resolveHardenDeadlineMs()` (`:258-265`); it is true only when `env["OPENCODEX_ACL_VERIFY_EXISTING"] === "1"`. Add `cachedWindowsPrincipalIdentity()` beside
 `currentWindowsPrincipal()` (`:479-485`), implemented as a zero-budget identity call that
 catches `EACLIDENTITY` and returns `null`. It must neither invoke a runner nor convert a
 cache miss into a hardening failure.
@@ -75,8 +71,7 @@ only explicit `(F)` for a file or exactly `(OI)(CI)(F)` for a directory, in any 
 Reject `(I)`, unknown flags, duplicate owner ACEs, and every other principal—including
 Everyone, Authenticated Users, and Users. Require exactly one accepted ACE.
 
-Add sync/async `existingAclSatisfiesPolicy()` wrappers next to `runIcacls()` and
-`runIcaclsAsync()` (`:503-578`). They run exactly `[targetPath]` through the existing runner
+Add sync/async `existingAclSatisfiesPolicy()` wrappers next to `runIcacls()` and `runIcaclsAsync()` (`:503-578`). They run exactly `[targetPath]` through the existing runner
 and deadline, never `/T`, `/grant`, `/inheritance`, `/remove`, or `/findsid`. Throw, timeout,
 non-zero exit, cache miss, or parser refusal returns `false`; async semantics are identical.
 
