@@ -401,3 +401,64 @@ second mechanism:
 Tests: replace the credential without another 401, run a sweep, and assert the record is
 gone; delete and re-add the account and assert the same.
 
+
+## Amendment after the wp6 plan audit (round 4) — settlement and lease rules
+
+Three findings, all accepted. This section is authoritative over every earlier one where
+they conflict.
+
+### 11. A live claim is not stale just because the credential moved
+
+The refresh CAS commits G → G+1 (`account-store.ts:864`) **before** the quota caller can
+settle. In that window the `claimed` record still fences G, so a naive liveness sweep sees
+G as non-live and deletes it, and a G+1 claim can replace it. The late settle then no-ops
+and G+1 is left unspent — a second refresh, which is the loop this phase closes.
+
+State-aware rules, replacing the flat "drop non-live" from round 3:
+
+- A valid, unexpired `claimed` record **blocks every other lineage for that account**. A
+  `claim` for a different lineage while one is live returns `granted: false`.
+- Reconciliation and the liveness sweep **must not remove a live `claimed` record** merely
+  because its starting generation moved. Moving is the expected outcome of the refresh it
+  is fencing.
+- Only account deletion, a matching `settle`/`release`, or lease expiry may end a claim.
+- Stale-generation cleanup applies to `spent` and `backoff` records only.
+
+Tests: run a sweep between the refresh commit and settlement and assert the claim survives;
+attempt a G+1 claim in the same window and assert it is refused.
+
+### 12. Settlement follows the shared flight, not the cancelled waiter
+
+Caller cancellation is scoped to the waiter; the shared refresh keeps running and may commit
+after that caller is gone (`account-store.ts:639-660`). Releasing the claim on cancellation
+would let that still-running flight rotate the credential with no spent fence at all.
+
+- A cancelled waiter **does not release**. The claim stays `claimed` until the shared
+  flight's terminal outcome is known, and whichever caller observes that outcome settles it.
+- The lease is sized against the operations it covers, not a round number: the refresh
+  flight's stale bound (`CODEX_REFRESH_FLIGHT_STALE_MS`) plus the WHAM request deadline
+  (8s, `auth-api.ts:975`) plus margin. A lease shorter than the flight it fences would
+  expire mid-refresh and admit a second claim — the same hole from the other side.
+
+Tests: cancel the waiter, let the background flight commit successfully, and assert a
+competing poll during that window is refused and the fence lands exactly once.
+
+### 13. `external-replacement` must not fence the returned generation
+
+Round 3 said the returned generation "becomes the spent fence". That is right for
+`self-refresh` and `joined-lineage` and wrong for `external-replacement`: there the
+returned generation is a **new** lineage that has had no recovery attempt and deserves its
+own budget. Fencing it would deny the new credential the one refresh this phase exists to
+grant.
+
+Outcome-specific settlement, explicitly:
+
+| outcome | what is spent | what the returned generation gets |
+| --- | --- | --- |
+| `self-refresh` | the returned generation | fenced — its one attempt is used |
+| `joined-lineage` | the returned generation | fenced — same lineage, same budget |
+| `external-replacement` | the claimed OLD lineage only | untouched — free to claim on its own next 401 |
+| stale claim id | nothing | untouched |
+
+Tests assert both stored fence generations, not just the presence of a record.
+
