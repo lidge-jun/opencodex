@@ -418,32 +418,84 @@ function installShutdownFallbackSpill(
   }
 }
 
+function terminalizeShutdownFallbackCandidate(
+  job: PendingResponseSpill,
+  candidate: ResidentResponseState,
+): void {
+  if (states.get(job.id) !== candidate) return;
+  spillCounters.writeFailures += 1;
+  replaceWithSpillFailure(job.id, candidate);
+  deferSupersededSpill(job.supersededSpill);
+}
+
+function pendingShutdownFallbackCandidates(): Array<{
+  job: PendingResponseSpill;
+  candidate: ResidentResponseState;
+}> {
+  return [...pendingResponseSpills]
+    .map(job => ({ job, candidate: job.candidate }))
+    .filter((entry): entry is { job: PendingResponseSpill; candidate: ResidentResponseState } => !!entry.candidate);
+}
+
+function supersedeShutdownFallbackBatch(
+  pending: Array<{ job: PendingResponseSpill; candidate: ResidentResponseState }>,
+  failures: Error[],
+): void {
+  for (const { job } of pending) {
+    job.cancelled = true;
+    markResponseSpillPublicationSuperseded(job.publicationControl);
+  }
+  for (const { job } of pending) {
+    const cleanupFailure = cleanupSupersededResponseSpillPublication(job.publicationControl);
+    if (cleanupFailure) failures.push(cleanupFailure);
+    releasePendingResponseSpill(job);
+  }
+}
+
+function terminalizeExhaustedShutdownFallback(
+  initial: Array<{ job: PendingResponseSpill; candidate: ResidentResponseState }>,
+  failures: Error[],
+): void {
+  let pending = initial;
+  // Every pass replaces each captured resident with a tombstone. Pruning may expose
+  // another finite batch, but resident count strictly decreases until none can requeue.
+  while (pending.length > 0) {
+    supersedeShutdownFallbackBatch(pending, failures);
+    for (const { job, candidate } of pending) {
+      failures.push(Object.assign(new Error("Response spill shutdown fallback budget exhausted"), { code: "ETIMEDOUT" }));
+      terminalizeShutdownFallbackCandidate(job, candidate);
+    }
+    recomputeOldestResident();
+    pruneResponses();
+    enforceAppOwnedMemoryBudget();
+    pending = pendingShutdownFallbackCandidates();
+  }
+}
+
 function fallbackPendingResponseSpills(reserveMs: number): Error[] {
   const deadline = Date.now() + reserveMs;
   const failures: Error[] = [];
   for (;;) {
-    const pending = [...pendingResponseSpills]
-      .map(job => ({ job, candidate: job.candidate }))
-      .filter((entry): entry is { job: PendingResponseSpill; candidate: ResidentResponseState } => !!entry.candidate);
+    const pending = pendingShutdownFallbackCandidates();
     if (pending.length === 0) return failures;
+    if (Date.now() >= deadline) {
+      terminalizeExhaustedShutdownFallback(pending, failures);
+      return failures;
+    }
 
-    for (const { job } of pending) {
-      // Ownership moves to the synchronous fallback. The original tail remains intact
-      // for global serialization, but its late result can no longer swap this resident.
-      job.cancelled = true;
-      markResponseSpillPublicationSuperseded(job.publicationControl);
-    }
-    for (const { job } of pending) {
-      const cleanupFailure = cleanupSupersededResponseSpillPublication(job.publicationControl);
-      if (cleanupFailure) failures.push(cleanupFailure);
-      releasePendingResponseSpill(job);
-    }
-    for (const { job, candidate } of pending) {
+    supersedeShutdownFallbackBatch(pending, failures);
+    let reserveExhausted = false;
+    for (let index = 0; index < pending.length; index += 1) {
+      const { job, candidate } = pending[index]!;
       if (states.get(job.id) !== candidate) continue;
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
-        failures.push(Object.assign(new Error("Response spill shutdown fallback budget exhausted"), { code: "ETIMEDOUT" }));
-        continue;
+        reserveExhausted = true;
+        for (const exhausted of pending.slice(index)) {
+          failures.push(Object.assign(new Error("Response spill shutdown fallback budget exhausted"), { code: "ETIMEDOUT" }));
+          terminalizeShutdownFallbackCandidate(exhausted.job, exhausted.candidate);
+        }
+        break;
       }
       try {
         installShutdownFallbackSpill(job, candidate, remaining);
@@ -454,6 +506,10 @@ function fallbackPendingResponseSpills(reserveMs: number): Error[] {
     recomputeOldestResident();
     pruneResponses();
     enforceAppOwnedMemoryBudget();
+    if (reserveExhausted || Date.now() >= deadline) {
+      terminalizeExhaustedShutdownFallback(pendingShutdownFallbackCandidates(), failures);
+      return failures;
+    }
   }
 }
 

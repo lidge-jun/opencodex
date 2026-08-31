@@ -195,6 +195,9 @@ load-bearing because resident entries over 2 MiB are deliberately excluded from
 exists, losing the continuation on restart. Cleanup is attempted for every abandoned writer; any
 failure is retained while fallback and snapshot persistence continue, then returned through the
 shutdown status so process exit is non-zero without sacrificing unrelated replay state.
+If the fallback reserve expires, every remaining resident candidate is terminalized as a bounded
+`spill-failed` tombstone before pruning, so no payload remains eligible for shutdown requeue and the
+snapshot flush always regains control.
 
 [Decision Log]
 - 목적과 의도: Keep `/healthz` and unrelated requests responsive during intermittent Windows ACL stalls without publishing an unhardened continuation.

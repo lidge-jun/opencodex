@@ -1128,6 +1128,62 @@ describe("Responses previous_response_id state", () => {
     expect(replay).toContain("safe-small-output");
   });
 
+  test("shutdown fallback budget exhaustion terminalizes every candidate and still snapshots unrelated state", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 60, fallbackReserveMs: 40 });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+        await gate;
+      }
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setIcaclsRunnerForTests((_args, timeoutMs) => {
+      Bun.sleepSync(timeoutMs + 50);
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_budget_exhausted_first", "a".repeat(2 * 1024 * 1024 + 4_096));
+    await started;
+    rememberLarge("resp_budget_exhausted_final", "b".repeat(2 * 1024 * 1024 + 4_096));
+    setResponseStateByteCapForTests(1_000_000_000);
+    rememberResponseState(
+      { model: "test/model", input: "budget-safe-input", store: false },
+      fixedResponse("resp_budget_unrelated", [{ type: "message", role: "assistant", content: "budget-safe-output" }]),
+      undefined,
+      { force: true },
+    );
+
+    let reported: unknown;
+    try {
+      const flushing = flushResponseState();
+      setResponseStateByteCapForTests(1_024);
+      await flushing;
+    } catch (error) {
+      reported = error;
+    } finally {
+      release();
+    }
+    expect(reported).toBeInstanceOf(Error);
+    expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 1, tombstoneCount: 2 });
+
+    clearResponseStateMemoryForTests();
+    setResponseStateByteCapForTests(1_024);
+    const replay = JSON.stringify(expandPreviousResponseInput({
+      previous_response_id: "resp_budget_unrelated",
+      input: "next",
+    }));
+    expect(replay).toContain("budget-safe-input");
+    expect(replay).toContain("budget-safe-output");
+  }, { timeout: 1_000 });
+
   test("directory fsync follows spill unlink", () => {
     const ref = writeResponseSpillDurably("resp_unlink_order", { createdAt: Date.now(), items: ["x"] });
     const events: string[] = [];
