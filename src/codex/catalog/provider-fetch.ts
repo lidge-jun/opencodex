@@ -1686,13 +1686,14 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   const droppedConfiguredIds: string[] = [];
   for (const candidate of configured) {
     if (present.has(candidate.id)) continue;
-    // Either way round. The fold exists because upstream can return the same
-    // model under a dated id, but the pair is just as often the other way:
-    // the account is configured with `deepseek-v4-pro-0813` and discovery
-    // answers `deepseek-v4-pro`. Only the first case was folded, so a
-    // configured, callable model was dropped from the authoritative catalog.
-    const dated = out.find(live =>
-      isDatedVariantId(live.id, candidate.id) || isDatedVariantId(candidate.id, live.id));
+    // Directional on purpose. A live dated row proves that model answers, so
+    // exposing it under the configured base id is backed by discovery. The
+    // reverse is not: a live base row says nothing about whether a configured
+    // dated snapshot is still callable, and folding it in would resurrect a
+    // retired or plan-removed snapshot on name similarity alone. That case is
+    // left to the explicit retention below, which is a contract rather than an
+    // inference.
+    const dated = out.find(live => isDatedVariantId(live.id, candidate.id));
     if (dated) {
       out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap));
       present.add(candidate.id);

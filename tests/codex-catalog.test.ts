@@ -3671,17 +3671,46 @@ describe("Codex catalog routed normalization", () => {
     expect(isDatedVariantId("model-1240", "model")).toBe(false);
   });
 
-  test("keeps a configured dated id when discovery answers the base id", () => {
-    // The reverse of the case the fold was written for: the account is
-    // configured with the dated id and upstream returns the base one.
+  // The fold is deliberately one-way, and this pins that. A live dated row proves
+  // that model answers, so serving it under the configured base id is backed by
+  // discovery. A live BASE row proves nothing about a configured dated snapshot:
+  // folding on name similarity would put a retired or plan-removed id back in the
+  // authoritative catalog with no callability signal behind it. Raised in review on
+  // #3041; the reverse case belongs to the explicit retention path below, not here.
+  test("does not infer a configured dated id from a live base id", () => {
     const { models, droppedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
       name: "deepseek",
       provider: {},
       models: [{ id: "deepseek-v4-pro" } as never],
       configured: [{ id: "deepseek-v4-pro-0813" } as never],
     });
+    expect(droppedConfiguredIds).toEqual(["deepseek-v4-pro-0813"]);
+    expect(models.map(m => m.id)).not.toContain("deepseek-v4-pro-0813");
+  });
+
+  test("an operator can still retain that dated id explicitly", () => {
+    // The same input, with the id named rather than inferred: retention is a
+    // decision someone made, which is the difference the review asked for.
+    const { models, droppedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
+      name: "deepseek",
+      provider: {},
+      models: [{ id: "deepseek-v4-pro" } as never],
+      configured: [{ id: "deepseek-v4-pro-0813" } as never],
+      retainConfiguredModelIds: new Set(["deepseek-v4-pro-0813"]),
+    });
     expect(droppedConfiguredIds).toEqual([]);
     expect(models.map(m => m.id)).toContain("deepseek-v4-pro-0813");
+  });
+
+  test("the forward fold still works, now including an MMDD suffix", () => {
+    const { models, droppedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
+      name: "deepseek",
+      provider: {},
+      models: [{ id: "deepseek-v4-pro-0813" } as never],
+      configured: [{ id: "deepseek-v4-pro" } as never],
+    });
+    expect(droppedConfiguredIds).toEqual([]);
+    expect(models.map(m => m.id)).toContain("deepseek-v4-pro");
   });
   test("isDatedVariantId matches <alias>-YYYYMMDD and <alias>-MMDD, nothing else", () => {
     expect(isDatedVariantId("claude-haiku-4-5-20251001", "claude-haiku-4-5")).toBe(true);
