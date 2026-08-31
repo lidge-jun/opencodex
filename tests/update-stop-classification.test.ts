@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
+import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
 
 const repoRoot = join(import.meta.dir, "..");
 const read = (rel: string): string => readFileSync(join(repoRoot, rel), "utf8");
@@ -38,23 +39,6 @@ describe("stop failure classification (#3008)", () => {
     expect(dispatchCodes).not.toContain(STOP_HISTORY_INCOMPLETE_EXIT_CODE);
   });
 
-  test("both updaters decode the code, not just the TypeScript one", () => {
-    // The reported path is a dashboard npm update, which runs through the plain-Node
-    // launcher. Fixing only the Bun updater would have left the reporter's lane broken
-    // while every focused test went green.
-    for (const lane of ["src/update/index.ts", "bin/ocx.mjs"]) {
-      const source = read(lane);
-      expect(source).toContain("STOP_HISTORY_INCOMPLETE_EXIT_CODE");
-      // Proceed for the history-only code...
-      expect(source).toMatch(/historyOnlyStop\s*=\s*stop(?:Res)?\.status === STOP_HISTORY_INCOMPLETE_EXIT_CODE/);
-      // ...and only then; any other nonzero status still aborts.
-      expect(source).toMatch(/status !== 0 && !historyOnlyStop/);
-      // A signal kill leaves status null, which is not 0 and not the history code, so the
-      // same expression aborts on it.
-      expect(source).not.toMatch(/status !== 0 \|\| historyOnlyStop/);
-    }
-  });
-
   test("the shared contract is plain ESM so the Node launcher can import it", () => {
     // A .ts module would be unusable from bin/ocx.mjs, and inlining the number in two
     // places is how the two ends drift.
@@ -74,7 +58,7 @@ describe("stop failure classification (#3008)", () => {
       "const server = http.createServer((req, res) => {",
       "  if (req.url !== '/healthz') { res.writeHead(404); res.end(); return; }",
       "  res.writeHead(200, { 'content-type': 'application/json' });",
-      "  res.end(JSON.stringify({ pid: process.pid, version: 'test' }));",
+      "  res.end(JSON.stringify({ service: 'opencodex', pid: process.pid, version: 'test' }));",
       "});",
       "server.listen(0, '127.0.0.1', () => process.stdout.write(String(server.address().port)));",
     ].join("\n")], { stdio: ["ignore", "pipe", "ignore"] });
@@ -97,6 +81,61 @@ describe("stop failure classification (#3008)", () => {
     // Nothing to ask is not ambiguity.
     expect(probeProxyLiveness(0)).toBe("dead");
     expect(probeProxyLiveness(Number.NaN)).toBe("dead");
+  });
+
+  test("identity decides live, and an unexpected status is unknown", async () => {
+    // Mirrors isOpencodexHealthz: a foreign server exposing /healthz is not our proxy, a
+    // pre-identity build of ours is, and any status other than 200 says the endpoint is
+    // answering without telling us what it is - which is not evidence of absence.
+    const cases: Array<[string, string, "live" | "dead" | "unknown"]> = [
+      ["canonical", "{ service: 'opencodex', pid: 1 }", "live"],
+      ["legacy pre-identity", "{ status: 'ok', version: '2.0.0', uptime: 12 }", "live"],
+      ["foreign", "{ service: 'other', status: 'ok' }", "dead"],
+      ["foreign lookalike", "{ status: 'ok' }", "dead"],
+    ];
+    for (const [name, body, expected] of cases) {
+      const listener = spawn(process.execPath, ["-e", [
+        "const http = require('node:http');",
+        "const server = http.createServer((req, res) => {",
+        "  res.writeHead(200, { 'content-type': 'application/json' });",
+        `  res.end(JSON.stringify(${body}));`,
+        "});",
+        "server.listen(0, '127.0.0.1', () => process.stdout.write(String(server.address().port)));",
+      ].join("\n")], { stdio: ["ignore", "pipe", "ignore"] });
+      const port = await new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`${name} listener did not report a port`)), 10_000);
+        listener.stdout.once("data", chunk => { clearTimeout(timer); resolve(Number(String(chunk))); });
+        listener.once("error", error => { clearTimeout(timer); reject(error); });
+      });
+      try {
+        expect(probeProxyLiveness(port)).toBe(expected);
+      } finally {
+        listener.kill();
+        await new Promise<void>(resolve => listener.once("exit", () => resolve()));
+      }
+    }
+  });
+
+  test("a non-200 from our own endpoint is unknown, never dead", async () => {
+    const listener = spawn(process.execPath, ["-e", [
+      "const http = require('node:http');",
+      "const server = http.createServer((req, res) => {",
+      "  res.writeHead(500, { 'content-type': 'application/json' });",
+      "  res.end(JSON.stringify({ service: 'opencodex' }));",
+      "});",
+      "server.listen(0, '127.0.0.1', () => process.stdout.write(String(server.address().port)));",
+    ].join("\n")], { stdio: ["ignore", "pipe", "ignore"] });
+    const port = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("listener did not report a port")), 10_000);
+      listener.stdout.once("data", chunk => { clearTimeout(timer); resolve(Number(String(chunk))); });
+      listener.once("error", error => { clearTimeout(timer); reject(error); });
+    });
+    try {
+      expect(probeProxyLiveness(port)).toBe("unknown");
+    } finally {
+      listener.kill();
+      await new Promise<void>(resolve => listener.once("exit", () => resolve()));
+    }
   });
 
   test("an unreachable or silent endpoint is unknown, not dead", async () => {
@@ -124,23 +163,48 @@ describe("stop failure classification (#3008)", () => {
     }
   });
 
-  test("the decision expression admits only the history code", () => {
-    // The two lanes share one predicate shape, so this evaluates that shape directly over
-    // the whole status domain rather than pattern-matching the source. A stop that did not
-    // finish must never reach the install, and a signal kill (null) carries no evidence
-    // that it did.
-    const proceeds = (status: number | null): boolean => {
-      const historyOnlyStop = status === STOP_HISTORY_INCOMPLETE_EXIT_CODE;
-      return !((status !== 0 && !historyOnlyStop));
-    };
-    expect(proceeds(0)).toBe(true);
-    expect(proceeds(STOP_HISTORY_INCOMPLETE_EXIT_CODE)).toBe(true);
-    expect(proceeds(1)).toBe(false);
-    expect(proceeds(2)).toBe(false);
-    expect(proceeds(4)).toBe(false);
-    expect(proceeds(64)).toBe(false);
-    expect(proceeds(130)).toBe(false);
-    expect(proceeds(null)).toBe(false);
+  test("the shared decision covers the whole post-stop matrix", () => {
+    // This is THE predicate both updaters call, not a copy of it: src/update/index.ts and
+    // bin/ocx.mjs each import decidePostStopUpdate. Testing a local reimplementation would
+    // stay green while either lane drifted, which is how #3008 shipped fixed on one side.
+    const dead = { hasRuntimeState: false, liveness: "dead" } as const;
+
+    // Proceed: a clean stop, or the history-only code with everything else quiet.
+    expect(decidePostStopUpdate({ status: 0, ...dead })).toEqual({ proceed: true, reason: "ok" });
+    expect(decidePostStopUpdate({ status: STOP_HISTORY_INCOMPLETE_EXIT_CODE, ...dead }))
+      .toEqual({ proceed: true, reason: "history-only" });
+
+    // Abort: a stop that did not finish. A signal kill carries no evidence that it did.
+    for (const status of [1, 2, 4, 64, 130, null]) {
+      expect(decidePostStopUpdate({ status, ...dead }))
+        .toEqual({ proceed: false, reason: "stop-failed" });
+    }
+
+    // Abort: records survived the stop, even on a clean exit.
+    expect(decidePostStopUpdate({ status: 0, hasRuntimeState: true, liveness: "dead" }))
+      .toEqual({ proceed: false, reason: "runtime-state" });
+
+    // Abort: something still answers as our proxy, or the probe could not tell. Absence of
+    // proof is not proof of absence when the cost is a server running mixed modules.
+    expect(decidePostStopUpdate({ status: 0, hasRuntimeState: false, liveness: "live" }))
+      .toEqual({ proceed: false, reason: "proxy-live" });
+    expect(decidePostStopUpdate({ status: 0, hasRuntimeState: false, liveness: "unknown" }))
+      .toEqual({ proceed: false, reason: "proxy-unknown" });
+    // The history-only code does not buy past a live or unclear proxy either.
+    expect(decidePostStopUpdate({ status: STOP_HISTORY_INCOMPLETE_EXIT_CODE, hasRuntimeState: false, liveness: "unknown" }))
+      .toEqual({ proceed: false, reason: "proxy-unknown" });
+  });
+
+  test("both updater lanes call the shared decision", () => {
+    // The reported path is a dashboard npm update through the plain-Node launcher. Fixing
+    // only the Bun updater would leave that lane broken while every focused test went
+    // green, which is exactly how #3008 reached a release.
+    for (const lane of ["src/update/index.ts", "bin/ocx.mjs"]) {
+      const source = read(lane);
+      expect(source).toContain("decidePostStopUpdate({");
+      // And neither lane keeps a private copy of the rule it was supposed to delegate.
+      expect(source).not.toMatch(/status !== 0 && !historyOnlyStop/);
+    }
   });
 
   test("handleStop emits the code only for a history-only failure and still returns", () => {

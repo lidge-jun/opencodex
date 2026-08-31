@@ -11,6 +11,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
+import { decidePostStopUpdate } from "../src/update/stop-decision.mjs";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -209,6 +210,7 @@ function runNpmSelfUpdate() {
   // "stopped" for exactly the proxy the probe exists to find.
   let bakeHostname = "127.0.0.1";
   let sawRuntimePort = false;
+  let sawRuntimeHostname = false;
   try {
     const rt = JSON.parse(readFileSync(join(configDir(), "runtime-port.json"), "utf8"));
     if (Number.isFinite(rt?.port) && rt.port > 0 && rt.port <= 65535) {
@@ -225,18 +227,31 @@ function runNpmSelfUpdate() {
       }
       if (runtimeLive) {
         bakePort = Math.trunc(rt.port);
-        if (typeof rt?.hostname === "string" && rt.hostname.trim() !== "") bakeHostname = rt.hostname.trim();
+        if (typeof rt?.hostname === "string" && rt.hostname.trim() !== "") {
+          bakeHostname = rt.hostname.trim();
+          sawRuntimeHostname = true;
+        }
         sawRuntimePort = true;
       }
     }
   } catch { /* fall through to config */ }
-  if (!sawRuntimePort) {
+  // Port and hostname resolve INDEPENDENTLY: a legacy runtime record carries a port and no
+  // hostname, and skipping config in that case probed 127.0.0.1 for a proxy bound to ::1.
+  if (!sawRuntimePort || bakeHostname === "127.0.0.1") {
     try {
       const cfg = JSON.parse(readFileSync(join(configDir(), "config.json"), "utf8"));
-      if (Number.isFinite(cfg?.port) && cfg.port > 0 && cfg.port <= 65535) bakePort = Math.trunc(cfg.port);
-      if (typeof cfg?.hostname === "string" && cfg.hostname.trim() !== "") bakeHostname = cfg.hostname.trim();
+      if (!sawRuntimePort && Number.isFinite(cfg?.port) && cfg.port > 0 && cfg.port <= 65535) {
+        bakePort = Math.trunc(cfg.port);
+      }
+      if (!sawRuntimeHostname && typeof cfg?.hostname === "string" && cfg.hostname.trim() !== "") {
+        bakeHostname = cfg.hostname.trim();
+      }
     } catch { /* keep default */ }
   }
+  // A wildcard bind answers on loopback, and a bracketed IPv6 literal is a URL spelling
+  // rather than a host: node:http wants the bare address.
+  if (bakeHostname === "0.0.0.0" || bakeHostname === "::" || bakeHostname === "*") bakeHostname = "127.0.0.1";
+  if (bakeHostname.startsWith("[") && bakeHostname.endsWith("]")) bakeHostname = bakeHostname.slice(1, -1);
 
   const launcher = fileURLToPath(import.meta.url);
 
@@ -361,20 +376,20 @@ function runNpmSelfUpdate() {
     // status is a stop that did not finish, and a signal kill (status null) says nothing
     // about whether it did - both abort, because replacing files under a live server
     // leaves it running mixed old and new modules (#3008).
-    const historyOnlyStop = stopRes.status === STOP_HISTORY_INCOMPLETE_EXIT_CODE;
-    if ((stopRes.status !== 0 && !historyOnlyStop) || stillHasRuntimeState) {
+    // The same decision the Bun updater makes, from the same module (#3008). Absent PID and
+    // runtime files are weak evidence, so the captured endpoint is asked; "unknown" aborts
+    // because a silent listener is exactly the state where replacing files is dangerous.
+    const decision = decidePostStopUpdate({
+      status: stopRes.status,
+      hasRuntimeState: stillHasRuntimeState,
+      liveness: probeProxyLiveness(bakePort, bakeHostname),
+    });
+    const historyOnlyStop = decision.reason === "history-only";
+    if (!decision.proceed) {
       if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
-      console.error("opencodex: could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
-      process.exit(1);
-    }
-    // Absent PID and runtime files are weak evidence: a crashed-but-listening proxy, or one
-    // supervised outside our records, looks identical to a stopped one. Ask the captured
-    // endpoint who is there before replacing package files under it.
-    // `unknown` aborts too: a listener that accepts connections but withholds /healthz, or
-    // a probe that timed out, is exactly the state where replacing files is most dangerous.
-    if (probeProxyLiveness(bakePort, bakeHostname) !== "dead") {
-      if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
-      console.error(`opencodex: a proxy is still answering on port ${bakePort} after the stop; aborting the update. Run 'ocx stop' and retry.`);
+      console.error(decision.reason === "proxy-unknown"
+        ? `opencodex: could not confirm the proxy on ${bakeHostname}:${bakePort} is stopped; aborting the update. Run 'ocx stop' and retry.`
+        : "opencodex: could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
       process.exit(1);
     }
     if (historyOnlyStop || historyRestoreIncomplete()) {

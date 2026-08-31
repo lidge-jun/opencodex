@@ -324,9 +324,11 @@ esac
   test("the stop gate covers service-managed and orphaned proxies whose pid file is stale/missing", () => {
     expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort())");
     expect(launcherSource).toContain("if (serviceWasInstalled || hasRuntimeState)");
-    // A history-only stop is the one nonzero status that does NOT abort: teardown
-    // succeeded and a manifest is waiting for review (#3008). Everything else still does.
-    expect(launcherSource).toContain("(stopRes.status !== 0 && !historyOnlyStop) || stillHasRuntimeState");
+    // The rule now lives in the shared post-stop decision both lanes import (#3008): a
+    // history-only stop proceeds, every other nonzero status and any surviving runtime
+    // state aborts. Pinned by tests/update-stop-classification.test.ts.
+    expect(launcherSource).toContain("decidePostStopUpdate({");
+    expect(launcherSource).toContain("hasRuntimeState: stillHasRuntimeState");
   });
 
   test("GUI worker update children use pipe stdio so background updates do not open consoles", () => {

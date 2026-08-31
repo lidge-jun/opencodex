@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "./stop-contract.mjs";
 import { proxyIdentityAt } from "../server/proxy-liveness";
 import { probeProxyLiveness } from "./proxy-liveness-probe.mjs";
+import { decidePostStopUpdate } from "./stop-decision.mjs";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -259,37 +260,27 @@ export async function runUpdate(): Promise<void> {
       windowsHide: true,
     });
     if (stopStdio === "pipe") logSpawnOutput("", stop);
-    // A history-only failure means teardown succeeded and a backup manifest is waiting for
-    // review: the proxy is down, the service is stopped, and replacing package files is
-    // safe. Every other nonzero status is a stop that did not finish, and `status: null`
-    // is a signal kill that carries no information about whether it did — both abort,
-    // because replacing files under a live server leaves it running mixed old and new
-    // modules (#3008).
-    const historyOnlyStop = stop.status === STOP_HISTORY_INCOMPLETE_EXIT_CODE;
-    if ((stop.status !== 0 && !historyOnlyStop) || readPid() || readRuntimePort()) {
+    // One decision, shared with the npm launcher (#3008). The two lanes disagreeing about
+    // the same situation is how this shipped fixed on one side only. Absent PID and runtime
+    // files are weak evidence - a crashed-but-listening proxy leaves none - so the captured
+    // endpoint is asked, and `null` from proxyIdentityAt covers refusal AND timeout alike.
+    const identity = await proxyIdentityAt(capturedListen.port, { hostname: capturedListen.hostname });
+    const decision = decidePostStopUpdate({
+      status: stop.status,
+      hasRuntimeState: !!(readPid() || readRuntimePort()),
+      liveness: identity ? "live" : probeProxyLiveness(capturedListen.port, capturedListen.hostname),
+    });
+    const historyOnlyStop = decision.reason === "history-only";
+    if (!decision.proceed) {
       if (trayWasRunning) {
         try {
           const { startWindowsTray } = await import("../tray/windows");
           startWindowsTray();
         } catch { /* preserve the proxy stop failure */ }
       }
-      console.error("⚠️  Could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
-      process.exit(1);
-    }
-    // Absent PID and runtime files are weak evidence: a crashed-but-listening proxy, or one
-    // supervised outside our records, looks identical to a stopped one. Ask the captured
-    // endpoint who is there before replacing package files under it.
-    // `null` from proxyIdentityAt covers refusal AND timeout, so it is not proof the proxy
-    // is gone. Confirm with the tri-state probe and abort unless it says definitively dead.
-    const stillLive = await proxyIdentityAt(capturedListen.port, { hostname: capturedListen.hostname });
-    if (stillLive || probeProxyLiveness(capturedListen.port, capturedListen.hostname) !== "dead") {
-      if (trayWasRunning) {
-        try {
-          const { startWindowsTray } = await import("../tray/windows");
-          startWindowsTray();
-        } catch { /* preserve the proxy stop failure */ }
-      }
-      console.error(`⚠️  A proxy is still answering on ${capturedListen.hostname}:${capturedListen.port} after the stop; aborting the update. Run 'ocx stop' and retry.`);
+      console.error(decision.reason === "proxy-unknown"
+        ? `⚠️  Could not confirm the proxy on ${capturedListen.hostname}:${capturedListen.port} is stopped; aborting the update. Run 'ocx stop' and retry.`
+        : "⚠️  Could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
       process.exit(1);
     }
     if (historyOnlyStop || historyRestoreIncomplete()) {
