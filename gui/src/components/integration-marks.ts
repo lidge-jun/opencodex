@@ -58,26 +58,44 @@ export const INTEGRATION_MARKS: Record<OverviewClientId, string | null> = {
 };
 
 /**
- * Assets whose artwork is one neutral ink, so the ink has to come from the theme.
- *
- * Derived from `MONOCHROME_CLIENT_MARKS` rather than restated, because two
- * hand-maintained lists of the same fact drift. Nothing is added on top of it,
- * and the two candidates that look like they belong here do not:
- *
- * - `openai.svg` is a single fill, but that fill is #10A37F -- OpenAI's brand
- *   green. Masking it repaints a trademark in the theme's text color, which is
- *   the same reason `dsh` stays an image despite being single-ink.
- * - `grok.svg` is #000000, a genuine neutral and a real masking candidate. It
- *   is xAI's published asset with a literal fill, and rewriting that file to
- *   `currentColor` is a change to someone else's mark rather than a rendering
- *   choice, so it stays an image here.
+* Assets whose artwork is one neutral ink, so the ink has to come from the theme.
+*
+ * The export-client half is derived from `MONOCHROME_CLIENT_MARKS` rather than
+ * restated, because two hand-maintained lists of the same fact drift.
+*
+ * `openai.svg` looks like it belongs here and does not: it is a single fill, but
+ * that fill is #10A37F -- OpenAI's brand green. Masking repaints a trademark in
+ * the theme's text color, the same reason `dsh` stays an image despite being
+ * single-ink.
  */
-export const MASKED_MARKS: ReadonlySet<string> = new Set(
-  [...MONOCHROME_CLIENT_MARKS].map(clientId => CLIENT_MARKS[clientId]).filter((src): src is string => src !== undefined),
-);
+/**
+ * The neutral-ink marks that belong to no export client.
+ *
+ * `MONOCHROME_CLIENT_MARKS` is keyed by `ExportClientId`, so it structurally
+ * cannot carry a native row's asset. Grok is a native row, which is the only
+ * reason its mark needs a second home rather than an entry there.
+ *
+ * `grok.svg` is one `#000000` fill on transparency. Measured on the dark card
+ * surface (`rgb(48,48,48)`) that is about 1.9:1 -- the glyph is very nearly gone,
+ * which a zoomed capture confirms. An earlier pass left it as an image on the
+ * grounds that masking would be editing someone else's mark; that reasoning does
+ * not survive contact with what masking is. The file is not modified. It is read
+ * as a shape and painted in the surrounding text color, which is how xAI renders
+ * it on their own dark surfaces. Flattening does not apply either: there is one
+ * ink to flatten.
+ *
+ * `openai.svg` still does not belong here, and the distinction is not neutrality
+ * in the abstract -- it is that #10A37F IS the brand. Repainting it loses
+ * information a reader uses to identify the mark. #000000 carries none.
+ */
+const MASKED_NATIVE_MARKS: readonly string[] = [NATIVE_MARKS.grok];
+
+export const MASKED_MARKS: ReadonlySet<string> = new Set([
+  ...[...MONOCHROME_CLIENT_MARKS].map(clientId => CLIENT_MARKS[clientId]).filter((src): src is string => src !== undefined),
+  ...MASKED_NATIVE_MARKS,
+]);
 
 /** The mark for a row, or null when it has none. */
 export function markFor(clientId: OverviewClientId): string | null {
   return INTEGRATION_MARKS[clientId];
 }
-
