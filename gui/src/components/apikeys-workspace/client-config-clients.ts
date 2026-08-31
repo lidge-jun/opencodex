@@ -47,17 +47,26 @@ export const CLIENT_LABEL_KEYS = {
  * so its symbol comes out of the shipping application, where the vendor names the
  * module `official-brand-symbol`. Still first-party, just not fetched.
  *
- * Two clients are absent on purpose. `gajae` publishes only raster marks and
- * `hermes` upstream ships a text-glyph placeholder with no path data. Both render
- * a monogram, which is what this map's rule prescribes; the README records why.
+ * Three are traced rather than fetched, because their vendors publish no usable
+ * vector: `hermes` from the Hermes desktop application icon, `gajae` from the
+ * Gajae mascot PNG. A trace follows the source pixels -- it is not a redraw --
+ * and the conversion parameters are in the README beside the source URL, so the
+ * result can be reproduced. What is still refused: squeezing a horizontal
+ * wordmark into this square slot, and a full-frame silhouette plate that renders
+ * as a filled box at 20px. Both candidates existed and both were rejected;
+ * `devlog/_plan/260831_aside_client_and_integrations_ux/005_remaining_marks_provenance.md`
+ * names them.
  */
 export const CLIENT_MARKS: Partial<Record<ExportClientId, string>> = {
   opencode: "/provider-icons/opencode.svg",
   pi: "/provider-icons/pi.svg",
   omp: "/provider-icons/oh-my-pi.svg",
+  hermes: "/provider-icons/hermes-agent.svg",
   openclaw: "/provider-icons/openclaw.svg",
   kimi: "/provider-icons/kimi-color.svg",
+  gajae: "/provider-icons/gajae-code.svg",
   dsh: "/provider-icons/deepseek-harness.svg",
+  mcode: "/provider-icons/minimax.svg",
   zcode: "/provider-icons/zcode.svg",
   prime: "/provider-icons/prime-agent.svg",
   aside: "/provider-icons/aside.svg",
@@ -72,16 +81,20 @@ export const CLIENT_MARKS: Partial<Record<ExportClientId, string>> = {
  * ships white-on-transparent and vanishes in light mode, while `opencode`
  * (#211E1E) and `kimi` (#1A1A1A) vanish in dark. That is not hypothetical -- a
  * rendered check of every mark showed `prime` blank on white and `opencode` and
- * `kimi` blank on #0d1117.
+ * `kimi` blank on #0d1117. `hermes` joined them the same way: its traced
+ * artwork is one ink, and a 20px render on #0d1117 showed nothing at all.
  *
  * A multi-color mark must never be listed here: masking discards its colors and
- * would flatten a brand palette into one ink.
+ * would flatten a brand palette into one ink. That is why `gajae` (seven traced
+ * layers) and `mcode` (a three-stop gradient) stay images despite arriving in
+ * the same pass as `hermes`.
  */
 export const MONOCHROME_CLIENT_MARKS: ReadonlySet<ExportClientId> = new Set<ExportClientId>([
   "opencode",
   "kimi",
   "prime",
   "aside",
+  "hermes",
 ]);
 
 /** The `/api/client-config` 200 envelope, read off the route rather than a design doc. */

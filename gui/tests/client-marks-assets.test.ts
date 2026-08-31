@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CLIENT_MARKS, MONOCHROME_CLIENT_MARKS } from "../src/components/apikeys-workspace/client-config-clients";
+import { CLIENT_MARKS, CLIENTS, MONOCHROME_CLIENT_MARKS } from "../src/components/apikeys-workspace/client-config-clients";
 
 const PUBLIC_DIR = join(import.meta.dir, "..", "public");
 
@@ -105,4 +105,35 @@ test("every mark's provenance is recorded in the README", () => {
     .map(src => src!.split("/").pop()!)
     .filter(file => !readme.includes(file));
   expect(undocumented).toEqual([]);
+});
+
+/*
+ * Every export client now has a mark, and that is a property worth pinning
+ * rather than a coincidence of the current map. The monogram branch in
+ * ClientConfigRow stays -- it is the correct fallback and a future client will
+ * arrive without an asset -- but a client SILENTLY losing its mark, because a
+ * key was renamed or an entry dropped in a merge, looks identical to a client
+ * that never had one. This is the difference.
+ */
+test("every export client has a mark", () => {
+  const monogram = CLIENTS.filter(clientId => CLIENT_MARKS[clientId] === undefined);
+  expect(monogram).toEqual([]);
+});
+
+/*
+ * Two of the newest marks are traced from raster sources, which is a different
+ * provenance claim from "fetched" and the one a reader is most likely to doubt.
+ * The README has to carry the reproduction detail: the source file, and the
+ * tracer parameters. Named files rather than a general rule because only these
+ * two are traced -- a fetched mark has nothing to reproduce.
+ */
+test("a traced mark records the source it was traced from", () => {
+  const readme = readFileSync(join(PUBLIC_DIR, "provider-icons", "README.md"), "utf8");
+  for (const [file, source] of [
+    ["hermes-agent.svg", "apps/desktop/assets/icon.png"],
+    ["gajae-code.svg", "assets/character.png"],
+  ] as const) {
+    expect(readme, `${file} should name its raster source`).toContain(source);
+  }
+  expect(readme, "a traced mark should record its tracer invocation").toContain("potrace");
 });
