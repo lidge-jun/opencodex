@@ -2037,7 +2037,14 @@ function windowsTaskTriggerScopeAcceptable(element: string, expectedUserId: stri
   if (userIdCount === 0) return true;
   if (userIdCount !== 1) return false;
   if (expectedUserId === undefined) return false;
-  return taskXmlDecodedValueEquals(element, "UserId", expectedUserId);
+  // Compared the same lossy way as Command and Arguments, and for the same reason:
+  // buildWindowsTaskXml writes the live account name here, so an account named outside
+  // the console code page comes back from `schtasks /query /xml` mangled and an exact
+  // comparison would reject a task that is in fact correctly scoped (#3064). The
+  // separator rule earns its keep on this field: a `DOMAIN\User` scope keeps its
+  // backslash verified literally, so a placeholder run can never swallow the domain and
+  // let another domain's account match.
+  return taskXmlDecodedPathEquals(element, "UserId", expectedUserId);
 }
 
 /** Validate the stable OpenCodex action, principal, settings, and logon trigger. */

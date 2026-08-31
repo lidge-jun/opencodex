@@ -583,6 +583,47 @@ describe("Windows service task", () => {
   });
 
 
+  // A scoped trigger names the installing account, and that name goes through the same
+  // code page as the paths do (CodeRabbit review on #3067).
+  test("accepts a scoped trigger whose account name the code page could not carry", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const user = "MACHINE\\Người";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher, undefined, user)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    expect(windowsTaskRegistrationHealthy(xml, wscript, launcher, user)).toBe(true);
+
+    for (const mangled of [
+      xml.replace("Người", "Ng??i"),
+      xml.replace("Người", "Ngi"),
+      xml.replace("Người", "Ng\uFFFDi"),
+    ]) expect(windowsTaskRegistrationHealthy(mangled, wscript, launcher, user)).toBe(true);
+  });
+
+  test("a scoped trigger for a different account is still rejected", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const user = "MACHINE\\Người";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher, undefined, user)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+
+    // The relaxation must not reach across the domain separator: a placeholder run
+    // stands in for unrepresentable characters only, never for a `\`. Otherwise
+    // "OTHER\\admin" could match a scope that names this machine.
+    for (const other of [
+      "MACHINE\\Nguoi",
+      "OTHER\\Người",
+      "MACHINE\\Người\\sub",
+    ]) expect(windowsTaskRegistrationHealthy(xml, wscript, launcher, other)).toBe(false);
+
+    // And an ASCII account name keeps its exact comparison.
+    const ascii = "MACHINE\\installer";
+    const asciiXml = buildWindowsTaskXml("ignored.cmd", launcher, undefined, ascii)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    expect(windowsTaskRegistrationHealthy(asciiXml, wscript, launcher, ascii)).toBe(true);
+    expect(windowsTaskRegistrationHealthy(asciiXml, wscript, launcher, "MACHINE\\installr")).toBe(false);
+  });
+
   // --- #3064: a non-ASCII profile path survives the schtasks code page --------
   test("accepts a registration whose path the schtasks code page could not carry", () => {
     const wscript = "C:\\Windows\\System32\\wscript.exe";
