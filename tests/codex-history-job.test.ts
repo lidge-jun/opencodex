@@ -132,6 +132,13 @@ test("the failure wording names the real reason instead of always blaming the Co
   expect(describeHistoryJobFailure(partialIntegrity, "restore")).toContain("partial restore");
   expect(describeHistoryJobFailure(partialIntegrity, "restore")).toContain("manifest was retained");
 
+  // An ambiguous reroute is not a retry: two histories produced the same row and no durable
+  // fact separates them, so "run doctor" points the operator the wrong way.
+  const ambiguous = { ...integrity, historyIntegrityCode: "history_apply_ambiguous_reroute" } as const;
+  expect(describeHistoryJobFailure(ambiguous, "apply")).toContain("cannot prove whether an earlier relabel was undone");
+  expect(describeHistoryJobFailure(ambiguous, "apply")).toContain("Resolve it manually");
+  expect(describeHistoryJobFailure(ambiguous, "apply")).not.toContain("'ocx doctor'");
+
   const partialPermission = { ...permission, rows: 1, files: 1 } as const;
   expect(describeHistoryJobFailure(partialPermission, "apply")).toContain("changed but did not converge");
   expect(describeHistoryJobFailure(partialPermission, "apply")).toContain("manifest was retained");

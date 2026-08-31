@@ -312,6 +312,9 @@ describe("Codex history provider sync", () => {
       ["C: pending with an expected-0 route is decidable", row("openai", "vscode", 1), entry({ relabel: "pending", hadFirstUserMessage: false }), 1],
       ["C: pending with an expected-1 route is undecidable", row("openai", "vscode", 1), entry({ relabel: "pending", hadFirstUserMessage: true }), null],
       ["C: legacy entry with drift refuses, as dev does", row("openai", "vscode", 1), entry({ hadFirstUserMessage: true }), null],
+      // Reverse drift is foreign under every provenance: nothing in this system clears the
+      // flag, so a baseline that moved down is a decision this manifest does not own.
+      ["reverse drift refuses even with a none marker", row("openai", "vscode", 0), entry({ hasUserEvent: 1, relabel: "none" }), null],
       ["C: exec-origin cannot be reached by legacy return", row("opencodex", "exec", 1), entry({ modelProvider: "opencodex", source: "exec", relabel: "pending", hadFirstUserMessage: true }), 1],
       // D - routed tuple with drift; no provenance needed.
       ["D: drift on the routed tuple is the user's", row("opencodex", "vscode", 1), entry({ relabel: "pending", hadFirstUserMessage: false }), 1],

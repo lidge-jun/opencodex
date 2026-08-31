@@ -110,6 +110,8 @@ export type CodexHistoryJobOutcome =
   | { readonly kind: "blocked"; readonly reason: "busy" | "database" | "unsafe-path" | "desired_disabled" | "desired_enabled" }
   | { readonly kind: "failed"; readonly reason: "worker-error" | "worker-died" | "timeout";
       readonly message: string; readonly historyFailureReason?: CodexHistoryFailureReason;
+      /** Specific integrity condition when `historyFailureReason` is `"integrity"`. */
+      readonly historyIntegrityCode?: string;
       readonly rows?: number; readonly files?: number };
 
 /**
@@ -258,6 +260,13 @@ export function describeHistoryJobFailure(
     return "permission was denied while writing Codex history; this is not a Codex app lock. Run 'ocx doctor'.";
   }
   if (outcome.historyFailureReason === "integrity") {
+    // Not every integrity stop is a retry. An ambiguous reroute means two histories
+    // produced the same row and no durable fact separates them, so retrying reaches the
+    // same refusal - the manifest needs a person, and saying "run doctor" sends them the
+    // wrong way.
+    if (outcome.historyIntegrityCode === "history_apply_ambiguous_reroute") {
+      return "a Codex history entry could not be re-routed because its manifest cannot prove whether an earlier relabel was undone; nothing was changed and the manifest was kept. Resolve it manually rather than retrying.";
+    }
     return partiallyChanged
       ? "the history backup or its restore target changed after a partial restore; the manifest was retained for review and safe retry. Run 'ocx doctor'."
       : "the history backup or its restore target failed integrity checks; no unverified provider metadata was applied. Run 'ocx doctor'.";
@@ -298,6 +307,7 @@ function classifyWorkerResult(result: HistoryWorkerResult): CodexHistoryJobOutco
       reason: "worker-error",
       message: redactWorkerMessage(result.message),
       ...(result.reason ? { historyFailureReason: result.reason } : {}),
+      ...(result.integrityCode ? { historyIntegrityCode: result.integrityCode } : {}),
       ...(result.rows !== undefined && result.files !== undefined
         ? { rows: result.rows, files: result.files }
         : {}),

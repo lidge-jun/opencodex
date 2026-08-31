@@ -75,6 +75,8 @@ export type HistoryWorkerResult =
       readonly reason: "busy" | "database" | "unsafe-path" | "desired_disabled" | "desired_enabled" }
   | { readonly type: "error"; readonly requestId: string; readonly jobId: string;
       readonly message: string; readonly reason?: CodexHistoryFailureReason;
+      /** Specific integrity condition, so a non-retryable one can be named as such. */
+      readonly integrityCode?: string;
       readonly rows?: number; readonly files?: number };
 
 const OPERATIONS: ReadonlySet<string> = new Set<CodexHistoryWorkerOperation>([

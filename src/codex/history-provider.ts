@@ -503,32 +503,36 @@ function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ApplyRowSna
     // tuple alone is not proof: route-then-legacy-recovery lands on that same tuple, so
     // refreshing there would adopt OpenCodex's own write as the user's baseline.
     //
-    // `relabel: "none"` is that proof, written by a restore that landed and passed its
-    // readback. With it, the observed row is the honest pre-route baseline.
     const atOriginalTuple = row.model_provider === existing.modelProvider
       && row.source === existing.source;
     const observedEvent: 0 | 1 = Number(row.has_user_event) === 1 ? 1 : 0;
-    if (previousRelabel === "none" && atOriginalTuple) {
-      existing.hasUserEvent = observedEvent;
-      manifest.version = 2;
-      return;
-    }
-    // No proof, and the row disagrees with the recorded baseline. Whether that is decidable
-    // depends on what the previous route could have written: it sets the event to 1 only
-    // when the message was non-empty at ITS snapshot. If it would have written 0, the
-    // observed 1 cannot be OpenCodex's and is the user's — the same expected-event-0 cell
-    // the classifier preserves rather than refuses.
-    //
-    // Only when the previous route could itself have authored the difference are the two
-    // histories indistinguishable, and that is where refusing beats guessing: keeping the
-    // record would erase real activity, refreshing it would preserve an event OpenCodex
-    // wrote.
     if (observedEvent !== existing.hasUserEvent) {
-      const priorRouteCouldAuthorIt = previousHadFirstUserMessage === true;
-      if (priorRouteCouldAuthorIt) {
+      // The row's event disagrees with the recorded baseline. Whether that is decidable is
+      // a function of DIRECTION and ORIGIN, not of one flag:
+      //
+      // - `1 -> 0` is always foreign. Nothing in this system clears the flag: routing only
+      //   ever sets it, the user only ever sets it, and legacy recovery sets it to 1. A
+      //   baseline that moved down is a decision this manifest does not own.
+      // - `0 -> 1` on an exec-origin entry is the user's. `routeExec` moves `source` to
+      //   `cli` and legacy recovery does not move it back, so an exec-origin row wearing
+      //   its original tuple was never routed away and back.
+      // - `0 -> 1` with `relabel: "none"` is the user's: a restore landed and undid the
+      //   previous relabel, so the observed row is the honest pre-route state.
+      // - `0 -> 1` where the previous route would have written 0 is the user's, because
+      //   OpenCodex could not have authored a 1 it never writes.
+      // - `0 -> 1` where the previous route WOULD have written 1, or where a legacy entry
+      //   records nothing about it, is undecidable: routing-never-landed-plus-activity and
+      //   routing-landed-then-legacy-recovery produce the same row. Refuse rather than pick.
+      const reverseDrift = observedEvent === 0;
+      const execOrigin = existing.modelProvider !== "openai";
+      const priorRouteWroteZero = previousHadFirstUserMessage === false;
+      const decidable = !reverseDrift
+        && atOriginalTuple
+        && (execOrigin || previousRelabel === "none" || priorRouteWroteZero);
+      if (!decidable) {
         throw new CodexHistoryIntegrityError("history_apply_ambiguous_reroute");
       }
-      if (atOriginalTuple) existing.hasUserEvent = observedEvent;
+      existing.hasUserEvent = observedEvent;
     }
     manifest.version = 2;
     return;
