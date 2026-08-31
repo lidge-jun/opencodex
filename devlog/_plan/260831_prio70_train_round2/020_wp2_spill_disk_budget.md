@@ -128,6 +128,32 @@ Suite, typecheck and privacy scan on `ssh lidge`.
 
 Residual risk, same as round 1's wp3: NTFS unlink semantics and `icacls` timeout
 behaviour while a path is held still want a real Windows host.
+
+## What implementation added beyond this plan
+
+Four adversarial review rounds against the built branch (findings 4, 3, 1, 0). Three of
+their findings changed the design rather than the code, so they belong here:
+
+- **The footprint is measured, not estimated.** The plan said "exact prospective
+  measurement" and the first implementation used `candidate.sizeBytes`, which omits the
+  `version` field the published envelope carries. `prospectiveResponseSpillBytes` now
+  shares `serializedSpill` itself, so the two cannot drift.
+- **Superseded generations are priced in two places, not one.** A same-id replacement
+  takes the old spill off `states` and hands it to the pending job. It is invisible to
+  the accounting walk at admission (the job does not exist yet) and again in the shutdown
+  fallback (supersession has already released the job). Both checks add it explicitly.
+- **Cleanup debt is per path and repayable.** The plan did not anticipate a failed
+  unlink. A flat charge that never decrements is phantom debt: a Windows lock that clears,
+  or the async writer's own retry, removes the file while the charge stays, and two
+  conservative 256 MiB charges consume the whole default cap for the life of the process.
+  The debt is keyed by path and settled when the path is gone.
+- **The shutdown fallback fails closed.** If the footprint still does not fit after
+  reclaim, it terminalizes with ENOSPC rather than publishing onto an over-budget volume.
+
+And one about verification: the first regression stayed green with the admission check
+deleted, because `pruneResponses` reclaimed on another path. It proved the counter, not
+the cap. There are now two tests — one for accounting during a forced copy fallback, one
+for enforcement — and the enforcement test is red when admission is removed.
 ### Amendment after audit round 1 (`002`, blocker 3): the peak is two envelopes
 
 The first draft reserved one serialized envelope. Windows publication can fall back
