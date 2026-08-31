@@ -3620,15 +3620,10 @@ export async function installFreshWindowsSchedulerSafely(
   }
 }
 
-/**
- * If a service is installed, stop it so the process manager doesn't respawn after `ocx stop`.
- * Returns true if a service was found and stopped.
- */
-export function stopServiceIfInstalled(): boolean {
-  const outcome = stopServiceIfInstalledDetailed();
-  return outcome === "stopped" || outcome === "stopped-respawnable";
-}
-
+// `stopServiceIfInstalled` (boolean) is deliberately gone. It collapsed "not installed",
+// "refused to stop" and "state could not be read" into the same `false`, and every caller
+// that trusted it eventually read a live manager as absence — the route, then uninstall
+// (#3008). Callers take `stopServiceIfInstalledDetailed` and handle the outcomes.
 /**
  * Would stopping the installed manager leave something that can respawn the proxy?
  *

@@ -35,6 +35,7 @@ import {
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
 import { collectStatus, unusedProxyWarningLines } from "./status";
+import { sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 
 import {
@@ -55,7 +56,7 @@ import { runReady, type ReadyArgs } from "./ready";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
-import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled } from "../service";
+import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled } from "../service";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
@@ -1055,16 +1056,17 @@ async function handleUninstall() {
   // "refused to stop" and "state could not be read" alike, so this step used to print
   // "not installed" for a manager that might still be running and then tear down shared
   // config underneath it (#3008).
-  let serviceTeardownProven = true;
+  // The authorization rule lives in `uninstall-plan` so it can be exercised for every
+  // failure permutation by calling it, rather than by reading this function's source.
+  const observed: UninstallObservation = { serviceStop: null, proxyAccountedFor: false, serviceRemoved: false };
   await runStep("service stopped", () => {
     const outcome = stopServiceIfInstalledDetailed();
+    observed.serviceStop = outcome;
     if (outcome === "absent") return false;
     if (outcome === "failed") {
-      serviceTeardownProven = false;
       throw new Error("the installed service manager did not stop; it may respawn the proxy");
     }
     if (outcome === "state-unknown") {
-      serviceTeardownProven = false;
       throw new Error("the Windows Task Scheduler state could not be read, so this uninstall cannot tell whether a manager is still running. Run 'ocx service status' to see the query error");
     }
     return true;
@@ -1072,25 +1074,31 @@ async function handleUninstall() {
 
   await runStep("proxy stopped", async () => {
     const pid = readPid();
-    if (!pid) return false;
-    try {
-      await stopProxy(pid);
-    } catch (err) {
-      serviceTeardownProven = false;
-      throw err;
+    if (!pid) {
+      // A missing pid file is not proof that nothing is serving: a proxy can outlive its
+      // record (crash, manual delete, corrupt file), which is exactly why `ocx stop` falls
+      // back to identity-checked discovery. Without this, uninstall restored shared config
+      // and reported success while that proxy kept running (#3008).
+      const live = await findLiveProxy();
+      if (!live) { observed.proxyAccountedFor = true; return false; }
+      if (!live.pid) {
+        throw new Error(`a proxy is answering on port ${live.port} but no process id could be resolved for it; stop it from the home that started it, then rerun`);
+      }
+      await stopProxy(live.pid);
+      observed.proxyAccountedFor = true;
+      return true;
     }
+    await stopProxy(pid);
     removePid(pid);
     removeRuntimePort(pid);
+    observed.proxyAccountedFor = true;
     return true;
   });
 
   await runStep("service removed", () => {
-    try {
-      return uninstallServiceIfInstalled();
-    } catch (err) {
-      serviceTeardownProven = false;
-      throw err;
-    }
+    const removed = uninstallServiceIfInstalled();
+    observed.serviceRemoved = true;
+    return removed;
   });
 
   if (process.platform === "win32") {
@@ -1105,7 +1113,7 @@ async function handleUninstall() {
   // Shared client config comes down only once nothing that could still be serving is
   // unaccounted for. Restoring it under a live, still-managed proxy leaves both pointing
   // at each other — the same failure `ocx stop` refuses (#3008).
-  if (serviceTeardownProven) {
+  if (sharedTeardownAuthorized(observed)) {
     await runStep("native Codex restored", async () => {
       const r = await restoreNativeCodexAsync();
       if (!r.success) throw new Error(r.message);
@@ -1119,7 +1127,8 @@ async function handleUninstall() {
   } else {
     failures.push("native Codex restored", "Grok Build config restored");
     console.error("⚠️  Skipping shared teardown (native Codex restore, Grok config): a service or proxy could not be proven stopped.");
-    console.error("   Resolve the failures above, then run 'ocx restore' to finish.");
+    console.error("   Resolve the failures above and rerun 'ocx uninstall' — service removal and local state cleanup are also unfinished.");
+    console.error("   'ocx restore' is an interim step if you need native routing back before then.");
   }
 
   await runStep("system env vars reverted", () => {

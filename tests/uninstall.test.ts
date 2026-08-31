@@ -102,11 +102,45 @@ describe("full uninstall command", () => {
   });
 });
 describe("uninstall gates shared teardown on a proven service stop", () => {
+  test("the authorization rule, exercised for every failure permutation", async () => {
+    const { sharedTeardownAuthorized } = await import("../src/cli/uninstall-plan");
+    const base = { serviceStop: "stopped" as const, proxyAccountedFor: true, serviceRemoved: true };
+    expect(sharedTeardownAuthorized(base)).toBe(true);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "absent" })).toBe(true);
+    // The manager is removed next, so a wrapper that could have respawned cannot.
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable" })).toBe(true);
+    // A manager that refused to stop, or one we could not read, may still be running.
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "failed" })).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "state-unknown" })).toBe(false);
+    // The step itself threw: we know nothing.
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: null })).toBe(false);
+    // A proxy that could not be stopped — including a live orphan with no pid — blocks it.
+    expect(sharedTeardownAuthorized({ ...base, proxyAccountedFor: false })).toBe(false);
+    // So does a manager that could not be removed: it would respawn afterwards.
+    expect(sharedTeardownAuthorized({ ...base, serviceRemoved: false })).toBe(false);
+  });
+
+  test("a live orphan with no pid file blocks the teardown", async () => {
+    const cli = await readText("src/cli/index.ts");
+    const at = cli.indexOf("async function handleUninstall(");
+    const fn = cli.slice(at, at + 6000);
+    // A missing pid file is not proof that nothing is serving — the same discovery
+    // `ocx stop` performs. Without it, uninstall restored shared config under a live proxy.
+    expect(fn).toContain("const live = await findLiveProxy();");
+    expect(fn).toContain("if (!live) { observed.proxyAccountedFor = true; return false; }");
+    expect(fn).toContain("no process id could be resolved for it");
+    // The orphan-with-no-pid branch THROWS, so `proxyAccountedFor` stays false and the
+    // authorization rule refuses the shared teardown.
+    const orphanBranch = fn.slice(fn.indexOf("const live = await findLiveProxy();"), fn.indexOf("const live = await findLiveProxy();") + 600);
+    expect(orphanBranch).toContain("throw new Error(");
+    expect(orphanBranch.indexOf("throw new Error(")).toBeLessThan(orphanBranch.indexOf("observed.proxyAccountedFor = true;", orphanBranch.indexOf("throw new Error(")));
+  });
+
   async function uninstallFn(): Promise<string> {
     const cli = await readText("src/cli/index.ts");
     const at = cli.indexOf("async function handleUninstall(");
     expect(at).toBeGreaterThan(-1);
-    return cli.slice(at, at + 4000);
+    return cli.slice(at, at + 6000);
   }
 
   test("the detailed outcome is consumed, not the boolean collapse", async () => {
@@ -123,16 +157,23 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
 
   test("shared teardown runs only when nothing that could still serve is unaccounted for", async () => {
     const fn = await uninstallFn();
-    expect(fn).toContain("if (serviceTeardownProven) {");
-    // Every step that could leave a live proxy behind clears the flag.
-    expect((fn.match(/serviceTeardownProven = false;/g) ?? []).length).toBeGreaterThanOrEqual(4);
-    const restoreAt = fn.indexOf("native Codex restored");
-    const gateAt = fn.indexOf("if (serviceTeardownProven) {");
-    expect(gateAt).toBeLessThan(restoreAt);
+    // The rule itself is exercised by calling it above; this pins the wiring.
+    expect(fn).toContain("if (sharedTeardownAuthorized(observed)) {");
+    // Every step that could leave something serving records what it observed, and the
+    // fields start pessimistic so a step that throws cannot look like a success.
+    expect(fn).toContain("serviceStop: null, proxyAccountedFor: false, serviceRemoved: false");
+    expect(fn).toContain("observed.serviceStop = outcome;");
+    expect((fn.match(/observed\.proxyAccountedFor = true;/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(fn).toContain("observed.serviceRemoved = true;");
+    const gateAt = fn.indexOf("if (sharedTeardownAuthorized(observed)) {");
+    expect(gateAt).toBeLessThan(fn.indexOf("native Codex restored", gateAt));
     // The skip is a failure, not a silent pass: the command must exit nonzero and say what
     // to run once the blocker is resolved.
     expect(fn).toContain('failures.push("native Codex restored", "Grok Build config restored");');
     expect(fn).toContain("Skipping shared teardown");
-    expect(fn).toContain("ocx restore");
+    // Naming only `ocx restore` was wrong: it restores client routing but leaves the
+    // service removal and local cleanup this command had not reached.
+    expect(fn).toContain("rerun 'ocx uninstall'");
+    expect(fn).toContain("interim step");
   });
 });
