@@ -12,12 +12,15 @@ import { spawnSync } from "node:child_process";
  * `runNpmSelfUpdate`, which is not async and cannot import the TypeScript liveness module.
  * A separate Node child does the fetch so the caller keeps its straight-line control flow.
  *
- * Fails OPEN — an unreachable endpoint, a timeout, or an unparseable body all read as "not
- * live". A probe that cannot answer must not block an update on its own uncertainty; the
- * PID and runtime-file gates above it are still in force.
+ * Returns `"live" | "dead" | "unknown"`, and the caller treats `unknown` as a reason to
+ * stop. Fail-open was wrong here: a listener that accepts connections but withholds
+ * `/healthz`, or a probe that times out, is exactly the state where replacing package
+ * files is most dangerous, and "we could not tell" is not evidence the proxy is gone.
+ * Only a refused connection or a definitive non-OpenCodex answer earns `"dead"`.
  */
-export function proxyStillAnswering(port, hostname = "127.0.0.1", timeoutMs = 1500) {
-  if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
+export function probeProxyLiveness(port, hostname = "127.0.0.1", timeoutMs = 1500) {
+  // An unusable port is not an ambiguous probe: there is nothing to ask.
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) return "dead";
   // `node:http` rather than `fetch`: the child inherits a parent whose event loop is
   // blocked on `spawnSync`, and an aborted-before-dispatch fetch reports the same "not
   // live" as a genuinely dead port. A request emitted on the socket cannot be confused
@@ -32,12 +35,17 @@ export function proxyStillAnswering(port, hostname = "127.0.0.1", timeoutMs = 15
     "  res.on('end', () => {",
     "    try {",
     "      const parsed = JSON.parse(body);",
-    "      if (res.statusCode === 200 && parsed && typeof parsed === 'object' && 'pid' in parsed) process.stdout.write('LIVE');",
-    "    } catch { /* not an opencodex healthz body */ }",
+    "      const isOpencodex = parsed && typeof parsed === 'object'",
+    "        && ('pid' in parsed || 'ok' in parsed || 'version' in parsed || 'status' in parsed);",
+    "      if (res.statusCode === 200 && isOpencodex) process.stdout.write('LIVE');",
+    "      else process.stdout.write('DEAD');",
+    "    } catch { process.stdout.write('UNKNOWN'); }",
     "  });",
     "});",
-    "req.on('timeout', () => req.destroy());",
-    "req.on('error', () => {});",
+    "req.on('timeout', () => { process.stdout.write('UNKNOWN'); req.destroy(); });",
+    "// ECONNREFUSED is the one error that proves nothing is listening. Everything else -",
+    "// reset, unreachable host, TLS confusion - leaves the question open.",
+    "req.on('error', err => process.stdout.write(err && err.code === 'ECONNREFUSED' ? 'DEAD' : 'UNKNOWN'));",
   ].join("\n");
   try {
     const probe = spawnSync(
@@ -45,8 +53,13 @@ export function proxyStillAnswering(port, hostname = "127.0.0.1", timeoutMs = 15
       ["-e", script, hostname, String(port), String(timeoutMs)],
       { encoding: "utf8", timeout: timeoutMs + 1500, windowsHide: true },
     );
-    return (probe.stdout ?? "").includes("LIVE");
+    const out = probe.stdout ?? "";
+    if (out.includes("LIVE")) return "live";
+    if (out.includes("DEAD")) return "dead";
+    // A child that produced nothing, was killed by its own timeout, or failed to spawn
+    // leaves the question open rather than answering it.
+    return "unknown";
   } catch {
-    return false;
+    return "unknown";
   }
 }

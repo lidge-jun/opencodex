@@ -10,7 +10,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
-import { proxyStillAnswering } from "../src/update/proxy-liveness-probe.mjs";
+import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -204,6 +204,10 @@ function runNpmSelfUpdate() {
   // Capture listen target before stop clears runtime-port.json (mirrors GUI/CLI update worker).
   // Do not treat a live runtime port of 10100 as "missing" — track whether the read succeeded.
   let bakePort = 10100;
+  // The hostname travels with the port: a proxy bound to ::1 or a specific interface is
+  // invisible to a probe that assumes 127.0.0.1, and "no answer" would then read as
+  // "stopped" for exactly the proxy the probe exists to find.
+  let bakeHostname = "127.0.0.1";
   let sawRuntimePort = false;
   try {
     const rt = JSON.parse(readFileSync(join(configDir(), "runtime-port.json"), "utf8"));
@@ -221,6 +225,7 @@ function runNpmSelfUpdate() {
       }
       if (runtimeLive) {
         bakePort = Math.trunc(rt.port);
+        if (typeof rt?.hostname === "string" && rt.hostname.trim() !== "") bakeHostname = rt.hostname.trim();
         sawRuntimePort = true;
       }
     }
@@ -229,6 +234,7 @@ function runNpmSelfUpdate() {
     try {
       const cfg = JSON.parse(readFileSync(join(configDir(), "config.json"), "utf8"));
       if (Number.isFinite(cfg?.port) && cfg.port > 0 && cfg.port <= 65535) bakePort = Math.trunc(cfg.port);
+      if (typeof cfg?.hostname === "string" && cfg.hostname.trim() !== "") bakeHostname = cfg.hostname.trim();
     } catch { /* keep default */ }
   }
 
@@ -364,7 +370,9 @@ function runNpmSelfUpdate() {
     // Absent PID and runtime files are weak evidence: a crashed-but-listening proxy, or one
     // supervised outside our records, looks identical to a stopped one. Ask the captured
     // endpoint who is there before replacing package files under it.
-    if (proxyStillAnswering(bakePort)) {
+    // `unknown` aborts too: a listener that accepts connections but withholds /healthz, or
+    // a probe that timed out, is exactly the state where replacing files is most dangerous.
+    if (probeProxyLiveness(bakePort, bakeHostname) !== "dead") {
       if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
       console.error(`opencodex: a proxy is still answering on port ${bakePort} after the stop; aborting the update. Run 'ocx stop' and retry.`);
       process.exit(1);

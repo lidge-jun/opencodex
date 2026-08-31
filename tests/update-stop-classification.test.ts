@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
-import { proxyStillAnswering } from "../src/update/proxy-liveness-probe.mjs";
+import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
 
 const repoRoot = join(import.meta.dir, "..");
 const read = (rel: string): string => readFileSync(join(repoRoot, rel), "utf8");
@@ -86,17 +86,42 @@ describe("stop failure classification (#3008)", () => {
     });
 
     try {
-      expect(proxyStillAnswering(port)).toBe(true);
+      expect(probeProxyLiveness(port)).toBe("live");
     } finally {
       listener.kill();
       await new Promise<void>(resolve => listener.once("exit", () => resolve()));
     }
 
-    // Fails open: the port is closed now, and a probe that cannot answer must not block an
-    // update on its own uncertainty - the PID and runtime-file gates are still in force.
-    expect(proxyStillAnswering(port)).toBe(false);
-    expect(proxyStillAnswering(0)).toBe(false);
-    expect(proxyStillAnswering(Number.NaN)).toBe(false);
+    // A refused connection is the one error that proves nothing is listening.
+    expect(probeProxyLiveness(port)).toBe("dead");
+    // Nothing to ask is not ambiguity.
+    expect(probeProxyLiveness(0)).toBe("dead");
+    expect(probeProxyLiveness(Number.NaN)).toBe("dead");
+  });
+
+  test("an unreachable or silent endpoint is unknown, not dead", async () => {
+    // Fail-open was the wrong default: a listener that accepts connections but withholds
+    // /healthz, or a probe that times out, is exactly the state where replacing package
+    // files is most dangerous. "We could not tell" is not evidence the proxy is gone.
+    const listener = spawn(process.execPath, ["-e", [
+      "const net = require('node:net');",
+      // Accepts the connection and never answers, so the request times out.
+      "const server = net.createServer(() => {});",
+      "server.listen(0, '127.0.0.1', () => process.stdout.write(String(server.address().port)));",
+    ].join("\n")], { stdio: ["ignore", "pipe", "ignore"] });
+
+    const port = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("listener did not report a port")), 10_000);
+      listener.stdout.once("data", chunk => { clearTimeout(timer); resolve(Number(String(chunk))); });
+      listener.once("error", error => { clearTimeout(timer); reject(error); });
+    });
+
+    try {
+      expect(probeProxyLiveness(port, "127.0.0.1", 400)).toBe("unknown");
+    } finally {
+      listener.kill();
+      await new Promise<void>(resolve => listener.once("exit", () => resolve()));
+    }
   });
 
   test("the decision expression admits only the history code", () => {

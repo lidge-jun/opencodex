@@ -2998,6 +2998,22 @@ export function stopWindows(): void {
     if (isWindowsSchedulerEndBenign(error)) return;
   }
 }
+
+/**
+ * `stopWindows` for callers that need to know whether it worked.
+ *
+ * The void form swallows a non-benign `/end` failure, which is right for best-effort
+ * teardown and wrong for deciding whether an update may replace files: a scheduler that
+ * refused to stop can respawn the proxy on top of a half-written install (#3008).
+ */
+export function stopWindowsChecked(): boolean {
+  try {
+    schtasks(["/end", "/tn", TASK]);
+    return true;
+  } catch (error) {
+    return isWindowsSchedulerEndBenign(error);
+  }
+}
 function statusWindows(): string { try { return schtasks(["/query", "/tn", TASK]); } catch { return ""; } }
 function statusWindowsXml(): string { try { return schtasks(["/query", "/tn", TASK, "/xml"]); } catch { return ""; } }
 
@@ -3634,12 +3650,16 @@ export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
     // two managers installed, and either one would respawn the proxy after `ocx stop`.
     let stopped = false;
     let failed = false;
-    try {
-      const q = schtasks(["/query", "/tn", TASK]);
-      if (q.includes(TASK)) {
-        try { stopWindows(); stopped = true; } catch { failed = true; }
-      }
-    } catch { /* task not found */ }
+    // `probeWindowsSchedulerTask` is tri-state on purpose: a query that THROWS is not the
+    // same as a task that is absent, and treating it as absent lets a live scheduler
+    // survive a "successful" stop.
+    const probe = probeWindowsSchedulerTask();
+    if (probe.status === "present") {
+      if (stopWindowsChecked()) stopped = true;
+      else failed = true;
+    } else if (probe.status === "unknown") {
+      failed = true;
+    }
     if (statusWinswRaw() !== "nonexistent") {
       try { stopWinswService(); stopped = true; } catch { failed = true; }
     }

@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "./stop-contract.mjs";
 import { proxyIdentityAt } from "../server/proxy-liveness";
+import { probeProxyLiveness } from "./proxy-liveness-probe.mjs";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -278,8 +279,10 @@ export async function runUpdate(): Promise<void> {
     // Absent PID and runtime files are weak evidence: a crashed-but-listening proxy, or one
     // supervised outside our records, looks identical to a stopped one. Ask the captured
     // endpoint who is there before replacing package files under it.
+    // `null` from proxyIdentityAt covers refusal AND timeout, so it is not proof the proxy
+    // is gone. Confirm with the tri-state probe and abort unless it says definitively dead.
     const stillLive = await proxyIdentityAt(capturedListen.port, { hostname: capturedListen.hostname });
-    if (stillLive) {
+    if (stillLive || probeProxyLiveness(capturedListen.port, capturedListen.hostname) !== "dead") {
       if (trayWasRunning) {
         try {
           const { startWindowsTray } = await import("../tray/windows");
