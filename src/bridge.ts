@@ -146,16 +146,20 @@ export { adapterFailureFromMessage } from "./lib/errors";
 /**
  * Build the native `WebSearchAction::Search` payload from the queries that ran.
  *
- * Single query → `{ query, queries: [query] }`. Batch → `{ queries }` with NO singular
- * `query`. Empty → `{ query: "", queries: [""] }`.
+ * Every action carries BOTH keys: `{ query, queries }`, where `query` is the first
+ * member. Empty → `{ query: "", queries: [""] }`.
  *
- * The asymmetry is load-bearing in both directions. DeepSeek's native Responses parser
+ * Carrying both is load-bearing in both directions. DeepSeek's native Responses parser
  * makes `queries` a required field, and Console Go's upstream validator makes `query` a
  * required field — so a replayed `web_search_call` carried in the history of every
  * subsequent turn fails deserialization with `missing field 'queries'` (#930) or 400s
  * with `missing required field 'query'` unless both keys are present. Carrying both keys
  * in every case satisfies both strict parsers; the trade-off is that a multi-query batch
  * loses the "<first> ..." ellipsis in codex-rs and shows the first query as the label.
+ *
+ * That trade is deliberate: a cosmetic label against a conversation that 400s on every
+ * subsequent turn. Do not restore the old batch-omits-`query` shape to win the ellipsis
+ * back — it reopens #3071.
  *
  * This fixes items created from here on. History recorded before it is repaired at the
  * replay boundary by `backfillWebSearchQueries()` in the Responses adapter.

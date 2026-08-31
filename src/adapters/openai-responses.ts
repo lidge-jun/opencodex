@@ -901,13 +901,21 @@ function annotateEmptyResponsesToolOutputs(body: unknown, enabled: boolean): unk
  * Runs on every forward request; with intact pairs it returns the original reference.
  */
 /**
- * Backfill `queries` on a replayed single-query `web_search_call`.
+ * Repair a replayed `web_search_call` action that is missing either key.
  *
  * `webSearchAction()` in the bridge now emits both keys, but that only helps items
  * created after the fix. A conversation that already recorded
- * `{type:"search", query:"..."}` replays that stored item on every subsequent turn, and
- * DeepSeek's native Responses parser requires `queries` — so upgrading alone leaves
- * those threads permanently 400ing with `missing field 'queries'` (#930).
+ * `{type:"search", query:"..."}` or `{type:"search", queries:[...]}` replays that stored
+ * item on every subsequent turn. DeepSeek's native Responses parser requires `queries`
+ * (#930) and Console Go's validator requires `query` (#3071), so upgrading alone leaves
+ * those threads permanently 400ing in one direction or the other. The repair runs both
+ * ways.
+ *
+ * Input items carry a loose schema, so a stored `queries` is not necessarily an array of
+ * strings. A non-string first member is left alone rather than copied into `query`:
+ * writing `query: 123` would satisfy the presence check and still fail the validator this
+ * repair exists to satisfy, while claiming a successful repair. An empty `queries: []`
+ * canonicalizes to the same shape the bridge emits for an empty search.
  *
  * Runs on every Responses request, on both `input` items and the `action` nested inside
  * them. Returns the original reference when nothing needs repair, so the common path
@@ -924,9 +932,19 @@ function backfillWebSearchQueries(body: unknown): unknown {
     // DeepSeek native Responses requires `queries`; Console Go requires `query`.
     const rep: Record<string, unknown> = { ...action };
     let itemChanged = false;
-    if (typeof action.query !== "string" && Array.isArray(action.queries) && action.queries.length > 0) {
-      rep.query = action.queries[0];       // multi-query item recorded before the fix
-      itemChanged = true;
+    if (typeof action.query !== "string" && Array.isArray(action.queries)) {
+      if (action.queries.length === 0) {
+        // An empty array satisfies neither validator. Canonicalize to the empty-search
+        // shape the bridge emits rather than inventing a query.
+        rep.query = "";
+        rep.queries = [""];
+        itemChanged = true;
+      } else if (typeof action.queries[0] === "string") {
+        rep.query = action.queries[0];     // multi-query item recorded before the fix
+        itemChanged = true;
+      }
+      // A non-string first member is left untouched: copying it would produce an invalid
+      // singular field while reporting a successful repair.
     } else if (typeof action.query === "string" && !Array.isArray(action.queries)) {
       rep.queries = [action.query];        // single-query item recorded before the fix
       itemChanged = true;

@@ -1325,6 +1325,36 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(input[2].action).toEqual({ type: "open_page", url: "https://example.test" });
   });
 
+  test("does not forge a singular query from a malformed or empty queries array (#3071)", () => {
+    // Input items use a loose schema, so a stored `queries` need not be an array of
+    // strings. Copying a non-string first member would satisfy the presence check and
+    // still fail the Console Go validator this repair exists to satisfy — a repair that
+    // reports success and produces an invalid shape is worse than no repair.
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "provider-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "provider-model",
+        input: [
+          { type: "web_search_call", id: "ws_num", status: "completed", action: { type: "search", queries: [42] } },
+          { type: "web_search_call", id: "ws_obj", status: "completed", action: { type: "search", queries: [{ q: "x" }] } },
+          { type: "web_search_call", id: "ws_empty", status: "completed", action: { type: "search", queries: [] } },
+        ],
+      },
+    }, meta);
+    const input = (JSON.parse(request.body) as { input: Array<{ action: Record<string, unknown> }> }).input;
+
+    // Left alone: a non-string first member is not a query.
+    expect(input[0].action).toEqual({ type: "search", queries: [42] });
+    expect(input[1].action).toEqual({ type: "search", queries: [{ q: "x" }] });
+    // Canonicalized: an empty array satisfies neither validator, so it becomes the same
+    // empty-search shape the bridge emits rather than being passed through.
+    expect(input[2].action).toEqual({ type: "search", query: "", queries: [""] });
+  });
+
   test("strips invalid type-specific ids from serialized input items", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const encryptedContent = "opaque-openai-encrypted-content";
