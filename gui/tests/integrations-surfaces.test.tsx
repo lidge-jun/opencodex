@@ -359,7 +359,7 @@ test("a foreign edit and an unowned block get different dialog copy", async () =
 test("the dialog's config path can break mid-string, so it cannot overflow a phone", async () => {
   /*
    * The dialog is 370px wide at a 390px viewport and the path it names is a long
-   * unbroken token -- `/Users/jun/.zcode/v2/config.json` and worse. Without a
+   * unbroken token -- a real one is `~/.zcode/v2/config.json` and worse. Without a
    * break opportunity inside the word that token overflows its own container,
    * which is how the one piece of information the user needs (WHICH file) ends up
    * off screen.
@@ -369,10 +369,12 @@ test("the dialog's config path can break mid-string, so it cannot overflow a pho
    * break. Rendered geometry was measured separately at 390px in both themes
    * (dialog 370px wide at left:10, code element 212px, no overflow).
    */
+  // A synthetic home, not a real one: privacy:scan rejects a committed /Users/<name>/.
+  const longPath = "/home/dev/Library/Application Support/SomeVendor/deeply/nested/config.json";
   stateResponse = () => json(status({
     state: "conflict",
     reason: "unowned-key",
-    configPath: "/Users/jun/Library/Application Support/SomeVendor/deeply/nested/config.json",
+    configPath: longPath,
   }));
   await remountClient();
   await act(async () => { buttonByText("Replace")!.click(); });
@@ -382,7 +384,7 @@ test("the dialog's config path can break mid-string, so it cannot overflow a pho
   // A <code> element, not bare text: `.integration-consequence-body code` is what
   // carries `overflow-wrap: anywhere`.
   expect(code).not.toBeNull();
-  expect(code!.textContent).toBe("/Users/jun/Library/Application Support/SomeVendor/deeply/nested/config.json");
+  expect(code!.textContent).toBe(longPath);
 });
 
 test("unsafe locks the switch instead of guessing", async () => {
