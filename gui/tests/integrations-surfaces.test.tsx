@@ -673,6 +673,97 @@ test("a drifted restore asks a second time instead of failing", async () => {
   expect((posts[1] as { confirmDrift?: boolean }).confirmDrift).toBe(true);
 });
 
+/**
+ * #3059: focus had nowhere to go when the restore consumed the row that owned the
+ * trigger. A consumed snapshot re-renders as an `expired` badge with no button, so
+ * the remembered element is detached by the time the dialog closes — and calling
+ * .focus() on a detached node succeeds silently while focus stays on <body>. A
+ * keyboard user ends up at the top of the document with nothing announced.
+ *
+ * The reporter blamed a page unmount, which the tree does not do: refresh() keeps
+ * stale data (client-resource.ts:339-341), so `if (!status)` is cold-load only. The
+ * mechanism is wrong and the experience is real, which is why this is a fix rather
+ * than a close.
+ */
+test("focus returns to a stable region when the restore removed its trigger", async () => {
+  const [{ createRoot }, { LanguageProvider }, { default: RestoreDialog }] = await Promise.all([
+    import("react-dom/client"),
+    import("../src/i18n/provider"),
+    import("../src/pages/integrations/RestoreDialog"),
+  ]);
+
+  // The shape RollbackHistory renders: a region holding the row's trigger.
+  const region = testWindow.document.createElement("section");
+  const trigger = testWindow.document.createElement("button");
+  region.appendChild(trigger);
+  testWindow.document.body.appendChild(region);
+  trigger.focus();
+  expect(testWindow.document.activeElement).toBe(trigger);
+
+  const row = {
+    opId: "op-consumed",
+    clientId: "hermes" as const,
+    kind: "apply" as const,
+    at: "2026-08-02T09:00:00.000Z",
+    configPath: "/tmp/home/.hermes/config.yaml",
+    snapshot: "stored" as const,
+    undoable: false,
+  };
+  await act(async () => {
+    root = createRoot(container);
+    root.render(
+      <LanguageProvider>
+        <RestoreDialog apiBase={apiBase} row={row} onClose={() => {}} onRestored={() => {}} />
+      </LanguageProvider>,
+    );
+  });
+
+  // The restore consumes the snapshot, so the row re-renders without its button.
+  trigger.remove();
+  await act(async () => { root!.unmount(); root = null; });
+
+  expect(testWindow.document.activeElement).toBe(region);
+  expect(testWindow.document.activeElement).not.toBe(testWindow.document.body);
+  region.remove();
+});
+
+test("focus returns to the trigger itself when it survived", async () => {
+  const [{ createRoot }, { LanguageProvider }, { default: RestoreDialog }] = await Promise.all([
+    import("react-dom/client"),
+    import("../src/i18n/provider"),
+    import("../src/pages/integrations/RestoreDialog"),
+  ]);
+
+  const region = testWindow.document.createElement("section");
+  const trigger = testWindow.document.createElement("button");
+  region.appendChild(trigger);
+  testWindow.document.body.appendChild(region);
+  trigger.focus();
+
+  const row = {
+    opId: "op-kept",
+    clientId: "hermes" as const,
+    kind: "apply" as const,
+    at: "2026-08-02T09:00:00.000Z",
+    configPath: "/tmp/home/.hermes/config.yaml",
+    snapshot: "stored" as const,
+    undoable: true,
+  };
+  await act(async () => {
+    root = createRoot(container);
+    root.render(
+      <LanguageProvider>
+        <RestoreDialog apiBase={apiBase} row={row} onClose={() => {}} onRestored={() => {}} />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => { root!.unmount(); root = null; });
+
+  // The fallback must not preempt a trigger that is still there.
+  expect(testWindow.document.activeElement).toBe(trigger);
+  region.remove();
+});
+
 test("a card toggles its own client without a trip to the sub-page", async () => {
   // Same rule as the client page: off means disable, for `stale` too.
   stateResponse = () => json({ clients: [status({ state: "stale" })] });

@@ -32,6 +32,7 @@ export default function RestoreDialog({
   const t = useT();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const restoreFallbackRef = useRef<HTMLElement | null>(null);
   const [drift, setDrift] = useState(false);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -43,12 +44,31 @@ export default function RestoreDialog({
     // focus-restore uses the same tagName check.
     const active = document.activeElement;
     restoreFocusRef.current = active?.tagName === "BUTTON" ? active as HTMLElement : null;
+    // The trigger may not survive the restore. A row whose snapshot is consumed
+    // re-renders as an `expired` badge with no button (RollbackHistory.tsx:44-46),
+    // so the element captured above is detached by the time the cleanup runs and
+    // focus lands on <body> — a keyboard user dropped at the top of the document
+    // with nothing announced (#3059). Remember the enclosing region too, so there
+    // is somewhere to return to that cannot disappear.
+    restoreFallbackRef.current =
+      (active?.closest?.("section, [role='region'], main") as HTMLElement | null) ?? null;
     if (dialog && !dialog.open) dialog.showModal();
     return () => {
       if (dialog?.open) dialog.close();
-      // The row's button is gone from the DOM in the collapsed case, so this is
-      // a best effort: focus returns only if the trigger survived the close.
-      restoreFocusRef.current?.focus?.();
+      // Prefer the trigger; fall back to its region when the restore removed it.
+      // `isConnected` is the check that matters: a detached node accepts .focus()
+      // silently and focus stays on <body>, which is the reported symptom.
+      const trigger = restoreFocusRef.current;
+      if (trigger?.isConnected) {
+        trigger.focus?.();
+        return;
+      }
+      const fallback = restoreFallbackRef.current;
+      if (!fallback?.isConnected) return;
+      // A region is not focusable by default; -1 makes it programmatically
+      // focusable without adding it to the Tab order.
+      if (!fallback.hasAttribute("tabindex")) fallback.setAttribute("tabindex", "-1");
+      fallback.focus?.();
     };
   }, []);
 
