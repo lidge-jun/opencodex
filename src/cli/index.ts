@@ -230,7 +230,13 @@ async function handleStart(options: { block?: boolean } = {}) {
   const present = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (present) assertNotAdminToken(present);
   const requestedPort = parsePortOption();
-  const owner = await findProxyOwnerBeforeJournalRecovery();
+  // Always probe the configured port, even when both state files are absent. A
+  // fallback-port sibling overwrites the pid/runtime records on start and removes
+  // them on its own shutdown, so state-file absence alone proves nothing: without
+  // the probe, `start` shadowed a healthy configured-port proxy on an ephemeral
+  // port and re-pointed Codex/Grok config at that ephemeral copy, and the next
+  // sibling shutdown left no runtime record for discovery at all.
+  const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
   if (owner.live) {
     // Service-wrapper context (opencodex-service.cmd `:loop`): a healthy proxy from
     // ANY source means the requested port is already served. Exit 0 so the wrapper's
