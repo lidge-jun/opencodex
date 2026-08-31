@@ -122,6 +122,80 @@ test("noncanonical pool-required providers use only their configured static cred
   expect(request.headers.session_id).toBeUndefined();
 });
 
+test("noncanonical Responses destinations strip Codex-private item metadata", () => {
+  const rawBody = {
+    model: "openai/gpt-5.6-sol",
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "ping" }],
+        internal_chat_message_metadata_passthrough: { turn_id: "turn-1" },
+      },
+      {
+        type: "function_call",
+        name: "lookup",
+        arguments: "{}",
+        call_id: "call-1",
+        internal_chat_message_metadata_passthrough: { turn_id: "turn-1" },
+      },
+    ],
+  };
+
+  for (const configuredProvider of [
+    {
+      adapter: "openai-responses",
+      baseUrl: "https://gateway.example/v1",
+      authMode: "key" as const,
+      apiKey: "test-key",
+    },
+    {
+      adapter: "openai-responses",
+      baseUrl: "https://gateway.example/v1",
+      authMode: "forward" as const,
+    },
+  ]) {
+    const request = createResponsesPassthroughAdapter(configuredProvider).buildRequest({
+      modelId: rawBody.model,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: rawBody,
+    }, { headers: new Headers() });
+    const body = JSON.parse(request.body) as { input: Record<string, unknown>[] };
+
+    expect(body.input.every(item => !("internal_chat_message_metadata_passthrough" in item)))
+      .toBe(true);
+  }
+
+  expect(rawBody.input.every(item => "internal_chat_message_metadata_passthrough" in item))
+    .toBe(true);
+});
+
+test("canonical ChatGPT forward preserves Codex-private item metadata", () => {
+  const request = createResponsesPassthroughAdapter(provider).buildRequest({
+    modelId: "gpt-5.6-sol",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: {
+      model: "gpt-5.6-sol",
+      input: [{
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "ping" }],
+        internal_chat_message_metadata_passthrough: { turn_id: "turn-1" },
+      }],
+    },
+  }, { headers: new Headers({ authorization: "Bearer token" }) });
+  const body = JSON.parse(request.body) as {
+    input: { internal_chat_message_metadata_passthrough?: unknown }[];
+  };
+
+  expect(body.input[0].internal_chat_message_metadata_passthrough)
+    .toEqual({ turn_id: "turn-1" });
+});
+
 test("passthrough serialized-body observation releases after the request settles", () => {
   const budget = createTranslatorBudget();
   const request = createResponsesPassthroughAdapter(provider).buildRequest({
