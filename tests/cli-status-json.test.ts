@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isConnectionRefused, isUncleanExitEvidence, proxyHealthFailureReason, resolveStatusPid, selectListenTarget } from "../src/cli/status";
+import { findDeadPid } from "./helpers/dead-pid";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -431,7 +432,7 @@ describe("unclean prior exit evidence", () => {
 describe("status reports stale process records end to end", () => {
   const seed = (home: string, opts: { pid?: number; runtime?: boolean; port: number }): void => {
     writeFileSync(join(home, "config.json"), JSON.stringify({ port: opts.port, codexAutoStart: false }), "utf8");
-    const pid = opts.pid ?? (process.pid === 4242 ? 4243 : 4242);
+    const pid = opts.pid ?? findDeadPid();
     if (opts.pid !== 0) writeFileSync(join(home, "ocx.pid"), String(pid), "utf8");
     if (opts.runtime) {
       writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ pid, port: opts.port, hostname: "127.0.0.1" }), "utf8");
@@ -519,7 +520,7 @@ describe("status reports stale process records end to end", () => {
     await new Promise<void>(resolve => { occupied.listen(0, "127.0.0.1", () => resolve()); });
     const occupiedPort = (occupied.address() as AddressInfo).port;
     try {
-      const pid = process.pid === 4242 ? 4243 : 4242;
+      const pid = findDeadPid();
       writeFileSync(join(home, "config.json"), JSON.stringify({ port: occupiedPort, codexAutoStart: false }), "utf8");
       writeFileSync(join(home, "ocx.pid"), String(pid), "utf8");
       writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ pid, port: freePort, hostname: "127.0.0.1" }), "utf8");

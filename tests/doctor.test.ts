@@ -30,6 +30,7 @@ import {
   LOCAL_MANAGEMENT_READ_PATHS,
   verifyLocalManagementReadCapability,
 } from "../src/lib/local-management-capability";
+import { findDeadPid } from "./helpers/dead-pid";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-doctor-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -802,7 +803,7 @@ describe("doctor reclaim wiring (end to end)", () => {
   });
 
   const seedStaleTemp = (): string => {
-    const deadPid = process.pid === 4242 ? 4243 : 4242;
+    const deadPid = findDeadPid();
     const path = join(tempHome, `responses-state.json.ocx.${deadPid}.1.tmp`);
     writeFileSync(path, "abandoned snapshot");
     const old = new Date(Date.now() - 48 * 60 * 60 * 1_000);
@@ -867,7 +868,7 @@ describe("doctor reports an unclean prior proxy exit", () => {
   const deadPid = (): number => {
     const spawned = spawnSync(process.execPath, ["-e", ""], { encoding: "utf8" });
     const pid = spawned.pid;
-    return typeof pid === "number" && pid > 0 ? pid : (process.pid === 4242 ? 4243 : 4242);
+    return typeof pid === "number" && pid > 0 ? pid : findDeadPid();
   };
 
   // Port 9 is the discard port: nothing listens, so the health probe is refused rather

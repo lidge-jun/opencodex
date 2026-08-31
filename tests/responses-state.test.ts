@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { BULK_DURABLE_IO_BUDGET_MS } from "./helpers/test-budget";
+import { findDeadPid } from "./helpers/dead-pid";
 import {
   closeSync,
   existsSync,
@@ -2526,7 +2527,7 @@ describe("Responses previous_response_id state", () => {
 
   test("recovers only old response-state temps owned by dead processes", () => {
     const old = new Date(Date.now() - 60 * 60 * 1_000);
-    const deadPid = process.pid === 4242 ? 4243 : 4242;
+    const deadPid = findDeadPid();
     const stale = join(home, `responses-state.json.ocx.${deadPid}.1.tmp`);
     const live = join(home, "responses-state.json.ocx.5252.2.tmp");
     const current = join(home, `responses-state.json.ocx.${process.pid}.3.tmp`);
@@ -2560,21 +2561,7 @@ describe("Responses previous_response_id state", () => {
     symlinkSync(realSnapshot, join(home, "responses-state.json"));
 
     // This test drives the REAL load path, whose sweep probes live pids with kill(pid, 0).
-    // A hardcoded "dead" pid can collide with a live process on a shared CI runner, so
-    // probe for a genuinely dead one instead (ESRCH). EPERM means alive-but-not-ours.
-    let deadPid = -1;
-    for (let candidate = 4242; candidate < 5242; candidate++) {
-      if (candidate === process.pid) continue;
-      try {
-        process.kill(candidate, 0);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-          deadPid = candidate;
-          break;
-        }
-      }
-    }
-    expect(deadPid).toBeGreaterThan(0);
+    const deadPid = findDeadPid();
     const stranded = join(realDir, `responses-state.json.ocx.${deadPid}.1.tmp`);
     writeFileSync(stranded, "private state");
     const old = new Date(Date.now() - 60 * 60 * 1_000);
@@ -2588,7 +2575,7 @@ describe("Responses previous_response_id state", () => {
   });
 
   test("stale temp recovery is best-effort when unlink fails", () => {
-    const deadPid = process.pid === 4242 ? 4243 : 4242;
+    const deadPid = findDeadPid();
     const path = join(home, `responses-state.json.ocx.${deadPid}.1.tmp`);
     writeFileSync(path, "private state");
     const old = new Date(Date.now() - 60 * 60 * 1_000);
@@ -2653,7 +2640,7 @@ describe("Responses previous_response_id state", () => {
     // schedulePersist site sits downstream of, so a process had its only look BEFORE it
     // wrote anything. Here nothing touches the continuation store at all.
     const old = new Date(Date.now() - 60 * 60 * 1_000);
-    const deadPid = process.pid === 4242 ? 4243 : 4242;
+    const deadPid = findDeadPid();
     const stale = join(home, `responses-state.json.ocx.${deadPid}.1.tmp`);
     const young = join(home, "responses-state.json.ocx.6262.4.tmp");
     for (const path of [stale, young]) writeFileSync(path, "private state");
@@ -2751,7 +2738,7 @@ describe("Responses previous_response_id state", () => {
     // Report and reclaim must share one predicate. If they drift, doctor tells an operator
     // to reclaim files it will then refuse to touch (or vice versa).
     const old = new Date(Date.now() - 60 * 60 * 1_000);
-    const deadPid = process.pid === 4242 ? 4243 : 4242;
+    const deadPid = findDeadPid();
     const stale = join(home, `responses-state.json.ocx.${deadPid}.1.tmp`);
     const live = join(home, "responses-state.json.ocx.5252.2.tmp");
     const young = join(home, "responses-state.json.ocx.6262.3.tmp");
