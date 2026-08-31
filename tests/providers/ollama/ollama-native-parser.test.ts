@@ -376,6 +376,41 @@ describe("ollama-native — tool calls", () => {
     expect(both.filter(e => e.type === "tool_call_start")).toHaveLength(2);
   });
 
+  test("rejects oversized tool names and too many pending calls", async () => {
+    const adapter = createOllamaNativeAdapter(provider());
+    const oversized = await collect(adapter, ndjsonResponse([
+      frame({
+        role: "assistant",
+        tool_calls: [{ index: 0, function: { name: "x".repeat(1025), arguments: {} } }],
+      }, false),
+    ]));
+    expect(oversized.at(-1)).toMatchObject({ type: "error", code: "invalid_ollama_native_payload" });
+    expect((oversized.at(-1) as { message?: string }).message).toContain("name exceeded 1024 bytes");
+
+    const calls = Array.from({ length: 129 }, (_, index) => ({
+      index,
+      function: { name: `tool_${index}`, arguments: {} },
+    }));
+    const excessive = await collect(adapter, ndjsonResponse([
+      frame({ role: "assistant", tool_calls: calls }, false),
+    ]));
+    expect(excessive.at(-1)).toMatchObject({ type: "error", code: "invalid_ollama_native_payload" });
+    expect((excessive.at(-1) as { message?: string }).message).toContain("exceeded 128 pending tool calls");
+  });
+
+  test("charges retained tool names to the aggregate translator budget", async () => {
+    const adapter = createOllamaNativeAdapter(provider());
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 2500 });
+    const frames = Array.from({ length: 3 }, (_, index) => frame({
+      role: "assistant",
+      tool_calls: [{ function: { index, name: `${index}${"n".repeat(699)}`, arguments: {} } }],
+    }, false));
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(ndjsonResponse(frames), budget)) events.push(event);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "translation_buffer_limit" });
+    expect(budget.snapshot().overflows).toBe(1);
+  });
+
   test("tool-result replay pairs a toolResult message with its call id", () => {
     const adapter = createOllamaNativeAdapter(provider());
     const built = adapter.buildRequest(parsedWith([
