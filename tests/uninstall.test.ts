@@ -95,52 +95,84 @@ describe("full uninstall command", () => {
     expect(uninstallBody).toContain('runStep("proxy stopped"');
     expect(uninstallBody).toContain('runStep("service removed"');
     expect(uninstallBody).toContain("await stopProxy(pid);");
-    expect(uninstallBody).toContain("uninstallServiceIfInstalled()");
+    expect(uninstallBody).toContain("uninstallServiceDetailed()");
     expect(uninstallBody.indexOf('runStep("service stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("proxy stopped"'));
     expect(uninstallBody.indexOf('runStep("proxy stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("service removed"'));
-    expect(uninstallBody.indexOf("await stopProxy(pid);")).toBeLessThan(uninstallBody.indexOf("uninstallServiceIfInstalled()"));
+    expect(uninstallBody.indexOf("await stopProxy(pid);")).toBeLessThan(uninstallBody.indexOf("uninstallServiceDetailed()"));
   });
 });
 describe("uninstall gates shared teardown on a proven service stop", () => {
   test("the authorization rule, exercised for every failure permutation", async () => {
     const { sharedTeardownAuthorized } = await import("../src/cli/uninstall-plan");
-    const base = { serviceStop: "stopped" as const, proxyAccountedFor: true, serviceRemoved: true };
+    const base = {
+      serviceStop: "stopped" as const,
+      proxyProvenDown: true,
+      serviceRemoval: "removed" as const,
+      respawnWindowVerified: false,
+    };
     expect(sharedTeardownAuthorized(base)).toBe(true);
     expect(sharedTeardownAuthorized({ ...base, serviceStop: "absent" })).toBe(true);
-    // The manager is removed next, so a wrapper that could have respawned cannot.
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable" })).toBe(true);
+    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "absent" })).toBe(true);
+    // Removing the registration does not prove an already-running wrapper died; killing it
+    // is best-effort (#764), so the restart window has to be polled first.
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable" })).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable", respawnWindowVerified: true })).toBe(true);
     // A manager that refused to stop, or one we could not read, may still be running.
     expect(sharedTeardownAuthorized({ ...base, serviceStop: "failed" })).toBe(false);
     expect(sharedTeardownAuthorized({ ...base, serviceStop: "state-unknown" })).toBe(false);
     // The step itself threw: we know nothing.
     expect(sharedTeardownAuthorized({ ...base, serviceStop: null })).toBe(false);
-    // A proxy that could not be stopped — including a live orphan with no pid — blocks it.
-    expect(sharedTeardownAuthorized({ ...base, proxyAccountedFor: false })).toBe(false);
-    // So does a manager that could not be removed: it would respawn afterwards.
-    expect(sharedTeardownAuthorized({ ...base, serviceRemoved: false })).toBe(false);
+    // A proxy that could not be PROVEN down — a live orphan with no pid, or an endpoint
+    // that would not answer — blocks it. A findLiveProxy miss is not proof.
+    expect(sharedTeardownAuthorized({ ...base, proxyProvenDown: false })).toBe(false);
+    // A removal that failed used to look like absence on darwin and linux.
+    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "failed" })).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: null })).toBe(false);
+  });
+
+  test("a removal failure is distinguishable from nothing being installed", async () => {
+    const { setUninstallServiceHooksForTests, uninstallServiceDetailed } = await import("../src/service");
+    // Windows is the platform whose hooks are injectable; the darwin/linux catch arms that
+    // returned the same false as absence are now typed outcomes rather than a boolean.
+    setUninstallServiceHooksForTests({
+      platform: "win32",
+      assertEnvironment: () => {},
+      probeWindowsTask: () => ({ status: "absent" }) as never,
+      uninstallWindowsTask: () => {},
+      nativeStatus: () => "nonexistent",
+      uninstallNative: () => {},
+      removeInstallState: () => {},
+    } as never);
+    expect(uninstallServiceDetailed()).toBe("absent");
+
+    const serviceSource = await readText("src/service.ts");
+    // The darwin and linux arms return "failed", not the absence value.
+    expect(serviceSource).toContain('try { uninstallLaunchd(); removeServiceInstallState(); return "removed"; } catch { return "failed"; }');
+    expect(serviceSource).toContain('try { unlinkSync(unitPath()); removeServiceInstallState(); return "removed"; } catch { return "failed"; }');
   });
 
   test("a live orphan with no pid file blocks the teardown", async () => {
     const cli = await readText("src/cli/index.ts");
     const at = cli.indexOf("async function handleUninstall(");
-    const fn = cli.slice(at, at + 6000);
+    const fn = cli.slice(at, at + 9000);
     // A missing pid file is not proof that nothing is serving — the same discovery
     // `ocx stop` performs. Without it, uninstall restored shared config under a live proxy.
     expect(fn).toContain("const live = await findLiveProxy();");
-    expect(fn).toContain("if (!live) { observed.proxyAccountedFor = true; return false; }");
+    expect(fn).toContain("observed.proxyProvenDown = await proxyEndpointProvenDown();");
     expect(fn).toContain("no process id could be resolved for it");
-    // The orphan-with-no-pid branch THROWS, so `proxyAccountedFor` stays false and the
+    // The orphan-with-no-pid branch THROWS, so `proxyProvenDown` stays false and the
     // authorization rule refuses the shared teardown.
     const orphanBranch = fn.slice(fn.indexOf("const live = await findLiveProxy();"), fn.indexOf("const live = await findLiveProxy();") + 600);
     expect(orphanBranch).toContain("throw new Error(");
-    expect(orphanBranch.indexOf("throw new Error(")).toBeLessThan(orphanBranch.indexOf("observed.proxyAccountedFor = true;", orphanBranch.indexOf("throw new Error(")));
+    // A findLiveProxy miss is not proof either: it goes through the tri-state probe first.
+    expect(orphanBranch).toContain("could not be confirmed down either");
   });
 
   async function uninstallFn(): Promise<string> {
     const cli = await readText("src/cli/index.ts");
     const at = cli.indexOf("async function handleUninstall(");
     expect(at).toBeGreaterThan(-1);
-    return cli.slice(at, at + 6000);
+    return cli.slice(at, at + 9000);
   }
 
   test("the detailed outcome is consumed, not the boolean collapse", async () => {
@@ -161,10 +193,14 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(fn).toContain("if (sharedTeardownAuthorized(observed)) {");
     // Every step that could leave something serving records what it observed, and the
     // fields start pessimistic so a step that throws cannot look like a success.
-    expect(fn).toContain("serviceStop: null, proxyAccountedFor: false, serviceRemoved: false");
+    expect(fn).toContain("serviceStop: null,");
+    expect(fn).toContain("proxyProvenDown: false,");
+    expect(fn).toContain("serviceRemoval: null,");
+    expect(fn).toContain("respawnWindowVerified: false,");
     expect(fn).toContain("observed.serviceStop = outcome;");
-    expect((fn.match(/observed\.proxyAccountedFor = true;/g) ?? []).length).toBeGreaterThanOrEqual(3);
-    expect(fn).toContain("observed.serviceRemoved = true;");
+    expect(fn).toContain("observed.serviceRemoval = outcome;");
+    expect(fn).toContain('if (observed.serviceStop === "stopped-respawnable")');
+    expect(fn).toContain("observed.respawnWindowVerified = true;");
     const gateAt = fn.indexOf("if (sharedTeardownAuthorized(observed)) {");
     expect(gateAt).toBeLessThan(fn.indexOf("native Codex restored", gateAt));
     // The skip is a failure, not a silent pass: the command must exit nonzero and say what

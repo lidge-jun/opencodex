@@ -3775,13 +3775,22 @@ export function setUninstallServiceHooksForTests(hooks: UninstallServiceHooksFor
  * service or scheduler task that cannot be removed throws so the caller cannot erase state and
  * report success.
  */
-export function uninstallServiceIfInstalled(): boolean {
+/**
+ * Outcome of removing an installed manager.
+ *
+ * `false` used to mean both "nothing was installed" and "removal failed" on darwin and
+ * linux, so a failed removal was reported as absence and authorized the shared teardown
+ * while the service assets were still there (#3008).
+ */
+export type ServiceUninstallOutcome = "absent" | "removed" | "failed";
+
+export function uninstallServiceDetailed(): ServiceUninstallOutcome {
   const hooks = uninstallServiceHooksForTests;
   (hooks?.assertEnvironment ?? assertServiceEnvironmentMatchesInstall)();
   const platform = hooks?.platform ?? process.platform;
   if (platform === "darwin") {
     if (existsSync(plistPath())) {
-      try { uninstallLaunchd(); removeServiceInstallState(); return true; } catch { return false; }
+      try { uninstallLaunchd(); removeServiceInstallState(); return "removed"; } catch { return "failed"; }
     }
   } else if (platform === "win32") {
     let removed = false;
@@ -3797,13 +3806,20 @@ export function uninstallServiceIfInstalled(): boolean {
       (hooks?.uninstallNative ?? uninstallWinswService)();
       removed = true;
     }
-    if (removed) { (hooks?.removeInstallState ?? removeServiceInstallState)(); return true; }
+    if (removed) { (hooks?.removeInstallState ?? removeServiceInstallState)(); return "removed"; }
   } else if (platform === "linux" && existsSync(unitPath())) {
-    try { uninstallSystemd(); removeServiceInstallState(); return true; } catch {
-      try { unlinkSync(unitPath()); removeServiceInstallState(); return true; } catch { return false; }
+    try { uninstallSystemd(); removeServiceInstallState(); return "removed"; } catch {
+      try { unlinkSync(unitPath()); removeServiceInstallState(); return "removed"; } catch { return "failed"; }
     }
   }
-  return false;
+  return "absent";
+}
+
+/** Boolean form for callers that only distinguish "something was removed". */
+export function uninstallServiceIfInstalled(): boolean {
+  const outcome = uninstallServiceDetailed();
+  if (outcome === "failed") throw new Error("the installed service could not be removed");
+  return outcome === "removed";
 }
 
 /** True if a background service (launchd/systemd/Task Scheduler) is installed. */

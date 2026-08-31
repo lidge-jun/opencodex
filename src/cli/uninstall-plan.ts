@@ -14,17 +14,32 @@
 export type UninstallObservation = {
   /** Detailed service-stop outcome, or null when the step threw. */
   serviceStop: "absent" | "stopped" | "stopped-respawnable" | "failed" | "state-unknown" | null;
-  /** Did the proxy step finish with nothing left running that we know of? */
-  proxyAccountedFor: boolean;
-  /** Did service removal complete (or find nothing to remove)? */
-  serviceRemoved: boolean;
+  /**
+   * Did the proxy step PROVE nothing is serving?
+   *
+   * A `findLiveProxy` miss is not that proof: it collapses a timeout and a transport
+   * failure into the same null as a dead endpoint, so an unresponsive proxy read as absent.
+   */
+  proxyProvenDown: boolean;
+  /** Service removal outcome, or null when the step threw. */
+  serviceRemoval: "absent" | "removed" | "failed" | null;
+  /**
+   * For a Task Scheduler backend: was the restart window verified AFTER removal?
+   *
+   * Deleting the registration does not prove an already-running `:loop` wrapper died —
+   * killing it is best-effort (#764). `ocx stop` polls across the window; uninstall has
+   * to do the same before it may take shared config down.
+   */
+  respawnWindowVerified: boolean;
 };
 
 export function sharedTeardownAuthorized(o: UninstallObservation): boolean {
   if (o.serviceStop === null) return false;
   // "absent" and a clean stop are the only service states that prove nothing is managing
-  // the proxy. `stopped-respawnable` is fine here because uninstall REMOVES the manager
-  // next, which is what makes the wrapper unable to come back.
+  // the proxy.
   if (o.serviceStop === "failed" || o.serviceStop === "state-unknown") return false;
-  return o.proxyAccountedFor && o.serviceRemoved;
+  // Removing the registration is not the same as proving the running wrapper is gone.
+  if (o.serviceStop === "stopped-respawnable" && !o.respawnWindowVerified) return false;
+  if (o.serviceRemoval === null || o.serviceRemoval === "failed") return false;
+  return o.proxyProvenDown;
 }

@@ -56,7 +56,7 @@ import { runReady, type ReadyArgs } from "./ready";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
-import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled } from "../service";
+import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
@@ -1039,6 +1039,19 @@ async function handleStop() {
 }
 
 async function handleUninstall() {
+  /** Definitive "nothing is answering" on the endpoint this home would serve. */
+  const proxyEndpointProvenDown = async (): Promise<boolean> => {
+    try {
+      const { probeProxyLiveness } = await import("../update/proxy-liveness-probe.mjs");
+      const runtime = readRuntimePort();
+      const config = loadConfig();
+      const port = runtime?.port ?? (typeof config.port === "number" && config.port > 0 ? config.port : 10100);
+      const hostname = runtime?.hostname ?? config.hostname ?? "127.0.0.1";
+      return probeProxyLiveness(port, hostname) === "dead";
+    } catch {
+      return false;
+    }
+  };
   const failures: string[] = [];
 
   const runStep = async (label: string, step: () => void | boolean | Promise<void | boolean>) => {
@@ -1058,7 +1071,12 @@ async function handleUninstall() {
   // config underneath it (#3008).
   // The authorization rule lives in `uninstall-plan` so it can be exercised for every
   // failure permutation by calling it, rather than by reading this function's source.
-  const observed: UninstallObservation = { serviceStop: null, proxyAccountedFor: false, serviceRemoved: false };
+  const observed: UninstallObservation = {
+    serviceStop: null,
+    proxyProvenDown: false,
+    serviceRemoval: null,
+    respawnWindowVerified: false,
+  };
   await runStep("service stopped", () => {
     const outcome = stopServiceIfInstalledDetailed();
     observed.serviceStop = outcome;
@@ -1080,26 +1098,50 @@ async function handleUninstall() {
       // back to identity-checked discovery. Without this, uninstall restored shared config
       // and reported success while that proxy kept running (#3008).
       const live = await findLiveProxy();
-      if (!live) { observed.proxyAccountedFor = true; return false; }
+      if (!live) {
+        // A miss is not proof: `findLiveProxy` collapses a timeout and a transport failure
+        // into the same null as a dead endpoint. Ask the tri-state probe, which only says
+        // "dead" for a refused connection or a definitive non-OpenCodex answer (#3008).
+        observed.proxyProvenDown = await proxyEndpointProvenDown();
+        if (!observed.proxyProvenDown) {
+          throw new Error("no proxy could be found, but its endpoint could not be confirmed down either; confirm nothing is serving, then rerun");
+        }
+        return false;
+      }
       if (!live.pid) {
         throw new Error(`a proxy is answering on port ${live.port} but no process id could be resolved for it; stop it from the home that started it, then rerun`);
       }
       await stopProxy(live.pid);
-      observed.proxyAccountedFor = true;
+      observed.proxyProvenDown = true;
       return true;
     }
     await stopProxy(pid);
     removePid(pid);
     removeRuntimePort(pid);
-    observed.proxyAccountedFor = true;
+    observed.proxyProvenDown = true;
     return true;
   });
 
   await runStep("service removed", () => {
-    const removed = uninstallServiceIfInstalled();
-    observed.serviceRemoved = true;
-    return removed;
+    const outcome = uninstallServiceDetailed();
+    observed.serviceRemoval = outcome;
+    // "absent" and "removed" are both fine; a failure is not, and it used to look like
+    // absence on darwin and linux.
+    if (outcome === "failed") throw new Error("the installed service could not be removed");
+    return outcome === "removed";
   });
+
+  // Only Task Scheduler can respawn through a surviving wrapper, and removing the
+  // registration does not prove the running one died. Poll the same window `ocx stop` does
+  // before shared config is allowed down (#764, #3008).
+  if (observed.serviceStop === "stopped-respawnable") {
+    await runStep("respawn window verified", async () => {
+      const survivor = await proxyStillLiveAfterStop({ canRespawn: true });
+      if (survivor) throw new Error(`a proxy is still listening on port ${survivor.port} after the service was removed; it is being respawned`);
+      observed.respawnWindowVerified = true;
+      return true;
+    });
+  }
 
   if (process.platform === "win32") {
     await runStep("Windows tray removed", async () => {
