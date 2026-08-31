@@ -750,3 +750,29 @@ test("a populated overview journal collapses instead of flooding the page", asyn
   await act(async () => { details.open = true; });
   expect(container.querySelectorAll(".integration-history-older .integration-history-row").length).toBeGreaterThan(1);
 });
+
+/*
+ * Adding a file client means editing three hand-maintained lists that no type
+ * relates to each other: CLIENTS in client-config-clients.ts, INTEGRATION_TABS,
+ * and FILE_CLIENTS. Miss one and the client half-ships -- it exports from the
+ * API tab but has no Integrations tab to toggle from, or it owns a tab that
+ * renders a page for a client the file surface does not recognize. Both compile,
+ * and both look complete from whichever half you happen to open.
+ *
+ * Aside is the reason this exists: it needed all three, and nothing would have
+ * failed if it had landed in two.
+ */
+test("every export client has both an Integrations tab and a file-surface entry", async () => {
+  const { CLIENTS } = await import("../src/components/apikeys-workspace/client-config-clients");
+  const { TABS, FILE_CLIENTS } = await import("../src/pages/integrations/integration-tabs");
+
+  const tabIds = new Set(TABS.map(tab => tab.id as string));
+  const missing = CLIENTS.filter(id => !tabIds.has(id) || !FILE_CLIENTS.has(id as never));
+  expect(missing).toEqual([]);
+
+  // And no tab claims a client that does not exist, which would render a page
+  // for an id the config surface cannot answer for.
+  const clientIds = new Set<string>(CLIENTS);
+  const orphaned = [...FILE_CLIENTS].filter(id => !clientIds.has(id));
+  expect(orphaned).toEqual([]);
+});
