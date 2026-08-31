@@ -121,14 +121,31 @@ const commandRunners: Record<string, CommandRunner> = {
     if (desired.status === "unchanged") {
       const { classifyNativeRoutedResidue } = await import("../codex/native-residue");
       if (classifyNativeRoutedResidue().kind === "clean") {
-        const alreadyOff = "Codex integration is already OFF and native; no Codex files changed.";
+        // The Codex half being a no-op says nothing about the Grok half. Returning here
+        // without stripping the fence meant `ocx restore` could report success while Grok
+        // still pointed at a stopped proxy — and the deferred-teardown recovery path
+        // (#3008) tells operators to run exactly this command before deleting a receipt,
+        // so the incomplete teardown would be signed off and the obligation erased.
+        let grokNote = "";
+        let grokCode = 0;
+        try {
+          const g = stripGrokConfig();
+          if (g.changed) grokNote = ` ${g.message}`;
+          else if (!g.ok) { grokNote = ` Grok config cleanup failed: ${g.message}`; grokCode = 1; }
+        } catch (err) {
+          grokNote = ` Grok config cleanup failed: ${err instanceof Error ? err.message : String(err)}`;
+          grokCode = 1;
+        }
+        const alreadyOff = `Codex integration is already OFF and native; no Codex files changed.${grokNote}`;
         if (restoreJson) {
           const { skippedRestoreEnvelope } = await import("../codex/inject");
-          console.log(JSON.stringify(skippedRestoreEnvelope(true, alreadyOff)));
-        } else {
+          console.log(JSON.stringify(skippedRestoreEnvelope(grokCode === 0, alreadyOff)));
+        } else if (grokCode === 0) {
           console.log(alreadyOff);
+        } else {
+          console.error(alreadyOff);
         }
-        return 0;
+        return grokCode;
       }
     }
     let r: { success: boolean; message: string };
