@@ -531,6 +531,7 @@ const providerConfigSchema = z.object({
   retryOn429: retryOn429PolicySchema.optional(),
   transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
+  codexNativeContextMode: z.enum(["default", "1m"]).optional(),
   // Validated rather than passed through: this schema ends in `.passthrough()`, so an
   // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be
   // accepted, persisted, and then silently resolved to the `code_mode_only` default — the
@@ -1255,6 +1256,20 @@ const configSchema = z.object({
           code: "custom",
           path: ["providers", redactSecretString(name), "codexAccountMode"],
           message: "codexAccountMode is valid only on the canonical built-in openai provider",
+        });
+      }
+    }
+    if (Object.hasOwn(provider, "codexNativeContextMode") && provider.codexNativeContextMode !== undefined) {
+      const canonicalOpenAiShape = name === "openai"
+        && provider.adapter === "openai-responses"
+        && (provider as { authMode?: unknown }).authMode === "forward"
+        && typeof provider.baseUrl === "string"
+        && provider.baseUrl.replace(/\/+$/, "") === "https://chatgpt.com/backend-api/codex";
+      if (!canonicalOpenAiShape) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["providers", redactSecretString(name), "codexNativeContextMode"],
+          message: "codexNativeContextMode is valid only on the canonical built-in openai provider",
         });
       }
     }

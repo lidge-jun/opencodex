@@ -26,6 +26,7 @@ import { redactSecretString } from "../lib/redact";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { modelAutoCompactTokenLimitsConfigError } from "../providers/auto-compact-budget";
 import { vercelGatewayRoutingConfigError } from "../providers/vercel-gateway-routing";
@@ -565,6 +566,12 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     }
     if (seed) seed.codexAccountMode = raw.codexAccountMode;
     const canonicalCandidate = { ...raw };
+    if (Object.hasOwn(raw, "codexNativeContextMode")
+      && raw.codexNativeContextMode !== "default"
+      && raw.codexNativeContextMode !== "1m") {
+      return "provider openai codexNativeContextMode must be default or 1m";
+    }
+    delete canonicalCandidate.codexNativeContextMode;
     delete canonicalCandidate.responsesSnapshotRepair;
     // modelCosts is a user-owned display overlay, not part of the canonical
     // forward seed; it is validated separately below (providerModelCostsConfigError).
@@ -591,8 +598,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;
     }
-  } else if (Object.hasOwn(raw, "codexAccountMode")) {
-    return `provider ${name} must not include codexAccountMode`;
+  } else if (Object.hasOwn(raw, "codexAccountMode") || Object.hasOwn(raw, "codexNativeContextMode")) {
+    return `provider ${name} must not include Codex-native settings`;
   }
   const typed = provider as unknown as OcxProviderConfig;
   const baseUrlError = providerBaseUrlConfigError(typed.baseUrl);
@@ -780,6 +787,9 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     if (typeof registryNote === "string" && registryNote.trim()) dto.note = registryNote;
     const codexAccountMode = providerCodexAccountMode(name, provider);
     if (codexAccountMode) dto.codexAccountMode = codexAccountMode;
+    if (name === "openai" && isCanonicalOpenAiForwardProvider(provider)) {
+      dto.codexNativeContextMode = provider.codexNativeContextMode ?? "default";
+    }
     providers[name] = dto;
   }
   return {

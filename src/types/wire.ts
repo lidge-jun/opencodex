@@ -25,6 +25,9 @@ export type ReasoningSummaryDelivery = typeof REASONING_SUMMARY_DELIVERY_VALUES[
 /** Trusted runtime ownership for Codex-account credentials. Never persisted per provider. */
 export type CodexAccountMode = "direct" | "pool";
 
+/** User-selected context policy for canonical Codex-login GPT-5.6 models. */
+export type CodexNativeContextMode = "default" | "1m";
+
 export const OPENAI_PROVIDER_TIER_VERSION = 2 as const;
 
 /**

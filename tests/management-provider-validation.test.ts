@@ -2914,6 +2914,97 @@ describe("provider management validation", () => {
     });
   });
 
+  test("native GPT-5.6 context mode persists only after full sync and rolls back on failure", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 10100,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect, codexNativeContextMode: "default" },
+        extra: { adapter: "openai-chat", baseUrl: "https://extra.example.test/v1" },
+      },
+    };
+    saveConfig(liveConfig);
+    const seenModes: string[] = [];
+    let failNext = false;
+    const deps = {
+      createManagementConvergeCodex: catalogConvergenceFactory(),
+      syncModelsToCodex: async (_port: number | undefined, current: OcxConfig) => {
+        seenModes.push(current.providers.openai?.codexNativeContextMode ?? "default");
+        if (failNext) {
+          failNext = false;
+          return {
+            status: "applied",
+            ok: false,
+            added: 0,
+            catalogPath: null,
+            catalogExists: false,
+            catalogWritten: false,
+            cacheSynced: false,
+            message: "synthetic sync failure",
+          } as const;
+        }
+        return {
+          status: "applied",
+          ok: true,
+          added: 0,
+          catalogPath: null,
+          catalogExists: true,
+          catalogWritten: true,
+          cacheSynced: true,
+          message: "synced",
+        } as const;
+      },
+    };
+    const patch = async (name: string, mode: unknown) => {
+      const req = new Request(`http://127.0.0.1/api/providers?name=${name}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ codexNativeContextMode: mode }),
+      });
+      return handleManagementAPI(req, new URL(req.url), liveConfig, deps);
+    };
+
+    expect((await patch("extra", "1m"))?.status).toBe(400);
+    expect((await patch("openai", "invalid"))?.status).toBe(400);
+    const enabled = await patch("openai", "1m");
+    expect(enabled?.status).toBe(200);
+    expect(await enabled?.json()).toMatchObject({
+      success: true,
+      codexNativeContextMode: "1m",
+    });
+    expect(liveConfig.providers.openai?.codexNativeContextMode).toBe("1m");
+    expect(loadConfig().providers.openai?.codexNativeContextMode).toBe("1m");
+
+    const listedRequest = new Request("http://127.0.0.1/api/providers");
+    const listedResponse = await handleManagementAPI(
+      listedRequest,
+      new URL(listedRequest.url),
+      liveConfig,
+      deps,
+    );
+    const listed = await listedResponse!.json() as Array<Record<string, unknown>>;
+    expect(listed.find(row => row.name === "openai")?.codexNativeContextMode).toBe("1m");
+    expect(listed.find(row => row.name === "extra")).not.toHaveProperty("codexNativeContextMode");
+
+    failNext = true;
+    const failed = await patch("openai", "default");
+    expect(failed?.status).toBe(500);
+    expect(await failed?.json()).toMatchObject({
+      error: "synthetic sync failure",
+      codexNativeContextMode: "1m",
+      rolledBack: true,
+      rollbackSyncOk: true,
+    });
+    expect(liveConfig.providers.openai?.codexNativeContextMode).toBe("1m");
+    expect(loadConfig().providers.openai?.codexNativeContextMode).toBe("1m");
+    expect(seenModes).toEqual(["1m", "default", "1m"]);
+  });
+
   test("xAI Responses opt-in reports mixed state and atomically normalizes both model adapters", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

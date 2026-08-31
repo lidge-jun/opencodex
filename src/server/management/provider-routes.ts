@@ -473,6 +473,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
+      ...(name === "openai" && isCanonicalOpenAiForwardProvider(p)
+        ? { codexNativeContextMode: p.codexNativeContextMode ?? "default" }
+        : {}),
       ...(name === "xai" ? { xaiResponsesOptInState: xaiResponsesOptInState(p) } : {}),
       discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
       ...(name === "openai" && isCanonicalOpenAiForwardProvider(p)
@@ -678,10 +681,92 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (!isPlainRecord(rawBody)) return jsonResponse({ error: "provider patch body must be a plain object" }, 400);
     const keys = Object.keys(rawBody);
     const hasMode = Object.hasOwn(rawBody, "codexAccountMode");
+    const hasNativeContextMode = Object.hasOwn(rawBody, "codexNativeContextMode");
     const hasSetDefault = Object.hasOwn(rawBody, "setDefault");
     const canonicalBudgetOnly = name === "openai"
       && keys.length === 1
       && keys[0] === "modelAutoCompactTokenLimits";
+
+    if (hasNativeContextMode) {
+      if (keys.length !== 1) {
+        return jsonResponse({ error: "codexNativeContextMode cannot be combined with other patch fields" }, 400);
+      }
+      if (name !== "openai") {
+        return jsonResponse({ error: "codexNativeContextMode is valid only for provider openai" }, 400);
+      }
+      const mode = rawBody.codexNativeContextMode;
+      if (mode !== "default" && mode !== "1m") {
+        return jsonResponse({ error: "codexNativeContextMode must be default or 1m" }, 400);
+      }
+      const provider = config.providers.openai;
+      if (!provider || !isCanonicalOpenAiForwardProvider(provider)) {
+        return jsonResponse({ error: "provider openai must be the canonical built-in provider" }, 400);
+      }
+
+      const previousPresent = Object.hasOwn(provider, "codexNativeContextMode");
+      const previousMode = provider.codexNativeContextMode;
+      const save = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
+      withConfigMutationLockSync(() => {
+        config.providers.openai = { ...config.providers.openai!, codexNativeContextMode: mode };
+        save(config);
+      });
+      reconcileLiveStateStores();
+      const { clearModelCache } = await import("../../codex/model-cache");
+      clearModelCache("openai");
+
+      const sync = deps.syncModelsToCodex ?? (await import("../../codex/sync")).syncModelsToCodex;
+      const runtimePort = deps.readRuntimePort?.(process.pid)?.port ?? config.port;
+      let result: Awaited<ReturnType<typeof sync>>;
+      try {
+        result = await sync(runtimePort, config, null);
+      } catch {
+        result = {
+          status: "applied",
+          ok: false,
+          added: 0,
+          catalogPath: null,
+          catalogExists: false,
+          catalogWritten: false,
+          cacheSynced: false,
+          message: "Codex sync failed before the GPT-5.6 context mode could be applied.",
+        };
+      }
+      if (result.status === "applied" && result.ok) {
+        const { attachStaleAppServerHint } = await import("../../codex/app-server-processes");
+        return jsonResponse({
+          success: true,
+          name: "openai",
+          codexNativeContextMode: mode,
+          sync: attachStaleAppServerHint(result),
+        });
+      }
+
+      withConfigMutationLockSync(() => {
+        const current = { ...config.providers.openai! };
+        if (previousPresent) current.codexNativeContextMode = previousMode;
+        else delete current.codexNativeContextMode;
+        config.providers.openai = current;
+        save(config);
+      });
+      reconcileLiveStateStores();
+      clearModelCache("openai");
+      let rollbackOk = false;
+      try {
+        const rollback = await sync(runtimePort, config, null);
+        rollbackOk = rollback.status === "applied" && rollback.ok;
+      } catch {
+        rollbackOk = false;
+      }
+      const status = result.status === "refused" || result.status === "skipped" || result.status === "catalog-only"
+        ? 409
+        : 500;
+      return jsonResponse({
+        error: result.message,
+        codexNativeContextMode: previousMode ?? "default",
+        rolledBack: true,
+        rollbackSyncOk: rollbackOk,
+      }, status);
+    }
 
     // codexAccountMode keeps its dedicated side-effect path (quota cache clear, thread map
     // clear, pool prime) and is mutually exclusive with every other patch field.

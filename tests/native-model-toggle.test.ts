@@ -175,6 +175,85 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(entry.auto_compact_token_limit).toBe(120_000);
   });
 
+  test("official 1M mode raises only the exact native GPT-5.6 catalog maximum", () => {
+    const limits = nativeContextLimits({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexNativeContextMode: "1m",
+        },
+      },
+    } as never);
+    for (const slug of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+      const entry: Record<string, unknown> = {
+        slug,
+        context_window: 272_000,
+        max_context_window: 922_000,
+        effective_context_window_percent: 95,
+      };
+      applyNativeOpenAiContextOverride(entry as never, limits);
+      expect(entry).toMatchObject({
+        context_window: 272_000,
+        max_context_window: 1_000_000,
+        effective_context_window_percent: 95,
+      });
+    }
+
+    for (const slug of ["gpt-5.5", "gpt-daybreak-blue-latest"]) {
+      const entry: Record<string, unknown> = {
+        slug,
+        context_window: 272_000,
+        max_context_window: 922_000,
+        effective_context_window_percent: 95,
+      };
+      applyNativeOpenAiContextOverride(entry as never, limits);
+      expect(entry.max_context_window).toBe(272_000);
+    }
+
+    const gpt54 = {
+      slug: "gpt-5.4",
+      context_window: 1_000_000,
+      max_context_window: 1_000_000,
+      effective_context_window_percent: 95,
+    };
+    const gpt54Default = { ...gpt54 };
+    applyNativeOpenAiContextOverride(gpt54Default as never, nativeContextLimits({} as never));
+    applyNativeOpenAiContextOverride(gpt54 as never, limits);
+    expect(gpt54).toEqual(gpt54Default);
+
+    const routed = {
+      slug: "openrouter/gpt-5.6-sol",
+      context_window: 128_000,
+      max_context_window: 128_000,
+      effective_context_window_percent: 95,
+    };
+    applyNativeOpenAiContextOverride(routed as never, limits);
+    expect(routed).toEqual({
+      slug: "openrouter/gpt-5.6-sol",
+      context_window: 128_000,
+      max_context_window: 128_000,
+      effective_context_window_percent: 95,
+    });
+  });
+
+  test("1M mode is ignored on a non-canonical provider named openai", () => {
+    const limits = nativeContextLimits({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.invalid/v1",
+          authMode: "forward",
+          codexNativeContextMode: "1m",
+        },
+      },
+    } as never);
+    const entry: Record<string, unknown> = { slug: "gpt-5.6-sol", context_window: 272_000 };
+    applyNativeOpenAiContextOverride(entry as never, limits);
+    expect(entry.max_context_window).toBe(272_000);
+  });
+
   test("the on-disk catalog preserves a lower retained native compaction threshold", () => {
     const retained = {
       slug: "gpt-5.4-mini",
@@ -231,7 +310,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(gpt55?.maxInputTokens).toBeUndefined();
   });
 
-  test("the native 1M switch raises the Codex 272k default up to the measured ceiling", () => {
+  test("the native provider cap raises the Codex 272k default up to the measured ceiling", () => {
     const raised = nativeModelRows({ providerContextCaps: { openai: 922_000 } });
     expect(raised.find(r => r.slug === "gpt-5.6-sol")).toMatchObject({
       contextWindow: 922_000,
@@ -794,9 +873,9 @@ describe("#2574 a stale on-disk row is what a subagent reads", () => {
    * missing is any assertion that the WRITTEN row matches what the resolver would produce.
    */
   test("a raised cap opts the family into the wider window, and the row follows", () => {
-    // The 1M opt-in is expressed as a raised providerContextCaps.openai, not a per-model
-    // window. With the default cap the family stays at 272k; raising it past the opt-in
-    // threshold is what makes 922k the correct width.
+    // The legacy measured-window path is expressed as a raised providerContextCaps.openai,
+    // not a per-model window. With the default cap the family stays at 272k; raising it past
+    // the measured threshold is what makes 922k the correct width.
     const optedIn = nativeContextLimits({ providerContextCaps: { openai: 1_050_000 } } as never);
     expect(nativeOpenAiContextWindow("gpt-5.6-sol", optedIn)).toBe(NATIVE_GPT56_OPT_IN_CONTEXT_WINDOW);
 

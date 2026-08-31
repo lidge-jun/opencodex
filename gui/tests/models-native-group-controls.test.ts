@@ -33,6 +33,14 @@ test("the native provider group carries the additive entitlement diagnostic", ()
   expect(groups[0]!.entitlement).toEqual(entitlement);
 });
 
+test("the native provider group carries the persisted GPT-5.6 context mode", () => {
+  const groups = buildProviderModelGroups(
+    [nativeRow("gpt-5.6-sol")],
+    [{ name: "openai", codexNativeContextMode: "1m" }],
+  );
+  expect(groups[0]!.codexNativeContextMode).toBe("1m");
+});
+
 test("the native card keeps sorting first once a custom row joins it", () => {
   const groups = buildProviderModelGroups(
     [{ provider: "anthropic", id: "opus", native: false }, nativeRow("gpt-5.6-sol"), customRow("gpt-5.4")],

@@ -31,7 +31,7 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, isNativeOpenAiCapabilityAliasModel, nativeMultiAgentVersion, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, type NativeContextLimitsInput } from "./metadata";
+import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, isNativeOpenAiCapabilityAliasModel, nativeMultiAgentVersion, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxContextWindow, nativeOpenAiMaxInputTokens, type NativeContextLimitsInput } from "./metadata";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
@@ -376,7 +376,7 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
       entry.context_window = contextWindow;
     }
     if (typeof override.maxContextWindow === "number") {
-      const maxContextWindow = narrowNativeMaxContextWindow(nativeSlug, override.maxContextWindow, limits);
+      const maxContextWindow = nativeOpenAiMaxContextWindow(nativeSlug, limits);
       entry.max_context_window = maxContextWindow;
     }
   }
@@ -389,10 +389,12 @@ export function applyNativeOpenAiContextOverride(entry: RawEntry, limits?: Nativ
   if (cappedContext !== currentContext && typeof cappedContext === "number") {
     entry.context_window = cappedContext;
   }
-  const currentMax = typeof entry.max_context_window === "number" ? entry.max_context_window : undefined;
-  const cappedMax = narrowNativeMaxContextWindow(nativeSlug, currentMax, limits);
-  if (cappedMax !== currentMax) {
-    entry.max_context_window = cappedMax;
+  if (typeof override?.maxContextWindow !== "number") {
+    const currentMax = typeof entry.max_context_window === "number" ? entry.max_context_window : undefined;
+    const cappedMax = narrowNativeMaxContextWindow(nativeSlug, currentMax, limits);
+    if (cappedMax !== currentMax) {
+      entry.max_context_window = cappedMax;
+    }
   }
   const effectiveContext = typeof entry.context_window === "number" && entry.context_window > 0
     ? entry.context_window

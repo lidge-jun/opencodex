@@ -49,6 +49,8 @@ import {
 } from "./native-models";
 import { cachedAvailableAccountGatedNativeModels } from "../model-entitlements";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
+import { NATIVE_GPT56_ONE_MILLION_CONTEXT_WINDOW } from "../native-context-mode";
+export { NATIVE_GPT56_ONE_MILLION_CONTEXT_WINDOW } from "../native-context-mode";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 export {
   NATIVE_DAYBREAK_BLUE_MODEL,
@@ -138,8 +140,15 @@ export const NATIVE_GPT56_CONTEXT_WINDOW = 272_000;
  */
 export const NATIVE_GPT56_MAX_INPUT_TOKENS = 922_000;
 
-/** User-facing 1M opt-in: the largest window the native 5.6 family may advertise. */
+/** Legacy measured/safe operating-window opt-in used by the provider context-cap controls. */
 export const NATIVE_GPT56_OPT_IN_CONTEXT_WINDOW = NATIVE_GPT56_MAX_INPUT_TOKENS;
+
+/** Exact public model allowlist for the official 1M mode. Capability aliases are excluded. */
+export const NATIVE_GPT56_ONE_MILLION_MODELS: ReadonlySet<string> = new Set([
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+]);
 
 const NATIVE_GPT56_FAMILY = new Set<string>([
   "gpt-5.6-sol",
@@ -207,6 +216,8 @@ export interface NativeContextLimits {
   readonly modelWindows?: Readonly<Record<string, number>>;
   /** `providers.openai.modelAutoCompactTokenLimits` — soft, lowering-only budgets. */
   readonly modelAutoCompactTokenLimits?: Readonly<Record<string, number>>;
+  /** Official root Codex override, valid only on the canonical forward provider. */
+  readonly nativeContextMode?: "default" | "1m";
 }
 
 export type NativeContextLimitsInput = NativeContextLimits | number | undefined;
@@ -242,6 +253,10 @@ export function nativeContextLimits(
     ...(positiveInt(provider?.contextWindow) !== undefined ? { providerWindow: provider!.contextWindow } : {}),
     ...(Object.keys(modelWindows).length > 0 ? { modelWindows } : {}),
     ...(Object.keys(modelAutoCompactTokenLimits).length > 0 ? { modelAutoCompactTokenLimits } : {}),
+    ...(provider?.codexNativeContextMode === "1m"
+      && isCanonicalOpenAiForwardProvider(provider)
+      ? { nativeContextMode: "1m" as const }
+      : {}),
   };
 }
 
@@ -258,7 +273,7 @@ function narrowToLimits(raw: number | undefined, slug: string, input: NativeCont
     return overlay !== undefined && cap !== undefined ? Math.min(window, cap) : window;
   }
   const narrowed = overlay === undefined ? raw : Math.min(raw, overlay);
-  // 922k is the GPT-5.6 1M opt-in, not a request to shrink gpt-5.4's 1M window.
+  // 922k is the legacy measured GPT-5.6 preset, not a request to shrink gpt-5.4's 1M window.
   if (cap === NATIVE_GPT56_MAX_INPUT_TOKENS) return narrowed;
   return applyProviderContextCap(narrowed, cap) ?? narrowed;
 }
@@ -269,6 +284,30 @@ export function nativeOpenAiContextWindow(slug: string, limits?: NativeContextLi
       ? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)!.context_window as number
       : undefined);
   return narrowToLimits(raw, slug, limits);
+}
+
+/**
+ * Catalog ceiling for a native model. The official 1M mode raises only the exact public
+ * Sol/Terra/Luna allowlist and deliberately leaves their ordinary `context_window` alone.
+ * Existing explicit context overlays and provider caps remain lowering constraints.
+ */
+export function nativeOpenAiMaxContextWindow(
+  slug: string,
+  input?: NativeContextLimitsInput,
+): number | undefined {
+  const limits = asLimits(input);
+  const configured = NATIVE_OPENAI_CONTEXT_OVERRIDES[slug]?.maxContextWindow;
+  if (configured === undefined) return undefined;
+  if (limits.nativeContextMode !== "1m" || !NATIVE_GPT56_ONE_MILLION_MODELS.has(slug)) {
+    const contextWindow = nativeOpenAiContextWindow(slug, limits);
+    return contextWindow === undefined ? configured : Math.min(configured, contextWindow);
+  }
+  const overlay = positiveInt(limits.modelWindows?.[slug]) ?? positiveInt(limits.providerWindow);
+  const cap = positiveInt(limits.cap);
+  let maximum = NATIVE_GPT56_ONE_MILLION_CONTEXT_WINDOW;
+  if (overlay !== undefined) maximum = Math.min(maximum, overlay);
+  if (cap !== undefined) maximum = Math.min(maximum, cap);
+  return maximum;
 }
 
 /**

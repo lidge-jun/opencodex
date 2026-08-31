@@ -52,7 +52,7 @@ import {
   NATIVE_CAP_OPTIONS,
   NATIVE_CAP_OPTION_SET,
   NATIVE_GPT56_DEFAULT_WINDOW,
-  NATIVE_GPT56_OPT_IN_WINDOW,
+  NATIVE_GPT56_SAFE_WINDOW,
   PAGE,
   readCollapsedProviders,
   THREAD_OPTION_SET,
@@ -244,6 +244,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   }, [status, ok, feedbackGen]);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const [nativeContextModeSaving, setNativeContextModeSaving] = useState(false);
+  const nativeContextModeBusyRef = useRef(false);
   const loadGenerationRef = useRef(0);
   const loadPendingRef = useRef(false);
   // multi_agent_v2 / ultra gate. null = endpoint unavailable (older proxy build) -> section hidden.
@@ -734,7 +736,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(enabled && nativeGroup
-          ? { provider, enabled, value: NATIVE_GPT56_OPT_IN_WINDOW }
+          ? { provider, enabled, value: NATIVE_GPT56_SAFE_WINDOW }
           : { provider, enabled }),
       });
       try {
@@ -752,6 +754,38 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     } finally {
       setBusy(false);
       busyRef.current = false;
+    }
+  };
+  const saveNativeContextMode = async (mode: "default" | "1m") => {
+    if (nativeContextModeBusyRef.current) return;
+    nativeContextModeBusyRef.current = true;
+    setNativeContextModeSaving(true);
+    setStatus("");
+    try {
+      const response = await fetch(`${apiBase}/api/providers?name=openai`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codexNativeContextMode: mode }),
+      });
+      await readJsonOrThrow<{ success: boolean; codexNativeContextMode: "default" | "1m" }>(
+        response,
+        t("models.nativeContextModeSaveFailed"),
+      );
+      setProviders(current => current.map(provider => provider.name === "openai"
+        ? { ...provider, codexNativeContextMode: mode }
+        : provider));
+      publishFeedback(true, t("models.nativeContextModeApplied"));
+      await load(true);
+      reloadAppServerState();
+    } catch (error) {
+      await load(true);
+      publishFeedback(
+        false,
+        error instanceof Error ? error.message : t("models.nativeContextModeSaveFailed"),
+      );
+    } finally {
+      nativeContextModeBusyRef.current = false;
+      setNativeContextModeSaving(false);
     }
   };
   const toggleCollapse = (p: string) => {
@@ -1194,6 +1228,10 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     const capOptions = group.nativeProviderGroup ? NATIVE_CAP_OPTIONS : CAP_OPTIONS;
     const capOptionSet = group.nativeProviderGroup ? NATIVE_CAP_OPTION_SET : CAP_OPTION_SET;
     const discoveryFailure = liveModels && discovery?.status === "failed" ? discovery : undefined;
+    const nativeOneMillionAvailable = nativeProviderGroup && rows.some(row =>
+      row.id === "gpt-5.6-sol" || row.id === "gpt-5.6-terra" || row.id === "gpt-5.6-luna"
+    );
+    const nativeContextMode = group.codexNativeContextMode ?? "default";
     const q = (search[provider] ?? "").trim().toLowerCase();
     const filtered = q ? rows.filter(m => m.id.toLowerCase().includes(q)) : rows;
     // Display-only: enabled models float to the top of each provider group so they
@@ -1399,6 +1437,43 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         {!isCollapsed && (
           <div className="models-provider-body">
             {nativeProviderGroup && <p className="muted text-label models-provider-hint">{t("models.nativeHint")}</p>}
+            {nativeOneMillionAvailable && (
+              <div className="row models-provider-hint" data-testid="native-gpt56-context-mode">
+                <div style={{ display: "grid", gap: 3, flex: "1 1 360px" }}>
+                  <span className="text-label font-semibold">{t("models.nativeContextModeTitle")}</span>
+                  <span className="muted text-caption">
+                    {nativeContextMode === "1m"
+                      ? t("models.nativeContextModeOneMillionHint")
+                      : t("models.nativeContextModeDefaultHint")}
+                  </span>
+                  <span className="muted text-caption">{t("models.nativeContextModeExperimental")}</span>
+                </div>
+                <div
+                  className="segmented models-segmented"
+                  role="radiogroup"
+                  aria-label={t("models.nativeContextModeTitle")}
+                >
+                  {(["default", "1m"] as const).map(mode => (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="radio"
+                      aria-checked={nativeContextMode === mode}
+                      className={`btn btn-sm${nativeContextMode === mode ? " btn-primary" : " btn-ghost"}`}
+                      disabled={busy || nativeContextModeSaving}
+                      onClick={() => void saveNativeContextMode(mode)}
+                    >
+                      {t(mode === "default"
+                        ? "models.nativeContextModeDefault"
+                        : "models.nativeContextModeOneMillion")}
+                    </button>
+                  ))}
+                </div>
+                {nativeContextModeSaving && (
+                  <span className="muted text-caption" role="status">{t("common.saving")}</span>
+                )}
+              </div>
+            )}
             {!nativeProviderGroup && modelDiscovery && (
               <div className="row models-provider-hint">
                 <span className="muted text-label">{t("models.newPolicyProvider")}</span>

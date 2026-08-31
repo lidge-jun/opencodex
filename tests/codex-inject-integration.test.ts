@@ -47,6 +47,22 @@ function runRestore(codexHome: string, ocxHome: string): { stdout: string; statu
   return { stdout: result.stdout?.trim() ?? "", status: result.status ?? 1 };
 }
 
+function nativeContextConfig(mode: "default" | "1m"): string {
+  return JSON.stringify({
+    port: 10100,
+    defaultProvider: "openai",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+        codexNativeContextMode: mode,
+      },
+    },
+  });
+}
+
 describe("injectCodexConfig integration (Design B)", () => {
   let codexHome: string;
   let ocxHome: string;
@@ -128,6 +144,68 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(second.match(/openai_base_url/g)?.length).toBe(1);
     expect(second.match(/Auto-injected by opencodex/g)?.length).toBe(1);
     expect(second).toBe(first);
+  });
+
+  test("native GPT-5.6 1M mode injects exact root settings and Default removes only owned settings", () => {
+    writeFileSync(join(codexHome, "config.toml"), [
+      'model = "gpt-5.6-sol"',
+      'model_reasoning_effort = "high"',
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+      "[mcp_servers.example]",
+      'command = "example"',
+      "",
+      "[agents]",
+      "max_threads = 4",
+      "",
+      "[plugins.example]",
+      "enabled = true",
+      "",
+      "[model_providers.user-owned]",
+      'name = "User owned"',
+      'base_url = "https://example.invalid/v1"',
+      "",
+    ].join("\n"), "utf8");
+
+    expect(runInject(codexHome, ocxHome, nativeContextConfig("1m")).status).toBe(0);
+    const enabled = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(enabled.match(/^model_context_window = 1000000$/gm)?.length).toBe(1);
+    expect(enabled.match(/^model_auto_compact_token_limit = 900000$/gm)?.length).toBe(1);
+    expect(() => Bun.TOML.parse(enabled)).not.toThrow();
+
+    expect(runInject(codexHome, ocxHome, nativeContextConfig("1m")).status).toBe(0);
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(enabled);
+
+    expect(runInject(codexHome, ocxHome, nativeContextConfig("default")).status).toBe(0);
+    const disabled = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(disabled).not.toContain("model_context_window = 1000000");
+    expect(disabled).not.toContain("model_auto_compact_token_limit = 900000");
+    expect(disabled).toContain('model = "gpt-5.6-sol"');
+    expect(disabled).toContain('model_reasoning_effort = "high"');
+    expect(disabled).toContain("fast_mode = true");
+    expect(disabled).toContain("[mcp_servers.example]");
+    expect(disabled).toContain("[agents]");
+    expect(disabled).toContain("[plugins.example]");
+    expect(disabled).toContain("[model_providers.user-owned]");
+  });
+
+  test("a conflicting user compaction limit refuses 1M mode without changing config", () => {
+    const original = [
+      'model = "gpt-5.6-sol"',
+      "model_auto_compact_token_limit = 120000",
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+    ].join("\n");
+    writeFileSync(join(codexHome, "config.toml"), original, "utf8");
+
+    const result = runInject(codexHome, ocxHome, nativeContextConfig("1m"));
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).success).toBe(false);
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
   });
 
   test.each([

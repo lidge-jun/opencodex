@@ -40,8 +40,15 @@ function writeConfig(): void {
   writeFileSync(join(home, "config.json"), JSON.stringify({
     port: 10100,
     defaultProvider: "openai",
-    providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
-    // The 1M opt-in is a raised provider cap, not a per-model window.
+    providers: { openai: {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+      // The current-config re-derive must carry the new maximum even when the file predates it.
+      codexNativeContextMode: "1m",
+    } },
+    // Keep the pre-existing measured 922k operating-window path active too: the official 1M
+    // mode changes the catalog maximum, while this cap continues to choose the ordinary window.
     providerContextCaps: { openai: 1_050_000 },
   }));
 }
@@ -79,4 +86,3 @@ describe("#2574 a subagent does not inherit a stale catalog width", () => {
     expect(Math.floor(NATIVE_GPT56_OPT_IN_CONTEXT_WINDOW * 0.95)).toBe(875_900);
   });
 });
-

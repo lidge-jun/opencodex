@@ -12,6 +12,7 @@ import type { removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../c
 import type { probeClaudeDesktopPolicy } from "../../claude/desktop-policy";
 import type { RuntimePortState } from "../../config/process-state";
 import type { CatalogDisposition, ConvergeCodex } from "../../codex/convergence-types";
+import type { syncModelsToCodex } from "../../codex/sync";
 import type {
   performCodexRestart,
   readCodexAppServerState,
@@ -23,6 +24,8 @@ export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
   createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;
+  /** Full native sync seam for atomic settings that span config.json, catalog, and config.toml. */
+  syncModelsToCodex?: typeof syncModelsToCodex;
   /** Test-only destination for best-effort Claude agent-definition sync. */
   claudeAgentConfigDir?: string;
   /** Startup-health seam keeps route tests from launching platform probes. */

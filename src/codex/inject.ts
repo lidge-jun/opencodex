@@ -73,6 +73,8 @@ import {
   transformManagedSubagentDefaults,
   type ManagedSubagentDefaults,
 } from "./subagent-defaults";
+import { transformManagedNativeContextMode } from "./native-context-mode";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import type { OcxConfig } from "../types";
 
 // Ownership predicates live in `./injected-marker` so `journal.ts` can reach them
@@ -450,6 +452,12 @@ export function stripRootContextWindowOverrides(content: string): string {
     .join("\n");
 }
 
+function configuredNativeOneMillionContext(config: OcxConfig | undefined): boolean {
+  const provider = config?.providers?.openai;
+  return provider?.codexNativeContextMode === "1m"
+    && isCanonicalOpenAiForwardProvider(provider);
+}
+
 function stripRootRoutedModel(content: string): string {
   const lines = content.split("\n");
   const firstTable = lines.findIndex((l) => /^\s*\[/.test(l));
@@ -696,6 +704,13 @@ export async function injectCodexConfig(
   const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
   const activeProvider = externalCodexModelProvider(rawContent);
   if (activeProvider) {
+    if (configuredNativeOneMillionContext(config)) {
+      return {
+        success: false,
+        message:
+          `Codex config injection refused: native GPT-5.6 1M mode requires the built-in openai provider, but ${tomlString(activeProvider)} owns config.toml. No files were changed.`,
+      };
+    }
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
     // replay that stale snapshot over externally managed config.
     if (!options.validateOnly) removeJournal();
@@ -735,7 +750,19 @@ export async function injectCodexConfig(
         `No files were changed; inspect ${CODEX_CONFIG_PATH}.`,
     };
   }
-  const baselineContent = nativeDefaultsBaseline.content;
+  const nativeContextBaseline = transformManagedNativeContextMode(
+    nativeDefaultsBaseline.content,
+    false,
+  );
+  if (!nativeContextBaseline.ok) {
+    return {
+      success: false,
+      message:
+        `Codex config injection refused: existing OpenCodex-managed GPT-5.6 context settings are ambiguous: ${nativeContextBaseline.error}. ` +
+        `No files were changed; inspect ${CODEX_CONFIG_PATH}.`,
+    };
+  }
+  const baselineContent = nativeContextBaseline.content;
 
   /*
    * The journal write used to happen HERE, before the transforms. It now happens
@@ -806,6 +833,27 @@ export async function injectCodexConfig(
     content = result.content;
     keptUserBaseUrl = result.keptUserBaseUrl;
   }
+
+  const desiredNativeOneMillionContext = configuredNativeOneMillionContext(config);
+  if (desiredNativeOneMillionContext && (legacyMode || keptUserBaseUrl)) {
+    return {
+      success: false,
+      message:
+        "Codex config injection refused: native GPT-5.6 1M mode requires canonical OpenAI passthrough routing with no user-owned root openai_base_url. No files were changed.",
+    };
+  }
+  const managedNativeContext = transformManagedNativeContextMode(
+    content,
+    desiredNativeOneMillionContext,
+  );
+  if (!managedNativeContext.ok) {
+    return {
+      success: false,
+      message:
+        `Codex config injection refused: GPT-5.6 1M settings could not be managed safely: ${managedNativeContext.error}. No files were changed.`,
+    };
+  }
+  content = managedNativeContext.content;
 
   const desiredSubagentDefaults = configuredManagedSubagentDefaults(config);
   const routingOwnershipWarning =
@@ -1197,6 +1245,7 @@ function removeOcxSection(content: string): string {
 interface StripOpencodexConfigResult {
   content: string;
   managedDefaultsError: string | null;
+  managedNativeContextError: string | null;
 }
 
 /**
@@ -1233,10 +1282,13 @@ function stripOpencodexConfigResult(
   if (hadRootOcxProvider || hadInjectedBaseUrl) out = stripRootRoutedModel(out);
   const managedDefaults = transformManagedSubagentDefaults(out, null);
   if (managedDefaults.ok) out = managedDefaults.content;
+  const managedNativeContext = transformManagedNativeContextMode(out, false);
+  if (managedNativeContext.ok) out = managedNativeContext.content;
   out = stripOpencodexCatalogPath(out);
   return {
     content: out.replace(/\n{3,}/g, "\n\n").trimEnd() + "\n",
     managedDefaultsError: !managedDefaults.ok ? managedDefaults.error : null,
+    managedNativeContextError: !managedNativeContext.ok ? managedNativeContext.error : null,
   };
 }
 
@@ -1291,6 +1343,14 @@ export function removeCodexConfig(
       success: false,
       message:
         `${routingMessage} Native Codex sub-agent defaults could not be safely removed: ${stripped.managedDefaultsError}. ` +
+        "The ambiguous marker and adjacent value were preserved; inspect $CODEX_HOME/config.toml before using native Codex.",
+    };
+  }
+  if (stripped.managedNativeContextError) {
+    return {
+      success: false,
+      message:
+        `${removedMessage} Native GPT-5.6 context settings could not be safely removed: ${stripped.managedNativeContextError}. ` +
         "The ambiguous marker and adjacent value were preserved; inspect $CODEX_HOME/config.toml before using native Codex.",
     };
   }

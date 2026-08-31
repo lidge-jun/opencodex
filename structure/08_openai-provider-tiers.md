@@ -210,15 +210,20 @@ preserving a stale one would block every later migration.
   account, and an unavailable discovery temporarily hides the model rather than guessing.
 - The two GPT-5.6 surfaces advertise different windows on purpose. API rows use 1,050,000
   context with 922,000 max input. Codex-login rows default to the live catalog 272,000
-  (auto-compact 244,800) and only rise to 922,000 / 829,800 when the user turns the 1M
-  switch on.
+  (auto-compact 244,800). The existing provider context-cap workflow can raise that operating
+  window to the measured 922,000 / 829,800 mode. Separately, the Models card exposes the official
+  `Default | 1M` Codex opt-in for exactly Sol/Terra/Luna. That mode keeps the catalog
+  `context_window` at its normal default, raises only `max_context_window` to 1,000,000, and
+  marker-manages root `model_context_window = 1000000` plus
+  `model_auto_compact_token_limit = 900000`.
 
   The ceiling is the same on both — probing a real Codex-login account accepted 921,508 input
   tokens and refused 922,013 with `context_length_exceeded` on Sol, Terra and Luna alike,
   matching the 922,000 the API surface already declared. A Codex-login `context_window` is a
   spending budget, not a label: Codex fills `context_window * effective_context_window_percent`
   (95% by default, codex-rs `turn_context.rs`). Advertising 1,050,000 there spent 997,500 and
-  blew past the ceiling. The 922,000 opt-in yields a 875,900-token budget and keeps ~46k of
+  blew past the measured ceiling. The older 922,000 operating mode yields an 875,900-token budget
+  and keeps ~46k of
   headroom. Evidence: `devlog/_plan/260817_native_gpt56_1m_context/001_measurement_evidence.md`
   and `014_final_922k_with_margin.md`.
 - `*-pro` selected ids rewrite to the base wire id with `reasoning.mode: "pro"`; request logs,

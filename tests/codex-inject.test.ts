@@ -15,8 +15,68 @@ import {
   MANAGED_AGENTS_TABLE_MARKER,
   MANAGED_SUBAGENT_DEFAULT_MARKER,
 } from "../src/codex/subagent-defaults";
+import {
+  MANAGED_NATIVE_CONTEXT_MARKER,
+  transformManagedNativeContextMode,
+} from "../src/codex/native-context-mode";
 
 describe("Codex config injection", () => {
+  test("managed GPT-5.6 1M settings are exact, idempotent, and reversible", () => {
+    const original = [
+      'model = "gpt-5.6-sol"',
+      "model_reasoning_effort = \"high\"",
+      "",
+      "[features]",
+      "fast_mode = true",
+      "",
+      "[mcp_servers.example]",
+      'command = "example"',
+      "",
+    ].join("\n");
+    const enabled = transformManagedNativeContextMode(original, true);
+    expect(enabled.ok).toBe(true);
+    if (!enabled.ok) return;
+    expect(enabled.content.match(/^model_context_window = 1000000$/gm)?.length).toBe(1);
+    expect(enabled.content.match(/^model_auto_compact_token_limit = 900000$/gm)?.length).toBe(1);
+    expect(enabled.content.match(new RegExp(MANAGED_NATIVE_CONTEXT_MARKER, "g"))?.length).toBe(2);
+    expect(enabled.content).toContain("[mcp_servers.example]");
+
+    const repeated = transformManagedNativeContextMode(enabled.content, true);
+    expect(repeated).toEqual({ ok: true, changed: false, content: enabled.content });
+
+    const disabled = transformManagedNativeContextMode(enabled.content, false);
+    expect(disabled.ok).toBe(true);
+    if (!disabled.ok) return;
+    expect(disabled.content).not.toContain(MANAGED_NATIVE_CONTEXT_MARKER);
+    expect(disabled.content).not.toContain("model_context_window = 1000000");
+    expect(disabled.content).not.toContain("model_auto_compact_token_limit = 900000");
+    expect(disabled.content).toContain('model = "gpt-5.6-sol"');
+    expect(disabled.content).toContain("[mcp_servers.example]");
+  });
+
+  test("1M settings preserve an exact user compaction value and reject a conflicting one", () => {
+    const exact = transformManagedNativeContextMode(
+      "\"model_auto_compact_token_limit\" = 900_000\n[features]\nfast_mode = true\n",
+      true,
+    );
+    expect(exact.ok).toBe(true);
+    if (exact.ok) {
+      expect(exact.content).toContain('"model_auto_compact_token_limit" = 900_000');
+      expect(exact.content.match(new RegExp(MANAGED_NATIVE_CONTEXT_MARKER, "g"))?.length).toBe(1);
+      const removed = transformManagedNativeContextMode(exact.content, false);
+      expect(removed.ok).toBe(true);
+      if (removed.ok) expect(removed.content).toContain('"model_auto_compact_token_limit" = 900_000');
+    }
+
+    const conflict = "model_auto_compact_token_limit = 120000\n[features]\nfast_mode = true\n";
+    expect(transformManagedNativeContextMode(conflict, true)).toEqual({
+      ok: false,
+      changed: false,
+      content: conflict,
+      error: "user-owned model_auto_compact_token_limit conflicts with the 1M mode",
+    });
+  });
+
   test("omits provider-level Responses WebSocket support by default", () => {
     const block = buildProviderTableBlock(10100);
 

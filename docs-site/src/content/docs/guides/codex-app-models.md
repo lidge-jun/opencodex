@@ -167,7 +167,7 @@ metadata instead of an older-template approximation.
 
 | Route | Picker ids and catalog metadata |
 | --- | --- |
-| Codex login (account-qualified rows disabled) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 922,000-token catalog window. |
+| Codex login (account-qualified rows disabled) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. Default mode keeps the 272,000-token catalog window. The Models card's explicit 1M mode preserves that catalog default, raises only these three rows' `max_context_window` to 1,000,000, and synchronizes Codex's 1,000,000 / 900,000 root opt-in. The pre-existing context cap can still opt into or cap the measured 922,000 workflow. |
 | Codex login (account-qualified rows enabled with eligible selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
 | Codex login (explicit Daybreak forward row) | `openai/gpt-daybreak-blue-latest` only when the exact `customModels` row is configured on the canonical `openai` provider. It keeps the Daybreak wire id and uses the pinned Sol capability snapshot (922,000 context; 829,800 automatic compaction). |
 | OpenAI (API key) | Exactly ten namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, the three `*-pro` virtual ids, and the two Daybreak aliases (1,050,000 context; 922,000 max input for all ten) |

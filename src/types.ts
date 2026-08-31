@@ -16,7 +16,12 @@ export {
   toolChoiceToolPredicate,
 } from "./types/tools";
 
-export type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } from "./types/wire";
+export type {
+  UpstreamHttpVersion,
+  ReasoningSummaryDelivery,
+  CodexAccountMode,
+  CodexNativeContextMode,
+} from "./types/wire";
 export {
   UPSTREAM_HTTP_VERSION_VALUES,
   REASONING_SUMMARY_DELIVERY_VALUES,
