@@ -3,7 +3,7 @@ import { managementFetch as fetch, ManagementRequest as Request } from "./helper
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { readCodexAccountRecord, saveCodexAccountCredential } from "../src/codex/account-store";
 import { getTrackedCodexWebSocketCountForAccount } from "../src/codex/websocket-registry";
 import { clearAccountNeedsReauth, clearAccountQuota, getAccountQuota, isAccountNeedsReauth, markAccountNeedsReauth, updateAccountQuota } from "../src/codex/auth-api";
 import {
@@ -32,7 +32,12 @@ import { handleManagementAPI } from "../src/server/management-api";
 import { providerManagementConfigError } from "../src/server/auth-cors";
 import { providerEmptyToolOutputConfigError } from "../src/config/provider-validation";
 import { providerServiceTierConfigError, withProviderServiceTierDTO } from "../src/server/management/provider-capability-config";
-import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
+import { clearModelCache, markProviderDiscoveryFailed, markProviderDiscoveryOk } from "../src/codex/model-cache";
+import {
+  resetCodexModelEntitlementCacheForTests,
+  resolveCodexModelEntitlements,
+  type CodexModelEntitlementCredentialSnapshot,
+} from "../src/codex/model-entitlements";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -686,6 +691,77 @@ describe("provider management validation", () => {
       expect(providers.find(provider => provider.name === "not-attempted"))
         .not.toHaveProperty("discovery");
     } finally {
+      clearModelCache();
+    }
+  });
+
+  test("provider discovery stays ok while entitlement status changes independently", async () => {
+    const accountId = "pool-entitlement-diagnostic";
+    const now = Date.now();
+    const liveConfig: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: poolProviders(),
+      codexAccounts: [{
+        id: accountId,
+        email: "pool-entitlement-diagnostic@example.test",
+        isMain: false,
+      }],
+    };
+    saveCodexAccountCredential(accountId, {
+      accessToken: "entitlement-diagnostic-access",
+      refreshToken: "entitlement-diagnostic-refresh",
+      expiresAt: now + 60_000,
+      chatgptAccountId: "chatgpt-entitlement-diagnostic",
+    });
+    const generation = readCodexAccountRecord(accountId)!.generation;
+    const storedCredential: CodexModelEntitlementCredentialSnapshot = {
+      accountId,
+      accessToken: "entitlement-diagnostic-access",
+      chatgptAccountId: "chatgpt-entitlement-diagnostic",
+      credentialIdentity: `pool:${generation}:chatgpt-entitlement-diagnostic`,
+    };
+    const readOpenAi = async (config: OcxConfig): Promise<Record<string, unknown>> => {
+      const requestUrl = new URL("http://127.0.0.1/api/providers");
+      const response = await handleManagementAPI(new Request(requestUrl), requestUrl, config);
+      const providers = await response!.json() as Array<Record<string, unknown>>;
+      return providers.find(provider => provider.name === "openai")!;
+    };
+
+    markProviderDiscoveryOk("openai", 1);
+    try {
+      await resolveCodexModelEntitlements(liveConfig, {
+        credentials: [storedCredential],
+        fetcher: (async () => Response.json({ models: [{
+          slug: "gpt-5.6-sol",
+          supported_in_api: true,
+          visibility: "list",
+        }] })) as typeof fetch,
+        now,
+      });
+      expect(await readOpenAi(liveConfig)).toMatchObject({
+        discovery: { status: "ok" },
+        entitlement: { status: "fresh" },
+      });
+
+      resetCodexModelEntitlementCacheForTests();
+      await resolveCodexModelEntitlements(liveConfig, {
+        credentials: [storedCredential],
+        fetcher: (async () => new Response("upstream failed", { status: 503 })) as typeof fetch,
+        now,
+      });
+      expect(await readOpenAi(liveConfig)).toMatchObject({
+        discovery: { status: "ok" },
+        entitlement: { status: "failed", reason: "http-error", httpStatus: 503 },
+      });
+
+      resetCodexModelEntitlementCacheForTests();
+      expect(await readOpenAi({ ...liveConfig, codexAccounts: [] })).toMatchObject({
+        discovery: { status: "ok" },
+        entitlement: { status: "unavailable" },
+      });
+    } finally {
+      resetCodexModelEntitlementCacheForTests();
       clearModelCache();
     }
   });

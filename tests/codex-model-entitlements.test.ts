@@ -145,6 +145,51 @@ describe("Codex account model entitlements", () => {
     }
   });
 
+  test("reports an expired roster while its refresh remains in flight", async () => {
+    const isolated = installIsolatedCodexHome("ocx-entitlement-in-flight-");
+    const accountId = "pool-in-flight";
+    const config = {
+      codexAccounts: [{ id: accountId, email: "pool-in-flight@example.test", isMain: false }],
+    };
+    let releaseRefresh: ((response: Response) => void) | undefined;
+    let refresh: ReturnType<typeof resolveCodexModelEntitlements> | undefined;
+    try {
+      saveCodexAccountCredential(accountId, {
+        accessToken: "in-flight-access",
+        refreshToken: "in-flight-refresh",
+        expiresAt: Date.now() + 60_000,
+        chatgptAccountId: "chatgpt-in-flight",
+      });
+      const generation = readCodexAccountRecord(accountId)!.generation;
+      const storedCredential: CodexModelEntitlementCredentialSnapshot = {
+        accountId,
+        accessToken: "in-flight-access",
+        chatgptAccountId: "chatgpt-in-flight",
+        credentialIdentity: `pool:${generation}:chatgpt-in-flight`,
+      };
+      await resolveCodexModelEntitlements(config, {
+        credentials: [storedCredential],
+        fetcher: (async () => roster(SOL)) as typeof fetch,
+        now: 1_000,
+        clientVersion: TEST_CLIENT_VERSION,
+      });
+
+      const pendingResponse = new Promise<Response>(resolve => { releaseRefresh = resolve; });
+      refresh = resolveCodexModelEntitlements(config, {
+        credentials: [storedCredential],
+        fetcher: (async () => pendingResponse) as typeof fetch,
+        now: 301_001,
+        clientVersion: TEST_CLIENT_VERSION,
+      });
+      expect(getCodexModelEntitlementStatus(config, 301_001, TEST_CLIENT_VERSION))
+        .toEqual({ status: "expired-refresh-in-flight" });
+    } finally {
+      releaseRefresh?.(roster(SOL));
+      await refresh;
+      isolated.restore();
+    }
+  });
+
   test("keeps account-gated models scoped to the authenticated account roster", async () => {
     const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
       credentials: [credential("main"), credential("secondary")],

@@ -540,17 +540,17 @@ async function fetchAccountModels(
       redirect: "error",
       signal: controller.signal,
     });
-    const body = await readBoundedResponseBody(response, {
-      signal: controller.signal,
-      maxBytes: MODEL_ROSTER_MAX_BYTES,
-      fatalUtf8: true,
-    });
     if (!response.ok) {
       return unconfirmedAccountModels(credential, clientVersion, now, {
         kind: "http-error",
         httpStatus: response.status,
       });
     }
+    const body = await readBoundedResponseBody(response, {
+      signal: controller.signal,
+      maxBytes: MODEL_ROSTER_MAX_BYTES,
+      fatalUtf8: true,
+    });
     if (!body.displaySafe || body.truncated) {
       return unconfirmedAccountModels(credential, clientVersion, now, { kind: "unparseable" });
     }
@@ -865,13 +865,16 @@ export function getCodexModelEntitlementStatus(
     credentialIdentity,
     entry: accountModelsCache.get(cacheKeyFor(accountId, version)),
   }));
+  const hasFlight = (accountId: string, credentialIdentity: string): boolean => {
+    const prefix = `${accountId}\u0000${credentialIdentity}\u0000${version}`;
+    return [...accountModelsFlights.keys()].some(key => key === prefix || key.startsWith(`${prefix}\u0000`));
+  };
   if (entries.some(({ accountId, credentialIdentity, entry }) => (
     entry
     && entry.credentialIdentity === credentialIdentity
     && entry.expiresAt <= now
-    && accountModelsFlights.has(`${accountId}\u0000${credentialIdentity}\u0000${version}`)
+    && hasFlight(accountId, credentialIdentity)
   ))) return { status: "expired-refresh-in-flight" };
-
   const live = entries.flatMap(({ credentialIdentity, entry }) => (
     entry && entry.credentialIdentity === credentialIdentity && entry.expiresAt > now ? [entry] : []
   ));

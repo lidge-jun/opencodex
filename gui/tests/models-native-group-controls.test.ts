@@ -23,6 +23,16 @@ test("a provider with no native rows is not a native group", () => {
   expect(groups[0]!.nativeProviderGroup).toBe(false);
 });
 
+test("the native provider group carries the additive entitlement diagnostic", () => {
+  const entitlement = { status: "failed", reason: "timeout" } as const;
+  const groups = buildProviderModelGroups(
+    [nativeRow("gpt-5.6-sol")],
+    [{ name: "openai", entitlement }],
+  );
+
+  expect(groups[0]!.entitlement).toEqual(entitlement);
+});
+
 test("the native card keeps sorting first once a custom row joins it", () => {
   const groups = buildProviderModelGroups(
     [{ provider: "anthropic", id: "opus", native: false }, nativeRow("gpt-5.6-sol"), customRow("gpt-5.4")],
