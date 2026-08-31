@@ -479,15 +479,22 @@ function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ApplyRowSna
     // makes the new routed row match the expected post-image and erases activity that
     // arrived in between. Re-record it, and promote the manifest so the field is covered by
     // the schema that declares it.
+    const previousRelabel = existing.relabel;
     existing.relabel = "pending";
     existing.hadFirstUserMessage = hasFirstUserMessage(row.first_user_message);
-    // `hasUserEvent` is the value restore returns to, and for THIS attempt that is the
-    // row as it stands now. The previous attempt's value predates a restore that already
-    // happened plus whatever the user did afterwards, so keeping it would restore the
-    // thread to a state that is two events old. Provider and source are provenance and
-    // stay; only when the row is back at the recorded original tuple is its event flag
-    // the honest pre-route baseline.
-    if (row.model_provider === existing.modelProvider && row.source === existing.source) {
+    // `hasUserEvent` is the value restore returns to, and the previous attempt's value can
+    // be two events stale — a restore that already landed, plus whatever the user did
+    // afterwards. But refreshing it needs proof that the previous relabel was UNDONE, and
+    // the original tuple is not that proof: route-then-legacy-recovery lands on the same
+    // tuple, so refreshing there would adopt OpenCodex's own write as the user's baseline.
+    // This is the same ambiguity the classifier refuses on, arriving one layer up.
+    //
+    // `relabel: "none"` is the proof, written by a restore that actually completed. Absent
+    // it, keep the recorded baseline: an entry that is one event stale still restores to a
+    // state the user was in, while a wrong refresh silently rewrites what OpenCodex owns.
+    if (previousRelabel === "none"
+      && row.model_provider === existing.modelProvider
+      && row.source === existing.source) {
       existing.hasUserEvent = Number(row.has_user_event) === 1 ? 1 : 0;
     }
     manifest.version = 2;
@@ -1466,6 +1473,18 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
       if (error instanceof CodexHistoryIntegrityError) {
         throw new CodexHistoryIntegrityError(error.message, { rows: entries.length, files });
       }
+      // The restore landed and its readback passed; only finalization failed, so the
+      // manifest survives on disk. Record that its relabel is undone, or a later routing
+      // attempt cannot tell this entry from one still mid-route and has to keep a baseline
+      // that is now stale. Best-effort: a failure here leaves exactly the prior state.
+      try {
+        for (const entry of entries) {
+          const stored = manifest.entries[entry.id];
+          if (stored) stored.relabel = "none";
+        }
+        manifest.version = 2;
+        writeBackup(backupPath, manifest, stateDbPath);
+      } catch { /* the surviving manifest keeps its previous marker */ }
       const failureReason = classifyRecoverableHistoryError(error);
       if (failureReason) {
         return {

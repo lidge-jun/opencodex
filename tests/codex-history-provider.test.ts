@@ -161,6 +161,9 @@ describe("Codex history provider sync", () => {
       setBeforeHistoryBackupConsumeForTests(undefined);
     }
     expect(existsSync(fixture.backupPath)).toBe(true);
+    // The restore landed and only finalization failed, so the surviving manifest records
+    // that its relabel is undone - the proof a later attempt needs to refresh its baseline.
+    expect(JSON.parse(readFileSync(fixture.backupPath, "utf8")).entries["thread-1"].relabel).toBe("none");
 
     // The user types while the manifest is still on disk, then a second route runs.
     const active = new Database(fixture.dbPath);
@@ -213,6 +216,9 @@ describe("Codex history provider sync", () => {
       ["C: pending with an expected-0 route is decidable", row("openai", "vscode", 1), entry({ relabel: "pending", hadFirstUserMessage: false }), 1],
       ["C: pending with an expected-1 route is undecidable", row("openai", "vscode", 1), entry({ relabel: "pending", hadFirstUserMessage: true }), null],
       ["C: legacy entry with drift refuses, as dev does", row("openai", "vscode", 1), entry({ hadFirstUserMessage: true }), null],
+      // The route-then-legacy-recovery history the audits kept returning to: the row wears
+      // the original tuple, but OpenCodex authored the 1 because its route expected one.
+      ["C: legacy return of a committed expected-1 route restores 0", row("openai", "vscode", 1), entry({ relabel: "committed", hadFirstUserMessage: true }), 0],
       ["C: exec-origin cannot be reached by legacy return", row("opencodex", "exec", 1), entry({ modelProvider: "opencodex", source: "exec", relabel: "pending", hadFirstUserMessage: true }), 1],
       // D - routed tuple with drift; no provenance needed.
       ["D: drift on the routed tuple is the user's", row("opencodex", "vscode", 1), entry({ relabel: "pending", hadFirstUserMessage: false }), 1],
