@@ -55,6 +55,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   nanogpt: "nanogpt.svg",
   nebius: "nebius.svg",
   neuralwatt: "neuralwatt.svg",
+  nous: "nous.svg",
   novita: "novita.svg",
   orcarouter: "orcarouter.svg",
   parallel: "parallel.svg",
@@ -62,9 +63,11 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   scaleway: "scaleway.svg",
   siliconflow: "siliconflow.svg",
   synthetic: "synthetic.svg",
+  together: "together.svg",
   umans: "umans.svg",
   venice: "venice.svg",
   vultr: "vultr.svg",
+  litellm: "litellm.svg",
   zenmux: "zenmux.svg",
   /*
    * Z.AI and Zhipu's BigModel are the same company on two brands. `zai` is the

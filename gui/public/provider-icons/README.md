@@ -171,6 +171,17 @@ follow every upscaled pixel edge.
 - `cerebras.svg`, `novita.svg`, `siliconflow.svg`, `deepinfra.svg` — single-ink.
 - `baseten.svg`, `hyperbolic.svg`, `sambanova.svg`, `umans.svg`, `venice.svg`,
   `vultr.svg`, `bizrouter.svg`, `orcarouter.svg` — colour-layered.
+- `nous.svg` — traced from `nousresearch.com/apple-touch-icon.png` (180x180). This
+  is the Nous Research company mark, distinct from `hermes-agent.svg`, which is
+  the Hermes product's own icon. Attributing one to the other would be wrong even
+  though the same organization ships both.
+
+Found on a docs subdomain after the vendor's marketing site offered only a
+wordmark:
+
+- `together.svg` — `docs.together.ai/favicon.svg`, 1.07:1.
+- `litellm.svg` — `docs.litellm.ai/img/logo.svg`, 1:1. The marketing site's SVGs
+  are third-party model logos, not LiteLLM's own mark.
 
 **The plate problem, recorded because the first pass shipped it.** A favicon is
 usually a glyph on a filled rounded square. Tracing luminance alone captured the
@@ -182,21 +193,32 @@ found real plates behind `baseten` (#19e76e), `cerebras` (#ef5b27), `hyperbolic`
 
 ### Rejected, and why
 
-- **`nous`** — `nousresearch.com/safari-pinned-tab.svg` opens with the full
-  512-unit frame as its first path, so it renders as a black square. This is the
-  identical candidate the Hermes client mark rejected. Nous Research keeps its
-  fallback tile; reusing `hermes-agent.svg` would attribute a product's mark to
-  its publisher.
-- **`litellm`** — the traced favicon is a muddy multi-colour blob with no legible
-  silhouette at 19px. The homepage SVGs are third-party model logos, not LiteLLM's
-  own mark.
+- **`nousresearch.com/safari-pinned-tab.svg`** — opens with the full 512-unit
+  frame as its first path, so it renders as a black square. This is the identical
+  candidate the Hermes client mark rejected. The apple-touch-icon was used instead.
+- **LiteLLM's marketing-site SVGs** — third-party model logos, and the favicon
+  traces to a muddy blob with no legible silhouette at 19px. The docs logo was
+  used instead.
 - **Wordmarks refused** for `cerebras` (843x320 from Sanity CDN), `siliconflow`
   (188x28), `zhipu-bigmodel` (123x25), `vultr` (218x52), `baseten` (1001x151) and
   `chutes` (192x30). A lockup in the rail's 19px box is an illegible smear, so
   each was replaced by a traced square mark or left to the fallback.
-- **Nothing found** for `chutes`, `nscale`, `together`, `volcengine` and
-  `tencent-coding-plan`: no square SVG and no usable raster icon at the
-  registry's domains. They keep their fallback tiles.
+
+### Still unmarked, and what was searched
+
+Six ids keep the fallback tile. Each was probed at its registry `baseUrl` and
+`dashboardUrl`, plus the vendor's docs subdomain and the conventional icon paths
+(`/favicon.svg`, `/favicon.ico`, `/apple-touch-icon.png`, `/logo.svg`, `/icon.svg`):
+
+- `chutes` — `chutes.ai` and `docs.chutes.ai` serve only the 192x30 wordmark.
+- `nscale` — `nscale.com` and `docs.nscale.com` returned no icon at any path.
+- `volcengine`, `volcengine-coding-plan`, `volcengine-agent-plan` — the Ark
+  console's SVGs are UI glyphs rather than a product mark.
+- `tencent-coding-plan` — `cloud.tencent.com` serves a 32x32 favicon whose trace
+  is unreadable at 19px.
+
+These are recorded results, not skipped work. Inventing a mark, or borrowing a
+neighbouring brand's, is a misattribution that outlives the commit.
 
 `zhipu-bigmodel` and `zhipu-bigmodel-coding` share `zai.svg`: Z.AI and BigModel
 are the same company, and the mainland console publishes only the wordmark.
