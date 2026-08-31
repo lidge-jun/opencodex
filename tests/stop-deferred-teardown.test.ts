@@ -185,6 +185,35 @@ describe("performStopTeardown", () => {
   });
 });
 
+describe("receipt naming is shared by both update lanes", () => {
+  test("the launcher's scan and the TypeScript listing agree on what is outstanding", async () => {
+    const mod = await import("../src/config/pending-teardown");
+    const names = await import("../src/config/pending-teardown-names.mjs");
+    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
+
+    // bin/ocx.mjs runs under plain Node and cannot import the TypeScript module, so the
+    // naming rule lives in one shared .mjs. Spelling it twice is exactly how the npm lane
+    // ended up watching a filename that no longer existed.
+    expect(names.hasPendingTeardownIn(readdirSync, home)).toBe(true);
+    expect(mod.pendingTeardownOutstanding()).toBe(true);
+
+    // The retired singleton name is not a receipt.
+    expect(names.isPendingTeardownFileName("pending-teardown.json")).toBe(false);
+    expect(names.isPendingTeardownFileName(`pending-teardown-${claimed.nonce}.json`)).toBe(true);
+    // A quarantined receipt must not keep an update blocked.
+    expect(names.isPendingTeardownFileName(`pending-teardown-unreadable-${claimed.nonce}-1.bak`)).toBe(false);
+
+    mod.quarantinePendingTeardown(claimed.nonce);
+    expect(names.hasPendingTeardownIn(readdirSync, home)).toBe(false);
+    expect(mod.pendingTeardownOutstanding()).toBe(false);
+  });
+
+  test("an unreadable directory reads as no receipts rather than throwing", async () => {
+    const names = await import("../src/config/pending-teardown-names.mjs");
+    expect(names.hasPendingTeardownIn(() => { throw new Error("EACCES"); }, home)).toBe(false);
+  });
+});
+
 describe("pending teardown receipts", () => {
   test("a claim is durable and carries the endpoint it was stopping", async () => {
     const mod = await import("../src/config/pending-teardown");

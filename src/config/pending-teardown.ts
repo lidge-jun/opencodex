@@ -58,8 +58,13 @@ export type PendingTeardownRead =
   | { state: "valid"; receipt: PendingTeardownReceipt }
   | { state: "invalid"; nonce: string; detail: string };
 
-const PREFIX = "pending-teardown-";
-const SUFFIX = ".json";
+import {
+  isPendingTeardownFileName,
+  PENDING_TEARDOWN_PREFIX as PREFIX,
+  PENDING_TEARDOWN_SUFFIX as SUFFIX,
+  pendingTeardownNonceFromFileName,
+} from "./pending-teardown-names.mjs";
+
 const NONCE_RE = /^[0-9a-f]{32}$/;
 
 export function pendingTeardownPathFor(nonce: string): string {
@@ -135,9 +140,10 @@ export function listPendingTeardowns(): OutstandingTeardown[] {
   }
   const out: OutstandingTeardown[] = [];
   for (const name of names) {
-    if (!name.startsWith(PREFIX) || !name.endsWith(SUFFIX)) continue;
-    const nonce = name.slice(PREFIX.length, name.length - SUFFIX.length);
-    if (!NONCE_RE.test(nonce)) continue;
+    // One naming rule, shared with the npm launcher: the two lanes drifting apart is
+    // exactly how the Node updater stopped seeing receipts at all.
+    if (!isPendingTeardownFileName(name)) continue;
+    const nonce = pendingTeardownNonceFromFileName(name)!;
     const read = readPendingTeardown(nonce);
     if (read.state !== "missing") out.push(read);
   }

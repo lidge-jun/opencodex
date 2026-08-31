@@ -748,13 +748,22 @@ async function handleStop() {
    *
    * Deriving them separately meant the receipt could name a different endpoint than the
    * one actually contacted, and a proxy with no runtime record got no receipt at all —
-   * silently reopening the parent-crash window on the path where the stop is a hard kill.
-   * When no endpoint can be resolved there is nothing to defer to: the proxy does its own
-   * teardown, which is correct because this run cannot prove anything about it later.
+   * silently reopening the parent-crash window on the path where the stop is a hard kill
+   * and no child teardown runs at all.
+   *
+   * So the caller supplies whatever endpoint it already discovered: the orphan path knows
+   * one from `findLiveProxy` even when the runtime record is gone. Only when nothing can
+   * be resolved is the stop left undeferred — there is no endpoint to send the nonce to,
+   * so the graceful request cannot happen and the kill has no receipt to leave. That is
+   * reported rather than silent, because it is the one case that keeps the old window.
    */
-  const stopWithDeferral = async (pid: number): Promise<void> => {
-    const endpoint = endpointOf(readRuntimePort(pid));
+  const stopWithDeferral = async (pid: number, discovered?: { hostname: string; port: number } | null): Promise<void> => {
+    const endpoint = discovered ?? endpointOf(readRuntimePort(pid));
     if (endpoint) claimTeardown(endpoint);
+    else {
+      console.warn("⚠️  No listen endpoint could be resolved for this proxy, so the stop cannot be deferred.");
+      console.warn("   If this process dies before the restore, client config may keep pointing at the stopped proxy; rerun 'ocx stop'.");
+    }
     await stopProxy(pid, { deferSharedTeardownNonce: teardownNonce, runtimeEndpoint: endpoint ?? undefined });
   };
   try {
@@ -818,7 +827,9 @@ async function handleStop() {
     const live = await findLiveProxy();
     if (live?.pid) {
       try {
-        await stopWithDeferral(live.pid);
+        // The probe already found where it answers, and on this path the runtime record is
+        // typically what went missing in the first place.
+        await stopWithDeferral(live.pid, { hostname: live.hostname ?? "127.0.0.1", port: live.port });
         console.log(`✅ Proxy (PID ${live.pid}) stopped.`);
       } catch (err) {
         stopFailed = true;
@@ -871,41 +882,43 @@ async function handleStop() {
   // warning that lets the restore happen anyway is not a gate.
   //
   // An UNREADABLE obligation is a third case. It names no endpoint, so nothing can ever
-  // prove its proxy down, so it can never be discharged this way — and both updater gates
-  // treat it as a reason to run a stop that would fail on it every time. Quarantine moves
-  // it aside, keeping the evidence for the operator while letting this stop perform the
-  // restore it stood for.
-  const inheritedOnly = inheritedTeardowns.length > 0 && !teardownNonce;
+  // prove its proxy down. It is NOT waved through: it fails this stop and is set aside
+  // only afterwards, so the operator gets an explicit manual step instead of a silent
+  // restore backed by no evidence. Setting it aside is still necessary — left in place it
+  // makes both updater gates run a stop that fails on it every time, which is an update
+  // that can never proceed.
+  //
+  // Inherited obligations are evaluated whether or not this run claimed its own. A stop
+  // that finds a live proxy used to skip them entirely, so older abandoned receipts
+  // accumulated forever while each run cleared only its own nonce.
   const recoveredNonces: string[] = [];
-  let inheritedRecoverable = inheritedOnly;
-  if (inheritedOnly && !ownershipBlocked) {
+  const unreadable: { nonce: string }[] = [];
+  let inheritedBlocks = false;
+  if (inheritedTeardowns.length > 0 && !ownershipBlocked) {
     for (const read of inheritedTeardowns) {
       if (read.state === "invalid") {
-        const moved = quarantinePendingTeardown(read.nonce);
-        console.warn(`⚠️  A pending-teardown receipt could not be read (${read.detail}); finishing its teardown and setting it aside${moved ? ` at ${moved}` : ""}.`);
-        if (!moved) {
-          // It could not even be moved, so the next stop would find it again and this one
-          // cannot honestly claim the obligation is settled.
-          inheritedRecoverable = false;
-          stopFailed = true;
-          console.error("❌ That receipt could not be set aside; leaving it in place. Remove it manually once the proxy is confirmed stopped.");
-        }
+        unreadable.push(read);
+        inheritedBlocks = true;
+        stopFailed = true;
+        console.error(`❌ A pending-teardown receipt could not be read (${read.detail}).`);
+        console.error("   It names no endpoint, so this stop cannot prove the proxy it belonged to is down.");
+        console.error("   Confirm no proxy is running, then rerun 'ocx stop' to complete the teardown.");
         continue;
       }
       if (await abandonedTeardownIsSafeToFinish(read.receipt.endpoint)) {
         recoveredNonces.push(read.receipt.nonce);
         continue;
       }
-      inheritedRecoverable = false;
+      inheritedBlocks = true;
       stopFailed = true;
       console.error(`❌ A shared teardown from an earlier stop is still outstanding, and the proxy on ${read.receipt.endpoint.hostname}:${read.receipt.endpoint.port} could not be confirmed down.`);
       console.error("   Skipping shared teardown: restoring client config under a proxy that may still be running is what the deferral exists to prevent.");
       console.error("   The obligation is preserved; retry once the proxy is confirmed stopped.");
     }
   }
-  const restoreBlocked = ownershipBlocked || (inheritedOnly && !inheritedRecoverable);
+  const restoreBlocked = ownershipBlocked || inheritedBlocks;
   if (!restoreBlocked) {
-    if (inheritedRecoverable) {
+    if (recoveredNonces.length > 0) {
       // A previous deferred stop died before restoring, and the probe says its endpoint is
       // not answering. That is the whole point of leaving the receipt behind.
       console.log("↩️  Finishing a shared teardown left unfinished by an earlier stop.");
@@ -916,12 +929,11 @@ async function handleStop() {
     // The obligation is discharged whether or not history metadata finalized: config and
     // catalog are what a client reads, and `restore.other` already fails the stop.
     //
-    // Clear by the identity that was READ, never by re-reading the file: a concurrent stop
-    // may have written its own receipt in the meantime, and deleting that one would drop a
-    // live obligation on the floor. That holds for an unparseable file too — it is
-    // identified by the hash of the bytes that were read.
+    // Each nonce names its own file, so a clear can only ever remove the obligation it
+    // names — never one a concurrent stop wrote. Both this run's claim and every inherited
+    // receipt it proved discharged are released together.
     if (!restore.other) {
-      const discharged = teardownNonce ? [teardownNonce] : recoveredNonces;
+      const discharged = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
       for (const nonce of discharged) {
         // A receipt that survives its discharge re-triggers recovery forever, so a failed
         // removal is surfaced rather than swallowed.
@@ -931,6 +943,17 @@ async function handleStop() {
           console.error("   Remove it manually; otherwise every later stop and update will try to recover it again.");
         }
       }
+    }
+  }
+  // Set an unreadable receipt aside only AFTER the outcome is known, and only when nothing
+  // else is still outstanding. Moving it earlier would erase an obligation from every
+  // future scan while the restore it stood for had not run — a crash, a blocking sibling
+  // receipt, or a failed restore would each lose it silently.
+  if (unreadable.length > 0 && !ownershipBlocked) {
+    for (const read of unreadable) {
+      const moved = quarantinePendingTeardown(read.nonce);
+      if (moved) console.warn(`⚠️  That unreadable receipt was set aside at ${moved}; it no longer blocks an update, and 'ocx stop' has not restored on its behalf.`);
+      else console.error(`❌ It could not be set aside either: ${pendingTeardownPathFor(read.nonce)}. Remove it manually.`);
     }
   }
   // Set the code rather than exiting inline: this function returns a value its dispatcher

@@ -20,6 +20,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
+import { hasPendingTeardownIn } from "../src/config/pending-teardown-names.mjs";
 import {
   npmCachePreflightFailureMessage,
   runNpmCachePreflight,
@@ -370,7 +371,7 @@ function runNpmSelfUpdate() {
   // that silently skips the recovery the receipt was written to trigger (#3008). Presence
   // is the whole test here — the launcher cannot parse it, and `ocx stop` is what decides
   // whether the obligation is safe to finish.
-  const hasPendingTeardown = existsSync(join(configDir(), "pending-teardown.json"));
+  const hasPendingTeardown = hasPendingTeardownIn(readdirSync, configDir());
   if (serviceWasInstalled || hasRuntimeState || hasPendingTeardown) {
     console.log("⏹  Stopping the running proxy before updating...");
     const stopRes = spawnSync(process.execPath, [launcher, "stop"], { stdio: "inherit", windowsHide: true });
