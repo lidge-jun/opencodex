@@ -183,12 +183,18 @@ describe("Grok fence lifecycle wiring", () => {
     // ocx stop let it, a scheduler wrapper that respawns seconds later would already have
     // lost its client config, and the parent ownershipBlocked guard could only prevent a
     // second redundant teardown (#3008).
-    expect(stopFn).toContain("deferSharedTeardown: true");
+    expect(stopFn).toContain("deferSharedTeardown: teardownClaimed");
     expect(controlSource).toContain("deferSharedTeardown");
-    expect(apiSource).toContain('url.searchParams.get("deferSharedTeardown") === "1"');
-    // A direct /api/stop caller keeps the self-contained behaviour.
-    expect(apiSource).toContain("deferSharedTeardown");
-    expect(apiSource).toContain("await restoreNativeCodexAsync()");
+    expect(apiSource).toContain("performStopTeardown(url, { readReceipt: readPendingTeardown })");
+    // The deferral is an obligation, so it is claimed on disk BEFORE it is requested and
+    // released only after THIS process has restored the shared config itself. A bare
+    // query flag could not survive the parent dying mid-stop.
+    const claimAt = stopFn.indexOf("claimTeardown();");
+    expect(claimAt).toBeGreaterThan(-1);
+    expect(claimAt).toBeLessThan(stopFn.indexOf("deferSharedTeardown: teardownClaimed"));
+    expect(stopFn).toContain("isPendingTeardownAbandoned(readPendingTeardown(), isProcessAlive)");
+    expect(stopFn.indexOf("await restoreSharedClientStateAfterStop()"))
+      .toBeLessThan(stopFn.indexOf("clearPendingTeardown()"));
   });
 
   test("handleStop treats an incomplete native Codex restore as a stop failure", () => {
@@ -263,9 +269,15 @@ describe("POST /api/stop teardown", () => {
   });
 
   test("strips the Grok fence on an accepted stop", () => {
+    // The teardown moved to src/server/stop-teardown.ts so a test can call it: the route
+    // schedules process.exit 200ms after answering, which made the inline version
+    // unreachable. tests/stop-deferred-teardown.test.ts proves the behaviour; this proves
+    // the route still delegates to it rather than growing a second copy.
     const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
-    expect(handler).toContain('await import("../grok/inject")');
-    expect(handler).toContain("stripGrokConfig()");
+    expect(handler).toContain("performStopTeardown(url, { readReceipt: readPendingTeardown })");
+    const teardownSource = readFileSync(join(import.meta.dir, "..", "src", "server", "stop-teardown.ts"), "utf8");
+    expect(teardownSource).toContain('await import("../grok/inject")');
+    expect(teardownSource).toContain("stripGrokConfig()");
   });
 
   test("maps a failed shutdown drain to a nonzero process exit", () => {

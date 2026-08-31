@@ -26,6 +26,12 @@ import {
   writePid,
   writeRuntimePort,
 } from "../config/process-state";
+import {
+  claimPendingTeardown,
+  clearPendingTeardown,
+  isPendingTeardownAbandoned,
+  readPendingTeardown,
+} from "../config/pending-teardown";
 import { collectStatus, unusedProxyWarningLines } from "./status";
 import { takeFlag } from "./runtime-api";
 
@@ -45,7 +51,7 @@ import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-li
 import { createReadinessGate } from "../server/readiness";
 import { runReady, type ReadyArgs } from "./ready";
 import { runCli } from "./root";
-import { ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
+import { isProcessAlive, ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled } from "../service";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
@@ -689,6 +695,25 @@ async function handleStop() {
   // service — the exact failure this flag prevents. A plain stop failure is different: we
   // tried, so local teardown still proceeds.
   let ownershipBlocked = false;
+  // Deferring shared teardown to this process is an obligation, so record it on disk
+  // before asking for it (#3008). A parent that dies mid-stop would otherwise leave the
+  // client config routed at a proxy that is already gone, with nothing to find later.
+  // `abandonedTeardown` is the inverse case: a PREVIOUS stop left that obligation
+  // unfinished, so this run finishes it once it can prove no proxy is live.
+  const abandonedTeardown = isPendingTeardownAbandoned(readPendingTeardown(), isProcessAlive);
+  let teardownClaimed = false;
+  const claimTeardown = () => {
+    if (teardownClaimed) return;
+    try {
+      claimPendingTeardown();
+      teardownClaimed = true;
+    } catch (err) {
+      // Without a receipt the proxy performs its own teardown, which is the pre-#3008
+      // behaviour: correct for every backend that cannot respawn, and merely early for
+      // Task Scheduler. Losing the deferral is far better than losing the stop.
+      console.warn(`⚠️  Could not record the deferred-teardown receipt: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   try {
     const serviceStop = stopServiceIfInstalledDetailed();
     stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
@@ -720,7 +745,10 @@ async function handleStop() {
       // the proxy's shutdown handlers actually run; taskkill /F is the fallback inside.
       // Shared teardown is deferred to this process: it happens after the respawn
       // verification below, so a survivor does not get its client config pulled first.
-      await stopProxy(pid, { deferSharedTeardown: true });
+      // The receipt goes down first — the proxy honours the deferral only when it can
+      // see one, so an unrecordable claim degrades to the child doing its own teardown.
+      claimTeardown();
+      await stopProxy(pid, { deferSharedTeardown: teardownClaimed });
       console.log(`✅ Proxy (PID ${pid}) stopped.`);
       removePid(pid);
       removeRuntimePort(pid);
@@ -748,7 +776,8 @@ async function handleStop() {
     const live = await findLiveProxy();
     if (live?.pid) {
       try {
-        await stopProxy(live.pid, { deferSharedTeardown: true });
+        claimTeardown();
+        await stopProxy(live.pid, { deferSharedTeardown: teardownClaimed });
         console.log(`✅ Proxy (PID ${live.pid}) stopped.`);
       } catch (err) {
         stopFailed = true;
@@ -790,9 +819,25 @@ async function handleStop() {
     }
   }
   if (!ownershipBlocked) {
+    if (abandonedTeardown && !teardownClaimed) {
+      // A previous deferred stop died before restoring. Nothing above found a proxy to
+      // stop, and the respawn verification did not find a survivor, so the obligation is
+      // safe to finish here — that is the whole point of leaving the receipt behind.
+      console.log("↩️  Finishing a shared teardown left unfinished by an earlier stop.");
+    }
     const restore = await restoreSharedClientStateAfterStop();
     if (restore.other) stopFailed = true;
     else if (restore.historyOnly) historyOnlyFailure = true;
+    // The obligation is discharged whether or not history metadata finalized: config and
+    // catalog are what a client reads, and `restore.other` already fails the stop. Clear
+    // this run's own receipt, plus an abandoned one this run just finished.
+    if (!restore.other) {
+      clearPendingTeardown();
+      if (abandonedTeardown) {
+        const stale = readPendingTeardown();
+        if (stale) clearPendingTeardown(stale.ownerPid);
+      }
+    }
   }
   // Set the code rather than exiting inline: this function returns a value its dispatcher
   // reads, so exiting here would take that decision away from the caller.

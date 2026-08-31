@@ -256,15 +256,18 @@ export async function handleManagementAPI(
   if (routed) return routed;
 
   if (url.pathname === "/api/stop" && req.method === "POST") {
-    const { restoreNativeCodexAsync } = await import("../codex/inject");
     const { stopServiceIfInstalled, isServiceOwnershipError } = await import("../service");
     // `ocx stop` performs its own shared teardown AFTER verifying the scheduler did not
-    // respawn the proxy (#3008). Without this flag the child restores native Codex and
-    // strips the Grok fence here, so a survivor found moments later has already had the
-    // shared config pulled out from under it — and the parent's `ownershipBlocked` guard
-    // can only prevent a second, redundant teardown. A direct caller sends nothing and
-    // keeps the self-contained behaviour.
-    const deferSharedTeardown = url.searchParams.get("deferSharedTeardown") === "1";
+    // respawn the proxy (#3008). Without this the child restores native Codex and strips
+    // the Grok fence here, so a survivor found moments later has already had the shared
+    // config pulled out from under it — and the parent's `ownershipBlocked` guard can
+    // only prevent a second, redundant teardown. A direct caller sends nothing and keeps
+    // the self-contained behaviour.
+    //
+    // The query flag alone is not enough to hand over the obligation: any authenticated
+    // caller could set it and simply exit, leaving client config pointed at a proxy that
+    // no longer exists. Honour the deferral only when the caller left a pending-teardown
+    // receipt on disk, which a later stop/update can find and finish.
     try {
       stopServiceIfInstalled();
     } catch (err) {
@@ -280,12 +283,9 @@ export async function handleManagementAPI(
     // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
     // which is exactly why an intentional stop has to do it here — unless the caller is
     // `ocx stop`, which does it itself once the proxy is proven down.
-    const restore = deferSharedTeardown
-      ? { success: true, message: "shared teardown deferred to the stopping client", artifacts: null }
-      : await restoreNativeCodexAsync();
-    const grok = deferSharedTeardown
-      ? { ok: true, changed: false, message: "shared teardown deferred to the stopping client" }
-      : (await import("../grok/inject")).stripGrokConfig();
+    const { readPendingTeardown } = await import("../config/pending-teardown");
+    const { performStopTeardown } = await import("./stop-teardown");
+    const teardown = await performStopTeardown(url, { readReceipt: readPendingTeardown });
     setTimeout(async () => {
       let shutdownSucceeded = false;
       try {
@@ -295,10 +295,7 @@ export async function handleManagementAPI(
       }
       process.exit(shutdownSucceeded ? 0 : 1);
     }, 200);
-    const grokNote = grok.ok ? "" : ` Grok config cleanup failed: ${grok.message}`;
-    return jsonResponse(restore.success
-      ? { success: true, message: `Proxy stopping, native Codex restored.${grokNote}` }
-      : { success: false, message: `Proxy stopping, but native Codex restore failed: ${restore.message}. Run \`ocx restore\`.${grokNote}` });
+    return jsonResponse(teardown);
   }
 
   if (url.pathname.startsWith("/api/native-main-profiles")) {
