@@ -135,7 +135,7 @@ GUI 是代理 JSON 管理 API 之上的輕量用戶端。常用 endpoint 包括�
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | 透過瀏覽器登入新增池帳號。 |
 | `GET /api/logs?tail=50&provider=...&status=5xx` | 使用 tail、provider、精確狀態碼或狀態類別篩選近期請求後設資料。 |
 | `GET` / `PUT /api/subagent-models` | 讀取或設定五個置頂的 `spawn_agent` override 模型。 |
-| `POST /api/stop` | 停止代理/服務，恢復原生 Codex 並退出。 |
+| `POST /api/stop` | 停止代理/服務，恢復原生 Codex 並退出。在 Windows 工作排程器後端會以 `respawnable_service` 拒絕，無法讀取該狀態時以 `service_state_unknown` 拒絕；兩種情況都不會做任何變更。 |
 
 :::tip
 從儀表板新增 **Ollama Cloud** 或其他目錄型 provider 時，其文字/視覺模型分類會寫入儲存的

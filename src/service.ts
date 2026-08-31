@@ -3681,7 +3681,32 @@ export function installedServiceRespawnRisk(
  * are down when they report stopped, and making them pay a seven-second poll would be a
  * regression in every ordinary `ocx stop`.
  */
-export type ServiceStopOutcome = "absent" | "stopped" | "stopped-respawnable" | "failed";
+/**
+ * `state-unknown` is kept apart from `failed` because the remedies differ. A manager that
+ * refused to stop is a stop failure the operator can retry; a scheduler whose state cannot
+ * be READ is a broken query, and telling that operator "the manager did not stop" sends
+ * them looking for the wrong thing (#3008).
+ */
+export type ServiceStopOutcome = "absent" | "stopped" | "stopped-respawnable" | "failed" | "state-unknown";
+
+/**
+ * Collapse the Windows backend observations into one outcome.
+ *
+ * Extracted so the precedence is testable by calling it. The rule that matters: a readable
+ * failure outranks an unreadable state, and an unreadable state outranks success — a
+ * scheduler we cannot see may still respawn the proxy.
+ */
+export function classifyWindowsServiceStop(o: {
+  stopped: boolean;
+  failed: boolean;
+  schedulerStopped: boolean;
+  stateUnknown: boolean;
+}): ServiceStopOutcome {
+  if (o.failed) return "failed";
+  if (o.stateUnknown) return "state-unknown";
+  if (o.stopped) return o.schedulerStopped ? "stopped-respawnable" : "stopped";
+  return "absent";
+}
 
 export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
   assertServiceEnvironmentMatchesInstall();
@@ -3695,6 +3720,7 @@ export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
     let stopped = false;
     let failed = false;
     let schedulerStopped = false;
+    let stateUnknown = false;
     // `probeWindowsSchedulerTask` is tri-state on purpose: a query that THROWS is not the
     // same as a task that is absent, and treating it as absent lets a live scheduler
     // survive a "successful" stop.
@@ -3703,7 +3729,9 @@ export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
       if (stopWindowsChecked()) { stopped = true; schedulerStopped = true; }
       else failed = true;
     } else if (probe.status === "unknown") {
-      failed = true;
+      // Not "failed": nothing refused to stop. The query itself could not answer, which is
+      // a different problem with a different fix.
+      stateUnknown = true;
     }
     if (statusWinswRaw() !== "nonexistent") {
       try { stopWinswService(); stopped = true; } catch { failed = true; }
@@ -3714,8 +3742,8 @@ export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
     killWindowsServiceWrapperProcesses();
     // A failure on either backend wins: the other one stopping does not make the live one
     // safe to update over.
-    if (failed) return "failed";
-    if (stopped) return schedulerStopped ? "stopped-respawnable" : "stopped";
+    const outcome = classifyWindowsServiceStop({ stopped, failed, schedulerStopped, stateUnknown });
+    if (outcome !== "absent") return outcome;
   } else if (process.platform === "linux" && isSystemd() && existsSync(unitPath())) {
     try { stopSystemd(); return "stopped"; } catch { return "failed"; }
   }

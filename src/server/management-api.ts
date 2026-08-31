@@ -293,7 +293,7 @@ export async function handleManagementAPI(
         message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Nothing was changed. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
       }, 409, req, config);
     }
-    let serviceStop: "absent" | "stopped" | "stopped-respawnable" | "failed";
+    let serviceStop: import("../service").ServiceStopOutcome;
     try {
       serviceStop = stopServiceIfInstalledDetailed();
     } catch (err) {
@@ -312,6 +312,14 @@ export async function handleManagementAPI(
       return jsonResponse({
         success: false,
         message: "The installed service manager did not stop; it may respawn the proxy. Shared client config was left alone. Run `ocx stop` from the home that owns the service.",
+      }, 409, req, config);
+    }
+    if (serviceStop === "state-unknown") {
+      // Same case, same remedy as the pre-check: the query is what needs fixing.
+      return jsonResponse({
+        success: false,
+        code: "service_state_unknown",
+        message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Shared client config was left alone. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
       }, 409, req, config);
     }
     // The pre-check above already refused the respawnable case without a receipt, so

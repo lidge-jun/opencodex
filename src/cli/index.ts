@@ -802,6 +802,14 @@ async function handleStop() {
       stopFailed = true;
       console.error("❌ The installed service manager did not stop; it may respawn the proxy.");
     }
+    if (serviceStop === "state-unknown") {
+      // Nothing refused to stop — the scheduler state could not be READ. Saying "did not
+      // stop" sends the operator looking for the wrong problem, and `/api/stop` answers
+      // the same case with service_state_unknown.
+      stopFailed = true;
+      console.error("❌ The Windows Task Scheduler state could not be read, so this stop cannot tell whether a wrapper would respawn the proxy.");
+      console.error("   Run 'ocx service status' to see the query error, repair Task Scheduler access, then retry.");
+    }
   } catch (err) {
     if (isServiceOwnershipError(err)) {
       ownershipBlocked = true;

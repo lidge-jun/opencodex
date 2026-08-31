@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { installedServiceRespawnRisk, isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
+import { classifyWindowsServiceStop, installedServiceRespawnRisk, isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
 const ENSURE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "ensure-desired-integrations.ts"), "utf8");
@@ -379,6 +379,40 @@ describe("POST /api/stop teardown", () => {
     const teardownSource = readFileSync(join(import.meta.dir, "..", "src", "server", "stop-teardown.ts"), "utf8");
     expect(teardownSource).toContain('await import("../grok/inject")');
     expect(teardownSource).toContain("stripGrokConfig()");
+  });
+
+  test("an unreadable scheduler state gets the same diagnosis from the CLI and the API", () => {
+    const serviceSource = readFileSync(join(import.meta.dir, "..", "src", "service.ts"), "utf8");
+    // A manager that refused to stop and a query that could not answer are different
+    // problems: reporting the second as "did not stop" sends the operator looking for the
+    // wrong thing, and `ocx stop` was the command the API told them to run (#3008).
+    expect(serviceSource).toContain('"absent" | "stopped" | "stopped-respawnable" | "failed" | "state-unknown"');
+    // Behavioural, because a source-text assertion cannot tell whether an unreadable probe
+    // is still being folded into the generic failure.
+    expect(classifyWindowsServiceStop({ stopped: false, failed: false, schedulerStopped: false, stateUnknown: true }))
+      .toBe("state-unknown");
+    // A readable failure outranks it — something actually refused to stop.
+    expect(classifyWindowsServiceStop({ stopped: false, failed: true, schedulerStopped: false, stateUnknown: true }))
+      .toBe("failed");
+    // And an unreadable state outranks success: a scheduler we cannot see may respawn.
+    expect(classifyWindowsServiceStop({ stopped: true, failed: false, schedulerStopped: true, stateUnknown: true }))
+      .toBe("state-unknown");
+    expect(classifyWindowsServiceStop({ stopped: true, failed: false, schedulerStopped: true, stateUnknown: false }))
+      .toBe("stopped-respawnable");
+    expect(classifyWindowsServiceStop({ stopped: true, failed: false, schedulerStopped: false, stateUnknown: false }))
+      .toBe("stopped");
+    expect(classifyWindowsServiceStop({ stopped: false, failed: false, schedulerStopped: false, stateUnknown: false }))
+      .toBe("absent");
+    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
+    expect(stopFn).toContain('if (serviceStop === "state-unknown")');
+    const unknownBranch = stopFn.slice(stopFn.indexOf('if (serviceStop === "state-unknown")'), stopFn.indexOf('if (serviceStop === "state-unknown")') + 700);
+    expect(unknownBranch).toContain("stopFailed = true;");
+    expect(unknownBranch).toContain("ocx service status");
+    expect(unknownBranch).not.toContain("did not stop");
+    const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
+    expect(handler).toContain('if (serviceStop === "state-unknown")');
+    // The route answers the post-stop case with the same code as the pre-check.
+    expect((handler.match(/service_state_unknown/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
   test("maps a failed shutdown drain to a nonzero process exit", () => {

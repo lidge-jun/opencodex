@@ -139,7 +139,7 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | 通过浏览器登录添加池账号。 |
 | `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | 使用 tail、provider、精确状态码或状态类别筛选近期请求元数据。`limit`/`offset` 从最新一行向前分页（`offset=0` 为最新一页）。响应为 `{ timeZone, total, logs }`，其中 `total` 为分页前的匹配行数。 |
 | `GET` / `PUT /api/subagent-models` | 读取或设置五个置顶的 `spawn_agent` override 模型。 |
-| `POST /api/stop` | 停止代理/服务，恢复原生 Codex 并退出。 |
+| `POST /api/stop` | 停止代理/服务，恢复原生 Codex 并退出。在 Windows 任务计划程序后端会以 `respawnable_service` 拒绝，无法读取该状态时以 `service_state_unknown` 拒绝；两种情况都不会做任何更改。 |
 
 :::tip
 从仪表盘添加 **Ollama Cloud** 或其他目录型 provider 时，其文本/视觉模型分类会写入保存的
