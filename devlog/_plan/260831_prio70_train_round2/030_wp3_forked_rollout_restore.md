@@ -394,3 +394,35 @@ scan on `ssh lidge`.
 `Closes #3026`. PR #3056 is 630 commits behind `dev`; carry its id-aware reader with
 credit to its author rather than rebasing that branch, the same way round 1's wp3
 carried Ingwannu's `aec717722`.
+
+## What implementation added beyond this plan
+
+Seven adversarial review rounds against the built branch (findings 3, 2, 1, 1, 2, 2, 0).
+The eleven planning rounds got the classifier right; every implementation finding was in
+the machinery around it, which is worth recording separately:
+
+- **A surviving manifest has to be re-snapshotted, not just re-marked.** The plan said to
+  reopen the relabel marker on a new routing attempt. That was half of it: the entry also
+  carries `hadFirstUserMessage` and `hasUserEvent`, and both described the previous
+  attempt. The stale message flag made the new routed row match the expected post-image;
+  the stale event value restored the thread to a state two events old.
+- **Refreshing the baseline needs the same proof the classifier needs.** Tuple equality
+  does not establish that the previous relabel was undone — route-then-legacy-recovery
+  lands on the original tuple. A restore that lands and passes its readback now records
+  `relabel: "none"`, which is the proof. Nothing wrote that value before.
+- **A sixth cell, and it refuses.** When the proof is absent and the row has drifted,
+  neither reading is safe. That is the plan's undecidable shape arriving one layer up, in
+  `rememberOriginal` rather than in the classifier, and it refuses the same way.
+- **The decision is direction and origin, not one flag.** Reverse drift is always foreign;
+  `0 → 1` is the user's for an exec-origin entry, under a `none` marker, or when the
+  previous route would have written 0; everything else refuses, and a legacy `undefined`
+  is not `false`.
+- **The refusal has to reach a person.** `failureReason: "integrity"` alone reads as
+  "retry or run doctor", and an ambiguous reroute is not retryable. The specific code now
+  travels through the worker and job layers to an operator message that says the manifest
+  needs manual resolution.
+
+And two about verification: a regression that let an ordinary restore consume the manifest
+never reached the reopen path at all, and the legacy-return end-to-end test passed because
+the fixture's rollout omitted `source`, so restore refused at rollout preflight before the
+classifier was consulted. Both were green for reasons unrelated to what they claimed.
