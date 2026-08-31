@@ -217,6 +217,11 @@ export interface HardenResult {
 export interface HardenOptions {
   required: boolean;
   /**
+   * Explicit total budget for this harden call. Shutdown recovery uses a reduced
+   * caller-owned slice instead of opening the normal 30-second window.
+   */
+  deadlineMs?: number;
+  /**
    * Optional timeout-memo key distinct from `targetPath` (issue #612).
    * Atomic writers mint a fresh `.tmp` path per write; keying the timeout cache by the
    * final destination path prevents re-stalling the event loop on every subsequent temp.
@@ -257,7 +262,11 @@ const HARDEN_DEADLINE_MIN_MS = 1_000;
 const HARDEN_DEADLINE_MAX_MS = 60_000;
 
 /** Resolve the total harden budget once per call (env mutation cannot change it midway). */
-function resolveHardenDeadlineMs(): number {
+function resolveHardenDeadlineMs(overrideMs?: number): number {
+  if (overrideMs !== undefined) {
+    if (!Number.isSafeInteger(overrideMs) || overrideMs <= 0) return 1;
+    return Math.min(HARDEN_DEADLINE_MAX_MS, overrideMs);
+  }
   const raw = env["OPENCODEX_ACL_TIMEOUT_MS"]?.trim();
   if (!raw) return HARDEN_DEADLINE_DEFAULT_MS;
   const parsed = Number(raw);
@@ -537,12 +546,14 @@ function shouldVerifyExistingAcl(): boolean {
   return env["OPENCODEX_ACL_VERIFY_EXISTING"] === "1";
 }
 
-function existingAclAlreadyCompliant(targetPath: string, directory: boolean): boolean {
+function existingAclAlreadyCompliant(targetPath: string, directory: boolean, deadline: number): boolean {
   if (!shouldVerifyExistingAcl()) return false;
   const identity = cachedCurrentWindowsIdentity();
   if (!identity) return false;
   try {
-    const result = icaclsRunner([targetPath], resolveHardenDeadlineMs());
+    const remaining = deadline - nowFn();
+    if (remaining <= 0) return false;
+    const result = icaclsRunner([targetPath], remaining);
     return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
   } catch {
     return false;
@@ -552,12 +563,15 @@ function existingAclAlreadyCompliant(targetPath: string, directory: boolean): bo
 async function existingAclAlreadyCompliantAsync(
   targetPath: string,
   directory: boolean,
+  deadline: number,
 ): Promise<boolean> {
   if (!shouldVerifyExistingAcl()) return false;
   const identity = cachedCurrentWindowsIdentity();
   if (!identity) return false;
   try {
-    const result = await asyncIcaclsRunner([targetPath], resolveHardenDeadlineMs());
+    const remaining = deadline - nowFn();
+    if (remaining <= 0) return false;
+    const result = await asyncIcaclsRunner([targetPath], remaining);
     return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
   } catch {
     return false;
@@ -788,7 +802,8 @@ function hardenEntry(
   if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
-  if (existingAclAlreadyCompliant(targetPath, directory)) return { ok: true };
+  const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
+  if (existingAclAlreadyCompliant(targetPath, directory, deadline)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
   if (timeoutMemoError) {
@@ -796,7 +811,6 @@ function hardenEntry(
     return { ok: false, diagnostics: timeoutMemoError.message };
   }
 
-  const deadline = nowFn() + resolveHardenDeadlineMs();
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0 && deadline - nowFn() <= 0) break; // retry only while budget remains
@@ -841,7 +855,8 @@ async function hardenEntryAsync(
   if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
-  if (await existingAclAlreadyCompliantAsync(targetPath, directory)) return { ok: true };
+  const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
+  if (await existingAclAlreadyCompliantAsync(targetPath, directory, deadline)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
   if (timeoutMemoError) {
@@ -849,7 +864,6 @@ async function hardenEntryAsync(
     return { ok: false, diagnostics: timeoutMemoError.message };
   }
 
-  const deadline = nowFn() + resolveHardenDeadlineMs();
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0 && deadline - nowFn() <= 0) break;

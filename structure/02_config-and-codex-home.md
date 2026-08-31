@@ -185,6 +185,13 @@ remain fail-closed after that bounded recovery. Optional config-directory harden
 per-directory async single-flight, while required config mutation writers retain their existing
 awaited or synchronous fail-closed boundary.
 
+Graceful shutdown drains that serialized publication queue to a stable fixed point before snapshot
+serialization. The drain has a wall-clock cap with a reserved synchronous fallback budget; expiry
+supersedes the async writer before fallback publication, and the fallback splits its reserve across
+the directory and file ACL hardens. This ordering is load-bearing because resident entries over 2
+MiB are deliberately excluded from `responses-state.json`: serializing first could omit the resident
+before its durable spill stub exists, losing the continuation on restart.
+
 [Decision Log]
 - 목적과 의도: Keep `/healthz` and unrelated requests responsive during intermittent Windows ACL stalls without publishing an unhardened continuation.
 - 기존 구현 및 제약 조건: Response demotion called the synchronous spill writer from request-time state mutations; `Bun.spawnSync(icacls)` could block the only Bun event loop for the full timeout and immediately replace replayable state with a tombstone.

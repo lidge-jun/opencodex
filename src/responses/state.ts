@@ -54,6 +54,8 @@ const PERIODIC_TEMP_MAX_CLEANUPS = 64;
 const PERIODIC_TEMP_SCAN_DEADLINE_MS = 25;
 const RESPONSE_STATE_TEMP_NAME = /^responses-state\.json\.ocx\.(\d+)\.(\d+)\.tmp$/;
 const MAX_SNAPSHOT_REWRITE_ATTEMPTS = 4;
+const RESPONSE_SPILL_SHUTDOWN_BUDGET_MS = 5_000;
+const RESPONSE_SPILL_SHUTDOWN_FALLBACK_RESERVE_MS = 4_000;
 
 interface ResidentResponseState {
   kind: "resident";
@@ -185,6 +187,7 @@ const pendingResponseSpills = new Set<PendingResponseSpill>();
 const pendingResponseSpillById = new Map<string, PendingResponseSpill>();
 let pendingResponseSpillBytes = 0;
 let responseSpillPublicationTail: Promise<void> = Promise.resolve();
+let responseSpillShutdownBudgetOverride: { totalMs: number; fallbackReserveMs: number } | null = null;
 
 function deferSupersededSpill(ref: ResponseSpillRef | undefined): void {
   if (!ref) return;
@@ -220,19 +223,23 @@ function isAclTimeout(error: unknown): boolean {
     && String((error as { code?: unknown }).code) === "ETIMEDOUT";
 }
 
+function spillPayloadForResident(candidate: ResidentResponseState): Parameters<typeof writeResponseSpillDurably>[1] {
+  return {
+    createdAt: candidate.createdAt,
+    ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
+    items: candidate.items,
+    ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
+    ...(candidate.providers ? { providers: candidate.providers } : {}),
+  };
+}
+
 async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void> {
   if (job.cancelled || !job.candidate) return;
   job.running = true;
   const candidate = job.candidate;
   let ref: ResponseSpillRef | null = null;
   try {
-    const state = {
-      createdAt: candidate.createdAt,
-      ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
-      items: candidate.items,
-      ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
-      ...(candidate.providers ? { providers: candidate.providers } : {}),
-    };
+    const state = spillPayloadForResident(candidate);
     try {
       ref = await writeResponseSpillDurablyAsync(job.id, state);
     } catch (error) {
@@ -325,12 +332,123 @@ function replaceWithPendingResponseSpill(
 
 /** Test-only: settle every serialized Windows spill publication. */
 export async function flushPendingResponseSpillsForTests(): Promise<void> {
-  await responseSpillPublicationTail;
+  await drainResponseSpillPublications();
 }
 
 /** Test-only: observe the bounded queue without exposing payloads. */
 export function pendingResponseSpillMetricsForTests(): { count: number; bytes: number } {
   return { count: pendingResponseSpills.size, bytes: pendingResponseSpillBytes };
+}
+
+/** Test-only: shorten the shutdown drain/fallback budget (null restores production values). */
+export function setResponseSpillShutdownBudgetForTests(
+  budget: { totalMs: number; fallbackReserveMs: number } | null,
+): void {
+  responseSpillShutdownBudgetOverride = budget;
+}
+
+function responseSpillShutdownBudget(): { totalMs: number; fallbackReserveMs: number } {
+  return responseSpillShutdownBudgetOverride ?? {
+    totalMs: RESPONSE_SPILL_SHUTDOWN_BUDGET_MS,
+    fallbackReserveMs: RESPONSE_SPILL_SHUTDOWN_FALLBACK_RESERVE_MS,
+  };
+}
+
+function awaitResponseSpillTailUntil(observed: Promise<void>, deadline: number): Promise<boolean> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return Promise.resolve(false);
+  return new Promise(resolve => {
+    let finished = false;
+    const finish = (settled: boolean): void => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve(settled);
+    };
+    const timer = setTimeout(() => finish(false), remaining);
+    observed.then(() => finish(true), () => finish(true));
+  });
+}
+
+function installShutdownFallbackSpill(
+  job: PendingResponseSpill,
+  candidate: ResidentResponseState,
+  aclBudgetMs: number,
+): void {
+  let ref: ResponseSpillRef | null = null;
+  try {
+    ref = writeResponseSpillDurably(job.id, spillPayloadForResident(candidate), { aclBudgetMs });
+    if (ref.payloadBytes > responseSpillPayloadCap()) {
+      deleteResponseSpill(ref);
+      ref = null;
+      if (job.directAdmission) admissionCounters.oversizedDrops += 1;
+      throw Object.assign(new Error("Response spill payload exceeds replay ceiling"), { code: "EFBIG" });
+    }
+    if (states.get(job.id) !== candidate) {
+      deleteResponseSpill(ref);
+      ref = null;
+      return;
+    }
+    if (swapResidentForSpill(job.id, candidate, ref)) {
+      ref = null;
+      spillCounters.writes += 1;
+      if (job.directAdmission) admissionCounters.directSpills += 1;
+      deferSupersededSpill(job.supersededSpill);
+    }
+  } catch (error) {
+    if (ref) deleteResponseSpill(ref);
+    if (states.get(job.id) === candidate) {
+      spillCounters.writeFailures += 1;
+      replaceWithSpillFailure(job.id, candidate);
+      deferSupersededSpill(job.supersededSpill);
+    }
+    throw error;
+  }
+}
+
+function fallbackPendingResponseSpills(reserveMs: number): void {
+  const deadline = Date.now() + reserveMs;
+  for (;;) {
+    const pending = [...pendingResponseSpills]
+      .map(job => ({ job, candidate: job.candidate }))
+      .filter((entry): entry is { job: PendingResponseSpill; candidate: ResidentResponseState } => !!entry.candidate);
+    if (pending.length === 0) return;
+
+    for (const { job } of pending) {
+      // Ownership moves to the synchronous fallback. The original tail remains intact
+      // for global serialization, but its late result can no longer swap this resident.
+      job.cancelled = true;
+      releasePendingResponseSpill(job);
+    }
+    for (const { job, candidate } of pending) {
+      if (states.get(job.id) !== candidate) continue;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw Object.assign(new Error("Response spill shutdown fallback budget exhausted"), { code: "ETIMEDOUT" });
+      }
+      installShutdownFallbackSpill(job, candidate, remaining);
+    }
+    recomputeOldestResident();
+    pruneResponses();
+    enforceAppOwnedMemoryBudget();
+  }
+}
+
+async function drainResponseSpillPublications(): Promise<void> {
+  const budget = responseSpillShutdownBudget();
+  const fallbackReserveMs = Math.min(budget.totalMs, Math.max(1, budget.fallbackReserveMs));
+  const drainDeadline = Date.now() + Math.max(0, budget.totalMs - fallbackReserveMs);
+
+  for (;;) {
+    if (pendingResponseSpills.size === 0) return;
+    const observed = responseSpillPublicationTail;
+    const settled = await awaitResponseSpillTailUntil(observed, drainDeadline);
+    if (!settled) {
+      fallbackPendingResponseSpills(fallbackReserveMs);
+      return;
+    }
+    if (observed === responseSpillPublicationTail) return;
+  }
 }
 
 function byteCap(): number {
@@ -1116,6 +1234,7 @@ function schedulePersist(): void {
 
 /** Flush any pending debounced snapshot write (graceful shutdown / deterministic tests). */
 export async function flushResponseState(): Promise<void> {
+  await drainResponseSpillPublications();
   if (persistTimer) {
     await persistNow(pendingPersistPath ?? snapshotPath(), true);
     return;

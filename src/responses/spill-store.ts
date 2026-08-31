@@ -119,6 +119,17 @@ export interface ResponseSpillIoForTest {
 let spillIoForTest: ResponseSpillIoForTest | null = null;
 let spillGeneration = 0;
 
+interface ResponseSpillWriteOptions {
+  retryTimedOutOnce?: boolean;
+  /** Total caller-owned ACL budget shared by every harden in this publication. */
+  aclBudgetMs?: number;
+}
+
+interface SpillAclBudget {
+  deadline: number;
+  perCallMs: number;
+}
+
 export function setSpillIoForTest(io: ResponseSpillIoForTest | null): void {
   spillIoForTest = io;
 }
@@ -183,16 +194,37 @@ function canUseExclusiveCopyFallback(error: unknown): boolean {
     .some(code => isErrno(error, code));
 }
 
-function harden(path: string, mode: number): void {
+function spillAclBudget(totalMs: number | undefined): SpillAclBudget | undefined {
+  if (totalMs === undefined) return undefined;
+  const bounded = Math.max(1, Math.floor(totalMs));
+  return { deadline: Date.now() + bounded, perCallMs: Math.max(1, Math.floor(bounded / 2)) };
+}
+
+function nextSpillHardenDeadlineMs(budget: SpillAclBudget | undefined): number | undefined {
+  if (!budget) return undefined;
+  const remaining = budget.deadline - Date.now();
+  if (remaining <= 0) {
+    throw Object.assign(new Error("Response spill ACL budget exhausted"), { code: "ETIMEDOUT" });
+  }
+  return Math.min(budget.perCallMs, remaining);
+}
+
+function harden(path: string, mode: number, budget?: SpillAclBudget): void {
+  const aclApplies = budget ? windowsSecretAclApplies() : process.platform === "win32";
   try {
     chmodSync(path, mode);
   } catch {
-    if (process.platform !== "win32") throw new Error("Response spill permission hardening failed");
+    if (!aclApplies) throw new Error("Response spill permission hardening failed");
   }
-  if (process.platform === "win32") {
+  if (aclApplies) {
+    const deadlineMs = nextSpillHardenDeadlineMs(budget);
+    const options = {
+      required: true,
+      ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+    };
     const result = mode === 0o700
-      ? hardenSecretDir(path, { required: true })
-      : hardenSecretPath(path, { required: true });
+      ? hardenSecretDir(path, options)
+      : hardenSecretPath(path, options);
     if (!result.ok) throw new Error("Response spill permission hardening failed");
   }
 }
@@ -253,7 +285,11 @@ function unlinkEphemeral(path: string): void {
   unlink(path, true);
 }
 
-function publishNoReplace(tempPath: string, destinationPath: string): void {
+function publishNoReplace(
+  tempPath: string,
+  destinationPath: string,
+  budget?: SpillAclBudget,
+): void {
   try {
     if (spillIoForTest?.link) spillIoForTest.link(tempPath, destinationPath);
     else linkSync(tempPath, destinationPath);
@@ -265,7 +301,7 @@ function publishNoReplace(tempPath: string, destinationPath: string): void {
       if (spillIoForTest?.copyFileExcl) spillIoForTest.copyFileExcl(tempPath, destinationPath);
       else copyFileSync(tempPath, destinationPath, constants.COPYFILE_EXCL);
       copied = true;
-      harden(destinationPath, 0o600);
+      harden(destinationPath, 0o600, budget);
       const copyFd = openSync(destinationPath, "r");
       try {
         if (spillIoForTest?.fsync) spillIoForTest.fsync(copyFd);
@@ -396,14 +432,16 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
 export function writeResponseSpillDurably(
   responseId: string,
   state: Omit<ResponseSpillPayload, "version" | "responseId">,
+  options: ResponseSpillWriteOptions = {},
 ): ResponseSpillRef {
   let tempPath: string | null = null;
   let fd: number | null = null;
   try {
+    const aclBudget = spillAclBudget(options.aclBudgetMs);
     const { bytes, digest, idDigest, contentDigest } = serializedSpill(responseId, state);
     const dir = responseSpillDirectory();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    harden(dir, 0o700);
+    harden(dir, 0o700, aclBudget);
 
     tempPath = join(dir, `.response-spill.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
     fd = openSync(tempPath, "wx", 0o600);
@@ -411,7 +449,7 @@ export function writeResponseSpillDurably(
     fsyncFile(fd);
     closeFile(fd);
     fd = null;
-    harden(tempPath, 0o600);
+    harden(tempPath, 0o600, aclBudget);
     record("harden");
     const publishTempPath = tempPath;
 
@@ -421,7 +459,7 @@ export function writeResponseSpillDurably(
       if (!OWNED_SPILL_NAME.test(fileName)) throw new Error("Response spill name allocation failed");
       const destinationPath = join(dir, fileName);
       try {
-        publishNoReplace(publishTempPath, destinationPath);
+        publishNoReplace(publishTempPath, destinationPath, aclBudget);
         fsyncDirectoryBestEffort(dir);
         unlinkEphemeral(publishTempPath);
         tempPath = null;
@@ -454,7 +492,7 @@ export function writeResponseSpillDurably(
 export async function writeResponseSpillDurablyAsync(
   responseId: string,
   state: Omit<ResponseSpillPayload, "version" | "responseId">,
-  options: { retryTimedOutOnce?: boolean } = {},
+  options: ResponseSpillWriteOptions = {},
 ): Promise<ResponseSpillRef> {
   let tempPath: string | null = null;
   let fd: number | null = null;

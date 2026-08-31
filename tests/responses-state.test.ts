@@ -45,6 +45,7 @@ import {
   runPendingResponseStatePersistForTests,
   setResponseStateByteCapForTests,
   setResponseStatePersistAttemptHookForTests,
+  setResponseSpillShutdownBudgetForTests,
   getStoredResponseBytesForTests,
   flushPendingResponseSpillsForTests,
   pendingResponseSpillMetricsForTests,
@@ -178,6 +179,7 @@ describe("Responses previous_response_id state", () => {
     setPlatformForTests(null);
     resetHardenedStateForTests();
     delete process.env.OPENCODEX_ACL_TIMEOUT_MS;
+    setResponseSpillShutdownBudgetForTests(null);
     setResponseStateByteCapForTests(null);
     clearResponseStateForTests();
     rmSync(home, { recursive: true, force: true });
@@ -816,6 +818,192 @@ describe("Responses previous_response_id state", () => {
     expect(replay).not.toContain("old-aaaaaaaa");
     expect(spillFileNames(home)).toHaveLength(1);
     expect(responseStateMetrics()).toMatchObject({ spillStubCount: 1, spillWriteFailures: 0 });
+  });
+
+  test("shutdown flush stays pending while Windows spill ACL publication is gated", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 1_000, fallbackReserveMs: 500 });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+      }
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_shutdown_pending", "p".repeat(2 * 1024 * 1024 + 4_096));
+    await started;
+
+    let flushed = false;
+    const flushing = flushResponseState().then(() => { flushed = true; });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      expect(flushed).toBe(false);
+    } finally {
+      release();
+    }
+    await flushing;
+  });
+
+  test("shutdown flush installs an oversized spill before snapshot and restart replay", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 1_000, fallbackReserveMs: 500 });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+      }
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    const payload = `restart-${"r".repeat(2 * 1024 * 1024 + 4_096)}`;
+    rememberLarge("resp_shutdown_restart", payload);
+    await started;
+
+    let flushed = false;
+    const flushing = flushResponseState().then(() => { flushed = true; });
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(flushed).toBe(false);
+    release();
+    await flushing;
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1 });
+
+    clearResponseStateMemoryForTests();
+    setResponseStateByteCapForTests(1_024);
+    const replay = JSON.stringify(expandPreviousResponseInput({
+      previous_response_id: "resp_shutdown_restart",
+      input: "next",
+    }));
+    expect(replay).toContain("restart-rrrrrrrr");
+    expect(responseStateMetrics().spillStubCount).toBe(1);
+  });
+
+  test("shutdown drain cap expiry enters the synchronous spill fallback", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    setAsyncIcaclsRunnerForTests(async () => {
+      entered();
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    let synchronousCalls = 0;
+    setIcaclsRunnerForTests(() => {
+      synchronousCalls += 1;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_shutdown_fallback", "f".repeat(2 * 1024 * 1024 + 4_096));
+    await started;
+
+    try {
+      await flushResponseState();
+      expect(synchronousCalls).toBeGreaterThan(0);
+      expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
+      expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1 });
+    } finally {
+      release();
+    }
+  });
+
+  test("shutdown fallback spends only its reserved ACL budget", async () => {
+    setPlatformForTests("win32");
+    const totalMs = 500;
+    const fallbackReserveMs = 300;
+    setResponseSpillShutdownBudgetForTests({ totalMs, fallbackReserveMs });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    setAsyncIcaclsRunnerForTests(async () => {
+      entered();
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    const deadlines: number[] = [];
+    setIcaclsRunnerForTests((_args, timeoutMs) => {
+      deadlines.push(timeoutMs);
+      Bun.sleepSync(Math.min(20, timeoutMs));
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_shutdown_budget", "b".repeat(2 * 1024 * 1024 + 4_096));
+    await started;
+
+    const beganAt = Date.now();
+    try {
+      await flushResponseState();
+    } finally {
+      release();
+    }
+    const elapsedMs = Date.now() - beganAt;
+    expect(deadlines.length).toBeGreaterThanOrEqual(6);
+    expect(Math.max(...deadlines)).toBeLessThanOrEqual(Math.floor(fallbackReserveMs / 2));
+    expect(elapsedMs).toBeLessThanOrEqual(totalMs);
+  });
+
+  test("late async spill completion cannot overwrite the shutdown fallback", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
+    let release!: () => void;
+    let entered!: () => void;
+    let secondPublish!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const latePublished = new Promise<void>(resolve => { secondPublish = resolve; });
+    let publishCount = 0;
+    setSpillIoForTest({
+      record: event => {
+        if (event !== "publish") return;
+        publishCount += 1;
+        if (publishCount === 2) secondPublish();
+      },
+    });
+    setAsyncIcaclsRunnerForTests(async () => {
+      entered();
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    setResponseStateByteCapForTests(1_024);
+    const payload = `fallback-${"z".repeat(2 * 1024 * 1024 + 4_096)}`;
+    rememberLarge("resp_shutdown_late", payload);
+    await started;
+
+    let fallbackFile: string | undefined;
+    try {
+      await flushResponseState();
+      fallbackFile = spillFileNames(home)[0];
+      expect(fallbackFile).toBeDefined();
+    } finally {
+      release();
+    }
+    await latePublished;
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(spillFileNames(home)).toEqual([fallbackFile!]);
+    expect(publishCount).toBe(2);
+    const replay = JSON.stringify(expandPreviousResponseInput({
+      previous_response_id: "resp_shutdown_late",
+      input: "next",
+    }));
+    expect(replay).toContain("fallback-zzzzzzzz");
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1, spillWrites: 1 });
   });
 
   test("directory fsync follows spill unlink", () => {
