@@ -489,6 +489,52 @@ describe("Windows service task", () => {
   });
 
   /**
+   * #3064: `schtasks /query /xml` converts the document through the console code
+   * page before the bytes exist, so a profile named outside that page comes back
+   * with substitution characters. An exact comparison rejected a registration this
+   * process had just created correctly, and `ocx service install` rolled it back.
+   *
+   * The tolerance has to stay narrow enough that a MANGLED path still cannot match
+   * a DIFFERENT account's path. A wildcard as wide as `[^\\/]*` leaves a fully
+   * non-ASCII segment with no anchors at all, so `...\\김병준\\...` would match
+   * `...\\Admin\\...` and this process would adopt another account's task.
+   */
+  describe("a scheduler path the console code page could not carry", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\김병준\\.opencodex\\service-launcher.vbs";
+    const healthy = (reportedLauncher: string, expectedLauncher = launcher) =>
+      windowsTaskRegistrationHealthy(
+        buildWindowsTaskXml("ignored.cmd", reportedLauncher)
+          .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`),
+        wscript,
+        expectedLauncher,
+      );
+
+    test.each([
+      ["question marks, one per character", "C:\\Users\\???\\.opencodex\\service-launcher.vbs"],
+      ["a single replacement character", "C:\\Users\\\uFFFD\\.opencodex\\service-launcher.vbs"],
+    ])("accepts a registration whose profile came back as %s", (_label, reported) => {
+      expect(healthy(reported)).toBe(true);
+    });
+
+    // The reason the tolerance is a substitution class and not a wildcard.
+    test("rejects another account's path that is merely the same shape", () => {
+      expect(healthy("C:\\Users\\Admin\\.opencodex\\service-launcher.vbs")).toBe(false);
+    });
+
+    test("rejects a path whose ASCII structure differs", () => {
+      expect(healthy("C:\\Users\\???\\.opencodex\\other-launcher.vbs")).toBe(false);
+      expect(healthy("D:\\Users\\???\\.opencodex\\service-launcher.vbs")).toBe(false);
+    });
+
+    // An expectation with nothing unrepresentable in it has nothing to forgive.
+    test("does not forgive substitutions when the expected path is pure ASCII", () => {
+      const ascii = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+      expect(healthy("C:\\Users\\???\\.opencodex\\service-launcher.vbs", ascii)).toBe(false);
+    });
+  });
+
+  /**
    * `UserId` is optional in the schema, and omitting it makes a SessionStateChangeTrigger fire
    * for any account's session change. Scope it to the installing account when that account is
    * known. The builder is synchronous and cannot force an account lookup, so an unknown

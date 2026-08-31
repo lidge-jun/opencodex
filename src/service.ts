@@ -1963,6 +1963,67 @@ function taskXmlDecodedValueEquals(xml: string, tag: string, expected: string): 
   return taskXmlDecodeEntities(value).trim().toLowerCase() === expected.trim().toLowerCase();
 }
 
+/**
+ * Characters a console code page substitutes when it cannot carry the original.
+ * Windows writes `?` per unrepresentable character, some layers write U+FFFD, and a
+ * few drop them entirely.
+ */
+const CODE_PAGE_SUBSTITUTIONS = /^[?\uFFFD]*$/;
+
+/**
+ * Compare a value that OpenCodex itself wrote against what `schtasks /query /xml` read
+ * back, tolerating ONLY the characters the console code page could not carry.
+ *
+ * `runFile` already reads the query as bytes, so this is not a spawn-decoding bug: the
+ * conversion happens inside `schtasks` before the bytes exist. A profile named outside
+ * the active code page — `C:\\Users\\김병준\\...` — comes back as `C:\\Users\\???\\...`, so an
+ * exact comparison rejected a registration this process had just created correctly and
+ * `ocx service install` rolled it back (#3064).
+ *
+ * The tolerance is deliberately narrow. Each unrepresentable RUN in the expected value
+ * may match only a run of substitution characters — never arbitrary text, and never a
+ * path separator. A wildcard as wide as `[^\\\\/]*` would leave a fully non-ASCII segment with
+ * no anchors at all, so `C:\\Users\\김병준\\x.vbs` would match `C:\\Users\\Admin\\x.vbs` and this
+ * process would adopt, repair, or delete another account's task. Accepting a foreign
+ * live task is a worse failure than the rollback this fixes.
+ */
+function taskXmlLossyValueEquals(reported: string, expected: string): boolean {
+  const a = reported.trim().toLowerCase();
+  const b = expected.trim().toLowerCase();
+  if (a === b) return true;
+  // Nothing unrepresentable in the expectation means there was nothing to mangle,
+  // so any difference is a real one.
+  if (!/[^\x00-\x7F]/.test(b)) return false;
+  const parts = b.split(/([^\x00-\x7F]+)/);
+  let rest = a;
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i]!;
+    if (i % 2 === 0) {
+      // Literal ASCII run: it must be present verbatim, which is what keeps every
+      // directory boundary and file name in the path verified.
+      if (!rest.startsWith(part)) return false;
+      rest = rest.slice(part.length);
+      continue;
+    }
+    // Unrepresentable run: consume only substitution characters, and stop at the
+    // next literal so a trailing run cannot swallow the remainder of the string.
+    const next = parts[i + 1] ?? "";
+    const end = next === "" ? rest.length : rest.indexOf(next);
+    if (end < 0) return false;
+    if (!CODE_PAGE_SUBSTITUTIONS.test(rest.slice(0, end))) return false;
+    rest = rest.slice(end);
+  }
+  return rest === "";
+}
+
+function taskXmlDecodedLossyValueEquals(xml: string, tag: string, expected: string): boolean {
+  if (taskXmlHasPrefixedTag(xml, tag)) return false;
+  if (taskXmlElementCount(xml, tag) !== 1) return false;
+  const value = new RegExp(`<${tag}(?:\\s[^>]*?)?>([^<]*)<\\/${tag}>`, "i").exec(xml)?.[1];
+  if (value === undefined) return false;
+  return taskXmlLossyValueEquals(taskXmlDecodeEntities(value), expected);
+}
+
 function taskXmlOptionalValueEquals(xml: string, tag: string, expected: string): boolean {
   // Check the prefixed form first: treating `<t:Enabled>false</t:Enabled>` as an
   // omission would turn an explicitly disabled task into a healthy one.
@@ -2025,7 +2086,14 @@ function windowsTaskTriggerScopeAcceptable(element: string, expectedUserId: stri
   if (userIdCount === 0) return true;
   if (userIdCount !== 1) return false;
   if (expectedUserId === undefined) return false;
-  return taskXmlDecodedValueEquals(element, "UserId", expectedUserId);
+  // Same tolerance as Command and Arguments, and for the same reason:
+  // buildWindowsTaskXml writes the live account name here, so an account named
+  // outside the console code page comes back mangled and an exact comparison
+  // rejects a task that is in fact correctly scoped (#3064). The literal-ASCII
+  // requirement is what keeps this safe -- a DOMAIN\\User scope keeps its backslash
+  // verified, so a substitution run can never swallow the domain and let another
+  // domain's account match.
+  return taskXmlDecodedLossyValueEquals(element, "UserId", expectedUserId);
 }
 
 /** Validate the stable OpenCodex action, principal, settings, and logon trigger. */
@@ -2058,8 +2126,12 @@ function windowsTaskRegistrationBaseHealthy(
     // quotes we wrote as `&quot;` back to literal `"` on export, so an escaped
     // needle never matched and a healthy task read as permanently stale (#608).
     // Case-insensitive: elevated `schtasks /create` may rewrite System32 casing.
-    && taskXmlDecodedValueEquals(action, "Command", wscript)
-    && taskXmlDecodedValueEquals(action, "Arguments", `/b /nologo "${launcher}"`);
+    // Lossy on purpose: both name paths under the user profile, which the query
+    // cannot carry when the profile is named outside the code page (#3064). Only
+    // unrepresentable characters are forgiven; every ASCII segment and every
+    // separator is still matched literally.
+    && taskXmlDecodedLossyValueEquals(action, "Command", wscript)
+    && taskXmlDecodedLossyValueEquals(action, "Arguments", `/b /nologo "${launcher}"`);
 }
 
 /** Validate the security/lifecycle-critical fields of the registered scheduler task. */
