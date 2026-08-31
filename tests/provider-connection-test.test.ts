@@ -406,7 +406,7 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     });
 
     // Fire the request with an explicit AbortController signal.
-    const req = new Request(
+    const req = new ManagementRequest(
       "http://127.0.0.1/api/providers/test?name=testprov",
       { method: "POST", signal: controller.signal },
     );
@@ -460,7 +460,7 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     });
 
     const controller = new AbortController();
-    const req = new Request(
+    const req = new ManagementRequest(
       "http://127.0.0.1/api/providers/test?name=testprov",
       { method: "POST", signal: controller.signal },
     );
