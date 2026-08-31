@@ -66,6 +66,7 @@ import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../codex
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import {
   availableAccountGatedNativeModels,
+  codexModelEntitlementStateForAccount,
   resolveCodexModelEntitlements,
 } from "../codex/model-entitlements";
 export {
@@ -1211,10 +1212,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ? new Map([...accountBoundNativeOpenAiSlugsBySelector(config)].map(([selector, slugs]) => {
             const target = accountTargets.get(selector);
             const accountId = target && isMainCodexAccountTarget(target) ? MAIN_CODEX_ACCOUNT_ID : target;
-            const entitled = accountId ? modelEntitlements.modelsByAccount.get(accountId) : undefined;
-            const confirmed = accountId ? modelEntitlements.confirmedAccountIds.has(accountId) : false;
             return [selector, slugs.filter(slug => (
-              !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || (confirmed && entitled?.has(slug) === true)
+              !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)
+              || (accountId !== undefined
+                && codexModelEntitlementStateForAccount(modelEntitlements, accountId, slug) === "granted")
             ))] as const;
           }))
           : new Map<string, readonly string[]>();

@@ -3,8 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS,
   availableAccountGatedNativeModels,
   cachedAvailableAccountGatedNativeModels,
+  codexModelEntitlementStateForAccount,
   composeGatedClientVersionFloorForTests,
   compareClientVersionsForTests,
   codexEntitlementNegativeMemoForTests,
@@ -20,6 +22,7 @@ import {
   resolveCodexModelEntitlements,
   seedCodexModelEntitlementsForTests,
   type CodexModelEntitlementCredentialSnapshot,
+  type CodexModelEntitlementState,
 } from "../src/codex/model-entitlements";
 import {
   forceRefreshMainAccountToken,
@@ -52,6 +55,14 @@ function roster(...slugs: string[]): Response {
   return Response.json({
     models: slugs.map(slug => ({ slug, supported_in_api: true, visibility: "list" })),
   });
+}
+
+function projectedEntitlementState(
+  snapshot: Awaited<ReturnType<typeof resolveCodexModelEntitlements>>,
+  accountId: string,
+  modelId: string,
+): CodexModelEntitlementState {
+  return codexModelEntitlementStateForAccount(snapshot, accountId, modelId);
 }
 
 function deferred<T = void>(): {
@@ -212,6 +223,126 @@ describe("Codex account model entitlements", () => {
     expect([...cachedAvailableAccountGatedNativeModels(1_000)]).toContain(DAYBREAK);
   });
 
+});
+
+describe("tri-state entitlement authority", () => {
+  const directHeaders = (): Headers => new Headers({
+    authorization: "Bearer tri-state-caller",
+    "chatgpt-account-id": "tri-state-account",
+  });
+
+  test("an omitted gated slug below its minimum is unknown and uses the failure TTL", async () => {
+    let fetches = 0;
+    const backend = (async () => {
+      fetches += 1;
+      return roster("gpt-5.5");
+    }) as typeof fetch;
+
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), SOL, {
+      fetcher: backend,
+      now: 1_000,
+      clientVersion: "0.140.0",
+    })).toBe(false);
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), SOL, {
+      fetcher: backend,
+      now: 15_999,
+      clientVersion: "0.140.0",
+    })).toBe(false);
+    expect(fetches).toBe(1);
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), SOL, {
+      fetcher: backend,
+      now: 16_001,
+      clientVersion: "0.140.0",
+    })).toBe(false);
+    expect(fetches).toBe(2);
+
+    const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+      credentials: [credential("main")],
+      fetcher: (async () => roster("gpt-5.5")) as typeof fetch,
+      now: 20_000,
+      clientVersion: "0.140.0",
+    });
+    expect(snapshot.clientVersionByAccount.get("main")).toBe("0.140.0");
+    expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("unknown");
+    expect(entitledCodexAccountIdsForModel(snapshot, SOL)?.size).toBe(0);
+    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(false);
+  });
+
+  test("an omitted gated slug at its minimum is denied", async () => {
+    const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+      credentials: [credential("main")],
+      fetcher: (async () => roster("gpt-5.5")) as typeof fetch,
+      now: 1_000,
+      clientVersion: "0.144.0",
+    });
+
+    expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("denied");
+    expect(entitledCodexAccountIdsForModel(snapshot, SOL)?.size).toBe(0);
+    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(false);
+  });
+
+  test("a present gated slug below its minimum is granted", async () => {
+    const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+      credentials: [credential("main")],
+      fetcher: (async () => roster("gpt-5.5", SOL)) as typeof fetch,
+      now: 1_000,
+      clientVersion: "0.140.0",
+    });
+
+    expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("granted");
+    expect([...entitledCodexAccountIdsForModel(snapshot, SOL)!]).toEqual(["main"]);
+    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(true);
+  });
+
+  test("Daybreak omission remains denied without a known minimum", async () => {
+    expect(ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS.get(SOL)).toBe("0.144.0");
+    expect(ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS.has(DAYBREAK)).toBe(false);
+
+    for (const clientVersion of ["0.140.0", "0.200.0"]) {
+      const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+        credentials: [credential(`main-${clientVersion}`)],
+        fetcher: (async () => roster("gpt-5.5")) as typeof fetch,
+        now: 1_000,
+        clientVersion,
+      });
+      expect(projectedEntitlementState(snapshot, `main-${clientVersion}`, DAYBREAK)).toBe("denied");
+      expect(entitledCodexAccountIdsForModel(snapshot, DAYBREAK)?.size).toBe(0);
+      expect(availableAccountGatedNativeModels(snapshot).has(DAYBREAK)).toBe(false);
+    }
+  });
+
+  test("CHARACTERIZATION: no positive projection returns a gated slug absent from the roster", async () => {
+    const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+      credentials: [credential("main")],
+      fetcher: (async () => roster("gpt-5.5")) as typeof fetch,
+      now: 1_000,
+      clientVersion: "0.140.0",
+    });
+    expect(entitledCodexAccountIdsForModel(snapshot, SOL)?.size).toBe(0);
+    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(false);
+
+    seedCodexModelEntitlementsForTests("main", ["gpt-5.5"], 1_000, "0.140.0");
+    expect(cachedAvailableAccountGatedNativeModels(1_001, undefined, "0.140.0").has(SOL))
+      .toBe(false);
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), SOL, {
+      fetcher: (async () => roster("gpt-5.5")) as typeof fetch,
+      now: 1_000,
+      clientVersion: "0.140.0",
+    })).toBe(false);
+  });
+
+  test("CHARACTERIZATION: an unconfirmed roster cannot grant a present gated slug", () => {
+    const snapshot = {
+      modelsByAccount: new Map([["main", new Set([SOL])]]),
+      clientVersionByAccount: new Map([["main", "0.140.0"]]),
+      confirmedAccountIds: new Set<string>(),
+      credentialIdentities: new Map([["main", "test:main"]]),
+    };
+
+    expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("unknown");
+    expect(entitledCodexAccountIdsForModel(snapshot, SOL)?.size).toBe(0);
+    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(false);
+  });
 });
 
 describe("ensureCodexEntitlementFreshness", () => {

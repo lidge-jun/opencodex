@@ -89,6 +89,20 @@ export function deriveGatedClientVersionFloor(
 const MEASURED_GATED_CLIENT_VERSION_MINIMUM = "0.144.0";
 
 /**
+ * Lowest versions measured to return each account-gated model when the account owns it.
+ *
+ * This is deliberately independent of the bundled upstream snapshot. The snapshot still
+ * records 0.142.2 for sol/terra/luna, while live measurements show that upstream omits them
+ * below 0.144.0. Daybreak has no snapshot row or independent minimum, so its omission remains
+ * authoritative instead of inheriting a guessed floor from another model.
+ */
+export const ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS: ReadonlyMap<string, string> = new Map([
+  ["gpt-5.6-sol", MEASURED_GATED_CLIENT_VERSION_MINIMUM],
+  ["gpt-5.6-terra", MEASURED_GATED_CLIENT_VERSION_MINIMUM],
+  ["gpt-5.6-luna", MEASURED_GATED_CLIENT_VERSION_MINIMUM],
+]);
+
+/**
  * Fallback when the snapshot records no usable gated floor.
  *
  * Not every gated slug carries a `minimal_client_version` — `gpt-daybreak-blue-latest` has no
@@ -285,9 +299,12 @@ interface CachedAccountModels {
 
 export interface CodexModelEntitlementSnapshot {
   readonly modelsByAccount: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly clientVersionByAccount: ReadonlyMap<string, string>;
   readonly confirmedAccountIds: ReadonlySet<string>;
   readonly credentialIdentities: ReadonlyMap<string, string>;
 }
+
+export type CodexModelEntitlementState = "granted" | "denied" | "unknown";
 
 export interface CodexModelEntitlementResolveOptions {
   readonly fetcher?: typeof fetch;
@@ -501,10 +518,16 @@ async function fetchAccountModels(
     // that as authoritative is exactly how 2.36.0 denied sol/terra/luna to accounts that own
     // them (#3022). No usable rows means unconfirmed, on the 15s failure TTL, asked again.
     const usable = models !== null && models.size > 0;
+    const hasUnknownGatedAbsence = usable && [...ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS]
+      .some(([modelId, minimum]) => (
+        !models.has(modelId) && compareClientVersions(clientVersion, minimum) < 0
+      ));
     return {
       credentialIdentity: credential.credentialIdentity,
       clientVersion,
-      expiresAt: now + (usable ? MODEL_ROSTER_TTL_MS : MODEL_ROSTER_FAILURE_TTL_MS),
+      expiresAt: now + (usable && !hasUnknownGatedAbsence
+        ? MODEL_ROSTER_TTL_MS
+        : MODEL_ROSTER_FAILURE_TTL_MS),
       models: models ?? new Set(),
       confirmed: usable,
     };
@@ -823,9 +846,42 @@ export async function resolveCodexModelEntitlements(
   })));
   return {
     modelsByAccount: new Map(results.map(({ credential, result }) => [credential.accountId, result.models])),
+    clientVersionByAccount: new Map(results.map(({ credential, result }) => (
+      [credential.accountId, result.clientVersion]
+    ))),
     confirmedAccountIds: new Set(results.flatMap(({ credential, result }) => result.confirmed ? [credential.accountId] : [])),
     credentialIdentities: new Map(results.map(({ credential }) => [credential.accountId, credential.credentialIdentity])),
   };
+}
+
+function codexModelEntitlementStateForRoster(
+  models: ReadonlySet<string> | undefined,
+  confirmed: boolean,
+  clientVersion: string | undefined,
+  modelId: string,
+): CodexModelEntitlementState {
+  if (!models || !confirmed) return "unknown";
+  // Positive evidence is authoritative regardless of which client version asked for it.
+  if (models.has(modelId)) return "granted";
+  const minimum = ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS.get(modelId);
+  if (minimum && (!clientVersion || compareClientVersions(clientVersion, minimum) < 0)) {
+    return "unknown";
+  }
+  return "denied";
+}
+
+/** Per-account tri-state authority. Positive projections admit only `granted`. */
+export function codexModelEntitlementStateForAccount(
+  snapshot: CodexModelEntitlementSnapshot,
+  accountId: string,
+  modelId: string,
+): CodexModelEntitlementState {
+  return codexModelEntitlementStateForRoster(
+    snapshot.modelsByAccount.get(accountId),
+    snapshot.confirmedAccountIds.has(accountId),
+    snapshot.clientVersionByAccount?.get(accountId),
+    modelId,
+  );
 }
 
 /** Fail-closed entitlement check for a Direct request's own forwarded ChatGPT credential. */
@@ -844,7 +900,12 @@ export async function isDirectCallerEntitledToCodexModel(
     options.now ?? Date.now(),
     clientVersion,
   );
-  return result.confirmed && result.models.has(modelId);
+  return codexModelEntitlementStateForRoster(
+    result.models,
+    result.confirmed,
+    result.clientVersion,
+    modelId,
+  ) === "granted";
 }
 
 export function entitledCodexAccountIdsForModel(
@@ -852,8 +913,10 @@ export function entitledCodexAccountIdsForModel(
   modelId: string | undefined,
 ): ReadonlySet<string> | undefined {
   if (!modelId || !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(modelId)) return undefined;
-  return new Set([...snapshot.modelsByAccount].flatMap(([accountId, models]) => (
-    snapshot.confirmedAccountIds.has(accountId) && models.has(modelId) ? [accountId] : []
+  return new Set([...snapshot.modelsByAccount.keys()].flatMap(accountId => (
+    codexModelEntitlementStateForAccount(snapshot, accountId, modelId) === "granted"
+      ? [accountId]
+      : []
   )));
 }
 
@@ -862,10 +925,9 @@ export function availableAccountGatedNativeModels(
   eligibleAccountIds?: ReadonlySet<string>,
 ): ReadonlySet<string> {
   return new Set([...ACCOUNT_GATED_NATIVE_OPENAI_MODELS].filter(modelId => (
-    [...snapshot.modelsByAccount].some(([accountId, models]) => (
+    [...snapshot.modelsByAccount.keys()].some(accountId => (
       (!eligibleAccountIds || eligibleAccountIds.has(accountId))
-      && snapshot.confirmedAccountIds.has(accountId)
-      && models.has(modelId)
+      && codexModelEntitlementStateForAccount(snapshot, accountId, modelId) === "granted"
     ))
   )));
 }
@@ -890,9 +952,13 @@ export function cachedAvailableAccountGatedNativeModels(
       (!eligibleAccountIds || eligibleAccountIds.has(accountIdOfCacheKey(accountId)))
       && !accountIdOfCacheKey(accountId).startsWith(DIRECT_CALLER_ACCOUNT_PREFIX)
       && (version === null || entry.clientVersion === version)
-      && entry.confirmed
       && entry.expiresAt > now
-      && entry.models.has(modelId)
+      && codexModelEntitlementStateForRoster(
+        entry.models,
+        entry.confirmed,
+        entry.clientVersion,
+        modelId,
+      ) === "granted"
     ))
   )));
 }
