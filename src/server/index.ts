@@ -748,7 +748,6 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(config.appOwnedMemoryBudgetMb));
   enforceAppOwnedMemoryBudget();
   registerCodexCooldownRecoveryProbeWorker(config);
-  registerCodexQuotaAutoRefreshWorker(config);
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
   // Heavy work runs in a Worker via the single-flight job controller.
@@ -1014,8 +1013,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     return "public";
   }
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
+  let unregisterQuotaAutoRefresh: (() => void) | null = null;
   try {
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
+    unregisterQuotaAutoRefresh = registerCodexQuotaAutoRefreshWorker(config);
     // External `ocx config set` / direct config.json edits run in other
     // processes; poll the file so Logs/Usage display prices follow them live.
     // Started inside the guarded startup transaction so the catch below can
@@ -2319,6 +2320,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
     }
   } catch (error) {
+    unregisterQuotaAutoRefresh?.();
     userCostOverlayReconciler?.stop();
     backgroundLifecycle?.releaseAfterFailedStart();
     void nativeMainLifecycle.release();
@@ -2344,7 +2346,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             ? [() => managementIngressRef.stop(closeActiveConnections)]
             : []),
           async () => {
-            userCostOverlayReconciler?.stop();
+            try {
+              userCostOverlayReconciler?.stop();
+            } finally {
+              unregisterQuotaAutoRefresh?.();
+            }
           },
         ],
         async () => {

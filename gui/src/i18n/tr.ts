@@ -1693,7 +1693,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.fiveHour": "5saat",
   "codexAuth.weekly": "Hafta",
   "codexAuth.quotaAutoRefresh": "Otomatik pencere etkinleştirme",
-  "codexAuth.quotaAutoRefreshHint": "Bu kota penceresi sıfırlandığında tek bir en küçük test mesajı gönderir.",
+  "codexAuth.quotaAutoRefreshHint": "Bu kota penceresi sıfırlandığında depolanmayan tek bir en küçük Codex ısınma isteği gönderir.",
   "codexAuth.quotaAutoRefreshUpdated": "Otomatik pencere etkinleştirme güncellendi.",
   "codexAuth.quotaAutoRefreshFailed": "Otomatik pencere etkinleştirme güncellenemedi.",
   "codexAuth.monthly": "30gün",

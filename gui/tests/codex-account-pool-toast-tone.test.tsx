@@ -19,7 +19,8 @@ let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let originalConfirm: typeof window.confirm;
 
-const account: CodexAccountEntry = {
+type LegacyCodexAccountEntry = Omit<CodexAccountEntry, "quotaAutoRefresh">;
+const legacyAccount: LegacyCodexAccountEntry = {
   id: "pool-1",
   email: "pool@example.test",
   isMain: false,
@@ -27,6 +28,15 @@ const account: CodexAccountEntry = {
   priority: 0,
   hasCredential: true,
   quota: { resetCredits: 2, updatedAt: 1 },
+};
+const account: CodexAccountEntry = {
+  ...legacyAccount,
+  quotaAutoRefresh: {
+    fiveHourAvailable: false,
+    weeklyAvailable: false,
+    fiveHourEnabled: false,
+    weeklyEnabled: false,
+  },
 };
 
 function makeController(overrides: Partial<CodexAccountPoolController> = {}): CodexAccountPoolController {
@@ -143,7 +153,7 @@ async function chooseOrder(selectId: string, value: string): Promise<void> {
 
 test("a legacy account without quota activation data keeps selection order usable", async () => {
   const saved: { id: string; priority: number | null }[] = [];
-  expect(account.quotaAutoRefresh).toBeUndefined();
+  expect(legacyAccount.quotaAutoRefresh).toBeUndefined();
   await mountPool(makeController({
     setAccountPriority: async (id, priority) => {
       saved.push({ id, priority });

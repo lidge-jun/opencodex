@@ -1195,7 +1195,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.fiveHour": "5 Std.",
   "codexAuth.weekly": "Woche",
   "codexAuth.quotaAutoRefresh": "Automatische Fensteraktivierung",
-  "codexAuth.quotaAutoRefreshHint": "Sendet beim Zurücksetzen dieses Kontingentfensters eine minimale Testnachricht.",
+  "codexAuth.quotaAutoRefreshHint": "Sendet beim Zurücksetzen dieses Kontingentfensters eine minimale, nicht gespeicherte Codex-Aufwärmanfrage.",
   "codexAuth.quotaAutoRefreshUpdated": "Automatische Fensteraktivierung aktualisiert.",
   "codexAuth.quotaAutoRefreshFailed": "Automatische Fensteraktivierung konnte nicht aktualisiert werden.",
   "codexAuth.monthly": "30d",

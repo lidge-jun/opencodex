@@ -187,8 +187,8 @@ export async function runCodexQuotaAutoRefresh(
   return inFlight;
 }
 
-export function registerCodexQuotaAutoRefreshWorker(config: OcxConfig): void {
-  registerStateSweepAfterTick({
+export function registerCodexQuotaAutoRefreshWorker(config: OcxConfig): () => void {
+  return registerStateSweepAfterTick({
     name: "codex-quota-auto-refresh",
     afterTick: () => { void runCodexQuotaAutoRefresh(config); },
   });

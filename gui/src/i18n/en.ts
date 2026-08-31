@@ -1732,7 +1732,7 @@ export const en = {
   "codexAuth.fiveHour": "5h",
   "codexAuth.weekly": "Week",
   "codexAuth.quotaAutoRefresh": "Automatic window activation",
-  "codexAuth.quotaAutoRefreshHint": "Sends one minimal message when this quota window resets.",
+  "codexAuth.quotaAutoRefreshHint": "Sends one minimal, non-stored Codex warm-up request when this quota window resets.",
   "codexAuth.quotaAutoRefreshUpdated": "Automatic window activation updated.",
   "codexAuth.quotaAutoRefreshFailed": "Could not update automatic window activation.",
   "codexAuth.monthly": "30d",

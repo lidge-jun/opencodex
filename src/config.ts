@@ -2499,8 +2499,14 @@ function codexQuotaAutoRefreshError(value: unknown): string | null {
   if (!raw || raw.codexQuotaAutoRefresh === undefined) return null;
   const parsed = codexQuotaAutoRefreshSchema.safeParse(raw.codexQuotaAutoRefresh);
   if (parsed.success) return null;
-  return schemaDiagnosticsError(parsed.error)
-    .replace("schema_invalid: ", "schema_invalid: codexQuotaAutoRefresh.");
+  const details = parsed.error.issues.map(issue => {
+    const path = issue.path.join(".");
+    const message = path === ""
+      ? issue.message.replace(/^codexQuotaAutoRefresh\s*/, "")
+      : issue.message;
+    return `codexQuotaAutoRefresh${path ? `.${path}` : ""}: ${message}`;
+  });
+  return `schema_invalid: ${details.join("; ")}`;
 }
 
 function googleAntigravityStaticCatalogVersionError(value: unknown): string | null {
