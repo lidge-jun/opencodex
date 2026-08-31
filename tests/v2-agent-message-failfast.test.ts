@@ -32,6 +32,10 @@ const ROUTING_ENVELOPE = [
   "",
 ].join("\n");
 
+// The same envelope a delegated agent uses to REPLY, as opposed to being spawned.
+// #3021 saw one of these reach the parent conversation as raw `gAAAA...` text.
+const MESSAGE_ROUTING_ENVELOPE = ROUTING_ENVELOPE.replace("NEW_TASK", "MESSAGE");
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
 });
@@ -133,6 +137,46 @@ describe("V2 routed agent-message ciphertext guard", () => {
       { type: "input_text", text: ROUTING_ENVELOPE },
       { type: "encrypted_content", encrypted_content: FERNET_TASK },
     ]))).toBe(true);
+  });
+
+  /**
+   * #3021: a delegated subagent's MESSAGE reply reached the parent conversation as
+   * raw `gAAAA...` ciphertext after an `adapter_eof`.
+   *
+   * The detector decides "unreadable" by stripping the routing envelope and asking
+   * whether any plaintext survives, so an envelope shape it does not recognise counts
+   * as surviving text. The envelope pattern matched only NEW_TASK, so a MESSAGE whose
+   * entire body was one Fernet token measured as READABLE and was forwarded verbatim.
+   *
+   * This is the detection half only. Recovery stays NEW_TASK-only on purpose:
+   * decrypting a MESSAGE on the parent's behalf would build a plaintext oracle out of
+   * a payload the parent's session may not be entitled to read.
+   */
+  test("blocks a MESSAGE reply envelope followed only by a Fernet payload", () => {
+    expect(hasUnreadableEncryptedAgentTask(agentMessage([
+      { type: "input_text", text: MESSAGE_ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]))).toBe(true);
+  });
+
+  test("blocks a MESSAGE envelope carried inside the encrypted slot itself", () => {
+    // The shape the report describes: header and ciphertext arrive as one
+    // encrypted_content string rather than as separate parts.
+    expect(hasUnreadableEncryptedAgentTask(agentMessage([
+      {
+        type: "encrypted_content",
+        encrypted_content: `${MESSAGE_ROUTING_ENVELOPE}${FERNET_TASK}`,
+      },
+    ]))).toBe(true);
+  });
+
+  test("a MESSAGE reply that carries real text stays readable", () => {
+    // The control. Widening the envelope must not turn every agent reply into a
+    // blocked one -- only the ones with nothing left after the header comes off.
+    expect(hasUnreadableEncryptedAgentTask(agentMessage([
+      { type: "input_text", text: `${MESSAGE_ROUTING_ENVELOPE}the worker finished the migration` },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]))).toBe(false);
   });
 
   test("blocks a control preamble mixed into the Fernet slot before sanitization", async () => {

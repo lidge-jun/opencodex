@@ -175,7 +175,24 @@ function textWithoutFernetRuns(payload: string, runs: readonly FernetTokenRun[])
   return `${text}${payload.slice(last)}`;
 }
 
-export const AGENT_MESSAGE_ROUTING_ENVELOPE = /(?:^|\n)Message Type\s*:\s*NEW_TASK[^\n]*\nTask name\s*:[^\n]*\nSender\s*:[^\n]*\nPayload\s*:\s*(?:\n|$)/gi;
+/**
+ * The routing header codex-rs writes above a delegated agent payload.
+ *
+ * `MESSAGE` is matched as well as `NEW_TASK`, and only for the unreadability CHECK --
+ * recovery stays NEW_TASK-only. #3021 reported a subagent `MESSAGE` arriving in the
+ * parent conversation as raw `gAAAA...` ciphertext after an `adapter_eof`. The detector
+ * decides "unreadable" by stripping the envelope and asking whether any plaintext
+ * survives, so an envelope shape it does not recognise counts as surviving text: a
+ * `MESSAGE` whose entire body is one Fernet token measured as READABLE and was forwarded
+ * verbatim.
+ *
+ * Widening the strip is not the same as widening recovery. Recovery decrypts, and
+ * decrypting a `MESSAGE` on the parent's behalf would build a plaintext oracle out of a
+ * payload the parent's session may have no right to read. This only lets the proxy
+ * NOTICE that what it is about to forward is unreadable ciphertext, which is what the
+ * report asks for: fail closed with a structured error rather than paste the token.
+ */
+export const AGENT_MESSAGE_ROUTING_ENVELOPE = /(?:^|\n)Message Type\s*:\s*(?:NEW_TASK|MESSAGE)[^\n]*\nTask name\s*:[^\n]*\nSender\s*:[^\n]*\nPayload\s*:\s*(?:\n|$)/gi;
 
 // CXC is the compatibility-hook control namespace. Strip only the tagged paragraph:
 // later untagged paragraphs may be genuine task text. Repeated CXC paragraphs are
