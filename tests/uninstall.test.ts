@@ -101,3 +101,38 @@ describe("full uninstall command", () => {
     expect(uninstallBody.indexOf("await stopProxy(pid);")).toBeLessThan(uninstallBody.indexOf("uninstallServiceIfInstalled()"));
   });
 });
+describe("uninstall gates shared teardown on a proven service stop", () => {
+  async function uninstallFn(): Promise<string> {
+    const cli = await readText("src/cli/index.ts");
+    const at = cli.indexOf("async function handleUninstall(");
+    expect(at).toBeGreaterThan(-1);
+    return cli.slice(at, at + 4000);
+  }
+
+  test("the detailed outcome is consumed, not the boolean collapse", async () => {
+    const fn = await uninstallFn();
+    // stopServiceIfInstalled returns false for "not installed", "refused to stop" and
+    // "state could not be read" alike, so this step reported "not installed" for a manager
+    // that might still be running (#3008).
+    expect(fn).toContain("stopServiceIfInstalledDetailed()");
+    expect(fn).not.toContain("stopServiceIfInstalled()");
+    expect(fn).toContain('if (outcome === "absent") return false;');
+    expect(fn).toContain('if (outcome === "failed")');
+    expect(fn).toContain('if (outcome === "state-unknown")');
+  });
+
+  test("shared teardown runs only when nothing that could still serve is unaccounted for", async () => {
+    const fn = await uninstallFn();
+    expect(fn).toContain("if (serviceTeardownProven) {");
+    // Every step that could leave a live proxy behind clears the flag.
+    expect((fn.match(/serviceTeardownProven = false;/g) ?? []).length).toBeGreaterThanOrEqual(4);
+    const restoreAt = fn.indexOf("native Codex restored");
+    const gateAt = fn.indexOf("if (serviceTeardownProven) {");
+    expect(gateAt).toBeLessThan(restoreAt);
+    // The skip is a failure, not a silent pass: the command must exit nonzero and say what
+    // to run once the blocker is resolved.
+    expect(fn).toContain('failures.push("native Codex restored", "Grok Build config restored");');
+    expect(fn).toContain("Skipping shared teardown");
+    expect(fn).toContain("ocx restore");
+  });
+});

@@ -1051,18 +1051,47 @@ async function handleUninstall() {
     }
   };
 
-  await runStep("service stopped", () => stopServiceIfInstalled());
+  // Consume the DETAILED outcome. The boolean helper returns false for "not installed",
+  // "refused to stop" and "state could not be read" alike, so this step used to print
+  // "not installed" for a manager that might still be running and then tear down shared
+  // config underneath it (#3008).
+  let serviceTeardownProven = true;
+  await runStep("service stopped", () => {
+    const outcome = stopServiceIfInstalledDetailed();
+    if (outcome === "absent") return false;
+    if (outcome === "failed") {
+      serviceTeardownProven = false;
+      throw new Error("the installed service manager did not stop; it may respawn the proxy");
+    }
+    if (outcome === "state-unknown") {
+      serviceTeardownProven = false;
+      throw new Error("the Windows Task Scheduler state could not be read, so this uninstall cannot tell whether a manager is still running. Run 'ocx service status' to see the query error");
+    }
+    return true;
+  });
 
   await runStep("proxy stopped", async () => {
     const pid = readPid();
     if (!pid) return false;
-    await stopProxy(pid);
+    try {
+      await stopProxy(pid);
+    } catch (err) {
+      serviceTeardownProven = false;
+      throw err;
+    }
     removePid(pid);
     removeRuntimePort(pid);
     return true;
   });
 
-  await runStep("service removed", () => uninstallServiceIfInstalled());
+  await runStep("service removed", () => {
+    try {
+      return uninstallServiceIfInstalled();
+    } catch (err) {
+      serviceTeardownProven = false;
+      throw err;
+    }
+  });
 
   if (process.platform === "win32") {
     await runStep("Windows tray removed", async () => {
@@ -1073,16 +1102,25 @@ async function handleUninstall() {
     });
   }
 
-  await runStep("native Codex restored", async () => {
-    const r = await restoreNativeCodexAsync();
-    if (!r.success) throw new Error(r.message);
-  });
+  // Shared client config comes down only once nothing that could still be serving is
+  // unaccounted for. Restoring it under a live, still-managed proxy leaves both pointing
+  // at each other — the same failure `ocx stop` refuses (#3008).
+  if (serviceTeardownProven) {
+    await runStep("native Codex restored", async () => {
+      const r = await restoreNativeCodexAsync();
+      if (!r.success) throw new Error(r.message);
+    });
 
-  await runStep("Grok Build config restored", () => {
-    const r = stripGrokConfig();
-    if (!r.ok) throw new Error(r.message);
-    return r.changed;
-  });
+    await runStep("Grok Build config restored", () => {
+      const r = stripGrokConfig();
+      if (!r.ok) throw new Error(r.message);
+      return r.changed;
+    });
+  } else {
+    failures.push("native Codex restored", "Grok Build config restored");
+    console.error("⚠️  Skipping shared teardown (native Codex restore, Grok config): a service or proxy could not be proven stopped.");
+    console.error("   Resolve the failures above, then run 'ocx restore' to finish.");
+  }
 
   await runStep("system env vars reverted", () => {
     const r = revertSystemEnv();
