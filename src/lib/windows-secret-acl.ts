@@ -31,6 +31,7 @@
 
 import { existsSync, statSync } from "node:fs";
 import { env, platform } from "node:process";
+import { waitForSubprocessExit } from "./bounded-subprocess";
 import { resolveTrustedWindowsIcaclsExe } from "./windows-elevation";
 import {
   cachedCurrentWindowsIdentity,
@@ -337,33 +338,40 @@ function defaultIcaclsRunner(args: string[], timeoutMs: number): IcaclsResult {
 
 /**
  * Async icacls runner (#612): yields the event loop while waiting for the child.
- * Timeout provenance is recorded by our timer (async Subprocess has no exitedDueToTimeout);
- * we still await process exit before classifying so settlement is confirmed.
+ * Async Subprocess has no exitedDueToTimeout, so the shared settlement helper
+ * classifies the deadline and abandons a child that does not settle after kill.
  */
 async function defaultAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<IcaclsResult> {
   const proc = trySpawnIcacls(args);
   if (!proc) return spawnFailedResult();
-  let timedOutByUs = false;
-  const timer = setTimeout(() => {
-    timedOutByUs = true;
-    try { proc.kill(); } catch { /* already exited */ }
-  }, Math.max(1, timeoutMs));
-  let exitCode: number | null = null;
-  try {
-    exitCode = await proc.exited;
-  } finally {
-    clearTimeout(timer);
-  }
-  const stdout = proc.stdout
+  const { exitCode, timedOut } = await waitForSubprocessExit(proc, timeoutMs);
+  const stdout = !timedOut && proc.stdout
     ? await new Response(proc.stdout).text().catch(() => "")
     : "";
-  const timedOut = timedOutByUs;
   return {
     success: !timedOut && exitCode === 0,
     exitCode: timedOut ? null : exitCode,
     timedOut,
     stdout,
   };
+}
+
+function awaitAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<IcaclsResult> {
+  return new Promise(resolve => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: IcaclsResult): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolve(result);
+    };
+    timer = setTimeout(
+      () => finish({ success: false, exitCode: null, timedOut: true, stdout: "" }),
+      Math.max(1, timeoutMs),
+    );
+    void asyncIcaclsRunner(args, timeoutMs).then(finish, () => finish(spawnFailedResult()));
+  });
 }
 
 let icaclsRunner: IcaclsRunner = defaultIcaclsRunner;
@@ -571,7 +579,7 @@ async function existingAclAlreadyCompliantAsync(
   try {
     const remaining = deadline - nowFn();
     if (remaining <= 0) return false;
-    const result = await asyncIcaclsRunner([targetPath], remaining);
+    const result = await awaitAsyncIcaclsRunner([targetPath], remaining);
     return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
   } catch {
     return false;
@@ -632,7 +640,7 @@ async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: 
     if (remaining <= 0) {
       throw icaclsError(step, { success: false, exitCode: null, timedOut: true, stdout: "" });
     }
-    return asyncIcaclsRunner(args, remaining);
+    return awaitAsyncIcaclsRunner(args, remaining);
   };
   const runOrThrow = async (step: string, args: string[]): Promise<void> => {
     const result = await run(step, args);
@@ -765,7 +773,7 @@ async function describeAclStateAfterTimeoutAsync(targetPath: string, deadline: n
     for (const sid of BROAD_SIDS) {
       const remaining = deadline - nowFn();
       if (remaining <= 0) return "ACL state unverified (budget exhausted)";
-      const found = await asyncIcaclsRunner([targetPath, "/findsid", sid], remaining);
+      const found = await awaitAsyncIcaclsRunner([targetPath, "/findsid", sid], remaining);
       if (!found.success) return "ACL state unverified (probe failed)";
       if (found.stdout.includes(targetPath)) return "broad ACL grants still present";
     }

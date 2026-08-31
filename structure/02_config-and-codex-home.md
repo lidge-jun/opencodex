@@ -188,6 +188,9 @@ awaited or synchronous fail-closed boundary.
 Each ordinary async spill write attempt owns one 30-second ACL budget shared across directory, temp,
 and exclusive-copy destination hardening; the single timeout retry receives one fresh whole-attempt
 budget. No harden step may reopen an independent 30-second window inside either attempt.
+Both icacls and effective-principal subprocess waits are settlement-bounded: at deadline the child is
+killed, unref'd, and abandoned without awaiting `proc.exited`. The caller-level deadline also bounds
+injected/shared runners, so a child that ignores termination cannot pin the serialized spill queue.
 
 Graceful shutdown drains that serialized publication queue to a stable fixed point before snapshot
 serialization. The drain has a wall-clock cap with a reserved synchronous fallback budget; expiry

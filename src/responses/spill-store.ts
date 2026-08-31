@@ -118,6 +118,7 @@ export interface ResponseSpillIoForTest {
 
 let spillIoForTest: ResponseSpillIoForTest | null = null;
 let spillGeneration = 0;
+let spillNowOverride: (() => number) | null = null;
 
 interface ResponseSpillWriteOptions {
   retryTimedOutOnce?: boolean;
@@ -147,6 +148,15 @@ export function markResponseSpillPublicationSuperseded(control: ResponseSpillPub
 
 export function setSpillIoForTest(io: ResponseSpillIoForTest | null): void {
   spillIoForTest = io;
+}
+
+/** Test-only: inject the spill deadline clock. */
+export function setResponseSpillNowForTests(now: (() => number) | null): void {
+  spillNowOverride = now;
+}
+
+function spillNow(): number {
+  return spillNowOverride?.() ?? Date.now();
 }
 
 function record(event: "write" | "fsync" | "close" | "harden" | "publish" | "dir-fsync" | "stub-swap"): void {
@@ -212,12 +222,12 @@ function canUseExclusiveCopyFallback(error: unknown): boolean {
 function spillAclBudget(totalMs: number | undefined): SpillAclBudget | undefined {
   if (totalMs === undefined) return undefined;
   const bounded = Math.max(1, Math.floor(totalMs));
-  return { deadline: Date.now() + bounded, perCallMs: Math.max(1, Math.floor(bounded / 2)) };
+  return { deadline: spillNow() + bounded, perCallMs: Math.max(1, Math.floor(bounded / 2)) };
 }
 
 function nextSpillHardenDeadlineMs(budget: SpillAclBudget | undefined): number | undefined {
   if (!budget) return undefined;
-  const remaining = budget.deadline - Date.now();
+  const remaining = budget.deadline - spillNow();
   if (remaining <= 0) {
     throw Object.assign(new Error("Response spill ACL budget exhausted"), { code: "ETIMEDOUT" });
   }

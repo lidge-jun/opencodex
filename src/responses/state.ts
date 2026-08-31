@@ -196,6 +196,7 @@ let pendingResponseSpillBytes = 0;
 let responseSpillPublicationTail: Promise<void> = Promise.resolve();
 let responseSpillShutdownBudgetOverride: { totalMs: number; fallbackReserveMs: number } | null = null;
 let responseSpillShutdownTerminalizationPassLimitOverride: number | null = null;
+let responseSpillAsyncAclAttemptBudgetOverride: number | null = null;
 
 function deferSupersededSpill(ref: ResponseSpillRef | undefined): void {
   if (!ref) return;
@@ -251,7 +252,7 @@ async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void>
     const state = spillPayloadForResident(candidate);
     try {
       ref = await writeResponseSpillDurablyAsync(job.id, state, {
-        aclBudgetMs: RESPONSE_SPILL_ASYNC_ACL_ATTEMPT_BUDGET_MS,
+        aclBudgetMs: responseSpillAsyncAclAttemptBudgetMs(),
         publicationControl: job.publicationControl,
       });
     } catch (error) {
@@ -259,7 +260,7 @@ async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void>
       // The ACL helper permits exactly one caller-owned recovery budget. The resident generation
       // remains replayable during both attempts, so a transient timeout never becomes a tombstone.
       ref = await writeResponseSpillDurablyAsync(job.id, state, {
-        aclBudgetMs: RESPONSE_SPILL_ASYNC_ACL_ATTEMPT_BUDGET_MS,
+        aclBudgetMs: responseSpillAsyncAclAttemptBudgetMs(),
         retryTimedOutOnce: true,
         publicationControl: job.publicationControl,
       });
@@ -352,6 +353,11 @@ export async function flushPendingResponseSpillsForTests(): Promise<void> {
   await drainResponseSpillPublications();
 }
 
+/** Test-only: observe ordinary queue settlement without invoking shutdown fallback. */
+export async function awaitResponseSpillPublicationTailForTests(): Promise<void> {
+  await responseSpillPublicationTail;
+}
+
 /** Test-only: observe the bounded queue without exposing payloads. */
 export function pendingResponseSpillMetricsForTests(): { count: number; bytes: number } {
   return { count: pendingResponseSpills.size, bytes: pendingResponseSpillBytes };
@@ -362,6 +368,15 @@ export function setResponseSpillShutdownBudgetForTests(
   budget: { totalMs: number; fallbackReserveMs: number } | null,
 ): void {
   responseSpillShutdownBudgetOverride = budget;
+}
+
+/** Test-only: shorten the ordinary async whole-attempt ACL budget. */
+export function setResponseSpillAsyncAclAttemptBudgetForTests(budgetMs: number | null): void {
+  responseSpillAsyncAclAttemptBudgetOverride = budgetMs;
+}
+
+function responseSpillAsyncAclAttemptBudgetMs(): number {
+  return responseSpillAsyncAclAttemptBudgetOverride ?? RESPONSE_SPILL_ASYNC_ACL_ATTEMPT_BUDGET_MS;
 }
 
 /** Test-only: lower the hard terminalization pass guard (null restores production). */

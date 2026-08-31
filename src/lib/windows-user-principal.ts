@@ -22,6 +22,7 @@
 
 import { existsSync } from "node:fs";
 import { win32 as windowsPath } from "node:path";
+import { waitForSubprocessExit } from "./bounded-subprocess";
 
 import {
   resolveTrustedWindowsPowerShellExe,
@@ -143,18 +144,8 @@ async function defaultAsyncWindowsPrincipalRunner(
     stderr: "ignore",
     windowsHide: true,
   });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    try { proc.kill(); } catch { /* already exited */ }
-  }, Math.max(1, timeoutMs));
-  let exitCode: number | null = null;
-  try {
-    exitCode = await proc.exited;
-  } finally {
-    clearTimeout(timer);
-  }
-  const stdout = proc.stdout
+  const { exitCode, timedOut } = await waitForSubprocessExit(proc, timeoutMs);
+  const stdout = !timedOut && proc.stdout
     ? await new Response(proc.stdout).text().catch(() => "")
     : "";
   return {
@@ -314,11 +305,11 @@ export async function resolveCurrentWindowsPrincipalAsync(timeoutMs: number): Pr
     return `*${cachedIdentity.sid}`;
   })();
   asyncLookupInFlight = lookup;
-  try {
-    return await lookup;
-  } finally {
-    if (asyncLookupInFlight === lookup) asyncLookupInFlight = null;
-  }
+  void lookup.then(
+    () => { if (asyncLookupInFlight === lookup) asyncLookupInFlight = null; },
+    () => { if (asyncLookupInFlight === lookup) asyncLookupInFlight = null; },
+  );
+  return waitForExistingLookup(lookup, timeoutMs);
 }
 
 /** Test seam: replace the sync resolver process and clear its successful cache. */

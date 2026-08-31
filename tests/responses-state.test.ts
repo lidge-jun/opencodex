@@ -43,6 +43,7 @@ import {
   responseStatePersistPendingForTests,
   responseContinuationRetainedStoreSnapshot,
   runPendingResponseStatePersistForTests,
+  setResponseSpillAsyncAclAttemptBudgetForTests,
   setResponseStateByteCapForTests,
   setResponseStatePersistAttemptHookForTests,
   setResponseSpillShutdownBudgetForTests,
@@ -55,6 +56,7 @@ import {
   deleteResponseSpill,
   recoverOrphanedResponseSpills,
   responseSpillDirectory,
+  setResponseSpillNowForTests,
   setResponseSpillPayloadCapForTests,
   setSpillIoForTest,
   writeResponseSpillDurably,
@@ -138,6 +140,12 @@ interface ShutdownBudgetChildResult {
   guardReported: boolean;
 }
 
+interface NeverSettlingAclChildResult {
+  settled: boolean;
+  pending: { count: number; bytes: number };
+  metrics: { tombstoneCount: number };
+}
+
 async function runShutdownBudgetChild(
   scenario: "exhaustion" | "guard",
 ): Promise<ShutdownBudgetChildResult> {
@@ -175,6 +183,41 @@ async function runShutdownBudgetChild(
   const line = stdout.trim().split(/\r?\n/).at(-1);
   if (!line) throw new Error(`response spill shutdown budget child produced no result (${scenario})`);
   return JSON.parse(line) as ShutdownBudgetChildResult;
+}
+
+async function runNeverSettlingAclChild(
+  mode: "principal" | "icacls",
+): Promise<NeverSettlingAclChildResult> {
+  const timeoutMs = watchdogMs(1_500);
+  const child = Bun.spawn([
+    process.execPath,
+    join(import.meta.dir, "helpers", "responses-state-never-settling-acl-child.ts"),
+    mode,
+  ], {
+    cwd: join(import.meta.dir, ".."),
+    env: { ...process.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdoutPromise = new Response(child.stdout).text();
+  const stderrPromise = new Response(child.stderr).text();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<number>(resolve => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill("SIGKILL"); } catch { /* already exited */ }
+      void child.exited.then(resolve, () => resolve(-1));
+    }, timeoutMs);
+  });
+  const exitCode = await Promise.race([child.exited, timeout]);
+  if (timer !== undefined) clearTimeout(timer);
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+  if (timedOut) throw new Error(`never-settling ${mode} child timed out after ${timeoutMs}ms`);
+  if (exitCode !== 0) throw new Error(`never-settling ${mode} child exited ${exitCode}: ${stderr.trim()}`);
+  const line = stdout.trim().split(/\r?\n/).at(-1);
+  if (!line) throw new Error(`never-settling ${mode} child produced no result`);
+  return JSON.parse(line) as NeverSettlingAclChildResult;
 }
 
 function rememberLarge(id: string, text: string, providers?: Parameters<typeof rememberResponseState>[2]): void {
@@ -228,6 +271,7 @@ describe("Responses previous_response_id state", () => {
 
   afterEach(() => {
     setSpillIoForTest(null);
+    setResponseSpillNowForTests(null);
     setAsyncIcaclsRunnerForTests(null);
     setIcaclsRunnerForTests(null);
     setNowForTests(null);
@@ -236,6 +280,7 @@ describe("Responses previous_response_id state", () => {
     resetHardenedStateForTests();
     delete process.env.OPENCODEX_ACL_TIMEOUT_MS;
     setResponseSpillShutdownBudgetForTests(null);
+    setResponseSpillAsyncAclAttemptBudgetForTests(null);
     setResponseStateByteCapForTests(null);
     clearResponseStateForTests();
     rmSync(home, { recursive: true, force: true });
@@ -848,15 +893,21 @@ describe("Responses previous_response_id state", () => {
     let clock = 0;
     let firstGrant = true;
     const deadlines: number[] = [];
+    const grantDeadlines: number[] = [];
+    const hardenTargets: string[] = [];
     setNowForTests(() => clock);
+    setResponseSpillNowForTests(() => clock);
     setAsyncIcaclsRunnerForTests(async (args, timeoutMs) => {
       deadlines.push(timeoutMs);
+      if (args.includes("/grant:r")) grantDeadlines.push(timeoutMs);
       if (firstGrant && args.includes("/grant:r")) {
         firstGrant = false;
         clock += timeoutMs;
         return { success: false, exitCode: null, timedOut: true, stdout: "" };
       }
-      clock += 10;
+      const target = String(args[0]);
+      if (!hardenTargets.includes(target)) hardenTargets.push(target);
+      clock += [6_000, 2_000, 1_000][hardenTargets.indexOf(target)] ?? 1_000;
       return { success: true, exitCode: 0, timedOut: false, stdout: "" };
     });
     setSpillIoForTest({
@@ -869,6 +920,10 @@ describe("Responses previous_response_id state", () => {
 
     expect(deadlines.length).toBeGreaterThanOrEqual(10);
     expect(Math.max(...deadlines)).toBeLessThanOrEqual(15_000);
+    const retryAttemptGrantDeadlines = grantDeadlines.slice(-3);
+    expect(retryAttemptGrantDeadlines).toHaveLength(3);
+    expect(retryAttemptGrantDeadlines[1]!).toBeLessThan(retryAttemptGrantDeadlines[0]!);
+    expect(retryAttemptGrantDeadlines[2]!).toBeLessThan(retryAttemptGrantDeadlines[1]!);
     expect(responseStateMetrics()).toMatchObject({
       residentCount: 0,
       spillStubCount: 1,
@@ -877,6 +932,17 @@ describe("Responses previous_response_id state", () => {
       spillWriteFailures: 0,
     });
   });
+
+  test("Windows spill queue advances past never-settling principal and icacls runners", async () => {
+    for (const mode of ["principal", "icacls"] as const) {
+      const result = await runNeverSettlingAclChild(mode);
+      expect(result).toMatchObject({
+        settled: true,
+        pending: { count: 0, bytes: 0 },
+        metrics: { tombstoneCount: 2 },
+      });
+    }
+  }, { timeout: (2 * watchdogMs(1_500)) + 2_000 });
 
   test("Windows pending spill publication cannot overwrite a newer same-id generation", async () => {
     setPlatformForTests("win32");
