@@ -1088,7 +1088,6 @@ describe("Responses bridge web_search_call native item", () => {
     // Console Go's upstream validator requires singular `query` on the search action,
     // and DeepSeek native Responses requires `queries` — so a batch carries both now.
     expect(action).toEqual({ type: "search", query: "rust async", queries: ["rust async", "tokio runtime"] });
-    expect(action.query).toBe("rust async");
   });
 
   test("a single-query search also carries queries so strict parsers accept the replay (#930)", () => {
