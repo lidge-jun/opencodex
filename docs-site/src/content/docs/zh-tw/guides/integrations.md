@@ -80,6 +80,15 @@ ocx integration client history --client hermes
 ocx integration client restore --op <opId> [--confirm-drift]
 ```
 
+`--overwrite-conflict` 是 **Replace** 的終端形式：
+
+```bash
+ocx integration client enable --client zcode --overwrite-conflict
+```
+
+和 `--confirm-drift` 一樣，它永遠不會被預設：沒有這個旗標，衝突仍然會被拒絕。
+它只適用於 `enable`；對衝突強制 *disable* 會刪除我們從未寫入的區塊，因此這個組合會被拒絕。
+
 MiniMax Code 先連接一次 provider，再透過會檢查設定的 launcher 啟動：
 
 ```bash

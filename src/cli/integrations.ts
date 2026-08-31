@@ -29,7 +29,7 @@ const GROK_USAGE = `Usage:
 
 const CLIENT_USAGE = `Usage:
   ocx integration client [status] [--client <id>] [--json]
-  ocx integration client <enable|disable> --client <id> [--json]
+  ocx integration client <enable|disable> --client <id> [--overwrite-conflict] [--json]
   ocx integration client history [--client <id>] [--json]
   ocx integration client restore --op <opId> [--confirm-drift] [--json]`;
 
@@ -212,11 +212,33 @@ export async function handleClientIntegrationCommand(
       throw new CliUsageError(`unknown client integration command ${action}`, CLIENT_USAGE);
     }
     const client = takeOption(args, "--client");
+    /*
+     * The conflict escape hatch, spelled the way `restore --confirm-drift` is: the
+     * refusal is the default and the waiver has to be typed.
+     *
+     * Without it the dashboard could resolve a conflict and the CLI could not,
+     * which strands exactly the user who cannot open a browser -- an SSH session,
+     * or an agent driving the proxy. That dead end is the reason the overwrite
+     * path exists at all.
+     */
+    const overwriteConflict = takeFlag(args, "--overwrite-conflict");
     rejectArgs(args, CLIENT_USAGE);
     if (!client) throw new CliUsageError("--client <id> is required", CLIENT_USAGE);
+    /*
+     * Refused here rather than forwarded. The route answers 400 for this pair, but
+     * a local usage error names the flag that is wrong, where the route's reply
+     * arrives as a generic failed request.
+     */
+    if (overwriteConflict && action === "disable") {
+      throw new CliUsageError("--overwrite-conflict applies only to enable", CLIENT_USAGE);
+    }
     const result = await runtimeRequest(`/api/client-integrations/${encodeURIComponent(client)}`, {
       method: "PUT",
-      body: JSON.stringify({ enabled: action === "enable" }),
+      // Sent only when asked for, so a proxy on an older build sees the request it
+      // has always seen rather than an unknown field.
+      body: JSON.stringify(overwriteConflict
+        ? { enabled: true, overwriteConflict: true }
+        : { enabled: action === "enable" }),
     }, deps);
     printData(result, wantsJson, [String((result as Record<string, unknown>).message ?? `${client} ${action}d.`)]);
   });

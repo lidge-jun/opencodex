@@ -554,6 +554,41 @@ describe("headless GUI parity CLI", () => {
     ]);
   });
 
+  test("enable can waive a conflict, and only when the flag is typed", async () => {
+    /*
+     * The parity this closes: the dashboard could resolve a conflict and the CLI
+     * could not, which strands the user who has no browser -- an SSH session, or
+     * an agent driving the proxy. That dead end is the reason the overwrite path
+     * exists, so leaving it GUI-only reproduces it for half the users.
+     */
+    const runtime = fakeRuntime();
+    expect(await handleClientIntegrationCommand(["enable", "--client", "hermes", "--json"], runtime.deps)).toBe(0);
+    expect(await handleClientIntegrationCommand(
+      ["enable", "--client", "hermes", "--overwrite-conflict", "--json"],
+      runtime.deps,
+    )).toBe(0);
+    expect(runtime.requests.map(row => row.body)).toEqual([
+      // Absent rather than false: an older proxy sees the request it always saw.
+      { enabled: true },
+      { enabled: true, overwriteConflict: true },
+    ]);
+  });
+
+  test("a conflict waiver cannot ride along with disable", async () => {
+    /*
+     * Forcing a DISABLE over a conflict deletes a block we do not own, which is
+     * the one thing the refusal exists to prevent. The route answers 400; failing
+     * locally names the offending flag instead of surfacing a generic request
+     * failure, and sends nothing.
+     */
+    const runtime = fakeRuntime();
+    expect(await handleClientIntegrationCommand(
+      ["disable", "--client", "hermes", "--overwrite-conflict", "--json"],
+      runtime.deps,
+    )).not.toBe(0);
+    expect(runtime.requests).toEqual([]);
+  });
+
   test("a client integration command without its required target fails instead of guessing", async () => {
     const runtime = fakeRuntime();
     // No `--client`: picking one for the user would write a config they never named.

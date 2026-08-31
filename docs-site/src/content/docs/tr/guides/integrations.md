@@ -168,6 +168,16 @@ ocx integration client history --client hermes
 ocx integration client restore --op <opId> [--confirm-drift]
 ```
 
+`--overwrite-conflict`, **Replace** eyleminin terminal karsiligidir:
+
+```bash
+ocx integration client enable --client zcode --overwrite-conflict
+```
+
+`--confirm-drift` gibi asla varsayilmaz: bayrak yazilmadan catisma yine reddedilir.
+Yalnizca `enable` icin gecerlidir; bir catismanin uzerine *disable* zorlamak hic
+yazmadigimiz bir blogu silecegi icin bu birlesim reddedilir.
+
 MiniMax Code için sağlayıcıyı bir kez bağlayın ve denetimli başlatıcı üzerinden çalıştırın:
 
 ```bash

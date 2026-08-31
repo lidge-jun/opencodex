@@ -124,6 +124,14 @@ written as whole documents), or
 whenever our own entries were edited, the switch locks and disable refuses rather
 than guessing which edits were yours.
 
+That lock is no longer a dead end. A conflicted client shows **Replace** next to its
+switch, on both the overview card and the client's own page. It replaces whatever
+holds our settings with the block opencodex would write, and it asks first: the
+dialog names the file, says what is lost, and points at the snapshot that makes it
+undoable. The switch itself stays locked, because the switch cannot know which edits
+you meant to keep — only you can say so. Nothing else is relaxed: a file we cannot
+parse, or one whose structure we cannot reason about, still refuses.
+
 ## What to expect, honestly
 
 **Formatting is generally not preserved.** Applying parses a config and writes it back
@@ -174,6 +182,16 @@ ocx integration client disable --client hermes
 ocx integration client history --client hermes
 ocx integration client restore --op <opId> [--confirm-drift]
 ```
+
+`--overwrite-conflict` is the terminal form of **Replace**:
+
+```bash
+ocx integration client enable --client zcode --overwrite-conflict
+```
+
+Like `--confirm-drift`, it is never assumed — without it a conflict is still refused.
+It applies only to `enable`; forcing a *disable* over a conflict would delete a block
+we never wrote, so that combination is rejected.
 
 For MiniMax Code, connect the provider once and launch through the checked wrapper:
 
