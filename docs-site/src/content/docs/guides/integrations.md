@@ -1,10 +1,10 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code and Prime Agent from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent and Aside from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Ten clients work this way, each with a switch:
+file, and removes it again. Twelve clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -18,6 +18,8 @@ file, and removes it again. Ten clients work this way, each with a switch:
 | DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (default `~/.dsh/settings.yaml`) | YAML | hot reload | non-secret loopback bearer placeholder |
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | new sessions, or after opening the model picker | loopback placeholder |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | new sessions | loopback placeholder |
+| ZCode | `~/.zcode/v2/config.json` | JSON | on restart | loopback placeholder |
+| Aside | `~/.aside/u/<account>/models.json` | JSON | after fully quitting and reopening Aside | loopback placeholder |
 
 The managed OpenCode integration owns two fragments: `provider.opencodex` (opencode V1) and
 `providers.opencodex` (opencode V2). Only the V2 block carries the per-model reasoning-effort
@@ -45,6 +47,17 @@ disagree about which file is meant. Its managed block owns only
 `providers.opencodex`, so other providers and any `modelOverrides` you have set
 stay untouched. Prime Agent reads `models.json` when a session starts, so start
 a new session after connecting it.
+
+Aside is per-account: its state lives under `~/.aside/u/<account>/` and opencodex
+writes the catalog of whichever account Aside's own `accounts.json` names as
+current. If that manifest is missing or unreadable the integration refuses rather
+than guessing an account, because a guess on a multi-account machine would write
+into a different account's catalog. Its managed block owns only
+`providers.opencodex`, so your other Aside providers stay untouched.
+
+One caveat specific to Aside: the running app rewrites `models.json` itself, so
+fully quit and reopen Aside after applying, the same way Claude Desktop needs a
+restart. Aside's block is loopback-only and never carries a real credential.
 
 Paths honor each client's own environment override where it has one. For OMP,
 `OMP_PROFILE` wins over `PI_PROFILE` by presence, even when explicitly empty. A named profile

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { navigateHash, normalizeHashPath } from "../hash-routing";
-import { useT, type TKey } from "../i18n/shared";
+import { useT } from "../i18n/shared";
 import ApiKeys from "./ApiKeys";
 import Claude from "./Claude";
 import Grok from "./Grok";
@@ -8,53 +8,7 @@ import IntegrationsOverview from "./integrations/IntegrationsOverview";
 import FileIntegrationPage, {
   type FileIntegrationClientId,
 } from "./integrations/FileIntegrationPage";
-
-type IntegrationTab =
-  | "overview"
-  | "keys"
-  | "codex"
-  | "claude"
-  | "grok"
-  | FileIntegrationClientId;
-
-interface TabDefinition {
-  id: IntegrationTab;
-  hash: string;
-  labelKey: TKey;
-}
-
-const TABS: readonly TabDefinition[] = [
-  { id: "overview", hash: "integrations", labelKey: "integrations.tab.overview" },
-  { id: "keys", hash: "integrations/keys", labelKey: "integrations.tab.keys" },
-  { id: "codex", hash: "integrations/codex", labelKey: "integrations.tab.codex" },
-  { id: "claude", hash: "integrations/claude", labelKey: "integrations.tab.claude" },
-  { id: "grok", hash: "integrations/grok", labelKey: "integrations.tab.grok" },
-  { id: "opencode", hash: "integrations/opencode", labelKey: "integrations.tab.opencode" },
-  { id: "pi", hash: "integrations/pi", labelKey: "integrations.tab.pi" },
-  { id: "omp", hash: "integrations/omp", labelKey: "integrations.tab.omp" },
-  { id: "hermes", hash: "integrations/hermes", labelKey: "integrations.tab.hermes" },
-  { id: "openclaw", hash: "integrations/openclaw", labelKey: "integrations.tab.openclaw" },
-  { id: "kimi", hash: "integrations/kimi", labelKey: "integrations.tab.kimi" },
-  { id: "gajae", hash: "integrations/gajae", labelKey: "integrations.tab.gajae" },
-  { id: "dsh", hash: "integrations/dsh", labelKey: "integrations.tab.dsh" },
-  { id: "mcode", hash: "integrations/mcode", labelKey: "integrations.tab.mcode" },
-  { id: "zcode", hash: "integrations/zcode", labelKey: "integrations.tab.zcode" },
-  { id: "prime", hash: "integrations/prime", labelKey: "integrations.tab.prime" },
-] as const;
-
-const FILE_CLIENTS = new Set<FileIntegrationClientId>([
-  "opencode",
-  "pi",
-  "omp",
-  "hermes",
-  "openclaw",
-  "kimi",
-  "gajae",
-  "dsh",
-  "mcode",
-  "zcode",
-  "prime",
-]);
+import { FILE_CLIENTS, TABS, type IntegrationTab } from "./integrations/integration-tabs";
 
 function readIntegrationTab(hash = window.location.hash): IntegrationTab {
   const raw = normalizeHashPath(hash);
