@@ -87,8 +87,14 @@ on the owner path.
 
 A 5-second drain cap followed by a 60-second fallback is not a bound. So:
 
-1. **One end-to-end shutdown budget** covers drain *and* fallback, not one each.
-2. The fallback **passes its remaining budget down** instead of letting each harden
+1. **A budget split, not just a total** (audit round 3 — `006`). "Enter the fallback
+   at cap expiry" and "the fallback uses the remaining budget" cancel each other: a
+   drain that consumes the whole deadline leaves the fallback zero time. So reserve
+   the slice up front — end-to-end budget `B`, drain cap `B - R`, fallback reserve
+   `R`, and the fallback receives `R` rather than the remainder. `R` must cover one
+   directory harden plus one file harden at a reduced per-call deadline, because
+   those are two separate calls (`src/responses/spill-store.ts:324`).
+2. The fallback **passes its reserved budget down** instead of letting each harden
    call open a fresh 30s window. `OPENCODEX_ACL_TIMEOUT_MS` proves the deadline is
    already parameterizable (`:799`); the plumbing is the work.
 3. **Explicit ownership transfer.** When the drain abandons a job, mark the async
@@ -100,15 +106,26 @@ path reaches `flushResponseState()`, and no request is being served — #3011 is
 about the request path. But it is acceptable *only* with an enforceable end-to-end
 deadline.
 
-### Split condition, restated concretely
+### The split condition is withdrawn (audit round 3 — `006`)
 
-If threading the remaining budget through the harden calls turns out larger than
-the drain itself, land the drain with a cap that simply **abandons** the
-outstanding job and file the bounded-fallback work separately.
+Round 2 claimed abandonment "leaves exactly today's behaviour". That was wrong, and
+the error was measuring against the wrong baseline.
 
-Abandoning is not a regression: it leaves exactly today's behaviour for the >2 MiB
-case, which is already lossy. Hanging shutdown would be a new failure. Prefer the
-status quo over a worse trade.
+On `origin/dev`, oversized candidates are published **synchronously before the
+request returns**: `admitOversizedCandidate` calls `writeResponseSpillDurably`
+inline (`src/responses/state.ts:382`, `:393`). There is no shutdown-loss window on
+`dev` for that case at all. This doc says as much a few paragraphs up — "before the
+PR this race did not exist" — and then contradicted itself.
+
+Abandonment is equivalent to **PR #3018's head**, which is exactly the state that
+introduced the loss. Measuring a proposed regression against an unmerged PR instead
+of `dev` is how a regression gets waved through.
+
+So: wp3 lands the bounded fallback, or wp3 does not land. If the budget plumbing
+proves larger than the drain, the correct move is to keep #3018 **unmerged** until
+the drain is complete. `dev` is currently correct on durability and merely slow on
+Windows. A 47-second stall is worse UX; a lost continuation is worse behaviour, and
+we do not trade the second for the first.
 
 `src/server/lifecycle.ts` needs no change — it already calls `flushResponseState()`
 at the right boundary.

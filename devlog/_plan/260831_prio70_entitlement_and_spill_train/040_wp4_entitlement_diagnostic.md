@@ -69,3 +69,24 @@ re-plan. It is a diagnostic, not a subsystem.
 
 Needs wp1 and wp2 landed first: the states above only become distinguishable once
 wp1 separates unknown from denied and wp2 knows whether a refresh was attempted.
+
+## Prerequisite: failure provenance (audit round 3 — `006`)
+
+Verified blocker: parsed-empty and network/timeout failure produce the **identical**
+cache entry today. The success path when `parseAccountModels` returns an empty set
+(`src/codex/model-entitlements.ts:414`) and the catch path (`:424`) both yield
+`{models: new Set(), confirmed: false}`. Nothing downstream can tell them apart.
+
+So `unconfirmed-empty` and "refresh failed" are one state in the data. Reporting
+them as two would be exactly the invented-status-field lie `002` objected to in
+`discovery: ok`.
+
+wp4 therefore requires, in order:
+
+1. Record provenance on the cache entry — `parsed-empty` / `http-error` /
+   `timeout` / `unparseable` — as a discriminated field, not a boolean.
+2. A regression asserting the two states are genuinely distinct end to end.
+3. Only then may the diagnostic name them separately.
+
+If provenance is not added, wp4 reports a single merged `unconfirmed` state and
+says so plainly. An honest coarse answer beats a fabricated precise one.
