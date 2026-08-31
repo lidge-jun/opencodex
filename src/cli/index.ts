@@ -35,7 +35,7 @@ import {
   quarantinePendingTeardown,
 } from "../config/pending-teardown";
 import { collectStatus, unusedProxyWarningLines } from "./status";
-import { sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
+import { endpointsToProve, everyEndpointProvenDown, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
 
 import {
@@ -1043,11 +1043,10 @@ async function handleUninstall() {
   const proxyEndpointProvenDown = async (): Promise<boolean> => {
     try {
       const { probeProxyLiveness } = await import("../update/proxy-liveness-probe.mjs");
-      const runtime = readRuntimePort();
-      const config = loadConfig();
-      const port = runtime?.port ?? (typeof config.port === "number" && config.port > 0 ? config.port : 10100);
-      const hostname = runtime?.hostname ?? config.hostname ?? "127.0.0.1";
-      return probeProxyLiveness(port, hostname) === "dead";
+      // Every candidate, not just the preferred one: a stale runtime record pointing at a
+      // closed port would otherwise "prove" a live proxy on the configured port is gone.
+      const endpoints = endpointsToProve(readRuntimePort(), loadConfig());
+      return everyEndpointProvenDown(endpoints, e => probeProxyLiveness(e.port, e.hostname));
     } catch {
       return false;
     }
@@ -1138,6 +1137,12 @@ async function handleUninstall() {
     await runStep("respawn window verified", async () => {
       const survivor = await proxyStillLiveAfterStop({ canRespawn: true });
       if (survivor) throw new Error(`a proxy is still listening on port ${survivor.port} after the service was removed; it is being respawned`);
+      // A null from that poll is not proof either: its identity probe returns null on a
+      // timeout, so a respawned-but-unresponsive proxy looks the same as none. Require the
+      // tri-state probe to say dead on every candidate before calling the window verified.
+      if (!await proxyEndpointProvenDown()) {
+        throw new Error("no survivor answered after the service was removed, but the endpoint could not be confirmed down either; confirm nothing is serving, then rerun");
+      }
       observed.respawnWindowVerified = true;
       return true;
     });

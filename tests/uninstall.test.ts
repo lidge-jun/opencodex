@@ -213,3 +213,47 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(fn).toContain("interim step");
   });
 });
+  test("proof covers every distinct endpoint, not just the preferred one", async () => {
+    const { endpointsToProve, everyEndpointProvenDown } = await import("../src/cli/uninstall-plan");
+
+    // A stale runtime record pointing at a closed port, and the live proxy on the
+    // configured one. Probing only the runtime candidate reports "dead" for a port nobody
+    // is using and authorizes the teardown (#3008).
+    const endpoints = endpointsToProve({ port: 10999, hostname: "127.0.0.1" }, { port: 10100, hostname: "127.0.0.1" });
+    expect(endpoints).toEqual([
+      { hostname: "127.0.0.1", port: 10999 },
+      { hostname: "127.0.0.1", port: 10100 },
+    ]);
+    const closedRuntimeLiveConfig = (e: { port: number }) => (e.port === 10999 ? "dead" as const : "live" as const);
+    expect(everyEndpointProvenDown(endpoints, closedRuntimeLiveConfig)).toBe(false);
+    // A silent listener is not absence either.
+    expect(everyEndpointProvenDown(endpoints, e => (e.port === 10999 ? "dead" : "unknown"))).toBe(false);
+    // Both definitively dead is the only proof.
+    expect(everyEndpointProvenDown(endpoints, () => "dead")).toBe(true);
+
+    // Identical candidates collapse to one; a missing runtime record leaves the config one.
+    expect(endpointsToProve({ port: 10100, hostname: "127.0.0.1" }, { port: 10100 })).toHaveLength(1);
+    expect(endpointsToProve(null, { port: 10100 })).toEqual([{ hostname: "127.0.0.1", port: 10100 }]);
+    // No configured port still yields the default, so the set is never empty in practice.
+    expect(endpointsToProve(null, {})).toEqual([{ hostname: "127.0.0.1", port: 10100 }]);
+    // An empty set is not proof of anything.
+    expect(everyEndpointProvenDown([], () => "dead")).toBe(false);
+    // A nonsense runtime port is skipped rather than probed.
+    expect(endpointsToProve({ port: 0 }, { port: 10100 })).toEqual([{ hostname: "127.0.0.1", port: 10100 }]);
+  });
+
+  test("the respawn window is verified by evidence, not by a silent poll", async () => {
+    const cli = await readText("src/cli/index.ts");
+    const at = cli.indexOf("async function handleUninstall(");
+    const fn = cli.slice(at, at + 9000);
+    // proxyStillLiveAfterStop returns null on a timeout as well as on a genuinely dead
+    // endpoint, so a respawned-but-unresponsive proxy looked verified-down.
+    const windowStep = fn.slice(fn.indexOf('runStep("respawn window verified"'), fn.indexOf('runStep("respawn window verified"') + 900);
+    expect(windowStep).toContain("if (!await proxyEndpointProvenDown())");
+    expect(windowStep).toContain("could not be confirmed down either");
+    expect(windowStep.indexOf("if (!await proxyEndpointProvenDown())"))
+      .toBeLessThan(windowStep.indexOf("observed.respawnWindowVerified = true;"));
+    // And the proof itself asks every candidate.
+    expect(fn).toContain("endpointsToProve(readRuntimePort(), loadConfig())");
+    expect(fn).toContain("everyEndpointProvenDown(endpoints, e => probeProxyLiveness(e.port, e.hostname))");
+  });

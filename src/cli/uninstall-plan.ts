@@ -43,3 +43,44 @@ export function sharedTeardownAuthorized(o: UninstallObservation): boolean {
   if (o.serviceRemoval === null || o.serviceRemoval === "failed") return false;
   return o.proxyProvenDown;
 }
+
+/** An endpoint an uninstall must account for before shared config comes down. */
+export type ProbeEndpoint = { hostname: string; port: number };
+
+/**
+ * Every DISTINCT endpoint this home could be serving on.
+ *
+ * A runtime record and the configured port can disagree — a stale record pointing at a
+ * closed port while the live proxy sits on the configured one. Probing only the runtime
+ * candidate then reports "dead" for a port nobody is using and authorizes the teardown
+ * (#3008). `findLiveProxy` already probes both; the proof has to cover both too.
+ */
+export function endpointsToProve(
+  runtime: { port?: number; hostname?: string } | null,
+  config: { port?: number; hostname?: string },
+): ProbeEndpoint[] {
+  const out: ProbeEndpoint[] = [];
+  const push = (port: number | undefined, hostname: string | undefined) => {
+    if (!port || port <= 0 || port > 65535) return;
+    const endpoint = { hostname: hostname ?? "127.0.0.1", port };
+    if (out.some(e => e.port === endpoint.port && e.hostname === endpoint.hostname)) return;
+    out.push(endpoint);
+  };
+  push(runtime?.port, runtime?.hostname);
+  push(typeof config.port === "number" && config.port > 0 ? config.port : 10100, config.hostname);
+  return out;
+}
+
+/**
+ * Proof requires EVERY candidate to be definitively dead.
+ *
+ * "unknown" is not absence: a listener that accepts connections but withholds /healthz, or
+ * one that times out, is exactly the state where restoring shared config is most harmful.
+ */
+export function everyEndpointProvenDown(
+  endpoints: readonly ProbeEndpoint[],
+  probe: (e: ProbeEndpoint) => "live" | "dead" | "unknown",
+): boolean {
+  if (endpoints.length === 0) return false;
+  return endpoints.every(e => probe(e) === "dead");
+}
