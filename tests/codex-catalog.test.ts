@@ -3683,12 +3683,29 @@ describe("Codex catalog routed normalization", () => {
     expect(droppedConfiguredIds).toEqual([]);
     expect(models.map(m => m.id)).toContain("deepseek-v4-pro-0813");
   });
-  test("isDatedVariantId matches only <alias>-YYYYMMDD", () => {
+  test("isDatedVariantId matches <alias>-YYYYMMDD and <alias>-MMDD, nothing else", () => {
     expect(isDatedVariantId("claude-haiku-4-5-20251001", "claude-haiku-4-5")).toBe(true);
+    expect(isDatedVariantId("deepseek-v4-pro-0813", "deepseek-v4-pro")).toBe(true);
     expect(isDatedVariantId("claude-haiku-4-5-2025", "claude-haiku-4-5")).toBe(false);
     expect(isDatedVariantId("claude-haiku-4-5-latest", "claude-haiku-4-5")).toBe(false);
     expect(isDatedVariantId("claude-haiku-4-5", "claude-haiku-4-5")).toBe(false);
     expect(isDatedVariantId("claude-haiku-4-5-20251001", "claude-haiku-4")).toBe(false);
+  });
+
+  // A four-digit suffix that IS a valid month and day is read as one, even when the
+  // author meant something else. `-1024` is October 24th, so `model-1024` folds into
+  // `model` and the two are treated as the same model. Pinned as a known cost of
+  // accepting MMDD at all: nothing in an id says which reading was intended, and the
+  // alternative -- rejecting MMDD -- is the bug this fold exists to fix (#3024).
+  test("a four-digit suffix that reads as a date is folded, context size or not", () => {
+    expect(isDatedVariantId("model-1024", "model")).toBe(true);
+    expect(isDatedVariantId("model-0128", "model")).toBe(true);
+    // Values that cannot be a date stay separate models, which is what keeps most
+    // version and size suffixes safe.
+    expect(isDatedVariantId("model-2048", "model")).toBe(false);
+    expect(isDatedVariantId("model-4096", "model")).toBe(false);
+    expect(isDatedVariantId("model-8192", "model")).toBe(false);
+    expect(isDatedVariantId("model-0000", "model")).toBe(false);
   });
 
   test("disabled providers are excluded from routed model gathering", async () => {
