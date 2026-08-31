@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyNativeVisibility, augmentRoutedModelsWithMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, CODEX_ACCOUNT_BOUND_CATALOG_KIND, CODEX_NATIVE_ALIAS_CATALOG_KIND, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_DAYBREAK_BLUE_MODEL, NATIVE_OPENAI_MODELS, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiCapabilitySourceSlug, nativeOpenAiContextWindow, nativeReasoningEfforts, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, resolveComboCatalogMember, shouldExposeRoutedModel, upstreamNativeEntry } from "../src/codex/catalog";
-import { applyProviderConfigHints } from "../src/codex/catalog/provider-fetch";
+import { applyProviderConfigHints, mergeConfiguredModelsIntoLiveCatalog } from "../src/codex/catalog/provider-fetch";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
@@ -3711,6 +3711,49 @@ describe("Codex catalog routed normalization", () => {
   // that). `deepseek-v4-pro-0813` configured against a live `deepseek-v4-pro` stays dropped.
   test("does not fold configured=dated against live=base", () => {
     expect(isDatedVariantId("deepseek-v4-pro", "deepseek-v4-pro-0813")).toBe(false);
+  });
+
+  // The predicate test above is necessary and not sufficient: it passes on any
+  // implementation, including one whose MERGE LOOP calls the predicate a second time with
+  // the arguments swapped. These three drive `mergeConfiguredModelsIntoLiveCatalog` itself,
+  // so they fail if the loop ever becomes bidirectional. Carried from #3041, where the
+  // reverse fold was proposed and then withdrawn — the guard outlives the proposal.
+  test("the merge loop does not infer a configured dated id from a live base id", () => {
+    const { models, droppedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
+      name: "deepseek",
+      provider: {},
+      models: [{ id: "deepseek-v4-pro" } as never],
+      configured: [{ id: "deepseek-v4-pro-0813" } as never],
+    });
+    expect(droppedConfiguredIds).toEqual(["deepseek-v4-pro-0813"]);
+    expect(models.map(m => m.id)).not.toContain("deepseek-v4-pro-0813");
+  });
+
+  test("the merge loop folds a live MMDD dated row onto its configured base", () => {
+    const { models, droppedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
+      name: "deepseek",
+      provider: {},
+      models: [{ id: "deepseek-v4-pro-0813" } as never],
+      configured: [{ id: "deepseek-v4-pro" } as never],
+    });
+    expect(droppedConfiguredIds).toEqual([]);
+    expect(models.map(m => m.id)).toContain("deepseek-v4-pro");
+  });
+
+  // Retention of a dated id is a decision someone made, not an inference from a name.
+  // Note what this set actually is: production fills `retainConfiguredModelIds` from combo
+  // targets, not from `providers.*.models`, so this pins the combo-target path (OCX-111).
+  // The operator-facing opt-in is #1690's `retainModels`, which does not exist yet.
+  test("a dated id named in retainConfiguredModelIds survives the drop", () => {
+    const { models, droppedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
+      name: "deepseek",
+      provider: {},
+      models: [{ id: "deepseek-v4-pro" } as never],
+      configured: [{ id: "deepseek-v4-pro-0813" } as never],
+      retainConfiguredModelIds: new Set(["deepseek-v4-pro-0813"]),
+    });
+    expect(droppedConfiguredIds).toEqual([]);
+    expect(models.map(m => m.id)).toContain("deepseek-v4-pro-0813");
   });
 
   test("disabled providers are excluded from routed model gathering", async () => {
