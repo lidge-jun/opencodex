@@ -19,6 +19,8 @@ import { resolveCodexHomeDir } from "./home";
 import { assertNotRealCodexHomeUnderTest } from "../lib/test-home-guard";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
+import { withNativeMainExclusiveClaim } from "./native-main-claim";
+import { resolveNativeProfileContext } from "./native-profile-store";
 
 export { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
@@ -191,7 +193,21 @@ async function resolveMainAccountToken(
     ? AbortSignal.any([dependencies.signal, AbortSignal.timeout(30_000)])
     : AbortSignal.timeout(30_000);
   const lockKey = refreshGrantFingerprintForToken(initial.refreshToken);
-  return withCodexRefreshFileLock(lockKey, signal, async () => {
+  // Two locks, because they guard two different things that live in two different
+  // homes. `withCodexRefreshFileLock` is keyed on the grant fingerprint and lives
+  // under OPENCODEX_HOME; it serializes refreshes of the SAME grant within one
+  // install. The file being rewritten is `auth.json` under CODEX_HOME, which every
+  // OpenCodex install on the machine shares no matter what its own home is -- so two
+  // proxies with distinct OPENCODEX_HOMEs took two unrelated fingerprint locks and
+  // refreshed the one credential concurrently (#2999).
+  //
+  // The outer claim is the CODEX_HOME coordination the other native-main paths
+  // already use (`.opencodex-native-main.claim.sqlite`), so this needs no new
+  // primitive and no FFI. Order is claim (machine-wide) then fingerprint lock
+  // (per-grant), never the reverse: two processes holding different fingerprint
+  // locks and then reaching for the same claim would deadlock.
+  return withNativeMainExclusiveClaim(resolveNativeProfileContext(), () =>
+    withCodexRefreshFileLock(lockKey, signal, async () => {
     const locked = readMainAuthJsonCredential();
     if (!locked) throw new MainAuthJsonChangedDuringRefreshError();
     if (!locked.refreshToken
@@ -221,7 +237,8 @@ async function resolveMainAccountToken(
     const result = persistRefreshedMainAuthJson(locked, refreshed);
     clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     return result;
-  });
+    }),
+  { waitMs: 30_000 });
 }
 
 /** Refresh the CLI-owned native credential before upstream I/O and publish it atomically. */
