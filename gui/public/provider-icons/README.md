@@ -140,3 +140,63 @@ Both directions are enforced in `gui/tests/integration-marks.test.ts`, including
 luminance check that fails any single-ink near-neutral mark left as an image. That
 direction was missing until it caught `grok`; the same class of defect had already
 shipped once for `prime`, `opencode` and `kimi`.
+
+## Provider marks (2026-09-01)
+
+Sourced for the providers that were rendering a coloured initial tile. Every
+entry below was fetched from the vendor's own domain, taken from the registry's
+`baseUrl`/`dashboardUrl` rather than guessed.
+
+Published as SVG and committed with only comments, `<title>`/`<desc>` and
+`data-name` attributes stripped:
+
+- `digitalocean.svg` — `digitalocean.com` favicon, 32x32.
+- `featherless.svg` — `featherless.ai/favicon.svg`, 256x256.
+- `kilo.svg` — `kilo.ai/favicon/favicon.svg`, 32x32. Keeps its `oklch()` plate.
+- `nanogpt.svg` — `nano-gpt.com/logo.svg`, 181x187, gradient.
+- `nebius.svg` — `nebius.com/favicon/favicon.svg`, 96x96.
+- `neuralwatt.svg` — the site's Webflow-hosted brand asset, 32x32.
+- `parallel.svg` — `parallel.ai/icon.svg`, 96x96.
+- `scaleway.svg` — `scaleway.com/favicon/website/favicon.svg`, 16x16.
+- `synthetic.svg` — `synthetic.new/favicon.svg`, 54x54.
+- `zai.svg` — `z-cdn.chatglm.cn/z-ai/static/logo.svg`, 30x30.
+- `zenmux.svg` — the site's CDN-hosted brand mark, 160x160.
+
+Traced from raster, because the vendor publishes no square SVG mark. Same
+technique as `hermes-agent.svg` and `gajae-code.svg`: `potrace -s --flat` for a
+single-ink silhouette, k-means colour layers (seeded at 3, largest area first)
+for multi-colour art, downsampled to a 160px box first so the trace does not
+follow every upscaled pixel edge.
+
+- `cerebras.svg`, `novita.svg`, `siliconflow.svg`, `deepinfra.svg` — single-ink.
+- `baseten.svg`, `hyperbolic.svg`, `sambanova.svg`, `umans.svg`, `venice.svg`,
+  `vultr.svg`, `bizrouter.svg`, `orcarouter.svg` — colour-layered.
+
+**The plate problem, recorded because the first pass shipped it.** A favicon is
+usually a glyph on a filled rounded square. Tracing luminance alone captured the
+square and produced a solid box: `baseten` came out 97.7% ink, `bizrouter` 89.3%.
+The fix reads the border ring, takes its median colour as the plate when the ring
+is uniform, and masks by distance from that colour instead of by darkness. It
+found real plates behind `baseten` (#19e76e), `cerebras` (#ef5b27), `hyperbolic`
+(#1a1a1a), `umans`/`bizrouter` (#000000) and `orcarouter` (#ffffff).
+
+### Rejected, and why
+
+- **`nous`** — `nousresearch.com/safari-pinned-tab.svg` opens with the full
+  512-unit frame as its first path, so it renders as a black square. This is the
+  identical candidate the Hermes client mark rejected. Nous Research keeps its
+  fallback tile; reusing `hermes-agent.svg` would attribute a product's mark to
+  its publisher.
+- **`litellm`** — the traced favicon is a muddy multi-colour blob with no legible
+  silhouette at 19px. The homepage SVGs are third-party model logos, not LiteLLM's
+  own mark.
+- **Wordmarks refused** for `cerebras` (843x320 from Sanity CDN), `siliconflow`
+  (188x28), `zhipu-bigmodel` (123x25), `vultr` (218x52), `baseten` (1001x151) and
+  `chutes` (192x30). A lockup in the rail's 19px box is an illegible smear, so
+  each was replaced by a traced square mark or left to the fallback.
+- **Nothing found** for `chutes`, `nscale`, `together`, `volcengine` and
+  `tencent-coding-plan`: no square SVG and no usable raster icon at the
+  registry's domains. They keep their fallback tiles.
+
+`zhipu-bigmodel` and `zhipu-bigmodel-coding` share `zai.svg`: Z.AI and BigModel
+are the same company, and the mainland console publishes only the wordmark.

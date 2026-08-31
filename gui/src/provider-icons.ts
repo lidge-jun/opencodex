@@ -44,6 +44,38 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   alibaba: "alibaba-color.svg",
   "alibaba-token-plan": "alibaba-color.svg",
   "alibaba-token-plan-intl": "alibaba-color.svg",
+  baseten: "baseten.svg",
+  bizrouter: "bizrouter.svg",
+  cerebras: "cerebras.svg",
+  deepinfra: "deepinfra.svg",
+  digitalocean: "digitalocean.svg",
+  featherless: "featherless.svg",
+  hyperbolic: "hyperbolic.svg",
+  kilo: "kilo.svg",
+  nanogpt: "nanogpt.svg",
+  nebius: "nebius.svg",
+  neuralwatt: "neuralwatt.svg",
+  novita: "novita.svg",
+  orcarouter: "orcarouter.svg",
+  parallel: "parallel.svg",
+  sambanova: "sambanova.svg",
+  scaleway: "scaleway.svg",
+  siliconflow: "siliconflow.svg",
+  synthetic: "synthetic.svg",
+  umans: "umans.svg",
+  venice: "venice.svg",
+  vultr: "vultr.svg",
+  zenmux: "zenmux.svg",
+  /*
+   * Z.AI and Zhipu's BigModel are the same company on two brands. `zai` is the
+   * international GLM Coding Plan and the mark comes from z.ai; the two
+   * `zhipu-bigmodel*` ids are the mainland console, which publishes only a
+   * horizontal wordmark, so they borrow it rather than render a lockup squeezed
+   * into a 19px box.
+   */
+  zai: "zai.svg",
+  "zhipu-bigmodel": "zai.svg",
+  "zhipu-bigmodel-coding": "zai.svg",
   "qwen-cloud": "qwen-portal-color.svg",
   "vercel-ai-gateway": "vercel-ai-gateway-color.svg",
   vllm: "vllm-color.svg",
