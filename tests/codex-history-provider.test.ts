@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyBackupPathFor, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, setAfterNoopPendingCountForTests, setAfterStrictHistoryRolloutAppendForTests, setBeforeHistoryApplyTransactionForTests, setBeforeHistoryBackupConsumeForTests, setBeforeStrictHistoryRolloutAppendForTests, setHistoryDbBusyTimeoutForTests, snapshotCodexHistoryNoop, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex/history-provider";
+import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyBackupPathFor, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, restoredUserEventFor, setAfterNoopPendingCountForTests, setAfterStrictHistoryRolloutAppendForTests, setBeforeHistoryApplyTransactionForTests, setBeforeHistoryBackupConsumeForTests, setBeforeStrictHistoryRolloutAppendForTests, setHistoryDbBusyTimeoutForTests, snapshotCodexHistoryNoop, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex/history-provider";
 import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "./helpers/codex-history-manifest-fixtures";
 
 // Windows CI: a transient file lock can consume the full production 5s busy timeout, tripping
@@ -134,6 +134,84 @@ describe("Codex history provider sync", () => {
       .toEqual({ model_provider: "openai", source: "vscode", first_user_message: null, has_user_event: 0 });
     restored.close();
     expect(existsSync(fixture.backupPath)).toBe(false);
+  });
+
+  test("a second routing attempt reopens the relabel marker (#3026)", () => {
+    // A surviving manifest means a previous cycle did not consume it. Its relabel describes
+    // THAT attempt; carrying a stale "committed" into a new route lets a later restore treat
+    // the marker as proof that OpenCodex authored an event flag the user had since set.
+    const fixture = makeFixture();
+    const db = new Database(fixture.dbPath);
+    db.run("UPDATE threads SET first_user_message = NULL, has_user_event = 0 WHERE id = 'thread-1'");
+    db.close();
+
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+    expect((JSON.parse(readFileSync(fixture.backupPath, "utf8")) as {
+      entries: Record<string, { relabel?: string }>;
+    }).entries["thread-1"]?.relabel).toBe("committed");
+
+    // Restore back to openai, then route again while the manifest still exists.
+    expect(syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+
+    // The new attempt's marker describes the new attempt.
+    const after = JSON.parse(readFileSync(fixture.backupPath, "utf8")) as {
+      version: number;
+      entries: Record<string, { relabel?: string; hadFirstUserMessage?: boolean }>;
+    };
+    expect(after.version).toBe(2);
+    expect(after.entries["thread-1"]?.relabel).toBe("committed");
+    expect(after.entries["thread-1"]?.hadFirstUserMessage).toBe(false);
+  });
+
+  describe("restore classifier state matrix", () => {
+    // has_user_event has two writers, so the verdict is decided by which tuple the row
+    // wears plus the entry's recorded provenance. This table is the whole contract; the
+    // end-to-end tests above prove two of its rows against real databases.
+    const entry = (over: Partial<Parameters<typeof restoredUserEventFor>[1]> = {}) => ({
+      id: "t", rolloutPath: "/tmp/r.jsonl",
+      modelProvider: "openai", source: "vscode", hasUserEvent: 0 as 0 | 1,
+      ...over,
+    });
+    const row = (provider: string, source: string, event: 0 | 1, message: string | null = "hi") => ({
+      id: "t", rollout_path: "/tmp/r.jsonl",
+      model_provider: provider, source, has_user_event: event, first_user_message: message,
+    });
+
+    const cases: Array<[string, ReturnType<typeof row>, ReturnType<typeof entry>, 0 | 1 | null]> = [
+      // A - exactly the recorded original.
+      ["A: untouched original restores its own value", row("openai", "vscode", 0), entry(), 0],
+      // B - the expected post-image; OpenCodex wrote it, so the manifest is authoritative.
+      ["B: routed post-image restores the recorded 0", row("opencodex", "vscode", 1), entry({ hadFirstUserMessage: true }), 0],
+      ["B: routed post-image of a null-message row", row("opencodex", "vscode", 0, null), entry({ hadFirstUserMessage: false }), 0],
+      ["B: exec legacy bridge is still recognized", row("openai", "cli", 1), entry({ modelProvider: "opencodex", source: "exec", hasUserEvent: 1 }), 1],
+      // C - original tuple with 0 to 1 drift, decided by provenance.
+      ["C: relabel none is user activity", row("openai", "vscode", 1), entry({ relabel: "none", hadFirstUserMessage: false }), 1],
+      ["C: committed whose route expected 1 is OpenCodex's own", row("openai", "vscode", 1), entry({ relabel: "committed", hadFirstUserMessage: true }), 0],
+      ["C: committed whose route expected 0 cannot be OpenCodex's", row("openai", "vscode", 1), entry({ relabel: "committed", hadFirstUserMessage: false }), 1],
+      ["C: pending with an expected-0 route is decidable", row("openai", "vscode", 1), entry({ relabel: "pending", hadFirstUserMessage: false }), 1],
+      ["C: pending with an expected-1 route is undecidable", row("openai", "vscode", 1), entry({ relabel: "pending", hadFirstUserMessage: true }), null],
+      ["C: legacy entry with drift refuses, as dev does", row("openai", "vscode", 1), entry({ hadFirstUserMessage: true }), null],
+      ["C: exec-origin cannot be reached by legacy return", row("opencodex", "exec", 1), entry({ modelProvider: "opencodex", source: "exec", relabel: "pending", hadFirstUserMessage: true }), 1],
+      // D - routed tuple with drift; no provenance needed.
+      ["D: drift on the routed tuple is the user's", row("opencodex", "vscode", 1), entry({ relabel: "pending", hadFirstUserMessage: false }), 1],
+      // An exec-origin row at opencodex/cli/1 is B, not D: routeExec always writes 1, so
+      // that IS the expected post-image and the recorded value is authoritative.
+      ["B: exec-origin post-image is opencodex/cli/1", row("opencodex", "cli", 1), entry({ modelProvider: "opencodex", source: "exec", hadFirstUserMessage: false }), 0],
+      // Neither shape - a foreign decision this manifest does not own.
+      ["reverse drift never restores", row("openai", "vscode", 0), entry({ hasUserEvent: 1, relabel: "committed" }), null],
+      ["a different provider is foreign", row("anthropic", "vscode", 0), entry(), null],
+      ["a different source is foreign", row("openai", "cli", 0), entry(), null],
+    ];
+
+    for (const [name, observed, recorded, expected] of cases) {
+      test(name, () => {
+        expect(restoredUserEventFor(observed, recorded)).toBe(expected);
+      });
+    }
   });
 
   test("preserves a first user message that arrived after routing (#3026)", () => {

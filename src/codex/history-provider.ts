@@ -361,7 +361,10 @@ function readBackupStrict(path: string, stateDbPath: string): StrictBackupRead {
     return {
       kind: "known",
       present: false,
-      manifest: { version: 1, stateDbPath, entries: {} },
+      // New manifests carry the snapshot and relabel fields, so they are v2. v1 stays
+      // readable: an entry written before those fields existed falls back to the
+      // current-row reading, which is the behaviour it was written under.
+      manifest: { version: 2, stateDbPath, entries: {} },
       fingerprint: "absent",
     };
   }
@@ -463,7 +466,16 @@ function writeBackup(path: string, manifest: CodexHistoryBackupManifest, stateDb
 }
 
 function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ApplyRowSnapshot): void {
-  if (manifest.entries[row.id]) return;
+  const existing = manifest.entries[row.id];
+  if (existing) {
+    // A surviving entry means a previous route/restore cycle did not consume its manifest.
+    // Its `relabel` describes THAT attempt, and this one has not written yet — leaving a
+    // stale `committed` here would let a later restore treat the marker as proof that
+    // OpenCodex authored an event flag the user had since set. The snapshot itself stays:
+    // it is the original provenance and must not be overwritten by a routed row.
+    existing.relabel = "pending";
+    return;
+  }
   manifest.entries[row.id] = {
     id: row.id,
     rolloutPath: row.rollout_path,
@@ -534,7 +546,7 @@ function rowMatchesExpectedPostImage(row: RestoreRowSnapshot, entry: CodexHistor
  * produce an identical row, and nothing durable separates them. That one cell refuses. A
  * guess there either erases real activity or fabricates it.
  */
-function restoredUserEventFor(row: RestoreRowSnapshot, entry: CodexHistoryBackupEntry): 0 | 1 | null {
+export function restoredUserEventFor(row: RestoreRowSnapshot, entry: CodexHistoryBackupEntry): 0 | 1 | null {
   if (rowMatchesRestoreTuple(row, entry.modelProvider, entry.source, entry.hasUserEvent)) {
     return entry.hasUserEvent;                                   // A
   }
@@ -545,11 +557,11 @@ function restoredUserEventFor(row: RestoreRowSnapshot, entry: CodexHistoryBackup
 
   const routeExpectedEvent = entry.hadFirstUserMessage ?? hasFirstUserMessage(row.first_user_message) ? 1 : 0;
 
-  // D: wearing the routed tuple, so the 1 arrived after OpenCodex wrote the row.
-  if (rowMatchesRestoreTuple(row, "opencodex", entry.source, 1)
-    || (entry.modelProvider !== "openai" && rowMatchesRestoreTuple(row, "opencodex", "cli", 1))) {
-    return 1;
-  }
+  // D: wearing the routed tuple, so the 1 arrived after OpenCodex wrote the row. The tuple
+  // is the one routing actually produces — `routeOpenai` keeps the source, `routeExec`
+  // moves exec to cli — so D and C cannot both match rather than merely being ordered.
+  const routedSource = entry.modelProvider === "openai" ? entry.source : "cli";
+  if (rowMatchesRestoreTuple(row, "opencodex", routedSource, 1)) return 1;
 
   // C: wearing the original tuple.
   if (rowMatchesRestoreTuple(row, entry.modelProvider, entry.source, 1)) {

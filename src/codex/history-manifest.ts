@@ -103,7 +103,7 @@ export function validateCodexHistoryBackupManifest(
   expectedStateDbPath: string,
 ): CodexHistoryManifestValidation {
   if (!isRecord(raw)
-    || raw.version !== 1
+    || (raw.version !== 1 && raw.version !== 2)
     || typeof raw.stateDbPath !== "string"
     || !raw.stateDbPath.trim()
     || !isAbsolute(raw.stateDbPath)
@@ -130,6 +130,12 @@ export function validateCodexHistoryBackupManifest(
       || typeof value.hasUserEvent !== "number"
       || !Number.isSafeInteger(value.hasUserEvent)
       || (value.hasUserEvent !== 0 && value.hasUserEvent !== 1)
+      // Optional, but not unvalidated: a truthy `hadFirstUserMessage: "false"` would select
+      // the wrong restore verdict, and an unrecognized `relabel` would be read as a state
+      // the classifier does not have.
+      || (value.hadFirstUserMessage !== undefined && typeof value.hadFirstUserMessage !== "boolean")
+      || (value.relabel !== undefined
+        && value.relabel !== "pending" && value.relabel !== "committed" && value.relabel !== "none")
       || !hasAllowedProvenance(value)) {
       return { ok: false, reason: "schema", scope: "entry-provenance" };
     }
