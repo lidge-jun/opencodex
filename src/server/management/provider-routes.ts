@@ -880,16 +880,17 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
+    const upstreamSignal = req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000);
     try {
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,
           body: JSON.stringify({ project }),
-          signal: AbortSignal.timeout(8000),
+          signal: upstreamSignal,
         })
         : await providerOutboundGet(name, prov, modelsUrl, {
           headers,
-          signal: AbortSignal.timeout(8000),
+          signal: upstreamSignal,
         });
       const latencyMs = Date.now() - started;
       const redirectError = await providerRedirectError(res, modelsUrl);
@@ -950,12 +951,19 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         message: `Connected — ${models} model${models === 1 ? "" : "s"} available.`,
       });
     } catch (err) {
+      // Do not leak client-abort reasons (e.g. user navigation, tab close) into
+      // the response body; surface a neutral message instead.
+      const clientAborted = req.signal?.aborted;
+      const isTimeout = upstreamSignal.aborted && !clientAborted;
+      const isAbort = clientAborted || isTimeout;
       return jsonResponse({
         ok: false,
         latencyMs: Date.now() - started,
-        error: err instanceof ProviderOutboundPolicyError
-          ? `upstream /models blocked by destination policy: ${err.message}`
-          : err instanceof Error ? err.message : "Connection test failed",
+        error: isAbort
+          ? (clientAborted ? "Connection test aborted" : "Connection test timed out")
+          : err instanceof ProviderOutboundPolicyError
+            ? `upstream /models blocked by destination policy: ${err.message}`
+            : err instanceof Error ? err.message : "Connection test failed",
       });
     }
   }

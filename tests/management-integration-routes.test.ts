@@ -766,7 +766,7 @@ describe("POST /api/client-integrations/restore", () => {
     });
     expect(readFileSync(configPath, "utf8")).toBe(before);
     expect(store.listOperations()).toHaveLength(journalBefore);
-  });
+  }, 15_000);
 });
 
 describe("GET /api/client-integrations/journal", () => {

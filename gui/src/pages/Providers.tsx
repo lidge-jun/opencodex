@@ -6,7 +6,7 @@ import type { WorkspaceProvider } from "../provider-workspace/catalog";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
 import { oauthTosRisk } from "../oauth-tos-risk";
 import { ToastNotice, type NoticeTone } from "../ui";
-import { IconPlus } from "../icons";
+import { IconPlus, IconRefresh } from "../icons";
 import { useT } from "../i18n/shared";
 import { useProviderAccountPools } from "../hooks/useProviderAccountPools";
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
@@ -20,6 +20,10 @@ import { useProvidersFetch } from "./use-providers-fetch";
 import { ProvidersPageModals } from "./providers-page-modals";
 import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-page-utils";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
+import { useProviderBatchController } from "../hooks/use-provider-batch-controller";
+import { testProviderConnection, type ConnectionTestResult } from "../components/provider-workspace/provider-test";
+
+
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
@@ -67,6 +71,51 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setStatusOk(false);
     setStatusTone("err");
   }, []);
+
+  const { batchTesting, startBatch, cancelMountedBatch, isActiveBatch } = useProviderBatchController();
+  const [providerConfigGeneration, setProviderConfigGeneration] = useState(0);
+
+  // Cancel batch when apiBase changes.
+  const prevApiBaseRef = useRef(apiBase);
+  useEffect(() => {
+    if (prevApiBaseRef.current !== apiBase) {
+      cancelMountedBatch();
+      prevApiBaseRef.current = apiBase;
+    }
+  }, [apiBase, cancelMountedBatch]);
+
+  const testAllProviders = useCallback(async () => {
+    if (!config || batchTesting) return;
+    const names = Object.keys(config.providers);
+    if (names.length === 0) return;
+
+    const controller = startBatch();
+    const signal = controller.signal;
+    const results: Record<string, ConnectionTestResult> = {};
+    const queue = [...names];
+    const workerCount = Math.min(3, names.length);
+    const runWorker = async () => {
+      while (queue.length > 0 && !signal.aborted) {
+        const name = queue.shift()!;
+        results[name] = await testProviderConnection(apiBase, name, signal);
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+    } finally {
+      if (!signal.aborted && isActiveBatch(controller) && aliveRef.current) {
+        cancelMountedBatch();
+        const passed = Object.values(results).filter(r => r.ok).length;
+        const failed = names.length - passed;
+        notify(
+          failed === 0
+            ? t("prov.testAll.ok", { count: passed })
+            : t("prov.testAll.partial", { passed, failed }),
+          failed === 0,
+        );
+      }
+    }
+  }, [config, batchTesting, apiBase, notify, t, startBatch, cancelMountedBatch, isActiveBatch]);
 
   const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
     if (completion.catalogRefreshPending) {
@@ -138,12 +187,18 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setQuotaRefresh(previous => ({ epoch: previous.epoch + 1, force }));
   }, []);
   const { fetchConfig, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
-    apiBase, t, setConfig, setOauthProviders, setOauthStatus, notify,
+    apiBase, t, setConfig, setProviderConfigGeneration, setOauthProviders, setOauthStatus, notify,
     invalidateProviderQuotas,
     configCacheKey,
   });
 
-  // WP3: one Codex account controller for the whole Providers page, shared by the
+  useEffect(() => {
+    cancelMountedBatch();
+  }, [providerConfigGeneration, cancelMountedBatch]);
+
+
+
+  // WP3, shared by the
   // Overview tab and the Accounts tab so a mutation on either is instantly visible on
   // both. Mounting CodexAccountPool twice used to fork this state.
   const codexPool = useCodexAccountPool(apiBase);
@@ -307,6 +362,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
       <div className="page-head">
         <h2>{t("nav.providers")}</h2>
         <div className="row">
+          <button type="button" className="btn btn-secondary" onClick={() => void testAllProviders()} disabled={batchTesting}>
+            <IconRefresh />{batchTesting ? t("prov.testing") : t("prov.testAll")}
+          </button>
           <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}><IconPlus />{t("prov.add")}</button>
         </div>
       </div>

@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
+import { logKey } from "../log-key";
 import { hashLogConversationQuery, matchesLogConversationId } from "../log-conversation-id";
 import { statusCodeInfo } from "../status-codes";
 import { IconX } from "../icons";
@@ -127,7 +128,7 @@ interface LogAttempt {
 }
 
 export interface LogEntry {
-  requestId?: string;
+  requestId: string;
   timestamp: number;
   model: string;
   provider: string;
@@ -365,6 +366,10 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const resourceKey = logsCacheKey(apiBase);
   const cachedLogs = validCachedLogs(readSessionListCache<LogEntry[]>(resourceKey));
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const [clearedIds, setClearedIds] = useState<Set<string> | null>(null);
+
+  useEffect(() => { setClearedIds(null); }, [resourceKey]);
   const [failureStreak, setFailureStreak] = useState<{ error: unknown; count: number }>(
     { error: null, count: 0 },
   );
@@ -508,7 +513,19 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     return () => { cancelled = true; };
   }, [conversationQuery]);
 
-  const filteredLogs = logs.filter(log => (
+  const logsRef = useRef(logs);
+  logsRef.current = logs;
+  const clearView = useCallback(() => {
+    const ids = new Set<string>();
+    for (const log of logsRef.current) { ids.add(logKey(log.requestId)); }
+    setClearedIds(ids);
+  }, []);
+  const visibleLogs = (() => {
+    if (!clearedIds) return logs;
+    return logs.filter(log => !clearedIds.has(logKey(log.requestId)));
+  })();
+
+  const filteredLogs = visibleLogs.filter(log => (
     logMatchesSurface(log, surfaceFilter)
     && (!interceptedHelpersOnly || Boolean(log.shadowCallRewrittenFrom))
     && (!conversationQuery || matchesLogConversationId(log.conversationId, conversationQuery, conversationQueryHash))
@@ -529,15 +546,33 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
     : 0;
 
+  const prevCountRef = useRef(filteredLogs.length);
+  useEffect(() => {
+    if (filteredLogs.length === 0) { prevCountRef.current = 0; return; }
+    if (autoScroll && filteredLogs.length > prevCountRef.current) {
+      rowVirtualizer.scrollToIndex(filteredLogs.length - 1, { align: "end" });
+    }
+    prevCountRef.current = filteredLogs.length;
+  }, [filteredLogs.length, autoScroll, rowVirtualizer]);
+
   return (
     <div className="logs-page">
       <div className="page-head">
         <h2>{t("nav.logs")}</h2>
         {tab === "logs" && (
+          <>
           <label className="muted text-control logs-auto-refresh">
             <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} />
             {t("logs.autoRefresh")}
           </label>
+          <label className="muted text-control logs-auto-refresh">
+            <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />
+            {t("logs.autoScroll")}
+          </label>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={clearView} disabled={visibleLogs.length === 0}>
+            {t("logs.clearView")}
+          </button>
+          </>
         )}
       </div>
       <div className="page-tabs" role="tablist" aria-label={t("nav.logs")}>
@@ -635,6 +670,9 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             {t("logs.filter.conversation.clear")}
           </button>
         )}
+        <span className="muted text-caption" style={{ marginLeft: "auto" }}>
+          {t("logs.bufferCount", { shown: filteredLogs.length, total: logs.length })}
+        </span>
       </div>
 
       {conversationTotals && (
@@ -725,7 +763,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                 const when = formatLogDateParts(log.timestamp, localeTag, serverTimeZone);
                 return (
                <tr
-                 key={log.requestId ?? `${log.timestamp}-${virtualRow.index}`}
+                 key={log.requestId}
                  data-index={virtualRow.index}
                  ref={rowVirtualizer.measureElement}
                >
@@ -802,13 +840,13 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                         type="button"
                         className="log-detail-btn"
                         onClick={() => setDetail(log)}
-                        aria-label={`${t("logs.details")}: ${log.requestId ?? log.status}`}
+                        aria-label={`${t("logs.details")}: ${log.requestId}`}
                       >
                         {t("logs.details")}
                       </button>
                     </span>
                  </td>
-                  <td className="muted mono"><span className="log-reqid" title={log.requestId}>{log.requestId ?? "-"}</span></td>
+                  <td className="muted mono"><span className="log-reqid" title={log.requestId}>{log.requestId}</span></td>
                  <td className="num log-col-duration">{log.durationMs}ms</td>
                 </tr>
                 );
@@ -874,7 +912,6 @@ function LogDetailDialog({
   const reasoningWire = reasoningWireLabel(detail);
 
   const copyRequestId = async () => {
-    if (!detail.requestId) return;
     try {
       await navigator.clipboard.writeText(detail.requestId);
       setCopied(true);
@@ -908,12 +945,10 @@ function LogDetailDialog({
             <span className="muted">{t("logs.col.time")}</span><span className="mono">{formatLogDateTime(detail.timestamp, localeTag, serverTimeZone)}</span>
             <span className="muted">{t("logs.col.request")}</span>
             <span className="log-detail-request-row">
-              <span className="mono log-detail-break">{detail.requestId ?? "\u2014"}</span>
-              {detail.requestId && (
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyRequestId()}>
-                  {t(copied ? "logs.detail.copied" : "logs.detail.copyRequestId")}
-                </button>
-              )}
+              <span className="mono log-detail-break">{detail.requestId}</span>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyRequestId()}>
+                {t(copied ? "logs.detail.copied" : "logs.detail.copyRequestId")}
+              </button>
             </span>
             {detail.conversationId && (
               <>

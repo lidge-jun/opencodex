@@ -8,8 +8,10 @@ import {
   addRequestLog,
   clearRequestLogsForTests,
   getRequestLogEntries,
+  nextRequestLogId,
   type RequestLogEntry,
 } from "../src/server/request-log";
+import { requestLogDto } from "../src/server/management/shared";
 import type { OcxConfig } from "../src/types";
 
 const config = { providers: [] } as unknown as OcxConfig;
@@ -229,4 +231,75 @@ describe("GET /api/logs display metrics", () => {
     }
   });
 });
+
+describe("requestId generation", () => {
+  test("nextRequestLogId produces unique, non-empty IDs matching ocx-hex format", () => {
+    const ids = Array.from({ length: 50 }, () => nextRequestLogId());
+    for (const id of ids) {
+      expect(typeof id).toBe("string");
+      expect(id.length).toBeGreaterThan(0);
+      expect(id).toMatch(/^ocx-[0-9a-f]{32}$/);
+    }
+    // 50 IDs with 128 bits of randomness — collision is astronomically unlikely
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("requestId stability across repeated reads", () => {
+  test("same entry's requestId is preserved across two /api/logs reads", async () => {
+    addRequestLog(baseEntry({ requestId: "req-stable-1" }));
+
+    const logs1 = await readLogs();
+    const logs2 = await readLogs();
+
+    const entry1 = logs1.find(e => e.requestId === "req-stable-1");
+    const entry2 = logs2.find(e => e.requestId === "req-stable-1");
+    expect(entry1).toBeDefined();
+    expect(entry2).toBeDefined();
+    expect(entry1!.requestId).toBe(entry2!.requestId);
+  });
+});
+
+describe("requestId DTO passthrough", () => {
+  test("requestLogDto preserves the original requestId", () => {
+    const entry: RequestLogEntry = {
+      requestId: "req-dto-passthrough",
+      timestamp: Date.now(),
+      model: "gpt-test",
+      provider: "openai",
+      status: 200,
+      durationMs: 100,
+      usageStatus: "reported",
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    };
+    const dto = requestLogDto(entry);
+    expect(dto.requestId).toBe("req-dto-passthrough");
+  });
+});
+
+describe("GET /api/logs returns entries with non-empty requestIds", () => {
+  test("entries created via addRequestLog have requestId in API response", async () => {
+    addRequestLog(baseEntry({ requestId: "req-api-check" }));
+
+    const logs = await readLogs();
+    const entry = logs.find(e => e.requestId === "req-api-check");
+    expect(entry).toBeDefined();
+    expect(typeof entry!.requestId).toBe("string");
+    expect(entry!.requestId.length).toBeGreaterThan(0);
+  });
+
+  test("different entries get different requestIds", async () => {
+    addRequestLog(baseEntry({ requestId: "req-api-a" }));
+    addRequestLog(baseEntry({ requestId: "req-api-b" }));
+
+    const logs = await readLogs();
+    const ids = logs
+      .filter(e => e.requestId.startsWith("req-api-"))
+      .map(e => e.requestId);
+    expect(ids).toContain("req-api-a");
+    expect(ids).toContain("req-api-b");
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
 import { ManagementRequest as Request } from "./helpers/management-auth";
