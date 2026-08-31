@@ -375,6 +375,9 @@ interface NegativeCredentialMemo {
 interface EntitlementEnsureFlight {
   readonly startedAt: number;
   readonly promise: Promise<void>;
+  readonly clientVersion: string;
+  readonly identityVector: ReadonlyMap<string, string | null>;
+  readonly workset: readonly string[];
 }
 
 const negativeCredentialMemo = new Map<string, NegativeCredentialMemo>();
@@ -836,7 +839,7 @@ export async function ensureCodexEntitlementFreshness(
       }).finally(() => {
         if (entitlementEnsureFlights.get(key) === created) entitlementEnsureFlights.delete(key);
       });
-      created = { startedAt, promise };
+      created = { startedAt, promise, clientVersion, identityVector, workset };
       entitlementEnsureFlights.set(key, created);
       flight = created;
     }
@@ -865,15 +868,18 @@ export function getCodexModelEntitlementStatus(
     credentialIdentity,
     entry: accountModelsCache.get(cacheKeyFor(accountId, version)),
   }));
-  const hasFlight = (accountId: string, credentialIdentity: string): boolean => {
-    const prefix = `${accountId}\u0000${credentialIdentity}\u0000${version}`;
-    return [...accountModelsFlights.keys()].some(key => key === prefix || key.startsWith(`${prefix}\u0000`));
+  const hasRefreshFlight = (accountId: string, credentialIdentity: string): boolean => {
+    return [...entitlementEnsureFlights.values()].some(flight => (
+      flight.clientVersion === version
+      && flight.identityVector.get(accountId) === credentialIdentity
+      && flight.workset.includes(accountId)
+    ));
   };
   if (entries.some(({ accountId, credentialIdentity, entry }) => (
     entry
     && entry.credentialIdentity === credentialIdentity
     && entry.expiresAt <= now
-    && hasFlight(accountId, credentialIdentity)
+    && hasRefreshFlight(accountId, credentialIdentity)
   ))) return { status: "expired-refresh-in-flight" };
   const live = entries.flatMap(({ credentialIdentity, entry }) => (
     entry && entry.credentialIdentity === credentialIdentity && entry.expiresAt > now ? [entry] : []
