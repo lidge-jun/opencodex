@@ -4,7 +4,10 @@ import { dirname, join } from "node:path";
 import { atomicWriteFileAsync, getConfigDir, resolveWriteTarget } from "../config";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 import { windowsSecretAclApplies } from "../lib/windows-secret-acl";
-import type { OcxProviderContinuationState } from "../types";
+import type {
+  OcxGuardrailsResponseMarker,
+  OcxProviderContinuationState,
+} from "../types";
 import {
   cleanupSupersededResponseSpillPublication,
   createResponseSpillPublicationControl,
@@ -96,6 +99,7 @@ interface ResidentResponseState {
   /** Index in `items` where provider output begins; see clientCarriedPrefixLength. */
   providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
+  guardrails?: OcxGuardrailsResponseMarker;
   sizeBytes: number;
 }
 
@@ -106,6 +110,7 @@ interface SpilledResponseState {
   /** Mirrors the spilled payload boundary so a spilled entry keeps its anchor. */
   providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
+  guardrails?: OcxGuardrailsResponseMarker;
   spill: ResponseSpillRef;
   sizeBytes: number;
 }
@@ -924,6 +929,7 @@ function measureResidentEntry(id: string, entry: ResidentInput): ResidentRespons
     items: entry.items,
     ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
     ...(entry.providers ? { providers: entry.providers } : {}),
+    ...(entry.guardrails ? { guardrails: entry.guardrails } : {}),
   });
   return sizeBytes === null ? null : { kind: "resident", ...entry, sizeBytes };
 }
@@ -1027,6 +1033,7 @@ function swapResidentForSpill(id: string, expected: ResidentResponseState, ref: 
     createdAt: expected.createdAt,
     ...(expected.clientThreadId ? { clientThreadId: expected.clientThreadId } : {}),
     ...(expected.providers ? { providers: expected.providers } : {}),
+    ...(expected.guardrails ? { guardrails: expected.guardrails } : {}),
     spill: ref,
   };
   const next: SpilledResponseState = { ...base, sizeBytes: stubSize(id, base) };
@@ -1050,6 +1057,7 @@ function replaceSpillEntryAtomically(
       items: candidate.items,
       ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
+      ...(candidate.guardrails ? { guardrails: candidate.guardrails } : {}),
     });
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
@@ -1057,6 +1065,7 @@ function replaceSpillEntryAtomically(
       ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
+      ...(candidate.guardrails ? { guardrails: candidate.guardrails } : {}),
       spill: ref,
     };
     const next: SpilledResponseState = { ...base, sizeBytes: stubSize(id, base) };
@@ -1143,6 +1152,7 @@ function admitOversizedCandidate(
       items: candidate.items,
       ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
+      ...(candidate.guardrails ? { guardrails: candidate.guardrails } : {}),
     });
     // Enforce the ceiling against the REAL envelope: the spill payload adds
     // the {version, responseId, ...} wrapper, so a candidate within the
@@ -1158,6 +1168,7 @@ function admitOversizedCandidate(
       createdAt: candidate.createdAt,
       ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
+      ...(candidate.guardrails ? { guardrails: candidate.guardrails } : {}),
       spill: ref,
     };
     const next: SpilledResponseState = { ...base, sizeBytes: stubSize(id, base) };
@@ -1210,8 +1221,19 @@ interface LegacySnapshotState {
   clientThreadId?: unknown;
   items?: unknown;
   providers?: OcxProviderContinuationState;
+  guardrails?: unknown;
   conversationId?: unknown;
   cursorCheckpointUsable?: unknown;
+}
+
+function normalizedGuardrailsMarker(value: unknown): OcxGuardrailsResponseMarker | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const marker = value as Record<string, unknown>;
+  if (Object.keys(marker).some(key => !["enforced", "policyRevision"].includes(key))
+    || marker.enforced !== true
+    || typeof marker.policyRevision !== "string"
+    || !/^[0-9a-f]{64}$/.test(marker.policyRevision)) return undefined;
+  return { enforced: true, policyRevision: marker.policyRevision };
 }
 
 function isSpillRef(value: unknown): value is ResponseSpillRef {
@@ -1231,6 +1253,7 @@ function loadSnapshotEntry(id: string, value: unknown): void {
   const clientThreadId = typeof rec.clientThreadId === "string" && rec.clientThreadId.trim().length > 0
     ? rec.clientThreadId.trim()
     : undefined;
+  const guardrails = normalizedGuardrailsMarker(rec.guardrails);
   // A malformed boundary degrades to "never skip" rather than to a bad index: an untrusted
   // snapshot must not be able to authorize dropping conversation history.
   const anchorFor = (itemCount: number): number | undefined => {
@@ -1249,6 +1272,7 @@ function loadSnapshotEntry(id: string, value: unknown): void {
       // here; the spill payload validator re-checks it against the real array.
       ...(anchorFor(Number.MAX_SAFE_INTEGER) !== undefined ? { providerOutputStart: anchorFor(Number.MAX_SAFE_INTEGER) } : {}),
       ...(rec.providers ? { providers: rec.providers } : {}),
+      ...(guardrails ? { guardrails } : {}),
       spill: rec.spill,
     };
     replaceMapEntry(id, { ...base, sizeBytes: stubSize(id, base) });
@@ -1276,6 +1300,7 @@ function loadSnapshotEntry(id: string, value: unknown): void {
     items: rec.items,
     ...(anchorFor(rec.items.length) !== undefined ? { providerOutputStart: anchorFor(rec.items.length) } : {}),
     ...(providers ? { providers } : {}),
+    ...(guardrails ? { guardrails } : {}),
   });
   if (!resident) {
     replaceMapEntry(id, tombstone(id, rec.createdAt));
@@ -1889,6 +1914,7 @@ function pruneResponses(at = now()): void {
         items: entry.items,
         ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
         ...(entry.providers ? { providers: entry.providers } : {}),
+        ...(entry.guardrails ? { guardrails: entry.guardrails } : {}),
       });
       if (swapResidentForSpill(oldestId, entry, ref)) noteSpillWriteSuccess();
     } catch (error) {
@@ -2006,6 +2032,7 @@ export function evictOldestResponseContinuationForBudget(): number {
       items: entry.items,
       ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
       ...(entry.providers ? { providers: entry.providers } : {}),
+      ...(entry.guardrails ? { guardrails: entry.guardrails } : {}),
     });
     if (swapResidentForSpill(id, entry, ref)) noteSpillWriteSuccess();
   } catch (error) {
@@ -2050,6 +2077,7 @@ function materializeEntry(
       ? { providerOutputStart: result.payload.providerOutputStart }
       : {}),
     ...(result.payload.providers ? { providers: result.payload.providers } : {}),
+    ...(result.payload.guardrails ? { guardrails: result.payload.guardrails } : {}),
   });
   if (!state) {
     spillCounters.readFailures += 1;
@@ -2174,6 +2202,19 @@ export function previousResponseProviderState(responseId: string | undefined): O
   return providers ? structuredClone(providers) : undefined;
 }
 
+export function previousResponseGuardrailsMarker(
+  responseId: string | undefined,
+  clientThreadId?: string,
+): OcxGuardrailsResponseMarker | undefined {
+  if (!responseId) return undefined;
+  ensureLoaded();
+  pruneResponses();
+  const state = states.get(responseId);
+  if (!state || state.kind === "spill-failed") return undefined;
+  if (normalizedClientThreadId(clientThreadId) !== normalizedClientThreadId(state.clientThreadId)) return undefined;
+  return state.guardrails ? structuredClone(state.guardrails) : undefined;
+}
+
 export interface ResponseStateMetrics {
   count: number;
   residentCount: number;
@@ -2276,7 +2317,11 @@ export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },
   providerState?: OcxProviderContinuationState | string,
-  opts?: { force?: boolean; clientThreadId?: string },
+  opts?: {
+    force?: boolean;
+    clientThreadId?: string;
+    guardrails?: OcxGuardrailsResponseMarker;
+  },
 ): void {
   if (!requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)) return;
   const request = requestBody as Record<string, unknown>;
@@ -2303,6 +2348,7 @@ export function rememberResponseState(
     });
   }
   const clientThreadId = normalizedClientThreadId(opts?.clientThreadId);
+  const guardrails = normalizedGuardrailsMarker(opts?.guardrails);
   // Compute the normalized array once and reuse it for both fields, so the recorded
   // boundary can never disagree with the items it indexes.
   const requestItems = inputItems(request.input);
@@ -2320,6 +2366,7 @@ export function rememberResponseState(
     // incomplete agent turn on the Cursor side (we suspended without a real mcpResult), so its
     // checkpoint must not be reused — but the conversation id string itself is still valid.
     ...(Object.keys(normalizedProviderState).length > 0 ? { providers: normalizedProviderState } : {}),
+    ...(guardrails ? { guardrails } : {}),
   });
   enforceAppOwnedMemoryBudget();
   schedulePersist();

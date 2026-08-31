@@ -343,6 +343,94 @@ describe("handleResponses Codex WS relay selection", () => {
     expect(text).toContain("data: [DONE]");
   });
 
+  test("Guardrails masks the WS request and never restores reasoning deltas", async () => {
+    const secret = "sk_live_abcdefghijklmnopqrstuvwx";
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.reasoning_text.delta",
+          item_id: "reasoning-1",
+          delta: "private <STRIPE_ACCESS_TOKEN_1>",
+        }),
+      });
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.completed",
+          response: { id: "r-guardrails-ws", status: "completed", output: [] },
+        }),
+      });
+    });
+    const guarded = forwardConfig();
+    guarded.guardrails = {
+      enabled: true,
+      mode: "enforce",
+      failurePolicy: "block",
+    };
+    const guardedRequest = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test" },
+      body: JSON.stringify({ model: "gpt-5.5", input: secret, stream: true }),
+    });
+
+    const response = await handleResponses(
+      guardedRequest,
+      guarded,
+      { model: "", provider: "" },
+      { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME },
+    );
+    const sent = FakeWebSocket.instances[0]?.sent[0] ?? "";
+    const text = await response.text();
+
+    expect(sent).toContain("<STRIPE_ACCESS_TOKEN_1>");
+    expect(sent).not.toContain(secret);
+    expect(text).toContain("private <STRIPE_ACCESS_TOKEN_1>");
+    expect(text).not.toContain(secret);
+  });
+
+  test("disabled Guardrails is byte-identical to baseline on the Responses WS path", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.completed",
+          response: {
+            id: "resp-disabled-ws",
+            status: "completed",
+            output: [],
+          },
+        }),
+      });
+    });
+
+    const baselineResponse = await handleResponses(
+      request(),
+      forwardConfig(),
+      { model: "", provider: "" },
+      { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME },
+    );
+    const baselineBody = await baselineResponse.text();
+    const baselineSent = FakeWebSocket.instances[0]?.sent[0];
+
+    const disabled = forwardConfig();
+    disabled.guardrails = { enabled: false };
+    const disabledResponse = await handleResponses(
+      request(),
+      disabled,
+      { model: "", provider: "" },
+      { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME },
+    );
+    const disabledBody = await disabledResponse.text();
+    const disabledSent = FakeWebSocket.instances[1]?.sent[0];
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(disabledSent).toBe(baselineSent);
+    expect(disabledResponse.status).toBe(baselineResponse.status);
+    expect(disabledResponse.headers.get("content-type"))
+      .toBe(baselineResponse.headers.get("content-type"));
+    expect(disabledBody).toBe(baselineBody);
+  });
+
   test("an HTTP fallback remains on the configured legacy tee path", async () => {
     installFake(ws => ws.close());
     globalThis.fetch = (async () => new Response(

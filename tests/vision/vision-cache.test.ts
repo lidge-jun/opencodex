@@ -241,6 +241,32 @@ describe("vision description cache and per-turn cap", () => {
     expect(calls).toBe(4);
   });
 
+  test("sanitized and plaintext targets share one vision call without cross-restoration", async () => {
+    let calls = 0;
+    const literal = "<STRIPE_ACCESS_TOKEN_1>";
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return openaiSse(literal);
+    }) as typeof fetch;
+    const protectedRequest = parsed([{ type: "input_image", image_url: DATA_A }]);
+    const plaintextRequest = structuredClone(protectedRequest);
+
+    await describeImagesInPlace(
+      protectedRequest,
+      plan(),
+      new Headers({ authorization: "Bearer test" }),
+      undefined,
+      undefined,
+      undefined,
+      () => "<VISION_TEXT_1>",
+      plaintextRequest,
+    );
+
+    expect(calls).toBe(1);
+    expect(textParts(protectedRequest).join("\n")).toContain("<VISION_TEXT_1>");
+    expect(textParts(plaintextRequest).join("\n")).toContain(literal);
+  });
+
   test("error outcome reaches the caller unchanged and does not mutate the cache", async () => {
     const before = visionDescriptionRetainedStoreSnapshot();
     globalThis.fetch = (async () => new Response("preserve this exact detail", { status: 503 })) as typeof fetch;

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 
 type Finding = {
@@ -48,6 +49,43 @@ const DEVLOG_PUBLICATION_PROOF_TOKEN = ["sk-", "liveKeyShaped9", "x8w7v6u5", "t4
 const DEVLOG_PUBLICATION_PROOF_HOME_USERNAME = ["someone", "else"].join("");
 const DEVLOG_PUBLICATION_PROOF_EMAIL = ["stranger", "third-party.example.org"].join("@");
 
+/**
+ * Public attribution strings that must remain byte-for-byte identical to their
+ * reviewed upstream files. An allowance stops applying if either the path, email,
+ * or complete-file SHA-256 changes.
+ */
+const HASH_PINNED_PUBLIC_EMAILS = new Map<string, {
+  sha256: string;
+  emails: ReadonlySet<string>;
+}>([
+  [
+    "LICENSES/yaml-ISC.txt",
+    {
+      sha256: "5bba27375d93e9119f76c1015f7672cf9ad5f70952296e0842fb2243d6376869",
+      emails: new Set([["eemeli", "gmail.com"].join("@")]),
+    },
+  ],
+  [
+    "src/guardrails/rules/guardrails_regex_rules.yaml",
+    {
+      sha256: "df2a500675c8d75d65dcea0edf0afea15c53d8c4090e03befa2e090f33e43dcb",
+      emails: new Set([["n", "allure.epic"].join("@")]),
+    },
+  ],
+]);
+
+/**
+ * Synthetic upstream test vectors whose token-shaped values are required to verify
+ * the Guardrails rule port. The allowance is all-or-nothing and byte-pinned: any
+ * fixture edit drops back into the normal scanner instead of silently expanding it.
+ */
+const HASH_PINNED_SYNTHETIC_FIXTURES = new Map<string, string>([
+  [
+    "tests/fixtures/guardrails-donor-rule-cases.json",
+    "9fa0235082d4fec06b4001ecfae7d10b3c5a6e8e6f6f63dd764de0fd7d395224",
+  ],
+]);
+
 function gitLsFiles(): string[] {
   const result = Bun.spawnSync(["git", "ls-files"], { stdout: "pipe", stderr: "pipe" });
   if (!result.success) {
@@ -82,7 +120,9 @@ function lineAt(text: string, index: number): string {
   return text.slice(start, end === -1 ? text.length : end);
 }
 
-function isAllowedEmail(file: string, email: string): boolean {
+function isAllowedEmail(file: string, email: string, fileSha256: string): boolean {
+  const pinned = HASH_PINNED_PUBLIC_EMAILS.get(file);
+  if (pinned?.sha256 === fileSha256 && pinned.emails.has(email)) return true;
   if (file === "scripts/privacy-scan.ts" && email === "a@b.com") return true;
   if (file === DEVLOG_PUBLICATION_PROOF_FILE && email === DEVLOG_PUBLICATION_PROOF_EMAIL) return true;
   const domain = email.split("@").at(1)?.toLowerCase() ?? "";
@@ -191,7 +231,11 @@ function addFindingsForPattern(
  * scan on import, so a test that cannot call a function ends up re-declaring the patterns
  * instead — and then stays green even if a detector here is deleted.
  */
-export function scanText(file: string, text: string): Finding[] {
+export function scanText(
+  file: string,
+  text: string,
+  fileSha256 = createHash("sha256").update(text).digest("hex"),
+): Finding[] {
   const findings: Finding[] = [];
   addFindingsForPattern(
     findings,
@@ -208,7 +252,7 @@ export function scanText(file: string, text: string): Finding[] {
     "email",
     /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,
     match =>
-      isAllowedEmail(file, match[0])
+      isAllowedEmail(file, match[0], fileSha256)
       || (file.startsWith("devlog/") && isGitAttributionContext(lineAt(text, match.index ?? 0))),
   );
   addFindingsForPattern(
@@ -244,7 +288,10 @@ export function scanText(file: string, text: string): Finding[] {
 }
 
 function scanFile(file: string): Finding[] {
-  return scanText(file, readFileSync(file, "utf-8"));
+  const bytes = readFileSync(file);
+  const fileSha256 = createHash("sha256").update(bytes).digest("hex");
+  if (HASH_PINNED_SYNTHETIC_FIXTURES.get(file) === fileSha256) return [];
+  return scanText(file, bytes.toString("utf8"), fileSha256);
 }
 
 /**

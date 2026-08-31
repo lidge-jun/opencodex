@@ -230,8 +230,13 @@ function forcedAnswerNudge(): OcxMessage {
   };
 }
 
-function jsonError(status: number, message: string): Response {
-  return new Response(JSON.stringify({ error: { message, type: "upstream_error", code: null } }), {
+function jsonError(
+  status: number,
+  message: string,
+  errorType = "upstream_error",
+  code: string | null = null,
+): Response {
+  return new Response(JSON.stringify({ error: { message, type: errorType, code } }), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -240,7 +245,12 @@ function jsonError(status: number, message: string): Response {
 /** Hard provider/parse failure inside an iteration. The eager first iteration converts it to a
  *  non-200 jsonError; later (already-streaming) iterations surface it as an in-stream error event. */
 class LoopError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly errorType = "server_error",
+    readonly code: string | null = null,
+  ) {
     super(message);
     this.name = "LoopError";
   }
@@ -301,6 +311,11 @@ export interface WebSearchLoopDeps {
   onUsage?: (usage: OcxUsage | undefined) => void;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
+  /** Prepare only loop-added messages immediately before each outbound model build. */
+  beforeIterationBuild?: (
+    messages: OcxMessage[],
+    addedFromIndex: number,
+  ) => void | { code: string; errorType: string; message: string; status: number };
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
@@ -337,6 +352,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     : 300_000;
 
   const messages: OcxMessage[] = [...parsed.context.messages];
+  let preparedMessageCount = messages.length;
   const loopT0 = Date.now();
   const allTools = parsed.context.tools ?? [];
   // For the forced-answer pass we drop the synthetic web_search tool so the model MUST answer from the
@@ -392,6 +408,16 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
    * restart) before the `on429` key rotation.
    */
   const prepareIterationEvents = async function* (forceAnswer: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
+    const preparationFailure = deps.beforeIterationBuild?.(messages, preparedMessageCount);
+    if (preparationFailure) {
+      throw new LoopError(
+        preparationFailure.status,
+        preparationFailure.message,
+        preparationFailure.errorType,
+        preparationFailure.code,
+      );
+    }
+    preparedMessageCount = messages.length;
     // On the forced-answer pass the synthetic web_search tool is gone, so the model MUST answer
     // from the results already in `messages`. A weak model can still produce a thin answer that
     // ignores what the search found, which reads to the user as "the search did nothing". Nudge it
@@ -541,7 +567,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // through the adapter formatter or the generic transport error, which could expose its
           // raw message. A parent/client cancellation still owns the request lifecycle as 499.
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
-          throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`);
+          throw new LoopError(
+            prepared.response.status,
+            `Provider error ${prepared.response.status}`,
+            "upstream_error",
+          );
         }
         let formatted = "";
         if (body.displaySafe && !body.truncated && body.text.trim() && prepared.responseAdapter.formatErrorBody) {
@@ -554,17 +584,29 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           } catch { /* formatter hooks are best-effort; unsafe raw text is never the fallback */ }
         }
         const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
-        throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`);
+        throw new LoopError(
+          prepared.response.status,
+          `Provider error ${prepared.response.status}${suffix}`,
+          "upstream_error",
+        );
       }
       return prepared;
     } catch (error) {
       if (isTranslatorBudgetExceededError(error)) throw error;
       if (headerDeadline.didExpire()) {
-        throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`);
+        throw new LoopError(
+          504,
+          `Provider response-header timeout after ${connectTimeoutMs}ms during web-search`,
+          "upstream_error",
+        );
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
       if (error instanceof LoopError) throw error;
-      throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
+      throw new LoopError(
+        502,
+        `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`,
+        "upstream_error",
+      );
     } finally {
       headerDeadline.clear();
     }
@@ -625,7 +667,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
       if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
-      throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
+      throw new LoopError(
+        502,
+        `Provider stream error: ${error instanceof Error ? error.message : String(error)}`,
+        "upstream_error",
+      );
     }
 
     const terminalIndexes = events.flatMap((event, index) =>
@@ -785,7 +831,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     firstPrepared = await prepareIterationDrained(false);
   } catch (e) {
     if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-    if (e instanceof LoopError) return jsonError(e.status, e.message);
+    if (e instanceof LoopError) return jsonError(e.status, e.message, e.errorType, e.code);
     throw e;
   }
 
@@ -869,7 +915,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               message: "upstream translation buffer exceeded the safe limit",
             };
           } else {
-            yield { type: "error", message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)) };
+            yield e instanceof LoopError
+              ? {
+                  type: "error",
+                  status: e.status,
+                  errorType: e.errorType,
+                  code: e.code ?? undefined,
+                  message: e.message,
+                }
+              : { type: "error", message: e instanceof Error ? e.message : String(e) };
           }
           return;
         }

@@ -1,0 +1,508 @@
+# guardrails_regex_rules.yaml — v1 ruleset for guardrails-llm-filter
+#
+# DataType fields:
+#   data_type       — numeric type identifier (must match the models.DataType enum)
+#   group_priority  — overlap priority for this data type (higher wins; reserved for future resolver)
+#   name            — unique group name
+#   display_name    — human-readable name shown in UI
+#   description     — short description of what the group covers
+#
+# Rule fields:
+#   rule_id     — stable string rule identifier
+#   name        — unique rule name
+#   regex       — detection pattern (Go RE2 syntax)
+#   min_length  — minimum match length to avoid trivial FP
+#   keywords    — pre-filter: at least one must be present in text (case-insensitive)
+#   entropy     — minimum Shannon entropy of the matched value
+#   banlist     — block list for exact candidate value (lower-cased)
+#   validators  — extra validation steps:
+#                 [luhn, snils, inn_person, inn_org, ogrn, ogrnip, iban_mod97, email_ascii, payment_card, ip_v4, ip_v6, ip_public, ip_private]
+#   masking:
+#     capture_groups — semantic capture group indexes (1-based); absent means full match
+#     placeholder    — placeholder type name (e.g. PEM_KEY -> <PEM_KEY_1>)
+
+guardrails_regex_rules:
+  - data_type: 1
+    group_priority: 90
+    name: CREDENTIALS
+    display_name: "Учетные данные"
+    description: "URL/DSN с кредами, HTTP-авторизация, заголовки API-ключей и password assignment"
+    rules:
+      - rule_id: credentials.url_with_creds
+        name: credentials.url_with_creds
+        regex: '(?i)((?:https?|ftp)://[^:\s@/\\]+:[^@\s/''"`,\\]{3,}@[^\s''"`\\,;!?()\[\]{}]*[^\s''"`\\,;.!?()\[\]{}])(?:[\x60''"\s,;.!?()\[\]{}]|\\[nr]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "URL_WITH_CREDS"
+
+      - rule_id: credentials.db_connection
+        name: credentials.db_connection 
+        regex: '(?i)((?:postgres(?:ql)?|mysql|mssql|mongodb(?:\+srv)?)://[^:@\s\\]+:[^@\s''"`\,\\]{3,}@[^\s''"`\,;!?()\[\]{}\\]*[^\s''"`\,;.!?()\[\]{}\\])(?:[\x60''"\s,;.!?()\[\]{}]|\\[nr]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "DB_DSN"
+
+      - rule_id: credentials.redis_connection
+        name: credentials.redis_connection
+        regex: '(?i)(redis(?:s)?://(?:[^:@/\s\\]*:)[^@\s/''"`?,#\\]{3,}@[^\s''"`\\,;!?()\[\]{}]*[^\s''"`\\,;.!?()\[\]{}])(?:[\x60''"\s,;.!?()\[\]{}]|\\[nr]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "REDIS_DSN"
+
+      - rule_id: credentials.amqp_connection
+        name: credentials.amqp_connection
+        regex: '(?i)((?:amqps?)://(?:[^:@/\s\\]*:)[^@\s/''"`?,#\\]{3,}@[^\s''"`\\,;!?()\[\]{}]*[^\s''"`\\,;.!?()\[\]{}])(?:[\x60''"\s,;.!?()\[\]{}]|\\[nr]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "AMQP_DSN"
+
+      - rule_id: credentials.nats_connection
+        name: credentials.nats_connection
+        regex: '(?i)(nats://(?:[^:@/\s\\]+:)[^@\s/''"`?,\\]{3,}@[^\s''"`\\,;!?()\[\]{}]*[^\s''"`\\,;.!?()\[\]{}])(?:[\x60''"\s,;.!?()\[\]{}]|\\[nr]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "NATS_DSN"
+
+      - rule_id: credentials.http_auth_basic
+        name: credentials.http_auth_basic
+        regex: '(?i)Authorization:\s*Basic\s+([A-Za-z0-9+/]{8,}={0,2})(?:[\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        keywords: ["Authorization", "Basic"]
+        masking:
+          capture_groups: [1]
+          placeholder: "HTTP_AUTH_BASIC"
+
+      - rule_id: credentials.http_auth_bearer
+        name: credentials.http_auth_bearer
+        regex: '(?i)Authorization:\s*(?:Bearer|Token)\s+([A-Za-z0-9\-_.~+/]{12,512})(?:[\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        keywords: ["Authorization", "Bearer", "Token"]
+        masking:
+          capture_groups: [1]
+          placeholder: "BEARER_TOKEN"
+
+      - rule_id: credentials.url_encoded_bearer_token
+        name: credentials.url_encoded_bearer_token
+        regex: '(?i)(?:^|[?&\s])(?:auth|authorization|access_token|token)=["'']?(?:Bearer|Token)(?:%20|\+|\s)+([A-Za-z0-9\-_.~+/]{12,512})(?:[&\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        keywords: ["Bearer", "Token", "%20"]
+        masking:
+          capture_groups: [1]
+          placeholder: "BEARER_TOKEN"
+
+      - rule_id: credentials.api_key_header
+        name: credentials.api_key_header
+        regex: '(?i)(?:X-(?:Api-)?Key|Api-Key|X-Auth-Token)\s*:\s*([A-Za-z0-9\-_.~+/]{12,512})(?:[\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        keywords: ["api", "key", "token"]
+        masking:
+          capture_groups: [1]
+          placeholder: "API_KEY_HEADER"
+
+      - rule_id: credentials.nested_json_api_key
+        name: credentials.nested_json_api_key
+        regex: '(?i)(?:^|[,{]\s*)"?(?:api[-_]?key|key)"?\s*:\s*"?([A-Za-z0-9\-_.~+/]{12,512})(?:[\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        keywords: ["api", "key"]
+        masking:
+          capture_groups: [1]
+          placeholder: "API_KEY_HEADER"
+
+      - rule_id: credentials.password
+        name: credentials.password
+        regex: '(?i)(?:password|passwd|pwd)\s*[:=>{]+\s*(?:"([^"\\\r\n]{6,256})"|''([^''\\\r\n]{6,256})''|"([^\\\s''"`\,;:)\]\}]{6,256})|''([^\\\s''"`\,;:)\]\}]{6,256})|([^\\\s''"`\,;:)\]\}]{6,256}))(?:[\x60''"\s,;:()\[\]{}]|\\[nr]|$)'
+        keywords: ["password", "passwd", "pwd"]
+        entropy: 2.5
+        banlist:
+          - password
+          - qwerty
+          - "123456"
+          - "12345678"
+          - "111111"
+          - letmein
+          - admin
+          - welcome
+          - secret
+          - changeme
+          - pass
+        masking:
+          capture_groups: [1, 2, 3, 4, 5]
+          placeholder: "PASSWORD"
+
+      - rule_id: credentials.oauth_query_secret
+        name: credentials.oauth_query_secret
+        regex: '(?i)(?:\?|&)(?:access_token|refresh_token|id_token|client_secret)=([A-Za-z0-9._~+/%=-]{8,512})(?:[&\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        keywords: ["access_token", "refresh_token", "id_token", "client_secret"]
+        masking:
+          capture_groups: [1]
+          placeholder: "OAUTH_QUERY_SECRET"
+
+      - rule_id: credentials.oauth_body_secret
+        name: credentials.oauth_body_secret
+        regex: '(?i)(?:^|[&\s{,]|\\")["'']?(?:access_token|refresh_token|id_token|client_secret)["'']?(?:\\"|["''])?\s*[:=]\s*(?:\\"|["''])?([A-Za-z0-9._~+/%=-]{8,512})(?:\\"|[\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        keywords: ["access_token", "refresh_token", "id_token", "client_secret"]
+        masking:
+          capture_groups: [1]
+          placeholder: "OAUTH_BODY_SECRET"
+
+  - data_type: 2
+    group_priority: 100
+    name: API_KEYS
+    display_name: "API-ключи"
+    description: "API-ключи"
+    rules:
+
+      - rule_id: api_keys.stripe-key
+        name: api_keys.stripe-key
+        regex: '(sk_live_[A-Za-z0-9]{24,64})(?:[\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "STRIPE_API_KEY"
+
+      - rule_id: api_keys.stripe-restricted
+        name: api_keys.stripe-restricted
+        regex: '(rk_live_[A-Za-z0-9]{24,64})(?:[\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "STRIPE_RESTRICTED_API_KEY"
+
+  - data_type: 3
+    group_priority: 85
+    name: ACCESS_TOKENS
+    display_name: "Токены доступа"
+    description: "Токены сервисов и инфраструктуры"
+    rules:
+      - rule_id: access_tokens.twilio-auth-token
+        name: access_tokens.twilio-auth-token
+        regex: '\b([a-f0-9]{32})\b'
+        keywords: ["twilio", "auth_token"]
+        entropy: 3.5
+        masking:
+          capture_groups: [1]
+          placeholder: "TWILIO_AUTH_TOKEN"
+
+      - rule_id: access_tokens.npm-token
+        name: access_tokens.npm-token
+        regex: '(npm_[A-Za-z0-9]{36})(?:[\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "NPM_TOKEN"
+
+      - rule_id: access_tokens.generic-token
+        name: access_tokens.generic-token
+        # Format-agnostic token catch-all the provider-specific rules miss.
+        # Branch 1: a token/API-key/access-token keyword (up to five filler words
+        # away) followed by a 16+ char alphanumeric secret. Branch 2: an
+        # api_/key_/token_/sk_/pk_ prefixed secret (the prefix is the anchor).
+        # Branch 3: recovery / confirmation / OTP codes (4-8 digits after their
+        # keyword). Whichever group matches is masked.
+        regex: '(?i)(?:(?:api[\s-]?(?:ключ|key)|access[\s-]?token|reset[\s-]?токен|токен|token)(?:[\s,.:;!?()«»"\x27-]+[а-яё]+){0,5}[\s,.:;!?()«»"\x27-]*([A-Za-z0-9]{16,})|\b((?:api|key|token|tok|sk|pk|secret|access)_[A-Za-z0-9]{16,})|(?:смс\s+с\s+код[а-яё]*|код\s+(?:восстановлени[а-яё]+|подтвержден[а-яё]+|активаци[а-яё]+|из\s+смс|для\s+(?:подтвержден[а-яё]+|активаци[а-яё]+|верификац[а-яё]+))|otp|one-time|(?:пришел|пришёл|получил)\s+код)(?:[^\d]{0,15})(\d{4,8}))\b'
+        masking:
+          capture_groups: [1, 2, 3]
+          placeholder: "TOKEN"
+
+      - rule_id: access_tokens.generic-long-token
+        name: access_tokens.generic-long-token
+        # Keyword-free fallback for long (32+ char) mixed-case tokens where no
+        # nearby keyword survives. The case-sensitive uppercase requirement
+        # (?-i) is the precision anchor: it excludes all-lowercase hex hashes,
+        # git SHAs and UUIDs (which read as ordinary technical identifiers, not
+        # secrets) while still catching mixed-case tokens like ZXCasd123QWE….
+        regex: '(?-i)\b([A-Za-z0-9]*[A-Z][A-Za-z0-9]*)\b'
+        min_length: 32
+        masking:
+          capture_groups: [1]
+          placeholder: "TOKEN"
+
+      - rule_id: access_tokens.vault-token
+        name: access_tokens.vault-token
+        regex: '(hv[sbr]\.[A-Za-z0-9_\-]{90,120})(?:[\x60''"\s,;:!?()\[\]{}]|\\[nr]|$)'
+        keywords: ["vault", "VAULT_TOKEN"]
+        masking:
+          capture_groups: [1]
+          placeholder: "VAULT_TOKEN"
+      
+      - rule_id: access_tokens.private-key-pem
+        name: access_tokens.private-key-pem
+        regex: '-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'
+        masking:
+          placeholder: "PEM_KEY"
+
+  - data_type: 4
+    group_priority: 40
+    name: IP_ADDRESSES
+    display_name: "IP-адреса"
+    description: "IP-адреса"
+    rules:
+      - rule_id: ip-addrs.ipv4
+        name: ip-addrs.ipv4
+        regex: '\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b'
+        validators: [ip_v4]
+        masking:
+          placeholder: "IPV4"
+
+      - rule_id: ip-addrs.ipv4-cidr
+        name: ip-addrs.ipv4-cidr
+        regex: '\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)/(?:3[0-2]|[12]?\d)\b'
+        validators: [ip_v4]
+        masking:
+          placeholder: "IPV4_CIDR"
+
+      - rule_id: ip-addrs.ipv4-public
+        name: ip-addrs.ipv4-public
+        regex: '\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b'
+        validators: [ip_v4, ip_public]
+        masking:
+          placeholder: "IPV4"
+
+      - rule_id: ip-addrs.ipv4-private
+        name: ip-addrs.ipv4-private
+        regex: '\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b'
+        validators: [ip_v4, ip_private]
+        masking:
+          placeholder: "IPV4"
+
+      - rule_id: ip-addrs.ipv6
+        name: ip-addrs.ipv6
+        regex: '(?i)(?:^|[^0-9a-f:])([0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7})(?:$|[^0-9a-f:])'
+        validators: [ip_v6]
+        masking:
+          capture_groups: [1]
+          placeholder: "IPV6"
+
+      - rule_id: ip-addrs.ipv6-cidr
+        name: ip-addrs.ipv6-cidr
+        regex: '(?i)(?:^|[^0-9a-f:/])([0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}/(?:12[0-8]|1[01]\d|[1-9]?\d))(?:$|[^0-9a-f:/])'
+        validators: [ip_v6]
+        masking:
+          capture_groups: [1]
+          placeholder: "IPV6_CIDR"
+
+      - rule_id: ip-addrs.ipv6-public
+        name: ip-addrs.ipv6-public
+        regex: '(?i)(?:^|[^0-9a-f:])([0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7})(?:$|[^0-9a-f:])'
+        validators: [ip_v6, ip_public]
+        masking:
+          capture_groups: [1]
+          placeholder: "IPV6"
+
+      - rule_id: ip-addrs.ipv6-private
+        name: ip-addrs.ipv6-private
+        regex: '(?i)(?:^|[^0-9a-f:])([0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7})(?:$|[^0-9a-f:])'
+        validators: [ip_v6, ip_private]
+        masking:
+          capture_groups: [1]
+          placeholder: "IPV6"
+
+  - data_type: 5
+    group_priority: 50
+    name: PERSONAL_DATA
+    display_name: "Персональные данные"
+    description: "ФИО, телефонные номера (РФ), email, СНИЛС, ИНН, ОГРН, ОГРНИП, банковские карты (Visa, MasterCard, Мир), IBAN"
+    rules:
+      - rule_id: pii.fio-ru
+        name: pii.fio-ru
+        # Russian full names (ФИО). Three capitalized Cyrillic words alone are
+        # far too noisy, so the patronymic suffix is the precision anchor and
+        # both word orders require it: "Смирнова Анна Сергеевна" (Ф И О) and
+        # "Иван Петрович Сидоров" (И О Ф). Covered: declined forms (от
+        # Смирновой Анны Сергеевны, Иванову Ивану Ивановичу), short -ич
+        # patronymics (Ильич, Кузьмич), hyphenated surnames (Петрова-Водкина)
+        # and ALL-CAPS spellings (СМИРНОВА АННА СЕРГЕЕВНА) via the two
+        # uppercase branches. Suffix grammar: male ич(а|у|ем|е)?, female
+        # вн(а|ы|е|у|ой) / ичн(а|ы|е|у|ой). RE2 \b is ASCII-only and never
+        # fires next to Cyrillic, hence the explicit non-letter guards; only
+        # capture group 1 (the name) is masked.
+        regex: '(?:^|[^ЁА-Яёа-я])((?:[ЁА-Я][ёа-я]+(?:-[ЁА-Я][ёа-я]+)?\s+[ЁА-Я][ёа-я]+\s+[ЁА-Я][ёа-я]+(?:ич(?:а|у|ем|е)?|вн(?:а|ы|е|у|ой)|ичн(?:а|ы|е|у|ой)))|(?:[ЁА-Я][ёа-я]+\s+[ЁА-Я][ёа-я]+(?:ич(?:а|у|ем|е)?|вн(?:а|ы|е|у|ой)|ичн(?:а|ы|е|у|ой))\s+[ЁА-Я][ёа-я]+(?:-[ЁА-Я][ёа-я]+)?)|(?:[ЁА-Я]{2,}(?:-[ЁА-Я]{2,})?\s+[ЁА-Я]{2,}\s+[ЁА-Я]+(?:ИЧ(?:А|У|ЕМ|Е)?|ВН(?:А|Ы|Е|У|ОЙ)|ИЧН(?:А|Ы|Е|У|ОЙ)))|(?:[ЁА-Я]{2,}\s+[ЁА-Я]+(?:ИЧ(?:А|У|ЕМ|Е)?|ВН(?:А|Ы|Е|У|ОЙ)|ИЧН(?:А|Ы|Е|У|ОЙ))\s+[ЁА-Я]{2,}(?:-[ЁА-Я]{2,})?))(?:[^ЁА-Яёа-я]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "FIO"
+
+      - rule_id: pii.fio-ru.initials
+        name: pii.fio-ru.initials
+        # Surname + initials («Смирнова А.С.», «Кузнецов П. И.», «А.С. Смирнова»,
+        # «СМИРНОВА А.С.») — the dotted initial pair is the precision anchor, so
+        # a single initial («пункт А.») never matches. Declined surnames are
+        # free-form ([ёа-я]+); ALL-CAPS surnames get their own alternatives.
+        regex: '(?:^|[^ЁА-Яёа-я])((?:[ЁА-Я][ёа-я]+(?:-[ЁА-Я][ёа-я]+)?\s+[ЁА-Я]\.\s?[ЁА-Я]\.)|(?:[ЁА-Я]\.\s?[ЁА-Я]\.\s*[ЁА-Я][ёа-я]+(?:-[ЁА-Я][ёа-я]+)?)|(?:[ЁА-Я]{2,}(?:-[ЁА-Я]{2,})?\s+[ЁА-Я]\.\s?[ЁА-Я]\.)|(?:[ЁА-Я]\.\s?[ЁА-Я]\.\s*[ЁА-Я]{2,}(?:-[ЁА-Я]{2,})?))(?:[^ЁА-Яёа-я.]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "FIO"
+
+      - rule_id: pii.fio-ru.short
+        name: pii.fio-ru.short
+        # Two-word names without a patronymic («Анна Смирнова», «Смирнова Анна»,
+        # «Анну Смирнову»). A bare pair of capitalized words is hopelessly noisy,
+        # so a dictionary of common Russian first names is the anchor. Branch A:
+        # dictionary name (with an optional case ending) + free-form capitalized
+        # surname — covers suffix-less surnames (Жук, Мельник). Branch B:
+        # surname with a typical Russian suffix + dictionary name — covers the
+        # documents-style «Фамилия Имя» order without swallowing arbitrary
+        # capitalized words. Honorific-looking words with name-like suffixes
+        # («Господин Иван») may over-mask by one word — acceptable for a
+        # privacy-biased tool. Deliberately a separate rule so operators can
+        # disable the recall-biased form while keeping pii.fio-ru.
+        regex: '(?:^|[^ЁА-Яёа-я])((?:(?:(?:(?:Александр|Анастаси|Валентин|Екатерин|Елизавет|Маргарит|Алевтин|Ангелин|Антонин|Вероник|Виктори|Кристин|Светлан|Валери|Варвар|Евгени|Зинаид|Клавди|Людмил|Надежд|Натали|Наталь|Татьян|Анжел|Галин|Карин|Ксени|Ларис|Марин|Милан|Оксан|Полин|Регин|Таиси|Тамар|Ульян|Ален|Алин|Алис|Алён|Дарь|Диан|Елен|Жанн|Ирин|Лиди|Лили|Мари|Марь|Олес|Ольг|Раис|Софи|Софь|Алл|Анн|Вер|Дин|Инн|Кир|Нин|Юли|Ев|Зо|Ян)(?:а|я|ы|е|у|ю|ой|ей))|(?:(?:Константин|Александр|Владислав|Станислав|Анатолий|Валентин|Владимир|Всеволод|Вячеслав|Геннадий|Григорий|Алексей|Аркадий|Арсений|Валерий|Василий|Виталий|Георгий|Дмитрий|Евгений|Николай|Савелий|Тимофей|Ярослав|Андрей|Богдан|Виктор|Герман|Даниил|Данила|Кирилл|Леонид|Максим|Матвей|Михаил|Никита|Руслан|Сергей|Степан|Эдуард|Антон|Артем|Артём|Борис|Вадим|Данил|Денис|Игорь|Макар|Марат|Мирон|Павел|Роман|Семен|Семён|Тимур|Федор|Фёдор|Глеб|Егор|Иван|Илья|Марк|Олег|Петр|Пётр|Юрий|Лев)(?:а|у|ом|ем|е|ой|я|ю|й)?)|(?:Любовь))\s+[ЁА-Я][ёа-я]+(?:-[ЁА-Я][ёа-я]+)?)|(?:[ЁА-Я][ёа-я]+(?:ов|ев|ёв|ин|ын|ск|цк|енк|ук|юк|ич|шин|нко|ая|яя|ой|ый|ий|ых|их)[ёа-я]{0,3}\s+(?:(?:(?:Александр|Анастаси|Валентин|Екатерин|Елизавет|Маргарит|Алевтин|Ангелин|Антонин|Вероник|Виктори|Кристин|Светлан|Валери|Варвар|Евгени|Зинаид|Клавди|Людмил|Надежд|Натали|Наталь|Татьян|Анжел|Галин|Карин|Ксени|Ларис|Марин|Милан|Оксан|Полин|Регин|Таиси|Тамар|Ульян|Ален|Алин|Алис|Алён|Дарь|Диан|Елен|Жанн|Ирин|Лиди|Лили|Мари|Марь|Олес|Ольг|Раис|Софи|Софь|Алл|Анн|Вер|Дин|Инн|Кир|Нин|Юли|Ев|Зо|Ян)(?:а|я|ы|е|у|ю|ой|ей))|(?:(?:Константин|Александр|Владислав|Станислав|Анатолий|Валентин|Владимир|Всеволод|Вячеслав|Геннадий|Григорий|Алексей|Аркадий|Арсений|Валерий|Василий|Виталий|Георгий|Дмитрий|Евгений|Николай|Савелий|Тимофей|Ярослав|Андрей|Богдан|Виктор|Герман|Даниил|Данила|Кирилл|Леонид|Максим|Матвей|Михаил|Никита|Руслан|Сергей|Степан|Эдуард|Антон|Артем|Артём|Борис|Вадим|Данил|Денис|Игорь|Макар|Марат|Мирон|Павел|Роман|Семен|Семён|Тимур|Федор|Фёдор|Глеб|Егор|Иван|Илья|Марк|Олег|Петр|Пётр|Юрий|Лев)(?:а|у|ом|ем|е|ой|я|ю|й)?)|(?:Любовь))))(?:[^ЁА-Яёа-я]|$)'
+        masking:
+          capture_groups: [1]
+          placeholder: "FIO"
+
+      - rule_id: pii.phone-ru
+        name: pii.phone-ru
+        # Leading guard (start-of-line or a non-digit) prevents matching a phone
+        # that is actually a substring of a longer digit run (e.g. a card number);
+        # the trailing \b prevents swallowing/adjoining extra digits. Only capture
+        # group 1 (the number itself) is masked, so the guard char is left intact.
+        regex: '(?:^|[^\d])((?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2})\b'
+        min_length: 10
+        masking:
+          capture_groups: [1]
+          placeholder: "PHONE_RU"
+
+      - rule_id: pii.email
+        name: pii.email
+        # Leading guard excludes backslash so that JSON escape sequences like
+        # \n@allure.epic (where \n is a two-char escape) are not falsely matched.
+        # Only capture group 1 (the email) is masked; the guard char stays intact.
+        regex: '(?:^|[^\w\\])([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,63})\b'
+        min_length: 6
+        validators: [email_ascii]
+        masking:
+          capture_groups: [1]
+          placeholder: "EMAIL"
+
+      - rule_id: pii.docs.snils
+        name: pii.docs.snils
+        # Separators (space/dash) optional and independent between groups, so all of
+        # "123-456-789 12", "901 144 044 41", "901144044 41", "90114404441" match.
+        # The snils validator strips non-digits and verifies the checksum, which
+        # rejects any 11-digit false positive.
+        regex: '\b\d{3}[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{2}\b'
+        validators: [snils]
+        masking:
+          placeholder: "SNILS"
+
+      - rule_id: pii.docs.passport
+        name: pii.docs.passport
+        # RF internal passport (4-digit series + 6-digit number) has no checksum,
+        # so a context keyword is required *inside* the regex. The keyword accepts
+        # inflections (паспорт/паспорта/паспортные/паспортом/…) and up to three
+        # filler words may sit between it and the number, so
+        # "с моим паспортом? 4609 328145" and "паспортные данные: 4518123456" both
+        # match. Only the digit span is masked via capture group 1. Handles
+        # "4609 328145", "77 12 345678", "5012345678", "серия 4509 № 123456".
+        regex: '(?i)(?:паспорт[а-яё]*|пасп\.?|серия)(?:[\s,.:;!?()«»"\x27-]+[а-яё]+){0,3}[\s,.:;!?()«»"\x27№-]*(\d{2}[\s-]?\d{2}[\s-]*(?:(?:№|номер)[\s№:.-]*)?\d{6})(?:\D|$)'
+        keywords: ["паспорт", "серия"]
+        masking:
+          capture_groups: [1]
+          placeholder: "PASSPORT_RF"
+
+      - rule_id: pii.docs.kpp
+        name: pii.docs.kpp
+        # КПП — 9 chars (4 tax-authority + 2 reason + 3 serial). A bare 9-digit run
+        # is noisy, so the "кпп" keyword (up to 3 filler words away) is required.
+        regex: '(?i)кпп(?:[\s,.:;!?()«»"\x27-]+[а-яёa-z]+){0,3}[\s,.:;!?()«»"\x27-]*(\d{4}[\dА-ЯA-Z]{2}\d{3})\b'
+        keywords: ["кпп"]
+        masking:
+          capture_groups: [1]
+          placeholder: "KPP"
+
+      - rule_id: pii.docs.address
+        name: pii.docs.address
+        # RU postal address across three shapes: (A) marker-first —
+        # "г. Москва, ул. Тверская 15"; (B) marker-after-name —
+        # "Невский проспект 88", "Ленинградский проспект, дом 45"; (C) bare
+        # name + house anchored by an apartment/entrance suffix —
+        # "Чехова 44 кв 78". A street/apartment anchor is always required; a bare
+        # "Name Number" pair with no marker or suffix is deliberately NOT matched.
+        # The street NAME must start capitalised: a lowercase relaxation was tried
+        # and rejected — it false-positived on prose like "пл. кухни 18 кв. 6" and
+        # "и пр. позиции 7, офис 4" (abbrev markers are omonyms of площадь/прочее).
+        # The leading boundary keeps a marker like "ул" from firing inside a word
+        # (артик-УЛ). Group 1 (the whole address) is masked.
+        regex: '(?i)(?:^|[\s.,:;!?(])((?:[Гг]\.?\s?(?-i:[ЁА-Я])[ёа-я\-]+,?\s+)?(?:ул(?:иц[аеу])?|пр-т|пр\.|просп(?:ект)?|пер(?:еул(?:ок)?)?\.?|пл(?:ощадь)?|б-р|бул(?:ьвар)?|шоссе|ш\.|наб(?:ережная)?|проезд|алл(?:ея)?)\.?\s+(?:(?-i:[ЁА-Я])[ёа-яЁА-Я0-9.\-]*[,\s]+){1,3}(?:д(?:ом)?\.?\s?)?\d+[а-я]?(?:\s?(?:к(?:орп(?:ус)?)?|стр(?:оение)?)\.?\s?\d+)?(?:[,\s]+(?:кв(?:артира)?|подъезд|под|офис)\.?\s?\d+[а-я]?)?|(?:(?-i:[ЁА-Я])[ёа-яЁА-Я0-9.\-]*\s+){1,2}(?:проспект|улиц[аеу]|переулок|площадь|шоссе|бульвар|набережная|проезд)[,\s]+(?:д(?:ом)?\.?\s?)?\d+[а-я]?(?:[,\s]+(?:кв(?:артира)?|подъезд|под|офис|корпус|к)\.?\s?\d+[а-я]?)?|(?-i:[ЁА-Я])[ёа-яЁА-Я0-9.\-]*\s+\d+[а-я]?\s?(?:к(?:орп(?:ус)?)?\.?\s?\d+|(?:,?\s?(?:кв(?:артира)?|подъезд|под)\.?\s?\d+)))'
+        masking:
+          capture_groups: [1]
+          placeholder: "ADDRESS"
+
+      - rule_id: pii.docs.inn-person
+        name: pii.docs.inn-person
+        regex: '\b\d{12}\b'
+        min_length: 12
+        keywords: ["ИНН", "инн", "inn", "ИНН:"]
+        validators: [inn_person]
+        masking:
+          placeholder: "INN_PERSON"
+
+      - rule_id: pii.docs.inn-org
+        name: pii.docs.inn-org
+        regex: '\b\d{10}\b'
+        min_length: 10
+        keywords: ["ИНН", "инн", "inn", "ИНН:"]
+        validators: [inn_org]
+        masking:
+          placeholder: "INN_ORG"
+
+      - rule_id: pii.docs.ogrn
+        name: pii.docs.ogrn
+        regex: '\b\d{13}\b'
+        min_length: 13
+        keywords: ["ОГРН", "ogrn"]
+        validators: [ogrn]
+        masking:
+          placeholder: "OGRN"
+
+      - rule_id: pii.docs.ogrnip
+        name: pii.docs.ogrnip
+        regex: '\b3\d{14}\b'
+        min_length: 15
+        keywords: ["ОГРНИП", "ogrnip"]
+        validators: [ogrnip]
+        masking:
+          placeholder: "OGRNIP"
+
+      - rule_id: pii.fin.credit-card
+        name: pii.fin.credit-card
+        regex: '\b(?:4|5[1-5]|2(?:2(?:2[1-9]|[3-9]\d)|[3-6]\d{2}|7(?:0\d|20))|3[47]|6011|64[4-9]|65|62|220[0-4])(?:[ -]?\d){11,17}\b'
+        min_length: 13
+        validators: [luhn, payment_card]
+        masking:
+          placeholder: "CREDIT_CARD"
+
+      - rule_id: pii.fin.credit-card.context
+        name: pii.fin.credit-card.context
+        # Keyword-gated fallback for the Luhn rule above: a card-shaped PAN of a
+        # valid brand/length that sits IMMEDIATELY after a card keyword
+        # (карта/карты/карте/карту/карточка/card/visa/…) — only separators between —
+        # is masked even when its Luhn checksum fails (typo'd / synthetic cards the
+        # strict rule would leak). Two precision guards, both learned from an
+        # adversarial FP hunt: (1) the keyword must be a WHOLE word — a letter right
+        # after it means an omonym (картЕЛЬ/картУз/картЕчь), no match; (2) only
+        # separators may sit between the keyword and the PAN, so "по карте ЗАКАЗ
+        # 4200…" / "card SERIAL 5100…" (a non-card number one word away) do NOT fire.
+        # The keyword is baked into the regex so the gate holds regardless of the
+        # keyword-prefilter flag; payment_card_no_luhn keeps brand+length precision.
+        # Residual ambiguity (accepted): a non-payment "карта" (медкарта, техкарта)
+        # directly followed by a 16-digit id is indistinguishable from a PAN and may
+        # be masked — rare and low-harm for a privacy gate. Group 1 (the PAN) is masked.
+        regex: '(?i)(?:карт[аеуы]|карточк[аеиуой]|card|visa|mastercard|maestro|маэстро)[\s:.,;№#()\-/]{1,4}((?:4|5[1-5]|2(?:2(?:2[1-9]|[3-9]\d)|[3-6]\d{2}|7(?:0\d|20))|3[47]|6011|64[4-9]|65|62|220[0-4])(?:[ -]?\d){11,17})'
+        min_length: 13
+        validators: [payment_card_no_luhn]
+        masking:
+          capture_groups: [1]
+          placeholder: "CREDIT_CARD"
+
+      - rule_id: pii.fin.iban
+        name: pii.fin.iban
+        regex: '\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b'
+        min_length: 15
+        validators: [iban_mod97]
+        masking:
+          placeholder: "IBAN"
+
+      - rule_id: pii.fin.cvc
+        name: pii.fin.cvc
+        # Card CVC/CVV — 3 digits. A bare 3-digit run is hopelessly common, so a
+        # keyword is the precision anchor: either an explicit cvc/cvv/цвс (branch
+        # 1) or a card-security phrase — «на обороте карты», «сзади карты»,
+        # «код подтверждения карты» (branch 2). A generic «код 789» is left alone.
+        regex: '(?i)(?:(?:cvc|cvv|цвс|cvv2|cvc2|код\s+безопасности)(?:[\s,.:;!?()«»"\x27-]+[а-яё]+){0,3}[\s,.:;!?()«»"\x27-]*(\d{3})|(?:обороте?\s+карт[а-яё]*|сзади\s+карт[а-яё]*|на\s+обороте|код\s+подтвержден[а-яё]+\s+карт[а-яё]*|цифры\s+(?:на\s+)?обороте|карт[а-яё]*\s+для\s+бронировани[а-яё]*)(?:[^\d]{0,20})(\d{3}))\b'
+        keywords: ["cvc", "cvv", "цвс", "обороте", "сзади", "карт"]
+        masking:
+          capture_groups: [1, 2]
+          placeholder: "CVC"

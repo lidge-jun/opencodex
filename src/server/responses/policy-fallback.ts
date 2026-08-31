@@ -6,9 +6,15 @@ import type { OcxConfig } from "../../types";
 import type { RouteCandidateTrace, RouteDecisionTraceV1 } from "../../routing/trace";
 import { handleResponses as handleResponsesCore } from "./core";
 import { requestPacingOverloadResponse } from "./pacing-overload";
+import {
+  captureGuardrailsPolicy,
+  guardrailsPolicyProtectsProvider,
+  retainCapturedGuardrailsRuntimeSnapshot,
+} from "../../guardrails/activation";
+import type { GuardrailsRuntimeSnapshotLease } from "../../guardrails/runtime";
 
 type CoreHandler = typeof handleResponsesCore;
-type CoreOptions = Parameters<CoreHandler>[3];
+type CoreOptions = NonNullable<Parameters<CoreHandler>[3]>;
 
 export interface PolicyFallbackDeps {
   runCore?: CoreHandler;
@@ -117,13 +123,25 @@ export async function handleResponsesWithPolicyFallback(
   const runCore = deps.runCore ?? handleResponsesCore;
   let requestBodyReadNotified = false;
   let storedPool401ReplayDispatched = false;
-  const coreOptions: CoreOptions = {
+  let preparedGuardrailsRequest: Parameters<
+    NonNullable<CoreOptions["onGuardrailsRequestPrepared"]>
+  >[0] | undefined;
+  const scopedOptions: CoreOptions = {
     ...options,
-    ...(options.onRequestBodyRead ? {
+    guardrailsCapturedPolicy: options.guardrailsCapturedPolicy
+      ?? captureGuardrailsPolicy(config),
+    onGuardrailsRequestPrepared: prepared => {
+      preparedGuardrailsRequest ??= prepared;
+      options.onGuardrailsRequestPrepared?.(prepared);
+    },
+  };
+  const coreOptions: CoreOptions = {
+    ...scopedOptions,
+    ...(scopedOptions.onRequestBodyRead ? {
       onRequestBodyRead: () => {
         if (requestBodyReadNotified) return;
         requestBodyReadNotified = true;
-        options.onRequestBodyRead?.();
+        scopedOptions.onRequestBodyRead?.();
       },
     } : {}),
     onStoredPool401ReplayDispatched: () => {
@@ -150,34 +168,78 @@ export async function handleResponsesWithPolicyFallback(
   const initialTrace = logCtx.routeDecision;
   const initialRequestedModel = logCtx.requestedModel;
   if (!rawBody || !isPolicyDecision(initialTrace)) return response;
+  const providerScopeAnchor = initialTrace.selected.provider;
+  const initialProviderProtected = guardrailsPolicyProtectsProvider(
+    scopedOptions.guardrailsCapturedPolicy,
+    providerScopeAnchor,
+  );
 
   const tried = new Set<string>([
     candidateKey({ provider: initialTrace.selected.provider, model: initialTrace.selected.model }),
   ]);
 
-  while (!storedPool401ReplayDispatched && await shouldHopPolicyCandidate(response, req.signal)) {
-    if (req.signal.aborted) return response;
-    const next = rankPolicyFallbackCandidates(initialTrace, tried)[0];
-    if (!next) return response;
-    tried.add(candidateKey(next));
+  let policySnapshotLease: GuardrailsRuntimeSnapshotLease | undefined;
+  try {
+    while (!storedPool401ReplayDispatched && await shouldHopPolicyCandidate(response, req.signal)) {
+      if (req.signal.aborted) return response;
+      const next = rankPolicyFallbackCandidates(initialTrace, tried)[0];
+      if (!next) return response;
+      tried.add(candidateKey(next));
 
-    finishFailedPolicyAttempt(logCtx, response.status);
-    const retryRequest = requestWithCandidate(req, rawBody, next);
-    try {
+      if (
+        initialProviderProtected
+        && preparedGuardrailsRequest?.snapshot
+        && !policySnapshotLease
+      ) {
+        try {
+          policySnapshotLease = await retainCapturedGuardrailsRuntimeSnapshot(
+            preparedGuardrailsRequest.snapshot,
+          );
+        } catch {
+          // Keep the first physical failure rather than retrying after losing the
+          // immutable runtime that owns its placeholder mapping.
+          return response;
+        }
+      }
+
+      finishFailedPolicyAttempt(logCtx, response.status);
+      const retryRequest = requestWithCandidate(
+        req,
+        initialProviderProtected && preparedGuardrailsRequest
+          ? preparedGuardrailsRequest.body as Record<string, unknown>
+          : rawBody,
+        next,
+      );
+      const retryOptions: CoreOptions = {
+        ...coreOptions,
+        guardrailsProviderScopeAnchor: providerScopeAnchor,
+        ...(initialProviderProtected && preparedGuardrailsRequest
+          ? {
+              guardrailsTurn: preparedGuardrailsRequest.turn,
+              guardrailsSnapshot: preparedGuardrailsRequest.snapshot,
+              guardrailsPassthroughFailure: preparedGuardrailsRequest.passthroughFailure,
+            }
+          : {
+              guardrailsTurn: undefined,
+              guardrailsSnapshot: undefined,
+              guardrailsPassthroughFailure: false,
+            }),
+      };
       try {
-        response = await runCore(retryRequest, config, logCtx, coreOptions);
+        response = await runCore(retryRequest, config, logCtx, retryOptions);
       } catch (error) {
         const overload = requestPacingOverloadResponse(error);
         if (overload) return overload;
         throw error;
+      } finally {
+        logCtx.requestedModel = initialRequestedModel;
+        logCtx.routeDecision = initialTrace;
       }
-    } finally {
-      logCtx.requestedModel = initialRequestedModel;
-      logCtx.routeDecision = initialTrace;
     }
+    return response;
+  } finally {
+    policySnapshotLease?.release();
   }
-
-  return response;
 }
 
 export const handleResponses = handleResponsesWithPolicyFallback;

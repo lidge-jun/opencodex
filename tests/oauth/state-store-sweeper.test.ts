@@ -135,6 +135,9 @@ describe("state-store sweeper", () => {
       // an owner and a sweep policy.
       "codex-quota-401-recovery",
       "responses-continuation",
+      "guardrails-continuation",
+      "guardrails-compact-continuation",
+      "guardrails-activity",
       "antigravity-replay",
       "config-warning-memos",
       "catalog-warning-memos",

@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 2,
+  "donor": {
+    "repository": "https://github.com/cloud-ru-tech/guardrails-llm-filter",
+    "commit": "bbd6f27467a53ff3869b59449edf4209f85ae675",
+    "license": {
+      "sourcePath": "LICENSE",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    },
+    "notice": {
+      "sourcePath": "NOTICE",
+      "sha256": "1df90c6ee1b48b349b8c3a6e3b964ddd60a23745504f8d3bb070756c2ef92c7e"
+    }
+  },
+  "assets": [
+    {
+      "sourcePath": "configs/guardrails_regex_rules.yaml",
+      "distributedPath": "src/guardrails/rules/guardrails_regex_rules.yaml",
+      "sha256": "df2a500675c8d75d65dcea0edf0afea15c53d8c4090e03befa2e090f33e43dcb",
+      "disposition": "copied"
+    },
+    {
+      "sourcePath": "configs/guardrails_regex_rules.gitleaks.generated.yaml",
+      "distributedPath": "src/guardrails/rules/guardrails_regex_rules.gitleaks.generated.yaml",
+      "sha256": "72c283a45c3fef21073a8883d10cb3350b19fe36c3fa1ebcea2e3f29208ccf97",
+      "disposition": "copied"
+    }
+  ],
+  "testFixtures": [
+    {
+      "sourcePath": "tests/rules/rules_cases_test.go",
+      "sourceSha256": "b7eae600c5a1658a69f948ab355cbc25f2b48bdc9f64d3ad3793115711d91214",
+      "distributedPath": "tests/fixtures/guardrails-donor-rule-cases.json",
+      "sha256": "9fa0235082d4fec06b4001ecfae7d10b3c5a6e8e6f6f63dd764de0fd7d395224",
+      "disposition": "modified"
+    }
+  ],
+  "gitleaks": {
+    "repository": "https://github.com/gitleaks/gitleaks",
+    "commit": "09242ce9c8a60d9b051fc2d166f9e849b88c7ac0",
+    "configPath": "config/gitleaks.toml",
+    "configSha256": "e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf",
+    "licenseSourcePath": "LICENSE"
+  },
+  "generatorSources": [
+    {
+      "path": "cmd/rulesgen/main.go",
+      "sha256": "f2bbf53b5468704c9d1ab84fec64765f68eef0a22f9d08eb6b3e39841d9c6a4d"
+    },
+    {
+      "path": "pkg/gitleaksgen/generator.go",
+      "sha256": "cbf9a0f76b5cadebe868bd5b8d8c35b02fdf08845eae39c0c839e69d9f2684db"
+    },
+    {
+      "path": "pkg/gitleaksgen/policy.go",
+      "sha256": "40cde40e9db736fc67d9a3e38974263a495fcc5ec5a641e8886241e0024249b1"
+    },
+    {
+      "path": "pkg/gitleaksgen/types.go",
+      "sha256": "7ab61c682714f35827cd3dc5eb14e7242e7855fbb6c18ccdd379f72706f64873"
+    },
+    {
+      "path": "pkg/gitleaksgen/toml/loader.go",
+      "sha256": "fe2896c14f6201a62fe2d82af505ed44db3c79f8484f04ce7d0b45f8a3d592db"
+    },
+    {
+      "path": "pkg/gitleaksgen/toml/types.go",
+      "sha256": "0d519ef9bfd6a9ac8546df42c957091cbc7a371303a295751a8f79e45a0182cd"
+    }
+  ],
+  "generatedOutput": {
+    "path": "configs/guardrails_regex_rules.gitleaks.generated.yaml",
+    "sha256": "72c283a45c3fef21073a8883d10cb3350b19fe36c3fa1ebcea2e3f29208ccf97"
+  },
+  "runtimeDependencies": [
+    {
+      "name": "re2-wasm",
+      "version": "1.0.2",
+      "disposition": "dependency-only",
+      "sourceRepository": "https://github.com/google/re2-wasm",
+      "sourceTag": "v1.0.2",
+      "sourceCommit": "63796eaa20e1eea74466c0c56e2785a64f7ae372",
+      "npmIntegrity": "sha512-VXUdgSiUrE/WZXn6gUIVVIsg0+Hp6VPZPOaHCay+OuFKy6u/8ktmeNEf+U5qSA8jzGGFsg8jrDNu1BeHpz2pJA==",
+      "npmTarballSha1": "78c09dc651b8962aa814b55ae7fe5e472ec15bbb",
+      "licenseSpdx": "Apache-2.0",
+      "licenseSourcePath": "LICENSE",
+      "distributedLicensePath": "LICENSES/re2-wasm-Apache-2.0.txt",
+      "licenseSha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "installedPath": "node_modules/re2-wasm",
+      "artifacts": [
+        {
+          "path": "build/wasm/re2.js",
+          "sha256": "4bfa5d6a8dd0052da8d06baf171078a392dc9c70592d5dca90c9aefa9006336e"
+        },
+        {
+          "path": "build/wasm/re2.wasm",
+          "sha256": "79e025a30d20157807add5e7d01acefe700f06721f4a56669b0bad5d00995e72"
+        }
+      ],
+      "embeddedSources": [
+        {
+          "name": "Google RE2",
+          "repository": "https://github.com/google/re2",
+          "commit": "166dbbeb3b0ab7e733b278e8f42a84f6882b8a25",
+          "sourcePath": "third_party/re2",
+          "licenseSpdx": "BSD-3-Clause",
+          "licenseSourcePath": "LICENSE",
+          "distributedLicensePath": "LICENSES/Google-RE2-BSD-3-Clause.txt",
+          "licenseSha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449"
+        },
+        {
+          "name": "node-re2",
+          "repository": "https://github.com/google/re2-wasm",
+          "commit": "63796eaa20e1eea74466c0c56e2785a64f7ae372",
+          "sourcePath": "third_party/node-re2",
+          "licenseSpdx": "BSD-3-Clause",
+          "licenseSourcePath": "third_party/node-re2/LICENSE",
+          "distributedLicensePath": "LICENSES/node-re2-BSD-3-Clause.txt",
+          "licenseSha256": "ab8fe2b1365d8e8eccbda8693d36513a65721425ca2862a9fb9a603952591feb"
+        }
+      ]
+    },
+    {
+      "name": "yaml",
+      "version": "2.8.1",
+      "disposition": "dependency-only",
+      "sourceRepository": "https://github.com/eemeli/yaml",
+      "sourceTag": "v2.8.1",
+      "sourceCommit": "1dc3c3ba06971613d0bcb772da4711ca25343dac",
+      "npmIntegrity": "sha512-lcYcMxX2PO9XMGvAJkJ3OsNMw+/7FKes7/hgerGUYWIoWu5j/+YQqcZr5JnPZWzOsEBgMbSbiSTn/dv/69Mkpw==",
+      "npmTarballSha1": "1870aa02b631f7e8328b93f8bc574fac5d6c4d79",
+      "licenseSpdx": "ISC",
+      "licenseSourcePath": "LICENSE",
+      "distributedLicensePath": "LICENSES/yaml-ISC.txt",
+      "licenseSha256": "5bba27375d93e9119f76c1015f7672cf9ad5f70952296e0842fb2243d6376869",
+      "installedPath": "node_modules/yaml",
+      "artifacts": [],
+      "embeddedSources": []
+    }
+  ],
+  "distributionFiles": [
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "sha256": "1c556faccf3e806c1e24226187fa910f1cbce6e31de34f54d04b8d7a26e8456f"
+    },
+    {
+      "path": "src/guardrails/rules/provenance.schema.json",
+      "sha256": "7f5b0215784eefa92a0638571f42813995d1af80c5b53a57f1c181682ddb88d7"
+    },
+    {
+      "path": "src/guardrails/rules/MODIFICATIONS.md",
+      "sha256": "69c35366346aec09d29f42289e02d3d87f0de4edd95986376355c96e951146f0"
+    },
+    {
+      "path": "LICENSES/Apache-2.0.txt",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    },
+    {
+      "path": "LICENSES/re2-wasm-Apache-2.0.txt",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
+    },
+    {
+      "path": "LICENSES/Gitleaks-MIT.txt",
+      "sha256": "e3884b252b3bfc045e55be43a34d1e80da070bc6f804ac95bf4660e97d62ebc6"
+    },
+    {
+      "path": "LICENSES/Google-RE2-BSD-3-Clause.txt",
+      "sha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449"
+    },
+    {
+      "path": "LICENSES/node-re2-BSD-3-Clause.txt",
+      "sha256": "ab8fe2b1365d8e8eccbda8693d36513a65721425ca2862a9fb9a603952591feb"
+    },
+    {
+      "path": "LICENSES/yaml-ISC.txt",
+      "sha256": "5bba27375d93e9119f76c1015f7672cf9ad5f70952296e0842fb2243d6376869"
+    }
+  ]
+}

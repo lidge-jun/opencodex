@@ -10,6 +10,7 @@ import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
 import { safeResponseHeaders } from "./safe-response-headers";
 
 export { safeResponseHeaders } from "./safe-response-headers";
+import { looksLikeSse, readBoundedPrefix } from "../lib/stream-prefix";
 
 const OPEN = 1;
 type ResponsesTerminalReporter = (status: ResponsesTerminalStatus) => void;
@@ -407,56 +408,4 @@ export async function sendResponseToWebSocket(
     code: "websocket_protocol_error",
     message: `Unexpected successful non-SSE upstream response (${contentType || "missing content-type"})`,
   }, response.headers));
-}
-
-export async function readBoundedPrefix(
-  body: ReadableStream<Uint8Array>,
-  maxBytes = 4096,
-): Promise<{ prefix: Uint8Array; stream: ReadableStream<Uint8Array> }> {
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let remainder: Uint8Array | undefined;
-  let total = 0;
-  while (total < maxBytes) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const take = Math.min(value.byteLength, maxBytes - total);
-    if (take > 0) {
-      chunks.push(value.slice(0, take));
-      total += take;
-    }
-    if (take < value.byteLength) {
-      remainder = value.slice(take);
-      break;
-    }
-  }
-  const prefix = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    prefix.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      if (prefix.byteLength > 0) controller.enqueue(prefix);
-      if (remainder && remainder.byteLength > 0) controller.enqueue(remainder);
-    },
-    async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
-      }
-      controller.enqueue(value);
-    },
-    cancel(reason) {
-      return reader.cancel(reason);
-    },
-  });
-  return { prefix, stream };
-}
-
-export function looksLikeSse(prefix: Uint8Array): boolean {
-  const text = new TextDecoder().decode(prefix);
-  return /^\s*(event:|data:)/.test(text);
 }

@@ -32,6 +32,50 @@ should select among several targets.
 | Voice and Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | Relayed call-creation response | A separate sideband WebSocket relays frames in both directions |
 | Responses compaction | `POST /v1/responses/compact` | Replacement-history JSON | Not applicable |
 
+## Guardrails transport boundary
+
+When the optional `guardrails.enabled` setting is `true`, opencodex captures one immutable policy
+intent before reading the request body, then activates its runtime only when the canonical routed
+provider is covered by `providerScope`. Absence and `mode: "all"` cover every provider; selected
+mode covers only its non-empty `providerIds` list. Supported semantic text is scanned after
+Responses continuation expansion/local encrypted-content sanitation and before upstream I/O.
+Protected retries and later web-search/vision/tool rounds reuse the same logical mapping.
+
+| Mode | Provider-facing request | Client-facing response |
+| --- | --- | --- |
+| `enforce` | Supported detected values become issued placeholders | Eligible assistant prose restores issued placeholders; executable fields stay masked |
+| `detect` | Original bytes/translated semantics are sent unchanged | Identity response; provider output is not scanned for new values |
+| disabled/absent | Baseline opencodex path; Guardrails does not load the registry or scan | Baseline opencodex path |
+
+Covered request text includes current parser-supported Responses message/tool history,
+Chat message/function-call arguments, Anthropic system/message/tool input/result text, token-count
+request text, and local plaintext materialized for compact/recovery/additional rounds. Headers,
+model IDs, metadata, schemas/tool definitions, images/binary media, file IDs, reasoning/signatures,
+genuine ciphertext, and unknown opaque items are not scanned.
+Model-visible `input_file.filename` is scanned; opaque `input_file.file_id` and file bytes are not.
+Each semantic text leaf is capped at 128 KiB and the aggregate logical turn at 2 MiB.
+The turn also has a 128 MiB regex-work budget, calculated as UTF-8 bytes multiplied by the
+number of rules that actually execute after keyword prefiltering.
+
+The last client-facing transform restores only placeholders issued by that logical turn. Function
+and custom-tool arguments, Anthropic `tool_use` input, shell/computer actions, and tool-search
+payloads deliberately remain placeholders; the proxy never turns model-controlled executable
+output into an original secret.
+
+Responses continuation mapping is in memory for at most one hour and requires the same non-empty
+`x-codex-parent-thread-id` and admission identity with `previous_response_id`. Configured-key IDs are
+isolated; environment admission is process-wide; loopback relies on the local-process trust boundary.
+Cross-scope and unscoped requests cannot inherit originals. Enforce registry/settings changes keep
+old mappings at their original expiry and scan new values with the current registry. Switching the
+continuation to detect or disabled returns HTTP `409` with code `guardrails_policy_changed`.
+The same fail-closed response applies when a protected continuation resolves to a provider excluded
+by selected-provider mode.
+
+With the default `failurePolicy: "block"`, scanner/registry failures return
+`guardrails_scan_failed` or `guardrails_capacity_exceeded` before upstream I/O. The explicit
+`passthrough` policy may send the original unmasked request and records a high-severity metadata
+event. See the [Guardrails guide](/guides/guardrails/) for the full privacy and continuation model.
+
 ## `POST /v1/responses`
 
 This is the native opencodex data-plane shape. The request body must be a JSON object with a
@@ -327,7 +371,9 @@ points at it; `ocx start` injects that key next to `openai_base_url` (see
 ## `POST /v1/responses/compact`
 
 Compaction returns replacement history for clients that need to shorten a long Responses
-conversation.
+conversation. With Guardrails enforcement, returned compact items remain masked machine state.
+Their mapping is associated only with an in-memory, thread-scoped fingerprint of the exact returned
+artifact; originals are not embedded in compact output or written to disk.
 
 | Route type | Behavior |
 | --- | --- |

@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "number",
+      "const": 2
+    },
+    "donor": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "format": "uri"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "license": {
+          "type": "object",
+          "properties": {
+            "sourcePath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "sourcePath",
+            "sha256"
+          ],
+          "additionalProperties": false
+        },
+        "notice": {
+          "type": "object",
+          "properties": {
+            "sourcePath": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "sourcePath",
+            "sha256"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "repository",
+        "commit",
+        "license",
+        "notice"
+      ],
+      "additionalProperties": false
+    },
+    "assets": {
+      "minItems": 2,
+      "maxItems": 2,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sourcePath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "distributedPath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "copied",
+              "modified"
+            ]
+          }
+        },
+        "required": [
+          "sourcePath",
+          "distributedPath",
+          "sha256",
+          "disposition"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "testFixtures": {
+      "minItems": 1,
+      "maxItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sourcePath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sourceSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "distributedPath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "disposition": {
+            "type": "string",
+            "const": "modified"
+          }
+        },
+        "required": [
+          "sourcePath",
+          "sourceSha256",
+          "distributedPath",
+          "sha256",
+          "disposition"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "gitleaks": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "format": "uri"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "configPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "configSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "licenseSourcePath": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "repository",
+        "commit",
+        "configPath",
+        "configSha256",
+        "licenseSourcePath"
+      ],
+      "additionalProperties": false
+    },
+    "generatorSources": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "generatedOutput": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false
+    },
+    "runtimeDependencies": {
+      "minItems": 2,
+      "maxItems": 2,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "disposition": {
+            "type": "string",
+            "const": "dependency-only"
+          },
+          "sourceRepository": {
+            "type": "string",
+            "format": "uri"
+          },
+          "sourceTag": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sourceCommit": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "npmIntegrity": {
+            "type": "string",
+            "pattern": "^sha512-[A-Za-z0-9+/=]+$"
+          },
+          "npmTarballSha1": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "licenseSpdx": {
+            "type": "string",
+            "minLength": 1
+          },
+          "licenseSourcePath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "distributedLicensePath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "licenseSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "installedPath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "embeddedSources": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "repository": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "commit": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{40}$"
+                },
+                "sourcePath": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "licenseSpdx": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "licenseSourcePath": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "distributedLicensePath": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "licenseSha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              },
+              "required": [
+                "name",
+                "repository",
+                "commit",
+                "sourcePath",
+                "licenseSpdx",
+                "licenseSourcePath",
+                "distributedLicensePath",
+                "licenseSha256"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "disposition",
+          "sourceRepository",
+          "sourceTag",
+          "sourceCommit",
+          "npmIntegrity",
+          "npmTarballSha1",
+          "licenseSpdx",
+          "licenseSourcePath",
+          "distributedLicensePath",
+          "licenseSha256",
+          "installedPath",
+          "artifacts",
+          "embeddedSources"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "distributionFiles": {
+      "minItems": 8,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "donor",
+    "assets",
+    "testFixtures",
+    "gitleaks",
+    "generatorSources",
+    "generatedOutput",
+    "runtimeDependencies",
+    "distributionFiles"
+  ],
+  "additionalProperties": false,
+  "$id": "https://opencodex.me/schemas/guardrails-provenance-v2.json",
+  "title": "OpenCodex Guardrails provenance"
+}

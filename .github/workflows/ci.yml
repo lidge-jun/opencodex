@@ -39,6 +39,8 @@ on:
       - "tsconfig.json"
       - "README.md"
       - "LICENSE"
+      - "THIRD_PARTY_NOTICES.md"
+      - "LICENSES/**"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/enforce-pr-target.yml"
@@ -193,6 +195,8 @@ jobs:
               - 'tsconfig.json'
               - 'README.md'
               - 'LICENSE'
+              - 'THIRD_PARTY_NOTICES.md'
+              - 'LICENSES/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release.yml'
               - '.github/workflows/enforce-pr-target.yml'
@@ -218,7 +222,11 @@ jobs:
               - '.gitattributes'
               - 'README.md'
               - 'LICENSE'
+              - 'THIRD_PARTY_NOTICES.md'
+              - 'LICENSES/**'
+              - 'scripts/guardrails-provenance.ts'
               - 'scripts/prepare-package.ts'
+              - 'scripts/verify-guardrails-package.ts'
 
       - name: Assert the scope output is usable
         id: scope
@@ -873,6 +881,9 @@ jobs:
 
       - name: Build package assets
         run: npm run build:gui
+
+      - name: Verify Guardrails package assets and WASM scanner
+        run: npx --no-install bun scripts/verify-guardrails-package.ts
 
       - name: Pack
         shell: bash

@@ -124,6 +124,50 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
 | `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings | 400 invalid shape or value |
 
+### Guardrails
+
+All Guardrails endpoints require the normal management credential or loopback dashboard session.
+They expose configuration and rule metadata, not the values matched in a request or response.
+
+| Method and path | Purpose | Notable errors |
+| --- | --- | --- |
+| `GET /api/guardrails` | Read safe settings, registry health/generation, rule counts, counters, top rules/categories, recent metadata-only events, and retention state | 503 only when rule assets required for the DTO are unavailable |
+| `GET /api/guardrails/settings` | Read the safe effective settings projection and provider IDs available to the dashboard | — |
+| `PUT /api/guardrails/settings` | Atomically update one or more settings: `enabled`, `mode`, `failurePolicy`, `providerScope`, `enabledDataTypes`, `disabledBuiltinRuleIds`, or `keywordPrefilterEnabled` | 400 invalid, unsupported, or empty patch; 428 missing `If-Match`; 412 stale revision; 409 writer busy or unavailable config state |
+| `GET /api/guardrails/rules` | List safe summaries for all effective rules plus declarative custom-rule definitions; built-in regexes are omitted | 503 invalid/unavailable rule assets |
+| `GET /api/guardrails/catalog` | List built-in rule metadata and IDs without regex matchers | — |
+| `POST /api/guardrails/rules` | Create one custom rule | 400 invalid rule; 428 missing `If-Match`; 412 stale revision; 409 duplicate ID, writer busy, or unavailable config state |
+| `PUT, DELETE /api/guardrails/rules/:ruleId` | Replace a local rule without changing its ID, or delete it | 400 invalid replacement; 404 unknown rule; 428 missing `If-Match`; 412 stale revision; 409 writer busy or unavailable config state |
+| `PUT /api/guardrails/rules/:ruleId/enabled` | Enable or disable one built-in rule | 400 invalid body; 404 unknown built-in ID; 428 missing `If-Match`; 412 stale revision; 409 writer/config conflict |
+| `GET /api/guardrails/activity` | Read bounded metadata events and filtered summaries; optional `limit=1..200`, `mode`, `surface`, `result`, and `category=1..6` filters | 400 invalid or unknown filter |
+| `GET /api/guardrails/export` | Download a versioned safe settings/custom-rule bundle | — |
+| `POST /api/guardrails/test` | Scan at most 128 KiB of text locally and return masked preview plus finding offsets/IDs/types; input is not retained or sent upstream | 400 invalid input/draft registry; 413 body, Tester, or regex-work limit |
+| `POST /api/guardrails/import` | Validate a versioned `merge` or `replace` bundle; `dryRun: true` reports counts/conflicts, and apply is one atomic mutation | 400 schema/RE2 error; apply: 428 missing `If-Match`, 412 stale revision; 409 import/config mutation conflict |
+
+`merge` adds only non-conflicting custom rules and preserves the current enabled state, mode,
+failure policy, enabled data types, built-in rule toggles, and keyword-prefilter setting. A changed
+definition with an existing rule ID is a conflict. Replace previews also report provider-scope
+changes, list the selected provider IDs, and flag reduced coverage. `replace` applies all bundle settings and replaces
+the custom-rule list.
+
+The safe settings projection marks retained removed IDs with `configured: false`. When selected
+scope contains no enabled configured provider and does not select `anthropic-native`,
+`trafficProtection` is `no-provider-coverage`; the dashboard renders this as **No providers
+protected**, not as ordinary reduced coverage.
+
+Guardrails GET responses include an `ETag` based on the current Guardrails revision. Mutation clients
+must return it in `If-Match`. A missing precondition receives `428 guardrails_revision_required`;
+a stale value receives `412 guardrails_revision_conflict` plus the current revision. The dashboard
+refetches instead of overwriting a newer configuration.
+
+Custom rules are declarative and bounded: `ruleId`, display metadata, data type, RE2 pattern,
+placeholder type/capture groups, and optional listed validators. The service validates the complete
+resulting registry before publishing it, so a failed update preserves the prior active rule set.
+
+See the [Guardrails guide](/guides/guardrails/) and
+[Guardrails configuration](/reference/configuration/#guardrails-sensitive-data-placeholders) for
+mode, continuation, executable-field, and telemetry semantics.
+
 ### Logs, usage, and storage
 
 | Method and path | Purpose | Notable errors |

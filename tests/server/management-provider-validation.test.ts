@@ -1919,7 +1919,7 @@ describe("provider management validation", () => {
 
     const server = startServer(0);
     try {
-      for (const name of ["openrouter/custom", "__proto__", "constructor"]) {
+      for (const name of ["openrouter/custom", "__proto__", "constructor", "anthropic-native"]) {
         const response = await fetch(new URL("/api/providers", server.url), {
           method: "POST",
           headers: { "content-type": "application/json" },

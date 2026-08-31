@@ -5,11 +5,11 @@ import {
   pumpResponsesSseToWebSocket,
   safeResponseHeaders,
   selectForwardHeaders,
-  readBoundedPrefix,
   sendResponsesJsonAsEvents,
   sendResponseToWebSocket,
   type WsData,
 } from "../../src/server/ws-bridge";
+import { readBoundedPrefix } from "../../src/lib/stream-prefix";
 import type { ServerWebSocket } from "bun";
 
 function mockWs(sendResult = 1): { ws: ServerWebSocket<WsData>; sent: string[] } {
@@ -310,6 +310,103 @@ describe("WS endpoint re-framer (120/132)", () => {
     const { prefix, stream } = await readBoundedPrefix(body, 3);
     expect(new TextDecoder().decode(prefix)).toBe("abc");
     expect(await new Response(stream).text()).toBe("abcdef");
+  });
+
+  test("bounded early classification preserves the unread tail of a large chunk", async () => {
+    const enc = new TextEncoder();
+    const source = `data: ${"x".repeat(5000)}`;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode(source));
+        controller.close();
+      },
+    });
+    const { prefix, stream } = await readBoundedPrefix(body, 4096, value =>
+      new TextDecoder().decode(value).startsWith("data:"));
+    expect(new TextDecoder().decode(prefix)).toBe(source.slice(0, 4096));
+    expect(await new Response(stream).text()).toBe(source);
+  });
+
+  test("bounded prefix reuses an oversized chunk buffer for the unread remainder", async () => {
+    const source = new Uint8Array(1024 * 1024);
+    source.set(new TextEncoder().encode("data:"));
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(source);
+        controller.close();
+      },
+    });
+    const { stream } = await readBoundedPrefix(body, 4);
+    const reader = stream.getReader();
+    const prefix = await reader.read();
+    const remainder = await reader.read();
+
+    expect(prefix.value?.byteLength).toBe(4);
+    expect(remainder.value?.byteLength).toBe(source.byteLength - 4);
+    expect(remainder.value?.buffer).toBe(source.buffer);
+    await reader.cancel();
+  });
+
+  test("bounded sniffing replays a read that settles after the deadline", async () => {
+    const encoder = new TextEncoder();
+    let sourceController!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        sourceController = controller;
+      },
+    });
+    const { prefix, stream } = await readBoundedPrefix(body, 4096, undefined, 5);
+
+    expect(prefix.byteLength).toBe(0);
+    sourceController.enqueue(encoder.encode("delayed"));
+    sourceController.close();
+    expect(await new Response(stream).text()).toBe("delayed");
+  });
+
+  test("bounded sniffing forwards cancellation while a timed-out read is pending", async () => {
+    const reason = new Error("client cancelled replay");
+    let cancelledWith: unknown;
+    const body = new ReadableStream<Uint8Array>({
+      cancel(value) {
+        cancelledWith = value;
+      },
+    });
+    const { stream } = await readBoundedPrefix(body, 4096, undefined, 5);
+
+    await stream.cancel(reason);
+    expect(cancelledWith).toBe(reason);
+  });
+
+  test("bounded sniffing forwards a delayed source error through the replay stream", async () => {
+    const failure = new Error("delayed stream failure");
+    let sourceController!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        sourceController = controller;
+      },
+    });
+    const { stream } = await readBoundedPrefix(body, 4096, undefined, 5);
+    const reader = stream.getReader();
+    const pending = reader.read();
+
+    sourceController.error(failure);
+    await expect(pending).rejects.toBe(failure);
+  });
+
+  test("bounded sniffing replays buffered bytes before an early source error", async () => {
+    const failure = new Error("source failed after prefix");
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("da"));
+        queueMicrotask(() => controller.error(failure));
+      },
+    });
+    const { prefix, stream } = await readBoundedPrefix(body, 4096, () => false, 50);
+    const reader = stream.getReader();
+
+    expect(new TextDecoder().decode(prefix)).toBe("da");
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe("da");
+    await expect(reader.read()).rejects.toBe(failure);
   });
 
   test("classifies labelled SSE responses", async () => {

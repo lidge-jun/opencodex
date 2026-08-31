@@ -508,7 +508,9 @@ describe("GitHub Actions hardening", () => {
       ".github/workflows/stale-needs-info.yml",
       ".npmignore",
       "LICENSE",
+      "LICENSES/**",
       "README.md",
+      "THIRD_PARTY_NOTICES.md",
       "assets/**",
       "bin/**",
       "bun.lock",
@@ -622,13 +624,17 @@ describe("GitHub Actions hardening", () => {
       ".npmignore",
       ".gitattributes",
       "LICENSE",
+      "LICENSES/**",
       "README.md",
+      "THIRD_PARTY_NOTICES.md",
       "assets/**",
       "bin/**",
       "bun.lock",
       "gui/**",
       "package.json",
+      "scripts/guardrails-provenance.ts",
       "scripts/prepare-package.ts",
+      "scripts/verify-guardrails-package.ts",
       "src/**",
     ].sort());
 
@@ -637,7 +643,7 @@ describe("GitHub Actions hardening", () => {
     // aggregate while silently skipping the packaging verification.
     const ciPatterns = (Bun.YAML.parse(filters) as { ci?: string[] }).ci ?? [];
     for (const pattern of packaging) {
-      if (pattern === "scripts/prepare-package.ts") continue; // covered by scripts/**
+      if (pattern.startsWith("scripts/") && ciPatterns.includes("scripts/**")) continue;
       expect(`${pattern}:${ciPatterns.includes(pattern)}`).toBe(`${pattern}:true`);
     }
   });

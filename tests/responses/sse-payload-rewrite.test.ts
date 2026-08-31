@@ -54,6 +54,22 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
   return text;
 }
 
+async function readAllBytes(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+    total += chunk.byteLength;
+  }
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
 describe("SSE payload rewrite composition", () => {
   test("applies image-gen restore and item-id repair in one relay pass", async () => {
     const upstream = [
@@ -137,6 +153,40 @@ describe("SSE payload rewrite composition", () => {
     expect(budget.snapshot().currentBytes).toBe(0);
   });
 
+  test("rewrites one highly fragmented event without retaining buffer capacity", async () => {
+    const event = `data: ${JSON.stringify({ type: "fragmented", delta: "x".repeat(16_384) })}\n\n`;
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 128 * 1024 });
+    const rewritten = relaySseWithPayloadRewrite(
+      streamFromTexts([...event]),
+      payload => payload,
+      budget,
+    );
+
+    expect(await readAll(rewritten)).toBe(event);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    budget.dispose();
+  });
+
+  test("rewrites thousands of packed events without retaining tail copies", async () => {
+    const eventCount = 4_096;
+    const upstream = Array.from(
+      { length: eventCount },
+      (_, index) => `data: ${JSON.stringify({ type: "packed", index })}\n\n`,
+    ).join("");
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 2 * 1024 * 1024 });
+    const rewritten = relaySseWithPayloadRewrite(
+      streamFromText(upstream),
+      payload => payload,
+      budget,
+    );
+
+    const output = await readAll(rewritten);
+    expect(output).toBe(upstream);
+    expect(output.match(/\n\n/g)).toHaveLength(eventCount);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    budget.dispose();
+  });
+
   test("unterminated rewrite accumulation closes through a typed failed tail", async () => {
     const budget = createTestTranslatorBudget({ maxTurnBytes: 64 });
     const upstream = new AbortController();
@@ -150,6 +200,62 @@ describe("SSE payload rewrite composition", () => {
     expect(out).toContain('"code":"translation_buffer_limit"');
     expect(out).toEndWith("data: [DONE]\n\n");
     expect(upstream.signal.aborted).toBe(true);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    budget.dispose();
+  });
+
+  test("malformed UTF-8 falls back to byte-identical passthrough", async () => {
+    const encoder = new TextEncoder();
+    const prefix = encoder.encode('event: malformed\ndata: {"delta":"');
+    const suffix = encoder.encode('"}\r\n\r\nevent: later\r\ndata: {"delta":"ok"}\r\n\r\n');
+    const malformed = new Uint8Array(prefix.byteLength + 1 + suffix.byteLength);
+    malformed.set(prefix);
+    malformed[prefix.byteLength] = 0x80;
+    malformed.set(suffix, prefix.byteLength + 1);
+    let sent = false;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) {
+          controller.close();
+          return;
+        }
+        sent = true;
+        controller.enqueue(malformed);
+      },
+    });
+    const budget = createTestTranslatorBudget();
+    const rewritten = relaySseWithBlockRewrite(
+      source,
+      block => [block.replace('"ok"', '"changed"')],
+      budget,
+    );
+
+    expect([...await readAllBytes(rewritten)]).toEqual([...malformed]);
+    expect(budget.snapshot().currentBytes).toBe(0);
+    budget.dispose();
+  });
+
+  test("source errors deliver an already-buffered partial tail before the original error", async () => {
+    const encoder = new TextEncoder();
+    const failure = new Error("synthetic upstream failure");
+    let pullCount = 0;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount === 1) {
+          controller.enqueue(encoder.encode('event: partial\ndata: {"delta":"kept"}'));
+          return;
+        }
+        controller.error(failure);
+      },
+    });
+    const budget = createTestTranslatorBudget();
+    const reader = relaySseWithPayloadRewrite(source, payload => payload, budget).getReader();
+
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(new TextDecoder().decode(first.value)).toBe('event: partial\ndata: {"delta":"kept"}');
+    await expect(reader.read()).rejects.toBe(failure);
     expect(budget.snapshot().currentBytes).toBe(0);
     budget.dispose();
   });

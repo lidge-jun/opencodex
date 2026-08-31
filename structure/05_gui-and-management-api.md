@@ -10,6 +10,25 @@ All ordinary HTTP responses (excluding successful WebSocket upgrades) include `X
 dashboard or management responses. Embedding the dashboard in an iframe is intentionally
 unsupported; deployments that previously relied on such embedding must open it as a top-level page.
 
+## Guardrails provider coverage
+
+The Guardrails settings DTO projects `providerScope` plus a safe `providerOptions` list containing
+only canonical ID, configured/native kind, configured status, and disabled status. It never reuses
+the broader provider DTO and therefore exposes no destination, credential-presence, header, model,
+or account metadata. `anthropic-native` is always represented as the built-in native Messages path;
+the ID is reserved from configured providers. Selected IDs retained after provider removal remain
+visible and marked unconfigured so operators can remove stale intent.
+
+The Settings panel reuses the existing card, checkbox, Notice, and consequence-dialog primitives.
+All-provider mode renders every option checked and includes future providers automatically.
+Unchecking one provider writes a non-empty selected list after explicit consequence confirmation;
+the last provider cannot be unchecked because global disable is the canonical zero-coverage state.
+Selected scope contributes to the truthful reduced-coverage status. A stale/disabled-only selected
+scope reports no effective provider coverage rather than ordinary reduced coverage. Guardrails
+import/export carries scope in the safe bundle, accepts older version-1 bundles as all-provider
+scope, and reports exact selected IDs plus all-to-selected or removed-provider changes as a security
+weakening before Replace.
+
 ## Authentication boundaries
 
 OpenCodex uses three mutually exclusive reusable admission credential classes:

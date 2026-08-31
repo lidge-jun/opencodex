@@ -37,6 +37,9 @@ import { reconcileGuardianBackoff } from "../oauth/token-guardian";
 import { sweepExpiredApiKeyCooldowns } from "../providers/key-failover";
 import { reconcileProviderRequestPacing } from "../providers/request-pacing";
 import { sweepAbandonedResponseStateTemps, sweepExpiredResponseStates } from "../responses/state";
+import { sweepExpiredGuardrailsContinuations } from "../guardrails/continuations";
+import { sweepExpiredGuardrailsCompactContinuations } from "../guardrails/compact-continuations";
+import { sweepExpiredGuardrailsActivity } from "../guardrails/telemetry";
 import { sweepExpiredAntigravityReplay } from "../adapters/google-antigravity-replay";
 import { reconcileProviderAccountQuotaRows } from "../providers/quota";
 import { reconcileRouterWarningMemos } from "../router";
@@ -99,6 +102,9 @@ export const STATE_STORE_REGISTRATIONS = [
     // sweepExpired on hot write paths, where a directory scan does not belong.
     sweepLiveness: sweepAbandonedResponseStateTemps,
   },
+  { name: "guardrails-continuation", sweepExpired: sweepExpiredGuardrailsContinuations },
+  { name: "guardrails-compact-continuation", sweepExpired: sweepExpiredGuardrailsCompactContinuations },
+  { name: "guardrails-activity", sweepExpired: sweepExpiredGuardrailsActivity },
   { name: "antigravity-replay", sweepExpired: sweepExpiredAntigravityReplay },
   { name: "config-warning-memos", reconcileGeneration: (context: GenerationContext) => reconcileConfigWarningMemos(context.generation) },
   { name: "catalog-warning-memos", reconcileGeneration: (context: GenerationContext) => reconcileCatalogWarningMemos(context.generation) },

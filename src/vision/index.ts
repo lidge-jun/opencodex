@@ -283,9 +283,10 @@ export async function describeImagesInPlace(
   abortSignal?: AbortSignal,
   recordSidecarOutcome?: SidecarOutcomeRecorder,
   translatorBudget?: TranslatorBudget,
+  sanitizeDescription?: (text: string) => string,
+  plaintextTarget?: OcxParsedRequest,
 ): Promise<void> {
   const jobs: ImageJob[] = [];
-  const targets: { msg: OcxMessage; parts: OcxContentPart[] }[] = [];
   for (const msg of parsed.context.messages) {
     if (!carriesImages(msg.role) || !Array.isArray(msg.content)) continue;
     const parts = msg.content as OcxContentPart[];
@@ -298,21 +299,25 @@ export async function describeImagesInPlace(
     for (const p of parts) {
       if (p.type === "image") jobs.push({ imageUrl: p.imageUrl, detail: p.detail, contextText });
     }
-    targets.push({ msg, parts });
   }
   if (jobs.length === 0) {
     syncRawBodyImageDescriptions(parsed, []);
+    if (plaintextTarget) syncRawBodyImageDescriptions(plaintextTarget, []);
     return;
   }
 
-  const inFlight = new Map<string, Promise<DescribeOutcome>>();
+  type PreparedDescribeOutcome = DescribeOutcome & { plaintextText?: string };
+  const inFlight = new Map<string, Promise<PreparedDescribeOutcome>>();
   const executions: Array<() => Promise<void>> = [];
-  const outcomePromises: Array<Promise<DescribeOutcome>> = [];
+  const outcomePromises: Array<Promise<PreparedDescribeOutcome>> = [];
   let misses = 0;
 
   for (const job of jobs) {
     const identity = descriptionIdentity(job, plan);
-    const cached = identity.persistent ? descriptionCache.get(identity.key) : undefined;
+    // A Guardrails sanitizer owns a request-local placeholder map. A globally
+    // cached plaintext or placeholder from another turn cannot safely be reused.
+    const persistent = identity.persistent && sanitizeDescription === undefined;
+    const cached = persistent ? descriptionCache.get(identity.key) : undefined;
     if (cached !== undefined) {
       outcomePromises.push(Promise.resolve({ text: cached }));
       continue;
@@ -332,8 +337,8 @@ export async function describeImagesInPlace(
     }
 
     misses += 1;
-    let resolveOutcome!: (outcome: DescribeOutcome) => void;
-    const pending = new Promise<DescribeOutcome>(resolve => { resolveOutcome = resolve; });
+    let resolveOutcome!: (outcome: PreparedDescribeOutcome) => void;
+    const pending = new Promise<PreparedDescribeOutcome>(resolve => { resolveOutcome = resolve; });
     inFlight.set(identity.key, pending);
     outcomePromises.push(pending);
     executions.push(async () => {
@@ -343,12 +348,21 @@ export async function describeImagesInPlace(
       } catch (error) {
         outcome = { text: "", error: error instanceof Error ? error.message : String(error) };
       }
-      const successfulText = outcome.error ? "" : clamp(outcome.text.trim(), DESC_MAX_CHARS);
-      if (identity.persistent && successfulText) {
+      const boundedText = outcome.error ? "" : clamp(outcome.text.trim(), DESC_MAX_CHARS);
+      const successfulText = boundedText && sanitizeDescription
+        ? sanitizeDescription(boundedText)
+        : boundedText;
+      if (persistent && successfulText) {
         descriptionCache.set(identity.key, successfulText);
         enforceAppOwnedMemoryBudget();
       }
-      const resolvedOutcome = outcome.error ? outcome : { ...outcome, text: successfulText };
+      const resolvedOutcome: PreparedDescribeOutcome = outcome.error
+        ? outcome
+        : {
+            ...outcome,
+            text: successfulText,
+            ...(sanitizeDescription ? { plaintextText: boundedText } : {}),
+          };
       resolveOutcome(resolvedOutcome);
     });
   }
@@ -356,25 +370,37 @@ export async function describeImagesInPlace(
   await runBounded(executions, VISION_CONCURRENCY, execute => execute());
   const outcomes = await Promise.all(outcomePromises);
 
-  let oi = 0;
-  const descriptions: string[] = [];
-  for (const { msg, parts } of targets) {
-    const newParts: OcxContentPart[] = [];
-    for (const p of parts) {
-      if (p.type !== "image") {
-        newParts.push(p);
-        continue;
-      }
-      const replacement = renderDescription(outcomes[oi++]);
-      descriptions.push(replacement.text);
-      const reservation = translatorBudget?.reserveTransient(
-        descriptionEncoder.encode(replacement.text).byteLength,
-        { kind: "request_copies" },
-      );
-      newParts.push(replacement);
-      reservation?.commitRetained();
+  const descriptions = outcomes.map(outcome => renderDescription(outcome).text);
+  const plaintextDescriptions = outcomes.map(outcome => renderDescription(
+    outcome.error
+      ? outcome
+      : { ...outcome, text: outcome.plaintextText ?? outcome.text },
+  ).text);
+  const applyDescriptions = (
+    target: OcxParsedRequest,
+    replacements: readonly string[],
+  ): void => {
+    let index = 0;
+    for (const msg of target.context.messages) {
+      if (!carriesImages(msg.role) || !Array.isArray(msg.content)) continue;
+      const parts = msg.content as OcxContentPart[];
+      if (!parts.some(part => part.type === "image")) continue;
+      msg.content = parts.map(part => {
+        if (part.type !== "image") return part;
+        const replacement = {
+          type: "text",
+          text: replacements[index++] ?? IMAGE_OMITTED_TEXT,
+        } as OcxTextContent;
+        const reservation = translatorBudget?.reserveTransient(
+          descriptionEncoder.encode(replacement.text).byteLength,
+          { kind: "request_copies" },
+        );
+        reservation?.commitRetained();
+        return replacement;
+      });
     }
-    msg.content = newParts;
-  }
-  syncRawBodyImageDescriptions(parsed, descriptions);
+    syncRawBodyImageDescriptions(target, replacements);
+  };
+  applyDescriptions(parsed, descriptions);
+  if (plaintextTarget) applyDescriptions(plaintextTarget, plaintextDescriptions);
 }

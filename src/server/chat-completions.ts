@@ -40,6 +40,15 @@ import type { AdmissionLease } from "../lib/admission";
 import type { DataPlaneAdmission } from "./auth-cors";
 import { tryClaimNativeMainProfileForTurn } from "../codex/native-main-admission";
 import {
+  admitGuardrailsRuntime,
+  demaskGuardrailsResponse,
+  guardrailsFailureCode,
+  guardrailsFailureStatus,
+  isGuardrailsCapacityError,
+  prepareGuardrailsTurn,
+  type GuardrailsTurn,
+} from "../guardrails/turn";
+import {
   createTranslatorBudget,
   finalizeTranslatorBudgetResponse,
   isTranslatorBudgetExceededError,
@@ -50,6 +59,15 @@ import { parseRequestEffortRowId } from "./effort-row";
 import { parseSyntheticRowId } from "./fast-row";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../codex/loopback-target";
+import {
+  recordGuardrailsEvent,
+  recordGuardrailsToolArgumentRestoreSkipped,
+  recordGuardrailsTurn,
+} from "../guardrails/telemetry";
+import {
+  captureGuardrailsPolicy,
+  type CapturedGuardrailsPolicy,
+} from "../guardrails/activation";
 
 type Rec = Record<string, unknown>;
 
@@ -89,6 +107,29 @@ async function handleChatCompletionsWithBudget(
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
+): Promise<Response> {
+  return handleChatCompletionsAfterAdmission(
+    req,
+    config,
+    logCtx,
+    translatorBudget,
+    logIds,
+    captureGuardrailsPolicy(config),
+  );
+}
+
+async function handleChatCompletionsAfterAdmission(
+  req: Request,
+  config: OcxConfig,
+  logCtx: RequestLogContext,
+  translatorBudget: TranslatorBudget,
+  logIds: {
+    requestId: string;
+    start: number;
+    turnAdmissionLease?: AdmissionLease;
+    admission?: DataPlaneAdmission;
+  } | undefined,
+  capturedGuardrailsPolicy: CapturedGuardrailsPolicy | undefined,
 ): Promise<Response> {
   let chatBody: Rec;
   try {
@@ -161,42 +202,147 @@ async function handleChatCompletionsWithBudget(
     /* unknown model: let handleResponses shape the 404 */
   }
 
-  if (chatNativeRoute) {
-    return handleNativeChatCompletions({
-      req,
-      config,
-      logCtx,
-      ...(logIds ? { logIds } : {}),
-      route: chatNativeRoute,
-      chatBody,
-      requestedModel,
-      requestedStream: stream,
-      translatorBudget,
-    });
-  }
-
-  let internalBody: Rec;
+  let admission;
   try {
-    // Validate the full Chat boundary after routing. Native Chat keeps `chatBody` as
-    // its wire source; this Responses projection is used only by the fallback path.
-    internalBody = chatCompletionsToResponsesBody(chatBody);
-    if (effortRow) {
-      internalBody.reasoning = {
-        ...(isRec(internalBody.reasoning) ? internalBody.reasoning : {}),
-        effort: effortRow.effort,
-      };
-    }
-  } catch (err) {
-    const overflow = isTranslatorBudgetExceededError(err);
-    const status = overflow ? 413 : err instanceof ChatCompletionsRequestError ? 400 : 500;
+    admission = await admitGuardrailsRuntime(
+      config,
+      "chat",
+      settledRoute?.providerName,
+      capturedGuardrailsPolicy,
+    );
+  } catch (error) {
+    const status = guardrailsFailureStatus(error);
+    recordGuardrailsEvent({
+      surface: "chat",
+      mode: capturedGuardrailsPolicy?.mode ?? "enforce",
+      result: "blocked",
+      registryGeneration: 0,
+      count: 1,
+      categoryIds: [],
+      ruleIds: [],
+      latencyMs: 0,
+      severity: "warning",
+    });
     if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
     return chatCompletionsErrorResponse(
       status,
-      overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
-      overflow ? "request_too_large" : undefined,
-      overflow ? "translation_buffer_limit" : undefined,
+      isGuardrailsCapacityError(error)
+        ? "request exceeds the Guardrails processing limit"
+        : "Guardrails could not safely initialize for this request",
+      "invalid_request_error",
+      guardrailsFailureCode(error),
     );
   }
+  const guardrailsSnapshot = admission.snapshot;
+  const guardrailsPassthroughFailure = admission.passthroughFailure;
+  if (guardrailsSnapshot || guardrailsPassthroughFailure) {
+    logCtx.sensitiveDataProtectionActive = true;
+  }
+  try {
+  let internalBody: Rec;
+  let guardrailsTurn: GuardrailsTurn | undefined;
+  let guardrailsBypassed = guardrailsPassthroughFailure;
+  if (!guardrailsBypassed && guardrailsSnapshot) {
+    const guardrailsStartedAt = performance.now();
+    try {
+      const prepared = await prepareGuardrailsTurn(config, "chat", chatBody, undefined, guardrailsSnapshot);
+      chatBody = prepared.body;
+      guardrailsTurn = prepared.turn;
+      if (guardrailsTurn) {
+        recordGuardrailsTurn("chat", guardrailsTurn, performance.now() - guardrailsStartedAt);
+      }
+    } catch (error) {
+      if (guardrailsSnapshot?.failurePolicy !== "passthrough") {
+        recordGuardrailsEvent({
+          surface: "chat",
+          mode: guardrailsSnapshot?.mode ?? "enforce",
+          result: "blocked",
+          registryGeneration: guardrailsSnapshot?.generation ?? 0,
+          count: 1,
+          categoryIds: [],
+          ruleIds: [],
+          latencyMs: performance.now() - guardrailsStartedAt,
+          severity: "warning",
+        });
+        const status = isGuardrailsCapacityError(error) ? 413 : 400;
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
+        return chatCompletionsErrorResponse(
+          status,
+          status === 413 ? "request exceeds the Guardrails processing limit" : "Guardrails could not safely process the request",
+          "invalid_request_error",
+          guardrailsFailureCode(error),
+        );
+      }
+      console.warn(`[opencodex] guardrails Chat processing failed in passthrough mode: ${error instanceof Error ? error.name : "unknown"}`);
+      recordGuardrailsEvent({
+        surface: "chat",
+        mode: guardrailsSnapshot?.mode ?? "enforce",
+        result: "passthrough",
+        registryGeneration: guardrailsSnapshot?.generation ?? 0,
+        count: 1,
+        categoryIds: [],
+        ruleIds: [],
+        latencyMs: performance.now() - guardrailsStartedAt,
+        severity: "high",
+      });
+      guardrailsBypassed = true;
+    }
+  }
+
+    if (chatNativeRoute) {
+      const nativeResponse = await handleNativeChatCompletions({
+        req,
+        config,
+        logCtx,
+        ...(logIds ? { logIds } : {}),
+        route: chatNativeRoute,
+        chatBody,
+        requestedModel,
+        requestedStream: stream,
+        translatorBudget,
+      });
+      return demaskGuardrailsResponse(
+        nativeResponse,
+        guardrailsTurn,
+        translatorBudget,
+        () => {
+          recordGuardrailsEvent({
+            surface: "chat",
+            mode: guardrailsTurn?.mode ?? "enforce",
+            result: "demask_warning",
+            registryGeneration: guardrailsTurn?.snapshot.generation ?? 0,
+            count: 1,
+            categoryIds: [],
+            ruleIds: [],
+            latencyMs: 0,
+            severity: "warning",
+          });
+        },
+        count => recordGuardrailsToolArgumentRestoreSkipped("chat", guardrailsTurn, count),
+      );
+    }
+
+    try {
+    // Validate the full Chat boundary after routing. Native Chat keeps `chatBody` as
+    // its wire source; this Responses projection is used only by the fallback path.
+      internalBody = chatCompletionsToResponsesBody(chatBody);
+      if (effortRow) {
+        internalBody.reasoning = {
+          ...(isRec(internalBody.reasoning) ? internalBody.reasoning : {}),
+          effort: effortRow.effort,
+        };
+      }
+    } catch (err) {
+      const overflow = isTranslatorBudgetExceededError(err);
+      const status = overflow ? 413 : err instanceof ChatCompletionsRequestError ? 400 : 500;
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(
+        status,
+        overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
+        overflow ? "request_too_large" : undefined,
+        overflow ? "translation_buffer_limit" : undefined,
+      );
+    }
 
   // Routed adapters only support streamed turns; always stream internally and fold
   // for non-streaming clients. Native Chat uses the caller's original stream bit.
@@ -294,6 +440,10 @@ async function handleChatCompletionsWithBudget(
     // headers from the FORWARD_HEADERS allowlist, which would drop the raw
     // header — so the fact is detected here and carried as an option flag.
     ...(visionDescribeTerminal ? { visionDescribeTerminal: true } : {}),
+    guardrailsTurn,
+    guardrailsSnapshot,
+    guardrailsPassthroughFailure: guardrailsBypassed,
+    guardrailsCapturedPolicy: capturedGuardrailsPolicy,
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
@@ -478,4 +628,7 @@ async function handleChatCompletionsWithBudget(
       "Cache-Control": "no-cache",
     },
   });
+  } finally {
+    admission.lease?.release();
+  }
 }
