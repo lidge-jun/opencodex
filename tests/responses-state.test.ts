@@ -1217,7 +1217,12 @@ describe("Responses previous_response_id state", () => {
 
   test("shutdown cleanup failure still persists unrelated response state and reports failure", async () => {
     setPlatformForTests("win32");
-    setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
+    // The drain must expire, but the fallback reserve must NOT: this test asserts that a
+    // cleanup failure still persists unrelated state. Under load the previous 80ms reserve
+    // could itself expire, terminalizing `resp_cleanup_unrelated` into a tombstone and
+    // failing the replay assertion. The gate below — not the clock — is what forces drain
+    // expiry, so the reserve is sized to never be the thing that runs out.
+    setResponseSpillShutdownBudgetForTests({ totalMs: 30_120, fallbackReserveMs: 30_000 });
     let release!: () => void;
     let entered!: () => void;
     let tempHardenFinished!: () => void;
