@@ -29,6 +29,14 @@ export interface GracefulStopIo {
   waitExit?: (pid: number, timeoutMs: number) => boolean;
   env?: Record<string, string | undefined>;
   exitTimeoutMs?: number;
+  /**
+   * Ask the proxy to leave native Codex and the Grok fence alone.
+   *
+   * `ocx stop` sets this because it restores shared client config itself, only after
+   * proving a stopped Task Scheduler did not respawn the proxy (#3008). Direct callers
+   * omit it and keep the self-contained behaviour.
+   */
+  deferSharedTeardown?: boolean;
 }
 
 /**
@@ -75,7 +83,12 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
   if (token) headers["x-opencodex-api-key"] = token;
   const fetchFn = io.fetchFn ?? fetch;
   try {
-    const res = await fetchFn(`http://${gracefulStopHost(runtime.hostname)}:${runtime.port}/api/stop`, {
+    // `ocx stop` asks the proxy NOT to restore shared client config: it does that itself,
+    // after verifying a stopped Task Scheduler did not respawn the proxy (#3008). Letting
+    // the child do it means a survivor found seconds later has already lost its config.
+    const stopUrl = `http://${gracefulStopHost(runtime.hostname)}:${runtime.port}/api/stop`
+      + (io.deferSharedTeardown ? "?deferSharedTeardown=1" : "");
+    const res = await fetchFn(stopUrl, {
       method: "POST",
       headers,
       // Hung proxies with many CLOSE_WAIT clients can be slow to accept; give them
@@ -107,10 +120,10 @@ function drainDeadlineMs(): number {
 }
 
 /** Graceful-first stop: management-API drain, then the platform kill ladder. */
-export async function stopProxy(pid: number): Promise<void> {
+export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<void> {
   if (!isProcessAlive(pid)) return;
   const runtime = readRuntimePort(pid);
-  const graceful = await stopProxyGracefully(pid);
+  const graceful = await stopProxyGracefully(pid, io);
   if (graceful === "refused") {
     // The proxy refused on purpose (foreign service owns it). Forcing would strip shared
     // config while that service keeps the proxy alive.

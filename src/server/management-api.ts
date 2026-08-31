@@ -258,6 +258,13 @@ export async function handleManagementAPI(
   if (url.pathname === "/api/stop" && req.method === "POST") {
     const { restoreNativeCodexAsync } = await import("../codex/inject");
     const { stopServiceIfInstalled, isServiceOwnershipError } = await import("../service");
+    // `ocx stop` performs its own shared teardown AFTER verifying the scheduler did not
+    // respawn the proxy (#3008). Without this flag the child restores native Codex and
+    // strips the Grok fence here, so a survivor found moments later has already had the
+    // shared config pulled out from under it — and the parent's `ownershipBlocked` guard
+    // can only prevent a second, redundant teardown. A direct caller sends nothing and
+    // keeps the self-contained behaviour.
+    const deferSharedTeardown = url.searchParams.get("deferSharedTeardown") === "1";
     try {
       stopServiceIfInstalled();
     } catch (err) {
@@ -269,12 +276,16 @@ export async function handleManagementAPI(
       }
       throw err;
     }
-    const restore = await restoreNativeCodexAsync();
     // Both managed configs come down together on an explicit teardown. The daemon's own
     // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
-    // which is exactly why an intentional stop has to do it here.
-    const { stripGrokConfig } = await import("../grok/inject");
-    const grok = stripGrokConfig();
+    // which is exactly why an intentional stop has to do it here — unless the caller is
+    // `ocx stop`, which does it itself once the proxy is proven down.
+    const restore = deferSharedTeardown
+      ? { success: true, message: "shared teardown deferred to the stopping client", artifacts: null }
+      : await restoreNativeCodexAsync();
+    const grok = deferSharedTeardown
+      ? { ok: true, changed: false, message: "shared teardown deferred to the stopping client" }
+      : (await import("../grok/inject")).stripGrokConfig();
     setTimeout(async () => {
       let shutdownSucceeded = false;
       try {

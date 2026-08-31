@@ -175,6 +175,22 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).not.toContain("if (stoppedService && !ownershipBlocked)");
   });
 
+  test("ocx stop defers shared teardown so a respawn survivor keeps its config", () => {
+    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
+    const apiSource = readFileSync(join(import.meta.dir, "..", "src", "server", "management-api.ts"), "utf8");
+    const controlSource = readFileSync(join(import.meta.dir, "..", "src", "lib", "process-control.ts"), "utf8");
+    // POST /api/stop normally restores native Codex and strips the Grok fence itself. If
+    // ocx stop let it, a scheduler wrapper that respawns seconds later would already have
+    // lost its client config, and the parent ownershipBlocked guard could only prevent a
+    // second redundant teardown (#3008).
+    expect(stopFn).toContain("deferSharedTeardown: true");
+    expect(controlSource).toContain("deferSharedTeardown");
+    expect(apiSource).toContain('url.searchParams.get("deferSharedTeardown") === "1"');
+    // A direct /api/stop caller keeps the self-contained behaviour.
+    expect(apiSource).toContain("deferSharedTeardown");
+    expect(apiSource).toContain("await restoreNativeCodexAsync()");
+  });
+
   test("handleStop treats an incomplete native Codex restore as a stop failure", () => {
     const restoreFn = sliceFn(CLI_SOURCE, "async function restoreSharedClientStateAfterStop(", "async function handleStop(");
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");

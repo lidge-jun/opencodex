@@ -693,7 +693,9 @@ async function handleStop() {
     const serviceStop = stopServiceIfInstalledDetailed();
     stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
     schedulerCanRespawn = serviceStop === "stopped-respawnable";
-    if (stoppedService) console.log("🛑 Service manager stopped (won't respawn).");
+    // No "won't respawn" claim here: a stopped Task Scheduler can still respawn through
+    // its wrapper, which the verification below is what actually settles.
+    if (stoppedService) console.log("🛑 Service manager stopped.");
     if (serviceStop === "failed") {
       // A manager that would not stop can respawn the proxy. That is a real stop failure,
       // not a history-only one, and an update must not replace files over it (#3008).
@@ -716,7 +718,9 @@ async function handleStop() {
     try {
       // Graceful-first (management-API drain) — on Windows this is the only path where
       // the proxy's shutdown handlers actually run; taskkill /F is the fallback inside.
-      await stopProxy(pid);
+      // Shared teardown is deferred to this process: it happens after the respawn
+      // verification below, so a survivor does not get its client config pulled first.
+      await stopProxy(pid, { deferSharedTeardown: true });
       console.log(`✅ Proxy (PID ${pid}) stopped.`);
       removePid(pid);
       removeRuntimePort(pid);
@@ -744,7 +748,7 @@ async function handleStop() {
     const live = await findLiveProxy();
     if (live?.pid) {
       try {
-        await stopProxy(live.pid);
+        await stopProxy(live.pid, { deferSharedTeardown: true });
         console.log(`✅ Proxy (PID ${live.pid}) stopped.`);
       } catch (err) {
         stopFailed = true;
