@@ -1075,7 +1075,7 @@ describe("Responses bridge web_search_call native item", () => {
     });
   });
 
-  test("a batched (plural) search emits action.search.queries without a singular query", () => {
+  test("a batched (plural) search carries both query and queries for Console Go (#3071)", () => {
     const json = buildResponseJSON([
       { type: "web_search_call_begin", id: "ws_3" },
       { type: "web_search_call_end", id: "ws_3", queries: ["rust async", "tokio runtime"] },
@@ -1085,9 +1085,10 @@ describe("Responses bridge web_search_call native item", () => {
 
     const output = json.output as Record<string, unknown>[];
     const action = (output[0] as Record<string, unknown>).action as Record<string, unknown>;
-    // Native renders "<first> ..." only when `query` is absent and queries.len() > 1.
-    expect(action).toEqual({ type: "search", queries: ["rust async", "tokio runtime"] });
-    expect(action.query).toBeUndefined();
+    // Console Go's upstream validator requires singular `query` on the search action,
+    // and DeepSeek native Responses requires `queries` — so a batch carries both now.
+    expect(action).toEqual({ type: "search", query: "rust async", queries: ["rust async", "tokio runtime"] });
+    expect(action.query).toBe("rust async");
   });
 
   test("a single-query search also carries queries so strict parsers accept the replay (#930)", () => {

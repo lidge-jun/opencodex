@@ -1295,11 +1295,11 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(input[0]).not.toHaveProperty("id");
   });
 
-  test("backfills queries on a replayed single-query web_search_call (#930)", () => {
+  test("backfills web_search_call actions in either missing direction (#930, #3071)", () => {
     // The bridge fix only helps items created after it. A conversation that already
-    // recorded {type:"search", query:"..."} replays that stored item every turn, and
-    // DeepSeek's parser rejects the whole request over it — so upgrading alone would
-    // leave those threads permanently broken.
+    // recorded a legacy web_search_call replays that stored item every turn. DeepSeek's
+    // parser rejects an action without `queries` (#930) and Console Go rejects one
+    // without `query` (#3071) — so upgrading alone would leave those threads broken.
     const adapter = createResponsesPassthroughAdapter(provider);
     const request = adapter.buildRequest({
       modelId: "provider-model",
@@ -1319,9 +1319,8 @@ describe("OpenAI Responses passthrough sanitization", () => {
 
     // Repaired: singular query gains the array the strict parser requires.
     expect(input[0].action).toEqual({ type: "search", query: "legacy", queries: ["legacy"] });
-    // Untouched: a batch already satisfies the parser, and adding `query` would collapse
-    // the native plural rendering.
-    expect(input[1].action).toEqual({ type: "search", queries: ["a", "b"] });
+    // Repaired: multi-query batch gains the singular `query` Console Go requires.
+    expect(input[1].action).toEqual({ type: "search", query: "a", queries: ["a", "b"] });
     // Untouched: not a search action.
     expect(input[2].action).toEqual({ type: "open_page", url: "https://example.test" });
   });
