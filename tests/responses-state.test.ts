@@ -60,6 +60,7 @@ import {
   writeResponseSpillDurably,
 } from "../src/responses/spill-store";
 import { adapterNeedsForcedContinuation, injectDeveloperMessage } from "../src/server/responses";
+import { watchdogMs } from "./helpers/ci-watchdog";
 
 /**
  * Windows without Developer Mode or admin cannot create a file symlink (EPERM).
@@ -126,6 +127,54 @@ function spillFileNames(home: string): string[] {
 function spillTempNames(home: string): string[] {
   const dir = responseSpillDirectory(home);
   return existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith(".tmp")) : [];
+}
+
+interface ShutdownBudgetChildResult {
+  settled: boolean;
+  reported: boolean;
+  pending: { count: number; bytes: number };
+  metrics: { residentCount: number; tombstoneCount: number };
+  replayedUnrelated: boolean;
+  guardReported: boolean;
+}
+
+async function runShutdownBudgetChild(
+  scenario: "exhaustion" | "guard",
+): Promise<ShutdownBudgetChildResult> {
+  const timeoutMs = watchdogMs(3_000);
+  const child = Bun.spawn([
+    process.execPath,
+    join(import.meta.dir, "helpers", "responses-state-shutdown-budget-child.ts"),
+    scenario,
+  ], {
+    cwd: join(import.meta.dir, ".."),
+    env: { ...process.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdoutPromise = new Response(child.stdout).text();
+  const stderrPromise = new Response(child.stderr).text();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<number>(resolve => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill("SIGKILL"); } catch { /* already exited */ }
+      void child.exited.then(resolve, () => resolve(-1));
+    }, timeoutMs);
+  });
+  const exitCode = await Promise.race([child.exited, timeout]);
+  if (timer !== undefined) clearTimeout(timer);
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+  if (timedOut) {
+    throw new Error(`response spill shutdown budget child timed out after ${timeoutMs}ms (${scenario})`);
+  }
+  if (exitCode !== 0) {
+    throw new Error(`response spill shutdown budget child exited ${exitCode} (${scenario}): ${stderr.trim()}`);
+  }
+  const line = stdout.trim().split(/\r?\n/).at(-1);
+  if (!line) throw new Error(`response spill shutdown budget child produced no result (${scenario})`);
+  return JSON.parse(line) as ShutdownBudgetChildResult;
 }
 
 function rememberLarge(id: string, text: string, providers?: Parameters<typeof rememberResponseState>[2]): void {
@@ -1128,61 +1177,26 @@ describe("Responses previous_response_id state", () => {
     expect(replay).toContain("safe-small-output");
   });
 
-  test("shutdown fallback budget exhaustion terminalizes every candidate and still snapshots unrelated state", async () => {
-    setPlatformForTests("win32");
-    setResponseSpillShutdownBudgetForTests({ totalMs: 60, fallbackReserveMs: 40 });
-    let release!: () => void;
-    let entered!: () => void;
-    const gate = new Promise<void>(resolve => { release = resolve; });
-    const started = new Promise<void>(resolve => { entered = resolve; });
-    let announced = false;
-    setAsyncIcaclsRunnerForTests(async () => {
-      if (!announced) {
-        announced = true;
-        entered();
-        await gate;
-      }
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+  test("shutdown fallback budget exhaustion is contained by a child watchdog", async () => {
+    const result = await runShutdownBudgetChild("exhaustion");
+    expect(result).toMatchObject({
+      settled: true,
+      reported: true,
+      pending: { count: 0, bytes: 0 },
+      metrics: { residentCount: 1, tombstoneCount: 2 },
+      replayedUnrelated: true,
     });
-    setIcaclsRunnerForTests((_args, timeoutMs) => {
-      Bun.sleepSync(timeoutMs + 50);
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+  }, { timeout: watchdogMs(3_000) + 2_000 });
+
+  test("shutdown terminalization pass guard reports a bounded failure", async () => {
+    const result = await runShutdownBudgetChild("guard");
+    expect(result).toMatchObject({
+      settled: true,
+      reported: true,
+      pending: { count: 0, bytes: 0 },
+      guardReported: true,
     });
-    setResponseStateByteCapForTests(1_024);
-    rememberLarge("resp_budget_exhausted_first", "a".repeat(2 * 1024 * 1024 + 4_096));
-    await started;
-    rememberLarge("resp_budget_exhausted_final", "b".repeat(2 * 1024 * 1024 + 4_096));
-    setResponseStateByteCapForTests(1_000_000_000);
-    rememberResponseState(
-      { model: "test/model", input: "budget-safe-input", store: false },
-      fixedResponse("resp_budget_unrelated", [{ type: "message", role: "assistant", content: "budget-safe-output" }]),
-      undefined,
-      { force: true },
-    );
-
-    let reported: unknown;
-    try {
-      const flushing = flushResponseState();
-      setResponseStateByteCapForTests(1_024);
-      await flushing;
-    } catch (error) {
-      reported = error;
-    } finally {
-      release();
-    }
-    expect(reported).toBeInstanceOf(Error);
-    expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
-    expect(responseStateMetrics()).toMatchObject({ residentCount: 1, tombstoneCount: 2 });
-
-    clearResponseStateMemoryForTests();
-    setResponseStateByteCapForTests(1_024);
-    const replay = JSON.stringify(expandPreviousResponseInput({
-      previous_response_id: "resp_budget_unrelated",
-      input: "next",
-    }));
-    expect(replay).toContain("budget-safe-input");
-    expect(replay).toContain("budget-safe-output");
-  }, { timeout: 1_000 });
+  }, { timeout: watchdogMs(3_000) + 2_000 });
 
   test("directory fsync follows spill unlink", () => {
     const ref = writeResponseSpillDurably("resp_unlink_order", { createdAt: Date.now(), items: ["x"] });

@@ -60,6 +60,7 @@ const RESPONSE_STATE_TEMP_NAME = /^responses-state\.json\.ocx\.(\d+)\.(\d+)\.tmp
 const MAX_SNAPSHOT_REWRITE_ATTEMPTS = 4;
 const RESPONSE_SPILL_SHUTDOWN_BUDGET_MS = 5_000;
 const RESPONSE_SPILL_SHUTDOWN_FALLBACK_RESERVE_MS = 4_000;
+const RESPONSE_SPILL_SHUTDOWN_TERMINALIZATION_MAX_PASSES = MAX_STORED_RESPONSES + 1;
 
 interface ResidentResponseState {
   kind: "resident";
@@ -193,6 +194,7 @@ const pendingResponseSpillById = new Map<string, PendingResponseSpill>();
 let pendingResponseSpillBytes = 0;
 let responseSpillPublicationTail: Promise<void> = Promise.resolve();
 let responseSpillShutdownBudgetOverride: { totalMs: number; fallbackReserveMs: number } | null = null;
+let responseSpillShutdownTerminalizationPassLimitOverride: number | null = null;
 
 function deferSupersededSpill(ref: ResponseSpillRef | undefined): void {
   if (!ref) return;
@@ -359,6 +361,16 @@ export function setResponseSpillShutdownBudgetForTests(
   responseSpillShutdownBudgetOverride = budget;
 }
 
+/** Test-only: lower the hard terminalization pass guard (null restores production). */
+export function setResponseSpillShutdownTerminalizationPassLimitForTests(limit: number | null): void {
+  responseSpillShutdownTerminalizationPassLimitOverride = limit;
+}
+
+function responseSpillShutdownTerminalizationPassLimit(): number {
+  return responseSpillShutdownTerminalizationPassLimitOverride
+    ?? RESPONSE_SPILL_SHUTDOWN_TERMINALIZATION_MAX_PASSES;
+}
+
 function responseSpillShutdownBudget(): { totalMs: number; fallbackReserveMs: number } {
   return responseSpillShutdownBudgetOverride ?? {
     totalMs: RESPONSE_SPILL_SHUTDOWN_BUDGET_MS,
@@ -452,14 +464,40 @@ function supersedeShutdownFallbackBatch(
   }
 }
 
+function stopAtShutdownTerminalizationPassLimit(
+  pending: Array<{ job: PendingResponseSpill; candidate: ResidentResponseState }>,
+  failures: Error[],
+): void {
+  failures.push(Object.assign(new Error("Response spill shutdown terminalization pass limit exceeded"), { code: "ELOOP" }));
+  supersedeShutdownFallbackBatch(pending, failures);
+  for (const { job, candidate } of pending) {
+    terminalizeShutdownFallbackCandidate(job, candidate);
+  }
+  for (const [id, state] of [...states]) {
+    if (state.kind !== "resident") continue;
+    spillCounters.writeFailures += 1;
+    replaceWithSpillFailure(id, state);
+  }
+  recomputeOldestResident();
+  pruneResponses();
+  enforceAppOwnedMemoryBudget();
+}
+
 function terminalizeExhaustedShutdownFallback(
   initial: Array<{ job: PendingResponseSpill; candidate: ResidentResponseState }>,
   failures: Error[],
 ): void {
   let pending = initial;
+  let passes = 0;
+  const passLimit = responseSpillShutdownTerminalizationPassLimit();
   // Every pass replaces each captured resident with a tombstone. Pruning may expose
   // another finite batch, but resident count strictly decreases until none can requeue.
   while (pending.length > 0) {
+    if (passes >= passLimit) {
+      stopAtShutdownTerminalizationPassLimit(pending, failures);
+      return;
+    }
+    passes += 1;
     supersedeShutdownFallbackBatch(pending, failures);
     for (const { job, candidate } of pending) {
       failures.push(Object.assign(new Error("Response spill shutdown fallback budget exhausted"), { code: "ETIMEDOUT" }));

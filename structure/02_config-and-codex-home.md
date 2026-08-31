@@ -198,6 +198,9 @@ shutdown status so process exit is non-zero without sacrificing unrelated replay
 If the fallback reserve expires, every remaining resident candidate is terminalized as a bounded
 `spill-failed` tombstone before pruning, so no payload remains eligible for shutdown requeue and the
 snapshot flush always regains control.
+The terminalization pass itself is hard-capped at `MAX_STORED_RESPONSES + 1`; exceeding that
+structural bound records a bounded failure, fail-closes every remaining resident, and returns control
+to snapshot persistence instead of relying on the progress argument alone.
 
 [Decision Log]
 - 목적과 의도: Keep `/healthz` and unrelated requests responsive during intermittent Windows ACL stalls without publishing an unhardened continuation.
