@@ -12,7 +12,7 @@ import { CLI_COMMANDS } from "./registry";
 import { isValidProviderName } from "../config/provider-name";
 import type { CliHead } from "./root";
 import type { ReadyArgs } from "./ready";
-import type { LiveProxy } from "../server/proxy-liveness";
+import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { hasHelpFlag, printSubcommandUsage, printUsage } from "./help";
 import { setIntegrationEnabled, shouldSyncCodexOnStart } from "../codex/desired-state";
@@ -29,7 +29,7 @@ export interface CliDispatchDeps {
   command: string | undefined;
   head: CliHead;
   loadConfig: () => OcxConfig;
-  findLiveProxy: () => Promise<LiveProxy | null>;
+  findLiveProxy: (io?: LivenessIo) => Promise<LiveProxy | null>;
   probeHostname: (hostname: string | undefined) => string;
   waitForProxy: (timeoutMs?: number) => Promise<LiveProxy | null>;
   startArgv: (port?: number) => string[];
@@ -542,7 +542,12 @@ const commandRunners: Record<string, CommandRunner> = {
   health: async deps => {
     const healthArgs = deps.args.slice(1);
     const wantsHealthJson = healthArgs.includes("--json");
-    const live = await deps.findLiveProxy();
+    // A proxy that has only just bound can miss a single 750ms probe while its
+    // event loop is still settling startup work — the same just-started race the
+    // stop paths already cover with retries (#764). Retry here so `ocx health`
+    // run seconds after a service restart reports the live proxy instead of a
+    // false negative.
+    const live = await deps.findLiveProxy({ attempts: 3 });
     if (wantsHealthJson) {
       console.log(JSON.stringify({ ok: !!live, pid: live?.pid ?? null, port: live?.port ?? null }));
     } else {
