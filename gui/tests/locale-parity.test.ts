@@ -248,3 +248,30 @@ test("every locale carries the exact DSH label and ownership semantics", async (
     expect(dict.get("integrations.semantics.dsh")).toBe(expected[2]);
   }
 });
+
+/*
+ * Aside's ownership sentence carries three facts a user acts on, and each is
+ * wrong in a different way if a translation drops it: which key OpenCodex
+ * touches (`providers.opencodex`, so the rest of the file is untouched), where
+ * the file lives (`~/.aside/u/`, which is per-account and not the bare
+ * `~/.aside`), and that Aside rewrites the file while running, so a change does
+ * not take until the app is fully quit and reopened. A translator working from
+ * the English can render the prose naturally and still lose one.
+ *
+ * The identifiers are asserted rather than the sentence, unlike the DSH case
+ * above: pinning full translated strings freezes wording, and these three tokens
+ * are the part that must survive translation unchanged.
+ */
+test("every locale keeps the three facts Aside's ownership sentence carries", async () => {
+  for (const locale of LOCALES) {
+    const dict = await readDict(locale);
+    expect(dict.get("api.clientConfig.clientAside"), locale).toBe("Aside");
+    expect(dict.get("integrations.tab.aside"), locale).toBe("Aside");
+
+    const semantics = dict.get("integrations.semantics.aside") ?? "";
+    expect(semantics, `${locale} names the managed key`).toContain("providers.opencodex");
+    expect(semantics, `${locale} names the per-account root`).toContain("~/.aside/u/");
+    // Aside rewrites models.json as it runs, so a restart hint is not optional.
+    expect(semantics.length, `${locale} keeps the restart warning`).toBeGreaterThan(80);
+  }
+});
