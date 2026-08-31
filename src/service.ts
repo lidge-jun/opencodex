@@ -3625,7 +3625,8 @@ export async function installFreshWindowsSchedulerSafely(
  * Returns true if a service was found and stopped.
  */
 export function stopServiceIfInstalled(): boolean {
-  return stopServiceIfInstalledDetailed() === "stopped";
+  const outcome = stopServiceIfInstalledDetailed();
+  return outcome === "stopped" || outcome === "stopped-respawnable";
 }
 
 /**
@@ -3637,7 +3638,14 @@ export function stopServiceIfInstalled(): boolean {
  * files: a manager that refused to stop can respawn the proxy on top of a half-written
  * install (#3008).
  */
-export type ServiceStopOutcome = "absent" | "stopped" | "failed";
+/**
+ * `stopped-respawnable` is Task Scheduler specifically: `schtasks /end` ends the task
+ * instance while the `cmd :loop` wrapper survives and respawns its child seconds later
+ * (#764). Only that backend needs the restart-window wait — launchd, systemd and WinSW
+ * are down when they report stopped, and making them pay a seven-second poll would be a
+ * regression in every ordinary `ocx stop`.
+ */
+export type ServiceStopOutcome = "absent" | "stopped" | "stopped-respawnable" | "failed";
 
 export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
   assertServiceEnvironmentMatchesInstall();
@@ -3650,12 +3658,13 @@ export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
     // two managers installed, and either one would respawn the proxy after `ocx stop`.
     let stopped = false;
     let failed = false;
+    let schedulerStopped = false;
     // `probeWindowsSchedulerTask` is tri-state on purpose: a query that THROWS is not the
     // same as a task that is absent, and treating it as absent lets a live scheduler
     // survive a "successful" stop.
     const probe = probeWindowsSchedulerTask();
     if (probe.status === "present") {
-      if (stopWindowsChecked()) stopped = true;
+      if (stopWindowsChecked()) { stopped = true; schedulerStopped = true; }
       else failed = true;
     } else if (probe.status === "unknown") {
       failed = true;
@@ -3670,7 +3679,7 @@ export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
     // A failure on either backend wins: the other one stopping does not make the live one
     // safe to update over.
     if (failed) return "failed";
-    if (stopped) return "stopped";
+    if (stopped) return schedulerStopped ? "stopped-respawnable" : "stopped";
   } else if (process.platform === "linux" && isSystemd() && existsSync(unitPath())) {
     try { stopSystemd(); return "stopped"; } catch { return "failed"; }
   }

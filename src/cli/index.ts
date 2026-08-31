@@ -679,6 +679,9 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
 async function handleStop() {
   let stopFailed = false;
   let historyOnlyFailure = false;
+  // Only Task Scheduler respawns after a successful stop (#764), so only it earns the
+  // restart-window wait; launchd, systemd and WinSW are down when they say so.
+  let schedulerCanRespawn = false;
   let stoppedService = false;
   // An ownership mismatch means the service manager was never even contacted: the installed
   // service is still live and will respawn the proxy. Tearing down SHARED state in that
@@ -688,7 +691,8 @@ async function handleStop() {
   let ownershipBlocked = false;
   try {
     const serviceStop = stopServiceIfInstalledDetailed();
-    stoppedService = serviceStop === "stopped";
+    stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
+    schedulerCanRespawn = serviceStop === "stopped-respawnable";
     if (stoppedService) console.log("🛑 Service manager stopped (won't respawn).");
     if (serviceStop === "failed") {
       // A manager that would not stop can respawn the proxy. That is a real stop failure,
@@ -770,8 +774,9 @@ async function handleStop() {
   // is explicitly best-effort and the `:loop` wrapper respawns its child after ~5s, so an
   // immediate probe can see a dead interval and an update can start replacing files right
   // before the proxy comes back. Poll across the restart window before this stop is allowed
-  // to report anything but failure (#3008).
-  if (stoppedService && !ownershipBlocked) {
+  // to report anything but failure (#3008) — and ONLY for that backend, since making every
+  // launchd and systemd stop wait seven seconds would be a regression in ordinary use.
+  if (schedulerCanRespawn && !ownershipBlocked) {
     const survivor = await proxyStillLiveAfterStop({ canRespawn: true });
     if (survivor) {
       stopFailed = true;

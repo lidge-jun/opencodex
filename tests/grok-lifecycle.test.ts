@@ -162,6 +162,19 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("ownershipBlocked = true;");
   });
 
+  test("only Task Scheduler earns the respawn wait", () => {
+    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
+    const serviceSource = readFileSync(join(import.meta.dir, "..", "src", "service.ts"), "utf8");
+    // schtasks /end leaves the `cmd :loop` wrapper alive to respawn its child (#764).
+    // launchd, systemd and WinSW are down when they report stopped, so charging them a
+    // seven-second poll on every ocx stop would be a regression in ordinary use.
+    expect(serviceSource).toContain('"absent" | "stopped" | "stopped-respawnable" | "failed"');
+    expect(serviceSource).toContain('schedulerStopped ? "stopped-respawnable" : "stopped"');
+    expect(stopFn).toContain("if (schedulerCanRespawn && !ownershipBlocked)");
+    // The wait is gated on the scheduler flag, not on "a service stopped".
+    expect(stopFn).not.toContain("if (stoppedService && !ownershipBlocked)");
+  });
+
   test("handleStop treats an incomplete native Codex restore as a stop failure", () => {
     const restoreFn = sliceFn(CLI_SOURCE, "async function restoreSharedClientStateAfterStop(", "async function handleStop(");
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
