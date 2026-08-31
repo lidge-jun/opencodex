@@ -125,10 +125,12 @@ failures after response headers have started are delivered as `response.failed` 
 
 When the routed model is listed in its provider's `noVisionModels` — or declared text-only for
 that model via `modelInputModalities` — and a request carries an image, opencodex describes each
-image **before** the main call and replaces it with text. The model catalog advertises image input
-for every sidecar-covered model. Combos advertise image only when every member is covered and
-`imageInput` is not disabled, so clients such as the Codex app allow attachments instead of
-blocking them before the sidecar runs. When
+image **before** the main call and replaces it with text, provided a vision sidecar plan is
+available. Without an available plan the raw image is stripped rather than forwarded to a
+text-only backend. The model catalog advertises image input for every sidecar-covered model.
+Combos advertise image input only when every member is sidecar-covered and the combo's
+`imageInput` setting is not disabled, so clients such as the Codex app allow attachments instead
+of blocking them before the sidecar runs. When
 `visionSidecar.model` is absent or blank, the OpenAI execution path, Dashboard, and management API
 use the `gpt-5.4-mini` fallback. Startup still migrates an explicitly persisted legacy
 `gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not to an absent
@@ -150,8 +152,8 @@ model field.
   remote `https` images are fetched by the OpenAI backend, not by the proxy.
 - `noVisionModels` matching ignores an Ollama-style `:size` suffix, so a `gpt-oss` entry also covers
   `gpt-oss:120b`.
-- If description fails, the model receives a short processing-error marker. If no sidecar plan is
-  available, the raw image is stripped rather than forwarded to a text-only backend.
+- If description fails, the model receives a short processing-error marker. (Without an available
+  sidecar plan, no description is attempted — the raw image is stripped, as described above.)
 - `maxDescriptionsPerTurn` (default 8) limits new descriptions per main-model turn. Cache hits and
   same-turn duplicates do not consume it. Successful `data:` image descriptions are cached by
   backend, model, detail, image bytes, and message context — plus the reasoning effort on OpenAI
