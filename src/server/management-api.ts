@@ -276,8 +276,13 @@ export async function handleManagementAPI(
     const { stripGrokConfig } = await import("../grok/inject");
     const grok = stripGrokConfig();
     setTimeout(async () => {
-      await drainAndShutdown(undefined, config.shutdownTimeoutMs ?? 5000);
-      process.exit(0);
+      let shutdownSucceeded = false;
+      try {
+        shutdownSucceeded = await drainAndShutdown(undefined, config.shutdownTimeoutMs ?? 5000);
+      } catch {
+        console.warn("[opencodex] shutdown drain failed");
+      }
+      process.exit(shutdownSucceeded ? 0 : 1);
     }, 200);
     const grokNote = grok.ok ? "" : ` Grok config cleanup failed: ${grok.message}`;
     return jsonResponse(restore.success

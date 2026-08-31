@@ -458,8 +458,9 @@ export function trackStreamLifetime(
 export async function drainAndShutdown(
   server: ReturnType<typeof Bun.serve> | undefined,
   timeoutMs: number,
-): Promise<void> {
+): Promise<boolean> {
   const s = server ?? _serverRef;
+  let shutdownSucceeded = true;
   // One absolute budget covers both a pre-existing scoped profile drain and
   // ordinary in-flight turns. A stuck scoped owner must not pin shutdown forever.
   const deadline = Date.now() + Math.max(0, timeoutMs);
@@ -491,9 +492,11 @@ export async function drainAndShutdown(
     // shutdown is usually part of.
     const stateFlush = await Promise.allSettled([flushResponseState(), flushAntigravityReplay()]);
     if (stateFlush[0]?.status === "rejected") {
+      shutdownSucceeded = false;
       console.warn("[responses] state flush during shutdown failed");
     }
     if (stateFlush[1]?.status === "rejected") {
+      shutdownSucceeded = false;
       console.warn("[antigravity] replay flush during shutdown failed");
     }
 
@@ -546,4 +549,5 @@ export async function drainAndShutdown(
       // never resume admission merely because shutdown cleanup returned.
     }
   }
+  return shutdownSucceeded;
 }

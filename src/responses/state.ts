@@ -418,13 +418,14 @@ function installShutdownFallbackSpill(
   }
 }
 
-function fallbackPendingResponseSpills(reserveMs: number): void {
+function fallbackPendingResponseSpills(reserveMs: number): Error[] {
   const deadline = Date.now() + reserveMs;
+  const failures: Error[] = [];
   for (;;) {
     const pending = [...pendingResponseSpills]
       .map(job => ({ job, candidate: job.candidate }))
       .filter((entry): entry is { job: PendingResponseSpill; candidate: ResidentResponseState } => !!entry.candidate);
-    if (pending.length === 0) return;
+    if (pending.length === 0) return failures;
 
     for (const { job } of pending) {
       // Ownership moves to the synchronous fallback. The original tail remains intact
@@ -433,16 +434,22 @@ function fallbackPendingResponseSpills(reserveMs: number): void {
       markResponseSpillPublicationSuperseded(job.publicationControl);
     }
     for (const { job } of pending) {
-      cleanupSupersededResponseSpillPublication(job.publicationControl);
+      const cleanupFailure = cleanupSupersededResponseSpillPublication(job.publicationControl);
+      if (cleanupFailure) failures.push(cleanupFailure);
       releasePendingResponseSpill(job);
     }
     for (const { job, candidate } of pending) {
       if (states.get(job.id) !== candidate) continue;
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
-        throw Object.assign(new Error("Response spill shutdown fallback budget exhausted"), { code: "ETIMEDOUT" });
+        failures.push(Object.assign(new Error("Response spill shutdown fallback budget exhausted"), { code: "ETIMEDOUT" }));
+        continue;
       }
-      installShutdownFallbackSpill(job, candidate, remaining);
+      try {
+        installShutdownFallbackSpill(job, candidate, remaining);
+      } catch (error) {
+        failures.push(error instanceof Error ? error : new Error("Response spill shutdown fallback failed"));
+      }
     }
     recomputeOldestResident();
     pruneResponses();
@@ -460,7 +467,10 @@ async function drainResponseSpillPublications(): Promise<void> {
     const observed = responseSpillPublicationTail;
     const settled = await awaitResponseSpillTailUntil(observed, drainDeadline);
     if (!settled) {
-      fallbackPendingResponseSpills(fallbackReserveMs);
+      const failures = fallbackPendingResponseSpills(fallbackReserveMs);
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Response spill shutdown fallback incomplete");
+      }
       return;
     }
     if (observed === responseSpillPublicationTail) return;
@@ -1248,9 +1258,7 @@ function schedulePersist(): void {
   schedulePersistAt(snapshotPath());
 }
 
-/** Flush any pending debounced snapshot write (graceful shutdown / deterministic tests). */
-export async function flushResponseState(): Promise<void> {
-  await drainResponseSpillPublications();
+async function flushResponseSnapshot(): Promise<void> {
   if (persistTimer) {
     await persistNow(pendingPersistPath ?? snapshotPath(), true);
     return;
@@ -1261,6 +1269,23 @@ export async function flushResponseState(): Promise<void> {
   // this flush was waiting on the single-flight gate. Shutdown owns one awaited
   // bounded follow-up rather than returning behind that unref'd timer.
   if (persistTimer) await persistNow(pendingPersistPath ?? snapshotPath(), true);
+}
+
+/** Flush publications and snapshot state; report drain failure only after persistence completes. */
+export async function flushResponseState(): Promise<void> {
+  const failures: unknown[] = [];
+  try {
+    await drainResponseSpillPublications();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await flushResponseSnapshot();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "Response state shutdown flush incomplete");
 }
 
 function inputItems(input: unknown): unknown[] {

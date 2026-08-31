@@ -363,11 +363,12 @@ async function handleStart(options: { block?: boolean } = {}) {
     shutdownStartedAt = now;
     console.log("\n🛑 Shutting down opencodex proxy...");
     void (async () => {
+      let shutdownSucceeded = false;
       try {
-        await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);
+        shutdownSucceeded = await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);
       } finally {
         const restored = syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
-        process.exit(restored ? 0 : 1);
+        process.exit(restored && shutdownSucceeded ? 0 : 1);
       }
     })();
   };

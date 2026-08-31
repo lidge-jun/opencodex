@@ -332,7 +332,7 @@ function clearOwnedPath(
 /** Claim and remove every path still owned by an abandoned async publication. */
 export function cleanupSupersededResponseSpillPublication(
   control: ResponseSpillPublicationControl,
-): void {
+): Error | null {
   control.superseded = true;
   const ownedDir = control.destinationPath
     ? dirname(control.destinationPath)
@@ -343,7 +343,7 @@ export function cleanupSupersededResponseSpillPublication(
   const tempError = clearOwnedPath(control, "tempPath", true);
   if (ownedDir) fsyncDirectoryBestEffort(ownedDir);
   const cleanupError = destinationError ?? tempError;
-  if (cleanupError) throw responseSpillWriteError(cleanupError);
+  return cleanupError ? responseSpillWriteError(cleanupError) : null;
 }
 
 function publishNoReplace(

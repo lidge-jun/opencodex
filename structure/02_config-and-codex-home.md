@@ -192,7 +192,9 @@ starts fallback publication. The writer rechecks supersession before no-replace 
 the fallback splits its reserve across the directory and file ACL hardens. This ordering is
 load-bearing because resident entries over 2 MiB are deliberately excluded from
 `responses-state.json`: serializing first could omit the resident before its durable spill stub
-exists, losing the continuation on restart.
+exists, losing the continuation on restart. Cleanup is attempted for every abandoned writer; any
+failure is retained while fallback and snapshot persistence continue, then returned through the
+shutdown status so process exit is non-zero without sacrificing unrelated replay state.
 
 [Decision Log]
 - 목적과 의도: Keep `/healthz` and unrelated requests responsive during intermittent Windows ACL stalls without publishing an unhardened continuation.

@@ -1064,6 +1064,70 @@ describe("Responses previous_response_id state", () => {
     expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1, spillWrites: 1 });
   });
 
+  test("shutdown cleanup failure still persists unrelated response state and reports failure", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
+    let release!: () => void;
+    let entered!: () => void;
+    let tempHardenFinished!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const hardened = new Promise<void>(resolve => { tempHardenFinished = resolve; });
+    let tempHardenCalls = 0;
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (String(args[0]).includes(".response-spill.")) {
+        tempHardenCalls += 1;
+        if (tempHardenCalls === 1) {
+          entered();
+          await gate;
+        }
+        if (tempHardenCalls === 3) tempHardenFinished();
+      }
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_cleanup_failure", "x".repeat(2 * 1024 * 1024 + 4_096));
+    await started;
+    const abandonedTempPath = join(responseSpillDirectory(home), spillTempNames(home)[0]!);
+    setSpillIoForTest({
+      unlink: path => {
+        if (path === abandonedTempPath) {
+          throw Object.assign(new Error("injected abandoned temp unlink failure"), { code: "EPERM" });
+        }
+        unlinkSync(path);
+      },
+    });
+    rememberResponseState(
+      { model: "test/model", input: "safe-small-input", store: false },
+      fixedResponse("resp_cleanup_unrelated", [{ type: "message", role: "assistant", content: "safe-small-output" }]),
+      undefined,
+      { force: true },
+    );
+
+    let reported: unknown;
+    try {
+      await flushResponseState();
+    } catch (error) {
+      reported = error;
+    } finally {
+      release();
+    }
+    await hardened;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(reported).toBeInstanceOf(Error);
+
+    setSpillIoForTest(null);
+    clearResponseStateMemoryForTests();
+    setResponseStateByteCapForTests(1_024);
+    const replay = JSON.stringify(expandPreviousResponseInput({
+      previous_response_id: "resp_cleanup_unrelated",
+      input: "next",
+    }));
+    expect(replay).toContain("safe-small-input");
+    expect(replay).toContain("safe-small-output");
+  });
+
   test("directory fsync follows spill unlink", () => {
     const ref = writeResponseSpillDurably("resp_unlink_order", { createdAt: Date.now(), items: ["x"] });
     const events: string[] = [];
