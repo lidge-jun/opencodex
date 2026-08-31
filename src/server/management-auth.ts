@@ -46,12 +46,18 @@ import {
   isApiAuthRequired,
   isDataPlaneAdmissionSecret,
   isLoopbackHostname,
+  type ManagementPolicyView,
   managementRequestOrigin,
   parseHttpHost,
 } from "./auth-cors";
 
 const GUI_SESSION_TTL_MS = 5 * 60_000;
+// Persistent remote-dashboard sessions are minted only in exchange for the admin token.
+// They remain origin- and CSRF-bound, while the browser keeps the opaque token in
+// origin-scoped storage rather than a hostname-scoped HTTP cookie.
+const GUI_PERSISTENT_SESSION_TTL_MS = 12 * 60 * 60_000;
 const GUI_SESSION_LIMIT = 128;
+export const GUI_SESSION_ENDPOINT_PATH = "/api/auth/session";
 const LOCAL_READ_REPLAY_LIMIT = 256;
 const consumedLocalReadCapabilities = new Map<string, number>();
 const admittedLocalReadRequests = new WeakSet<Request>();
@@ -242,16 +248,11 @@ function randomSessionSecret(prefix: "ocx_session_"): string {
   return `${prefix}${randomBytes(32).toString("base64url")}`;
 }
 
-export function issueGuiSession(
-  req: Request,
-  config: OcxConfig,
-  state: ManagementAuthState,
-): GuiSessionBootstrap | null {
-  if (isApiAuthRequired(config) || !state.available || req.method !== "GET" || !isAllowedManagementOrigin(req, config)) return null;
-  const host = parseHttpHost(req.headers.get("Host"));
-  if (!host || !isLoopbackHostname(host.hostname)) return null;
-  const origin = managementRequestOrigin(req, config);
-  if (!origin) return null;
+function mintGuiSession(
+  state: Extract<ManagementAuthState, { available: true }>,
+  origin: string,
+  ttlMs: number,
+): GuiSessionBootstrap {
   const now = Date.now();
   removeExpiredSessions(state, now);
   while (state.sessions.size >= GUI_SESSION_LIMIT) {
@@ -263,10 +264,97 @@ export function issueGuiSession(
   const session: GuiSessionRecord = {
     csrfToken: randomBytes(32).toString("base64url"),
     origin,
-    expiresAt: now + GUI_SESSION_TTL_MS,
+    expiresAt: now + ttlMs,
   };
   state.sessions.set(token, session);
   return { token, ...session };
+}
+
+export function issueGuiSession(
+  req: Request,
+  config: OcxConfig,
+  state: ManagementAuthState,
+): GuiSessionBootstrap | null {
+  if (isApiAuthRequired(config) || !state.available || req.method !== "GET" || !isAllowedManagementOrigin(req, config)) return null;
+  const host = parseHttpHost(req.headers.get("Host"));
+  if (!host || !isLoopbackHostname(host.hostname)) return null;
+  const origin = managementRequestOrigin(req, config);
+  if (!origin) return null;
+  return mintGuiSession(state, origin, GUI_SESSION_TTL_MS);
+}
+
+/** The management credential a request presented in a header. */
+function managementCredential(req: Request): string | null {
+  return req.headers.get("x-opencodex-api-key")?.trim()
+    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim()
+    || null;
+}
+
+/** The origin/CSRF admission a session credential must pass, shared by every gate that reads one. */
+function guiSessionAdmitted(req: Request, session: GuiSessionRecord, config: ManagementPolicyView): boolean {
+  const requestOrigin = managementRequestOrigin(req, config);
+  const claimedOrigin = req.headers.get("x-opencodex-gui-origin");
+  const browserOrigin = req.headers.get("Origin");
+  // Safe methods need no CSRF token. The opaque session credential is carried in a
+  // header and remains bound to this exact origin; mutations still demand the full arm.
+  const sameOrigin = requestOrigin === session.origin
+    && (!claimedOrigin || claimedOrigin === session.origin)
+    && (!browserOrigin || browserOrigin === session.origin);
+  const safeMethod = req.method === "GET" || req.method === "HEAD";
+  const csrf = req.headers.get("x-opencodex-csrf-token")?.trim();
+  return sameOrigin
+    && (safeMethod
+      || (claimedOrigin === session.origin
+        && browserOrigin === session.origin
+        && !!csrf
+        && equalSecret(csrf, session.csrfToken)));
+}
+
+/**
+ * Mint a GUI session in exchange for the raw admin token (POST /api/auth/session).
+ *
+ * Unlike issueGuiSession this is not loopback-only: the credential, not the transport,
+ * carries the trust. The browser stores this opaque, process-local token at its exact
+ * dashboard origin, avoiding hostname-scoped cookie replay to another HTTP port.
+ */
+export function issueGuiSessionForAdmin(
+  req: Request,
+  config: ManagementPolicyView,
+  state: ManagementAuthState,
+): GuiSessionBootstrap | null {
+  if (!state.available) return null;
+  const presented = req.headers.get("x-opencodex-api-key")?.trim()
+    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  if (!presented || !equalSecret(presented, state.token)) return null;
+  if (!isAllowedManagementOrigin(req, config)) return null;
+  const origin = managementRequestOrigin(req, config);
+  if (!origin) return null;
+  return mintGuiSession(state, origin, GUI_PERSISTENT_SESSION_TTL_MS);
+}
+
+/**
+ * POST /api/auth/session exchanges the admin token for an opaque browser-stored session.
+ * The route is mounted only on the dedicated remote dashboard listener; ordinary loopback
+ * dashboards use their injected short-lived session instead.
+ */
+export function handleGuiSessionEndpoint(
+  req: Request,
+  url: URL,
+  state: ManagementAuthState,
+  config: ManagementPolicyView,
+): Response | null {
+  if (url.pathname !== GUI_SESSION_ENDPOINT_PATH) return null;
+  if (req.method === "POST") {
+    const bootstrap = issueGuiSessionForAdmin(req, config, state);
+    if (!bootstrap) return Response.json({ error: "opencodex admin token required" }, { status: 401 });
+    return Response.json({
+      token: bootstrap.token,
+      csrfToken: bootstrap.csrfToken,
+      origin: bootstrap.origin,
+      expiresAt: bootstrap.expiresAt,
+    });
+  }
+  return Response.json({ error: "method not allowed" }, { status: 405 });
 }
 
 /**
@@ -426,15 +514,14 @@ function hasLocalProviderReloadCapability(
 export function managementPrincipal(
   req: Request,
   state: ManagementAuthState,
-  config?: OcxConfig,
+  config?: ManagementPolicyView,
   local?: LocalManagementAuthContext,
 ): ManagementPrincipal | null {
   if (hasSystemRestartCapability(req, local)) return "system-restart-capability";
   if (hasLocalProviderReloadCapability(req, local)) return "local-provider-reload-capability";
   if (hasLocalReadCapability(req, local)) return "local-read-capability";
   if (!state.available) return null;
-  const actual = req.headers.get("x-opencodex-api-key")?.trim()
-    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const actual = managementCredential(req);
   if (!actual) return null;
   if (equalSecret(actual, state.token)) return "admin-token";
   if (!config) return null;
@@ -445,7 +532,7 @@ export function managementPrincipal(
 export function requireManagementAuth(
   req: Request,
   state: ManagementAuthState,
-  config?: OcxConfig,
+  config?: ManagementPolicyView,
   local?: LocalManagementAuthContext,
 ): Response | null {
   if (hasSystemRestartCapability(req, local)) return null;
@@ -458,25 +545,12 @@ export function requireManagementAuth(
       hint: "Set OPENCODEX_ADMIN_AUTH_TOKEN to bypass file-backed admin token ACL hardening",
     }, { status: 503 });
   }
-  const actual = req.headers.get("x-opencodex-api-key")?.trim()
-    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const actual = managementCredential(req);
   if (actual && equalSecret(actual, state.token)) return null;
   if (actual && config) {
     removeExpiredSessions(state);
     const session = state.sessions.get(actual);
-    if (session) {
-      const requestOrigin = managementRequestOrigin(req, config);
-      const claimedOrigin = req.headers.get("x-opencodex-gui-origin");
-      const browserOrigin = req.headers.get("Origin");
-      const sameOrigin = requestOrigin === session.origin
-        && claimedOrigin === session.origin
-        && (!browserOrigin || browserOrigin === session.origin);
-      const safeMethod = req.method === "GET" || req.method === "HEAD";
-      const csrf = req.headers.get("x-opencodex-csrf-token")?.trim();
-      if (sameOrigin && (safeMethod || (browserOrigin === session.origin && !!csrf && equalSecret(csrf, session.csrfToken)))) {
-        return null;
-      }
-    }
+    if (session && guiSessionAdmitted(req, session, config)) return null;
   }
   return Response.json({ error: "opencodex admin token required" }, { status: 401 });
 }

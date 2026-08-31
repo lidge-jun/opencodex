@@ -190,6 +190,8 @@ import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveS
 import { handleSearch } from "./search";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
+  GUI_SESSION_ENDPOINT_PATH,
+  handleGuiSessionEndpoint,
   initializeManagementAuthState,
   issueGuiSession,
   managementPrincipal,
@@ -1054,6 +1056,19 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
 
       if (url.pathname.startsWith("/api/")) {
+        // POST /api/auth/session exchanges the admin token for an opaque browser-stored
+        // session (origin- and CSRF-bound). It runs before the management gate because it
+        // is how a persistent dashboard credential is established; every origin check
+        // still applies inside the handler.
+        const sessionEndpointResponse = handleGuiSessionEndpoint(req, url, managementAuth, config);
+        if (sessionEndpointResponse) return withManagementCors(sessionEndpointResponse, req, config);
+        if (url.pathname === GUI_SESSION_ENDPOINT_PATH && req.method !== "POST") {
+          return withManagementCors(
+            formatErrorResponse(405, "method_not_allowed", "Use POST to mint a dashboard session"),
+            req,
+            config,
+          );
+        }
         const localManagementAuth = {
           attestationSecret: localAttestationSecret,
           pid: process.pid,
