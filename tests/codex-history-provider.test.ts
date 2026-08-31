@@ -136,6 +136,63 @@ describe("Codex history provider sync", () => {
     expect(existsSync(fixture.backupPath)).toBe(false);
   });
 
+  test("preserves a first user message that arrived after routing (#3026)", () => {
+    // Routing derives the post-image has_user_event from the message AT SNAPSHOT TIME. A
+    // restore that recomputes it from the message as it is NOW reads the user's first
+    // message as OpenCodex's own write and erases the activity.
+    const fixture = makeFixture();
+    const db = new Database(fixture.dbPath);
+    db.run("UPDATE threads SET first_user_message = NULL, has_user_event = 0 WHERE id = 'thread-1'");
+    db.close();
+
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+
+    // The user types for the first time while the row is routed.
+    const active = new Database(fixture.dbPath);
+    active.run("UPDATE threads SET first_user_message = 'hello', has_user_event = 1 WHERE id = 'thread-1'");
+    active.close();
+
+    expect(syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+    const restored = new Database(fixture.dbPath, { readonly: true });
+    // Provenance restored, activity kept: OpenCodex owns provider and source, the user owns
+    // this flag, and the routing write for this entry produced a 0.
+    expect(restored.query("SELECT model_provider, source, has_user_event FROM threads WHERE id = 'thread-1'").get())
+      .toEqual({ model_provider: "openai", source: "vscode", has_user_event: 1 });
+    restored.close();
+    expect(existsSync(fixture.backupPath)).toBe(false);
+  });
+
+  test("restores a legacy manifest that predates the snapshot fields", () => {
+    // Every manifest already on disk lacks hadFirstUserMessage and relabel. Refusing them
+    // would brick exactly the population this fix exists to repair, so an entry without the
+    // fields must restore on the pre-existing behaviour.
+    const fixture = makeFixture();
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+
+    // Rewrite the manifest in the v1 shape, dropping both new fields.
+    const manifest = JSON.parse(readFileSync(fixture.backupPath, "utf8")) as {
+      version: number;
+      entries: Record<string, Record<string, unknown>>;
+    };
+    manifest.version = 1;
+    for (const entry of Object.values(manifest.entries)) {
+      delete entry.hadFirstUserMessage;
+      delete entry.relabel;
+    }
+    writeFileSync(fixture.backupPath, JSON.stringify(manifest));
+
+    expect(syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+    const restored = new Database(fixture.dbPath, { readonly: true });
+    expect(restored.query("SELECT model_provider, source, has_user_event FROM threads WHERE id = 'thread-1'").get())
+      .toEqual({ model_provider: "openai", source: "vscode", has_user_event: 0 });
+    restored.close();
+    expect(existsSync(fixture.backupPath)).toBe(false);
+  });
+
   test("does not route a new database row that was not captured in the manifest snapshot", () => {
     const fixture = makeFixture();
     const lateRollout = join(fixture.rollout, "..", "late-rollout.jsonl");

@@ -10,10 +10,37 @@ export interface CodexHistoryBackupEntry {
   modelProvider: string;
   source: string;
   hasUserEvent: 0 | 1;
+  /**
+   * Whether the row had a non-empty `first_user_message` when the snapshot was taken.
+   *
+   * Routing derives the post-image `has_user_event` from the message AT SNAPSHOT TIME
+   * (`history-provider.ts` `routeOpenai`), so a restore that recomputes it from the
+   * message as it is NOW will mistake the user's first message for OpenCodex's own write
+   * and erase it. Only the emptiness is recorded, never the text: this manifest is a file
+   * on disk and the message is user content.
+   *
+   * Optional because manifests written before this field exists cannot be given one. An
+   * entry without it falls back to the current-row reading, which is exactly as imprecise
+   * as the behaviour it replaces and no worse.
+   */
+  hadFirstUserMessage?: boolean;
+  /**
+   * Whether OpenCodex's routing relabel is known to have landed for this entry.
+   *
+   * `pending` is written before the routing write and resolved after it, so a crash
+   * between the two leaves an honest "unknown" rather than a confident wrong answer. The
+   * observed row resolves it: the recorded original means the write did not land, the
+   * expected post-image means it did.
+   *
+   * Absent on entries written before the field existed. Those refuse only in the one
+   * genuinely undecidable case — original tuple with `has_user_event` moved 0 to 1 —
+   * which `dev` already refuses today.
+   */
+  relabel?: "pending" | "committed" | "none";
 }
 
 export interface CodexHistoryBackupManifest {
-  version: 1;
+  version: 1 | 2;
   stateDbPath: string;
   entries: Record<string, CodexHistoryBackupEntry>;
 }

@@ -462,7 +462,7 @@ function writeBackup(path: string, manifest: CodexHistoryBackupManifest, stateDb
   atomicWriteFile(path, JSON.stringify({ ...manifest, stateDbPath: manifest.stateDbPath ?? stateDbPath }, null, 2) + "\n");
 }
 
-function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ThreadRow): void {
+function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ApplyRowSnapshot): void {
   if (manifest.entries[row.id]) return;
   manifest.entries[row.id] = {
     id: row.id,
@@ -470,6 +470,15 @@ function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ThreadRow):
     modelProvider: row.model_provider,
     source: row.source,
     hasUserEvent: Number(row.has_user_event) === 1 ? 1 : 0,
+    // Emptiness only, never the text: the manifest is a file on disk and the message is
+    // user content. Routing derives the post-image event flag from the message as it was
+    // HERE, so a restore that re-reads the current message would mistake later user
+    // activity for OpenCodex's own write.
+    hadFirstUserMessage: hasFirstUserMessage(row.first_user_message),
+    // The routing write has not happened yet. Resolved to "committed" after it lands, or
+    // left pending if the process dies between the two - in which case the observed row
+    // is what decides.
+    relabel: "pending",
   };
 }
 
@@ -486,7 +495,13 @@ function rowMatchesRestoreTuple(
 
 function rowMatchesExpectedPostImage(row: RestoreRowSnapshot, entry: CodexHistoryBackupEntry): boolean {
   if (entry.modelProvider === "openai") {
-    const postHasUserEvent = hasFirstUserMessage(row.first_user_message) ? 1 : entry.hasUserEvent;
+    // Routing derived this from the message AT SNAPSHOT TIME (`routeOpenai`), so read the
+    // recorded flag when the manifest has one. Recomputing from the row's CURRENT message
+    // mistakes a first message the user sent after routing for OpenCodex's own write, and
+    // restore then erases it. Manifests written before the flag existed fall back to the
+    // current reading, which is exactly the behaviour this replaces and no worse.
+    const hadMessage = entry.hadFirstUserMessage ?? hasFirstUserMessage(row.first_user_message);
+    const postHasUserEvent = hadMessage ? 1 : entry.hasUserEvent;
     return rowMatchesRestoreTuple(row, "opencodex", entry.source, postHasUserEvent);
   }
   return hasFirstUserMessage(row.first_user_message)
@@ -497,6 +512,60 @@ function rowMatchesExpectedPostImage(row: RestoreRowSnapshot, entry: CodexHistor
       // can use its preserved first-line padding to recover exact provenance.
       || rowMatchesRestoreTuple(row, "openai", "cli", 1)
   );
+}
+
+/**
+ * What `has_user_event` should read after restore, or `null` when the row is not one this
+ * manifest owns.
+ *
+ * The field has two writers, so a final state cannot establish authorship on its own. Four
+ * shapes cover every row reachable in practice, and the tuple the row wears says which:
+ *
+ * - **A** exactly the recorded original: untouched, or already restored.
+ * - **B** the expected post-image: OpenCodex wrote it, so the recorded value is authoritative.
+ * - **C** the original tuple with the flag moved 0 to 1: either Codex-side user activity, or
+ *   OpenCodex routing that legacy recovery has since pulled back to the original provider.
+ * - **D** the post-image tuple with the flag moved 0 to 1: a routed row the user then touched.
+ *   No provenance needed - a row wearing the routed tuple was written by OpenCodex, so drift
+ *   on top of it can only be what followed.
+ *
+ * Only C is ambiguous, and only when the route's own expected event was 1: then "routing
+ * never landed and the user typed" and "routing landed and legacy recovery pulled it back"
+ * produce an identical row, and nothing durable separates them. That one cell refuses. A
+ * guess there either erases real activity or fabricates it.
+ */
+function restoredUserEventFor(row: RestoreRowSnapshot, entry: CodexHistoryBackupEntry): 0 | 1 | null {
+  if (rowMatchesRestoreTuple(row, entry.modelProvider, entry.source, entry.hasUserEvent)) {
+    return entry.hasUserEvent;                                   // A
+  }
+  if (rowMatchesExpectedPostImage(row, entry)) return entry.hasUserEvent;  // B
+
+  const drifted = Number(row.has_user_event) === 1 && entry.hasUserEvent === 0;
+  if (!drifted) return null;
+
+  const routeExpectedEvent = entry.hadFirstUserMessage ?? hasFirstUserMessage(row.first_user_message) ? 1 : 0;
+
+  // D: wearing the routed tuple, so the 1 arrived after OpenCodex wrote the row.
+  if (rowMatchesRestoreTuple(row, "opencodex", entry.source, 1)
+    || (entry.modelProvider !== "openai" && rowMatchesRestoreTuple(row, "opencodex", "cli", 1))) {
+    return 1;
+  }
+
+  // C: wearing the original tuple.
+  if (rowMatchesRestoreTuple(row, entry.modelProvider, entry.source, 1)) {
+    // An exec-origin entry cannot reach here by legacy recovery: routeExec moves source to
+    // cli and recovery does not move it back, so the original tuple is unreachable that way.
+    if (entry.modelProvider !== "openai") return 1;
+    if (entry.relabel === "none") return 1;
+    if (entry.relabel === "committed") {
+      // OpenCodex authored the 1 only if its own routing write would have produced one.
+      return routeExpectedEvent === 1 ? 0 : 1;
+    }
+    if (entry.relabel === undefined) return null;  // legacy manifest: the pre-existing refusal
+    // pending: two histories reach this exact row and nothing durable tells them apart.
+    return routeExpectedEvent === 1 ? null : 1;
+  }
+  return null;
 }
 
 interface RestoreRolloutSnapshot {
@@ -608,8 +677,7 @@ function preflightRestoreRows(
     if (!row || typeof row.rollout_path !== "string" || !sameCodexHistoryPath(row.rollout_path, entry.rolloutPath)) {
       throw new CodexHistoryIntegrityError("history_backup_target_mismatch");
     }
-    if (!rowMatchesRestoreTuple(row, entry.modelProvider, entry.source, entry.hasUserEvent)
-      && !rowMatchesExpectedPostImage(row, entry)) {
+    if (restoredUserEventFor(row, entry) === null) {
       throw new CodexHistoryIntegrityError("history_backup_postimage_mismatch");
     }
     snapshots.set(entry.id, row);
@@ -625,7 +693,8 @@ function assertRestoreReadback(
     const row = getCurrent(entry.id);
     if (!row
       || !sameCodexHistoryPath(row.rollout_path, entry.rolloutPath)
-      || !rowMatchesRestoreTuple(row, entry.modelProvider, entry.source, entry.hasUserEvent)) {
+      || !rowMatchesRestoreTuple(row, entry.modelProvider, entry.source, Number(row.has_user_event) === 1 ? 1 : 0)
+      || restoredUserEventFor(row, entry) === null) {
       throw new CodexHistoryIntegrityError("history_backup_database_readback_mismatch");
     }
     const latest = readLatestSessionMetaForId(entry.rolloutPath, entry.id);
@@ -1246,6 +1315,15 @@ function syncCodexHistoryProviderUnsafe(provider: CodexHistoryProvider, stateDbP
       throw error;
     }
 
+    // The routing writes landed. Resolve every pending marker and rewrite the manifest, so a
+    // later restore knows the relabel is OpenCodex's rather than having to infer it. A crash
+    // before this point leaves `pending`, which the observed row resolves at restore time.
+    for (const row of [...openaiRows, ...execRows]) {
+      const entry = manifest.entries[row.id];
+      if (entry?.relabel === "pending") entry.relabel = "committed";
+    }
+    writeBackup(backupPath, manifest, stateDbPath);
+
     return { rows: openaiRows.length + execRows.length, files };
   } finally {
     db.close();
@@ -1287,10 +1365,13 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
       for (const entry of entries) {
         const before = snapshots.get(entry.id);
         if (!before) throw new CodexHistoryIntegrityError("history_backup_snapshot_missing");
+        // Codex-side activity that arrived after OpenCodex wrote the row is the user's, and
+        // restoring the manifest's snapshot over it would erase it.
+        const restoredEvent = restoredUserEventFor(before, entry) ?? entry.hasUserEvent;
         const result = update.run(
           entry.modelProvider,
           entry.source,
-          entry.hasUserEvent,
+          restoredEvent,
           entry.id,
           before.rollout_path,
           before.model_provider,
