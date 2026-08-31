@@ -328,3 +328,76 @@ distinguish the two extremes is not an oracle.
 Case 6 is also strengthened: after `rotated === false`, issue another 401 on the RETURNED
 generation and assert no second refresh is issued before the lineage actually changes.
 
+
+## Amendment after the wp6 plan audit (round 3) — final state design
+
+Four findings, all accepted. This section is the authoritative description of the recovery
+store; earlier sketches in this doc are superseded where they conflict.
+
+### 7. The claim identity is a claim id, not the lineage
+
+Lineage alone cannot separate an old claimant from a later retry on the same lineage:
+claim L₁ → transient failure releases L₁ → another poll claims L₁ → the first caller settles
+late and spends the second caller's claim.
+
+```
+claim(accountId, lineage) -> { granted: true, claimId } | { granted: false, reason }
+settle(accountId, claimId, outcome)   // CAS on (accountId, lineage, claimId)
+release(accountId, claimId, backoff)  // same CAS
+```
+
+Settling or releasing an unclaimed or superseded claim is a **no-op**, not an error: a late
+completion is exactly the case that must not disturb a newer claimant.
+
+`settle` also carries the **returned** generation and the provenance, because that is what
+becomes the spent fence — case 6 and 8b both depend on the fence being the generation the
+refresh returned, never the one that was rejected.
+
+### 8. `spent` is durable; `claimed` is a lease
+
+Removing the TTL was right for spent records and wrong for in-flight ones. A caller can be
+cancelled between claim and settle — `forceRefreshCodexPoolToken` explicitly supports
+caller-scoped cancellation while the shared flight continues
+(`account-store.ts:639-660`) — and an abandoned claim would wedge that account's recovery
+permanently.
+
+So the record has two shapes:
+
+| state | expires? | meaning |
+| --- | --- | --- |
+| `claimed` | yes — bounded lease | a refresh is in flight for this lineage |
+| `spent` | no | this lineage already had its one refresh |
+| `backoff` | at `nextAttemptAt` | a transient failure; retry allowed after the clock advances |
+
+An expired `claimed` lease is reclaimable, which recovers from a cancelled or thrown
+caller. An expired lease is **not** promoted to `spent`: the refresh may never have
+happened.
+
+Tests: owner cancellation between claim and settle; a settlement that throws; a stale
+claim recovered by a later poll.
+
+### 9. Transient failure releases into backoff, not into eligibility
+
+Releasing outright reopens the loop the phase exists to close: a failed quota request does
+not refresh the quota timestamp, so successive dashboard and background polls would each
+issue another token refresh. `release` therefore records `nextAttemptAt` and the record
+stays — still one per account.
+
+Case 11c becomes: several immediate polls after a transient refresh failure issue exactly
+**one** refresh; a poll after the clock advances past `nextAttemptAt` may issue another.
+
+### 10. `reconcileGeneration` alone cannot see a credential change
+
+`GenerationContext` carries `codexAccountIds` only (`state-store-sweeper.ts:3-11`), so it
+can drop a record for a deleted account but not for one whose credential was replaced under
+the same id. The promise that a record lives only until credential replacement needs a
+second mechanism:
+
+- `reconcileGeneration` drops records whose account id is gone (delete/re-add), and
+- it additionally drops any record whose fenced generation fails
+  `isCodexAccountGenerationLive(accountId, generation)` (`account-store.ts:196-199`), which
+  is exactly "the credential this record fenced is no longer the stored one".
+
+Tests: replace the credential without another 401, run a sweep, and assert the record is
+gone; delete and re-add the account and assert the same.
+
