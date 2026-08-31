@@ -31,13 +31,31 @@ export const CLIENT_LABEL_KEYS = {
  * Separate from `provider-icons.ts` on purpose: export-client ids and provider
  * ids are unrelated namespaces that happen to share the string "opencode".
  *
- * `pi.svg` is the Pi project's own favicon (`https://pi.dev/favicon.svg`);
- * provenance is recorded in `gui/public/provider-icons/README.md`. Both marks
- * carry their own dark background, so they read the same in either theme.
+ * Every entry is the product's OWN first-party asset, fetched and verified;
+ * provenance per file is recorded in `gui/public/provider-icons/README.md`.
+ *
+ * `kimi` points at an asset already committed for the Moonshot provider, which
+ * is the same brand as the Kimi Code client -- reusing it beats fetching a
+ * second copy of one logo.
+ *
+ * `dsh` uses the DeepSeek Harness favicon rather than `deepseek-color.svg`: the
+ * harness is first-party DeepSeek but it is a different product from the model
+ * provider, and the provider logo would be a borrowed mark.
+ *
+ * Three clients are absent on purpose. `gajae` publishes only raster marks,
+ * `hermes` upstream ships a text-glyph placeholder with no path data, and
+ * `aside` has no first-party web asset at all. Each renders a monogram, which is
+ * what this map's rule prescribes; the README records the reason for each.
  */
 export const CLIENT_MARKS: Partial<Record<ExportClientId, string>> = {
   opencode: "/provider-icons/opencode.svg",
   pi: "/provider-icons/pi.svg",
+  omp: "/provider-icons/oh-my-pi.svg",
+  openclaw: "/provider-icons/openclaw.svg",
+  kimi: "/provider-icons/kimi-color.svg",
+  dsh: "/provider-icons/deepseek-harness.svg",
+  zcode: "/provider-icons/zcode.svg",
+  prime: "/provider-icons/prime-agent.svg",
 };
 
 /** The `/api/client-config` 200 envelope, read off the route rather than a design doc. */

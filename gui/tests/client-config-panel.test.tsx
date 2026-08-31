@@ -273,9 +273,11 @@ test("dialog closes on Escape and returns focus to its trigger", async () => {
 });
 
 test("each client row shows its own brand mark, never a borrowed one", async () => {
-  // OpenCode and Pi ship real assets; the clients added later have none yet and
-  // fall back to a monogram tile. The rule this guards is that no client ever
-  // borrows another product's logo — not that every client has an asset.
+  // Eight clients ship a real first-party asset; gajae, hermes and aside have
+  // none that qualifies and fall back to a monogram tile. The rule this guards is
+  // that no client ever borrows another product's logo — not that every client
+  // has an asset. Uniqueness is the teeth: a borrowed logo would show up as the
+  // same src in two rows.
   stubRoute(client => Response.json(client === "pi" ? PI_ENVELOPE : OPENCODE_ENVELOPE));
   const { root, container } = await mountPanel();
 
