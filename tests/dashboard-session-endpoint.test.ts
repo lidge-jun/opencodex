@@ -173,7 +173,7 @@ describe("persistent session transport policy", () => {
   test("binds to the allowlisted external HTTPS origin behind a TLS-terminating proxy", async () => {
     const active = state();
     const external = "https://ocx.example.com";
-    const tlsConfig: OcxConfig = { ...config, corsAllowOrigins: [external] };
+    const tlsConfig: OcxConfig = { ...config, corsAllowOrigins: [external], allowRemoteDashboardSessions: true };
     const mintResponse = handleGuiSessionEndpoint(
       new Request(`${ORIGIN}${GUI_SESSION_ENDPOINT_PATH}`, {
         method: "POST",
@@ -207,6 +207,20 @@ describe("persistent session transport policy", () => {
     expect(admittedWithOrigin).toBeNull();
   });
 
+  test("requires explicit opt-in even for allowlisted remote HTTPS origins", () => {
+    const external = "https://ocx.example.com";
+    const response = handleGuiSessionEndpoint(
+      new Request(`${ORIGIN}${GUI_SESSION_ENDPOINT_PATH}`, {
+        method: "POST",
+        headers: { Host: HOST, "X-OpenCodex-API-Key": ADMIN_TOKEN, Origin: external },
+      }),
+      new URL(`${ORIGIN}${GUI_SESSION_ENDPOINT_PATH}`),
+      state(),
+      { ...config, corsAllowOrigins: [external] },
+    ) as Response;
+    expect(response.status).toBe(401);
+  });
+
   test("marks every endpoint response no-store", () => {
     const active = state();
     expect(mint({ "X-OpenCodex-API-Key": ADMIN_TOKEN }, active).headers.get("Cache-Control")).toBe("no-store");
@@ -218,5 +232,20 @@ describe("persistent session transport policy", () => {
       config,
     ) as Response;
     expect(method.headers.get("Cache-Control")).toBe("no-store");
+  });
+});
+
+describe("dashboard session revocation", () => {
+  test("revokes the exact session and blocks subsequent admission", async () => {
+    const active = state();
+    const body = await (mint({ "X-OpenCodex-API-Key": ADMIN_TOKEN }, active)).json() as { token: string; csrfToken: string };
+    const headers = { "X-OpenCodex-API-Key": body.token, "X-OpenCodex-GUI-Origin": ORIGIN, Origin: ORIGIN, "X-OpenCodex-CSRF-Token": body.csrfToken };
+    expect(requireManagementAuth(request("/api/config", { method: "GET", headers }), active, config)).toBeNull();
+    const revoked = handleGuiSessionEndpoint(
+      request("/api/auth/session/revoke", { method: "POST", headers }),
+      new URL(`${ORIGIN}/api/auth/session/revoke`), active, config,
+    ) as Response;
+    expect(revoked.status).toBe(204);
+    expect(requireManagementAuth(request("/api/config", { method: "GET", headers }), active, config)?.status).toBe(401);
   });
 });

@@ -58,6 +58,7 @@ const GUI_SESSION_TTL_MS = 5 * 60_000;
 const GUI_PERSISTENT_SESSION_TTL_MS = 12 * 60 * 60_000;
 const GUI_SESSION_LIMIT = 128;
 export const GUI_SESSION_ENDPOINT_PATH = "/api/auth/session";
+export const GUI_SESSION_REVOKE_PATH = "/api/auth/session/revoke";
 const LOCAL_READ_REPLAY_LIMIT = 256;
 const consumedLocalReadCapabilities = new Map<string, number>();
 const admittedLocalReadRequests = new WeakSet<Request>();
@@ -359,13 +360,13 @@ function browserRequestOrigin(req: Request): string | null {
   }
 }
 
-/** Loopback origins mint by default; allowlisted HTTPS is its own opt-in; plain-HTTP remote needs the explicit flag. */
+/** Loopback origins mint by default; every non-loopback persistent session needs explicit opt-in. */
 function persistentSessionTransportAllowed(origin: string, config: ManagementPolicyView): boolean {
   try {
     const parsed = new URL(origin);
     if (isLoopbackHostname(parsed.hostname)) return true;
-    if (parsed.protocol === "http:") return config.allowRemoteDashboardSessions === true;
-    return true;
+    return (parsed.protocol === "http:" || parsed.protocol === "https:")
+      && config.allowRemoteDashboardSessions === true;
   } catch {
     return false;
   }
@@ -386,6 +387,18 @@ export function handleGuiSessionEndpoint(
   state: ManagementAuthState,
   config: ManagementPolicyView,
 ): Response | null {
+  if (url.pathname === GUI_SESSION_REVOKE_PATH) {
+    if (req.method !== "POST" || !state.available) {
+      return Response.json({ error: "method not allowed" }, { status: 405, headers: NO_STORE_HEADERS });
+    }
+    const presented = managementCredential(req);
+    const session = presented ? state.sessions.get(presented) : undefined;
+    if (!session || !guiSessionAdmitted(req, session, config)) {
+      return Response.json({ error: "opencodex session required" }, { status: 401, headers: NO_STORE_HEADERS });
+    }
+    state.sessions.delete(presented!);
+    return new Response(null, { status: 204, headers: NO_STORE_HEADERS });
+  }
   if (url.pathname !== GUI_SESSION_ENDPOINT_PATH) return null;
   if (req.method === "POST") {
     const bootstrap = issueGuiSessionForAdmin(req, config, state);

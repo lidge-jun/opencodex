@@ -27,6 +27,7 @@ const SESSION_REBOOTSTRAP_PATH = "/opencodex-session";
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/settings";
 /** Remote-dashboard session endpoint: POST mints an opaque session from an admin token. */
 const AUTH_SESSION_PATH = "/api/auth/session";
+const AUTH_SESSION_REVOKE_PATH = "/api/auth/session/revoke";
 
 /**
  * The silent re-bootstrap must fail fast: every /api/* request queues behind the
@@ -86,11 +87,31 @@ function storeToken(token: string): void {
 }
 
 function clearToken(): void {
+  if (memorySessionPersistent && memoryToken) void revokePersistentGuiSession(memoryToken);
   if (memorySessionPersistent) clearPersistentGuiSession();
   memoryToken = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
   memorySessionPersistent = false;
+}
+
+/** Best-effort server revocation; local cleanup must not wait on network state. */
+async function revokePersistentGuiSession(token: string): Promise<void> {
+  if (!rawFetch || !memorySessionOrigin || !memoryCsrfToken) return;
+  try {
+    await rawFetch(AUTH_SESSION_REVOKE_PATH, {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        "X-OpenCodex-API-Key": token,
+        "X-OpenCodex-GUI-Origin": memorySessionOrigin,
+        Origin: memorySessionOrigin,
+        "X-OpenCodex-CSRF-Token": memoryCsrfToken,
+      },
+    });
+  } catch {
+    /* local logout remains authoritative when the server is unavailable */
+  }
 }
 
 function takeMetaContent(name: string): string | null {
