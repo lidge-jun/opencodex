@@ -390,3 +390,24 @@ was not in judging them right or wrong — it was in separating the finding from
 | --- | --- |
 | #2813 | `/v1/models` and `/api/models` dumps from an account actually in Luna Reserve |
 | #1419 | macOS `.ips` crash frames from a recurrence on Bun 1.4.0 |
+### Why #1527 was opened and then put down
+
+The fix looked ready: `envelope_exhausted` at
+`src/adapters/cursor/protobuf-request.ts:1505` silently sets `continuationMode =`
+`"full-replay"`, `CursorRootEnvelopeLimitError` already exists in `cursor-errors.ts`, and
+the file already imports it. Twenty lines, maybe.
+
+Then I read the comment sitting directly under that assignment. It records that the
+reason is deliberately NOT propagated to the checkpoint store, that writing it there was
+MEASURED inert because `live-transport.ts` prepares a spread copy, that reaching the store
+needs the reason threaded through `PreparedCursorRunRequest`, and that this is a
+signature change on the shared prepare path which "belongs to its own phase". It cites
+the audit rounds that established each of those.
+
+Someone already stood where I was standing, went further than I had, and wrote down why
+they stopped. Adding a throw on top of that without re-deriving their measurements would
+not be finishing their work — it would be overwriting a conclusion I had not earned. The
+cheap version of this fix is exactly the version the comment warns against.
+
+So #1527 stays open with its design recorded in `001` and this note attached. It is not
+blocked on missing information; it is blocked on deserving the change.
