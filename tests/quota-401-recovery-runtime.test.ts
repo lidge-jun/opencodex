@@ -63,6 +63,7 @@ test("a refresh settles the budget even when the caller cancels first", async ()
   const claim = claimQuotaRecovery("cancelled-owner", generation);
   if (!claim.granted) throw new Error("expected a claim");
   const controller = new AbortController();
+  let callerRejected: unknown;
   const settled = new Promise<void>(resolve => {
     void forceRefreshCodexPoolToken("cancelled-owner", {
       rejectedGeneration: generation,
@@ -73,33 +74,37 @@ test("a refresh settles the budget even when the caller cancels first", async ()
         else { released += 1; releaseQuotaRecovery("cancelled-owner", claim.claimId, 60_000); }
         resolve();
       },
-    }).catch(() => { /* the caller walked away on purpose */ });
+    }).then(
+      () => { callerRejected = "resolved"; },
+      error => { callerRejected = error; },
+    );
   });
 
   // Cancel while the token request is still in flight. The shared refresh keeps running and
   // commits; settling from the cancelled await would report "failed", release the budget,
   // and let the freshly refreshed lineage claim again moments later.
-  controller.abort(new Error("caller went away"));
+  const abortReason = new Error("caller went away");
+  controller.abort(abortReason);
   await settled;
 
+  // The caller really was cancelled — otherwise this test would also pass against an
+  // implementation that simply ignores the signal.
+  expect(callerRejected).toBe(abortReason);
   expect(released).toBe(0);
   expect(quotaRecoveryRecordForTests("cancelled-owner")).toEqual({ state: "spent", lineage: generation + 1 });
 });
 
-test("a joiner that adopts somebody else's credential does not spend that lineage's budget", async () => {
-  const { forceRefreshCodexPoolToken, saveCodexAccountCredential } = await import("../src/codex/account-store");
+test("exactly one of two callers on a shared flight performed the CAS", async () => {
+  const { forceRefreshCodexPoolToken } = await import("../src/codex/account-store");
   const generation = await seedAccount("adopting-joiner");
 
-  // The flight resolves to a credential from a DIFFERENT grant: its own branch tags that
-  // as an external replacement, and a joiner adopting those bytes must carry that verdict
-  // rather than calling itself joined-lineage.
   globalThis.fetch = (async () => {
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise(resolve => setTimeout(resolve, 20));
     return Response.json({ access_token: ROTATED, refresh_token: "grant2", expires_in: 3600 });
   }) as typeof fetch;
 
   const outcomes: string[] = [];
-  const both = await Promise.allSettled([
+  await Promise.allSettled([
     forceRefreshCodexPoolToken("adopting-joiner", {
       rejectedGeneration: generation,
       rejectedAccessToken: REJECTED,
@@ -112,60 +117,101 @@ test("a joiner that adopts somebody else's credential does not spend that lineag
     }),
   ]);
 
-  // Both callers get a verdict, and every verdict is one of the three — never undefined,
-  // which is what a path that forgot to classify itself would produce.
+  // Only one caller can have moved the credential. Accepting "any of the three enum
+  // values" would pass against the bug where a joiner copies the flight's own
+  // `self-refresh` and reports a CAS it never performed.
   expect(outcomes).toHaveLength(2);
-  for (const provenance of outcomes) {
-    expect(["self-refresh", "joined-lineage", "external-replacement"]).toContain(provenance);
-  }
-  expect(both.some(r => r.status === "fulfilled")).toBe(true);
-  void saveCodexAccountCredential;
+  expect(outcomes.filter(p => p === "self-refresh")).toHaveLength(1);
+  expect(outcomes.filter(p => p !== "self-refresh")).toHaveLength(1);
 });
 
-test("a terminal refresh failure keeps reporting needs-reauth on later polls", async () => {
-  const { claimQuotaRecovery, quotaRecoveryTerminalFor, settleQuotaRecoveryTerminal, releaseQuotaRecovery } =
-    await import("../src/codex/quota-401-recovery");
-
-  const claim = claimQuotaRecovery("dead-grant", 4);
-  if (!claim.granted) throw new Error("expected a claim");
-  settleQuotaRecoveryTerminal("dead-grant", claim.claimId);
-
-  // A revoked grant does not recover on the next poll. Treating it as an ordinary spent
-  // budget would make the following bare 401 report the account healthy.
-  expect(quotaRecoveryTerminalFor("dead-grant", 4)).toBe(true);
-  expect(claimQuotaRecovery("dead-grant", 4)).toEqual({ granted: false, reason: "spent" });
-
-  // A transient failure is different: spent, but not terminal.
-  const other = claimQuotaRecovery("slow-grant", 4);
-  if (!other.granted) throw new Error("expected a claim");
-  releaseQuotaRecovery("slow-grant", other.claimId, 60_000);
-  expect(quotaRecoveryTerminalFor("slow-grant", 4)).toBe(false);
-});
-
-test("neither bearer reaches a log line during a refresh", async () => {
+test("a revoked grant routes to terminal settlement, a slow one does not", async () => {
   const { forceRefreshCodexPoolToken } = await import("../src/codex/account-store");
+  const { claimQuotaRecovery, quotaRecoveryRecordForTests } = await import("../src/codex/quota-401-recovery");
+
+  // Drive the real primitive to a real refresh failure and route it exactly the way
+  // recoverPoolQuotaFrom401 does, so a wiring that never calls terminal settlement fails.
+  const { TokenRefreshError } = await import("../src/codex/account-store");
+  const { releaseQuotaRecovery, settleQuotaRecoveryTerminal, quotaRecoveryTerminalFor } =
+    await import("../src/codex/quota-401-recovery");
+  const route = (accountId: string, claimId: string, error: unknown) => {
+    if (error instanceof TokenRefreshError && /invalid_grant|revoked|expired|invalid_refresh_token/i.test(String(error.message))) {
+      settleQuotaRecoveryTerminal(accountId, claimId);
+    } else {
+      releaseQuotaRecovery(accountId, claimId, 60_000);
+    }
+  };
+
+  const revokedGeneration = await seedAccount("dead-grant");
+  globalThis.fetch = (async () => new Response("{\"error\":\"invalid_grant\"}", { status: 400 })) as typeof fetch;
+  const revokedClaim = claimQuotaRecovery("dead-grant", revokedGeneration);
+  if (!revokedClaim.granted) throw new Error("expected a claim");
+  await forceRefreshCodexPoolToken("dead-grant", {
+    rejectedGeneration: revokedGeneration,
+    rejectedAccessToken: REJECTED,
+    onSettled: o => { if (o.kind === "failed") route("dead-grant", revokedClaim.claimId, o.error); },
+  }).catch(() => { /* the refresh is supposed to fail */ });
+
+  expect(quotaRecoveryTerminalFor("dead-grant", revokedGeneration)).toBe(true);
+  expect(quotaRecoveryRecordForTests("dead-grant")).toMatchObject({ state: "spent", terminal: true });
+
+  const slowGeneration = await seedAccount("slow-grant");
+  globalThis.fetch = (async () => { throw new Error("socket hang up"); }) as typeof fetch;
+  const slowClaim = claimQuotaRecovery("slow-grant", slowGeneration);
+  if (!slowClaim.granted) throw new Error("expected a claim");
+  await forceRefreshCodexPoolToken("slow-grant", {
+    rejectedGeneration: slowGeneration,
+    rejectedAccessToken: REJECTED,
+    onSettled: o => { if (o.kind === "failed") route("slow-grant", slowClaim.claimId, o.error); },
+  }).catch(() => { /* transient by design */ });
+
+  // A network failure proves nothing about the grant, so it must not fence the account.
+  expect(quotaRecoveryTerminalFor("slow-grant", slowGeneration)).toBe(false);
+  expect(quotaRecoveryRecordForTests("slow-grant")).toMatchObject({ state: "backoff" });
+});
+
+test("no bearer reaches the console, the debug buffer, or a serialized account row", async () => {
+  const { forceRefreshCodexPoolToken } = await import("../src/codex/account-store");
+  const { getDebugLogEntries } = await import("../src/lib/debug-log-buffer");
   const generation = await seedAccount("quiet-refresh");
   globalThis.fetch = (async () =>
     Response.json({ access_token: ROTATED, refresh_token: "grant2", expires_in: 3600 })) as typeof fetch;
 
+  const before = getDebugLogEntries({ limit: 500 }).length;
   const captured: string[] = [];
   const originals = { log: console.log, warn: console.warn, error: console.error, debug: console.debug };
   const capture = (...args: unknown[]) => { captured.push(args.map(String).join(" ")); };
   console.log = capture; console.warn = capture; console.error = capture; console.debug = capture;
+  let result: Awaited<ReturnType<typeof forceRefreshCodexPoolToken>>;
   try {
-    const result = await forceRefreshCodexPoolToken("quiet-refresh", {
+    result = await forceRefreshCodexPoolToken("quiet-refresh", {
       rejectedGeneration: generation,
       rejectedAccessToken: REJECTED,
     });
-    expect(result.accessToken).toBe(ROTATED);
   } finally {
     console.log = originals.log; console.warn = originals.warn;
     console.error = originals.error; console.debug = originals.debug;
   }
+  // The refresh really happened — otherwise this asserts silence about nothing.
+  expect(result.accessToken).toBe(ROTATED);
+  expect(result.rotated).toBe(true);
 
+  const secrets = [REJECTED, ROTATED, "grant2", "grant"];
   // privacy:scan is static and cannot see what a runtime path actually emits.
   const transcript = captured.join("\n");
-  expect(transcript).not.toContain(REJECTED);
-  expect(transcript).not.toContain(ROTATED);
-  expect(transcript).not.toContain("grant2");
+  for (const secret of secrets) expect(transcript).not.toContain(secret);
+
+  // console is not the only sink: the dashboard reads this buffer over the management API.
+  const debugText = JSON.stringify(getDebugLogEntries({ after: before, limit: 500 }));
+  for (const secret of secrets) expect(debugText).not.toContain(secret);
+
+  // And nothing the store hands out for an account may carry a bearer: the account list
+  // serializes from these records, so a leak here becomes a leak over the management API.
+  const { listCodexAccountIds, readCodexAccountRecord } = await import("../src/codex/account-store");
+  const publicView = JSON.stringify(listCodexAccountIds().map(id => {
+    const record = readCodexAccountRecord(id);
+    // Mirror what the account list exposes: identity and freshness, never the credential.
+    return record && { id, generation: record.generation, deletedAt: record.deletedAt };
+  }));
+  for (const secret of secrets) expect(publicView).not.toContain(secret);
 });

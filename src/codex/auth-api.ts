@@ -1022,6 +1022,11 @@ async function recoverPoolQuotaFrom401(ctx: {
       onSettled: outcome => {
         if (outcome.kind === "resolved") {
           settleQuotaRecovery(accountId, claim.claimId, outcome);
+        } else if (outcome.error instanceof TokenRefreshError && isTerminalRefreshError(outcome.error)) {
+          // A revoked or expired grant does not become valid on the next poll. Releasing it
+          // into backoff would let the following bare 401 find a non-terminal record and
+          // report a dead credential as healthy.
+          settleQuotaRecoveryTerminal(accountId, claim.claimId);
         } else {
           releaseQuotaRecovery(accountId, claim.claimId, QUOTA_RECOVERY_BACKOFF_MS);
         }

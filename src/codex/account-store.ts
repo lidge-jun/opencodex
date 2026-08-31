@@ -627,11 +627,13 @@ export async function forceRefreshCodexPoolToken(
      * failures are swallowed: settlement bookkeeping must never reject a credential the
      * caller successfully obtained, nor disturb another waiter on the same flight.
      */
-    onSettled?: (outcome: ForcedRefreshOutcome) => void;
+    onSettled?: (outcome: ForcedRefreshOutcome) => void | Promise<void>;
   },
 ): Promise<CodexTokenResult & { rotated: boolean; selfRefreshed: boolean; provenance: CodexRefreshProvenance }> {
   const settle = (outcome: ForcedRefreshOutcome) => {
-    try { options.onSettled?.(outcome); } catch { /* bookkeeping must not break the caller */ }
+    // Both halves matter: a synchronous throw and a rejected thenable are equally capable
+    // of turning settlement bookkeeping into an unhandled rejection that fails the process.
+    try { void Promise.resolve(options.onSettled?.(outcome)).catch(() => {}); } catch { /* ignore */ }
   };
   const classify = (result: CodexRefreshResult): CodexRefreshProvenance =>
     // Default to the conservative reading. A path that did not classify itself is not
@@ -647,6 +649,13 @@ export async function forceRefreshCodexPoolToken(
   // a refresh that was about to succeed — releasing the budget, and letting the newly
   // refreshed lineage claim again moments later. So the settlement rides an uncancelled
   // resolution and the caller's cancellation is layered on top of it.
+  // A caller that is already gone must not start work. `resolveCodexToken` is called
+  // without the caller signal below, which bypasses its own pre-abort guard, so a
+  // pre-aborted request would otherwise rotate a credential nobody is waiting for.
+  if (options.signal?.aborted) {
+    settle({ kind: "failed", error: options.signal.reason });
+    throw options.signal.reason;
+  }
   const completion = resolveCodexToken(
     id,
     { rejectedGeneration: options.rejectedGeneration, rejectedAccessToken: options.rejectedAccessToken },
@@ -742,12 +751,11 @@ async function resolveCodexToken(
             // Adopted the stored result of a flight this caller joined: same grant, same
             // lineage. Not a replacement — that distinction is the whole point of #3019.
             //
-            // Unless the flight itself returned somebody else's credential: its
-            // grant-mismatch and freshness branches resolve to a credential this flight
-            // did not produce. Adopting those bytes is still an adoption, but the LINEAGE
-            // is a replacement, and fencing it would deny a genuinely new credential its
-            // own budget. Carry the flight's own verdict when it gave one.
-            provenance: refreshed.provenance ?? "joined-lineage",
+            // Only `external-replacement` is inherited. The flight's own success is tagged
+            // `self-refresh` for the caller that performed the CAS, and copying that here
+            // would tell a caller that did no CAS that the credential is its own lineage.
+            // Everything this branch adopts is, by definition, a join.
+            provenance: refreshed.provenance === "external-replacement" ? "external-replacement" : "joined-lineage",
           };
         }
       }
