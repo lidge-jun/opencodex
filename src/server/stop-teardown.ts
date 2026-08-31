@@ -1,4 +1,5 @@
 import type { CodexNativeRestoreResult } from "../codex/inject";
+import { deferralMatchesReceipt, type PendingTeardownRead } from "../config/pending-teardown";
 
 /**
  * Shared-teardown decision and execution for `POST /api/stop` (#3008).
@@ -12,8 +13,8 @@ import type { CodexNativeRestoreResult } from "../codex/inject";
 export type GrokStripResult = { ok: boolean; changed: boolean; message: string };
 
 export type StopTeardownIo = {
-  /** Presence of the caller's pending-teardown receipt. */
-  readReceipt?: () => unknown;
+  /** The caller's pending-teardown receipt as it stands on disk. */
+  readReceipt?: () => PendingTeardownRead;
   restoreNativeCodex?: () => Promise<CodexNativeRestoreResult>;
   stripGrok?: () => GrokStripResult;
 };
@@ -25,21 +26,26 @@ export type StopTeardownBody = {
 };
 
 /**
- * A deferral is honoured only when the caller also left a receipt on disk.
+ * A deferral is honoured only when the caller proves it owns the obligation.
  *
- * The query flag names an intention; the receipt is the obligation. Without that second
+ * The query flag names an intention; the receipt is the obligation. Without the second
  * half any authenticated caller could ask the proxy to skip teardown and then exit,
- * leaving native Codex and the Grok fence pointed at a proxy that no longer exists, with
- * nothing on disk for a later stop or update to find.
+ * leaving native Codex and the Grok fence pointed at a proxy that no longer exists.
+ *
+ * "A receipt exists" is not that proof either: it would let any caller ride on another
+ * stop's outstanding obligation and get a deferral it never owns. The request has to name
+ * the receipt's nonce, which only the process that wrote it (and anything that can read
+ * the 0700 config directory, which is already the trust boundary for the admin token)
+ * can know.
  */
-export function deferralHonored(url: URL, readReceipt: () => unknown): boolean {
+export function deferralHonored(url: URL, readReceipt: () => PendingTeardownRead): boolean {
   if (url.searchParams.get("deferSharedTeardown") !== "1") return false;
-  return readReceipt() != null;
+  return deferralMatchesReceipt(url.searchParams.get("teardownNonce"), readReceipt());
 }
 
 /** Run (or skip) the shared teardown and describe the outcome truthfully. */
 export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Promise<StopTeardownBody> {
-  const readReceipt = io.readReceipt ?? (() => null);
+  const readReceipt = io.readReceipt ?? ((): PendingTeardownRead => ({ state: "missing" }));
   if (deferralHonored(url, readReceipt)) {
     // Not "native Codex restored": nothing was restored here, and claiming otherwise
     // would be a success message the operator cannot verify.

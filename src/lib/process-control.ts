@@ -30,13 +30,15 @@ export interface GracefulStopIo {
   env?: Record<string, string | undefined>;
   exitTimeoutMs?: number;
   /**
-   * Ask the proxy to leave native Codex and the Grok fence alone.
+   * Nonce of the pending-teardown receipt this caller claimed.
    *
-   * `ocx stop` sets this because it restores shared client config itself, only after
-   * proving a stopped Task Scheduler did not respawn the proxy (#3008). Direct callers
-   * omit it and keep the self-contained behaviour.
+   * `ocx stop` sets it because it restores shared client config itself, only after
+   * proving a stopped Task Scheduler did not respawn the proxy (#3008). The nonce is what
+   * makes the deferral an owned obligation rather than a flag anyone can set: the proxy
+   * honours it only when it names the receipt actually on disk. Direct callers omit it
+   * and keep the self-contained behaviour.
    */
-  deferSharedTeardown?: boolean;
+  deferSharedTeardownNonce?: string;
 }
 
 /**
@@ -87,7 +89,9 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
     // after verifying a stopped Task Scheduler did not respawn the proxy (#3008). Letting
     // the child do it means a survivor found seconds later has already lost its config.
     const stopUrl = `http://${gracefulStopHost(runtime.hostname)}:${runtime.port}/api/stop`
-      + (io.deferSharedTeardown ? "?deferSharedTeardown=1" : "");
+      + (io.deferSharedTeardownNonce
+        ? `?deferSharedTeardown=1&teardownNonce=${encodeURIComponent(io.deferSharedTeardownNonce)}`
+        : "");
     const res = await fetchFn(stopUrl, {
       method: "POST",
       headers,

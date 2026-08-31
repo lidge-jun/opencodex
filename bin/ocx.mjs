@@ -364,7 +364,14 @@ function runNpmSelfUpdate() {
     }
   }
 
-  if (serviceWasInstalled || hasRuntimeState) {
+  // An outstanding pending-teardown receipt is a fourth reason to run the stop. After a
+  // parent crashed mid-deferral the service, pid and runtime records can all be absent
+  // while the shared client config still points at a proxy that is gone; installing over
+  // that silently skips the recovery the receipt was written to trigger (#3008). Presence
+  // is the whole test here — the launcher cannot parse it, and `ocx stop` is what decides
+  // whether the obligation is safe to finish.
+  const hasPendingTeardown = existsSync(join(configDir(), "pending-teardown.json"));
+  if (serviceWasInstalled || hasRuntimeState || hasPendingTeardown) {
     console.log("⏹  Stopping the running proxy before updating...");
     const stopRes = spawnSync(process.execPath, [launcher, "stop"], { stdio: "inherit", windowsHide: true });
     const stillHasRuntimeState =

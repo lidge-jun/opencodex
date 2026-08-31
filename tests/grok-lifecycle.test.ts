@@ -183,18 +183,39 @@ describe("Grok fence lifecycle wiring", () => {
     // ocx stop let it, a scheduler wrapper that respawns seconds later would already have
     // lost its client config, and the parent ownershipBlocked guard could only prevent a
     // second redundant teardown (#3008).
-    expect(stopFn).toContain("deferSharedTeardown: teardownClaimed");
+    expect(stopFn).toContain("deferSharedTeardownNonce: teardownNonce");
     expect(controlSource).toContain("deferSharedTeardown");
-    expect(apiSource).toContain("performStopTeardown(url, { readReceipt: readPendingTeardown })");
+    expect(apiSource).toContain("performStopTeardown(url, { readReceipt: readPendingTeardownState })");
     // The deferral is an obligation, so it is claimed on disk BEFORE it is requested and
     // released only after THIS process has restored the shared config itself. A bare
     // query flag could not survive the parent dying mid-stop.
     const claimAt = stopFn.indexOf("claimTeardown();");
     expect(claimAt).toBeGreaterThan(-1);
-    expect(claimAt).toBeLessThan(stopFn.indexOf("deferSharedTeardown: teardownClaimed"));
-    expect(stopFn).toContain("isPendingTeardownAbandoned(readPendingTeardown(), isProcessAlive)");
+    expect(claimAt).toBeLessThan(stopFn.indexOf("deferSharedTeardownNonce: teardownNonce"));
+    // The inherited receipt is snapshotted BEFORE this run claims anything: re-reading it
+    // later would authorize a clear against a receipt a concurrent stop just wrote.
+    expect(stopFn).toContain("isPendingTeardownAbandoned(inheritedTeardownRead, isProcessAlive)");
+    expect(stopFn.indexOf("readPendingTeardownState()")).toBeLessThan(claimAt);
+    expect(stopFn).toContain("clearPendingTeardown(teardownNonce)");
     expect(stopFn.indexOf("await restoreSharedClientStateAfterStop()"))
-      .toBeLessThan(stopFn.indexOf("clearPendingTeardown()"));
+      .toBeLessThan(stopFn.indexOf("clearPendingTeardown(teardownNonce)"));
+    // Finishing SOMEBODY ELSE's obligation needs a definitive "dead", not findLiveProxy's
+    // null, which also covers a timeout and a listener that withholds /healthz.
+    expect(stopFn).toContain("await abandonedTeardownIsSafeToFinish()");
+    const gateFn = sliceFn(CLI_SOURCE, "const abandonedTeardownIsSafeToFinish", "let stopFailed = false;");
+    expect(gateFn).toContain('probeProxyLiveness(port, hostname) === "dead"');
+    expect(gateFn).toContain("return false;");
+  });
+
+  test("an outstanding teardown receipt makes both updaters run the stop", () => {
+    // After a parent crashed mid-deferral the service, pid and runtime records can all be
+    // absent while shared client config still points at a proxy that is gone. Installing
+    // over that skips the recovery the receipt exists to trigger (#3008).
+    const updateSource = readFileSync(join(import.meta.dir, "..", "src", "update", "index.ts"), "utf8");
+    expect(updateSource).toContain("readPid() || readRuntimePort() || pendingTeardownOutstanding()");
+    const launcherSource = readFileSync(join(import.meta.dir, "..", "bin", "ocx.mjs"), "utf8");
+    expect(launcherSource).toContain('existsSync(join(configDir(), "pending-teardown.json"))');
+    expect(launcherSource).toContain("serviceWasInstalled || hasRuntimeState || hasPendingTeardown");
   });
 
   test("handleStop treats an incomplete native Codex restore as a stop failure", () => {
@@ -274,7 +295,7 @@ describe("POST /api/stop teardown", () => {
     // unreachable. tests/stop-deferred-teardown.test.ts proves the behaviour; this proves
     // the route still delegates to it rather than growing a second copy.
     const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
-    expect(handler).toContain("performStopTeardown(url, { readReceipt: readPendingTeardown })");
+    expect(handler).toContain("performStopTeardown(url, { readReceipt: readPendingTeardownState })");
     const teardownSource = readFileSync(join(import.meta.dir, "..", "src", "server", "stop-teardown.ts"), "utf8");
     expect(teardownSource).toContain('await import("../grok/inject")');
     expect(teardownSource).toContain("stripGrokConfig()");

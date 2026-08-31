@@ -283,9 +283,9 @@ export async function handleManagementAPI(
     // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
     // which is exactly why an intentional stop has to do it here — unless the caller is
     // `ocx stop`, which does it itself once the proxy is proven down.
-    const { readPendingTeardown } = await import("../config/pending-teardown");
+    const { readPendingTeardownState } = await import("../config/pending-teardown");
     const { performStopTeardown } = await import("./stop-teardown");
-    const teardown = await performStopTeardown(url, { readReceipt: readPendingTeardown });
+    const teardown = await performStopTeardown(url, { readReceipt: readPendingTeardownState });
     setTimeout(async () => {
       let shutdownSucceeded = false;
       try {

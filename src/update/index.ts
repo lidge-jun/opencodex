@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getConfigDir, loadConfig } from "../config";
 import { readPid, readRuntimePort } from "../config/process-state";
+import { pendingTeardownOutstanding } from "../config/pending-teardown";
 import { npmInvocation } from "./npm-invocation.mjs";
 import {
   npmCachePreflightFailureMessage,
@@ -250,8 +251,13 @@ export async function runUpdate(): Promise<void> {
   // modules after startup, so an in-place update leaves it executing mixed old/new code.
   // Gate on the service and the runtime-port record too, not just the pid file — a
   // service-managed or orphaned proxy can be live while ocx.pid is stale/missing.
+  //
+  // An outstanding pending-teardown receipt is a fourth reason to run the stop. After a
+  // parent crashed mid-deferral all three of the other signals can be absent while the
+  // shared client config still points at a proxy that is gone; installing over that
+  // silently skips the recovery the receipt was written to trigger (#3008).
   // Full `ocx stop` semantics (drain, service stop, restore).
-  if (serviceWasInstalled || readPid() || readRuntimePort()) {
+  if (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()) {
     console.log("⏹  Stopping the running proxy before updating...");
     const stopStdio = updateChildStdio();
     const stop = spawnSync(process.execPath, selfLaunchArgv(["stop"]), {
