@@ -181,6 +181,7 @@ export function runHistoryUnitUnderLock(
       jobId,
       message: "history_transition_failed",
       ...(result.failureReason ? { reason: result.failureReason } : {}),
+      ...(result.integrityCode ? { integrityCode: result.integrityCode } : {}),
       ...(result.rows > 0 || result.files > 0 ? { rows: result.rows, files: result.files } : {}),
     };
   }

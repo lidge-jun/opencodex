@@ -227,6 +227,11 @@ function integrityFailureResult(error: CodexHistoryIntegrityError): CodexHistory
     files: error.progress.files,
     failed: true,
     failureReason: "integrity",
+    // The specific code, so an operator sees WHICH integrity condition stopped the
+    // transition rather than a generic "run doctor". `history_apply_ambiguous_reroute` in
+    // particular needs manual resolution: the manifest is intact and the safe move is to
+    // inspect it, not to retry.
+    integrityCode: error.message,
   };
 }
 
@@ -239,6 +244,15 @@ export interface CodexHistorySyncResult {
   failed?: true;
   /** Why the retry budget was exhausted when `failed` is set. */
   failureReason?: CodexHistoryFailureReason;
+  /**
+   * The specific integrity condition, when `failureReason` is `"integrity"`.
+   *
+   * `failureReason` alone tells an operator only that something was inconsistent, which
+   * reads as "retry or run doctor". Some of these are not retryable —
+   * `history_apply_ambiguous_reroute` means two histories produced the same row and the
+   * manifest needs a human — so the code travels with the result.
+   */
+  integrityCode?: string;
 }
 
 interface ThreadRow {
@@ -480,6 +494,7 @@ function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ApplyRowSna
     // arrived in between. Re-record it, and promote the manifest so the field is covered by
     // the schema that declares it.
     const previousRelabel = existing.relabel;
+    const previousHadFirstUserMessage = existing.hadFirstUserMessage;
     existing.relabel = "pending";
     existing.hadFirstUserMessage = hasFirstUserMessage(row.first_user_message);
     // `hasUserEvent` is the value restore returns to, and the previous attempt's can be two
@@ -498,13 +513,22 @@ function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ApplyRowSna
       manifest.version = 2;
       return;
     }
-    // No proof, and the row disagrees with the recorded baseline. Neither reading is safe:
-    // keeping the record erases activity the user generated, refreshing it preserves an
-    // event OpenCodex authored. That is the same undecidable shape the classifier refuses
-    // on, so refuse here too rather than committing to one interpretation. Restore keeps
-    // working from the manifest that already exists.
+    // No proof, and the row disagrees with the recorded baseline. Whether that is decidable
+    // depends on what the previous route could have written: it sets the event to 1 only
+    // when the message was non-empty at ITS snapshot. If it would have written 0, the
+    // observed 1 cannot be OpenCodex's and is the user's — the same expected-event-0 cell
+    // the classifier preserves rather than refuses.
+    //
+    // Only when the previous route could itself have authored the difference are the two
+    // histories indistinguishable, and that is where refusing beats guessing: keeping the
+    // record would erase real activity, refreshing it would preserve an event OpenCodex
+    // wrote.
     if (observedEvent !== existing.hasUserEvent) {
-      throw new CodexHistoryIntegrityError("history_apply_ambiguous_reroute");
+      const priorRouteCouldAuthorIt = previousHadFirstUserMessage === true;
+      if (priorRouteCouldAuthorIt) {
+        throw new CodexHistoryIntegrityError("history_apply_ambiguous_reroute");
+      }
+      if (atOriginalTuple) existing.hasUserEvent = observedEvent;
     }
     manifest.version = 2;
     return;

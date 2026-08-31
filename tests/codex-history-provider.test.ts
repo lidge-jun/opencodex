@@ -181,10 +181,7 @@ describe("Codex history provider sync", () => {
     expect(after.entries["thread-1"]?.hadFirstUserMessage).toBe(true);
 
     // And the user's activity survives the restore rather than being read as OpenCodex's.
-    // eslint-disable-next-line no-console
-    console.log("DIAG2 result=", JSON.stringify(syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath)));
-    // eslint-disable-next-line no-console
-    console.log("DIAG afterRestore manifestGone=", !existsSync(fixture.backupPath));
+    syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath);
     const restored = new Database(fixture.dbPath, { readonly: true });
     expect(restored.query("SELECT model_provider, has_user_event FROM threads WHERE id = 'thread-1'").get())
       .toEqual({ model_provider: "openai", has_user_event: 1 });
@@ -196,10 +193,12 @@ describe("Codex history provider sync", () => {
     // say - the entry still reads "committed" while the row has drifted. Keeping the
     // recorded baseline would erase the user's event; refreshing it would preserve one
     // OpenCodex authored. Undecidable, so refuse rather than pick.
+    //
+    // Undecidable requires that the previous route COULD have written the differing event:
+    // it sets 1 only when the message was non-empty at its own snapshot. So this fixture
+    // keeps the message, unlike the expected-0 case where an observed 1 is provably the
+    // user's.
     const fixture = makeFixture();
-    const db = new Database(fixture.dbPath);
-    db.run("UPDATE threads SET first_user_message = NULL, has_user_event = 0 WHERE id = 'thread-1'");
-    db.close();
 
     expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath))
       .toEqual({ rows: 1, files: 1 });
@@ -244,6 +243,15 @@ describe("Codex history provider sync", () => {
     // route and the real recovery.
     const fixture = makeFixture({ includeLegacy: true });
 
+    // The fixture's rollout omits `source`, which makes restore refuse during rollout
+    // preflight before the classifier is ever consulted - a test that passes on that
+    // refusal would stay green with a broken classifier. Write the matching source so the
+    // real path runs.
+    appendFileSync(fixture.rollout, JSON.stringify({
+      type: "session_meta",
+      payload: { id: "thread-1", model_provider: "openai", source: "vscode" },
+    }) + "\n");
+
     expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath))
       .toEqual({ rows: 1, files: 1 });
     const routed = new Database(fixture.dbPath, { readonly: true });
@@ -267,19 +275,13 @@ describe("Codex history provider sync", () => {
     ).get()!;
     restored.close();
 
-    // Provenance is back either way. The event flag is the contract under test: it must not
-    // keep a 1 that OpenCodex authored, so either the restore returns it to 0 or the layer
-    // refuses and leaves the manifest for a human. What it must never do is silently accept
-    // the 1 as the user's and consume the manifest.
-    expect(row.model_provider).toBe("openai");
-    expect(row.source).toBe("vscode");
-    if (row.has_user_event === 1) {
-      expect(result).toMatchObject({ failed: true });
-      expect(existsSync(fixture.backupPath)).toBe(true);
-    } else {
-      expect(row.has_user_event).toBe(0);
-      expect(existsSync(fixture.backupPath)).toBe(false);
-    }
+    // The classifier reads the committed marker plus the route's expected event rather than
+    // the tuple, so the 1 is returned to 0 and the manifest is consumed.
+    // `files: 0` because the appended metadata already names openai/vscode; the database
+    // row is what this history put wrong.
+    expect(result).toEqual({ rows: 1, files: 0 });
+    expect(row).toEqual({ model_provider: "openai", source: "vscode", has_user_event: 0 });
+    expect(existsSync(fixture.backupPath)).toBe(false);
   });
 
   describe("restore classifier state matrix", () => {
@@ -1350,7 +1352,15 @@ describe("Design B migration helpers", () => {
 
     // Work cannot converge without its bound database; the manifest remains retry evidence.
     const result = migrateHistoryToOpenai(missingDb, backupPath);
-    expect(result).toEqual({ rows: 0, files: 0, failed: true, failureReason: "integrity" });
+    expect(result).toEqual({
+      rows: 0,
+      files: 0,
+      failed: true,
+      failureReason: "integrity",
+      // The specific condition travels with the result: an operator can tell a missing
+      // database from a manifest that needs manual resolution.
+      integrityCode: "history_state_database_missing",
+    });
     expect(existsSync(backupPath)).toBe(true);
   });
 
