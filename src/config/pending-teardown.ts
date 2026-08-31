@@ -145,13 +145,25 @@ export function readPendingTeardown(nonce: string): PendingTeardownRead {
 /** An obligation that exists on disk — the "missing" case cannot occur in a listing. */
 export type OutstandingTeardown = Exclude<PendingTeardownRead, { state: "missing" }>;
 
-/** Every obligation currently on disk, attributable or not. */
+/**
+ * Every obligation currently on disk, attributable or not.
+ *
+ * A scan that FAILS is not an empty scan. Swallowing a permission or I/O error into `[]`
+ * would let `handleStop` restore client config with an unread obligation sitting right
+ * there, so anything but a missing home surfaces as one unreadable obligation the caller
+ * must treat like any other: blocking, and needing a human.
+ */
 export function listPendingTeardowns(): OutstandingTeardown[] {
   let names: string[];
   try {
     names = readdirSync(getConfigDir());
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    return [{
+      state: "invalid",
+      nonce: "00000000000000000000000000000000",
+      detail: `the opencodex home could not be scanned (${(error as NodeJS.ErrnoException).code ?? "unknown"})`,
+    }];
   }
   const out: OutstandingTeardown[] = [];
   for (const name of names) {
@@ -175,8 +187,10 @@ export function listPendingTeardowns(): OutstandingTeardown[] {
 export function pendingTeardownOutstanding(): boolean {
   try {
     return readdirSync(getConfigDir()).some(isAnyTeardownObligationFileName);
-  } catch {
-    return false;
+  } catch (error) {
+    // Only a missing home is empty. Any other scan failure may be hiding an obligation,
+    // and reporting "none" would unblock an update over a teardown that never ran.
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
   }
 }
 

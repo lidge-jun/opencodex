@@ -59,7 +59,11 @@ export function pendingTeardownNonceFromFileName(name) {
 export function hasPendingTeardownIn(readdir, dir) {
   try {
     return readdir(dir).some(isAnyTeardownObligationFileName);
-  } catch {
-    return false;
+  } catch (error) {
+    // "There is no home yet" is the only honest empty answer. Any other failure —
+    // permissions, I/O, a file where the directory should be — means an obligation may be
+    // sitting there unread, and reporting "none" would let an update install over a
+    // teardown that never ran. Absence of proof is not proof of absence.
+    return error?.code !== "ENOENT";
   }
 }

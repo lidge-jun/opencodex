@@ -220,9 +220,35 @@ describe("receipt naming is shared by both update lanes", () => {
     expect(mod.pendingTeardownOutstanding()).toBe(false);
   });
 
-  test("an unreadable directory reads as no receipts rather than throwing", async () => {
+  test("a scan that fails is not an empty scan", async () => {
     const names = await import("../src/config/pending-teardown-names.mjs");
-    expect(names.hasPendingTeardownIn(() => { throw new Error("EACCES"); }, home)).toBe(false);
+    // Only a missing home is honestly empty. Any other failure may be hiding an
+    // obligation, and reporting "none" would let an update install over a teardown that
+    // never ran — absence of proof is not proof of absence.
+    const enoent = Object.assign(new Error("no such directory"), { code: "ENOENT" });
+    expect(names.hasPendingTeardownIn(() => { throw enoent; }, home)).toBe(false);
+    const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    expect(names.hasPendingTeardownIn(() => { throw denied; }, home)).toBe(true);
+    expect(names.hasPendingTeardownIn(() => { throw new Error("no code at all"); }, home)).toBe(true);
+  });
+
+  test("a home that cannot be scanned surfaces as one unreadable obligation", async () => {
+    const mod = await import("../src/config/pending-teardown");
+    const previous = process.env.OPENCODEX_HOME;
+    // A file where the home should be: readdir fails with ENOTDIR, which is not absence.
+    const notADir = join(home, "not-a-directory");
+    writeFileSync(notADir, "");
+    process.env.OPENCODEX_HOME = notADir;
+    try {
+      const listed = mod.listPendingTeardowns();
+      // handleStop must see something blocking rather than an empty set it would restore over.
+      expect(listed).toHaveLength(1);
+      expect(listed[0]!.state).toBe("invalid");
+      expect(mod.pendingTeardownOutstanding()).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+    }
   });
 });
 

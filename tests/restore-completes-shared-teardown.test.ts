@@ -54,6 +54,16 @@ async function seedOffConfig(): Promise<void> {
   saveConfig({ ...config, clientIntegrations: { ...(config.clientIntegrations ?? {}), codex: false } });
 }
 
+async function seedOnConfig(): Promise<void> {
+  // Codex ON, so the desired-state write is a real change and restore takes its ordinary
+  // forward path rather than the already-clean branch.
+  const { loadConfig, saveConfig } = await import("../src/config");
+  const config = loadConfig();
+  const integrations = { ...(config.clientIntegrations ?? {}) };
+  delete integrations.codex;
+  saveConfig({ ...config, clientIntegrations: integrations });
+}
+
 function writeManagedGrokFence(): string {
   mkdirSync(grokHome, { recursive: true });
   const configPath = join(grokHome, "config.toml");
@@ -100,6 +110,62 @@ test("the JSON envelope on that path reports the Grok cleanup too", async () => 
   expect(envelope.success).toBe(true);
   expect(String(envelope.message)).toContain("already OFF and native");
   expect(String(envelope.message)).toMatch(/Grok|managed block/i);
+});
+
+test("the ordinary forward-restore path strips the fence before emitting JSON", async () => {
+  await seedOnConfig();
+  // NOT the already-clean branch: Codex is ON here, so restore runs its real machinery
+  // and used to return the JSON envelope before stripGrokConfig() was ever called.
+  const configPath = writeManagedGrokFence();
+  const lines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+  try {
+    await dispatchCommand({ kind: "run", command: "restore", args: ["restore", "--json"] }, depsFor(["restore", "--json"]));
+  } finally {
+    console.log = originalLog;
+  }
+  // The fence itself, not the wording: a message can claim a cleanup that never happened.
+  const after = readFileSync(configPath, "utf8");
+  expect(after).not.toContain(BEGIN);
+  expect(after).toContain("# user content above");
+  const envelope = JSON.parse(lines.at(-1)!);
+  expect(envelope).toHaveProperty("artifacts");
+  expect(String(envelope.message)).toMatch(/Grok|managed block/i);
+});
+
+test("eject --json is the same runner and gets the same teardown", async () => {
+  await seedOnConfig();
+  const configPath = writeManagedGrokFence();
+  const lines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+  try {
+    await dispatchCommand({ kind: "run", command: "eject", args: ["eject", "--json"] }, depsFor(["eject", "--json"]));
+  } finally {
+    console.log = originalLog;
+  }
+  expect(readFileSync(configPath, "utf8")).not.toContain(BEGIN);
+});
+
+test("a Grok cleanup failure is not reported as a successful restore", async () => {
+  await seedOffConfig();
+  // A directory where config.toml belongs: the strip cannot succeed, and the envelope
+  // must not say the teardown is done.
+  mkdirSync(join(grokHome, "config.toml"), { recursive: true });
+  const lines: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+  console.error = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+  let code: number;
+  try {
+    code = await dispatchCommand({ kind: "run", command: "restore", args: ["restore", "--json"] }, depsFor(["restore", "--json"]));
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+  expect(code).toBe(1);
 });
 
 test("with no Grok home at all the no-op path still succeeds quietly", async () => {

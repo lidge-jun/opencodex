@@ -154,26 +154,40 @@ const commandRunners: Record<string, CommandRunner> = {
     } catch (err) {
       r = { success: false, message: err instanceof Error ? err.message : String(err) };
     }
+    // Grok BEFORE either output. The JSON path used to return here, so `ocx restore --json`
+    // (and `ocx eject --json`, the same runner) could report success while the fence still
+    // pointed at the stopped proxy — and the deferred-teardown recovery on this branch
+    // tells operators to run exactly this before deleting a receipt (#3008).
+    let grokFailure: string | null = null;
+    let grokChangedMessage: string | null = null;
+    try {
+      const g = stripGrokConfig();
+      if (g.changed) grokChangedMessage = g.message;
+      else if (!g.ok) grokFailure = g.message;
+    } catch (err) {
+      grokFailure = err instanceof Error ? err.message : String(err);
+    }
     if (restoreJson) {
       // Spawned callers need the artifact-level result to distinguish a busy
       // history worker from a successful native restore. Keep stdout machine
-      // readable; human framing remains the default command contract.
-      console.log(JSON.stringify(r));
-      return r.success ? 0 : 1;
+      // readable — the Codex artifact schema is unchanged; the Grok outcome is
+      // folded into success/message so a caller cannot read a half teardown as done.
+      const message = grokFailure
+        ? `${r.message} Grok config cleanup failed: ${grokFailure}`
+        : grokChangedMessage ? `${r.message} ${grokChangedMessage}` : r.message;
+      console.log(JSON.stringify({ ...r, success: r.success && !grokFailure, message }));
+      return r.success && !grokFailure ? 0 : 1;
     }
     if (r.success) console.log(`✅ ${r.message}`);
     else {
       console.error(`⚠️  ${r.message}`);
     }
     let code = r.success ? 0 : 1;
-    try {
-      const g = stripGrokConfig();
-      if (g.changed) console.log(`✅ ${g.message}`);
-      else if (!g.ok) {
-        console.error(`⚠️  ${g.message}`);
-        code = 1;
-      }
-    } catch { /* best-effort */ }
+    if (grokChangedMessage) console.log(`✅ ${grokChangedMessage}`);
+    if (grokFailure) {
+      console.error(`⚠️  ${grokFailure}`);
+      code = 1;
+    }
     if (r.success) {
       console.log("Codex integration is OFF and plain `codex` now runs natively. Switch back with: ocx restore back");
     } else {
