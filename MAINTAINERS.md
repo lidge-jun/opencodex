@@ -52,8 +52,8 @@ when a maintainer steps down.
   a new push still resets every box. A disproved claim unticks the matching
   box and keeps the PR a draft.
   Authors with repository push permission skip the ancestry heuristic only. As
-  with the approval requirement above, this is enforced by convention until
-  branch protection is configured (see the note under the change log).
+  with the approval requirement above, this part is enforced by convention;
+  the ruleset does not check ancestry (see the note under the change log).
 - A pull request requires approval from at least one maintainer and successful required CI checks
   before merge.
 - Authors do not approve their own pull requests.
@@ -160,11 +160,21 @@ Adding or removing a maintainer requires:
   and release automation keep the two owners already listed for those paths, so
   this addition does not widen the review surface for them.
 
-  CODEOWNERS requests reviews rather than enforcing them — no branch protection
-  rule is configured on this repository, so code-owner approval is a convention
-  here, not a gate. The same is true of the approval requirement in the review
-  and merge policy above. Widening the security boundary, or enforcing either
-  of these through branch protection, is a separate decision.
+  Code-owner approval and the maintainer-approval requirement above are both
+  enforced, not conventions. `dev`, `main`, and `preview` each carry an active
+  repository ruleset — the classic `/branches/{branch}/protection` endpoint
+  returns 404 for them, which is why this file long described the repository as
+  unprotected. `Protect dev` (id 20763889) requires a pull request with one
+  approving review, code-owner review, and extra approval for unattributed
+  changes, and it blocks deletion and non-fast-forward pushes. Allowed merge
+  methods are merge and squash; rebase merges are off.
+
+  The one carve-out is that the `maintain`/`admin` repository role holds a
+  `pull_request` bypass, so an owner can merge without the approval the rules
+  otherwise require. That is a bypass, not an exemption: "Authors do not approve
+  their own pull requests" above still governs, and an owner who uses the bypass
+  should record it on the pull request rather than leave it to be inferred from
+  a merge timestamp. Widening the security boundary is a separate decision.
 
 ## Security reports
 
