@@ -422,7 +422,7 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
         return;
       }
       (io.markRecycling ?? markRecyclingForExit)();
-      exitProcess(drainOutcome === "failed" ? 1 : 0);
+      exitProcess(drainOutcome === "failed" || drainOutcome === "rejected" ? 1 : 0);
     }, 200);
   }
 

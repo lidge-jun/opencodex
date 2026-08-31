@@ -60,6 +60,7 @@ const RESPONSE_STATE_TEMP_NAME = /^responses-state\.json\.ocx\.(\d+)\.(\d+)\.tmp
 const MAX_SNAPSHOT_REWRITE_ATTEMPTS = 4;
 const RESPONSE_SPILL_SHUTDOWN_BUDGET_MS = 5_000;
 const RESPONSE_SPILL_SHUTDOWN_FALLBACK_RESERVE_MS = 4_000;
+const RESPONSE_SPILL_ASYNC_ACL_ATTEMPT_BUDGET_MS = 30_000;
 const RESPONSE_SPILL_SHUTDOWN_TERMINALIZATION_MAX_PASSES = MAX_STORED_RESPONSES + 1;
 
 interface ResidentResponseState {
@@ -250,6 +251,7 @@ async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void>
     const state = spillPayloadForResident(candidate);
     try {
       ref = await writeResponseSpillDurablyAsync(job.id, state, {
+        aclBudgetMs: RESPONSE_SPILL_ASYNC_ACL_ATTEMPT_BUDGET_MS,
         publicationControl: job.publicationControl,
       });
     } catch (error) {
@@ -257,6 +259,7 @@ async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void>
       // The ACL helper permits exactly one caller-owned recovery budget. The resident generation
       // remains replayable during both attempts, so a transient timeout never becomes a tombstone.
       ref = await writeResponseSpillDurablyAsync(job.id, state, {
+        aclBudgetMs: RESPONSE_SPILL_ASYNC_ACL_ATTEMPT_BUDGET_MS,
         retryTimedOutOnce: true,
         publicationControl: job.publicationControl,
       });

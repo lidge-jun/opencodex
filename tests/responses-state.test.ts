@@ -843,6 +843,41 @@ describe("Responses previous_response_id state", () => {
     });
   });
 
+  test("Windows async spill attempts share one bounded ACL budget across every harden", async () => {
+    setPlatformForTests("win32");
+    let clock = 0;
+    let firstGrant = true;
+    const deadlines: number[] = [];
+    setNowForTests(() => clock);
+    setAsyncIcaclsRunnerForTests(async (args, timeoutMs) => {
+      deadlines.push(timeoutMs);
+      if (firstGrant && args.includes("/grant:r")) {
+        firstGrant = false;
+        clock += timeoutMs;
+        return { success: false, exitCode: null, timedOut: true, stdout: "" };
+      }
+      clock += 10;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setSpillIoForTest({
+      link: () => { throw Object.assign(new Error("injected link fallback"), { code: "EPERM" }); },
+    });
+    setResponseStateByteCapForTests(1_024);
+
+    rememberLarge("resp_async_acl_attempt_budget", "q".repeat(8_000));
+    await flushPendingResponseSpillsForTests();
+
+    expect(deadlines.length).toBeGreaterThanOrEqual(10);
+    expect(Math.max(...deadlines)).toBeLessThanOrEqual(15_000);
+    expect(responseStateMetrics()).toMatchObject({
+      residentCount: 0,
+      spillStubCount: 1,
+      tombstoneCount: 0,
+      spillWrites: 1,
+      spillWriteFailures: 0,
+    });
+  });
+
   test("Windows pending spill publication cannot overwrite a newer same-id generation", async () => {
     setPlatformForTests("win32");
     let release!: () => void;

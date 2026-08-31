@@ -244,16 +244,27 @@ function harden(path: string, mode: number, budget?: SpillAclBudget): void {
   }
 }
 
-async function hardenAsync(path: string, mode: number, retryTimedOutOnce = false): Promise<void> {
+async function hardenAsync(
+  path: string,
+  mode: number,
+  budget: SpillAclBudget,
+  retryTimedOutOnce = false,
+): Promise<void> {
   try {
     chmodSync(path, mode);
   } catch {
     if (!windowsSecretAclApplies()) throw new Error("Response spill permission hardening failed");
   }
   if (windowsSecretAclApplies()) {
+    const deadlineMs = nextSpillHardenDeadlineMs(budget);
+    const options = {
+      required: true,
+      retryTimedOutOnce,
+      ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+    };
     const result = mode === 0o700
-      ? await hardenSecretDirAsync(path, { required: true, retryTimedOutOnce })
-      : await hardenSecretPathAsync(path, { required: true, retryTimedOutOnce });
+      ? await hardenSecretDirAsync(path, options)
+      : await hardenSecretPathAsync(path, options);
     if (!result.ok) throw new Error("Response spill permission hardening failed");
   }
 }
@@ -383,6 +394,7 @@ function publishNoReplace(
 async function publishNoReplaceAsync(
   tempPath: string,
   destinationPath: string,
+  budget: SpillAclBudget,
   retryTimedOutOnce: boolean,
   publicationControl?: ResponseSpillPublicationControl,
 ): Promise<void> {
@@ -398,7 +410,7 @@ async function publishNoReplaceAsync(
       if (spillIoForTest?.copyFileExcl) spillIoForTest.copyFileExcl(tempPath, destinationPath);
       else copyFileSync(tempPath, destinationPath, constants.COPYFILE_EXCL);
       copied = true;
-      await hardenAsync(destinationPath, 0o600, retryTimedOutOnce);
+      await hardenAsync(destinationPath, 0o600, budget, retryTimedOutOnce);
       throwIfPublicationSuperseded(publicationControl);
       const copyFd = openSync(destinationPath, "r");
       try {
@@ -557,9 +569,11 @@ export function writeResponseSpillDurably(
 export async function writeResponseSpillDurablyAsync(
   responseId: string,
   state: Omit<ResponseSpillPayload, "version" | "responseId">,
-  options: ResponseSpillWriteOptions = {},
+  options: ResponseSpillWriteOptions & { aclBudgetMs: number },
 ): Promise<ResponseSpillRef> {
   const publicationControl = options.publicationControl;
+  const aclBudget = spillAclBudget(options.aclBudgetMs);
+  if (!aclBudget) throw new Error("Response spill async ACL budget is required");
   let tempPath: string | null = null;
   let fd: number | null = null;
   try {
@@ -567,7 +581,7 @@ export async function writeResponseSpillDurablyAsync(
     const { bytes, digest, idDigest, contentDigest } = serializedSpill(responseId, state);
     const dir = responseSpillDirectory();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    await hardenAsync(dir, 0o700, options.retryTimedOutOnce === true);
+    await hardenAsync(dir, 0o700, aclBudget, options.retryTimedOutOnce === true);
     throwIfPublicationSuperseded(publicationControl);
 
     tempPath = join(dir, `.response-spill.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
@@ -577,7 +591,7 @@ export async function writeResponseSpillDurablyAsync(
     fsyncFile(fd);
     closeFile(fd);
     fd = null;
-    await hardenAsync(tempPath, 0o600, options.retryTimedOutOnce === true);
+    await hardenAsync(tempPath, 0o600, aclBudget, options.retryTimedOutOnce === true);
     throwIfPublicationSuperseded(publicationControl);
     record("harden");
     const publishTempPath = tempPath;
@@ -594,6 +608,7 @@ export async function writeResponseSpillDurablyAsync(
         await publishNoReplaceAsync(
           publishTempPath,
           destinationPath,
+          aclBudget,
           options.retryTimedOutOnce === true,
           publicationControl,
         );

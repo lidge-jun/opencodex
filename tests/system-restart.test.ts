@@ -645,7 +645,7 @@ describe("acceptSystemRestart", () => {
     });
 
     await scheduled!();
-    expect(calls).toEqual(["latched", "drain", "stop", "start:10123", "recycle", "exit:0"]);
+    expect(calls).toEqual(["latched", "drain", "stop", "start:10123", "recycle", "exit:1"]);
   });
 
   test("spawn failure clears OCX_SERVICE so exit cleanup can restore fences", async () => {

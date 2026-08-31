@@ -185,6 +185,10 @@ remain fail-closed after that bounded recovery. Optional config-directory harden
 per-directory async single-flight, while required config mutation writers retain their existing
 awaited or synchronous fail-closed boundary.
 
+Each ordinary async spill write attempt owns one 30-second ACL budget shared across directory, temp,
+and exclusive-copy destination hardening; the single timeout retry receives one fresh whole-attempt
+budget. No harden step may reopen an independent 30-second window inside either attempt.
+
 Graceful shutdown drains that serialized publication queue to a stable fixed point before snapshot
 serialization. The drain has a wall-clock cap with a reserved synchronous fallback budget; expiry
 supersedes the async writer, claims and removes any temp or destination it still owns, and only then
