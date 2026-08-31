@@ -879,50 +879,76 @@ describe("Responses previous_response_id state", () => {
     expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1, spillWrites: 1, spillWriteFailures: 0 });
   });
 
-  test("counts an in-flight Windows publication against the disk cap", async () => {
+  test("holds the disk cap while a copy-fallback publication has temp and destination on disk", async () => {
     // The cap is a promise about the volume, and a file being created by
-    // writeResponseSpillDurablyAsync is on the volume. On Windows the gap between
-    // "queued" and "installed in states" is however long icacls takes, so accounting
-    // that walks only installed spills reports a satisfied budget while the directory
-    // grows. The measured incident behind this cap put 6.8 GiB on disk in 44 minutes.
+    // writeResponseSpillDurablyAsync is on the volume. Accounting that walks only
+    // installed spills reports a satisfied budget while the directory grows — the
+    // incident behind this cap put 6.8 GiB on disk in 44 minutes.
+    //
+    // The peak is TWO envelopes, not one: when hard-linking fails, publication copies
+    // with COPYFILE_EXCL and then hardens the destination, so the temp and the copy exist
+    // together. This drives that exact path and measures real bytes on disk.
     setPlatformForTests("win32");
+    setResponseStateByteCapForTests(1_024);
+
+    let gateDestinationHarden = false;
     let release!: () => void;
     let entered!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const started = new Promise<void>(resolve => { entered = resolve; });
     let announced = false;
-    setAsyncIcaclsRunnerForTests(async () => {
-      if (!announced) {
-        announced = true;
-        entered();
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (gateDestinationHarden && args.some(arg => arg.endsWith(".spill.json"))) {
+        if (!announced) {
+          announced = true;
+          entered();
+        }
+        await gate;
       }
-      await gate;
       return { success: true, exitCode: 0, timedOut: false, stdout: "" };
     });
-    setResponseStateByteCapForTests(1_024);
 
-    rememberLarge("resp_reserved_inflight", "x".repeat(8_000));
+    // One resident spill already on disk, so the cap has real prior occupancy.
+    rememberLarge("resp_cap_existing", "e".repeat(8_000));
+    await flushPendingResponseSpillsForTests();
+    const existingBytes = getSpilledResponseBytesForTests();
+    expect(existingBytes).toBeGreaterThan(0);
+    expect(spillFileNames(home)).toHaveLength(1);
+
+    // Force the exclusive-copy fallback, then gate the destination hardening that follows
+    // it, so the observation below happens with BOTH files present.
+    setSpillIoForTest({
+      link: () => { throw Object.assign(new Error("EXDEV"), { code: "EXDEV" }); },
+    });
+    gateDestinationHarden = true;
+
+    rememberLarge("resp_cap_inflight", "x".repeat(8_000));
     await started;
     try {
-      // Nothing is installed yet, so the walk over `states` sees nothing on disk.
-      expect(getSpilledResponseBytesForTests()).toBe(0);
-      // The reservation prices the publication anyway, at its PEAK footprint: publication
-      // can fall back from hard-linking to an exclusive copy, and during that fallback the
-      // temp and the destination exist together. Reserving one envelope would leave the
-      // overshoot intact at half its size.
-      const accounted = getAccountedResponseSpillBytesForTests();
-      const pending = pendingResponseSpillMetricsForTests();
-      expect(pending.count).toBe(1);
-      expect(accounted).toBe(pending.bytes * 2);
+      // Real disk: the temp and the copied destination coexist during hardening.
+      const onDisk = spillFileNames(home).length + spillTempNames(home).length;
+      expect(onDisk).toBeGreaterThanOrEqual(3);
+      // The walk over installed spills still reports only the settled file, so accounting
+      // built on it alone would price a three-envelope directory as one.
+      expect(getSpilledResponseBytesForTests()).toBe(existingBytes);
+      // Reservation prices the in-flight publication at its peak, so the accounted total
+      // covers what is actually on the volume.
+      expect(getAccountedResponseSpillBytesForTests())
+        .toBeGreaterThanOrEqual(existingBytes * 3);
     } finally {
       release();
+      setSpillIoForTest(null);
     }
     await flushPendingResponseSpillsForTests();
-    // Settled: the reservation is released exactly once and the accounting collapses to
-    // the real file. A leaked reservation would be monotonic - it would ratchet the usable
+    // Settled: the reservation is released exactly once and accounting collapses to the
+    // real files. A leaked reservation would be monotonic — it would ratchet the usable
     // cap toward zero until nothing could spill at all.
     expect(getAccountedResponseSpillBytesForTests()).toBe(getSpilledResponseBytesForTests());
-    expect(getSpilledResponseBytesForTests()).toBeGreaterThan(0);
+    expect(spillTempNames(home)).toHaveLength(0);
+    // And the newest continuation is still replayable: the cap must not have turned the
+    // fail-closed path into the ordinary one.
+    expect(JSON.stringify(expandPreviousResponseInput({ previous_response_id: "resp_cap_inflight", input: "next" })))
+      .toContain("xxxxxxxx");
   });
 
   test("Windows spill retries one transient ACL timeout without installing a tombstone", async () => {

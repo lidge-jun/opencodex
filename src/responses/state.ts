@@ -16,6 +16,7 @@ import {
   responseSpillDirectory,
   responseSpillPayloadCap,
   markResponseSpillPublicationSuperseded,
+  prospectiveResponseSpillBytes,
   type ResponseSpillPublicationControl,
   type ResponseSpillRef,
   writeResponseSpillDurably,
@@ -241,10 +242,28 @@ let pendingResponseSpillBytes = 0;
  * parallel bookkeeping pass.
  */
 let reservedResponseSpillBytes = 0;
+/**
+ * Bytes of spill publications that could not be cleaned up and will not be released.
+ *
+ * A failed cleanup leaves a real file behind. Counting it as a reservation would be
+ * wrong — reservations settle — so it is tracked separately and never decremented: the
+ * only honest way to price a file nobody can delete. Startup orphan recovery is what
+ * reclaims these across a restart.
+ */
+let unreclaimableResponseSpillBytes = 0;
 
-/** Peak on-disk footprint of publishing `payloadBytes`: temp plus destination copy. */
-function publicationFootprintBytes(payloadBytes: number): number {
-  return payloadBytes * 2;
+/**
+ * Peak on-disk footprint of publishing this candidate: temp plus destination copy.
+ *
+ * Measured from the production serializer rather than from `candidate.sizeBytes`. The
+ * resident measurement omits the `version` field the published envelope carries, so
+ * pricing an admission by it undercounts and lets a request sitting exactly at the cap
+ * still exceed it. Falls back to the resident figure only when serialization fails, which
+ * is the same condition that will fail the publication itself.
+ */
+function publicationFootprintBytes(id: string, candidate: ResidentResponseState): number {
+  const exact = prospectiveResponseSpillBytes(id, spillPayloadForResident(candidate));
+  return (exact ?? candidate.sizeBytes) * 2;
 }
 let responseSpillPublicationTail: Promise<void> = Promise.resolve();
 let responseSpillShutdownBudgetOverride: { totalMs: number; fallbackReserveMs: number } | null = null;
@@ -372,7 +391,7 @@ function queuePendingResponseSpill(
   // by as long as ACL hardening takes, which is the window the measured 6.8 GiB
   // accumulated in. Reclaim first, and only refuse if the peak footprint still does not
   // fit — an eviction pass can free a live continuation's worth of room.
-  const footprint = publicationFootprintBytes(candidate.sizeBytes);
+  const footprint = publicationFootprintBytes(id, candidate);
   if (accountedResponseSpillBytes() + footprint > spillByteCap()) {
     enforceSpilledResponseBudget();
     if (accountedResponseSpillBytes() + footprint > spillByteCap()) {
@@ -391,7 +410,7 @@ function queuePendingResponseSpill(
     cancelled: false,
     released: false,
     sizeBytes: candidate.sizeBytes,
-    reservedBytes: publicationFootprintBytes(candidate.sizeBytes),
+    reservedBytes: footprint,
     publicationControl: createResponseSpillPublicationControl(),
   };
   pendingResponseSpills.add(job);
@@ -494,7 +513,7 @@ function installShutdownFallbackSpill(
   // holding a temp and a destination at once. Re-reserve for its duration so the cap is
   // not blind exactly where the drain does its heaviest work, and settle in `finally` so
   // every return, throw and mismatch releases it.
-  const footprint = publicationFootprintBytes(candidate.sizeBytes);
+  const footprint = publicationFootprintBytes(job.id, candidate);
   reservedResponseSpillBytes += footprint;
   try {
     ref = writeResponseSpillDurably(job.id, spillPayloadForResident(candidate), { aclBudgetMs });
@@ -557,7 +576,17 @@ function supersedeShutdownFallbackBatch(
   }
   for (const { job } of pending) {
     const cleanupFailure = cleanupSupersededResponseSpillPublication(job.publicationControl);
-    if (cleanupFailure) failures.push(cleanupFailure);
+    if (cleanupFailure) {
+      failures.push(cleanupFailure);
+      // Cleanup failed, so the async temp or destination is STILL on the volume. Releasing
+      // the reservation would un-account a file that exists, and the fallback write that
+      // follows reserves only its own footprint — three envelopes on disk priced as two.
+      //
+      // These bytes are not a reservation: nothing will release them, because the file
+      // could not be removed. They are unreclaimable occupancy, and the cap has to keep
+      // seeing them or it stops describing the volume.
+      unreclaimableResponseSpillBytes += job.reservedBytes;
+    }
     releasePendingResponseSpill(job);
   }
 }
@@ -718,7 +747,17 @@ function spilledResponseBytes(): number {
  * measured incident this cap answers accumulated 6.8 GiB in 44 minutes.
  */
 function accountedResponseSpillBytes(): number {
-  return spilledResponseBytes() + reservedResponseSpillBytes;
+  // Superseded generations a pending job still owns are files on disk too. A same-id
+  // replacement removes the old spill from `states` and hands its ref to the job, so
+  // counting only `states` plus `pendingSpillUnlinks` loses it for the whole publication
+  // — during a copy fallback that is old generation + new temp + new destination, three
+  // envelopes priced as two.
+  let ownedBySpillJobs = 0;
+  for (const job of pendingResponseSpills) {
+    if (job.supersededSpill) ownedBySpillJobs += job.supersededSpill.payloadBytes;
+  }
+  return spilledResponseBytes() + reservedResponseSpillBytes + ownedBySpillJobs
+    + unreclaimableResponseSpillBytes;
 }
 
 /** Test-only: lower/restore the durable spill cap (null restores the default). */
@@ -2186,6 +2225,8 @@ export function clearResponseStateMemoryForTests(): void {
 export function clearResponseStateForTests(): void {
   for (const entry of states.values()) deleteOwnedSpills(entry);
   clearResponseStateMemoryForTests();
+  reservedResponseSpillBytes = 0;
+  unreclaimableResponseSpillBytes = 0;
   try {
     unlinkSync(snapshotPath());
   } catch {

@@ -470,6 +470,26 @@ function serializedSpill(
   };
 }
 
+/**
+ * Exact on-disk payload size this spill WOULD occupy, measured before publication.
+ *
+ * Callers that reserve disk against a cap need the real envelope, not the resident
+ * measurement: the resident figure omits the `version` field the published payload
+ * carries, so pricing an admission by it undercounts and lets a request that sits exactly
+ * at the cap still exceed it. Shares `serializedSpill` rather than describing it, so the
+ * two cannot drift.
+ */
+export function prospectiveResponseSpillBytes(
+  responseId: string,
+  state: Omit<ResponseSpillPayload, "version" | "responseId">,
+): number | null {
+  try {
+    return serializedSpill(responseId, state).bytes.byteLength;
+  } catch {
+    return null;
+  }
+}
+
 function responseSpillWriteError(cause: unknown): NodeJS.ErrnoException {
   const error = new Error("Response spill write failed", { cause }) as NodeJS.ErrnoException;
   if (cause && typeof cause === "object" && "code" in cause) {
