@@ -184,46 +184,50 @@ describe("codex routing", () => {
     updateAccountQuota("b", 10);
     expect(resolveCodexAccountForThread("thread-terminal-new", config, now)).toBe("b");
 
-    // Same pool, but a thread already bound to A: it must rebind rather than keep an
-    // account that cannot serve it. Milliseconds this time, so both units are exercised
-    // through the real selection path and not only through the scorer.
+    // Same pool, but a thread already BOUND to A. Bind it while A is cool, so the rebind
+    // below is a real transition rather than a first selection that happened to pick B.
+    clearAccountQuota("a");
+    clearAccountQuota("b");
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    const bound = makeConfig({ activeCodexAccountId: "a" });
+    expect(resolveCodexAccountForThread("thread-terminal-bound", bound, now)).toBe("a");
+    // A's burst window fills, in MILLISECONDS this time so both units run through the real
+    // selection path. The bound thread must move rather than keep an account that cannot
+    // serve it.
     clearAccountQuota("a");
     setAccountQuotaFromParsed("a", { shortPercent: 100, shortResetAt: now + 3_600_000 });
-    const bound = makeConfig({ activeCodexAccountId: "a" });
-    expect(resolveCodexAccountForThread("thread-terminal-bound", bound, now - 1000)).toBeString();
     expect(resolveCodexAccountForThread("thread-terminal-bound", bound, now)).toBe("b");
 
-    // And once the window resets, A is selectable again. Without this the fix would trade
-    // "exhausted account stays selected" for "recovered account stays excluded".
+    // And once the window resets, A stays selected. B carries KNOWN headroom here on
+    // purpose: with both accounts unknown, A would be kept by default and the assertion
+    // would hold even against a freshness-blind scorer. Against one, expired-A scores 100
+    // and the request moves to B.
     clearAccountQuota("a");
     clearAccountQuota("b");
     setAccountQuotaFromParsed("a", { shortPercent: 100, shortResetAt: now - 60_000 });
+    updateAccountQuota("b", 20);
     const recovered = makeConfig({ activeCodexAccountId: "a" });
     expect(resolveCodexAccountForThread("thread-terminal-recovered", recovered, now)).toBe("a");
   });
 
-  test("a tiered pool still moves off a terminal high-priority account (#3029)", () => {
-    // The pool carries DIFFERENT priorities here, which is the only shape that reaches
-    // selectPriorityTier's headroom check. A outranks B and B is worse on ordinary usage,
-    // so nothing except the terminal reading can move the selection.
+  test("the priority tier reads the request clock, not wall time (#3029)", () => {
+    // selectPriorityTier consults hasCodexQuotaHeadroom only when the pool carries
+    // DIFFERENT priorities, so a clock dropped in that lambda is invisible to an ordinary
+    // pool. Higher numbers run earlier, so A (2) outranks B (1).
     //
-    // Note on scope: this asserts the tiered path honours a terminal window. It does NOT
-    // isolate the clock threaded through that helper - selection reaches the same answer
-    // by another route when the clock is dropped there, so a green result here is not
-    // evidence the threading is intact. The scorer and subagent cases carry that proof.
-    const now = Date.now() + 7 * 24 * 60 * 60 * 1000;
-    const config = makeConfig({ activeCodexAccountId: "a" });
-    setCodexAccountPriority(config, "a", 1);
-    setCodexAccountPriority(config, "b", 2);
+    // The clock is historical, well before wall time. A's window is full for an hour after
+    // THAT instant, so it is live against the request clock and long expired against
+    // Date.now(). With the correct clock the tier sees A drained and descends to B; reading
+    // wall time makes A look unknown, the tier keeps it, and fill-first hands back A.
+    const now = 1_700_000_000_000;
+    const config = makeConfig({ activeCodexAccountId: "a", accountPoolStrategy: "fill-first" });
+    setCodexAccountPriority(config, "a", 2);
+    setCodexAccountPriority(config, "b", 1);
 
     setAccountQuotaFromParsed("a", { shortPercent: 100, shortResetAt: now + 3_600_000 });
-    // B is WORSE on ordinary usage, so lowest-usage selection would prefer A. Only the
-    // tier check - which reads the clock through hasCodexQuotaHeadroom - can move the
-    // selection to B, which is what makes this case load-bearing for the clock.
-    updateAccountQuota("b", 70);
+    updateAccountQuota("b", 20);
 
-    // A outranks B, but its burst window is full at the request's now, so the tier must
-    // fall through to B. Reading Date.now() here would score A unknown and keep it.
     expect(resolveCodexAccountForThread("thread-priority-terminal", config, now)).toBe("b");
   });
 

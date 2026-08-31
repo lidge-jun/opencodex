@@ -1596,6 +1596,7 @@ function pickPriorityPreemption(
     config,
     eligible.filter(id => hasCodexQuotaHeadroom(config, id, selectionOptions, now)),
     selectionOptions,
+    now,
   );
 }
 
@@ -1996,7 +1997,7 @@ export function resolveCodexAccountForThreadDetailed(
       && isCodexAccountSelectable(config, entry.accountId, now, quotaScope, selectionOptions);
     const failoverReady = shouldFailover(config, entry.accountId, now);
     const healthyForSharedAffinity = selectableForSharedState
-      && hasCodexQuotaHeadroom(config, entry.accountId, sharedSelectionOptions)
+      && hasCodexQuotaHeadroom(config, entry.accountId, sharedSelectionOptions, now)
       && !failoverReady;
     if (
       selectableForRequest
@@ -2092,7 +2093,7 @@ export function resolveCodexAccountForThreadDetailed(
     sharedSelectionOptions,
   );
   const activeHealthyForSharedSelection = activeSelectableForSharedState
-    && hasCodexQuotaHeadroom(config, active, sharedSelectionOptions)
+    && hasCodexQuotaHeadroom(config, active, sharedSelectionOptions, now)
     && !shouldFailover(config, active, now);
   if (!isCodexAccountSelectable(config, active, now, quotaScope, selectionOptions)) {
     const fallback = pickLowestUsageCodexAccount(config, active, now, quotaScope, selectionOptions);
