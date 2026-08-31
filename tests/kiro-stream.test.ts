@@ -768,6 +768,22 @@ describe("kiro adapter — parseStream", () => {
         .map(event => (event as { arguments: string }).arguments).join("")).toBe(args);
       expect(events.filter(event => event.type === "tool_call_end")).toHaveLength(1);
 
+      // Counts and payloads alone would pass on a reordered stream, or on an early `done` followed by
+      // a second one. Pin the positions too: commentary before the call starts, every argument delta
+      // inside the call, and exactly one terminal after it closes.
+      const indicesOf = (type: string) => events
+        .map((event, index) => (event.type === type ? index : -1))
+        .filter(index => index >= 0);
+      const [commentaryAt] = indicesOf("text_delta");
+      const [startAt] = indicesOf("tool_call_start");
+      const [endAt] = indicesOf("tool_call_end");
+      const doneAt = indicesOf("done");
+      expect(commentaryAt).toBeLessThan(startAt);
+      expect(startAt).toBeLessThan(endAt);
+      expect(indicesOf("tool_call_delta").every(at => at > startAt && at < endAt)).toBe(true);
+      expect(doneAt).toHaveLength(1);
+      expect(doneAt[0]).toBeGreaterThan(endAt);
+
       // The turn stays open for the tool result: no error, no truncation, no premature terminal.
       expect(events.some(event => event.type === "error")).toBe(false);
       expect(events.at(-1)).toMatchObject({ type: "done", endTurn: false });

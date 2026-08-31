@@ -163,6 +163,7 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 툴이 있는 턴에는 비공개 `codex_kiro_final_answer`를 추가합니다. 완료 재시도는 빈 assistant/user 턴을 만들지
 않고 원래 user/tool-result를 보존하며, 전송 전에 역할 교대·빈 구조 메시지·tool use/result 짝을 검증합니다.
 완료 툴 답변은 이전 commentary와 같더라도 `final_answer`로 내보냅니다.
+사용자만 줄 수 있는 결정·정보·설명이 없어 더 진행할 수 없을 때도 그 질문을 완료 툴로 보내고 멈추도록 계약이 지시합니다. 이때도 commentary가 아니라 턴이 끝난 `final_answer`로 도착합니다.
 
 ### Reasoning effort
 

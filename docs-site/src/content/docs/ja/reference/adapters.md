@@ -150,6 +150,7 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 ツール有効ターンでは非公開の `codex_kiro_final_answer` を追加します。再試行は空の assistant/user ターンを
 生成せず、元の user/tool-result を保持し、送信前にロール交互性、空の構造メッセージ、tool use/result の対応を検証します。
 完了ツールの回答は以前の commentary と同じでも `final_answer` として送出します。
+ユーザーしか出せない判断・情報・確認が得られず先に進めない場合も、その質問を完了ツールで送って停止するよう契約が指示します。これも commentary ではなくターンを終えた `final_answer` として届きます。
 
 ### Reasoning effort
 

@@ -150,6 +150,7 @@ Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 
 启用工具时，opencodex 会添加私有 `codex_kiro_final_answer`。重试不会制造空的 assistant/user 回合，
 而会保留原始 user/tool-result，并在发送前校验角色交替、非空结构消息以及 tool use/result 配对。
 完成工具的回答即使与先前 commentary 完全相同，也会作为 `final_answer` 发出。
+当缺少只有用户能提供的决定、信息或澄清而无法继续时，契约同样要求把该问题通过完成工具发出并停止；它也作为结束回合的 `final_answer` 到达，而不是 commentary。
 
 ### Reasoning effort
 

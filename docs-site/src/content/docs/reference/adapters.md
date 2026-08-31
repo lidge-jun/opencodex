@@ -255,6 +255,15 @@ answer. When the web-search sidecar is active, released
 commentary still streams ahead of the terminal event; only the events needed to decide whether the
 model requested a synthetic search remain buffered.
 
+A question the model cannot proceed without is also a final answer. The injected contract tells a
+routed model that when it needs a decision, a piece of information, or a clarification only the user
+can give, it should deliver that question through `codex_kiro_final_answer` and stop, rather than
+writing the question as ordinary text and continuing. Such a turn arrives like any other completed
+answer: final text with the turn ended, not commentary and not a client tool call. Without this,
+the contract described only "still working" and "fully complete", and a model holding a blocking
+question had no way to say so — the observed result was a question and a self-override emitted as one
+message, followed by another tool call from the same inference.
+
 If Kiro stops without calling the completion tool, the adapter makes one continuation. Reasoning-
 only retries preserve the original valid user/tool-result turn rather than manufacturing an empty
 assistant message; visible progress is replayed with a non-empty adapter-owned instruction. Before

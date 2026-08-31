@@ -248,6 +248,11 @@ sidecar'ı etkinken serbest bırakılan yorum terminal olayından önce yine de 
 yalnızca modelin sentetik bir arama talep edip etmediğine karar vermek için
 gereken olaylar arabelleğe alınmış olarak kalır.
 
+Yalnızca kullanıcının verebileceği bir karar, bilgi ya da açıklama olmadan devam
+edilemiyorsa, sözleşme bu soruyu tamamlama aracıyla gönderip durmayı söyler. Böyle
+bir tur da yorum ya da istemci araç çağrısı değil, turu bitiren `final_answer`
+olarak ulaşır.
+
 Kiro tamamlama aracını çağırmadan durursa adaptör bir devam işlemi yapar.
 Yalnızca akıl yürütme yeniden denemeleri boş bir asistan mesajı üretmek yerine
 orijinal geçerli kullanıcı/araç sonucu turunu korur; görünür ilerleme boş
@@ -323,5 +328,4 @@ Vizyon duyarlı adaptörler tarafından kullanılan paylaşılan yardımcılar:
 - `contentPartsToText(content)` — salt metin araç mesajları için içerik
   parçalarını metne düzleştirir (açıklanmayan bir görsel kısa bir `[image]`
   işaretçisi haline gelir, asla belirteç patlatan bir base64 bloğu olmaz).
-
 

@@ -597,7 +597,9 @@ describe("kiro adapter — buildRequest", () => {
     const injected: string = firstUser.content;
 
     // The third state has to be nameable, and the specific defect shape has to be named as wrong.
-    expect(injected).toContain("blocked on a decision only the user can make");
+    // The trigger covers information and clarification, not just a decision: being blocked on a
+    // missing account id is the same dead end as being blocked on a choice.
+    expect(injected).toContain("cannot continue until the user supplies a decision, information, or a clarification");
     expect(injected).toContain("that question is your final answer");
     expect(injected).toContain("Do not write the question as ordinary text and then answer it yourself.");
 
@@ -607,7 +609,7 @@ describe("kiro adapter — buildRequest", () => {
     const completion = current.userInputMessageContext.tools
       .find((tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name === KIRO_COMPLETION_TOOL_NAME);
     const description: string = completion.toolSpecification.description;
-    expect(description).toContain("blocked on a decision only the user can make");
+    expect(description).toContain("cannot continue until the user supplies a decision, information, or a clarification");
     expect(completion.toolSpecification.inputSchema.json.properties.answer.description)
       .toContain("blocking question");
 
@@ -622,7 +624,7 @@ describe("kiro adapter — buildRequest", () => {
   // soliciting NEW work; it reads as a blanket ban on asking anything, which left continuing to work
   // as the only endorsed move.
   test("the completion retry message permits a blocking question but still refuses a new task", () => {
-    expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain("blocked on a decision only the user can make");
+    expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain("cannot continue until the user supplies a decision, information, or a clarification");
     expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain(`call ${KIRO_COMPLETION_TOOL_NAME} now with that question as the answer`);
     // The narrowing must not reopen the loop this message was written to close.
     expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain("Do not solicit a new task");
