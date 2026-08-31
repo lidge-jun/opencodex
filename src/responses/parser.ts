@@ -250,12 +250,20 @@ function buildTools(tools: unknown[] | undefined): OcxTool[] | undefined {
       // Identity is the un-namespaced synthetic root (`imageGeneration: true`), not
       // the bare name: a namespaced ordinary `image_gen` must not suppress it.
       const synthetic = buildImageTool();
-      const rootIdx = out.findIndex(tool => tool.name === IMAGE_GEN_TOOL_NAME && !tool.namespace);
-      if (rootIdx >= 0) {
-        if (!out[rootIdx]!.imageGeneration) out[rootIdx] = synthetic;
-      } else {
-        out.push(synthetic);
+      // Every un-namespaced `image_gen` collides on one wire name, so removing only
+      // the first leaves a second root behind and the catalog stays ambiguous.
+      // Drop all root collisions, keep namespaced entries, then insert exactly one
+      // synthetic root — at the earliest colliding position so declaration order is
+      // preserved for models that read the catalog positionally.
+      let insertAt = -1;
+      for (let i = out.length - 1; i >= 0; i -= 1) {
+        const tool = out[i]!;
+        if (tool.name !== IMAGE_GEN_TOOL_NAME || tool.namespace) continue;
+        out.splice(i, 1);
+        insertAt = i;
       }
+      if (insertAt >= 0) out.splice(insertAt, 0, synthetic);
+      else out.push(synthetic);
     }
     else if (typeof t.name === "string" && t.type !== "web_search" && t.type !== "image_generation") {
       // Any OTHER named tool (e.g. a native/computer-use tool type opencodex doesn't explicitly

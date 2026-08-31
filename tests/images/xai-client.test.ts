@@ -197,4 +197,24 @@ describe("callXaiImages", () => {
     await callXaiImages({ prompt: "x", aspectRatio: "2:1" }, AUTH);
     expect(JSON.parse((badCalls[0]!.init?.body as string) ?? "{}")).not.toHaveProperty("aspect_ratio");
   });
+
+  test("an explicit auto suppresses the size-derived ratio instead of falling back", async () => {
+    const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x", size: "1792x1024", aspectRatio: "auto" }, AUTH);
+    const body = JSON.parse((calls[0]!.init?.body as string) ?? "{}");
+    // "1792x1024" would map to 16:9 if the explicit auto were treated as absent.
+    expect(body).not.toHaveProperty("aspect_ratio");
+  });
+
+  test("an unknown explicit literal does not fall back to the size mapping either", async () => {
+    const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x", size: "1024x1024", aspectRatio: "2:1" }, AUTH);
+    expect(JSON.parse((calls[0]!.init?.body as string) ?? "{}")).not.toHaveProperty("aspect_ratio");
+  });
+
+  test("an absent aspect_ratio still derives the ratio from size", async () => {
+    const calls = stubFetch(200, { data: [{ b64_json: "dGVzdA==" }] });
+    await callXaiImages({ prompt: "x", size: "1792x1024" }, AUTH);
+    expect(JSON.parse((calls[0]!.init?.body as string) ?? "{}").aspect_ratio).toBe("16:9");
+  });
 });

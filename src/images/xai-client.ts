@@ -48,7 +48,12 @@ export function resolveXaiAspectRatioLiteral(value: unknown): string | undefined
 }
 
 function resolveAspectRatio(req: XaiImageRequest): string | undefined {
-  if (req.aspectRatio?.trim()) return resolveXaiAspectRatioLiteral(req.aspectRatio);
+  // An explicit aspect_ratio owns the decision even when it resolves to nothing:
+  // "auto" means "let xAI choose", so falling back to a size-derived ratio would
+  // silently override the caller. Only an absent field consults `size`.
+  if (req.aspectRatio !== undefined && req.aspectRatio.trim()) {
+    return resolveXaiAspectRatioLiteral(req.aspectRatio);
+  }
   return mapSizeToAspectRatio(req.size);
 }
 

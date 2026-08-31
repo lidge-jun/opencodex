@@ -10,7 +10,7 @@ description: 在使用非 OpenAI 提供方时，将 image_generation 托管工�
 ## 前提条件
 
 - **启用桥接**：在配置中设置 `images.bridgeEnabled: true`（默认关闭，以避免意外产生 xAI 费用 - 见下文的 [配置](#configuration)）。
-- 配置一个带有 **API 密钥** 的 `xai` provider 条目。桥接会将执行固定到注册表中的 xAI Images 端点（`https://api.x.ai/v1`）；任何已配置的 `baseUrl` 覆盖都会被图像调用忽略。仅有 OAuth / `ocx login xai` **不会** 启用这条 sidecar 循环。同一项 `bridgeEnabled` 会启用另一条 Codex `/v1/images` 中继，让内置 `image_gen` 客户端用 Grok CLI 授权调用 Imagine — 见 [内置图像生成](/guides/codex-integration/#built-in-image-generation-image_gen)。若该授权（或 xAI API key）缺失，`/v1/images` 会返回错误，而不会落到 ChatGPT。
+- 配置一个带有 **API 密钥** 的 `xai` provider 条目。桥接会将执行固定到注册表中的 xAI Images 端点（`https://api.x.ai/v1`）；任何已配置的 `baseUrl` 覆盖都会被图像调用忽略。仅有 OAuth / `ocx login xai` **不会** 启用这条 sidecar 循环。同一项 `bridgeEnabled` 会启用另一条 Codex `/v1/images` 中继，让内置 `image_gen` 客户端用 Grok CLI 授权调用 Imagine — 见 [内置图像生成](/guides/codex-integration/#built-in-image-generation-image_gen)。若该授权（或 xAI API key）缺失，`/v1/images` 会返回错误，而不会落到 ChatGPT。只有在 `images.bridgeEnabled` 为 `true` 且未设置 `images.provider` 时，这条中继才拥有该路由；显式设置 `images.provider` 后，`/v1/images` 归该 provider 处理，其校验错误按原样返回，不会改由 xAI 重试。
 
   ```json
   {

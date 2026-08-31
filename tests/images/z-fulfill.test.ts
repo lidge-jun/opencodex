@@ -204,7 +204,7 @@ describe("fulfillImageCall", () => {
     expect(xaiCalls[0]!.n).toBe(4);
   });
 
-  test("forwards a validated aspect_ratio to callXaiImages", async () => {
+  test("forwards an aspect_ratio literal to callXaiImages", async () => {
     reset();
     await fulfillImageCall(
       { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x", aspect_ratio: "16:9", size: "1024x1024" }) },
@@ -213,10 +213,30 @@ describe("fulfillImageCall", () => {
     expect(xaiCalls[0]!.aspectRatio).toBe("16:9");
   });
 
-  test("drops auto and illegal aspect_ratio values", async () => {
+  test("forwards auto verbatim so the client can suppress the size-derived ratio", async () => {
     reset();
     await fulfillImageCall(
-      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x", aspect_ratio: "auto" }) },
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x", aspect_ratio: "auto", size: "1792x1024" }) },
+      plan, { spent: 0 },
+    );
+    // Folding "auto" to undefined here would make the request indistinguishable from
+    // one that never carried the field, and callXaiImages would derive 16:9 from size.
+    expect(xaiCalls[0]!.aspectRatio).toBe("auto");
+  });
+
+  test("an illegal literal is still forwarded for the client to reject", async () => {
+    reset();
+    await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x", aspect_ratio: "2:1" }) },
+      plan, { spent: 0 },
+    );
+    expect(xaiCalls[0]!.aspectRatio).toBe("2:1");
+  });
+
+  test("a non-string aspect_ratio is dropped before the client sees it", async () => {
+    reset();
+    await fulfillImageCall(
+      { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x", aspect_ratio: 169 }) },
       plan, { spent: 0 },
     );
     expect(xaiCalls[0]!.aspectRatio).toBeUndefined();

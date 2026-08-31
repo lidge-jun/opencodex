@@ -321,7 +321,10 @@ async function connectPublicHttps(
   const pinned = pickPinnedAddress(resolved.addresses);
   const download = options.pinnedDownload ?? ((resource, peer, signal) =>
     pinnedHttpGet(resource, peer, signal, {
-      maxBytes: options.maxBytes,
+      // `maxBytes` is optional in pinnedHttpGet, so forwarding undefined removes the
+      // cap entirely instead of inheriting a default. Keep the 50 MiB ceiling when a
+      // caller omits a limit, and honour an explicit tighter one.
+      maxBytes: options.maxBytes ?? MAX_DOWNLOAD_BYTES,
       context: `${options.context} download`,
     }));
   return download(url, pinned, options.signal);

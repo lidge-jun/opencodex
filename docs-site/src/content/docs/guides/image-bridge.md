@@ -23,6 +23,11 @@ xAI Grok Imagine, so the model you're actually chatting with can still generate 
   If that grant (or an xAI API key) is missing, `/v1/images` returns an error instead of
   falling through to ChatGPT.
 
+  The relay only owns the route when no image provider is configured: it runs when
+  `images.bridgeEnabled` is `true` **and** `images.provider` is omitted. Setting
+  `images.provider` explicitly hands `/v1/images` to that provider, and its own
+  validation errors are returned as-is rather than being retried through xAI.
+
   ```json
   {
     "providers": {
