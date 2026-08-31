@@ -936,9 +936,26 @@ export function resolveComboCatalogMember(
   };
 }
 
+/**
+ * Whether a model id's trailing segment is a release date.
+ *
+ * `YYYYMMDD` is unambiguous. `MMDD` is not — providers on the Alibaba Token
+ * Plan and DeepSeek date their ids that way (`deepseek-v4-pro-0813`), but four
+ * digits are also how a version reads (`claude-haiku-4-5-2025`). Requiring a
+ * real month and day separates them: `0813` is August 13th, `2025` has no
+ * twentieth month.
+ */
+function isDateSuffix(suffix: string): boolean {
+  if (/^\d{8}$/.test(suffix)) return true;
+  if (!/^\d{4}$/.test(suffix)) return false;
+  const month = Number(suffix.slice(0, 2));
+  const day = Number(suffix.slice(2));
+  return month >= 1 && month <= 12 && day >= 1 && day <= 31;
+}
+
 export function isDatedVariantId(liveId: string, configuredId: string): boolean {
   if (!liveId.startsWith(`${configuredId}-`)) return false;
-  return /^\d{8}$/.test(liveId.slice(configuredId.length + 1));
+  return isDateSuffix(liveId.slice(configuredId.length + 1));
 }
 
 export const lastDropWarnSignature = new Map<string, string>();
@@ -1669,7 +1686,13 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   const droppedConfiguredIds: string[] = [];
   for (const candidate of configured) {
     if (present.has(candidate.id)) continue;
-    const dated = out.find(live => isDatedVariantId(live.id, candidate.id));
+    // Either way round. The fold exists because upstream can return the same
+    // model under a dated id, but the pair is just as often the other way:
+    // the account is configured with `deepseek-v4-pro-0813` and discovery
+    // answers `deepseek-v4-pro`. Only the first case was folded, so a
+    // configured, callable model was dropped from the authoritative catalog.
+    const dated = out.find(live =>
+      isDatedVariantId(live.id, candidate.id) || isDatedVariantId(candidate.id, live.id));
     if (dated) {
       out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap));
       present.add(candidate.id);

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { mergeConfiguredModelsIntoLiveCatalog } from "../src/codex/catalog/provider-fetch";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -3651,6 +3652,37 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
+  // #3024: providers on the Alibaba Token Plan and DeepSeek date their ids with
+  // MMDD rather than YYYYMMDD, so the fold never matched them and a configured,
+  // callable model was dropped from the authoritative catalog while discovery
+  // still reported "ok".
+  test("isDatedVariantId accepts an MMDD suffix that is a real date", () => {
+    expect(isDatedVariantId("deepseek-v4-pro-0813", "deepseek-v4-pro")).toBe(true);
+    expect(isDatedVariantId("deepseek-v4-flash-0731", "deepseek-v4-flash")).toBe(true);
+    expect(isDatedVariantId("model-1231", "model")).toBe(true);
+  });
+
+  test("isDatedVariantId still rejects four digits that are not a date", () => {
+    // A version number reads the same way as an MMDD, so the month and day have
+    // to be real ones: "2025" has no twentieth month, "0001" no zeroth month.
+    expect(isDatedVariantId("claude-haiku-4-5-2025", "claude-haiku-4-5")).toBe(false);
+    expect(isDatedVariantId("model-0001", "model")).toBe(false);
+    expect(isDatedVariantId("model-1300", "model")).toBe(false);
+    expect(isDatedVariantId("model-1240", "model")).toBe(false);
+  });
+
+  test("keeps a configured dated id when discovery answers the base id", () => {
+    // The reverse of the case the fold was written for: the account is
+    // configured with the dated id and upstream returns the base one.
+    const { models, droppedConfiguredIds } = mergeConfiguredModelsIntoLiveCatalog({
+      name: "deepseek",
+      provider: {},
+      models: [{ id: "deepseek-v4-pro" } as never],
+      configured: [{ id: "deepseek-v4-pro-0813" } as never],
+    });
+    expect(droppedConfiguredIds).toEqual([]);
+    expect(models.map(m => m.id)).toContain("deepseek-v4-pro-0813");
+  });
   test("isDatedVariantId matches only <alias>-YYYYMMDD", () => {
     expect(isDatedVariantId("claude-haiku-4-5-20251001", "claude-haiku-4-5")).toBe(true);
     expect(isDatedVariantId("claude-haiku-4-5-2025", "claude-haiku-4-5")).toBe(false);
