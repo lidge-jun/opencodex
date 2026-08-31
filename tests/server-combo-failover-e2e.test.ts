@@ -36,6 +36,7 @@ import {
   responseStatePersistPendingForTests,
 } from "../src/responses/state";
 import { clearCursorThreadContinuityForTests } from "../src/adapters/cursor/thread-continuity";
+import { COMPACT_PROMPT, encodeCompactionSummary } from "../src/responses/compaction";
 
 // Full-suite Windows load: startServer + combo rename/delete management flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -112,6 +113,7 @@ mock.module("../src/lib/upstream-retry", () => ({
 }));
 
 const { handleResponses } = await import("../src/server/responses");
+const { handleResponsesCompact } = await import("../src/server/responses/compact");
 type HandleOptions = NonNullable<Parameters<typeof handleResponses>[3]>;
 
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth/token";
@@ -2305,7 +2307,7 @@ describe("server combo failover 030 activation matrix", () => {
     let backupHits = 0;
     const auth: string[] = [];
     globalThis.fetch = (async (input, init) => {
-      const url = input instanceof Request ? input.url : String(input);
+      const url = typeof input === "object" && input !== null && "url" in input ? String((input as Request).url) : String(input);
       if (url === XAI_OAUTH_DISCOVERY_URL) {
         return Response.json({ authorization_endpoint: "https://auth.x.ai/oauth/authorize", token_endpoint: TOKEN_ENDPOINT });
       }
@@ -2950,5 +2952,133 @@ describe("cursor conversation continuity across store:false chains", () => {
 
     expect(seen).toHaveLength(2);
     expect(seen[1]).toBe(seen[0]);
+  });
+});
+
+describe("combo compact failover", () => {
+  function compactRequest(body: Record<string, unknown>): Request {
+    return new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function postCompactLogged(config: OcxConfig): Promise<Response> {
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const start = Date.now();
+    const response = await handleResponsesCompact(compactRequest({
+      model: "combo/free",
+      stream: false,
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] }],
+    }), config, logCtx);
+    loggedRequestSequence += 1;
+    return responseWithDeferredRequestLog(response, `combo-compact-${loggedRequestSequence}`, start, logCtx);
+  }
+
+  function canonicalPoolConfig(
+    targets: Array<{ provider: string; model: string }>,
+    backupUrl?: string,
+  ): { config: OcxConfig } {
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "key",
+        apiKey: "combo-compact-key",
+      },
+      backup: provider("openai-chat", backupUrl ?? "http://127.0.0.1:9", "key-b"),
+    }, targets);
+    return { config };
+  }
+
+  test("native-capable first target 429 hops compact to the backup target", async () => {
+    const childBodies: Array<Record<string, unknown>> = [];
+    const b = serve(async request => {
+      childBodies.push(JSON.parse(await request.text()) as Record<string, unknown>);
+      return chatStream("compact backup");
+    });
+    const { config } = canonicalPoolConfig([
+      { provider: "openai", model: "gpt-5.4" },
+      { provider: "backup", model: "m1" },
+    ], baseUrl(b));
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === "object" && input !== null && "url" in input ? String((input as Request).url) : String(input);
+      if (url.includes("chatgpt.com")) {
+        return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+      }
+      return originalFetch(input as RequestInfo, init);
+    }) as typeof fetch;
+
+    const response = await postCompactLogged(config);
+    expect(response.status).toBe(200);
+    const json = await response.json() as { output?: unknown[] };
+    expect(JSON.stringify(json.output)).toContain("compact backup");
+
+    // The backup child received the synthetic summarizer turn as SSE, with the
+    // summarizer prompt present in its chat wire body.
+    expect(childBodies).toHaveLength(1);
+    expect(childBodies[0]!.stream).toBe(true);
+    expect(JSON.stringify(childBodies[0]!.messages)).toContain("CONTEXT CHECKPOINT COMPACTION");
+
+    const { log } = await latestAttemptReceipts(config);
+    const attempts = log.attempts as Array<Record<string, unknown>>;
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({
+      provider: "openai",
+      adapter: "openai-responses",
+      status: 429,
+    });
+    expect(attempts[1]).toMatchObject({ provider: "backup", adapter: "openai-chat", status: 200 });
+  });
+
+  test("combo compact runs the synthetic turn as SSE so a canonical child can serve it", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const { config } = canonicalPoolConfig([{ provider: "openai", model: "gpt-5.4" }]);
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!url.includes("chatgpt.com")) {
+        return originalFetch(input as RequestInfo, init);
+      }
+      // Only the codex/responses child turn is under test; side probes (e.g. the
+      // wham/usage quota check) just get a tolerated non-2xx.
+      if (!url.includes("backend-api/codex/responses")) {
+        return Response.json({ error: { message: "probe not under test" } }, { status: 403 });
+      }
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      bodies.push(body);
+      // Canonical ChatGPT Responses rejects non-streaming turns; a stream:false child
+      // request would strand every canonical-only combo here before the SSE coercion.
+      if (body.stream !== true) {
+        return Response.json({ error: { message: "non-streaming turns are rejected" } }, { status: 400 });
+      }
+      const completed = {
+        type: "response.completed",
+        response: {
+          id: "resp_compact",
+          status: "completed",
+          output: [{ type: "compaction", encrypted_content: encodeCompactionSummary("compact summary") }],
+        },
+      };
+      return new Response([
+        "event: response.created",
+        'data: {"type":"response.created","response":{"id":"resp_compact","status":"in_progress"}}',
+        "",
+        `event: ${completed.type}`,
+        `data: ${JSON.stringify(completed)}`,
+        "",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    const response = await postCompactLogged(config);
+    expect(response.status).toBe(200);
+    const json = await response.json() as { output?: unknown[] };
+    expect(JSON.stringify(json.output)).toContain("compact summary");
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]!.stream).toBe(true);
+    // Canonical children keep the native compaction_trigger item — only
+    // non-native targets get the summarizer prompt injected (covered above).
+    expect(JSON.stringify(bodies[0]!.input)).toContain("compaction_trigger");
   });
 });

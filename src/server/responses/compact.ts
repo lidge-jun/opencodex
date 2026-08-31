@@ -559,9 +559,9 @@ export async function handleResponsesCompact(
     }
   }
 
- // Native /responses/compact exists on the canonical ChatGPT backend and on the
- // official OpenAI API. Any other Responses-shaped gateway must take the routed
- // summarizer path below, or compaction fails against an endpoint it never had (#422).
+  // Native /responses/compact exists on the canonical ChatGPT backend and on the
+  // official OpenAI API. Any other Responses-shaped gateway must take the routed
+  // summarizer path below, or compaction fails against an endpoint it never had (#422).
   // Combo-resolved targets skip native compact so failover can advance through the
   // combo target list when the picked model returns 429/5xx — the routed path below
   // dispatches through handleResponses → handleComboResponses with full failover.
@@ -1006,8 +1006,10 @@ export async function handleResponsesCompact(
     ...raw,
     // Canonical ChatGPT Responses rejects non-streaming turns. Daybreak cannot use the
     // native compact endpoint either, so run its synthetic compaction as SSE and collapse
-    // the completed event back into the v1 compact JSON contract below.
-    stream: accountGatedCompactWireModel ? true : false,
+    // the completed event back into the v1 compact JSON contract below. Combo-dispatched
+    // turns also go out as SSE: failover can land on a canonical child that rejects a
+    // non-streaming turn, and every combo-capable provider already serves streaming traffic.
+    stream: accountGatedCompactWireModel || route.combo ? true : false,
     input: [...inputItems, { type: "compaction_trigger" }],
   };
   const internalHeaders = new Headers({ "content-type": "application/json" });
