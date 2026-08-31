@@ -14,6 +14,14 @@ Unit closed 2026-08-31. Every phase in this unit is on `dev`.
 | wp8 | 070 | #3083 | `d86ec3e03` -- marks on every surface |
 | wp9 | 080 | #3084 | `2a90cdaa9` -- conflict overwrite |
 
+Two follow-ups landed after the table above, both from auditing the merged head
+rather than from the plan:
+
+| what | PR | on `dev` as |
+|---|---|---|
+| Grok mark masked so it survives the dark theme | #3086 | `0cc73411a` |
+| `--overwrite-conflict` for the CLI, plus mobile dialog guards | #3088 | `91b2c4e19` |
+
 #3065 (`7853e8e05`) and #3074 landed alongside wp5: Aside's own mark plus the
 first version of the single-ink rule, and the property guards the pair relies on.
 
@@ -51,6 +59,20 @@ management envelope and restated again in the GUI adapter, with no import betwee
 them. The doc comment in `journal.ts` claimed a test asserted the three agree.
 None did, so a kind added in one place rendered as a raw i18n key with no type
 error anywhere. `tests/integrations-journal.test.ts` now reads all three.
+
+**A documented tradeoff was a defect.** 070 recorded `grok.svg` as staying an image
+because masking would be "editing someone else's mark". Measured on the dark card
+surface it was about 1.9:1 -- the glyph was effectively invisible, and had been since
+the mark landed. The reasoning was simply wrong about what masking does: the file is
+not modified, it is read as a shape and tinted, which is how xAI renders it
+themselves. Writing a tradeoff down does not make it correct, and neither this unit
+nor the pass that followed it measured the thing it was excusing.
+
+**Half a surface is not a surface.** 080 specified the overwrite escape hatch for the
+GUI and stopped there, which left `ocx integration client enable` dead-ending on the
+exact state the feature exists to escape. The user with no browser -- an SSH session,
+or an agent driving the proxy -- was the one still stuck. Fixed in #3088; the docs had
+meanwhile been asserting that a conflict simply locks.
 
 ## Verification as merged
 
