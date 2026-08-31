@@ -25,8 +25,19 @@ type TargetProvenance = "live-oauth-list" | "config" | "codex";
 
 const MAIN_ALIAS = "main";
 const MAIN_CODEX_ID = "__main__";
-/** Replacement-style single-slot OAuth (no stable identity; not HTTP-derivable). */
-const REPLACEMENT_STYLE_OAUTH = new Set(["kiro"]);
+/**
+ * Replacement-style single-slot OAuth (no stable identity; not HTTP-derivable).
+ *
+ * Empty since `d82b3049d` gave Kiro a quota-aware account pool: multiple Kiro accounts are
+ * stored under multiauth, ranked by remaining headroom in `rankAccountsByHeadroom`, and
+ * rotated on 429 by the generic OAuth failover path, which does not exclude Kiro. Printing a
+ * "single login slot" note alongside a list of several pooled accounts told operators the
+ * opposite of what the runtime does.
+ *
+ * Kept as a named seam rather than deleted: the replacement-style shape is a real category,
+ * and a future provider without stable per-account identity belongs here.
+ */
+const REPLACEMENT_STYLE_OAUTH = new Set<string>();
 
 const ACCOUNT_USAGE = `Usage:
   ocx account list [provider] [--json] [--all] [--quota [--refresh]]

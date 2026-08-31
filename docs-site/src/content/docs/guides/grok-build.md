@@ -15,13 +15,16 @@ into `~/.grok/config.toml`:
 
 ```toml
 # >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>
-[model.ocx-gpt-5-6-sol]
-model = "gpt-5.6-sol"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
-name = "OCX gpt-5.6-sol"
 extra_headers = { "x-opencodex-grok" = "1" }
+
+[model.ocx-gpt-5-6-sol]
+model = "gpt-5.6-sol"
+model_provider = "opencodex"
+name = "OCX gpt-5.6-sol"
 context_window = 272000
 supports_reasoning_effort = true
 reasoning_effort = "low"
@@ -32,7 +35,8 @@ value = "low"
 label = "Low"
 description = "Quick, fast implementations"
 default = true
-# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model,
+# each referencing model_provider = "opencodex" ...
 # <<< opencodex managed block <<<
 ```
 
@@ -102,44 +106,51 @@ outside the managed markers, where nothing opencodex does can clobber them. See
 `base_url` (a host that is actually reachable from where you run `grok`) and `api_key`
 (your `OPENCODEX_API_AUTH_TOKEN`).
 
-Do not replace `api_key` with `env_key` here. With no `model_provider` set, an `env_key`
-that fails to resolve does not stop the request — Grok falls through to your xAI session
+Do not replace `api_key` with `env_key` here. An `env_key` that fails to resolve does not
+stop the request — Grok falls through to your xAI session
 token and sends it to whatever `base_url` the entry names, which for a LAN deployment is a
 plaintext HTTP endpoint that is not xAI.
 
-The injected per-model `api_key` sits first in Grok's credential chain for these models,
-so turns against opencodex need no additional Grok login. Keep your normal `grok login` /
-`XAI_API_KEY` setup for native grok models and any harness features that contact xAI
-directly.
+The injected `api_key` on the provider entry sits first in Grok's credential chain for
+these models, so turns against opencodex need no additional Grok login. Keep your normal
+`grok login` / `XAI_API_KEY` setup for native grok models and any harness features that
+contact xAI directly.
 
 ## Manual recipe (without auto-registration)
 
 If you manage `~/.grok/config.toml` yourself — or opencodex is on a non-loopback bind — add
-per-model tables with **direct fields**, outside the `# >>> opencodex managed block` markers:
+a `[model_providers.opencodex]` block and per-model tables that reference it, outside the
+`# >>> opencodex managed block` markers:
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
 For a proxy reachable over the network, point `base_url` at the address `grok` can actually
 dial and use your admission token:
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
-Do not rely on `[model_providers.<id>]` inheritance for the endpoint: as of Grok Build
-0.2.101 the inherited `base_url` is not applied to inference routing (requests fall
-through to the default xAI proxy and fail with 401). Direct per-model fields route
-correctly.
+This uses `[model_providers.<id>]` inheritance, which requires Grok Build 0.2.109 or later
+(released 2026-07-21). On older versions the inherited `base_url` is not applied to inference
+routing — upgrade, or fall back to per-model direct fields (`base_url`/`api_backend`/`api_key`
+on each `[model.*]` table).
 
 Quote any alias containing a dot: bare `[model.grok-4.5]` is a three-segment key path, not
 the id `grok-4.5`. Generated aliases avoid dots entirely for this reason.

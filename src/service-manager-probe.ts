@@ -32,6 +32,19 @@ import { WINSW_SERVICE_ID } from "./lib/winsw";
 /** Short: this runs inside admission, and a slow answer is the same as none. */
 export const SERVICE_PROBE_TIMEOUT_MS = 2_000;
 
+/**
+ * The one query that is allowed to be slow: the full `schtasks` listing.
+ *
+ * 2s is the right budget for a targeted query and the wrong one for enumerating
+ * every task on the machine — measured at 12.3s on a host with 401 of them, which
+ * killed the listing and left ownership unprovable (#2914). This is not a general
+ * relaxation: the targeted queries keep the 2s ceiling, and after the
+ * locale-independent absence check above, a healthy host decides before the
+ * listing runs at all. Only a host that has already exhausted the cheap evidence
+ * pays this, and for it the alternative is not a fast answer but no answer.
+ */
+export const SERVICE_PROBE_LISTING_TIMEOUT_MS = 20_000;
+
 export type ServiceManagerBackend = "launchd" | "systemd" | "scheduler" | "winsw";
 
 export interface ServiceManagerClaim {
@@ -70,13 +83,68 @@ export interface ProbeRunner {
  * Windows probe runner: preserves schtasks stdout/stderr as raw bytes so the
  * UTF-16LE task XML is not corrupted by a UTF-8 decode.
  */
-export type RawProbeRunner = (file: string, args: readonly string[]) => {
+export type RawProbeRunner = (
+  file: string,
+  args: readonly string[],
+  options?: { readonly timeoutMs?: number },
+) => {
   status: number | null;
   stdout: Buffer;
   stderr: Buffer;
   timedOut: boolean;
   spawnFailed: boolean;
 };
+
+type RawProbeResult = ReturnType<RawProbeRunner>;
+
+/**
+ * Startup-local memo for the expensive full Task Scheduler listing.
+ *
+ * The targeted `/tn ... /xml` query is deliberately NOT cached: it is the
+ * race-sensitive evidence that a task appeared between two ownership checks.
+ * A listing may be reused only when that fresh targeted query returned exactly
+ * the same bytes and status as the query that caused the listing. If the
+ * targeted evidence changes, the old absence proof is stale and another
+ * listing is required rather than turning uncertainty into absence.
+ *
+ * Only a SUCCESSFUL listing is retained. A stall or spawn failure is not
+ * evidence of anything, and caching it made one transient 20s timeout poison the
+ * rest of the startup: the targeted query is byte-identical on the next
+ * inspection, so the identity check passed, the listing was never retried, and
+ * ownership stayed unprovable for the whole run — refusing the write that #2914
+ * exists to allow.
+ */
+export interface WindowsTaskListingCache {
+  getOrRun(targetedQuery: RawProbeResult, run: () => RawProbeResult): RawProbeResult;
+}
+
+function rawProbeIdentity(result: RawProbeResult): string {
+  return [
+    result.status === null ? "null" : String(result.status),
+    result.timedOut ? "1" : "0",
+    result.spawnFailed ? "1" : "0",
+    result.stdout.toString("base64"),
+    result.stderr.toString("base64"),
+  ].join("\u0000");
+}
+
+/** Create one bounded cache for the synchronous ownership phase of one startup. */
+export function createWindowsTaskListingCache(): WindowsTaskListingCache {
+  let identity: string | null = null;
+  let result: RawProbeResult | null = null;
+  return {
+    getOrRun(targetedQuery, run) {
+      const nextIdentity = rawProbeIdentity(targetedQuery);
+      if (result !== null && identity === nextIdentity) return result;
+      const next = run();
+      if (!next.timedOut && !next.spawnFailed && next.status === 0) {
+        identity = nextIdentity;
+        result = next;
+      }
+      return next;
+    },
+  };
+}
 
 export const defaultProbeRunner: ProbeRunner = (file, args) => {
   const result = spawnSync(file, [...args], {
@@ -94,11 +162,11 @@ export const defaultProbeRunner: ProbeRunner = (file, args) => {
   };
 };
 
-export const defaultRawProbeRunner: RawProbeRunner = (file, args) => {
+export const defaultRawProbeRunner: RawProbeRunner = (file, args, options) => {
   const result = spawnSync(file, [...args], {
     encoding: "buffer",
     windowsHide: true,
-    timeout: SERVICE_PROBE_TIMEOUT_MS,
+    timeout: options?.timeoutMs ?? SERVICE_PROBE_TIMEOUT_MS,
   });
   return {
     status: result.status,
@@ -122,6 +190,8 @@ export interface ProbeDeps {
   readonly winswStatus?: () => "started" | "stopped" | "nonexistent" | "unknown";
   /** Test seam for redirected Windows legacy-codepage output. */
   readonly windowsLocale?: string;
+  /** Startup-local full-listing cache; targeted task queries always bypass it. */
+  readonly windowsTaskListingCache?: WindowsTaskListingCache;
 }
 
 const LABEL = "com.opencodex.proxy";
@@ -535,7 +605,22 @@ function windowsTaskListContains(body: string, taskName: string): boolean {
   });
 }
 
-/** English hosts provide a decisive fast path; other locales fall back to a full listing. */
+/**
+ * The English message: a fast path on an English host, and nothing more.
+ *
+ * It cannot match a localized host — on zh-CN schtasks answers with the CP936
+ * bytes of `错误: 系统找不到指定的文件。` — which is why absence there has to be
+ * settled by the locale-neutral listing below (#2914). Adding more translated
+ * substrings would only cover the languages someone thought of, and each one is
+ * a chance to read a DIFFERENT refusal as absence.
+ *
+ * Deriving the host's own not-found wording from a control query looks like the
+ * general fix and is not: schtasks exits 1 for both "not found" and "access
+ * denied", so a locked-down host answers the control and the real query
+ * identically, and comparing them yields a false `absent` — the one direction
+ * that lets an unattended write proceed into a home another process owns.
+ * `tests/codex-service-manager-probe.test.ts` covers exactly that host.
+ */
 const SCHTASKS_TASK_NOT_FOUND_EN = /cannot find the file specified/i;
 
 /**
@@ -547,7 +632,8 @@ const SCHTASKS_TASK_NOT_FOUND_EN = /cannot find the file specified/i;
  * fallback, and only a successful list without our task proves absence.
  */
 function probeWindowsTaskRegistration(
-  deps: Required<Pick<ProbeDeps, "runRaw">> & Pick<ProbeDeps, "windowsLocale">,
+  deps: Required<Pick<ProbeDeps, "runRaw">>
+    & Pick<ProbeDeps, "windowsLocale" | "windowsTaskListingCache">,
 ): {
   registered: "present" | "absent" | "unknown";
   registeredXml: string;
@@ -574,7 +660,14 @@ function probeWindowsTaskRegistration(
     return { registered: "absent", registeredXml: "" };
   }
 
-  const listed = deps.runRaw(schtasks, ["/query", "/fo", "CSV", "/nh"]);
+  const runListing = () => deps.runRaw(
+    schtasks,
+    ["/query", "/fo", "CSV", "/nh"],
+    { timeoutMs: SERVICE_PROBE_LISTING_TIMEOUT_MS },
+  );
+  const listed = deps.windowsTaskListingCache
+    ? deps.windowsTaskListingCache.getOrRun(queried, runListing)
+    : runListing();
   if (listed.spawnFailed || listed.timedOut || listed.status !== 0) {
     return { registered: "unknown", registeredXml: "" };
   }
@@ -618,7 +711,7 @@ function probeWinswRegistration(
 
 function inspectWindows(
   deps: Required<Pick<ProbeDeps, "runRaw" | "home">>
-    & Pick<ProbeDeps, "configDir" | "winswStatus" | "windowsLocale">,
+    & Pick<ProbeDeps, "configDir" | "winswStatus" | "windowsLocale" | "windowsTaskListingCache">,
 ): ServiceManagerInstallation {
   const configDir = windowsConfigDirPath(deps);
   const taskXmlPath = join(configDir, "opencodex-service-task.xml");
@@ -898,6 +991,7 @@ export function inspectServiceManagerInstallation(deps: ProbeDeps = {}): Service
       configDir: deps.configDir,
       winswStatus: deps.winswStatus,
       windowsLocale: deps.windowsLocale,
+      windowsTaskListingCache: deps.windowsTaskListingCache,
     });
   }
   return unknown(`no service manager probe for platform ${platform}`);

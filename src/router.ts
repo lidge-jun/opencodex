@@ -354,6 +354,10 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       && registryEntry.requiresAdjacentResponsesToolResults !== undefined
       ? { requiresAdjacentResponsesToolResults: registryEntry.requiresAdjacentResponsesToolResults }
       : {}),
+    ...(provider.annotateEmptyToolOutputs === undefined
+      && registryEntry.annotateEmptyToolOutputs !== undefined
+      ? { annotateEmptyToolOutputs: registryEntry.annotateEmptyToolOutputs }
+      : {}),
     ...(provider.fastWire === undefined && registryEntry.fastWire !== undefined
       ? {
         fastWire: cloneFastWire(registryEntry.fastWire),

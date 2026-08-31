@@ -129,9 +129,12 @@ describe("runGeminiWebSearch request shape (review P1)", () => {
       expect(new URL(req.url).origin).toBe("https://daily-cloudcode-pa.googleapis.com");
       expect(req.url).toContain("/v1internal:generateContent");
       expect(req.init.redirect).toBe("manual");
-      const headers = req.init.headers as Record<string, string>;
-      expect(headers["Authorization"]).toBe("Bearer gem-token-abc");
-      expect(headers["User-Agent"]).toContain("antigravity");
+      // Read through Headers so the credential assertion holds whether the init carries a plain
+      // record or a Headers instance: the reset-recovery helper normalizes headers on the send
+      // path, and this canary is about WHICH bearer goes out, not how the init spells it.
+      const headers = new Headers(req.init.headers);
+      expect(headers.get("Authorization")).toBe("Bearer gem-token-abc");
+      expect(headers.get("User-Agent")).toContain("antigravity");
       const body = JSON.parse(String(req.init.body));
       expect(body.project).toBe("proj-9");
       expect(body.userAgent).toBe("antigravity");
@@ -176,7 +179,7 @@ describe("runGeminiWebSearch request shape (review P1)", () => {
     try {
       const out = await runGeminiWebSearch("q", "google-antigravity", cca, { model: "gemini-3.7-flash", reasoning: "low", timeoutMs: 5000 });
       expect(out.text).toBe("ok");
-      expect((request!.headers as Record<string, string>)["Authorization"]).toBe("Bearer token-a");
+      expect(new Headers(request!.headers).get("Authorization")).toBe("Bearer token-a");
       expect(JSON.parse(String(request!.body)).project).toBe("project-a");
       expect(accountSets["google-antigravity"]!.activeAccountId).toBe("account-b");
     } finally {

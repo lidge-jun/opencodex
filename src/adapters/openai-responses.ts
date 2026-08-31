@@ -14,13 +14,14 @@ import {
   isOpenAiOperatedResponsesDestination,
 } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
-import { modelRecordValue } from "../reasoning-effort";
+import { configuredReasoningEfforts, mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
 import { rewriteRoutedToolSearchForUpstream } from "../responses/tool-search-compat";
 import { rewriteRoutedNamespaceToolsForUpstream } from "../responses/namespace-tool-compat";
 import { openaiResponsesUrl } from "./openai-responses-url";
 import { injectXaiResponsesXSearch, normalizeXaiResponsesWebSearch } from "./xai-web-search";
+import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "./empty-tool-output-annotation";
 import {
   isXaiSchemaTarget,
   normalizeXaiToolParameters,
@@ -549,6 +550,27 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 
+/**
+ * Apply the routed provider's real effort ladder to an existing Responses reasoning field.
+ * Native forward requests keep the server-owned native clamp; unknown third-party ladders stay
+ * byte-equivalent instead of acquiring a policy from this adapter.
+ */
+function mapRoutedResponsesReasoningEffort(
+  body: unknown,
+  provider: OcxProviderConfig,
+  modelId: string,
+): unknown {
+  if (provider.authMode === "forward") return body;
+  if (configuredReasoningEfforts(provider, modelId) === undefined) return body;
+  if (!isPlainObject(body) || !isPlainObject(body.reasoning)) return body;
+  const requested = body.reasoning.effort;
+  if (typeof requested !== "string") return body;
+
+  const mapped = mapReasoningEffort(provider, modelId, requested);
+  if (!mapped || mapped === requested) return body;
+  return { ...body, reasoning: { ...body.reasoning, effort: mapped } };
+}
+
 function normalizeFunctionToolSchema(tool: unknown, xaiTarget: boolean): unknown | undefined {
   if (!isPlainObject(tool) || tool.type !== "function") return tool;
   if (xaiTarget) {
@@ -819,6 +841,40 @@ function toolOutputText(output: unknown): string {
     if (part.type === "refusal" && typeof part.refusal === "string") return `[refusal] ${part.refusal}`;
     return "";
   }).filter(Boolean).join("\n");
+}
+
+/** True when a Responses tool output item is present but carries no usable content. */
+function isToolOutputEmpty(output: unknown): boolean {
+  if (typeof output === "string") return output.trim() === "";
+  if (Array.isArray(output)) {
+    // Mirror the Chat wire rule through the shared contract: only a pure
+    // text/refusal part array whose joined content trims empty is annotated.
+    // input_image, encrypted_content, input_file and any other non-text part is
+    // real output and must never be replaced.
+    return isWhitespaceOnlyTextPartArray(output);
+  }
+  // A missing or null `output` is not a present-but-empty result: it is an
+  // incomplete payload. Leave it untouched so the upstream contract fails
+  // closed, and the orphan repair can surface it honestly instead of claiming
+  // the tool ran with no output.
+  return false;
+}
+
+/**
+ * Rewrite present-but-empty tool outputs to an explicit annotation. Synthetic
+ * missing-result placeholders are non-empty and pass through untouched. No-op unless
+ * the provider opts in (`annotateEmptyToolOutputs`).
+ */
+function annotateEmptyResponsesToolOutputs(body: unknown, enabled: boolean): unknown {
+  if (!enabled || !isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let changed = false;
+  const input = body.input.map(item => {
+    if (!isPlainObject(item) || (item.type !== "function_call_output" && item.type !== "custom_tool_call_output")) return item;
+    if (!isToolOutputEmpty(item.output)) return item;
+    changed = true;
+    return { ...item, output: EMPTY_TOOL_OUTPUT_ANNOTATION };
+  });
+  return changed ? { ...body, input } : body;
 }
 
 /**
@@ -1998,6 +2054,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         parsed._rawBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
+      outBody = mapRoutedResponsesReasoningEffort(outBody, provider, parsed.modelId);
       // stripPreviousResponseId() intentionally returns its input on a no-op. Detach before the
       // tier write so a force-fast/default decision can never mutate parsed._rawBody.
       outBody = applyTierDecisionToResponsesBody(outBody, parsed.options?.tierDecision);
@@ -2008,6 +2065,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // pair from its own storage either, so it needs the same repair the forward
       // backend gets — dropping previous_response_id is not much use if the body that
       // reaches the wire is unparseable.
+      if (provider.annotateEmptyToolOutputs === true) {
+        outBody = annotateEmptyResponsesToolOutputs(outBody, true);
+      }
       if (forward || stateless) {
         outBody = repairOrphanedInputItems(outBody, unexpandedMiss, stateless && !forward);
       }

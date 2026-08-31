@@ -180,6 +180,7 @@ Claude Desktop profile commands are:
 ```text
 ocx claude desktop [apply]                         Save and apply the four-family profile
 ocx claude desktop show [--json]                   Show routes, families, and defaults
+ocx claude desktop status [--json]                 Show applied state, drift, and health
 ocx claude desktop move <route> <family> [--default]
 ocx claude desktop default <family> <route|none>
 ocx claude desktop export <path|->                 Export versioned JSON (`-` = stdout)

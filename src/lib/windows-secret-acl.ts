@@ -31,8 +31,10 @@
 
 import { existsSync, statSync } from "node:fs";
 import { env, platform } from "node:process";
+import { waitForSubprocessExit } from "./bounded-subprocess";
 import { resolveTrustedWindowsIcaclsExe } from "./windows-elevation";
 import {
+  cachedCurrentWindowsIdentity,
   resolveCurrentWindowsPrincipal,
   resolveCurrentWindowsPrincipalAsync,
   setSyntheticWindowsPrincipalForTests,
@@ -216,6 +218,11 @@ export interface HardenResult {
 export interface HardenOptions {
   required: boolean;
   /**
+   * Explicit total budget for this harden call. Shutdown recovery uses a reduced
+   * caller-owned slice instead of opening the normal 30-second window.
+   */
+  deadlineMs?: number;
+  /**
    * Optional timeout-memo key distinct from `targetPath` (issue #612).
    * Atomic writers mint a fresh `.tmp` path per write; keying the timeout cache by the
    * final destination path prevents re-stalling the event loop on every subsequent temp.
@@ -256,7 +263,11 @@ const HARDEN_DEADLINE_MIN_MS = 1_000;
 const HARDEN_DEADLINE_MAX_MS = 60_000;
 
 /** Resolve the total harden budget once per call (env mutation cannot change it midway). */
-function resolveHardenDeadlineMs(): number {
+function resolveHardenDeadlineMs(overrideMs?: number): number {
+  if (overrideMs !== undefined) {
+    if (!Number.isSafeInteger(overrideMs) || overrideMs <= 0) return 1;
+    return Math.min(HARDEN_DEADLINE_MAX_MS, overrideMs);
+  }
   const raw = env["OPENCODEX_ACL_TIMEOUT_MS"]?.trim();
   if (!raw) return HARDEN_DEADLINE_DEFAULT_MS;
   const parsed = Number(raw);
@@ -327,33 +338,40 @@ function defaultIcaclsRunner(args: string[], timeoutMs: number): IcaclsResult {
 
 /**
  * Async icacls runner (#612): yields the event loop while waiting for the child.
- * Timeout provenance is recorded by our timer (async Subprocess has no exitedDueToTimeout);
- * we still await process exit before classifying so settlement is confirmed.
+ * Async Subprocess has no exitedDueToTimeout, so the shared settlement helper
+ * classifies the deadline and abandons a child that does not settle after kill.
  */
 async function defaultAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<IcaclsResult> {
   const proc = trySpawnIcacls(args);
   if (!proc) return spawnFailedResult();
-  let timedOutByUs = false;
-  const timer = setTimeout(() => {
-    timedOutByUs = true;
-    try { proc.kill(); } catch { /* already exited */ }
-  }, Math.max(1, timeoutMs));
-  let exitCode: number | null = null;
-  try {
-    exitCode = await proc.exited;
-  } finally {
-    clearTimeout(timer);
-  }
-  const stdout = proc.stdout
+  const { exitCode, timedOut } = await waitForSubprocessExit(proc, timeoutMs);
+  const stdout = !timedOut && proc.stdout
     ? await new Response(proc.stdout).text().catch(() => "")
     : "";
-  const timedOut = timedOutByUs;
   return {
     success: !timedOut && exitCode === 0,
     exitCode: timedOut ? null : exitCode,
     timedOut,
     stdout,
   };
+}
+
+function awaitAsyncIcaclsRunner(args: string[], timeoutMs: number): Promise<IcaclsResult> {
+  return new Promise(resolve => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: IcaclsResult): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolve(result);
+    };
+    timer = setTimeout(
+      () => finish({ success: false, exitCode: null, timedOut: true, stdout: "" }),
+      Math.max(1, timeoutMs),
+    );
+    void asyncIcaclsRunner(args, timeoutMs).then(finish, () => finish(spawnFailedResult()));
+  });
 }
 
 let icaclsRunner: IcaclsRunner = defaultIcaclsRunner;
@@ -500,6 +518,74 @@ function grantAce(user: string, directory: boolean): string {
   return directory ? `${user}:(OI)(CI)(F)` : `${user}:(F)`;
 }
 
+function existingAclIsCompliant(
+  targetPath: string,
+  directory: boolean,
+  stdout: string,
+  ownerName: string,
+): boolean {
+  const lines = stdout.replaceAll("\r", "").split("\n");
+  const first = lines.shift();
+  if (!first || first.slice(0, targetPath.length).toLowerCase() !== targetPath.toLowerCase()) {
+    return false;
+  }
+  const separator = first[targetPath.length];
+  if (separator !== undefined && !/\s/.test(separator)) return false;
+
+  const aceLines: string[] = [];
+  const firstAce = first.slice(targetPath.length).trim();
+  if (firstAce) aceLines.push(firstAce);
+  for (const line of lines) {
+    if (!line.trim()) break;
+    // Localized summary text is not indented like a continuation ACE.
+    if (!/^\s/.test(line)) break;
+    aceLines.push(line.trim());
+  }
+  if (aceLines.length !== 1) return false;
+
+  const match = /^([^:]+):((?:\([A-Z]+\))+)$/.exec(aceLines[0]!);
+  if (!match || match[1]!.trim().toLowerCase() !== ownerName.toLowerCase()) return false;
+  const rights = [...match[2]!.matchAll(/\(([A-Z]+)\)/g)].map(part => part[1]);
+  const expected = directory ? ["OI", "CI", "F"] : ["F"];
+  return rights.length === expected.length && rights.every((right, index) => right === expected[index]);
+}
+
+function shouldVerifyExistingAcl(): boolean {
+  return env["OPENCODEX_ACL_VERIFY_EXISTING"] === "1";
+}
+
+function existingAclAlreadyCompliant(targetPath: string, directory: boolean, deadline: number): boolean {
+  if (!shouldVerifyExistingAcl()) return false;
+  const identity = cachedCurrentWindowsIdentity();
+  if (!identity) return false;
+  try {
+    const remaining = deadline - nowFn();
+    if (remaining <= 0) return false;
+    const result = icaclsRunner([targetPath], remaining);
+    return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
+  } catch {
+    return false;
+  }
+}
+
+async function existingAclAlreadyCompliantAsync(
+  targetPath: string,
+  directory: boolean,
+  deadline: number,
+): Promise<boolean> {
+  if (!shouldVerifyExistingAcl()) return false;
+  const identity = cachedCurrentWindowsIdentity();
+  if (!identity) return false;
+  try {
+    const remaining = deadline - nowFn();
+    if (remaining <= 0) return false;
+    const result = await awaitAsyncIcaclsRunner([targetPath], remaining);
+    return result.success && existingAclIsCompliant(targetPath, directory, result.stdout, identity.name);
+  } catch {
+    return false;
+  }
+}
+
 function runIcacls(targetPath: string, directory: boolean, deadline: number): void {
   const principal = currentWindowsPrincipal(deadline);
 
@@ -554,7 +640,7 @@ async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: 
     if (remaining <= 0) {
       throw icaclsError(step, { success: false, exitCode: null, timedOut: true, stdout: "" });
     }
-    return asyncIcaclsRunner(args, remaining);
+    return awaitAsyncIcaclsRunner(args, remaining);
   };
   const runOrThrow = async (step: string, args: string[]): Promise<void> => {
     const result = await run(step, args);
@@ -687,7 +773,7 @@ async function describeAclStateAfterTimeoutAsync(targetPath: string, deadline: n
     for (const sid of BROAD_SIDS) {
       const remaining = deadline - nowFn();
       if (remaining <= 0) return "ACL state unverified (budget exhausted)";
-      const found = await asyncIcaclsRunner([targetPath, "/findsid", sid], remaining);
+      const found = await awaitAsyncIcaclsRunner([targetPath, "/findsid", sid], remaining);
       if (!found.success) return "ACL state unverified (probe failed)";
       if (found.stdout.includes(targetPath)) return "broad ACL grants still present";
     }
@@ -724,6 +810,8 @@ function hardenEntry(
   if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
+  const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
+  if (existingAclAlreadyCompliant(targetPath, directory, deadline)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
   if (timeoutMemoError) {
@@ -731,7 +819,6 @@ function hardenEntry(
     return { ok: false, diagnostics: timeoutMemoError.message };
   }
 
-  const deadline = nowFn() + resolveHardenDeadlineMs();
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0 && deadline - nowFn() <= 0) break; // retry only while budget remains
@@ -776,6 +863,8 @@ async function hardenEntryAsync(
   if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
+  const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
+  if (await existingAclAlreadyCompliantAsync(targetPath, directory, deadline)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
   if (timeoutMemoError) {
@@ -783,7 +872,6 @@ async function hardenEntryAsync(
     return { ok: false, diagnostics: timeoutMemoError.message };
   }
 
-  const deadline = nowFn() + resolveHardenDeadlineMs();
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0 && deadline - nowFn() <= 0) break;

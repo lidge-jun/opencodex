@@ -1,7 +1,7 @@
 import { chmodSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { hardenSecretDir } from "../lib/windows-secret-acl";
+import { hardenSecretDirAsync, windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 
 /**
@@ -14,6 +14,7 @@ export function expandUserPath(raw: string): string {
   return raw;
 }
 let resolvedConfigDirCache: { raw: string | undefined; path: string } | null = null;
+const configDirHardeningFlights = new Map<string, Promise<void>>();
 
 export function getConfigDir(): string {
   const raw = process.env["OPENCODEX_HOME"]?.trim() || undefined;
@@ -34,7 +35,21 @@ export function hardenConfigDir(): void {
   assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) return;
   try { chmodSync(dir, 0o700); } catch { /* best-effort */ }
-  if (process.platform === "win32") {
-    hardenSecretDir(dir, { required: false });
+  if (windowsSecretAclApplies() && !configDirHardeningFlights.has(dir)) {
+    // This is an optional read-path harden. Waiting synchronously here used to stop the Bun
+    // event loop (including /healthz) for the full icacls timeout. Required mutation paths keep
+    // their own awaited/fail-closed hardening; ordinary config reads only start one soft flight.
+    const flight = hardenSecretDirAsync(dir, { required: false })
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        if (configDirHardeningFlights.get(dir) === flight) configDirHardeningFlights.delete(dir);
+      });
+    configDirHardeningFlights.set(dir, flight);
   }
+}
+
+/** Test-only: settle optional config-directory hardening without exposing it to production callers. */
+export async function flushConfigDirHardeningForTests(): Promise<void> {
+  await Promise.all([...configDirHardeningFlights.values()]);
 }

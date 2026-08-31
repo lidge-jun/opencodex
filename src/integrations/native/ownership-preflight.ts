@@ -22,10 +22,13 @@ import {
   type ServiceStateEvidence,
 } from "../../service";
 import {
+  createWindowsTaskListingCache,
   inspectServiceManagerInstallation,
   type ProbeDeps,
   type ServiceManagerClaim,
 } from "../../service-manager-probe";
+
+export { createWindowsTaskListingCache };
 
 export type NativeTeardownOwnership = { ok: true } | { ok: false; message: string };
 

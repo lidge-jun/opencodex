@@ -33,6 +33,16 @@ opencodex 按以下顺序解析请求的模型：
 向后回退。对于可能匹配多个提供方的规则，提供方条目会按照其 JSON 插入顺序进行检查，
 因此当一个裸模型可能存在歧义时，请使用显式命名空间。
 
+### 被阻止模型重定向
+
+`blockedModelRedirects` 是可选的顶层 `Record<string, string>`，用于精确替换已解析的模型 ID，默认未设置。它在上述解析顺序之后运行：匹配后会保留已选定的提供方和账户路由，仅替换上游模型 ID，并记录路由原因 `blocked-model-redirect`。省略该键则路由保持不变。
+
+```json
+{
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+}
+```
+
 ## 精确 Codex 账户选择器
 
 `codexAccountNamespaces` 会把 `side` 这样的公开 selector 映射到一个已存储 Codex 账户。
@@ -61,7 +71,7 @@ Codex Auth 页面将此 picker 行为作为选择加入项。关闭它会隐藏�
 | 键 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | required | 有序的具体路由。`weight` 范围为 1–10000，默认值为 `1`。 |
-| `strategy?` | `"failover" \| "round-robin"` | `"failover"` | 选择策略。目标顺序表示故障切换优先级；权重会影响平滑加权轮询。 |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 选择策略。目标顺序表示 `failover` 优先级；`weight` 决定 `round-robin` 和 `random` 的抽取权重；`least-used` 根据记录的成功次数选择；`reset-window` 跟随最近的额度重置。 |
 | `stickyLimit?` | `number` | `1` | 在单个轮询批次中保留的成功请求数。范围 1–100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 仅在调用方省略 effort 且所选目标声明了请求的档位时应用。 |
 | `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` 仅在每个目标都支持图片时发布图片能力；`"disabled"` 强制仅文本（从对外能力中去掉图片，并在分发前拒绝带图请求）。 |
@@ -107,7 +117,7 @@ Codex Auth 页面将此 picker 行为作为选择加入项。关闭它会隐藏�
 
 CLI：`ocx route policy list`、`ocx route policy show <id>`、`ocx route policy dry-run <id> --model-context <tokens> --tools`、`ocx route policy evaluate <id>`。
 
-组合是显式的有序/加权目标路由与故障转移；策略配置文件是基于证据在候选之间进行选择。
+组合是采用可选策略的显式目标路由（有序 `failover`、平滑加权的 `round-robin` 或 `random` 均衡、`least-used`，以及 `reset-window`）：由配置的策略决定目标，可重试失败则沿列表继续尝试；策略配置文件是基于证据在候选之间进行选择。
 
 ## 请求历史与路由分析
 

@@ -484,13 +484,19 @@ Cursor 仍不會出現在 key-login list。
 
 ### Ollama Cloud
 
-Ollama Cloud 是 hosted、不是 local 的 Ollama，在 `https://ollama.com/v1` 提供 OpenAI-compatible API，
-key 來自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 依 vision capability 分類其
+Ollama Cloud 是 hosted、不是 local 的 Ollama，設定位址為 `https://ollama.com/v1`，
+key 來自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 以 Ollama 自身的
+REST API（`POST /api/chat`）連線，而非 OpenAI-compatible 介面，並向 provider 動態探索模型清單，
+因此新的 Ollama Cloud 模型不需改設定就會出現。opencodex 依 vision capability 分類其
 cloud lineup，讓 [vision sidecar](/zh-tw/guides/sidecars/) 只對純文字模型生效。純文字模型，例如
 `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`，會列在
 `noVisionModels`；原生 vision 模型，例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、
 `gemini-3-flash-preview`，不會列入。matching 可容忍 Ollama 的 `:size` tag，因此 `gpt-oss` 同時涵蓋
 `gpt-oss:120b` 與 `gpt-oss:20b`。
+
+Ollama 目前在文件中說明結構化輸出在 Ollama Cloud 上不受支援。因此對正典 `ollama-cloud`，
+opencodex 會以明確的錯誤拒絕結構化輸出請求（`text.format`），而不是悄悄回傳不受約束的
+散文式文字；本機 / 自訂 `ollama-native` 端點保留 Ollama 原生的 `format` 行為。
 
 ## 4. 本機供應商
 

@@ -119,7 +119,6 @@ OpenAI 実行経路、ダッシュボード、管理 API は `gpt-5.4-mini` を�
 {
   "providers": {
     "ollama-cloud": {
-      "adapter": "openai-chat",
       "baseUrl": "https://ollama.com/v1",
       "noVisionModels": ["glm-5.2", "gpt-oss", "qwen3-coder", "deepseek-v4-pro"]
     }

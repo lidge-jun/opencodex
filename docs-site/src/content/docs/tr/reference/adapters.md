@@ -30,8 +30,7 @@ olayları Responses SSE'ye dönüştürür.
 
 **Hedefler:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`;
 `baseUrl` üzerindeki sondaki `/chat/completions` veya `/` önce kaldırılır) ve
-her uyumlu sağlayıcı — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (yerel
-ve bulut) ve daha fazlası.
+her uyumlu sağlayıcı — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (yerel) ve daha fazlası.
 **Kimlik Doğrulama:** `key` (Bearer).
 
 - Dahili mesajları OpenAI rollerine dönüştürür; araçları `{type:"function",
@@ -55,6 +54,46 @@ ve bulut) ve daha fazlası.
   korur, `delta.reasoning_content` veya `delta.reasoning`'den gelen akıl
   yürütme farklarını kabul eder, `stream_options.include_usage` ile akışlı
   kullanım ister ve akışsız yanıt zarflarından kullanımı okur.
+
+## `ollama-native`
+
+**Hedefler:** OpenAI uyumlu yüzey yerine Ollama'nın kendi **Chat API'si** (`POST /api/chat`).
+Yerleşik `ollama-cloud` sağlayıcısı kayıt defteri tarafından bu adaptöre seçilir; ayrıca ayrı adlı
+özel veya kendi kendine barındırılan bir Ollama sağlayıcısında `adapter: "ollama-native"` ile
+yapılandırılabilir.
+**Kimlik Doğrulama:** bulut/özel hedefler için `key` (Bearer). Loopback veya `authMode: "local"`
+hedeflerine kimlik bilgisi gönderilmez.
+
+- **Kayıt defteri seçimi belirleyicidir.** Yerleşik `ollama-cloud` satırı, `/v1/models` canlı
+  keşfi için `https://ollama.com/v1` temel URL'sini korurken çıkarım
+  `POST https://ollama.com/api/chat` üzerine normalleştirilir. Sağlayıcı satırındaki yapılandırılmış
+  `adapter` değeri atılır. Sıradan yerleşik yerel Ollama `openai-chat` üzerinde kalır; yerel veya
+  self-hosted bir hedef için `ollama-native` seçmek açık bir sağlayıcı yapılandırma kararıdır ve
+  ana bilgisayara göre belirlenir, böylece Ollama olmayan bir hedef hiçbir zaman sessizce
+  yeniden yazılmaz.
+- **Model meta verileri:** `/v1/models` model başına meta veri taşımaz; bu yüzden kanonik Ollama
+  Cloud için sağlayıcı, keşfedilen her kimliği *sınırlı* bir `POST /api/show` ile zenginleştirir
+  (yanıt başına 256 KiB, istek başına 8 sn, eşzamanlılık 4, 48 istek, tüm aşama için 12 sn süre) ve
+  gerçek bağlam penceresi ile vision yeteneğini doldurur. show isteği aynı kaynaktadır ve asla bir
+  yönlendirmeyi izlemez; hata yalnızca o modeli düşürür, keşfi asla bozmaz.
+- **Akış:** Ollama'nın yerel NDJSON'u. Metin ve `message.thinking` delta'ları geldikçe iletilir;
+  bir tur yalnızca `done: true` terminal kaydında tamamlanır ve tamponlanmış `done: false` ya da
+  eksik terminal, kısmi metni ve araç çağrılarını tamamen bastırır.
+- **Reasoning:** Ollama'nın yerel `think` alanına (`low`/`medium`/`high`/`max` ve booleans)
+  eşlenir, modelin duyurulan merdivenine kırpılır ve üst katmanda yapılandırılan `__omit__`
+  sentinel semantiğine uyar.
+- **Görseller:** model vision destekliyorsa mesajın `images` dizisinde yerel olarak gönderilir;
+  video yanlış gönderilmek yerine reddedilir ve uzak görsel URL'leri alınmaz.
+- **Araçlar:** Ollama'nın yerel biçiminde bildirilir; akış halindeki araç çağrıları `arguments`
+  alanı nesne olan bütün çağrı kayıtlarıdır ve araç sonucu yeniden oynatma, çağrı kimliği ve araç
+  adına göre sıkı şekilde eşleştirilir. `tool_choice: "none"` ve `auto` normal çalışır;
+  **`required` veya tam adlandırılmış seçim fail closed** olur, çünkü Ollama'nın `/api/chat`
+  arabiriminde bunu dayatacak bir `tool_choice` alanı yoktur.
+- **Yapılandırılmış çıktı kanonik Ollama Cloud'da reddedilir.** Ollama şu anda yapılandırılmış
+  çıktıyı Cloud'da desteklemediğini belgeliyor ve Cloud `format` alanını zorunlu kılmıyor; bu
+  yüzden OpenCodex, şema tanımlı bir isteğe karşılık serbest metin döndürmek yerine isteği kapatarak
+  başarısız kılar. Yerel ve özel `ollama-native` uç noktaları Ollama'nın yerel `format` eşlemesini
+  korur (`json_object` → `"json"`, `json_schema` → şema nesnesinin kendisi).
 
 ## `openai-responses`
 
@@ -209,6 +248,11 @@ sidecar'ı etkinken serbest bırakılan yorum terminal olayından önce yine de 
 yalnızca modelin sentetik bir arama talep edip etmediğine karar vermek için
 gereken olaylar arabelleğe alınmış olarak kalır.
 
+Yalnızca kullanıcının verebileceği bir karar, bilgi ya da açıklama olmadan devam
+edilemiyorsa, sözleşme bu soruyu tamamlama aracıyla gönderip durmayı söyler. Böyle
+bir tur da yorum ya da istemci araç çağrısı değil, turu bitiren `final_answer`
+olarak ulaşır.
+
 Kiro tamamlama aracını çağırmadan durursa adaptör bir devam işlemi yapar.
 Yalnızca akıl yürütme yeniden denemeleri boş bir asistan mesajı üretmek yerine
 orijinal geçerli kullanıcı/araç sonucu turunu korur; görünür ilerleme boş
@@ -284,5 +328,4 @@ Vizyon duyarlı adaptörler tarafından kullanılan paylaşılan yardımcılar:
 - `contentPartsToText(content)` — salt metin araç mesajları için içerik
   parçalarını metne düzleştirir (açıklanmayan bir görsel kısa bir `[image]`
   işaretçisi haline gelir, asla belirteç patlatan bir base64 bloğu olmaz).
-
 

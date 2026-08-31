@@ -43,20 +43,26 @@ import {
   responseStatePersistPendingForTests,
   responseContinuationRetainedStoreSnapshot,
   runPendingResponseStatePersistForTests,
+  setResponseSpillAsyncAclAttemptBudgetForTests,
   setResponseStateByteCapForTests,
   setResponseStatePersistAttemptHookForTests,
+  setResponseSpillShutdownBudgetForTests,
   getStoredResponseBytesForTests,
+  flushPendingResponseSpillsForTests,
+  pendingResponseSpillMetricsForTests,
 } from "../src/responses/state";
 import {
   readResponseSpill,
   deleteResponseSpill,
   recoverOrphanedResponseSpills,
   responseSpillDirectory,
+  setResponseSpillNowForTests,
   setResponseSpillPayloadCapForTests,
   setSpillIoForTest,
   writeResponseSpillDurably,
 } from "../src/responses/spill-store";
 import { adapterNeedsForcedContinuation, injectDeveloperMessage } from "../src/server/responses";
+import { watchdogMs } from "./helpers/ci-watchdog";
 
 /**
  * Windows without Developer Mode or admin cannot create a file symlink (EPERM).
@@ -80,8 +86,11 @@ import {
   hardenSecretPath,
   hardenedSecretPathCountForTests,
   resetHardenedStateForTests,
+  setAsyncIcaclsRunnerForTests,
   setIcaclsRunnerForTests,
+  setNowForTests,
   setPlatformForTests,
+  setStatForTests,
   timedOutSecretPathCountForTests,
 } from "../src/lib/windows-secret-acl";
 
@@ -115,6 +124,100 @@ function fixedResponse(id: string, output: unknown[]): { id: string; output: unk
 function spillFileNames(home: string): string[] {
   const dir = responseSpillDirectory(home);
   return existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith(".spill.json")) : [];
+}
+
+function spillTempNames(home: string): string[] {
+  const dir = responseSpillDirectory(home);
+  return existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith(".tmp")) : [];
+}
+
+interface ShutdownBudgetChildResult {
+  settled: boolean;
+  reported: boolean;
+  pending: { count: number; bytes: number };
+  metrics: { residentCount: number; tombstoneCount: number };
+  replayedUnrelated: boolean;
+  guardReported: boolean;
+}
+
+interface NeverSettlingAclChildResult {
+  settled: boolean;
+  pending: { count: number; bytes: number };
+  metrics: { tombstoneCount: number };
+}
+
+async function runShutdownBudgetChild(
+  scenario: "exhaustion" | "guard",
+): Promise<ShutdownBudgetChildResult> {
+  const timeoutMs = watchdogMs(3_000);
+  const child = Bun.spawn([
+    process.execPath,
+    join(import.meta.dir, "helpers", "responses-state-shutdown-budget-child.ts"),
+    scenario,
+  ], {
+    cwd: join(import.meta.dir, ".."),
+    env: { ...process.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdoutPromise = new Response(child.stdout).text();
+  const stderrPromise = new Response(child.stderr).text();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<number>(resolve => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill("SIGKILL"); } catch { /* already exited */ }
+      void child.exited.then(resolve, () => resolve(-1));
+    }, timeoutMs);
+  });
+  const exitCode = await Promise.race([child.exited, timeout]);
+  if (timer !== undefined) clearTimeout(timer);
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+  if (timedOut) {
+    throw new Error(`response spill shutdown budget child timed out after ${timeoutMs}ms (${scenario})`);
+  }
+  if (exitCode !== 0) {
+    throw new Error(`response spill shutdown budget child exited ${exitCode} (${scenario}): ${stderr.trim()}`);
+  }
+  const line = stdout.trim().split(/\r?\n/).at(-1);
+  if (!line) throw new Error(`response spill shutdown budget child produced no result (${scenario})`);
+  return JSON.parse(line) as ShutdownBudgetChildResult;
+}
+
+async function runNeverSettlingAclChild(
+  mode: "principal" | "icacls",
+): Promise<NeverSettlingAclChildResult> {
+  const timeoutMs = watchdogMs(1_500);
+  const child = Bun.spawn([
+    process.execPath,
+    join(import.meta.dir, "helpers", "responses-state-never-settling-acl-child.ts"),
+    mode,
+  ], {
+    cwd: join(import.meta.dir, ".."),
+    env: { ...process.env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdoutPromise = new Response(child.stdout).text();
+  const stderrPromise = new Response(child.stderr).text();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<number>(resolve => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill("SIGKILL"); } catch { /* already exited */ }
+      void child.exited.then(resolve, () => resolve(-1));
+    }, timeoutMs);
+  });
+  const exitCode = await Promise.race([child.exited, timeout]);
+  if (timer !== undefined) clearTimeout(timer);
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+  if (timedOut) throw new Error(`never-settling ${mode} child timed out after ${timeoutMs}ms`);
+  if (exitCode !== 0) throw new Error(`never-settling ${mode} child exited ${exitCode}: ${stderr.trim()}`);
+  const line = stdout.trim().split(/\r?\n/).at(-1);
+  if (!line) throw new Error(`never-settling ${mode} child produced no result`);
+  return JSON.parse(line) as NeverSettlingAclChildResult;
 }
 
 function rememberLarge(id: string, text: string, providers?: Parameters<typeof rememberResponseState>[2]): void {
@@ -168,9 +271,16 @@ describe("Responses previous_response_id state", () => {
 
   afterEach(() => {
     setSpillIoForTest(null);
+    setResponseSpillNowForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
     setIcaclsRunnerForTests(null);
+    setNowForTests(null);
     setPlatformForTests(null);
+    setStatForTests(null);
     resetHardenedStateForTests();
+    delete process.env.OPENCODEX_ACL_TIMEOUT_MS;
+    setResponseSpillShutdownBudgetForTests(null);
+    setResponseSpillAsyncAclAttemptBudgetForTests(null);
     setResponseStateByteCapForTests(null);
     clearResponseStateForTests();
     rmSync(home, { recursive: true, force: true });
@@ -709,6 +819,486 @@ describe("Responses previous_response_id state", () => {
     rememberLarge("resp_durable_order", "x".repeat(8_000));
     expect(events).toEqual(["write", "fsync", "close", "harden", "publish", "dir-fsync", "stub-swap"]);
   });
+
+  test("Windows spill ACL hardening yields the event loop and swaps only after publication", async () => {
+    setPlatformForTests("win32");
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+      }
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+
+    rememberLarge("resp_async_acl", "x".repeat(8_000));
+    await started;
+    try {
+      let unrelatedTickRan = false;
+      setTimeout(() => { unrelatedTickRan = true; }, 0);
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(unrelatedTickRan).toBe(true);
+      expect(pendingResponseSpillMetricsForTests()).toMatchObject({ count: 1 });
+      expect(responseStateMetrics()).toMatchObject({ residentCount: 1, spillStubCount: 0, spillWriteFailures: 0 });
+      expect(JSON.stringify(expandPreviousResponseInput({ previous_response_id: "resp_async_acl", input: "next" })))
+        .toContain("xxxxxxxx");
+    } finally {
+      release();
+    }
+    await flushPendingResponseSpillsForTests();
+    expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1, spillWrites: 1, spillWriteFailures: 0 });
+  });
+
+  test("Windows spill retries one transient ACL timeout without installing a tombstone", async () => {
+    setPlatformForTests("win32");
+    process.env.OPENCODEX_ACL_TIMEOUT_MS = "1000";
+    let clock = 0;
+    let grantCalls = 0;
+    setNowForTests(() => clock);
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (args.includes("/grant:r")) {
+        grantCalls += 1;
+        if (grantCalls === 1) {
+          clock = 1_000;
+          return { success: false, exitCode: null, timedOut: true, stdout: "" };
+        }
+      }
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+
+    rememberLarge("resp_async_acl_retry", "r".repeat(8_000));
+    await flushPendingResponseSpillsForTests();
+
+    expect(grantCalls).toBeGreaterThanOrEqual(2);
+    expect(responseStateMetrics()).toMatchObject({
+      residentCount: 0,
+      spillStubCount: 1,
+      tombstoneCount: 0,
+      spillWrites: 1,
+      spillWriteFailures: 0,
+    });
+  });
+
+  test("Windows async spill attempts share one bounded ACL budget across every harden", async () => {
+    setPlatformForTests("win32");
+    let clock = 0;
+    let firstGrant = true;
+    const deadlines: number[] = [];
+    const grantDeadlines: number[] = [];
+    const hardenTargets: string[] = [];
+    setNowForTests(() => clock);
+    setResponseSpillNowForTests(() => clock);
+    setAsyncIcaclsRunnerForTests(async (args, timeoutMs) => {
+      deadlines.push(timeoutMs);
+      if (args.includes("/grant:r")) grantDeadlines.push(timeoutMs);
+      if (firstGrant && args.includes("/grant:r")) {
+        firstGrant = false;
+        clock += timeoutMs;
+        return { success: false, exitCode: null, timedOut: true, stdout: "" };
+      }
+      const target = String(args[0]);
+      if (!hardenTargets.includes(target)) hardenTargets.push(target);
+      clock += [6_000, 2_000, 1_000][hardenTargets.indexOf(target)] ?? 1_000;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setSpillIoForTest({
+      link: () => { throw Object.assign(new Error("injected link fallback"), { code: "EPERM" }); },
+    });
+    setResponseStateByteCapForTests(1_024);
+
+    rememberLarge("resp_async_acl_attempt_budget", "q".repeat(8_000));
+    await flushPendingResponseSpillsForTests();
+
+    expect(deadlines.length).toBeGreaterThanOrEqual(10);
+    expect(Math.max(...deadlines)).toBeLessThanOrEqual(15_000);
+    const retryAttemptGrantDeadlines = grantDeadlines.slice(-3);
+    expect(retryAttemptGrantDeadlines).toHaveLength(3);
+    expect(retryAttemptGrantDeadlines[1]!).toBeLessThan(retryAttemptGrantDeadlines[0]!);
+    expect(retryAttemptGrantDeadlines[2]!).toBeLessThan(retryAttemptGrantDeadlines[1]!);
+    expect(responseStateMetrics()).toMatchObject({
+      residentCount: 0,
+      spillStubCount: 1,
+      tombstoneCount: 0,
+      spillWrites: 1,
+      spillWriteFailures: 0,
+    });
+  });
+
+  test("Windows spill queue advances past never-settling principal and icacls runners", async () => {
+    for (const mode of ["principal", "icacls"] as const) {
+      const result = await runNeverSettlingAclChild(mode);
+      expect(result).toMatchObject({
+        settled: true,
+        pending: { count: 0, bytes: 0 },
+        metrics: { tombstoneCount: 2 },
+      });
+    }
+  }, { timeout: (2 * watchdogMs(1_500)) + 2_000 });
+
+  test("Windows pending spill publication cannot overwrite a newer same-id generation", async () => {
+    setPlatformForTests("win32");
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+      }
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+
+    rememberLarge("resp_async_replace", `old-${"a".repeat(8_000)}`);
+    await started;
+    rememberLarge("resp_async_replace", `new-${"b".repeat(8_000)}`);
+    release();
+    await flushPendingResponseSpillsForTests();
+
+    const replay = JSON.stringify(expandPreviousResponseInput({
+      previous_response_id: "resp_async_replace",
+      input: "next",
+    }));
+    expect(replay).toContain("new-bbbbbbbb");
+    expect(replay).not.toContain("old-aaaaaaaa");
+    expect(spillFileNames(home)).toHaveLength(1);
+    expect(responseStateMetrics()).toMatchObject({ spillStubCount: 1, spillWriteFailures: 0 });
+  });
+
+  test("shutdown flush stays pending while Windows spill ACL publication is gated", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 1_000, fallbackReserveMs: 500 });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+      }
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_shutdown_pending", "p".repeat(2 * 1024 * 1024 + 4_096));
+    await started;
+
+    let flushed = false;
+    const flushing = flushResponseState().then(() => { flushed = true; });
+    try {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      expect(flushed).toBe(false);
+    } finally {
+      release();
+    }
+    await flushing;
+  });
+
+  test("shutdown flush installs an oversized spill before snapshot and restart replay", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 1_000, fallbackReserveMs: 500 });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+      }
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    const payload = `restart-${"r".repeat(2 * 1024 * 1024 + 4_096)}`;
+    rememberLarge("resp_shutdown_restart", payload);
+    await started;
+
+    let flushed = false;
+    const flushing = flushResponseState().then(() => { flushed = true; });
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(flushed).toBe(false);
+    release();
+    await flushing;
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1 });
+
+    clearResponseStateMemoryForTests();
+    setResponseStateByteCapForTests(1_024);
+    const replay = JSON.stringify(expandPreviousResponseInput({
+      previous_response_id: "resp_shutdown_restart",
+      input: "next",
+    }));
+    expect(replay).toContain("restart-rrrrrrrr");
+    expect(responseStateMetrics().spillStubCount).toBe(1);
+  });
+
+  test("shutdown drain reaches a stable tail after a publication is appended mid-drain", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 1_000, fallbackReserveMs: 500 });
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let firstEntered!: () => void;
+    let secondEntered!: () => void;
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>(resolve => { releaseSecond = resolve; });
+    const firstStarted = new Promise<void>(resolve => { firstEntered = resolve; });
+    const secondStarted = new Promise<void>(resolve => { secondEntered = resolve; });
+    let aclCalls = 0;
+    setAsyncIcaclsRunnerForTests(async () => {
+      aclCalls += 1;
+      if (aclCalls === 1) {
+        firstEntered();
+        await firstGate;
+      } else if (aclCalls === 7) {
+        secondEntered();
+        await secondGate;
+      }
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_fixed_point_first", "a".repeat(8_000));
+    await firstStarted;
+
+    let flushed = false;
+    const flushing = flushResponseState().then(() => { flushed = true; });
+    rememberLarge("resp_fixed_point_second", "b".repeat(8_000));
+    releaseFirst();
+    await secondStarted;
+    try {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      expect(flushed).toBe(false);
+    } finally {
+      releaseSecond();
+    }
+    await flushing;
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 2 });
+  });
+
+  test("shutdown drain cap expiry enters the synchronous spill fallback", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    setAsyncIcaclsRunnerForTests(async () => {
+      entered();
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    let synchronousCalls = 0;
+    setIcaclsRunnerForTests(() => {
+      synchronousCalls += 1;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_shutdown_fallback", "f".repeat(2 * 1024 * 1024 + 4_096));
+    await started;
+
+    try {
+      await flushResponseState();
+      expect(synchronousCalls).toBeGreaterThan(0);
+      expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
+      expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1 });
+    } finally {
+      release();
+    }
+  });
+
+  test("shutdown fallback spends only its reserved ACL budget", async () => {
+    setPlatformForTests("win32");
+    const totalMs = 500;
+    const fallbackReserveMs = 300;
+    setResponseSpillShutdownBudgetForTests({ totalMs, fallbackReserveMs });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let aclClock = 0;
+    setNowForTests(() => aclClock);
+    setAsyncIcaclsRunnerForTests(async () => {
+      entered();
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    const deadlines: number[] = [];
+    setIcaclsRunnerForTests((_args, timeoutMs) => {
+      deadlines.push(timeoutMs);
+      aclClock += 20;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_shutdown_budget", "b".repeat(2 * 1024 * 1024 + 4_096));
+    await started;
+
+    try {
+      await flushResponseState();
+    } finally {
+      release();
+    }
+    const logicalElapsedMs = totalMs - fallbackReserveMs + aclClock;
+    expect(deadlines.length).toBeGreaterThanOrEqual(6);
+    expect(Math.max(...deadlines)).toBeLessThanOrEqual(Math.floor(fallbackReserveMs / 2));
+    expect(logicalElapsedMs).toBeLessThanOrEqual(totalMs);
+  });
+
+  test("late async spill completion cannot overwrite the shutdown fallback", async () => {
+    setPlatformForTests("win32");
+    setStatForTests(() => ({ dev: 1n, ino: 10n, ctimeNs: 100n }));
+    setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
+    let release!: () => void;
+    let entered!: () => void;
+    let tempHardenFinished!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const hardened = new Promise<void>(resolve => { tempHardenFinished = resolve; });
+    let publishCount = 0;
+    setSpillIoForTest({
+      record: event => {
+        if (event !== "publish") return;
+        publishCount += 1;
+      },
+    });
+    let tempHardenCalls = 0;
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (String(args[0]).includes(".response-spill.")) {
+        tempHardenCalls += 1;
+        if (tempHardenCalls === 1) {
+          entered();
+          await gate;
+        }
+        if (tempHardenCalls === 3) tempHardenFinished();
+      }
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    setResponseStateByteCapForTests(1_024);
+    const payload = `fallback-${"z".repeat(2 * 1024 * 1024 + 4_096)}`;
+    rememberLarge("resp_shutdown_late", payload);
+    await started;
+
+    let fallbackFile: string | undefined;
+    let abandonedTempCount = -1;
+    try {
+      await flushResponseState();
+      fallbackFile = spillFileNames(home)[0];
+      expect(fallbackFile).toBeDefined();
+      abandonedTempCount = spillTempNames(home).length;
+    } finally {
+      release();
+    }
+    await hardened;
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(spillFileNames(home)).toEqual([fallbackFile!]);
+    expect({ abandonedTempCount, publishCount }).toEqual({ abandonedTempCount: 0, publishCount: 1 });
+    const replay = JSON.stringify(expandPreviousResponseInput({
+      previous_response_id: "resp_shutdown_late",
+      input: "next",
+    }));
+    expect(replay).toContain("fallback-zzzzzzzz");
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1, spillWrites: 1 });
+  });
+
+  test("shutdown cleanup failure still persists unrelated response state and reports failure", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
+    let release!: () => void;
+    let entered!: () => void;
+    let tempHardenFinished!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const hardened = new Promise<void>(resolve => { tempHardenFinished = resolve; });
+    let tempHardenCalls = 0;
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (String(args[0]).includes(".response-spill.")) {
+        tempHardenCalls += 1;
+        if (tempHardenCalls === 1) {
+          entered();
+          await gate;
+        }
+        if (tempHardenCalls === 3) tempHardenFinished();
+      }
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_cleanup_failure", "x".repeat(2 * 1024 * 1024 + 4_096));
+    await started;
+    const abandonedTempPath = join(responseSpillDirectory(home), spillTempNames(home)[0]!);
+    setSpillIoForTest({
+      unlink: path => {
+        if (path === abandonedTempPath) {
+          throw Object.assign(new Error("injected abandoned temp unlink failure"), { code: "EPERM" });
+        }
+        unlinkSync(path);
+      },
+    });
+    rememberResponseState(
+      { model: "test/model", input: "safe-small-input", store: false },
+      fixedResponse("resp_cleanup_unrelated", [{ type: "message", role: "assistant", content: "safe-small-output" }]),
+      undefined,
+      { force: true },
+    );
+
+    let reported: unknown;
+    try {
+      await flushResponseState();
+    } catch (error) {
+      reported = error;
+    } finally {
+      release();
+    }
+    await hardened;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(reported).toBeInstanceOf(Error);
+
+    setSpillIoForTest(null);
+    clearResponseStateMemoryForTests();
+    setResponseStateByteCapForTests(1_024);
+    const replay = JSON.stringify(expandPreviousResponseInput({
+      previous_response_id: "resp_cleanup_unrelated",
+      input: "next",
+    }));
+    expect(replay).toContain("safe-small-input");
+    expect(replay).toContain("safe-small-output");
+  });
+
+  test("shutdown fallback budget exhaustion is contained by a child watchdog", async () => {
+    const result = await runShutdownBudgetChild("exhaustion");
+    expect(result).toMatchObject({
+      settled: true,
+      reported: true,
+      pending: { count: 0, bytes: 0 },
+      metrics: { residentCount: 1, tombstoneCount: 2 },
+      replayedUnrelated: true,
+    });
+  }, { timeout: watchdogMs(3_000) + 2_000 });
+
+  test("shutdown terminalization pass guard reports a bounded failure", async () => {
+    const result = await runShutdownBudgetChild("guard");
+    expect(result).toMatchObject({
+      settled: true,
+      reported: true,
+      pending: { count: 0, bytes: 0 },
+      guardReported: true,
+    });
+  }, { timeout: watchdogMs(3_000) + 2_000 });
 
   test("directory fsync follows spill unlink", () => {
     const ref = writeResponseSpillDurably("resp_unlink_order", { createdAt: Date.now(), items: ["x"] });

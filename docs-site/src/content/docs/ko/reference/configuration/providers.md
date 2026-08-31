@@ -54,7 +54,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 
 | 필드 | 타입 | 의미 |
 | --- | --- | --- |
-| `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` 중 하나이며, `azure`는 별칭입니다. |
+| `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `ollama-native`, `azure-openai` 중 하나이며, `azure`는 별칭입니다. |
 | `baseUrl` | `string` | 상위 API 기본 URL입니다. 대부분의 내장 고정 엔드포인트는 불일치를 무시합니다. 충돌 안전 키 프리셋은 같은 이름의 이전 사용자 지정 목적지를 보존합니다. |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | 업스트림 사용량, 과금, rate-limit 지표와 별개인 선택적 클라이언트 측 아웃바운드 요청 시작 속도 조절입니다. Provider 제한은 모든 모델에 적용되고 `models` 항목은 정확한 업스트림 모델 ID와 일치하며 지연을 더 늘릴 때만 적용됩니다. 큐 대기는 응답 헤더 타임아웃을 소모하지 않습니다. HTTP, Responses WebSocket, 명시적 어댑터 `fetchResponse`/`runTurn` 전송을 포함합니다. |
 | `responsesPath?` | `string` | 키 인증 `openai-responses` 요청의 상대 리소스 경로입니다. 반드시 `/`로 시작해야 하며 스킴, query, fragment를 포함하면 안 됩니다. |
@@ -80,6 +80,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `headers?` | `Record<string, string>` | 추가 상위 헤더입니다. Authorization, cookies, API-key 헤더, 내장 개행, 잘못된 이름은 허용하지 않습니다. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | 기본 OpenRouter `order`, `only`, `allowFallbacks` 선호도입니다. 정식 OpenRouter와 `openai-chat`에서만 유효합니다. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | 공급자 전반의 OpenRouter 선호도를 덮어쓰는 정확한 모델 id별 재정의입니다. |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` | 기본 Vercel AI Gateway `order`, `only`, `sort`(`"cost"` \| `"ttft"` \| `"tps"`) 선호도입니다. 정식 Vercel AI Gateway와 `openai-chat`에서만 유효합니다. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | 인증 모드입니다. 기본값은 `key`입니다. OAuth/구독 자격 증명은 `config.json` 밖에 저장되며, `local`은 레지스트리 항목이 허용하는 공급자에서만 사용할 수 있습니다. |
 | `codexAccountMode?` | `"pool" \| "direct"` | 정식 `openai` 전용입니다. 기본값은 Pool입니다. Direct는 풀 상태를 우회합니다. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | 이 OAuth 공급자의 Token Guardian 정책을 덮어씁니다. |
@@ -89,7 +90,9 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | 모델별 Responses 전달 enum입니다. 기존 delivery 필드를 다시 씁니다. |
 | `modelAdapters?` | `Record<string, string>` | 혼합 와이어 게이트웨이를 위한 모델별 `openai-chat` 또는 `openai-responses` 와이어 재정의입니다. 명시적 항목이 레지스트리 기본값보다 우선합니다. DeepSeek 프리셋은 `deepseek-v4-flash`에 네이티브 Responses를 선택할 수 있고, GitHub Copilot은 GPT-5 계열(`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`)을 Responses 전용 기본값으로 선언합니다. 이 모델들은 에이전트 트래픽에서 `/chat/completions`를 거부하기 때문입니다. `gpt-5.4-nano`처럼 기본값이 없는 모델은 여기서 직접 옵트인할 수 있습니다. 단일 와이어 상위 항목과 정식 ChatGPT forward는 재정의를 거부합니다. |
 | xAI Responses 옵트인(대시보드) | 스위치 | `xai`에서만 `grok-4.5`와 `grok-4.6`의 `modelAdapters` 항목을 원자적으로 설정하거나 지웁니다. 한 항목만 있으면 다음 스위치 쓰기가 둘을 정규화할 때까지 혼합 상태로 표시됩니다. 다른 재정의와 티어 동작은 바뀌지 않습니다. |
+| `xaiResponsesXSearch?` | `boolean` | 기본적으로 비활성화됩니다. xAI Responses 대상에서는 최종 요청 정규화 후에도 실제 `web_search` 도구가 남아 있을 때만 공급자가 호스팅하는 `x_search` 선언을 추가합니다. 기존 선언은 중복하지 않고, 호출자의 `tool_choice`/`allowed_tools` 선택기 범위를 확장하지 않으며, 웹 검색 사이드카의 `search.xSearch` 옵션과는 별개입니다. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | hosted tool namespace를 예약하는 non-forward Responses gateway용 정확한 모델 ID opt-in입니다. 현재 `["image_generation"]`만 허용하며, 일치하는 모델은 `openai-responses` wire를 사용하고 해당 hosted tool을 지원해야 합니다. 충돌하는 클라이언트 `image_gen` 선언을 제거하고 호출자의 tool choice를 유지하도록 selector도 다시 씁니다. OpenAI API 가상 `-pro` 모델은 선택한 공개 ID를 먼저 일치시키고, 해석된 기본 wire-model ID를 대체값으로 사용합니다. `modelAdapters`는 공개 ID를 먼저, 그 다음 기본 ID를 해석하며, 두 번째 결과가 최종 wire를 결정합니다. 설정하지 않은 모델은 일반 alias 동작을 유지합니다. |
+| `annotateEmptyToolOutputs?` | `boolean` | 존재하지만 비어 있는 도구 결과가 모델에 도달하기 전에 짧은 표시로 바꿔, 빈 결과를 누락된 결과로 해석하지 않도록 합니다. 빈 문자열과 텍스트 전용 파트 배열에 적용되며, 이미지·파일·암호화된 파트는 절대 변경하지 않습니다. 기본 제공 레지스트리에 따라 DeepSeek의 기본값은 `true`이며, 그 외에는 설정되지 않습니다. 공급자를 이 동작에서 제외하려면 `false`로 설정합니다. 명시적인 `false`는 이후 해당 필드를 생략한 편집에서도 유지됩니다. `PATCH /api/providers?name=<provider>`는 `true`, `false`, 또는 `null`을 받아 재정의를 지우고 레지스트리 기본 동작으로 되돌릴 수 있습니다. |
 | `reasoningEffortMap?` | `Record<string, string>` | reasoning 레이블의 공급자 전반 와이어 별칭입니다. |
 | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | reasoning 레이블의 모델별 와이어 별칭입니다. |
 | `reasoningWireFormat?` | `"gateway-object"` | `reasoning_effort` 대신 `reasoning: { enabled, effort }`를 받는 OpenAI 호환 게이트웨이용입니다. ClinePass 프리셋이 자동 설정합니다. |
@@ -102,6 +105,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 기본값이 꺼진 downstream SSE 복구입니다. 정확한 자리표시자 id, 누락된 종료 id, 그리고(`repairInvalidIds`) 정규 `msg_`/`rs_` 접두사가 없는 message/reasoning id를 복구합니다. function-call id는 다시 쓰지 않습니다. 내장 DeepSeek은 마지막 두 가지를 기본으로 켭니다. |
 | `responsesSnapshotRepair?` | `boolean` | 기본값이 꺼진 클라이언트용 복구입니다. SSE와 JSON의 Responses 수명 주기에서 누락된 status, output, 도구 메타데이터를 채우며 raw 검사와 영속화는 변경하지 않습니다. |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | API-key 프로바이더 전용(`authMode: "key"`). 동일 대상 429 재시도: `retryOn429`가 없으면 기능이 꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다. 429 시 대기(업스트림 `Retry-After` 또는 고정 간격) 후 키 장애 조치 전에 동일 키로 동일 요청을 재전송합니다 — 일반 텍스트 턴 복구 루프, Responses passthrough, 이미지/비디오 브리지, web-search 사이드카, 터미널 연속 요청을 모두 포함합니다. 재전송 대상은 프리스트림 HTTP 429 응답뿐이며, 커스텀 `runTurn` 전송은 HTTP 재시도 루프에서 제외됩니다. `attempts`는 첫 429 이후의 동일 키 재전송 횟수(총 전송 = `attempts` + 1)이며, 메인 복구 루프·터미널 가드 연속 요청·브리지 재시도가 공유하는 요청 단위 예산입니다. `attempts`를 모두 소진해도 동일 키 재전송만 중단되며, 이후에는 일반 키 장애 조치 또는 최종 오류 처리가 사용 가능한 대상에 따라 진행됩니다 — 키 인증 passthrough 와이어에는 장애 조치가 없으므로 소진된 429가 그대로 반환됩니다. Codex 자체는 429를 재시도하지 않으므로 단일 키 프로바이더의 유일한 방어선입니다. 기본값: `enabled: true`, `attempts: 3`, `intervalMs: 5000`, `maxIntervalMs: 60000`(단일 대기는 `maxIntervalMs`로 상한, 그 자체는 600000으로 상한), `respectRetryAfter: true`. |
+| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 키 인증 `openai-chat` 프로바이더 전용입니다. 스트림 시작 전의 일시적인 업스트림 상태(500, 502, 503, 504, 520, 521, 522)를 선택적으로 재시도합니다. 이 옵션이 없으면 꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다. 최초 Responses 요청, 터미널 가드 연속 요청, 네이티브 `/v1/chat/completions`, 429/계정 복구 재조회를 포함합니다. `attempts`는 최초 전송을 포함하여 요청 하나에 허용되는 업스트림 전송의 총횟수(1..10, 기본값 3)입니다. 연결 재설정 복구와 요청 단위 예산 하나를 공유하므로 `3`이면 실제로 프로바이더에 도달하는 요청은 최대 세 번입니다. 대기에는 400ms로 고정된 지수 백오프를 사용하고 상한은 5초이며 `Retry-After`를 따릅니다. 속도 제한을 처리하는 `retryOn429`와는 별개이며, 스트림 도중의 실패는 절대 재전송하지 않습니다. |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice`가 `auto` 또는 `none`만 받는 모델입니다. 강제 선택은 낮은 수준으로 바뀝니다. |
 | `preserveReasoningContentModels?` | `string[]` | chat 기록에서 이전 assistant `reasoning_content`가 필요한 모델입니다. |
 | `requiresReasoningPlaceholderModels?` | `string[]` | `reasoning_content`가 없는 tool_call 연속을 업스트림이 거부하는 모델(DeepSeek thinking 모드). 리플레이 캐시 미스 시 최소 플레이스홀더를 주입합니다. 미설정 시 `preserveReasoningContentModels`를 따르며 `[]`로 명시적 해제 가능. |
@@ -164,8 +168,9 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 | 키 | 타입 | 기본값 | 설명 |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | sticky 결속과 429 쿨다운 failover를 켭니다. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 새 세션에서는 이 임계값 이상에서 알려진 캐시 5시간 사용량이 가장 낮은 계정을 고릅니다. `0`이면 quota 선택을 끕니다. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 새 세션 전략입니다. quota는 5시간 막대만 사용합니다. |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 새 세션에서는 활성 계정이 이 임계값에 도달하면 설정된 창의 알려진 캐시 사용량이 가장 낮은 계정을 고릅니다. `0`이면 quota 선택을 끕니다. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 새 세션 전략입니다. `quota`는 `quotaWindow`로 지정한 창(기본값은 5시간 막대)으로 계정 순위를 매기고, `fill-first`도 같은 창에서 소진 임계값을 판정합니다. |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 사용량 기반 계정 선택에 사용하는, 공급자가 보고한 캐시 사용률 막대입니다. `five-hour`는 기존 동작을 유지합니다. `weekly`는 주간 막대를 사용하며 다른 사용 가능한 계정이 남아 있을 때만 5시간 막대가 소진된 계정을 건너뛰고, 아무 계정도 남지 않으면 해당 계정으로 폴백합니다. `max-utilization`은 알려진 값 중 가장 높은 값을 사용하므로 주간 사용량을 알기 전에도 5시간 사용량을 쓸 수 있고, 둘 다 모르면 unknown 순서를 따릅니다. 알려진 사용량은 unknown보다 앞서지만, 사용 가능한 계정이 모두 unknown이어도 사용 가능한 순서의 계정을 선택합니다. 앞서 설명한 5시간 사용량 동점 판정 뒤에도 완전히 같으면 사용 가능한 순서를 유지합니다. 정상 affinity 세션을 선제적으로 재배치하지 않습니다. 새 세션 배정과 가능한 429 대체 이후 라우팅 복구에서 `quota`는 이 창으로 사용 가능한 후보의 순위를 직접 매기고, `fill-first`는 이 창의 임계값과 소진 규칙에 따라 안정 순서로 이동하며, `round-robin`은 이 설정을 무시합니다. 쿨다운, failover 한도, 재인증 가능 여부는 별도의 로컬 상태로 유지됩니다. 계정별 주간 막대는 대시보드의 프로바이더 페이지에서 조회한 뒤에만 알 수 있습니다. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 성공한 새 세션 결속이 한 번의 라운드로빈 선택에 유지되는 횟수입니다. 범위는 1–100입니다. |
 
 활성화되면 429 레코드가 `Retry-After` 또는 기본 backoff에서 제한된 쿨다운을 기록하고, 요청 안에서 회전할 수 있습니다. 결속은 프로세스 로컬이며 크기가 제한됩니다. 자격 증명 401/403은 해당 계정이 재인증이 필요함을 표시합니다. 적격한 계정이 모두 쿨다운 중이면, 클라이언트는 인증 오류가 아니라 알려진 경우 `Retry-After`가 포함된 429를 받습니다.
@@ -298,6 +303,43 @@ OpenRouter는 하나의 모델을 여러 추론 공급자로 제공할 수 있�
 
 모델 키는 외부 opencodex 공급자 접두사 없이, 정확한 네이티브 OpenRouter id여야 합니다. `openrouter/anthropic-claude-sonnet-5`를 선택하면 모델 규칙을 적용하기 전에 네이티브 `anthropic/claude-sonnet-5`로 되돌아갑니다.
 
+## Vercel AI Gateway 공급자 라우팅
+
+Vercel AI Gateway는 하나의 모델을 여러 기반 추론 공급자에 걸쳐 라우팅할 수 있습니다. `vercelGatewayRouting`은
+공급자 전반의 선호도를 구성하고, `modelVercelGatewayRouting`은 정확한 모델 ID에 대해 이를 대체합니다. 둘 다
+설정하지 않으면 `resolveVercelGatewayRouting()`이 `undefined`를 반환하므로 Chat 요청 빌더는 `provider` 필드를
+생략하고 Vercel AI Gateway의 기본 동적 라우팅 동작이 유지됩니다.
+
+- `order`: Vercel AI Gateway 업스트림 공급자 slug를 우선순위 순으로 지정합니다.
+- `only`: 사용할 수 있는 Vercel AI Gateway 업스트림 공급자를 제한하는 명시적 허용 목록입니다.
+- `sort`: 사용할 수 있는 공급자를 `"cost"`(최저 비용), `"ttft"`(첫 토큰까지 걸리는 시간), `"tps"`(초당 토큰 수) 기준으로 자동 정렬합니다.
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
+        }
+      }
+    }
+  }
+}
+```
+
+모델 키는 외부 OpenCodex 공급자 접두사가 없는 Vercel 공개 모델 선택자입니다.
+`vercel-ai-gateway/zai-glm-5.2`를 선택하면 모델 규칙 적용 전에 네이티브 `zai/glm-5.2`가 복원됩니다. 네이티브
+`vercel/<model-id>` 선택자에도 동일한 매핑이 적용됩니다. OpenCodex에서는 인코딩된
+`vercel-ai-gateway/vercel-<model-id>` 선택자를 사용하고, 모델 키에는 `vercel/<model-id>`를 유지하십시오.
+
 ## 정적 모델 허용 목록
 
 `liveModels: false`로 두면 `models`만 노출합니다. `models`가 비어 있거나 생략되면 공급자는 어떤 라우팅 모델도 노출하지 않습니다. 라이브 발견은 캐싱 전에 4 MiB 또는 원시 모델 행 2,000개를 넘으면 거부합니다. 내장 프리셋은 더 낮은 한도를 쓰고 chat 가능한 행만 필터링할 수 있습니다. 너무 크거나 형식이 잘못된 결과는 오래된/설정된 폴백을 따릅니다. 유효하지만 선택 가능한 항목이 0개인 결과는 그대로 권위가 있으며, 조용히 다른 값으로 바꾸거나 잘라내지 않습니다.
@@ -341,7 +383,6 @@ OpenRouter는 하나의 모델을 여러 추론 공급자로 제공할 수 있�
       "defaultModel": "claude-sonnet-4-6"
     },
     "ollama-cloud": {
-      "adapter": "openai-chat",
       "baseUrl": "https://ollama.com/v1",
       "apiKey": "${OLLAMA_API_KEY}",
       "defaultModel": "glm-5.2",

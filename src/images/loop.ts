@@ -21,7 +21,7 @@ import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import {
   isTranslatorBudgetExceededError,
@@ -521,12 +521,15 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 deps.onAttemptSend?.(retryRecovery ?? recovery);
                 const h = new Headers(request.headers);
                 if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
-                return fetchImpl(request.url, {
+                // Same reset-recovery parity as the web-search loop: the replay needs
+                // `keepalive: false` to abandon the pooled socket, because Bun has ignored the
+                // hop-by-hop header alone (oven-sh/bun#20492).
+                return fetchImpl(request.url, applyUpstreamRecoveryInit({
                   method: request.method,
                   headers: h,
                   body: request.body,
                   signal: headerDeadline.signal,
-                });
+                }, retryRecovery));
               },
               { abortSignal: headerDeadline.signal, label: "image-bridge-loop" },
             );

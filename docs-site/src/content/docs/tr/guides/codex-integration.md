@@ -291,8 +291,8 @@ getirebilir (diğer `/api/*` rotalarıyla aynı kabul belirteci):
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
 tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
+curl -fsS -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
+  "https://proxy.example.com/v1/catalog" > "$tmp" \
   && mv "$tmp" "$dest"
 ocx sync-cache
 ```
@@ -306,6 +306,8 @@ Ayrıca bunu yönetim API'si (`POST /api/custom-models`, bir `displayName`
 dizesiyle `PUT /api/custom-models/<id>`) ve web kontrol paneli aracılığıyla
 ayarlayabilir veya düzenleyebilirsiniz. Yönlendirilen slug ayırıcısıyla
 çakışacağı için `/` işareti reddedilir.
+
+`GET /v1/catalog`, bir model listesini okumanın yönetici belirtecine mal olmaması için vardır. Rota salt okunurdur (`GET` ve `HEAD`), `x-opencodex-api-key`, bearer belirteci veya `x-api-key` kabul eder ve yönetim rotasıyla tamamen aynı baytları sunar. Yanıtlar güçlü bir `ETag` taşır — tam belge yerine `304` almak için `If-None-Match` ile geri gönderin — ve `Cache-Control: private, no-cache` içerir. Burada kabul edilen bir veri düzlemi anahtarı yönetim düzleminde **hiçbir şey** kazanmaz: `/api/catalog` ve tüm `/api/*` rotaları hâlâ yönetici belirteci veya pano oturumu gerektirir.
 
 Görünen ad **yalnızca görüntüleme amaçlıdır ve yeniden oluşturma boyunca
 kararlıdır**. Her `ocx sync` ve katalog yenilemesi yönlendirilen girdileri

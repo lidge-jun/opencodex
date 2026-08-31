@@ -153,13 +153,13 @@ CLI에서 표시 이름을 추가할 수 있습니다(proxy가 live 상태면 ca
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-원격 Codex client는 management API로 같은 생성된 catalog를 가져올 수 있습니다(다른 `/api/*` 경로와 같은 admission token을 사용합니다):
+원격 Codex client는 관리자 토큰이 아니라 일반 데이터 플레인 키(`/v1/responses`에 이미 사용하는 것과 같은 자격 증명)로 같은 생성된 catalog를 가져올 수 있습니다:
 
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
 tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
+curl -fsS -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
+  "https://proxy.example.com/v1/catalog" > "$tmp" \
   && mv "$tmp" "$dest"
 ocx sync-cache
 ```
@@ -167,6 +167,8 @@ ocx sync-cache
 응답은 원시 `opencodex-catalog.json` 문서입니다( provider credential 없음). 사용 가능할 때는 `x-opencodex-codex-version` header가 서버 쪽 Codex runtime version을 보고해서 client가 version skew를 알아볼 수 있습니다.
 
 또한 management API(`POST /api/custom-models`, `PUT /api/custom-models/<id>`의 `displayName` string)와 웹 대시보드에서도 설정하거나 수정할 수 있습니다. `/`는 routed-slug separator와 충돌하므로 거부됩니다.
+
+`GET /v1/catalog`은 모델 목록을 읽는 데 관리자 토큰이 필요하지 않도록 존재합니다. 읽기 전용(`GET`, `HEAD`)이며 `x-opencodex-api-key`, bearer 토큰, `x-api-key`를 허용하고 관리 라우트와 완전히 동일한 바이트를 제공합니다. 응답에는 강한 `ETag`가 포함되므로 `If-None-Match`로 다시 보내면 전체 문서 대신 `304`를 받고, `Cache-Control: private, no-cache`가 함께 설정됩니다. 여기서 허용된 데이터 플레인 키는 관리 플레인에서 **아무 권한도** 얻지 못합니다. `/api/catalog`을 비롯한 모든 `/api/*` 라우트는 여전히 관리자 토큰이나 대시보드 세션을 요구합니다.
 
 표시 이름은 **표시 전용이며 재생성 사이에서도 안정적**입니다. 모든 `ocx sync`와 catalog refresh는 `config.json`(`customModels` 포함)에서 routed entry를 다시 계산하므로, 설정된 이름이 라우팅 slug로 되돌아가지 않고 다시 적용됩니다. 관리형 service restart도 proxy가 bind된 직후 이 sync를 다시 시도합니다. 예를 들어 offline login 중이라 이 best-effort boot sync가 실패하면, 이전에 저장된 catalog는 유지되고 다음에 성공한 `ocx sync`가 설정된 이름을 다시 적용합니다. 진짜 upstream native name(예: `gpt-5.6-sol` → "GPT-5.6-Sol")은 고정된 upstream snapshot에서 오며, custom display name으로 덮어쓰지 않습니다.
 

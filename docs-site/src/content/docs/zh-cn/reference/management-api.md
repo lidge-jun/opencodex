@@ -120,6 +120,8 @@ Authorization: Bearer <admin-token>
 | `POST /api/storage/cleanup-policy/run` | 启动一次手动清理策略运行 | 409 `already_running`；500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | 仅测试用的策略流钩子 | 不可用时返回 404 `not_found` |
 
+`models`、`providers` 和 `days[].models` 中的记录也带有 `cacheHitRate`：它表示由提供方提示缓存提供的输入 token 比例，并限制在 `[0, 1]` 范围内。当提供方未报告缓存遥测数据或该记录没有输入 token 时，其值为 `null`，绝不会是 `0`，因为“没有缓存数据”与“实际命中率为 0%”是不同的事实，将两者显示为相同结果的图表会产生误导。
+
 :::caution
 存储清理端点可以移动或永久删除已归档的会话数据。务必先预览，并提交返回的摘要。若可能需要恢复，优先选择隔离。
 :::

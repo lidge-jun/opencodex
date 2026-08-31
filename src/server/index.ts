@@ -27,6 +27,7 @@ import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
 import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../service";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import {
+  createWindowsTaskListingCache,
   inspectNativeCodexOwnership,
   type NativeCodexOwnership,
   type OwnershipInspection,
@@ -499,6 +500,7 @@ function inspectStartupOwnership(
   deps: StartServerDeps,
   currentHomes: ReturnType<typeof currentServiceHomes> | null,
   statePaths: readonly string[] | null,
+  windowsTaskListingCache?: ReturnType<typeof createWindowsTaskListingCache>,
 ): OwnershipInspection {
   try {
     if (currentHomes === null || statePaths === null) {
@@ -508,9 +510,9 @@ function inspectStartupOwnership(
       };
     }
     if (deps.inspectNativeCodexOwnership) {
-      return deps.inspectNativeCodexOwnership({ currentHomes, statePaths });
+      return deps.inspectNativeCodexOwnership({ currentHomes, statePaths, windowsTaskListingCache });
     }
-    return inspectNativeCodexOwnership({ currentHomes, statePaths });
+    return inspectNativeCodexOwnership({ currentHomes, statePaths, windowsTaskListingCache });
   } catch {
     return {
       ownership: "unknown",
@@ -600,6 +602,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   const resolveServiceHomes = deps.resolveServiceHomes ?? currentServiceHomes;
   let startupOwnershipHomes: ReturnType<typeof currentServiceHomes> | null = null;
   let startupOwnershipStatePaths: readonly string[] | null = null;
+  // #2923: both synchronous startup ownership decisions keep their fresh,
+  // race-sensitive targeted task query. Only the expensive fallback listing is
+  // shared, and only while that targeted result stays byte-for-byte unchanged.
+  // Runtime ownership retries below intentionally omit this startup-local memo.
+  const startupWindowsTaskListingCache = createWindowsTaskListingCache();
   try {
     const homes = resolveServiceHomes();
     const statePaths = serviceStatePathsForOpenCodexHome(homes.opencodexHome);
@@ -610,6 +617,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     deps,
     startupOwnershipHomes,
     startupOwnershipStatePaths,
+    startupWindowsTaskListingCache,
   );
   // Startup cache invalidation is best-effort and must never block the server from
   // serving. It now takes K so it cannot race a convergence commit. Use the home
@@ -785,7 +793,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // clients; no Codex request can use this lifecycle in that state.
   // Re-probe here instead of trusting the earlier cache decision: startup work
   // between the two sites must not widen the service-install race.
-  const nativeOwnership = inspectStartupOwnership(deps, startupOwnershipHomes, startupOwnershipStatePaths);
+  const nativeOwnership = inspectStartupOwnership(
+    deps,
+    startupOwnershipHomes,
+    startupOwnershipStatePaths,
+    startupWindowsTaskListingCache,
+  );
   const preparedNativeMainLifecycle = nativeOwnership.ownership !== "foreign"
     && startupOwnershipHomes !== null
     ? prepareNativeMainStartupLifecycle(
@@ -1056,7 +1069,81 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
       }
 
+      if (url.pathname === "/v1/catalog" && (req.method === "GET" || req.method === "HEAD")) {
+        // #809: remote Codex clients need the model catalog, and the only prior source was
+        // GET /api/catalog behind management auth — so operators had to hand out an admin
+        // token to read a list of models. This route fixes that on the data plane instead of
+        // widening /api/*, which stays exactly as restricted as before.
+        //
+        // resolveApiAuth (not resolveResponsesApiAuth) for the same reason /v1/models uses
+        // it: nothing here forwards a caller credential upstream, so accepting the dedicated
+        // header, a recognized bearer, or x-api-key is safe — and rejecting x-api-key would
+        // 401 Anthropic-SDK clients holding a perfectly valid data credential.
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        }
+        const { serializePersistedCatalog, persistedCodexVersion, MAX_REMOTE_CATALOG_BYTES } = await import("./catalog-download");
+        const serialized = await serializePersistedCatalog();
+        if (serialized.body === null) {
+          // Built directly rather than through formatErrorResponse: that helper derives
+          // `code` from the status and message via classifyError, and these two need stable,
+          // specific codes. `catalog_not_found` in particular is what lets a caller — and
+          // tests/api-key-attribution.test.ts — tell "this route exists and has no catalog"
+          // apart from "this route is gone", which is the difference between admission proof
+          // and a vacuous pass.
+          return withCors(
+            new Response(JSON.stringify({
+              error: { type: "invalid_request_error", code: "catalog_not_found", message: "no materialized catalog is available" },
+            }), {
+              status: 404,
+              headers: { "content-type": "application/json" },
+            }),
+            req,
+            policy,
+          );
+        }
+        // Size policy belongs to this route, not the shared serializer: the management route
+        // must keep its existing behavior for a catalog of any supported size.
+        if (serialized.bytes !== undefined && serialized.bytes > MAX_REMOTE_CATALOG_BYTES) {
+          return withCors(
+            new Response(JSON.stringify({
+              error: { type: "server_error", code: "catalog_too_large", message: "catalog exceeds the maximum served size" },
+            }), {
+              status: 507,
+              headers: { "content-type": "application/json" },
+            }),
+            req,
+            policy,
+          );
+        }
+        const headers: Record<string, string> = {
+          "content-type": "application/json",
+          // Identity-varying content behind a credential: never let a shared cache keep it.
+          "cache-control": "private, no-cache",
+        };
+        if (serialized.etag) headers.ETag = serialized.etag;
+        const version = await persistedCodexVersion();
+        if (version) headers["x-opencodex-codex-version"] = version;
+        // Conditional GET: a client that already holds these bytes re-validates cheaply.
+        const ifNoneMatch = req.headers.get("if-none-match")?.trim();
+        if (serialized.etag && ifNoneMatch && ifNoneMatch === serialized.etag) {
+          return withCors(new Response(null, { status: 304, headers }), req, policy);
+        }
+        if (serialized.bytes !== undefined) headers["content-length"] = String(serialized.bytes);
+        // HEAD returns identical status and headers with no body.
+        return withCors(
+          new Response(req.method === "HEAD" ? null : serialized.body, { status: 200, headers }),
+          req,
+          policy,
+        );
+      }
+
       if (url.pathname === "/v1/models" && req.method === "GET") {
+        // #809: the catalog read sits immediately before model discovery because it shares
+        // that route's admission rationale exactly. Keep them adjacent so a future change to
+        // one is made in sight of the other.
         // Model discovery never forwards Authorization upstream, so the broader admission
         // set (Authorization / x-api-key / x-opencodex-api-key) is safe here and required by
         // remote OpenAI-style bearer clients and Claude gateway discovery (anthropic-version).

@@ -469,14 +469,25 @@ function kiroCompletionTool(): Record<string, unknown> {
   return {
     toolSpecification: {
       name: KIRO_COMPLETION_TOOL_NAME,
-      description: "Finish the task and return the complete user-facing final answer. Call only when no more work or tool calls are needed.",
+      // The shared tool-catalog nudge enumerates this name next to ordinary tools and tells every
+      // listed name to count a call only after its tool result returns. Nothing returns a result
+      // here: a valid call becomes the turn's terminal. Left undescribed, the model reads one more
+      // deferrable work tool and keeps calling tools with a finished answer already written as
+      // commentary. So the description states the distinction, the obligation, and the terminality
+      // where the model is actually choosing between tools.
+      //
+      // It also has to name the blocked-on-user state, for the same reason the prose contract does.
+      // This is the surface the model reads while CHOOSING; if it admits only "fully complete", a
+      // model holding a question that blocks progress reads this tool as unavailable and keeps
+      // working instead, which is the measured defect. The two surfaces must not disagree.
+      description: "Terminal completion channel, not an ordinary work tool. When the task is fully complete and no more work or tool calls are needed, you must call this tool exactly once instead of providing the final answer as ordinary assistant text. Call it the same way when you cannot continue until the user supplies a decision, information, or a clarification that only they can give: the question itself is the answer. Put the complete user-facing final answer in `answer`. The call is complete when issued: it ends the turn, returns no tool result, and no text or tool call may follow it.",
       inputSchema: {
         json: {
           type: "object",
           properties: {
             answer: {
               type: "string",
-              description: "The complete final answer to show the user.",
+              description: "The complete final answer to show the user, or the blocking question you need the user to answer before you can continue.",
             },
           },
           required: ["answer"],

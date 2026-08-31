@@ -1,8 +1,14 @@
-import { namespacedToolName, normalizeDeclaredToolName } from "../types";
+import {
+  CODE_MODE_EXEC_TOOL_NAME,
+  namespacedToolName,
+  normalizeDeclaredToolName,
+} from "../types";
 import { sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 
 /** Item types the client executes through a request-declared wire name. */
 const CLIENT_EXECUTED_CALL_TYPES = new Set(["function_call", "custom_tool_call"]);
+/** Codex groups ordinary top-level tools here; unlike an MCP namespace, it has no wire prefix. */
+const BUILTIN_FUNCTIONS_NAMESPACE = "functions";
 
 /**
  * Hosted declarations whose response items the PROVIDER executes, keyed by the request
@@ -79,11 +85,18 @@ function addWireToolName(names: Set<string>, tool: unknown, namespace?: string):
       ? nestedFunction.name
       : undefined;
   if (!name) return;
-  names.add(name);
   // Codex routes MCP calls by an explicit `namespace` field, so the same tool is reachable
   // as a bare inner name or as the flattened form; accept both rather than guess which
   // coordinate system this provider echoes back.
-  if (namespace) names.add(namespacedToolName(namespace, name));
+  if (!namespace || namespace === BUILTIN_FUNCTIONS_NAMESPACE) {
+    names.add(name);
+    return;
+  }
+  names.add(namespacedToolName(namespace, name));
+  // `exec` is the one name that also switches on nested-helper normalization, so a bare alias
+  // for a namespaced MCP tool would silently authorize `exec_command`/`shell_command`/
+  // `apply_patch` the request never declared. Every other inner name keeps the bare alias.
+  if (name !== CODE_MODE_EXEC_TOOL_NAME) names.add(name);
 }
 
 /**

@@ -73,6 +73,13 @@ export const CURSOR_ROUTING_LEVEL_PARAMETER_ID = "optimization";
 export const CURSOR_EXTERNAL_ROOT_BLOB_LIMIT = 192;
 /** Approximate prompt-size guard; tool schemas and protocol framing consume context separately. */
 export const CURSOR_EXTERNAL_ROOT_BYTE_LIMIT = 512 * 1024;
+/**
+ * Byte budget for the serialized arguments named inside ONE replayed tool-result envelope. The
+ * invocation identifies the call; the result is the payload. Without an independent cap, a single
+ * large-but-legitimate argument (a 600 KiB file write) consumed the whole root history budget and
+ * the result output was truncated away instead.
+ */
+export const CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT = 2 * 1024;
 
 /**
  * Action text for external-model tool-result continuations. Native models keep
@@ -118,6 +125,13 @@ type RootBlobCandidate = {
   messageIndex?: number;
   /** Original JSON text payload used when an active tool result must be truncated to fit. */
   text?: string;
+  /**
+   * Set when a tool result was truncated past the point where any of its own output survives — either down
+   * to the truncation marker alone, or mid-envelope before the `output:` line. The model reads both as an
+   * empty answer to its own call, so a caller deciding whether the result "survived" must be able to tell
+   * them apart from a real one (devlog 260829 070).
+   */
+  outputElided?: true;
 };
 
 function rootBlobCandidate(
@@ -156,7 +170,14 @@ function truncateToolResultBlob(entry: RootBlobCandidate, maxBytes: number): Roo
       "toolResult",
       { messageIndex: entry.messageIndex, text: truncated },
     );
-    if (result.byteLength <= maxBytes) return result;
+    if (result.byteLength <= maxBytes) {
+      // `output:` is the last fixed line of the envelope, so a cut landing before it leaves the header
+      // and no answer. Flag it: "a result root survived" would otherwise be true of a root that tells the
+      // model nothing about what its tool returned.
+      const outputStart = truncated.indexOf("\noutput:\n");
+      const keptOutput = outputStart >= 0 && truncated.length > outputStart + "\noutput:\n".length + marker.length;
+      return keptOutput ? result : { ...result, outputElided: true };
+    }
     if (end === 0) break;
     keepBytes = Math.max(0, end - (result.byteLength - maxBytes) - 16);
   }
@@ -165,7 +186,7 @@ function truncateToolResultBlob(entry: RootBlobCandidate, maxBytes: number): Roo
     "toolResult",
     { messageIndex: entry.messageIndex, text: marker.trimStart() },
   );
-  return markerOnly.byteLength <= maxBytes ? markerOnly : null;
+  return markerOnly.byteLength <= maxBytes ? { ...markerOnly, outputElided: true } : null;
 }
 
 function systemPromptBlobs(request: CursorRunRequest): RootBlobCandidate[] {
@@ -197,12 +218,59 @@ function assistantRootText(
 // [Tool Error] marker so Cursor does not wrap them as `<user_query>` (#1992). Native resume models
 // already carry the paired MCP result on turns[], so that marker is omitted from root replay — Auto
 // few-shot-mimics it as chat text otherwise. Each entry is a SHA-256 blob ID.
-function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobRequestScopeToken): {
+function rootPromptMessages(
+  request: CursorRunRequest,
+  requestScope: CursorBlobRequestScopeToken,
+  /**
+   * Calls indexed from the FULL history. The checkpoint path replays only a suffix of
+   * `rawMessages`, so a result in that suffix can have its originating call before the cut; indexing
+   * from the slice alone silently dropped the invocation line for every checkpoint continuation,
+   * which is where the defect this line prevents actually reappeared in live use.
+   */
+  knownCalls?: Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>,
+  /**
+   * Full-history index of `rawMessages[0]` for this call. Non-zero only on the checkpoint path, where
+   * only a suffix is replayed but `knownCalls` still spans full history; the positional bound needs
+   * both sides in the same space (devlog 260829 060).
+   */
+  knownCallsOffset = 0,
+  /**
+   * Roots the decoded checkpoint already carries, which this call's pruning must leave room for.
+   *
+   * The envelope guard downstream measures checkpoint roots PLUS this suffix and throws a
+   * non-retryable 400 when the total exceeds the limit. Pruning against the full limit therefore
+   * emitted a suffix that was individually legal and cumulatively fatal — invisible until suffix
+   * replay actually grew (devlog 260829 070, audit r8 finding 3).
+   */
+  carriedRoots: { count: number; byteLength: number } = { count: 0, byteLength: 0 },
+): {
   ids: Uint8Array[];
   byteLength: number;
   historyMessageStart: number;
   /** Serialized text of the roots that survived pruning, in wire order. */
   serialized: string[];
+  /**
+   * Source message index of each HISTORY root that survived pruning (system roots excluded).
+   *
+   * The checkpoint caller needs to know whether the specific message it is continuing from survived.
+   * Neither role nor text can answer that: roles repeat, and matching the result's own output against the
+   * serialized root fails on JSON escaping the moment real output contains a newline or a quote — which
+   * made live continuations abandon their checkpoint on every turn (devlog 260829 070).
+   */
+  historyMessageIndexes: number[];
+  /**
+   * Message indexes whose root survived pruning but lost ALL of its own output to truncation, so only the
+   * truncation marker remains. Aligned with nothing — membership is the whole signal (devlog 260829 070).
+   */
+  historyOutputElided: number[];
+  /**
+   * Message indexes of the trailing tool-result run as PRUNING saw it — root space, not raw-message space.
+   * The two spaces diverge: a bare tool call with no text emits no root, so two sequentially-executed
+   * results become adjacent roots while a raw-space scan still sees a trailing run of one. A caller that
+   * re-derives the run from `rawMessages` therefore cannot see a result this function dropped for count
+   * (audit r10). Emitted so the abandon decision reads the same set pruning acted on.
+   */
+  activeMessageIndexes: number[];
 } {
   const entries = systemPromptBlobs(request);
   const systemEntryCount = entries.length;
@@ -213,11 +281,17 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       byteLength: entries.reduce((sum, entry) => sum + entry.byteLength, 0),
       historyMessageStart: 0,
       serialized: entries.map(entry => entry.serialized),
+      historyMessageIndexes: [],
+      historyOutputElided: [],
+      activeMessageIndexes: [],
     };
   }
 
   const externalModel = isCursorExternalWireModel(request.modelId);
   const echoToolResultInRoot = cursorNeedsExternalToolContinuation(request.modelId);
+  // Replayed results name the invocation that produced them; without it the result is orphaned
+  // (devlog 260829 000_rca). Indexed once per request rather than rescanned per result.
+  const replayedCalls = echoToolResultInRoot ? (knownCalls ?? toolCallsByCallId(messages)) : undefined;
   const lastRawIsToolResult = messages.at(-1)?.role === "toolResult";
   const activeUserIndex = lastRawIsToolResult ? -1 : lastActionIndex(messages);
   // Repetition breaker (devlog 260826 gap-9): external full-replay flattens history to text,
@@ -287,7 +361,11 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
           text,
         );
       }
-      // Assistant tool CALLS are intentionally NOT replayed as visible "[Tool Call]" text here.
+      // Assistant tool CALLS are NOT replayed as a separate visible "[Tool Call]" entry: a model
+       // few-shot-mimics that marker and emits later tool calls as inert text (363-B guard in
+      // tests/cursor-tool-continuation.test.ts). The invocation is instead named INSIDE the paired
+      // "[Tool Result]" envelope below, which carries the same information without a mimickable
+      // call template (devlog 260829 002_audit_round2).
     } else if (message.role === "toolResult") {
       // Native resume models already receive the paired MCP result through turns[]. Replaying
       // the same payload as assistant-role "[Tool Result]" / "[tool_result]" text teaches Auto
@@ -296,7 +374,9 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       // #1920: the prefix must reflect the NORMALIZED error state (an empty
       // node_repl result is an error even when the runtime said isError=false).
       const prefix = normalizedToolResult(message, contentToText(message.content)).isError ? "[Tool Error]" : "[Tool Result]";
-      const text = `${prefix}\n${toolResultToText(message)}`;
+      // The bound compares in full-history space: this loop's `i` is already full-history on the
+      // full-replay path, and `knownCallsOffset` re-bases it when only a suffix is replayed.
+      const text = `${prefix}\n${toolResultToText(message, callBefore(replayedCalls, decodeCursorCallId(message.toolCallId), knownCallsOffset + i))}`;
       pushDeduped(toolResultRootPayload(text), "toolResult", { messageIndex: i, text }, text);
     }
   }
@@ -310,30 +390,108 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
 
   let selected = entries;
   let historyMessageStart = 0;
+  // The trailing tool-result run in ROOT space, recorded before pruning can drop from it. Empty for a
+  // native model or a non-external one, which never assemble a trailing run here at all.
+  let activeMessageIndexes: number[] = [];
   if (externalModel) {
+    // A non-zero offset means `rawMessages[0]` is NOT the conversation start: only the checkpoint
+    // path passes one, and it passes `suffixStart`, the count of messages the checkpoint carries.
+    // Named rather than tested inline because `knownCallsOffset` answers two different questions —
+    // where to re-base a position (#2936) and whether this history has a covered predecessor — and
+    // collapsing them back into one bare `!== 0` is how the second meaning gets lost again.
+    const suffixContinuesCoveredTurn = knownCallsOffset > 0;
     const systemEntries = entries.slice(0, systemEntryCount);
     const history = entries.slice(systemEntryCount);
     const systemBytes = systemEntries.reduce((sum, entry) => sum + entry.byteLength, 0);
-    const historyLimit = Math.max(0, CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - systemEntryCount);
-    const historyBudget = Math.max(0, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - systemBytes);
+    // On the checkpoint path the caller appends ONLY the history roots to what the checkpoint already
+    // carries (`suffixHistoryIds` is `ids.slice(suffixSystemCount)`), and the system roots the checkpoint
+    // carries are already inside `carriedRoots`. Subtracting `systemEntryCount` there charges for them
+    // twice, which cost a slot that was genuinely free: at 190 carried roots the limit came out 1 when 2
+    // results fit, and the count bound below then dropped an answered call for no reason (audit r10).
+    const chargeableSystemCount = suffixContinuesCoveredTurn ? 0 : systemEntryCount;
+    const historyLimit = Math.max(0, CURSOR_EXTERNAL_ROOT_BLOB_LIMIT - chargeableSystemCount - carriedRoots.count);
+    // Only the COUNT is relaxed. The byte side keeps charging `systemBytes` on both paths: the same
+    // double-charge argument applies in principle, but no configuration could be found where relaxing it
+    // changes the assembled payload — 6 crossings of carried bytes against system size against result size
+    // in the deciding band produced byte-identical output with and without it. Untested new code on the
+    // envelope path is a liability rather than a saving, and charging the bytes twice only ever errs
+    // conservative, so the relaxation is deliberately not made here (audit r11).
+    const historyBudget = Math.max(0, CURSOR_EXTERNAL_ROOT_BYTE_LIMIT - systemBytes - carriedRoots.byteLength);
 
     // Retain the active trailing tool-result block when it fits (may truncate text).
     // If even a truncation marker cannot fit the remaining budget, omit it rather than
     // emitting an oversized root blob.
-    let activeStart = history.length;
+    //
+    // Walk past any SYNTHETIC trailing root first. The repetition breaker above appends a
+    // `[context note]` user root after the transcript, and it stands for no message, so it carries no
+    // `messageIndex`. Without this step the result-run walk stopped dead on that note: `activeStart`
+    // came out equal to `history.length`, the trailing run was empty, and the results lost their
+    // trailing-run status entirely — they fell through to `prior` and were pruned as ordinary history,
+    // with no "keep at least one" guarantee and an empty `activeMessageIndexes` that sent the abandon
+    // check back to the raw-message scan it must not use. Measured: a note-armed continuation at 186
+    // carried roots was retained where the same shape without the note correctly abandoned, and the
+    // note arms on three identical assistant narrations — the runaway-repetition shape this whole unit
+    // exists to end, so the one input most likely to hit it (audit r11).
+    let activeEnd = history.length;
+    while (activeEnd > 0 && history[activeEnd - 1]?.messageIndex === undefined) activeEnd -= 1;
+    let activeStart = activeEnd;
     while (activeStart > 0 && history[activeStart - 1]?.role === "toolResult") activeStart -= 1;
+    // Reserve the synthetic tail's slots and bytes FIRST, and express every budget below net of it.
+    // The tail is appended after all pruning, so a block that spends its room overruns the envelope,
+    // and a block that divides the gross budget produces shares that cannot fit once it returns. Both
+    // happened: the equal-share pass became structurally unfittable and fell through to deleting a whole
+    // result, and the initiator-recovery block committed 51 bytes over the limit (audit r11, r12).
+    // Affordability is decided BEFORE the reservation, because the reservation cannot represent a
+    // deficit. `Math.max(0, …)` turns "the note cannot be paid for" into "the note costs nothing", and
+    // the tail was appended regardless — so an envelope with 26 bytes free emitted a 246-byte note and
+    // overran by 220. Holding the tail out of `historyEntries` is what made that unrecoverable: no block
+    // below could see it to charge it.
+    //
+    // A trailing tool result hid this, because the abandon check's survival disjuncts rescue that shape.
+    // The exposed shape is a turn that does NOT end in a result — an ordinary user interjection after a
+    // repetitive stretch — where nothing else bounds the tail: 13 of 42 positions threw the
+    // non-retryable 400 with the note armed and none without it (audit r13).
+    //
+    // When it does not fit, the note is dropped. That is the unit's own priority order: a missing
+    // instruction is recoverable, a missing tool result restarts the loop this unit exists to end.
+    const syntheticEntries = history.slice(activeEnd);
+    const syntheticCountRaw = syntheticEntries.length;
+    const syntheticBytesRaw = syntheticEntries.reduce((sum, entry) => sum + entry.byteLength, 0);
+    // BOTH axes. The count conjunct was briefly dropped as inert on the reasoning that the count bound
+    // below keeps one result and therefore always leaves a slot — which is exactly wrong at
+    // `historyLimit === 1`, where that one free slot is the one the result takes. The note was then judged
+    // affordable on bytes, the reservation clamped to 0, and the append pushed full replay to 193 roots:
+    // four armed-only `CursorRootEnvelopeLimitError` throws at 191 system prompts, on both tails and both
+    // suffix widths, where the same request without the note assembled 192 and succeeded.
+    //
+    // The sweep that called it inert varied CARRIED roots on the checkpoint path, where the count-full
+    // disjunct abandons the checkpoint before `historyLimit` can reach 1. The reachable route is full
+    // replay with many system prompts, and full replay has no abandon branch to rescue it (audit r14).
+    const syntheticAffordable = historyBudget - syntheticBytesRaw >= 0
+      && historyLimit - syntheticCountRaw >= 1;
+    const syntheticCount = syntheticAffordable ? syntheticCountRaw : 0;
+    const syntheticBytes = syntheticAffordable ? syntheticBytesRaw : 0;
+    const historyLimitForReal = Math.max(0, historyLimit - syntheticCount);
+    const historyBudgetForReal = Math.max(0, historyBudget - syntheticBytes);
     const active = history
-      .slice(activeStart)
-      .map(entry => truncateToolResultBlob(entry, historyBudget))
+      .slice(activeStart, activeEnd)
+      .map(entry => truncateToolResultBlob(entry, historyBudgetForReal))
       .filter((entry): entry is RootBlobCandidate => entry !== null);
+    // Record the run BEFORE any pruning below can shrink it, so the abandon decision downstream compares
+    // against what pruning was asked to preserve rather than against a raw-message scan that cannot see
+    // this run's true width (audit r10).
+    activeMessageIndexes = history
+      .slice(activeStart, activeEnd)
+      .map(entry => entry.messageIndex)
+      .filter((index): index is number => index !== undefined);
     let activeBytes = active.reduce((sum, entry) => sum + entry.byteLength, 0);
     // Shrink every active result toward an equal share before dropping any of them. Review found
     // that the previous `active.shift()` loop DELETED whole results: three ~220 KB results emitted
     // only the last two, and `call_0` vanished with its tool call still in the transcript. A
     // missing result is worse than a truncated one — the model sees a call it never got an answer
     // to, which is the pairing break #1527 reports, and the caller cannot tell it happened.
-    if (active.length > 1 && activeBytes > historyBudget) {
-      const share = Math.floor(historyBudget / active.length);
+    if (active.length > 1 && activeBytes > historyBudgetForReal) {
+      const share = Math.floor(historyBudgetForReal / active.length);
       for (let index = 0; index < active.length; index++) {
         const entry = active[index];
         if (!entry || entry.byteLength <= share) continue;
@@ -344,12 +502,12 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
     }
     // Only when even an equal share cannot fit — the marker alone has a floor, so enough results
     // still overflow — fall back to dropping the oldest.
-    while (active.length > 1 && activeBytes > historyBudget) {
+    while (active.length > 1 && activeBytes > historyBudgetForReal) {
       const dropped = active.shift();
       activeBytes -= dropped?.byteLength ?? 0;
     }
-    if (active.length === 1 && active[0] && activeBytes > historyBudget) {
-      const truncated = truncateToolResultBlob(active[0], historyBudget);
+    if (active.length === 1 && active[0] && activeBytes > historyBudgetForReal) {
+      const truncated = truncateToolResultBlob(active[0], historyBudgetForReal);
       if (truncated) {
         active[0] = truncated;
         activeBytes = truncated.byteLength;
@@ -358,23 +516,48 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
         activeBytes = 0;
       }
     }
+    // COUNT-bound the trailing run, not only its bytes. `historyLimit` already subtracts what the
+    // checkpoint carries, but until now it was consulted ONLY by the prior-history loop below, and
+    // `historyEntries` was assembled as `[...keptPrior, ...active]` with no count check at all. The
+    // shrink/drop loops above answer to `historyBudget` alone — `truncateToolResultBlob` makes a
+    // result smaller, it never removes one to free a root SLOT — so a parallel tool-call batch
+    // arrived unbounded: 190 carried roots plus a 3-result batch assembled 193 and threw the
+    // non-retryable 400 this unit exists to remove (audit r9). Sequential pairs hid it, because a
+    // trailing run of length 1 is the one case where the abandon test's `+ 1` is exactly right.
+    //
+    // Drop the OLDEST results first, matching the direction byte pressure already prunes, and keep
+    // at least one: a continuation with no result is worthless, and the abandon decision downstream
+    // reads `historyMessageIndexes` to notice exactly that and fall back to a full replay.
+    while (active.length > 1 && active.length > historyLimitForReal) {
+      const dropped = active.shift();
+      activeBytes -= dropped?.byteLength ?? 0;
+    }
 
     const prior = history.slice(0, activeStart);
     const keptPrior: RootBlobCandidate[] = [];
     let priorBytes = 0;
     // Take complete turns from the end: a turn starts at a user/developer root entry.
+    //
+    // Turn-granular admission needs a turn boundary to exist. A checkpoint suffix has NO user root at
+    // all — its initiating turn is inside the checkpoint — so `turnStart` walks to 0, the entire prior
+    // block becomes one all-or-nothing pseudo-turn, and the first budget overrun drops ALL of it.
+    // Measured on the checkpoint path with 8 pairs of 64 KiB results: 2 roots, unchanged by the orphan
+    // guard fix, because there was nothing left for that guard to strip. Admitting entry-by-entry keeps
+    // as much recent history as fits instead of none (devlog 260829 070, audit r8 finding 2).
     let i = prior.length - 1;
-    while (i >= 0 && keptPrior.length + active.length < historyLimit) {
+    while (i >= 0 && keptPrior.length + active.length < historyLimitForReal) {
       let turnStart = i;
-      // Root-blob roles are a closed set of four (system, user, assistant, toolResult): a
-      // developer message is normalized to a user root upstream, so "user" IS the turn start.
-      // Review suspected a developer-role gap here; the type says it cannot occur.
-      while (turnStart > 0 && prior[turnStart]?.role !== "user") turnStart -= 1;
+      if (!suffixContinuesCoveredTurn) {
+        // Root-blob roles are a closed set of four (system, user, assistant, toolResult): a
+        // developer message is normalized to a user root upstream, so "user" IS the turn start.
+        // Review suspected a developer-role gap here; the type says it cannot occur.
+        while (turnStart > 0 && prior[turnStart]?.role !== "user") turnStart -= 1;
+      }
       const turn = prior.slice(turnStart, i + 1);
       const turnBytes = turn.reduce((sum, entry) => sum + entry.byteLength, 0);
       if (
-        keptPrior.length + active.length + turn.length > historyLimit
-        || priorBytes + activeBytes + turnBytes > historyBudget
+        keptPrior.length + active.length + turn.length > historyLimitForReal
+        || priorBytes + activeBytes + turnBytes > historyBudgetForReal
       ) {
         break;
       }
@@ -383,12 +566,35 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       i = turnStart - 1;
     }
 
+    const trailingSynthetic = syntheticAffordable ? syntheticEntries : [];
+    // Synthetic trailing roots — today only the repetition-breaker note — are held OUT of
+    // `historyEntries` while the blocks below decide what survives, and appended once at assembly.
+    //
+    // They were briefly appended here instead, and every subsequent block then had to recognise a tail
+    // it could not identify except by position. The initiator-recovery loop below could not: its floor
+    // is "stop when one entry is left", so with `[toolResult, note]` it counted the note as the
+    // survivor and shifted off the RESULT — a 600 KB tool output replaced by 193 bytes of note, leaving
+    // a prompt that instructs the model to change strategy while showing it nothing its command
+    // returned. Measured 166 of 432 byte-pressure configurations losing an answer that way. Keeping the
+    // tail out means those blocks stay purely about real history and cannot mistake one for the other;
+    // the budgets still charge for it, which is what stops it overrunning the envelope (audit r12).
     const historyEntries = [...keptPrior, ...active];
     // Guard against orphan assistant / toolResult at the start of the retained suffix.
-    while (historyEntries[0]?.role === "assistant" || historyEntries[0]?.role === "toolResult") {
-      // Never drop the sole active tool-result block.
-      if (historyEntries.length <= active.length) break;
-      historyEntries.shift();
+    //
+    // Premised on `history` starting where the CONVERSATION starts: only then does a leading
+    // assistant/result entry mean its user turn was pruned. A checkpoint suffix breaks that premise —
+    // it begins at `suffixStart`, so its first entry is routinely the assistant message whose
+    // initiating user turn is inside the checkpoint. Running the loop there strips pair after pair
+    // until only `active` survives, because the `break` fires only once the survivors ARE `active`:
+    // measured 2 roots for 1, 2, 3 and 4 completed pairs in the suffix, so a growing conversation
+    // replayed a constant payload and the model never saw the output of the command it just ran
+    // (devlog 260829 070).
+    if (!suffixContinuesCoveredTurn) {
+      while (historyEntries[0]?.role === "assistant" || historyEntries[0]?.role === "toolResult") {
+        // Never drop the sole active tool-result block.
+        if (historyEntries.length <= active.length) break;
+        historyEntries.shift();
+      }
     }
     // #1527: the surviving history must not begin with a tool result. Byte pressure can consume the
     // whole budget with one large active result and drop the user turn that asked for it, and
@@ -418,7 +624,7 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
       if (initiator) {
         const withInitiator = [initiator, ...historyEntries];
         const initiatorBytes = withInitiator.reduce((sum, entry) => sum + entry.byteLength, 0);
-        if (withInitiator.length <= historyLimit && initiatorBytes <= historyBudget) {
+        if (withInitiator.length <= historyLimitForReal && initiatorBytes <= historyBudgetForReal) {
           historyEntries.length = 0;
           historyEntries.push(...withInitiator);
         } else {
@@ -433,14 +639,14 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
           // already prunes, then truncate whatever survives. An instruction with fewer or shorter
           // results is answerable; results with no instruction are not.
           const kept = [...historyEntries];
-          while (kept.length > 1 && kept.length + 1 > historyLimit) kept.shift();
+          while (kept.length > 1 && kept.length + 1 > historyLimitForReal) kept.shift();
           let keptBytes = kept.reduce((sum, entry) => sum + entry.byteLength, 0);
-          while (kept.length > 1 && initiator.byteLength + keptBytes > historyBudget) {
+          while (kept.length > 1 && initiator.byteLength + keptBytes > historyBudgetForReal) {
             const dropped = kept.shift();
             keptBytes -= dropped?.byteLength ?? 0;
           }
-          if (kept.length === 1 && kept[0] && initiator.byteLength + keptBytes > historyBudget) {
-            const room = historyBudget - initiator.byteLength;
+          if (kept.length === 1 && kept[0] && initiator.byteLength + keptBytes > historyBudgetForReal) {
+            const room = historyBudgetForReal - initiator.byteLength;
             const shrunk = room > 0 ? truncateToolResultBlob(kept[0], room) : null;
             if (shrunk) {
               kept[0] = shrunk;
@@ -450,14 +656,17 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
           // Only commit when the initiator genuinely fits alongside what is left. If the system
           // prompt has consumed the budget so completely that not even a truncation marker fits,
           // there is nothing honest to send here; the envelope guard downstream owns that case.
-          if (kept.length + 1 <= historyLimit && initiator.byteLength + keptBytes <= historyBudget) {
+          if (kept.length + 1 <= historyLimitForReal && initiator.byteLength + keptBytes <= historyBudgetForReal) {
             historyEntries.length = 0;
             historyEntries.push(initiator, ...kept);
           }
         }
       }
     }
-    selected = [...systemEntries, ...historyEntries];
+    // The synthetic tail goes on last, after every pruning decision is made, so telling the model to
+    // change strategy is not dropped by the walk that stopped ignoring it — and so no pruning block has
+    // to distinguish it from a real result by position. Its slots and bytes were already reserved above.
+    selected = [...systemEntries, ...historyEntries, ...trailingSynthetic];
     const firstKept = historyEntries.find(entry => entry.messageIndex !== undefined);
     historyMessageStart = firstKept?.messageIndex ?? (messages.length);
   }
@@ -467,6 +676,16 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
     byteLength: selected.reduce((sum, entry) => sum + entry.byteLength, 0),
     historyMessageStart,
     serialized: selected.map(entry => entry.serialized),
+    historyMessageIndexes: selected
+      .slice(systemEntryCount)
+      .map(entry => entry.messageIndex)
+      .filter((index): index is number => index !== undefined),
+    historyOutputElided: selected
+      .slice(systemEntryCount)
+      .filter(entry => entry.outputElided === true)
+      .map(entry => entry.messageIndex)
+      .filter((index): index is number => index !== undefined),
+    activeMessageIndexes,
   };
 }
 
@@ -660,12 +879,171 @@ function toolResultContentItems(
   return items;
 }
 
-function toolResultToText(message: OcxToolResultMessage): string {
+/**
+ * Serialize tool-call arguments for the replayed transcript, or `undefined` when they cannot be
+ * serialized at all. `OcxToolCall.arguments` is always an object, but it originates in provider
+ * JSON, so a cyclic or BigInt-bearing value must degrade instead of throwing inside request
+ * encoding. The failure is reported as `undefined` rather than a marker string so callers can tell
+ * "these two argument sets are equal" apart from "neither could be read" — collapsing both onto one
+ * marker made every unserializable argument set compare equal to every other.
+ */
+function serializeToolCallArguments(args: Record<string, unknown>): string | undefined {
+  try {
+    const serialized = JSON.stringify(args);
+    return typeof serialized === "string" ? serialized : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Truncate to a byte budget without splitting a UTF-8 sequence. */
+function truncateUtf8(text: string, maxBytes: number): string {
+  const encoded = encoder.encode(text);
+  if (encoded.byteLength <= maxBytes) return text;
+  let end = Math.max(0, maxBytes);
+  while (end > 0 && (encoded[end]! & 0xc0) === 0x80) end -= 1;
+  return decoder.decode(encoded.subarray(0, end));
+}
+
+/**
+ * Rendered argument text for one invocation line, bounded independently of the result it describes.
+ *
+ * The invocation is CONTEXT for a replayed result; the result itself is the payload. Serializing
+ * arguments in full inverted that: a legitimate 600 KiB `write_file` argument consumed the entire
+ * `CURSOR_EXTERNAL_ROOT_BYTE_LIMIT` history budget, so `truncateToolResultBlob` kept the invocation
+ * prefix and cut the actual output away — reproducing the very orphaned-result failure this line
+ * exists to prevent. A bounded prefix still identifies the call (tool name plus the head of its
+ * arguments) while leaving the output room to survive.
+ */
+function toolCallArgumentsText(args: Record<string, unknown>): string {
+  const serialized = serializeToolCallArguments(args);
+  if (serialized === undefined) return "[unserializable arguments]";
+  if (encoder.encode(serialized).byteLength <= CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT) return serialized;
+  // The budget is the size of the RENDERED line, so the marker has to come out of it rather than be
+  // added on top: otherwise every truncated invocation exceeds the declared limit by the marker.
+  const marker = "…[arguments truncated]";
+  const markerBytes = encoder.encode(marker).byteLength;
+  const keep = Math.max(0, CURSOR_INVOCATION_ARGUMENTS_BYTE_LIMIT - markerBytes);
+  return `${truncateUtf8(serialized, keep)}${marker}`;
+}
+
+/**
+ * The invocation that produced a replayed tool result, rendered as ONE descriptive line inside the
+ * result envelope.
+ *
+ * Why not a separate "[Tool Call]" entry: a model few-shot-mimics that marker and starts emitting
+ * later tool calls as inert text instead of real tool frames, which halts multi-tool continuations
+ * (363-B guard, tests/cursor-tool-continuation.test.ts). Why it must exist at all: without any
+ * record of the invocation, the replayed result is orphaned — its `call_id` refers to nothing the
+ * model can see — and live cursor/grok-4.6 turns re-ran commands that had already succeeded while
+ * narrating a phantom interrupt (devlog 260829 000_rca). A prose line inside the result satisfies
+ * both: the invocation is visible, but there is no call-shaped template to copy.
+ */
+function toolInvocationLine(call: Extract<OcxAssistantContentPart, { type: "toolCall" }>): string {
+  return `invoked: ${namespacedToolName(call.namespace, call.name)} with ${toolCallArgumentsText(call.arguments)}`;
+}
+
+/**
+ * History position of each indexed call, keyed by the map `toolCallsByCallId` returned.
+ *
+ * A side table rather than a wider return type: the map is threaded through two builders and the
+ * checkpoint site, and changing its shape would touch every one of them for data only the bound reads.
+ */
+const callPositions = new WeakMap<
+  Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>,
+  Map<string, number>
+>();
+
+/**
+ * The indexed call for `callId`, but only when it appears BEFORE `resultIndex` in history.
+ *
+ * `toolCallsByCallId` has no ordering constraint, so it would happily name a call that runs LATER than
+ * the result being labelled — a result whose own output is `EARLY-OUT` was measured on the shipped tree
+ * as `invoked: exec_command with {"cmd":"echo LATER"}`. That is the mislabel the index's own comment
+ * calls worse than no label, because nothing downstream can detect it (devlog 260829 060).
+ *
+ * `resultIndex` MUST be in full-history space. The checkpoint path replays a suffix and the turn
+ * builder starts at `historyMessageStart`, so a caller composes `knownCallsOffset + start + local`
+ * before calling; comparing a full-history call index against a slice-local result index silently
+ * drops legitimate pairings and re-creates the orphan #2910 fixed.
+ */
+function callBefore(
+  calls: Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>> | undefined,
+  callId: string,
+  resultIndex: number,
+): Extract<OcxAssistantContentPart, { type: "toolCall" }> | undefined {
+  const call = calls?.get(callId);
+  if (!call || !calls) return undefined;
+  const position = callPositions.get(calls)?.get(callId);
+  if (position === undefined || position >= resultIndex) return undefined;
+  return call;
+}
+
+/**
+ * Index assistant tool calls by decoded call id so a replayed result can name its invocation.
+ *
+ * A call id is supposed to be unique, but nothing upstream guarantees it across a long history, and
+ * `decodeCursorCallId` can map distinct wire ids onto the same decoded id. Two calls sharing one id
+ * would make the LAST one describe every result bearing it, so an early result could be labelled
+ * with a later command — a wrong invocation is worse than none, since it is the kind of mislabel the
+ * model cannot detect. Keep the FIRST call for an id (results follow their call, so the first
+ * binding is the one an earlier result belongs to) and drop the ambiguous id entirely once a second
+ * distinct call claims it, which degrades to the honest no-invocation-line path.
+ */
+function toolCallsByCallId(messages: readonly OcxMessage[]): Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>> {
+  const calls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
+  const ambiguous = new Set<string>();
+  const positions = new Map<string, number>();
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (!message || message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type !== "toolCall") continue;
+      const callId = decodeCursorCallId(part.id);
+      if (ambiguous.has(callId)) continue;
+      const existing = calls.get(callId);
+      if (!existing) {
+        calls.set(callId, part);
+        positions.set(callId, index);
+        continue;
+      }
+      // Same id, and not the same invocation: neither claim can be trusted for a given result.
+      // Identity is the FULL namespaced name — `one__read` and `two__read` are different tools, and
+      // comparing bare `name` labelled both results with the first namespace. Arguments count as
+      // different whenever either side cannot be serialized: two distinct unserializable argument
+      // sets are not evidence of the same call, so they must not compare equal.
+      const existingArgs = serializeToolCallArguments(existing.arguments);
+      const partArgs = serializeToolCallArguments(part.arguments);
+      const sameInvocation = namespacedToolName(existing.namespace, existing.name) === namespacedToolName(part.namespace, part.name)
+        && existingArgs !== undefined
+        && partArgs !== undefined
+        && existingArgs === partArgs;
+      if (!sameInvocation) {
+        calls.delete(callId);
+        positions.delete(callId);
+        ambiguous.add(callId);
+      }
+    }
+  }
+  callPositions.set(calls, positions);
+  return calls;
+}
+
+/**
+ * The replayed text of one tool result. When `call` is supplied, the invocation that produced it is
+ * named inline so the result is not orphaned; when it is absent (no match, or an ambiguous call id)
+ * the envelope is emitted unchanged rather than guessing.
+ */
+function toolResultToText(
+  message: OcxToolResultMessage,
+  call?: Extract<OcxAssistantContentPart, { type: "toolCall" }>,
+): string {
   const normalized = normalizedToolResult(message, contentToText(message.content));
   return [
     "[tool_result]",
     `call_id: ${decodeCursorCallId(message.toolCallId)}`,
     `name: ${namespacedToolName(message.toolNamespace, message.toolName)}`,
+    ...(call ? [toolInvocationLine(call)] : []),
     `is_error: ${normalized.isError}`,
     "output:",
     normalized.text,
@@ -799,6 +1177,10 @@ function conversationTurns(
   request: CursorRunRequest,
   requestScope: CursorBlobRequestScopeToken,
   historyMessageStart = 0,
+  /** Calls indexed from the FULL history; see {@link rootPromptMessages}. */
+  knownCalls?: Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>,
+  /** Full-history index of `rawMessages[0]`; see {@link rootPromptMessages}. */
+  knownCallsOffset = 0,
 ): Uint8Array[] {
   const messages = request.rawMessages;
   if (!messages?.length) return [];
@@ -806,6 +1188,7 @@ function conversationTurns(
   const externalModel = isCursorExternalWireModel(request.modelId);
   const historyEnd = messages.at(-1)?.role === "toolResult" ? messages.length : Math.max(0, end);
   const start = externalModel ? Math.max(0, historyMessageStart) : 0;
+  const turnCalls = externalModel ? (knownCalls ?? toolCallsByCallId(messages)) : undefined;
   const turns: Uint8Array[] = [];
   let current: { userMessage: Uint8Array; steps: Uint8Array[] } | undefined;
   const pendingToolCalls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
@@ -822,7 +1205,15 @@ function conversationTurns(
     pendingToolCalls.clear();
   };
 
-  for (const message of messages.slice(start, historyEnd)) {
+  const walked = messages.slice(start, historyEnd);
+  for (let w = 0; w < walked.length; w++) {
+    const message = walked[w];
+    // `for…of` gave this for free; keep it explicit so the indexed loop behaves identically.
+    if (!message) continue;
+    // Full-history position of this message: the slice offset the caller passed, plus where this
+    // loop starts inside `rawMessages`, plus the local step. All three terms are needed — dropping
+    // `start` still passes every test except the checkpoint-plus-pruned-root case (devlog 060).
+    const fullIndex = knownCallsOffset + start + w;
     if (message.role === "assistant") {
       if (!current) continue;
       for (const part of message.content) {
@@ -857,10 +1248,14 @@ function conversationTurns(
         // reported repro path for empty Computer Use results.
         const normalized = normalizedToolResult(message, contentToText(message.content));
         const prefix = normalized.isError ? "[Tool Error]" : "[Tool Result]";
+        // Name the invocation here as well, for the same reason the root replay does: a result with
+        // no visible originating call reads as an interrupted attempt (devlog 260829 000_rca).
+        const call = callBefore(turnCalls, decodeCursorCallId(message.toolCallId), fullIndex);
+        const invocation = call ? `${toolInvocationLine(call)}\n` : "";
         current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
           message: {
             case: "assistantMessage",
-            value: create(AssistantMessageSchema, { text: `${prefix}\n${normalized.text}` }),
+            value: create(AssistantMessageSchema, { text: `${prefix}\n${invocation}${normalized.text}` }),
           },
         })), requestScope));
         continue;
@@ -1018,9 +1413,104 @@ function buildPreparedCursorRunRequest(
           system: [],
           rawMessages: request.rawMessages.slice(suffixStart),
         };
-        const suffixRoots = rootPromptMessages(suffixRequest, requestScope);
-        const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart);
+        // Index calls from the FULL history, not the suffix: the cut can fall between a call and
+        // its result, and a result replayed without its invocation is the orphaned-result defect.
+        const fullHistoryCalls = toolCallsByCallId(request.rawMessages);
+        // What the checkpoint already spends against the envelope. An id the local store never held
+        // still occupies a root slot, so it counts toward the COUNT budget with a zero byte
+        // contribution rather than being skipped entirely.
+        let carriedBytes = 0;
+        for (const blobId of conversationState.rootPromptMessagesJson) {
+          carriedBytes += cursorBlobByteLength(blobId) ?? 0;
+        }
+        const carriedRoots = {
+          count: conversationState.rootPromptMessagesJson.length,
+          byteLength: carriedBytes,
+        };
+        // A checkpoint can be so large that nothing useful is left for the suffix. Pruning to fit then
+        // emits the covered prefix and silently drops the uncovered messages — the exact failure this unit
+        // exists to remove — while throwing would hand the caller a non-retryable 400. Abandon the
+        // checkpoint instead: full replay rebuilds a self-contained prompt and prunes it coherently
+        // (devlog 260829 070, audit r8).
+        //
+        // The decision is made on the RESULT of pruning, not on a byte threshold. A threshold has to
+        // predict what pruning will do, and the first attempt mispredicted it: comparing carried bytes
+        // against the raw limit left a band of a few hundred bytes below it where the checkpoint was kept,
+        // the suffix budget collapsed, and the newest tool result vanished. Adding `systemBytes` moved the
+        // band without closing it. Asking pruning what survived cannot drift from what pruning does.
+        const suffixRoots = rootPromptMessages(suffixRequest, requestScope, fullHistoryCalls, suffixStart, carriedRoots);
         const suffixSystemCount = systemPromptBlobs(suffixRequest).length;
+        // A tool continuation whose own result did not survive is worthless: that result is the whole
+        // reason the turn exists. "Kept SOMETHING" is not enough either — inside the band this fix first
+        // missed, pruning kept the assistant narration and dropped the result, which is worse than keeping
+        // nothing because the model then sees a call it never got an answer to. The test is therefore on
+        // the LAST replayed message specifically, identified by its index rather than its content.
+        const suffixMessages = suffixRequest.rawMessages ?? [];
+        const lastSuffixIndex = suffixMessages.length - 1;
+        // Only models whose results are replayed as root text can answer this question. A native resume
+        // model gets its result through server-side turn state, so `rootPromptMessages` never emits a
+        // toolResult root for it (`echoToolResultInRoot` is false) — asking whether that root survived
+        // returns "no" every single time, and an unguarded check therefore threw away the checkpoint of
+        // every native continuation, including the default `cursor/auto`. The checkpoint is the only place
+        // pendingToolCalls, readPaths and previousWorkspaceUris live, and full replay does not rebuild
+        // them, so that was this unit's own defect relocated to the native path (audit r8 round 3).
+        const resultReplayedAsRoot = cursorNeedsExternalToolContinuation(request.modelId);
+        // Kept, and kept with its output: a root reduced to the truncation marker alone answers the call
+        // with nothing, which is the same failure as dropping it. `outputElided` is set at the one place
+        // that can produce it, so this needs no threshold to guess at.
+        //
+        // Every trailing result is checked, not just the last one. Parallel tool calls land as a run of
+        // results, and under byte pressure the older ones were the ones getting emptied: measured a prompt
+        // carrying three calls and one answer, which is the shape this comment calls worse than keeping
+        // nothing. `historyOutputElided` already knew; only the last index was being read (audit r8
+        // round 3).
+        // The run is read from PRUNING's own report, not re-derived from `suffixMessages`. The two spaces
+        // disagree: root space skips an assistant message that emitted no root — a bare tool call with no
+        // narration, or whitespace-only text — so two sequentially-executed results sit adjacent as roots
+        // while a raw-message scan still sees a trailing run of one. Pruning's count bound acts on the root
+        // run, so a raw-space scan could not see the result it dropped: measured at 190 carried roots with
+        // bare-call pairs, the older answer vanished from the wire entirely while this check reported
+        // "kept" and the checkpoint was retained — an unanswered call, which the comment above rightly
+        // calls worse than keeping nothing (audit r10).
+        //
+        // `activeMessageIndexes` is that run as pruning saw it, recorded before pruning could shrink it.
+        // Falling back to the raw-space scan when it is empty keeps the full-replay and native shapes,
+        // which never populate it, behaving exactly as before.
+        let trailingStart = suffixMessages.length;
+        while (trailingStart > 0 && suffixMessages[trailingStart - 1]?.role === "toolResult") trailingStart -= 1;
+        const trailingIndexes = suffixRoots.activeMessageIndexes.length > 0
+          ? suffixRoots.activeMessageIndexes
+          : suffixMessages.slice(trailingStart).map((_, offset) => trailingStart + offset);
+        const keptEnough = trailingIndexes.every(index =>
+          suffixRoots.historyMessageIndexes.includes(index)
+          && !suffixRoots.historyOutputElided.includes(index));
+        const suffixKeptItsResult = !resultReplayedAsRoot
+          || suffixMessages[lastSuffixIndex]?.role !== "toolResult"
+          || keptEnough;
+        if (
+          carriedRoots.count + suffixSystemCount >= CURSOR_EXTERNAL_ROOT_BLOB_LIMIT
+          // Both survival disjuncts are about a REPLAYED root going missing, so both are meaningless for a
+          // model whose results never become roots. Gating only the second one still discarded every native
+          // checkpoint whose assistant turn was a bare tool call: no text root, no result root, zero history
+          // roots, condition true (audit r8 round 4). The count-full disjunct above stays ungated — it is a
+          // real envelope fact, independent of who echoes results.
+          || (resultReplayedAsRoot && suffixRoots.ids.length <= suffixSystemCount)
+          || !suffixKeptItsResult
+        ) {
+          conversationState = undefined;
+          continuationMode = "full-replay";
+          checkpointInvalidationReason = "envelope_exhausted";
+          // NOT propagated to the checkpoint store, and deliberately so after measuring the attempt.
+          // `src/adapters/cursor.ts` drops a dead checkpoint by reading
+          // `request.checkpointInvalidationReason`, but `live-transport.ts` prepares a SPREAD COPY of that
+          // request, so writing the field here lands on the copy and the caller never sees it — measured
+          // inert, `outer.checkpointInvalidationReason` stayed undefined. Reaching the store needs the
+          // reason threaded back through `PreparedCursorRunRequest`, which is a signature change on the
+          // shared prepare path and belongs to its own phase. The cost of not doing it is bounded: the
+          // checkpoint is re-decoded and re-abandoned each turn until TTL, which is wasted work rather
+          // than wrong output (audit r8 rounds 3 and 4).
+        } else {
+        const suffixTurns = conversationTurns(suffixRequest, requestScope, suffixRoots.historyMessageStart, fullHistoryCalls, suffixStart);
         const suffixHistoryIds = suffixRoots.ids.slice(suffixSystemCount);
         const suffixHistorySerialized = suffixRoots.serialized.slice(suffixSystemCount);
         conversationState = create(ConversationStateStructureSchema, {
@@ -1039,7 +1529,11 @@ function buildPreparedCursorRunRequest(
           byteLength: suffixRoots.byteLength,
           historyMessageStart: suffixRoots.historyMessageStart,
           serialized: suffixHistorySerialized,
+          historyMessageIndexes: suffixRoots.historyMessageIndexes,
+          historyOutputElided: suffixRoots.historyOutputElided,
+          activeMessageIndexes: suffixRoots.activeMessageIndexes,
         };
+        }
       }
     } catch {
       checkpointInvalidationReason = "decode_failed";

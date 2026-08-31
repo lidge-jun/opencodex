@@ -22,7 +22,7 @@ interface ProviderAdapter {
 
 ## `openai-chat`
 
-**Cibles :** l’API **Chat Completions** d’OpenAI (`POST {baseUrl}/chat/completions` ; un suffixe `/chat/completions` ou `/` est d’abord retiré de `baseUrl`) et tous les fournisseurs compatibles — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local et cloud), entre autres.
+**Cibles :** l’API **Chat Completions** d’OpenAI (`POST {baseUrl}/chat/completions` ; un suffixe `/chat/completions` ou `/` est d’abord retiré de `baseUrl`) et tous les fournisseurs compatibles — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local), entre autres.
 **Authentification :** `key` (Bearer).
 
 - Convertit les messages internes en rôles OpenAI ; mappe les outils vers `{type:"function", function:{…}}` et `tool_choice` (`auto`/`none`/`required` ou une fonction nommée).
@@ -31,6 +31,50 @@ interface ProviderAdapter {
 - **Limite `reasoning_effort`** au sous-ensemble annoncé par le modèle lorsque le niveau exact n’est pas disponible ; `xhigh` et `max` restent des libellés distincts, sauf si un fournisseur configure explicitement un alias. L’adaptateur **omet entièrement ce champ** pour les identifiants figurant dans `provider.noReasoningModels`.
 - Diffuse `delta.content` (texte), `delta.reasoning_content` (raisonnement) et `delta.tool_calls[]`, et recueille `usage`.
 - ClinePass utilise le format de passerelle vérifié en conditions réelles `reasoning: { enabled: true, effort }` (ou `{ enabled: false }` lorsque le raisonnement est désactivé). Sa documentation publique d’API ne précise pas encore cette forme de requête. L’adaptateur préserve les niveaux `low`, `medium`, `high`, `xhigh` et `max` demandés, accepte les deltas de raisonnement provenant de `delta.reasoning_content` ou de `delta.reasoning`, demande les données d’utilisation en flux avec `stream_options.include_usage` et lit ces données dans les enveloppes de réponse hors flux.
+
+## `ollama-native`
+
+**Cibles :** l’**API Chat** native d’Ollama (`POST /api/chat`) plutôt que sa surface compatible
+OpenAI. Le fournisseur intégré `ollama-cloud` est sélectionné sur cet adaptateur par le registre ;
+il peut aussi être configuré sur un fournisseur Ollama personnalisé ou auto-hébergé distinct avec
+`adapter: "ollama-native"`.
+**Authentification :** `key` (Bearer) pour les cibles cloud/personnalisées ; aucun identifiant
+n’est envoyé aux cibles de boucle locale ou en `authMode: "local"`.
+
+- **La sélection par le registre est déterminante.** La ligne intégrée `ollama-cloud` conserve
+  l’URL de base `https://ollama.com/v1` pour la découverte en direct via `/v1/models`, tandis que
+  l’inférence est normalisée vers `POST https://ollama.com/api/chat`. Un champ `adapter` configuré
+  est écarté pour cette ligne de fournisseur. L’Ollama local intégré reste sur `openai-chat` ;
+  choisir `ollama-native` pour un point de terminaison local ou auto-hébergé est une décision
+  explicite de configuration de fournisseur, détectée par hôte afin qu’une destination non-Ollama
+  ne soit jamais réécrite silencieusement.
+- **Métadonnées des modèles :** `/v1/models` ne porte aucune métadonnée par modèle ; pour Ollama
+  Cloud canonique, le fournisseur enrichit chaque identifiant découvert via un `POST /api/show`
+  *borné* (256 KiB par réponse, 8 s par requête, concurrence 4, 48 requêtes, échéance de 12 s pour
+  toute la phase) afin d’obtenir la véritable fenêtre de contexte et la capacité de vision. La
+  requête show est de même origine et ne suit jamais une redirection ; un échec dégrade ce seul
+  modèle sans jamais faire échouer la découverte.
+- **Diffusion :** le NDJSON natif d’Ollama. Les deltas de texte et de `message.thinking` sont
+  transmis dès leur arrivée ; un tour ne se termine que sur un enregistrement terminal
+  `done: true`, et un `done: false` bufferisé ou un terminal manquant supprime entièrement le
+  texte partiel et les appels d’outils.
+- **Raisonnement :** cartographie le champ natif `think` d’Ollama (`low`/`medium`/`high`/`max`,
+  plus les booléens), limité à l’échelle annoncée du modèle, et respecte la sémantique de la
+  sentinelle `__omit__` configurée en amont.
+- **Images :** envoyées nativement dans le tableau `images` du message lorsque le modèle prend en
+  charge la vision ; la vidéo est refusée plutôt que mal envoyée, et les URL d’images distantes ne
+  sont pas récupérées.
+- **Outils :** déclarés dans la forme native d’Ollama ; les appels d’outils diffusés sont des
+  enregistrements entiers avec des `arguments` objet, et le rejeu des résultats d’outils est
+  apparié strictement par identifiant d’appel et nom d’outil. `tool_choice: "none"` et `auto`
+  se comportent normalement ; **`required` ou un choix nommé exact échoue fermement**, car
+  `/api/chat` d’Ollama n’a aucun champ `tool_choice` pour l’imposer.
+- **La sortie structurée est refusée sur Ollama Cloud canonique.** Ollama documente actuellement
+  la sortie structurée comme non prise en charge sur son Cloud, et Cloud n’applique pas le champ
+  `format` ; OpenCodex fait donc échouer cette requête plutôt que de renvoyer une prose libre en
+  réponse à une demande structurée par schéma. Les points de terminaison `ollama-native` locaux et
+  personnalisés conservent le mappage natif `format` d’Ollama (`json_object` → `"json"`,
+  `json_schema` → l’objet de schéma).
 
 ## `openai-responses`
 
@@ -81,7 +125,7 @@ Le texte de l’assistant Kiro ne comporte pas, à lui seul, de phase fiable ind
 
 `END_TURN`, `STOP_SEQUENCE` ou l’absence de motif d’arrêt peuvent emprunter le chemin de compatibilité. Les autres motifs explicites ont déjà interrompu l’inférence en amont ; l’adaptateur les signale donc au lieu de consommer une nouvelle requête au modèle. Une limite de jetons de sortie est présentée comme une sortie incomplète que le client peut poursuivre, tandis qu’un épuisement de la fenêtre de contexte devient une erreur de longueur de contexte non renouvelable plutôt qu’une sortie tronquée. Les arrêts dus au filtrage et aux garde-fous sont présentés comme des sorties filtrées incomplètes. Un arrêt `TOOL_USE` sans appel d’outil réel est signalé comme une contradiction, et non comme une progression.
 
-Lorsqu’un outil client ordinaire est disponible, opencodex ajoute un outil privé `codex_kiro_final_answer` à la requête en amont. Le texte de progression est diffusé comme commentaire et ne peut pas clore le tour. L’adaptateur consomme l’appel privé, émet sa réponse comme texte final et n’expose jamais cet outil privé à Codex ou Claude Code. Le motif d’arrêt n’arrivant qu’à la fin du flux, le texte de l’assistant est retenu pendant un tour avec outils jusqu’au début d’un véritable appel d’outil ou jusqu’à la fin du flux. Il est alors libéré comme commentaire, sauf si l’outil privé a fourni la réponse finale. Lorsque le service auxiliaire de recherche Web est actif, les commentaires libérés continuent d’être diffusés avant l’événement terminal ; seuls les événements nécessaires pour déterminer si le modèle a demandé une recherche synthétique restent en mémoire tampon.
+Lorsqu’un outil client ordinaire est disponible, opencodex ajoute un outil privé `codex_kiro_final_answer` à la requête en amont. Le texte de progression est diffusé comme commentaire et ne peut pas clore le tour. L’adaptateur consomme l’appel privé, émet sa réponse comme texte final et n’expose jamais cet outil privé à Codex ou Claude Code. Le motif d’arrêt n’arrivant qu’à la fin du flux, le texte de l’assistant est retenu pendant un tour avec outils jusqu’au début d’un véritable appel d’outil ou jusqu’à la fin du flux. Il est alors libéré comme commentaire, sauf si l’outil privé a fourni la réponse finale. Lorsque le service auxiliaire de recherche Web est actif, les commentaires libérés continuent d’être diffusés avant l’événement terminal ; seuls les événements nécessaires pour déterminer si le modèle a demandé une recherche synthétique restent en mémoire tampon. Lorsque le modèle ne peut pas continuer sans une décision, une information ou une clarification que seul l’utilisateur peut fournir, le contrat lui demande de transmettre cette question via l’outil d’achèvement et de s’arrêter ; un tel tour arrive lui aussi comme `final_answer` avec le tour clos, et non comme un commentaire.
 
 Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effectue une continuation. Les nouvelles tentatives ne contenant que du raisonnement conservent le tour utilisateur/résultat d’outil valide d’origine au lieu de fabriquer un message assistant vide ; la progression visible est rejouée avec une instruction non vide appartenant à l’adaptateur. Avant le transport, la conversation générée est contrôlée afin de vérifier l’alternance des rôles, l’absence de tours structurels vides et la correspondance des identifiants d’utilisation et de résultat d’outil. Une sortie d’outil vide reçoit un texte de remplacement neutre et non vide. La nouvelle tentative ne peut pas se répéter récursivement : si elle est vide ou ne contient que du raisonnement, elle est renvoyée comme incomplète mais renouvelable ; un véritable appel d’outil client maintient le tour ouvert. Une réponse de l’outil d’achèvement est toujours émise comme `final_answer`, même si elle répète exactement un commentaire antérieur, car l’exactitude de la phase prime sur la déduplication esthétique. Les requêtes sans outil conservent le comportement normal d’achèvement textuel.
 

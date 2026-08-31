@@ -628,6 +628,8 @@ export interface OcxConfig {
     strategy?: OcxAccountPoolRotationStrategy;
     /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
     stickyLimit?: number;
+    /** Usage window for quota-based scoring. Default "five-hour" (today's behaviour). */
+    quotaWindow?: OcxAccountPoolQuotaWindow;
   };
   /**
    * Generic OAuth multi-account 429 failover (#2568). Presence-driven by default.
@@ -661,6 +663,8 @@ export interface OcxConfig {
 }
 
 export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";
+
+export type OcxAccountPoolQuotaWindow = "five-hour" | "weekly" | "max-utilization";
 
 export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";

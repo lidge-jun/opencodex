@@ -375,7 +375,7 @@ export function deriveEntry(
   const isCursorFallback = isRouted && model?.provider === "cursor";
   const entry: RawEntry = {
     slug, display_name: routedDisplayName(slug), description: desc,
-    shell_type: "shell_command", visibility: "list", supported_in_api: true,
+    shell_type: "unified_exec", visibility: "list", supported_in_api: true,
     priority, base_instructions: "You are a helpful coding assistant.",
     ...(isRouted
       ? isCursorFallback

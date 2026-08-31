@@ -13,9 +13,10 @@ You can log in multiple Claude accounts via the Providers dashboard (`ocx login 
 add-account). By default every request uses the **active** account only.
 
 An **experimental, opt-in** Claude account pool (`anthropicAccountPool.enabled`) adds sticky
-session affinity and 429 cooldown failover across those OAuth accounts. For **new** sessions
-only, `anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks
-lowest known 5-hour usage when above `autoSwitchThreshold`; `round-robin` spreads evenly
+session affinity and 429 cooldown failover across those OAuth accounts. For **new** sessions,
+`anthropicAccountPool.strategy` selects among eligible accounts: `quota` (default) picks the
+lowest known usage in the window set by `quotaWindow` (`five-hour` by default, or `weekly` /
+`max-utilization`) when above `autoSwitchThreshold`; `round-robin` spreads evenly
 (`stickyLimit`, default `1`); `fill-first` drains the active account until cooldown,
 reauthentication, or threshold, then advances. It is **off by default**, shows a GUI warning,
 and is not battle-tested — Anthropic may restrict accounts that look like automated rotation;
@@ -31,6 +32,11 @@ Operational contract when enabled:
   selection until re-authenticated.
 - If every eligible account is cooling, the proxy returns **429** (not 401) with `Retry-After`
   when known.
+- Recovery, including 429 failover, uses `quotaWindow` to rank eligible replacements without
+  changing the existing cooldown or failover limits; `round-robin` ignores `quotaWindow`.
+- `autoSwitchThreshold: 0` turns off **proactive** usage-based switching only. New-session
+  selection and 429 recovery still consult `quotaWindow`, so the window is inert only under
+  `round-robin`. `fill-first` evaluates its drain threshold in the selected window.
 
 See [Configuration](/reference/configuration/#anthropicaccountpool-experimental).
 
@@ -108,6 +114,7 @@ You can also manage the same profile from the command line:
 ```bash
 ocx claude desktop [apply]
 ocx claude desktop show [--json]
+ocx claude desktop status [--json]
 ocx claude desktop move <route> <opus|fable|sonnet|haiku> [--default]
 ocx claude desktop default <opus|fable|sonnet|haiku> <route|none>
 ocx claude desktop export <path|->
@@ -115,10 +122,18 @@ ocx claude desktop import <path> [--apply]
 ```
 
 `ocx claude desktop` and `apply` both write the current profile to Claude Desktop. `show` gives a
-readable summary; add `--json` for scripts. `export -` writes versioned JSON to standard output.
+readable summary; `status` reports the applied profile, drift, request activity, and Windows
+managed-policy health. Add `--json` for scripts. `export -` writes versioned JSON to standard output.
 Import validates the complete file before saving, so an invalid file leaves the current profile
 unchanged. Add `--apply` to write a valid imported profile to Desktop immediately. Use `none` only
 for an empty family; every non-empty family must keep one default.
+
+On Windows, a machine-managed Claude policy can make Desktop ignore the local third-party profile.
+OpenCodex reports this as `present`; a policy it cannot read is `unknown`, which is also a warning
+rather than a clean result. The diagnostic reports only that state—it does not expose policy value
+names or data, and it never removes or bypasses policy. Resolve the policy with your administrator,
+then fully quit and reopen Claude Desktop. Applying again also preserves profile keys that OpenCodex
+does not own while refreshing its gateway and model fields.
 
 Apply writes to Claude Desktop's real Electron user-data `configLibrary`: `~/Library/Application
 Support/Claude/configLibrary` on macOS, `%APPDATA%\Claude\configLibrary` on Windows, and

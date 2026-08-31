@@ -78,11 +78,11 @@ let restartIo: SystemRestartIo = {};
 /** Prevents double-scheduling in the 200ms window before drainAndShutdown sets draining. */
 let restartAccepted = false;
 
-type RestartDrainOutcome = "completed" | "rejected" | "deadline";
+type RestartDrainOutcome = "completed" | "failed" | "rejected" | "deadline";
 type BoundedSettlementOutcome = "completed" | "rejected" | "deadline";
 
 function waitForRestartDrain(
-  drainPromise: Promise<void>,
+  drainPromise: Promise<boolean | void>,
   deadlineMs: number,
   now: () => number,
   scheduleDeadline: NonNullable<SystemRestartIo["scheduleDeadline"]>,
@@ -105,7 +105,7 @@ function waitForRestartDrain(
     cancelDeadline = scheduleDeadline(() => finish("deadline"), remainingMs);
     if (settled) cancelDeadline();
     void drainPromise.then(
-      () => finish("completed"),
+      succeeded => finish(succeeded === false ? "failed" : "completed"),
       () => finish("rejected"),
     );
   });
@@ -382,7 +382,7 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
         await completeDeadlineRestartHandoff(io, exitProcess, restartPort, scheduleDeadline);
         return;
       }
-      if (drainOutcome === "rejected") {
+      if (drainOutcome === "failed" || drainOutcome === "rejected") {
         // drainAndShutdown stops the listener in finally. Even if ancillary cleanup
         // rejects, an accepted restart must still reach replacement or terminal exit.
         console.warn("Drain-and-restart cleanup failed; continuing terminal restart handoff");
@@ -422,7 +422,7 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
         return;
       }
       (io.markRecycling ?? markRecyclingForExit)();
-      exitProcess(0);
+      exitProcess(drainOutcome === "failed" || drainOutcome === "rejected" ? 1 : 0);
     }, 200);
   }
 

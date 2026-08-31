@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { acquireTestRunLock, TEST_RUN_ID_ENV } from "./test-run-lock";
+import {
+  acquireTestRunLock,
+  resolveWrappedTestRunLockPath,
+  TEST_RUN_ID_ENV,
+  TEST_RUN_LOCK_PATH_ENV,
+  TEST_RUN_LOCK_TOKEN_ENV,
+} from "./test-run-lock";
 
 export interface IsolatedTestEnvironment {
   root: string;
@@ -383,8 +389,18 @@ function waitWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T |
   });
 }
 
-async function runTestLane(lane: BunTestLane, runId: string, capture = false): Promise<{ exitCode: number; output: string }> {
-  const isolated = createIsolatedTestEnvironment({ ...process.env, [TEST_RUN_ID_ENV]: runId });
+async function runTestLane(
+  lane: BunTestLane,
+  runId: string,
+  inheritedLock: { lockPath: string; ownerToken: string } | undefined,
+  capture = false,
+): Promise<{ exitCode: number; output: string }> {
+  const isolated = createIsolatedTestEnvironment({
+    ...process.env,
+    [TEST_RUN_ID_ENV]: runId,
+    [TEST_RUN_LOCK_PATH_ENV]: inheritedLock?.lockPath,
+    [TEST_RUN_LOCK_TOKEN_ENV]: inheritedLock?.ownerToken,
+  });
   const startedAt = Date.now();
   let interrupted: NodeJS.Signals | null = null;
   const child = Bun.spawn([process.execPath, "test", ...lane.args], {
@@ -433,14 +449,66 @@ async function runTestLane(lane: BunTestLane, runId: string, capture = false): P
   }
 }
 
+/**
+ * `gui` is not a workspace of the root package and declares React only in `gui/package.json`, so a
+ * root `bun install` never creates `gui/node_modules`. Twenty-five files under `tests/` import
+ * modules from `gui/src`, which makes those tests fail on a fresh clone or worktree with
+ * `Cannot find package 'react'` — reported as an "Unhandled error between tests" that names no
+ * test, so the cause is not obvious from the output.
+ *
+ * `.github/workflows/ci.yml` already installs them explicitly for exactly this reason; the local
+ * runner had no equivalent. Install on demand rather than fail, because the tests genuinely
+ * require the dependency and `gui/node_modules` is a gitignored build artifact, not source.
+ */
+export function ensureGuiDependencies(io: {
+  cwd?: string;
+  exists?: (path: string) => boolean;
+  install?: (guiDir: string) => { ok: boolean; detail: string };
+  log?: (message: string) => void;
+} = {}): { kind: "present" | "installed" | "absent" | "failed"; detail?: string } {
+  const cwd = io.cwd ?? process.cwd();
+  const exists = io.exists ?? existsSync;
+  const log = io.log ?? (message => console.warn(message));
+  const guiDir = join(cwd, "gui");
+  if (!exists(join(guiDir, "package.json"))) return { kind: "absent" };
+  if (exists(join(guiDir, "node_modules", "react", "package.json"))) return { kind: "present" };
+
+  log("[test] gui dependencies are missing or incomplete; installing them so tests importing gui/src can resolve React.");
+  const install = io.install ?? ((dir: string) => {
+    const result = Bun.spawnSync(["bun", "install", "--frozen-lockfile"], {
+      cwd: dir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      ok: result.exitCode === 0,
+      detail: decodeOutput(result.stderr) || decodeOutput(result.stdout),
+    };
+  });
+  const outcome = install(guiDir);
+  if (outcome.ok) return { kind: "installed" };
+  return { kind: "failed", detail: outcome.detail };
+}
+
 if (import.meta.main) {
   const requestedTests = process.argv.slice(2);
-  let changedRun: ReturnType<typeof inspectChangedRun> = null;
-  try {
-    changedRun = inspectChangedRun(requestedTests);
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+  const guiDependencies = ensureGuiDependencies();
+  if (guiDependencies.kind === "failed") {
+    console.error(
+      "[test] could not install gui/node_modules, which tests importing gui/src need to resolve React.\n"
+      + "       Run it manually: cd gui && bun install --frozen-lockfile\n"
+      + (guiDependencies.detail ? `       ${guiDependencies.detail.trim().split("\n").slice(-3).join("\n       ")}` : ""),
+    );
     process.exitCode = 1;
+  }
+  let changedRun: ReturnType<typeof inspectChangedRun> = null;
+  if (process.exitCode !== 1) {
+    try {
+      changedRun = inspectChangedRun(requestedTests);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
   }
   if (process.exitCode !== 1) {
     if (changedRun) {
@@ -449,20 +517,26 @@ if (import.meta.main) {
       );
     }
     const runId = randomUUID();
+    const lockPath = resolveWrappedTestRunLockPath({ env: process.env });
     const lock = await acquireTestRunLock({
       runId,
+      lockPath,
+      validatedRuntimePath: lockPath !== undefined,
       onWait: owner => console.warn(
-        `[test] another Bun test run${owner ? ` (pid ${owner.pid})` : ""} holds the machine lock; waiting. `
+        `[test] another Bun test run${owner ? ` (pid ${owner.pid})` : ""} holds the user lock; waiting. `
         + "Set OCX_TEST_NO_QUEUE=1 only for intentional overlap.",
       ),
-      onAcquiredAfterWait: elapsedMs => console.warn(`[test] acquired the machine lock after ${Math.round(elapsedMs / 1000)}s.`),
+      onAcquiredAfterWait: elapsedMs => console.warn(`[test] acquired the user lock after ${Math.round(elapsedMs / 1000)}s.`),
     });
     const startedAt = Date.now();
     try {
+      const inheritedLock = process.platform === "win32" && lockPath && lock.owner
+        ? { lockPath, ownerToken: lock.owner.token }
+        : undefined;
       let exitCode = 0;
       let captured = "";
       for (const lane of resolveBunTestPlan(requestedTests, changedRun?.comparisonCommit)) {
-        const result = await runTestLane(lane, runId, Boolean(changedRun));
+        const result = await runTestLane(lane, runId, inheritedLock, Boolean(changedRun));
         captured += result.output;
         if (result.exitCode !== 0 && exitCode === 0) exitCode = result.exitCode;
         if ([124, 130, 143].includes(result.exitCode)) break;

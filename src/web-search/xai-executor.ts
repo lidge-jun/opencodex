@@ -12,7 +12,7 @@
  */
 import type { OcxProviderConfig } from "../types";
 import { getValidAccessToken, publicOAuthAuthenticationErrorMessage } from "../oauth";
-import { fetchWithResetRetry } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
 import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import { redactSecretString } from "../lib/redact";
@@ -102,14 +102,14 @@ export async function runXaiWebSearch(
   const t0 = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(url, {
+      recovery => fetch(url, applyUpstreamRecoveryInit({
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
         body: JSON.stringify(body),
         signal: linkedSignal.signal,
         // Credential-bearing: never follow a redirect off the pinned origin.
         redirect: "manual",
-      }),
+      }, recovery)),
       { abortSignal: linkedSignal.signal, label: "xai-web-search-sidecar" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);

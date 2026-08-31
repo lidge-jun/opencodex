@@ -364,6 +364,38 @@ describe("Command Code provider quota", () => {
     });
   });
 
+  // An out-of-range period end is not merely a wrong date: every consumer that formats it
+  // through Intl throws a RangeError. Drop the field and keep the usable credit figures.
+  test("an out-of-range subscription period end is dropped, not carried into the report", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes("/alpha/whoami")
+        ? {}
+        : url.includes("/alpha/billing/subscriptions")
+          ? { data: { currentPeriodStart: "2026-08-01T00:00:00.000Z", currentPeriodEnd: 1e20 } }
+          : url.includes("/alpha/usage/summary")
+            ? { totalCost: 12 }
+            : {
+              credits: { monthlyCredits: 0, purchasedCredits: 0, freeCredits: 0 },
+              windowLimits: { fiveHour: { cap: 100, used: 40 } },
+            };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(commandCodeConfig(), true);
+
+    expect(result.reports[0]?.quota).toEqual({
+      fiveHourPercent: 40,
+      creditsUsd: {
+        used: 12,
+        limit: 12,
+        remaining: 0,
+        percent: 100,
+      },
+      updatedAt: expect.any(Number),
+    });
+  });
+
   test("a mixed balance with roll-over purchased credits carries no subscription expiry", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);

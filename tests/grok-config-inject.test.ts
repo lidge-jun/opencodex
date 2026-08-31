@@ -63,15 +63,20 @@ describe("Grok config injection", () => {
     expect(content).toContain("[model.ocx-newer-model]");
   });
 
-  test("emits per-model direct fields (grok 0.2.101 ignores model_providers inheritance)", () => {
+  test("emits a shared model_providers block and per-model references (grok 0.2.109+)", () => {
     const block = buildGrokManagedBlock(10190, [{ id: "cursor/grok-4.5", contextWindow: 500_000 }]);
-    expect(block).not.toContain("[model_providers");
-    expect(block).not.toContain("model_provider =");
+    expect(block).toContain("[model_providers.opencodex]");
+    const providerBlock = block.slice(block.indexOf("[model_providers.opencodex]"), block.indexOf("[model."));
+    expect(providerBlock).toContain('base_url = "http://127.0.0.1:10190/v1"');
+    expect(providerBlock).toContain('api_backend = "responses"');
+    expect(providerBlock).toContain('api_key = "opencodex-loopback"');
+    expect(providerBlock).toContain('extra_headers = { "x-opencodex-grok" = "1" }');
     const table = block.slice(block.indexOf("[model.ocx-cursor-grok-4-5]"));
     expect(table).toContain('model = "cursor/grok-4.5"');
-    expect(table).toContain('base_url = "http://127.0.0.1:10190/v1"');
-    expect(table).toContain('api_backend = "responses"');
-    expect(table).toContain('api_key = "opencodex-loopback"');
+    expect(table).toContain('model_provider = "opencodex"');
+    expect(table).not.toContain('base_url =');
+    expect(table).not.toContain('api_key =');
+    expect(table).not.toContain('api_backend =');
     expect(table).toContain("context_window = 500000");
   });
 

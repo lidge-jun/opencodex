@@ -54,7 +54,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 
 |フィールド |タイプ |意味 |
 | --- | --- | --- |
-| `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`azure-openai` (または別名 `azure`) のいずれか。 |
+| `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`ollama-native`、`azure-openai` (または別名 `azure`) のいずれか。 |
 | `baseUrl` | `string` |アップストリーム API のベース URL。ほとんどの組み込み固定エンドポイントは不一致を無視します。衝突安全キー プリセットは、古い同じ名前のカスタム宛先を保持します。 |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | 上流の使用量、請求、レート制限表示とは別の、クライアント側の送信開始間隔調整です。プロバイダー制限は全モデルに適用され、`models` は上流の正確なモデル ID に一致し、遅延を増やす場合のみ有効です。キュー待機は応答ヘッダーのタイムアウトを消費しません。HTTP、Responses WebSocket、明示的なアダプターの `fetchResponse`/`runTurn` 送信を対象にします。 |
 | `responsesPath?` | `string` |キー認証 `openai-responses` リクエストの相対リソース パス。 `/` で始まり、スキーム、クエリ、またはフラグメントが含まれていない必要があります。 |
@@ -80,6 +80,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `headers?` | `Record<string, string>` |追加の上流ヘッダー。認証、Cookie、API キー ヘッダー、埋め込まれた改行、および無効な名前は拒否されます。 |
 | `openRouterRouting?` | `OpenRouterProviderRouting` |デフォルトの OpenRouter `order`、`only`、および `allowFallbacks` 設定。 `openai-chat` を持つ正規 OpenRouter に対してのみ有効です。 |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` |プロバイダー全体の OpenRouter 設定を置き換える正確なモデル ID のオーバーライド。 |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` |デフォルトの Vercel AI Gateway `order`、`only`、および `sort` (`"cost"` \| `"ttft"` \| `"tps"`) 設定。`openai-chat` を使用する正規の Vercel AI Gateway に対してのみ有効です。 |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` |認証モード (デフォルトは `key`)。 OAuth/サブスクリプション認証情報は `config.json` の外部に保存されます。 `local` は、レジストリ エントリで許可されているプロバイダーに限定されます。 |
 | `codexAccountMode?` | `"pool" \| "direct"` |正規の `openai` のみ。デフォルトはプールです。直接はプール状態をバイパスします。 |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` |この OAuth プロバイダーの Token Guardian ポリシーをオーバーライドします。 |
@@ -89,7 +90,9 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` |モデルごとの応答配信列挙型。既存の配信フィールドを書き換えます。 |
 | `modelAdapters?` | `Record<string, string>` | 混合配線ゲートウェイのモデルごとの `openai-chat` または `openai-responses` 配線オーバーライド。明示的なエントリはレジストリのデフォルトを破ります。DeepSeek のプリセットは `deepseek-v4-flash` のネイティブ Responses を選択でき、GitHub Copilot は GPT-5 ファミリー (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) を Responses 専用デフォルトとして宣言します。これらのモデルはエージェント トラフィックで `/chat/completions` を拒否するためです。`gpt-5.4-nano` のようなビルトイン デフォルトのないモデルはここでオプトインできます。単線アップストリーム ピンと正規の ChatGPT 転送はオーバーライドを拒否します。 |
 | xAI Responses オプトイン（ダッシュボード） | スイッチ | `xai` のみで、`grok-4.5` と `grok-4.6` の `modelAdapters` エントリを原子的に設定または削除します。片方だけの場合は、次のスイッチ操作で両方が正規化されるまで混合状態を表示します。他のオーバーライドと tier 動作は変わりません。 |
+| `xaiResponsesXSearch?` | `boolean` | デフォルトでは無効です。xAI Responses の宛先では、最終的なリクエスト正規化後もライブの `web_search` ツールが残っている場合にのみ、プロバイダーがホストする `x_search` 宣言を追加します。既存の宣言は重複させず、呼び出し元の `tool_choice` / `allowed_tools` セレクターの範囲を拡張することもありません。また、これは `search.xSearch` オプションを持つウェブ検索サイドカーとは別です。 |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | hosted tool namespace を予約する非 forward Responses gateway 向けの完全一致モデル opt-in。現在は `["image_generation"]` のみを受け付けます。一致したモデルは `openai-responses` wire を使い、その hosted tool をサポートする必要があります。競合するクライアント `image_gen` 宣言を除去し、呼び出し元の tool choice を維持するため selector も書き換えます。OpenAI API の仮想 `-pro` モデルでは、まず選択した公開 ID に一致させ、解決後のベース wire-model ID をフォールバックとして使用します。`modelAdapters` は公開 ID、次にベース ID の順に解決し、後者の結果が最終 wire を決めます。未設定のモデルは通常の alias 動作を維持します。 |
+| `annotateEmptyToolOutputs?` | `boolean` | 存在するものの空であるツール結果を、モデルに届く前に短いマーカーへ置き換え、空白の結果が欠落した結果として解釈されないようにします。空文字列とテキストのみのパーツ配列に適用されます。画像、ファイル、暗号化されたパーツには一切手を加えません。組み込みレジストリでは `DeepSeek` のデフォルトが `true` で、それ以外は未設定です。プロバイダーを対象外にするには `false` を設定します。明示的な `false` は、後続の編集でこのフィールドが省略されても保持されます。`PATCH /api/providers?name=<provider>` は `true`、`false`、またはオーバーライドを消去してレジストリのデフォルト動作へ戻すための `null` を受け付けます。 |
 | `reasoningEffortMap?` | `Record<string, string>` |ラベルを推論するためのプロバイダー全体のワイヤ エイリアス。 |
 | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` |推論ラベルのモデルごとのワイヤ エイリアス。 |
 | `reasoningWireFormat?` | `"gateway-object"` | `reasoning_effort` ではなく `reasoning: { enabled, effort }` を受け取る OpenAI 互換ゲートウェイ用です。ClinePass プリセットが自動設定します。 |
@@ -102,6 +105,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` |正確なプレースホルダー ID、欠落している端末 ID、および（`repairInvalidIds` で）正規の `msg_`/`rs_` 接頭辞を欠く message/reasoning ID に対するダウンストリーム SSE 修復はデフォルトで無効になっています。関数呼び出し ID は決して書き換えられません。組み込み DeepSeek は最後の 2 つをデフォルトで有効にします。 |
 | `responsesSnapshotRepair?` | `boolean` | デフォルトで無効のクライアント向け修復です。SSE と JSON の Responses ライフサイクルで欠落した status、output、ツールメタデータを補完し、raw 検査と永続化は変更しません。 |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | API-key プロバイダーのみ(`authMode: "key"`)。オプトインの同一ターゲット 429 リトライ: `retryOn429` が無ければ無効で、オブジェクトがあれば `enabled: false` でない限り有効になります。429 時に待機(上流の `Retry-After` または固定間隔)してから、キー フェイルオーバーの前に同一キーで同一リクエストを再送します — メインのテキストターン回復ループ、Responses passthrough、画像/動画ブリッジ、web-search サイドカー、ターミナル継続要求をすべてカバーします。再送の対象はプリストリームの HTTP 429 応答のみで、カスタム `runTurn` トランスポートは HTTP リトライループの対象外です。`attempts` は最初の 429 以降の同一キー再送回数(合計送信数 = `attempts` + 1)で、メインの回復ループ・ターミナルガード継続・ブリッジ再試行で共有されるリクエスト単位の予算です。`attempts` を使い切っても同一キーでの再送が止まるだけで、通常のキー フェイルオーバーまたは最終エラー処理が利用可能なターゲットに応じて続きます — キー認証の passthrough ワイヤにはフェイルオーバーがないため、使い切った 429 はそのまま返ります。Codex 自体は 429 をリトライしないため、単一キーのプロバイダーでは唯一の防御です。デフォルト: `enabled: true`、`attempts: 3`、`intervalMs: 5000`、`maxIntervalMs: 60000`(1回の待機は `maxIntervalMs` で上限、その上限は 600000)、`respectRetryAfter: true`。 |
+| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | キー認証の `openai-chat` プロバイダーのみ。ストリーム開始前に上流から返される一時的なステータス（500、502、503、504、520、521、522）に対するオプトインの再試行です。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。最初の Responses リクエスト、ターミナルガード継続、ネイティブの `/v1/chat/completions`、および 429／アカウント回復時の再取得が対象です。`attempts` は最初の送信を含め、1 回のリクエストで許可される上流への送信総数です（1～10、デフォルトは 3）。接続リセット回復と共有するリクエスト単位の単一予算であるため、`3` を指定した場合、プロバイダーに到達する実リクエストは最大 3 回です。待機には 400 ms を基準とする固定式の指数バックオフを使用し、上限は 5 秒で、`Retry-After` に従います。レート制限を扱う `retryOn429` とは別の機能であり、ストリーム開始後の失敗は再送されません。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` が `auto` または `none` のみを受け入れるモデル。強制的な選択は格下げされます。 |
 | `preserveReasoningContentModels?` | `string[]` |チャット履歴に以前のアシスタント `reasoning_content` が必要なモデル。 |
 | `requiresReasoningPlaceholderModels?` | `string[]` | `reasoning_content` を欠いた tool_call 継続を上流が拒否するモデル（DeepSeek thinking モード）。リプレイキャッシュが外れた場合に最小プレースホルダーを注入。未設定時は `preserveReasoningContentModels` を引き継ぎ、`[]` で明示的に無効化。 |
@@ -160,8 +164,9 @@ affinity を維持します。これらの戦略は provider enforcement を回�
 |キー |タイプ |デフォルト |説明 |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` |スティッキー アフィニティと 429 クールダウン フェイルオーバーを有効にします。 |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` |新しいセッションの場合は、このしきい値以上の、既知の最も低いキャッシュされた 5 時間の使用量を選択します。 `0` はクォータの選択を無効にします。 |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` |新しいセッション戦略。クォータでは 5 時間足のみを使用します。 |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` |新しいセッションでは、アクティブなアカウントがこのしきい値に達すると、設定した期間で既知のキャッシュ使用量が最も低いアカウントを選択します。 `0` はクォータ選択を無効にします。 |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` |新しいセッション戦略。`quota` は `quotaWindow` で指定した期間（既定は 5 時間足）でアカウントを順位付けし、`fill-first` も同じ期間で使い切りのしきい値を判定します。 |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` |使用量ベースのアカウント選択で使う、プロバイダー報告のキャッシュ済み使用率です。`five-hour` は従来の動作を維持します。`weekly` は週次使用量を使い、他に対象アカウントが残る間だけ 5 時間使用量が上限に達したアカウントを除外し、残らない場合はそれらへフォールバックします。`max-utilization` は判明している値のうち最も高いものを使うため、週次使用量が未取得でも 5 時間使用量を利用できます。どちらも不明なら unknown の順位付けに従います。既知の使用量は unknown より先ですが、対象がすべて unknown でも対象順の先頭を選択します。記載した 5 時間使用量による同点判定後も完全に同点なら、対象順を維持します。正常な affinity セッションを先回りして再配置することはありません。新規セッションの割り当てと、対象となる 429 代替後のルーティング復旧では、`quota` はこの期間で対象候補を直接順位付けし、`fill-first` はこの期間のしきい値と上限到達ルールを使って安定順に進み、`round-robin` はこの設定を無視します。クールダウン、フェイルオーバー上限、再認証の適格性は別のローカル状態です。アカウント別の週次使用量は、ダッシュボードのプロバイダーページで取得した後にのみ利用できます。 |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` |成功した新しいセッションのバインドは 1 つのラウンドロビン選択で保持されます。範囲は 1 ～ 100。 |
 
 有効にすると、429 レコードは `Retry-After` またはデフォルトのバックオフからの制限されたクールダウンを記録し、リクエスト内でローテーションする可能性があります。アフィニティはプロセスローカルであり、サイズ制限があります。資格情報 401/403 は、アカウントに再認証が必要であることをマークします。すべての対象となるアカウントが冷却されている場合、クライアントは、既知の場合、認証エラーではなく、`Retry-After` を含む 429 を受け取ります。
@@ -297,6 +302,37 @@ OpenRouter は、複数の推論プロバイダーを通じて 1 つのモデル
 
 モデル キーは、外部の opencodex プロバイダー プレフィックスを除いた、正確なネイティブ OpenRouter ID です。 `openrouter/anthropic-claude-sonnet-5` を選択すると、モデル ルールを適用する前のネイティブ `anthropic/claude-sonnet-5` が復元されます。
 
+## Vercel AI Gateway プロバイダーのルーティング
+
+Vercel AI Gateway は、1 つのモデルを複数の基盤となる推論プロバイダーへルーティングできます。`vercelGatewayRouting` はプロバイダー全体の設定を構成し、`modelVercelGatewayRouting` は正確なモデル ID ごとにそれを置き換えます。両方とも未設定の場合、`resolveVercelGatewayRouting()` は `undefined` を返すため、Chat リクエスト ビルダーは `provider` フィールドを省略し、Vercel AI Gateway のデフォルトの動的ルーティング動作が維持されます。
+
+- `order`: 優先順位順の Vercel AI Gateway アップストリーム プロバイダー スラッグ。
+- `only`: 対象となる Vercel AI Gateway アップストリーム プロバイダーを制限する明示的な許可リスト。
+- `sort`: 対象となるプロバイダーを `"cost"` (最安コスト)、`"ttft"` (最初のトークンまでの時間)、または `"tps"` (1 秒あたりのトークン数) で自動的に並べ替えます。
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
+        }
+      }
+    }
+  }
+}
+```
+
+モデル キーは、外側の opencodex プロバイダー プレフィックスを除いた Vercel の公開モデル セレクターです。`vercel-ai-gateway/zai-glm-5.2` を選択すると、モデル ルールを適用する前にネイティブの `zai/glm-5.2` が復元されます。ネイティブの `vercel/<model-id>` セレクターにも同じマッピングが適用されます。opencodex ではエンコードされた `vercel-ai-gateway/vercel-<model-id>` セレクターを使用し、モデル キーには `vercel/<model-id>` を指定してください。
+
 ## 静的モデルのホワイトリスト
 
 `models` のみを公開するように `liveModels: false` を設定します。 `models` が空であるか省略されている場合、プロバイダーはルーティングされたモデルを公開しません。ライブ ディスカバリは、キャッシュする前に 4 MiB または 2,000 を超える生のモデル行を拒否します。組み込みのプリセットは下限を使用し、チャットに適した行にフィルターをかけることができます。サイズが大きすぎる、または形式が正しくない結果は、古い/構成されたフォールバックに続きます。ゼロに適格な有効な結果は引き続き権威を持ち、暗黙的に置き換えられたり切り捨てられたりすることはありません。
@@ -340,7 +376,6 @@ OpenRouter は、複数の推論プロバイダーを通じて 1 つのモデル
       "defaultModel": "claude-sonnet-4-6"
     },
     "ollama-cloud": {
-      "adapter": "openai-chat",
       "baseUrl": "https://ollama.com/v1",
       "apiKey": "${OLLAMA_API_KEY}",
       "defaultModel": "glm-5.2",

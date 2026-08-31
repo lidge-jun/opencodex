@@ -1,6 +1,11 @@
 export const REDACTED_SECRET = "[REDACTED]";
 
-const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
+/**
+ * Credential-bearing header/field names. Exported for transports that must refuse to send
+ * credentials over an unsafe channel (e.g. plaintext non-loopback HTTP) rather than
+ * re-deriving a narrower local list.
+ */
+export const SENSITIVE_KEY_PATTERN = /^(?:authorization|proxy-authorization|cookie|set-cookie|set-cookie2|api[-_]?key|x-api-key|x-goog-api-key|x-amz-security-token|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|client[-_]?secret|password|profile[-_]?arn|exa[-_]?api[-_]?key)$/i;
 
 /**
  * Colon-labelled credential headers echoed back inside an error body

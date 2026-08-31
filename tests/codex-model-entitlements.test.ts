@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import {
   availableAccountGatedNativeModels,
   cachedAvailableAccountGatedNativeModels,
+  composeGatedClientVersionFloorForTests,
+  compareClientVersionsForTests,
   deriveGatedClientVersionFloor,
   entitledCodexAccountIdsForModel,
   GATED_MODEL_CLIENT_VERSION_FLOOR,
@@ -76,7 +78,7 @@ describe("Codex account model entitlements", () => {
     expect(availableAccountGatedNativeModels(snapshot).size).toBe(0);
   });
 
-  test("ignores hidden or API-disabled rows", async () => {
+  test("ignores hidden or API-disabled rows, and does not call the result a confirmation", async () => {
     const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
       credentials: [credential("main")],
       fetcher: (async () => Response.json({ models: [
@@ -87,7 +89,11 @@ describe("Codex account model entitlements", () => {
       clientVersion: TEST_CLIENT_VERSION,
     });
 
-    expect(snapshot.confirmedAccountIds.has("main")).toBe(true);
+    // INTENTIONAL ASSERTION FLIP (#3022). This used to assert `true`: rows arrived, so the
+    // parse "succeeded". But every row was filtered out, so the account proved nothing, and
+    // calling that a confirmation locked an empty roster in for the five-minute success TTL.
+    // Confirmation means usable evidence, not a successful HTTP round trip.
+    expect(snapshot.confirmedAccountIds.has("main")).toBe(false);
     expect(entitledCodexAccountIdsForModel(snapshot, DAYBREAK)?.size).toBe(0);
   });
 
@@ -235,15 +241,16 @@ describe("entitlement client version (#2886)", () => {
     const seen: string[] = [];
     const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
       credentials: [credential("main")],
-      // Gates exactly at the version the bundled snapshot declares for the gated models, so
-      // this asserts the floor is *sufficient* to return them rather than re-testing the
-      // arbitrary threshold the other backend uses.
+      // Gates at the version MEASURED upstream to actually return the gated rows, not at the
+      // version the bundled snapshot happens to declare. This mock used to gate at minor >= 142,
+      // which is why the suite never caught #3022: the derived floor was 0.142.2, the mock
+      // accepted it, and the test stayed green while real upstream answered with no gpt-5.6.
       fetcher: (async (input: RequestInfo | URL) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         const version = url.searchParams.get("client_version") ?? "";
         seen.push(version);
         const minor = Number(version.split(".")[1] ?? "0");
-        return minor >= 142 ? roster("gpt-5.5", SOL, TERRA, LUNA) : roster("gpt-5.5");
+        return minor >= 144 ? roster("gpt-5.5", SOL, TERRA, LUNA) : roster("gpt-5.5");
       }) as typeof fetch,
       now: 1_000,
       clientVersion: null,
@@ -625,5 +632,120 @@ describe("entitlement client version (#2886)", () => {
     const before = fetches;
     expect(await ask("tok-first", "0.146.0")).toBe(true);
     expect(fetches).toBe(before);
+  });
+
+  test("the gated floor never falls below the measured upstream minimum (#3022)", () => {
+    // 2.36.0 regressed exactly here: the floor is DERIVED from the bundled snapshot, and the
+    // snapshot records 0.142.2 for the gpt-5.6 rows. Upstream does not return those rows until
+    // 0.144.0 (devlog/_fin/260817_native_gpt56_1m_context/001_measurement_evidence.md: 0.142.2
+    // answers 200 with five rows and no gpt-5.6; >= 0.144.0 answers with eight including them,
+    // independently reproduced by the #2886 and #3022 reporters). So background sync asked a
+    // question upstream answers with an empty gated set, and the fail-closed gate read that as
+    // a confirmed denial — entitled Plus accounts lost sol/terra/luna.
+    expect(compareClientVersionsForTests(GATED_MODEL_CLIENT_VERSION_FLOOR, "0.144.0"))
+      .toBeGreaterThanOrEqual(0);
+  });
+
+  test("the floor is the higher of the derived and the measured minimum, not either alone", () => {
+    // Tested as a COMPOSITION on synthetic inputs. Hardcoding 0.144.0 would satisfy the test
+    // above while destroying the property that matters next: a refreshed snapshot declaring a
+    // NEWER requirement must take over, and the measured constant must then go inert rather
+    // than holding the floor down. Both directions are asserted here because only one of them
+    // is exercised by the shipped data.
+    const gated = new Set(["a"]);
+    const compose = (rows: Array<Record<string, unknown>>) =>
+      composeGatedClientVersionFloorForTests(rows, gated);
+
+    // Snapshot below the measurement: the measurement wins. This is today's shipped state.
+    expect(compose([{ slug: "a", minimal_client_version: "0.142.2" }])).toBe("0.144.0");
+    // Snapshot above the measurement: the snapshot wins, and the constant is inert.
+    expect(compose([{ slug: "a", minimal_client_version: "0.151.0" }])).toBe("0.151.0");
+    // Equal: either answer is the same value.
+    expect(compose([{ slug: "a", minimal_client_version: "0.144.0" }])).toBe("0.144.0");
+    // Derivation empty — no gated row carries a usable version — still never below measured.
+    expect(compose([])).toBe("0.144.0");
+    expect(compose([{ slug: "a", minimal_client_version: "0.0.0" }])).toBe("0.144.0");
+    // Numeric, not lexicographic: "0.99.0" must not beat "0.144.0".
+    expect(compose([{ slug: "a", minimal_client_version: "0.99.0" }])).toBe("0.144.0");
+  });
+
+  test("an empty roster is not a confirmation, and is retried on the failure TTL (#3022)", async () => {
+    // `{"models":[]}` parses to an empty Set, and an empty Set is truthy — so the old
+    // expression `confirmed: models !== null` called it a confirmed answer and locked it in for
+    // the full five-minute success TTL. An empty roster is absence of evidence, not evidence of
+    // absence, and it must expire on the 15s failure TTL instead.
+    //
+    // Driven through the DIRECT caller path deliberately: a completed flight only writes to the
+    // cache when `currentCredentialIdentity` matches the snapshot identity, and a synthetic
+    // pool credential never satisfies that guard — so a test built on `credential()` would
+    // measure an uncached path and prove nothing about the TTL.
+    let fetches = 0;
+    const empty = (async () => { fetches += 1; return Response.json({ models: [] }); }) as typeof fetch;
+
+    const ask = (now: number) => isDirectCallerEntitledToCodexModel(
+      directHeaders("tok-empty"),
+      SOL,
+      { fetcher: empty, now, clientVersion: "0.146.0" },
+    );
+
+    expect(await ask(1_000)).toBe(false);
+    expect(fetches).toBe(1);
+
+    // Still inside the 15s failure window: served from the cached unconfirmed entry.
+    expect(await ask(1_000 + 14_999)).toBe(false);
+    expect(fetches).toBe(1);
+
+    // Past the failure TTL: exactly one refetch. Under the old five-minute success TTL this
+    // stayed at 1 until 300,001 ms, which is the wrong answer held for twenty times too long.
+    expect(await ask(1_000 + 15_001)).toBe(false);
+    expect(fetches).toBe(2);
+  });
+
+  test("a non-empty roster still confirms the account", async () => {
+    // Characterization guard, green before and after: only the EMPTY case changes. An ordinary
+    // short roster must keep confirming the account and keep granting what it lists, otherwise
+    // the empty-roster fix would have widened into a denial of service for everyone.
+    let fetches = 0;
+    const backend = (async () => { fetches += 1; return roster(SOL); }) as typeof fetch;
+    const ask = (now: number) => isDirectCallerEntitledToCodexModel(
+      directHeaders("tok-nonempty"),
+      SOL,
+      { fetcher: backend, now, clientVersion: "0.146.0" },
+    );
+
+    expect(await ask(1_000)).toBe(true);
+    // And it keeps the five-minute success TTL: no refetch just past the failure window.
+    expect(await ask(1_000 + 15_001)).toBe(true);
+    expect(fetches).toBe(1);
+  });
+
+  test("an all-filtered roster is unconfirmed and retried on the failure TTL", async () => {
+    // Rows arrived, but every one was hidden or api-disabled, so the parse yields an empty set.
+    // Same situation as a zero-row response: no usable evidence. Every gated projection needs
+    // both confirmation and membership, so an empty set denies identically either way — which
+    // is exactly why calling it "confirmed" buys nothing and costs a five-minute wrong answer.
+    let fetches = 0;
+    const filtered = (async () => {
+      fetches += 1;
+      return Response.json({ models: [
+        { slug: SOL, supported_in_api: true, visibility: "hide" },
+        { slug: "gpt-disabled", supported_in_api: false, visibility: "list" },
+      ] });
+    }) as typeof fetch;
+
+    const ask = (now: number) => isDirectCallerEntitledToCodexModel(
+      directHeaders("tok-filtered"),
+      SOL,
+      { fetcher: filtered, now, clientVersion: "0.146.0" },
+    );
+
+    expect(await ask(1_000)).toBe(false);
+    expect(fetches).toBe(1);
+    expect(await ask(1_000 + 14_999)).toBe(false);
+    expect(fetches).toBe(1);
+    // The TTL half is asserted separately from the flag: flipping `confirmed` while leaving the
+    // success TTL in place would pass an assertion about the flag alone.
+    expect(await ask(1_000 + 15_001)).toBe(false);
+    expect(fetches).toBe(2);
   });
 });

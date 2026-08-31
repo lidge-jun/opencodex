@@ -5,7 +5,7 @@ import { codexAccountLogLabel } from "./account-label";
 import { isCodexAccountPaused } from "./account-pause";
 import { clearCodexAccountPin, codexAccountPriorityLookup, pinnedCodexAccountId } from "./account-priority";
 import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./account-usability";
-import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
+import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
   POOL_KEY_CODEX,
   normalizeAccountPoolStickyLimit,
@@ -91,6 +91,15 @@ type CodexUpstreamHealth = {
    * flaky account without throwing CodexAccountCooldownError (hard-only).
    */
   softAvoidUntil?: number;
+  /**
+   * Credential generation a 401/403 quarantine was derived from (#2892 gap 4).
+   *
+   * Provenance lives ON the entry rather than in a side map keyed by account id. A side map spends
+   * "whatever health is current when the old credential is found dead", which deletes a later
+   * unrelated entry: a G1 401, then a G2 save, then a genuine G2 503 would lose the 503. Only the
+   * entry that carries this field can be spent, and any later write simply replaces it.
+   */
+  credentialFailureGeneration?: number;
 };
 
 const CODEX_DEFAULT_QUOTA_COOLDOWN_MS = 60_000;
@@ -127,6 +136,22 @@ const upstreamHealth = new Map<string, CodexUpstreamHealth>();
  * from account-wide Retry-After/default throttles and transient health.
  */
 const quotaScopedHealth = new Map<string, Map<CodexQuotaScope, CodexUpstreamHealth>>();
+/**
+ * Spend a credential-failure health entry whose credential no longer exists (#2892 gap 4).
+ *
+ * A 401/403 describes one CREDENTIAL, not an account, and a replacement can land at any point after
+ * the outcome is recorded — so re-reading the store inside `recordCodexUpstreamOutcome` narrows the
+ * window without closing it. The reader decides instead, and it may only spend an entry that
+ * actually carries credential provenance: a later transient or quota write replaces the entry and
+ * with it the tag, so this can never delete evidence that belongs to a different failure.
+ */
+function dropSpentCredentialFailure(accountId: string): void {
+  const health = upstreamHealth.get(accountId);
+  const generation = health?.credentialFailureGeneration;
+  if (health === undefined || generation === undefined) return;
+  if (isCodexAccountGenerationLive(accountId, generation)) return;
+  upstreamHealth.delete(accountId);
+}
 let lastReconciledGeneration = 0;
 let liveHealthAccountIds = new Set<string>();
 
@@ -311,6 +336,7 @@ export function reconcileCodexRoutingHealth(context: GenerationContext): number 
 export function getCodexUpstreamHealth(
   accountId: string,
 ): CodexUpstreamHealth | null {
+  dropSpentCredentialFailure(accountId);
   return upstreamHealth.get(accountId) ?? null;
 }
 
@@ -690,7 +716,13 @@ function withProbeLeaseReleased(health: CodexUpstreamHealth, now: number): Codex
  */
 function preservedCooldownFields(health: CodexUpstreamHealth | undefined): Partial<CodexUpstreamHealth> {
   if (!health) return {};
-  const { consecutiveFailures: _f, consecutiveSuccesses: _s, lastFailureStatus: _st, lastFailureAt: _at, softAvoidUntil: _sa, ...cooldownFields } = health;
+  // `credentialFailureGeneration` is provenance for ONE credential failure, so it must not survive
+  // into a later transient or quota entry — otherwise that entry inherits the tag and gets spent
+  // when the old credential dies, deleting evidence that was never about it (#2892 gap 4 review).
+  const {
+    consecutiveFailures: _f, consecutiveSuccesses: _s, lastFailureStatus: _st, lastFailureAt: _at,
+    softAvoidUntil: _sa, credentialFailureGeneration: _cg, ...cooldownFields
+  } = health;
   return cooldownFields;
 }
 
@@ -1587,6 +1619,7 @@ function applyQuotaAutoSwitch(
 function shouldFailover(config: OcxConfig, accountId: string, now: number): boolean {
   const threshold = config.upstreamFailoverThreshold ?? 3;
   if (threshold <= 0) return false;
+  dropSpentCredentialFailure(accountId);
   const health = upstreamHealth.get(accountId);
   if (health?.lastFailureAt && now - health.lastFailureAt > CODEX_FAILURE_WINDOW_MS) return false;
   return !!health && health.consecutiveFailures >= threshold;
@@ -2111,6 +2144,16 @@ export function recordCodexUpstreamOutcome(
   const now = meta.now ?? Date.now();
   const outcomeClass = classifyCodexUpstreamOutcome(outcome, meta.denial);
   const quotaScope = codexQuotaScopeForModel(meta.modelId);
+  /*
+   * Spend a stale credential failure BEFORE any branch reads health (#2892 gap 4 review).
+   *
+   * Reader-side spending alone is not enough: the transient and workspace branches derive their new
+   * entry from the current one, so a spent G1 401 would donate its `consecutiveFailures` to G2's
+   * first genuine 503 and drop the tag while doing it. The account then reaches the failover
+   * threshold one failure early, and no later read can tell. Clearing it here means every branch
+   * starts from evidence that still describes a live credential.
+   */
+  dropSpentCredentialFailure(accountId);
   if (outcomeClass === "success") {
     const scopedProbe = meta.probeQuotaScope
       ? scopedHealthFor(accountId, meta.probeQuotaScope)
@@ -2213,13 +2256,39 @@ export function recordCodexUpstreamOutcome(
     ) {
       return;
     }
+    /*
+     * The pre-check above closes the same-process race, but not a cross-process one (#2892 gap 4).
+     * `isCodexAccountGenerationLive` is an unlocked read while credential writers coordinate under
+     * the mutation lock, and OS preemption needs no `await` — so another process can replace the
+     * credential after this check, or at any point after this whole function returns. No re-read here
+     * can close that: a replacement is always free to land one instruction later.
+     *
+     * Taking the credential lock is not an option either: it runs with `busy_timeout=0`, so acquiring
+     * it per outcome would turn ordinary contention into thrown request-path errors.
+     *
+     * So the evidence is TAGGED with the credential it describes and judged when it is READ. The
+     * health entry carries `credentialFailureGeneration` and the reauth map carries the same
+     * generation; `dropSpentCredentialFailure` and `isAccountNeedsReauth` discard an entry whose
+     * credential is gone. A later transient or quota write replaces the entry along with its tag, and
+     * `preservedCooldownFields` drops the tag explicitly, so this provenance can never be spent
+     * against a failure it did not describe.
+     *
+     * Affinity sweeping needs no tag: an affinity entry already carries a credential generation and
+     * self-invalidates on the next check, and re-adding swept entries would be a worse bug.
+     */
     upstreamHealth.set(accountId, {
       consecutiveFailures: 1,
       lastFailureStatus,
       lastFailureAt: now,
+      // Provenance rides on the entry: only this failure can be spent when its credential dies.
+      ...(meta.credentialGeneration !== undefined
+        ? { credentialFailureGeneration: meta.credentialGeneration }
+        : {}),
     });
     quotaScopedHealth.delete(accountId);
-    markAccountNeedsReauth(accountId, writerGeneration);
+    // The reauth flag carries the same provenance, so a replacement landing after this call cannot
+    // inherit a quarantine that was never about it.
+    markAccountNeedsReauth(accountId, writerGeneration, meta.credentialGeneration);
     clearThreadAccountMapForAccount(accountId);
     return;
   }

@@ -104,7 +104,23 @@ export function setProviderQuotaBeforePublishForTests(
   providerQuotaBeforePublishForTests = hook;
 }
 const TERMINAL_QUOTA_FAILURE = Symbol("terminal-quota-failure");
-type ProviderQuotaProbeResult = ProviderQuotaReport | null | typeof TERMINAL_QUOTA_FAILURE;
+/**
+ * The probe succeeded and the upstream authoritatively reported NO model-quota windows.
+ *
+ * Distinct from `null`, which means "this probe told us nothing" and deliberately preserves
+ * the last-good row for up to 30 minutes. Collapsing the two would let a stale report outlive
+ * the authoritative answer that replaced it: a GLM plan whose payload carries only MCP
+ * `TIME_LIMIT` rows has no model windows, and the dashboard and quota-aware routing must stop
+ * showing the previous token windows rather than keep them for another half hour.
+ *
+ * Suppression is shared with `TERMINAL_QUOTA_FAILURE`; only the reason differs.
+ */
+const AUTHORITATIVE_EMPTY_QUOTA = Symbol("authoritative-empty-quota");
+type ProviderQuotaProbeResult =
+  | ProviderQuotaReport
+  | null
+  | typeof TERMINAL_QUOTA_FAILURE
+  | typeof AUTHORITATIVE_EMPTY_QUOTA;
 
 export interface ProviderQuotaReport {
   provider: string;
@@ -636,10 +652,19 @@ async function fetchClineQuota(provider: string, config: OcxProviderConfig): Pro
  * same rows `CREDIT_LIMIT`) and `TIME_LIMIT` rows. `TOKENS_LIMIT`/`CREDIT_LIMIT`
  * rows carry the window length as `unit`/`number`: unit 3 is hours (number 5 →
  * the rolling five-hour window), unit 6 is weeks (number 1 → the weekly
- * window). `TIME_LIMIT` rows are the monthly MCP tool budget (Web Search / Web
- * Reader / Zread). Every row's `percentage` is the consumed share (falling
+ * window). Every row's `percentage` is the consumed share (falling
  * back to `currentValue`/`usage` when absent) and `nextResetTime` (unix ms)
  * the window reset.
+ *
+ * `TIME_LIMIT` rows are deliberately ignored (issue #1168). They are the shared
+ * monthly MCP *call* allowance for Web Search / Web Reader / Zread — not a
+ * model-token budget — and `ProviderQuota.monthlyPercent` is consumed as a
+ * model-capacity signal: `headroomOf()` in `src/oauth/account-quota-rank.ts`
+ * takes the MAX across every window, so a user who spent their MCP search
+ * allowance would be ranked as having no model capacity left, and the dashboard
+ * would draw a full monthly bar for a plan whose model tokens are untouched.
+ * A payload carrying only `TIME_LIMIT` rows therefore reports no quota at all,
+ * which is the honest answer rather than a fabricated one.
  */
 export function parseZaiQuotaLimits(data: Record<string, unknown> | null): ProviderQuota | null {
   const limits = Array.isArray(data?.limits) ? data.limits as unknown[] : null;
@@ -649,6 +674,9 @@ export function parseZaiQuotaLimits(data: Record<string, unknown> | null): Provi
   for (const raw of limits) {
     const row = asRecord(raw);
     if (!row) continue;
+    // Gate on row type before deriving a percentage: an MCP row must not even
+    // contribute a parsed value to a model-quota report.
+    if (row.type !== "TOKENS_LIMIT" && row.type !== "CREDIT_LIMIT") continue;
     const resetAt = normalizeResetAt(row.nextResetTime);
     let percent = normalizePercent(row.percentage);
     if (percent === undefined) {
@@ -659,21 +687,15 @@ export function parseZaiQuotaLimits(data: Record<string, unknown> | null): Provi
       }
     }
     if (percent === undefined) continue;
-    if (row.type === "TOKENS_LIMIT" || row.type === "CREDIT_LIMIT") {
-      const unit = toFiniteNumber(row.unit);
-      const number = toFiniteNumber(row.number);
-      if (unit === 3 && number === 5) {
-        quota.fiveHourPercent = percent;
-        if (resetAt !== undefined) quota.fiveHourResetAt = resetAt;
-        windows += 1;
-      } else if (unit === 6 && number === 1) {
-        quota.weeklyPercent = percent;
-        if (resetAt !== undefined) quota.weeklyResetAt = resetAt;
-        windows += 1;
-      }
-    } else if (row.type === "TIME_LIMIT") {
-      quota.monthlyPercent = percent;
-      if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
+    const unit = toFiniteNumber(row.unit);
+    const number = toFiniteNumber(row.number);
+    if (unit === 3 && number === 5) {
+      quota.fiveHourPercent = percent;
+      if (resetAt !== undefined) quota.fiveHourResetAt = resetAt;
+      windows += 1;
+    } else if (unit === 6 && number === 1) {
+      quota.weeklyPercent = percent;
+      if (resetAt !== undefined) quota.weeklyResetAt = resetAt;
       windows += 1;
     }
   }
@@ -715,9 +737,16 @@ function parseZaiQuotaLegacyFields(data: Record<string, unknown> | null): Provid
 
 /**
  * Fetches the Z.AI GLM Coding Plan quota — on whichever region the provider
- * points at (api.z.ai or open.bigmodel.cn). Authenticates with the API key as
- * a Bearer token per Z.AI's API reference. The `limits` array shape is
+ * points at (api.z.ai or open.bigmodel.cn). The `limits` array shape is
  * preferred; older field-name payloads fall back to the legacy parser.
+ *
+ * Authentication differs by host (issue #1168). `api.z.ai` takes the API key as
+ * a Bearer token per Z.AI's API reference; `open.bigmodel.cn` expects the key
+ * directly in `Authorization` with no scheme prefix and answers a Bearer header
+ * with an auth error, which is why BigModel Coding Plan quota never rendered.
+ * The host is already canonicalized by `isCanonicalZaiBaseUrl` above and
+ * `redirect: "error"` stays set, so the bare key cannot travel to a lookalike
+ * host or follow a redirect off-origin.
  */
 async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalZaiBaseUrl(config.baseUrl)) return null;
@@ -727,8 +756,9 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
   const monitorHost = normalized === ZAI_BASE_URL || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`
     ? ZAI_BASE_URL
     : ZAI_CN_BASE_URL;
+  const authorization = monitorHost === ZAI_CN_BASE_URL ? apiKey : `Bearer ${apiKey}`;
   const response = await fetch(`${monitorHost}/api/monitor/usage/quota/limit`, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    headers: { Accept: "application/json", Authorization: authorization },
     redirect: "error",
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
@@ -740,10 +770,16 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
   const body = asRecord(await readQuotaJson(response));
   if (!body || body.success === false) return null;
   const data = asRecord(body.data) ?? body;
-  const quota = Array.isArray(data?.limits)
-    ? parseZaiQuotaLimits(data)
-    : parseZaiQuotaLegacyFields(data);
-  return quota ? report(provider, "zai:quota-limit", quota) : null;
+  if (Array.isArray(data?.limits)) {
+    const quota = parseZaiQuotaLimits(data);
+    // A well-formed `limits[]` we fully understood is authoritative even when it yields no
+    // model window — for example a plan reporting only the monthly MCP `TIME_LIMIT` row.
+    // Returning `null` here would preserve the previous token windows for up to 30 minutes
+    // and keep quota-aware routing acting on a report the provider has already superseded.
+    return quota ? report(provider, "zai:quota-limit", quota) : AUTHORITATIVE_EMPTY_QUOTA;
+  }
+  const legacy = parseZaiQuotaLegacyFields(data);
+  return legacy ? report(provider, "zai:quota-limit", legacy) : null;
 }
 
 /**
@@ -1153,14 +1189,17 @@ export function parseXaiCreditsResponse(value: unknown): { percent: number; rese
   if (!config) return null;
   const period = asRecord(config.currentPeriod);
   if (!period || period.type !== "USAGE_PERIOD_TYPE_WEEKLY") return null;
-  const resetAt = normalizeResetAt(period.end);
-  if (resetAt === undefined) return null;
+  let percent = 0;
   if (config.creditUsagePercent !== undefined) {
-    const percent = normalizePercent(config.creditUsagePercent);
-    if (percent === undefined) return null;
-    return { percent, resetAt };
+    const normalized = normalizePercent(config.creditUsagePercent);
+    if (normalized === undefined) return null;
+    percent = normalized;
   }
-  return { percent: 0, resetAt };
+  const resetAt = normalizeResetAt(period.end);
+  return {
+    percent,
+    ...(resetAt !== undefined ? { resetAt } : {}),
+  };
 }
 
 async function fetchXaiWeeklyCredits(accessToken: string, userId: string): Promise<ProviderQuota | null> {
@@ -2305,9 +2344,18 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
         maybeFetchProviderQuota(name, provider, config, forceRefresh, prefetchedCodexSnapshot)
       )),
     );
-    const fresh = probeResults.filter((item): item is ProviderQuotaReport => item !== null && item !== TERMINAL_QUOTA_FAILURE);
+    const fresh = probeResults.filter((item): item is ProviderQuotaReport => (
+      item !== null && item !== TERMINAL_QUOTA_FAILURE && item !== AUTHORITATIVE_EMPTY_QUOTA
+    ));
+    // Both sentinels suppress the previous row. A terminal failure means the response was
+    // invalid; an authoritative empty means the response was valid and said there are no
+    // model windows. Either way the old row is no longer true, which is what separates them
+    // from `null` (told us nothing — keep the last-good row).
     const terminalFailures = new Set(
-      Object.keys(config.providers).filter((_, index) => probeResults[index] === TERMINAL_QUOTA_FAILURE),
+      Object.keys(config.providers).filter((_, index) => (
+        probeResults[index] === TERMINAL_QUOTA_FAILURE
+        || probeResults[index] === AUTHORITATIVE_EMPTY_QUOTA
+      )),
     );
     await providerQuotaBeforePublishForTests?.();
     let commitKey: string | null = null;

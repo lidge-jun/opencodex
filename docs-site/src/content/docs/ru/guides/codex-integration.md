@@ -250,8 +250,8 @@ ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-windo
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
 tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
+curl -fsS -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
+  "https://proxy.example.com/v1/catalog" > "$tmp" \
   && mv "$tmp" "$dest"
 ocx sync-cache
 ```
@@ -263,6 +263,8 @@ ocx sync-cache
 Display name можно задать или отредактировать и через management API
 (`POST /api/custom-models`, `PUT /api/custom-models/<id>` с полем `displayName`) и через
 веб-дашборд. Символ `/` запрещён, потому что он столкнулся бы с разделителем routed-slug.
+
+`GET /v1/catalog` существует для того, чтобы чтение списка моделей не требовало админского токена. Маршрут только для чтения (`GET` и `HEAD`), принимает `x-opencodex-api-key`, bearer-токен или `x-api-key` и отдаёт в точности те же байты, что и управляющий маршрут. Ответы содержат строгий `ETag` — верните его в `If-None-Match`, чтобы повторно проверить и получить `304` вместо полного документа — и `Cache-Control: private, no-cache`. Ключ плоскости данных, допущенный здесь, **не получает ничего** на плоскости управления: `/api/catalog` и все маршруты `/api/*` по-прежнему требуют админский токен или сессию панели.
 
 Display name — это **только отображение, и оно устойчиво к перегенерации**. Каждый `ocx sync` и
 каждое обновление каталога заново выводят маршрутизируемые записи из `config.json`

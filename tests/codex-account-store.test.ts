@@ -16,6 +16,17 @@ function refreshLockPathForToken(refreshToken: string): string {
   return join(TEST_DIR, `codex-refresh-${digest}.lock`);
 }
 
+/** Minimal unsigned JWT carrying the plan claim the store reconciles from. */
+function planJwt(plan: string, accountId = "acct-plan-flight"): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify({
+    chatgpt_account_id: accountId,
+    chatgpt_plan_type: plan,
+    "https://api.openai.com/auth": { chatgpt_account_id: accountId, chatgpt_plan_type: plan },
+  })).toString("base64url");
+  return `${header}.${body}.sig`;
+}
+
 describe("codex-account-store CRUD", () => {
   beforeEach(() => {
     // These exercises cover credential-store contention, not Windows ACL behavior.
@@ -689,6 +700,70 @@ describe("codex-account-store CRUD", () => {
     }
   });
 
+  /*
+   * #2892 gap 2. Flights are shared: a later caller on the same grant joins the
+   * running promise instead of opening its own. The flight's abort signal used to
+   * include the INITIATING caller's signal, so one cancelled request aborted the
+   * token fetch every other waiter depended on — and a joiner cannot tell that
+   * apart from a real upstream failure, so a cancelled Codex tab could get a
+   * healthy account marked for reauthentication on behalf of a live request.
+   */
+  test("cancelling the caller that opened a refresh flight does not cancel a live joiner (#2892)", async () => {
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    saveCodexAccountCredential("cancel-owner", {
+      accessToken: "rejected",
+      refreshToken: "cancel-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acc",
+    });
+    const generation = readCodexAccountRecord("cancel-owner")!.generation;
+
+    const originalFetch = globalThis.fetch;
+    let sawAbort = false;
+    let calls = 0;
+    let releaseFetch: (() => void) | undefined;
+    const fetchStarted = new Promise<void>(resolve => {
+      globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+        calls += 1;
+        resolve();
+        await new Promise<void>(release => { releaseFetch = release; });
+        // The flight must still be alive after the initiating caller gave up.
+        if (init?.signal?.aborted) sawAbort = true;
+        return Response.json({ access_token: "rotated", refresh_token: "cancel-grant2", expires_in: 3600 });
+      }) as typeof fetch;
+    });
+
+    try {
+      const owner = new AbortController();
+      const ownerCall = forceRefreshCodexPoolToken("cancel-owner", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+        signal: owner.signal,
+      });
+      await fetchStarted;
+      // A joiner arrives on the same grant while the flight is parked in fetch.
+      const joinerCall = forceRefreshCodexPoolToken("cancel-owner", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected",
+      });
+      // The client that started it goes away.
+      owner.abort(new Error("client disconnected"));
+      await expect(ownerCall).rejects.toThrow("client disconnected");
+
+      releaseFetch?.();
+      const joined = await joinerCall;
+
+      // The joiner gets the rotated credential, not an abort.
+      expect(sawAbort).toBe(false);
+      expect(joined.accessToken).toBe("rotated");
+      expect(calls).toBe(1);
+      expect(readCodexAccountRecord("cancel-owner")!.credential!.accessToken).toBe("rotated");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("a joined flight cannot copy a sibling account's replacement credential (#2887 review)", async () => {
     // Flights are keyed by refresh GRANT and shared across every account holding it. If the
     // owner's own credential is externally replaced BEFORE it takes the file lock, the
@@ -930,4 +1005,305 @@ describe("codex-account-store CRUD", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("a successful refresh advances an untouched dormant same-grant alias in the same write (#2892 gap 3)", async () => {
+    const { getValidCodexToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    const expiresAt = 0;
+    const shared = { refreshToken: "dormant-grant", expiresAt, chatgptAccountId: "acc" };
+    // Owner drives the refresh. `dormant` is an untouched duplicate that never calls in — the
+    // record the rotated grant used to skip, leaving it to send a dead grant on its next refresh.
+    saveCodexAccountCredential("dormant-owner", { accessToken: "shared-old", ...shared });
+    saveCodexAccountCredential("dormant-alias", { accessToken: "shared-old", ...shared });
+    // Negative cases: each must be left strictly alone.
+    saveCodexAccountCredential("alias-other-account", {
+      accessToken: "shared-old",
+      refreshToken: "dormant-grant",
+      expiresAt,
+      chatgptAccountId: "different-acc",
+    });
+    saveCodexAccountCredential("alias-moved-on", { accessToken: "already-newer", ...shared });
+    saveCodexAccountCredential("alias-other-grant", {
+      accessToken: "shared-old",
+      refreshToken: "unrelated-grant",
+      expiresAt,
+      chatgptAccountId: "acc",
+    });
+    const aliasGeneration = readCodexAccountRecord("dormant-alias")!.generation;
+    const otherAccountGeneration = readCodexAccountRecord("alias-other-account")!.generation;
+    const movedOnGeneration = readCodexAccountRecord("alias-moved-on")!.generation;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "rotated-access",
+      refresh_token: "rotated-grant",
+      expires_in: 3600,
+    })) as typeof fetch;
+
+    try {
+      await getValidCodexToken("dormant-owner");
+
+      const owner = readCodexAccountRecord("dormant-owner")!;
+      expect(owner.credential).toMatchObject({ accessToken: "rotated-access", refreshToken: "rotated-grant" });
+
+      // The dormant alias adopts the rotated credential WHOLE — access token, refresh token, and
+      // expiry together — so its bumped generation still means "newer JWT", which is what the
+      // plan-from-token fence reads it as.
+      const alias = readCodexAccountRecord("dormant-alias")!;
+      expect(alias.credential?.refreshToken).toBe("rotated-grant");
+      expect(alias.credential?.accessToken).toBe("rotated-access");
+      expect(alias.credential?.expiresAt).toBe(owner.credential!.expiresAt);
+      expect(alias.credential?.chatgptAccountId).toBe("acc");
+      expect(alias.generation).toBe(aliasGeneration + 1);
+      expect(alias.refreshGrantFingerprint).toBe(owner.refreshGrantFingerprint);
+
+      // A same-grant record on a DIFFERENT chatgpt account is not provably the same identity: a
+      // fingerprint is sha256 of the refresh token and carries no identity claim.
+      const otherAccount = readCodexAccountRecord("alias-other-account")!;
+      expect(otherAccount.credential?.refreshToken).toBe("dormant-grant");
+      expect(otherAccount.generation).toBe(otherAccountGeneration);
+
+      // An alias whose access token already moved on must NOT be given a generation bump with a
+      // stale JWT, and must not be handed back a possibly-rejected bearer.
+      const movedOn = readCodexAccountRecord("alias-moved-on")!;
+      expect(movedOn.credential?.accessToken).toBe("already-newer");
+      expect(movedOn.credential?.refreshToken).toBe("dormant-grant");
+      expect(movedOn.generation).toBe(movedOnGeneration);
+
+      expect(readCodexAccountRecord("alias-other-grant")!.credential?.refreshToken).toBe("unrelated-grant");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a tombstoned same-grant record is not resurrected by grant propagation (#2892 gap 3)", async () => {
+    const { getValidCodexToken, readCodexAccountRecord, saveCodexAccountCredential, tombstoneCodexAccount } =
+      await import("../src/codex/account-store");
+    const shared = { accessToken: "tomb-old", refreshToken: "tomb-grant", expiresAt: 0, chatgptAccountId: "acc" };
+    saveCodexAccountCredential("tomb-owner", { ...shared });
+    saveCodexAccountCredential("tomb-deleted", { ...shared });
+    tombstoneCodexAccount("tomb-deleted");
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "tomb-new",
+      refresh_token: "tomb-rotated",
+      expires_in: 3600,
+    })) as typeof fetch;
+    try {
+      await getValidCodexToken("tomb-owner");
+      const deleted = readCodexAccountRecord("tomb-deleted")!;
+      expect(deleted.deletedAt).toBeGreaterThan(0);
+      expect(deleted.credential).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a TOKENFUL tombstone is not resurrected either, isolating the deletedAt guard (#2892 gap 3)", async () => {
+    // The sibling test above cannot prove the `deletedAt` check is load-bearing: `tombstoneCodexAccount`
+    // drops the credential, so the separate `!alias.credential` guard already skips that record and the
+    // assertion passes with `deletedAt` removed. A tombstone that still CARRIES a credential is the only
+    // shape that reaches the `deletedAt` check, and it is reachable — a store written by an older build,
+    // or a tombstone raced by a concurrent save, produces exactly this record. `tokenful tombstone is
+    // treated as absent` earlier in this file pins the same shape for the read path.
+    const { getValidCodexToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    const shared = {
+      accessToken: "tokenful-old",
+      refreshToken: "tokenful-grant",
+      expiresAt: 0,
+      chatgptAccountId: "tokenful-acc",
+    };
+    saveCodexAccountCredential("tokenful-owner", { ...shared });
+    const ownerGeneration = readCodexAccountRecord("tokenful-owner")!.generation;
+    // Written directly: no public API produces a tombstone that retains its credential.
+    writeFileSync(ACCOUNTS_PATH, JSON.stringify({
+      "tokenful-owner": { credential: { ...shared }, generation: ownerGeneration },
+      "tokenful-deleted": { credential: { ...shared }, generation: ownerGeneration, deletedAt: Date.now() },
+    }, null, 2));
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "tokenful-new",
+      refresh_token: "tokenful-rotated",
+      expires_in: 3600,
+    })) as typeof fetch;
+    try {
+      await getValidCodexToken("tokenful-owner");
+      // The owner rotated.
+      expect(readCodexAccountRecord("tokenful-owner")!.credential!.refreshToken).toBe("tokenful-rotated");
+      // The tombstone kept its stale grant and stayed deleted: propagation skipped it on `deletedAt`
+      // alone, since its credential was present and every other eligibility field matched the owner.
+      const deleted = readCodexAccountRecord("tokenful-deleted")!;
+      expect(deleted.deletedAt).toBeGreaterThan(0);
+      expect(deleted.credential!.refreshToken).toBe("tokenful-grant");
+      expect(deleted.generation).toBe(ownerGeneration);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+
+  test("a same-grant sibling on a DIFFERENT upstream identity is never adopted (#2892 review)", async () => {
+    const { forceRefreshCodexPoolToken, getCodexAccountCredential, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    // Both records share one stored grant, but they claim different upstream accounts. Adoption
+    // copies BOTH tokens, so treating a shared fingerprint as proof of identity would hand this
+    // caller another account's credential.
+    saveCodexAccountCredential("foreign-caller", {
+      accessToken: "rejected-token",
+      refreshToken: "foreign-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-one",
+    });
+    saveCodexAccountCredential("foreign-sibling", {
+      accessToken: "sibling-fresh",
+      refreshToken: "foreign-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-two",
+    });
+    const generation = readCodexAccountRecord("foreign-caller")!.generation;
+
+    const originalFetch = globalThis.fetch;
+    let tokenCalls = 0;
+    globalThis.fetch = (async () => {
+      tokenCalls += 1;
+      return Response.json({ access_token: "own-new", refresh_token: "own-rotated", expires_in: 3600 });
+    }) as typeof fetch;
+    try {
+      const result = await forceRefreshCodexPoolToken("foreign-caller", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: "rejected-token",
+      });
+      // A real refresh must have run instead of adopting the foreign sibling.
+      expect(tokenCalls).toBe(1);
+      expect(result.accessToken).toBe("own-new");
+      expect(getCodexAccountCredential("foreign-caller")?.accessToken).not.toBe("sibling-fresh");
+      // The sibling is untouched: this path must not write to another identity's record.
+      expect(getCodexAccountCredential("foreign-sibling")?.accessToken).toBe("sibling-fresh");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+});
+
+describe("shared refresh flight plan reconciliation (#2892 gap 2 follow-up)", () => {
+  beforeEach(() => {
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+  });
+
+  afterEach(() => {
+    setIcaclsRunnerForTests(null);
+    delete process.env.OPENCODEX_HOME;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  test("an aborted owner still reconciles the refreshed plan for the shared flight", async () => {
+    // The flight deliberately outlives the caller that opened it, so plan reconciliation
+    // must not hang off that caller's wait: a rotated token carrying a NEW
+    // chatgpt_plan_type would otherwise commit while codexAccounts[].plan stayed stale
+    // for the rest of the process, skewing plan-selected quota projection.
+    const { forceRefreshCodexPoolToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    const { loadConfig, saveConfig } = await import("../src/config");
+    const { resetJwtPlanNotesForTests } = await import("../src/codex/plan-from-token");
+    resetJwtPlanNotesForTests();
+
+    saveConfig({
+      port: 10199,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [{ id: "plan-flight", email: "flight@example.test", plan: "plus", isMain: false }],
+    });
+    saveCodexAccountCredential("plan-flight", {
+      accessToken: planJwt("plus"),
+      refreshToken: "plan-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-plan-flight",
+    });
+    const generation = readCodexAccountRecord("plan-flight")!.generation;
+
+    const originalFetch = globalThis.fetch;
+    let releaseFetch: (() => void) | undefined;
+    const fetchStarted = new Promise<void>(resolve => {
+      globalThis.fetch = (async () => {
+        resolve();
+        await new Promise<void>(release => { releaseFetch = release; });
+        return Response.json({
+          access_token: planJwt("pro"),
+          refresh_token: "plan-grant2",
+          expires_in: 3600,
+        });
+      }) as typeof fetch;
+    });
+
+    try {
+      const owner = new AbortController();
+      const ownerCall = forceRefreshCodexPoolToken("plan-flight", {
+        rejectedGeneration: generation,
+        rejectedAccessToken: planJwt("plus"),
+        signal: owner.signal,
+      });
+      await fetchStarted;
+      owner.abort(new Error("client disconnected"));
+      await expect(ownerCall).rejects.toThrow("client disconnected");
+
+      releaseFetch?.();
+      // The flight is detached from every caller now, so there is nothing to await. Poll
+      // for the persisted outcome under a deadline instead of a fixed delay: a fixed
+      // sleep can pass before the flight commits on a loaded worker and let teardown race
+      // unfinished work, and it never proves the reconciliation actually ran.
+      const deadline = Date.now() + 5_000;
+      let persisted = loadConfig().codexAccounts?.[0];
+      while ((persisted?.plan !== "pro" || persisted?.planSource !== "jwt") && Date.now() < deadline) {
+        await Bun.sleep(10);
+        persisted = loadConfig().codexAccounts?.[0];
+      }
+
+      expect(persisted?.plan).toBe("pro");
+      expect(persisted?.planSource).toBe("jwt");
+      expect(readCodexAccountRecord("plan-flight")!.credential!.accessToken).toBe(planJwt("pro"));
+    } finally {
+      globalThis.fetch = originalFetch;
+      resetJwtPlanNotesForTests();
+    }
+  });
+
+  test("records with EMPTY account ids are never treated as the same identity (#2892 review)", async () => {
+    const { getValidCodexToken, readCodexAccountRecord, saveCodexAccountCredential } =
+      await import("../src/codex/account-store");
+    // Grant fingerprint, access token and expiry all match, and both ids are "". Two empty strings
+    // compare equal but prove nothing about which upstream account either record was meant to use,
+    // so propagation must fail closed rather than write a credential into an unidentified record.
+    const shared = { accessToken: "anon-old", refreshToken: "anon-grant", expiresAt: 0, chatgptAccountId: "" };
+    saveCodexAccountCredential("anon-owner", { ...shared });
+    saveCodexAccountCredential("anon-alias", { ...shared });
+    const aliasGeneration = readCodexAccountRecord("anon-alias")!.generation;
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      access_token: "anon-new",
+      refresh_token: "anon-rotated",
+      expires_in: 3600,
+    })) as typeof fetch;
+    try {
+      await getValidCodexToken("anon-owner");
+
+      // The owner still rotates normally.
+      expect(readCodexAccountRecord("anon-owner")!.credential?.refreshToken).toBe("anon-rotated");
+      // The unidentified record is untouched, generation included.
+      const alias = readCodexAccountRecord("anon-alias")!;
+      expect(alias.credential?.accessToken).toBe("anon-old");
+      expect(alias.credential?.refreshToken).toBe("anon-grant");
+      expect(alias.generation).toBe(aliasGeneration);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
 });

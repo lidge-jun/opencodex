@@ -12,6 +12,7 @@ import { withTestTranslatorBudget } from "./helpers/translator-budget";
 const EXPECTED_ADAPTER_NAMES = {
   "command-code": "command-code",
   "openai-chat": "openai-chat",
+  "ollama-native": "ollama-native",
   anthropic: "anthropic",
   "openai-responses": "openai-responses",
   google: "google",
@@ -29,7 +30,11 @@ function provider(adapter: string): OcxProviderConfig {
     // adapter accepts the placeholder URL.
     baseUrl: adapter === "mimo-free"
       ? "https://api.xiaomimimo.com/api/free-ai/openai/chat"
-      : "https://example.invalid/v1",
+      // ollama-native refuses a bare /v1 path on a host it does not recognise, rather than
+      // guessing that an arbitrary destination speaks Ollama's compatibility surface.
+      : adapter === "ollama-native"
+        ? "https://example.invalid/api"
+        : "https://example.invalid/v1",
     authMode: "key",
     apiKey: "test-key",
     defaultMaxOutputTokens: 4096,

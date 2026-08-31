@@ -114,8 +114,23 @@ report those details:
 ```
 
 When available, `input_tokens_details` can also include `cache_write_tokens`. The always-present
-detail objects are a compatibility guarantee for strict Responses clients; zero can mean “not
-reported,” not necessarily “the provider performed no such work.”
+detail objects are a compatibility guarantee for strict Responses clients; zero can mean "not
+reported," not necessarily "the provider performed no such work."
+
+### Correlating a response with its request log
+
+Every admitted HTTP Responses reply carries an `x-opencodex-request-id` header holding a
+proxy-generated id of the form `ocx-<32 hex>`. It is the key that ties a response to its row in
+the request log and in usage reporting.
+
+The proxy always generates this value and overwrites any id supplied by the caller or returned by
+the upstream, so it is unique to this proxy and safe to trust as a correlation key. The header is
+named in `Access-Control-Expose-Headers`, which is what lets browser JavaScript read it
+cross-origin — a custom `x-` header is otherwise invisible to `response.headers.get()` even when
+it is on the wire.
+
+Responses rejected at authentication or origin admission never reach this wrapper and carry no id,
+so a missing header means the request was refused before it was logged.
 
 ### WebSocket upgrade on the same path
 

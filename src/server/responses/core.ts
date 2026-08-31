@@ -86,7 +86,7 @@ import {
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
-import { modelInList, namespacedToolName } from "../../types";
+import { CODE_MODE_EXEC_TOOL_NAME, modelInList, namespacedToolName } from "../../types";
 import type {
   AdapterEvent,
   OcxConfig,
@@ -227,6 +227,7 @@ import {
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
+  transientRetryPolicyFor,
 } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
@@ -321,7 +322,7 @@ import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/cat
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
+import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, storedPoolReplayDispatchNotifier } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import {
   acquireUpstreamHostAdmission,
@@ -351,6 +352,7 @@ import { createRoutedToolSearchRestoreBlockRewrite } from "../responses-tool-sea
 import {
   createRoutedNamespaceCallRestoreRewrite,
   NamespaceToolCollisionError,
+  restoreRoutedNamespaceCalls,
   restoreRoutedNamespaceCallsInJson,
   type RoutedNamespaceToolAliases,
 } from "../../responses/namespace-tool-compat";
@@ -371,6 +373,7 @@ import { responsesJsonToSseStream } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
 import {
   emptyCompletionRetryEnabled,
+  emptyCompletionNotice,
   observeEmptyCompletion,
   guardEmptyCompletionEventStream,
 } from "./empty-completion-guard";
@@ -399,6 +402,11 @@ export function sidecarOutcomeRecorder(
       probeLeaseId: authCtx.probeLeaseId,
       probeQuotaScope: authCtx.probeQuotaScope,
       writerGeneration: authCtx.writerGeneration,
+      // A vision or web-search sidecar can return 401/403, and that is evidence about the exact
+      // stored credential it used. Without the generation it becomes an account-wide quarantine
+      // that a replacement inherits (#2892 gap 4). `main-pool` has no stored-record generation, so
+      // it keeps the unfenced account-wide semantics.
+      ...(authCtx.kind === "pool" ? { credentialGeneration: authCtx.generation } : {}),
     })
     : undefined;
 }
@@ -922,6 +930,15 @@ interface CodexPoolAccountRetryArgs {
   firstAuthCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
   firstResponse: Response;
   outcomeStatus: number;
+  /**
+   * Forbid resolving a DIFFERENT account for this retry.
+   *
+   * Set when a stored Pool 401 already spent this logical request's account budget on its own
+   * refresh and replay. The same-account gated-model retry above stays available, because it
+   * sends to the account that was already paying; only the alternate-account resolution below is
+   * out of budget.
+   */
+  sameAccountOnly?: boolean;
   upstream: AbortController;
   connectMs: number;
   passthroughEstimate?: number;
@@ -1084,7 +1101,9 @@ async function retryCodexPoolOnAlternateAccount(
   }
   // Exact account selectors may retry the same confirmed account above, but must never resolve
   // an alternate. Quota failures and a refreshed entitlement miss remain terminal.
-  if (!retryAuthCtx && firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
+  if (!retryAuthCtx && (firstAuthCtx.fixedAccount || args.sameAccountOnly === true)) {
+    return { kind: "no-alternate" };
+  }
   try {
     retryAuthCtx ??= await resolveCodexAuthContext(
         req.headers,
@@ -1433,6 +1452,8 @@ export interface HandleResponsesOptions {
   deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
   onConsumedComboFailure?: (failure: ConsumedComboFailure) => void;
+  /** A stored Pool credential was refreshed and its one allowed same-account replay was sent. */
+  onStoredPool401ReplayDispatched?: () => void;
   /** Caller-owned for Chat/Claude replay; omitted only at genuine Responses ingress. */
   translatorBudget?: TranslatorBudget;
   /**
@@ -2289,6 +2310,7 @@ export async function handleComboResponses(
       attemptRetained = true;
     };
     let consumedChildFailure: ConsumedComboFailure | undefined;
+    let storedPool401ReplayDispatched = false;
     const callbackGate = createChildPassthroughCallbackGate(options);
     let response: Response;
     try {
@@ -2315,6 +2337,7 @@ export async function handleComboResponses(
         onCodexAuthContextResolved: value => { resolvedAuth = value; },
         setTerminalOutcomeRecorder: value => { terminalRecorder = value; },
         onConsumedComboFailure: value => { consumedChildFailure = value; },
+        onStoredPool401ReplayDispatched: () => { storedPool401ReplayDispatched = true; },
         onNativePassthroughTerminal: callbackGate.onTerminal,
         onNativePassthroughCancel: callbackGate.onCancel,
       });
@@ -2420,6 +2443,10 @@ export async function handleComboResponses(
     (logCtx.attempts ??= []).push(attempt);
     attemptRetained = true;
     lastFailure = failure.response;
+    if (storedPool401ReplayDispatched) {
+      adoptFailedChildLog(childLog);
+      return lastFailure;
+    }
     if (comboFailureDecision(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     }) === "stop") {
@@ -3610,6 +3637,23 @@ async function handleResponsesInner(
     let outboundRequestBody: Record<string, unknown> | undefined;
     const declaredWireToolNames = new Set<string>();
     const declaredNamelessClientCallTypes = new Set<string>();
+    // `buildToolBridgeMaps` creates a bare alias only when the caller selected exactly one
+    // namespaced tool through a bare tool_choice. Restore that request-bounded identity before
+    // authorization checks instead of admitting the bare name into the declared set: for `exec`,
+    // the latter would also authorize the unrelated code-mode helper names.
+    const authorizedBareNamespaceToolAliases: RoutedNamespaceToolAliases = new Map(
+      [...toolBridgeMaps.toolNsMap].flatMap(([alias, identity]) =>
+        alias === identity.name
+          ? [[alias, {
+              namespace: identity.namespace,
+              name: identity.name,
+              kind: identity.freeform ? "custom" as const : "function" as const,
+            }] as const]
+          : []
+      ),
+    );
+    const restoreAuthorizedBareNamespaceToolCalls = (value: unknown): unknown =>
+      restoreRoutedNamespaceCalls(value, authorizedBareNamespaceToolAliases).value;
     let undeclaredToolGuardActive = false;
     const refreshUndeclaredToolGuard = (builtRequest: AdapterRequest): void => {
       outboundRequestBody = parseOutboundRequestBody(builtRequest.body);
@@ -3653,7 +3697,19 @@ async function handleResponsesInner(
       // however, the parsed maps also contain historical catalog entries, so only the bounded
       // current-turn wire snapshot above may authorize a call.
       if (replayedInputPrefixLength === 0) {
-        for (const name of toolBridgeMaps.declaredToolNames) declaredWireToolNames.add(name);
+        for (const name of toolBridgeMaps.declaredToolNames) {
+          // `buildToolBridgeMaps` also aliases a namespaced tool under its bare name when the
+          // caller's `tool_choice` selected it unambiguously, which the bridge needs to route the
+          // call back. For `exec` alone that alias would also switch on nested-helper
+          // normalization and re-authorize `exec_command`/`shell_command`/`apply_patch`, so it is
+          // admitted here only when the caller's own catalog declared a bare `exec`. Selecting an
+          // MCP `exec` is not a declaration of the code-mode shell tool.
+          if (
+            name === CODE_MODE_EXEC_TOOL_NAME
+            && !clientDeclaredWireToolNames.has(CODE_MODE_EXEC_TOOL_NAME)
+          ) continue;
+          declaredWireToolNames.add(name);
+        }
       }
       undeclaredToolGuardActive = (
         declaredWireToolNames.size > 0
@@ -3679,7 +3735,7 @@ async function handleResponsesInner(
       // state for exactly the passthrough traffic the guard deliberately stands down for.
       if (!undeclaredToolGuardActive || inspectionSawUndeclaredTool) return;
       if (undeclaredToolCallName(
-        payload,
+        restoreAuthorizedBareNamespaceToolCalls(payload),
         declaredWireToolNames,
         declaredNamelessClientCallTypes,
         providerExecutedCallTypes,
@@ -3691,7 +3747,7 @@ async function handleResponsesInner(
       ? (response: { id?: unknown; output?: unknown; status?: unknown }) => {
         if (inspectionSawUndeclaredTool) return;
         const restoredResponse = restoreRoutedCustomCalls(
-          response,
+          restoreAuthorizedBareNamespaceToolCalls(response),
           routedCustomToolNames,
           routedCustomToolRepairNames,
           declaredWireToolNames,
@@ -3839,7 +3895,7 @@ async function handleResponsesInner(
 
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     let oauth401ReplayAttempted = false;
-    let codexMain401ReplayAttempted = false;
+    let codex401ReplayKind: "main" | "stored" | null = null;
     const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
     let rateLimitRetries = 0;
     const rebuildAndRefetch = async (
@@ -3914,9 +3970,9 @@ async function handleResponsesInner(
       upstreamResponse.status === 401
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")
       && usesCodexForwardPoolAuth(authCtx, route.provider)
-      && !codexMain401ReplayAttempted
+      && codex401ReplayKind === null
     ) {
-      codexMain401ReplayAttempted = true;
+      codex401ReplayKind = authCtx.kind === "pool" ? "stored" : "main";
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
       const poolAuthCtx = authCtx.kind === "pool" ? authCtx : undefined;
       const poolReplay = poolAuthCtx
@@ -3978,10 +4034,19 @@ async function handleResponsesInner(
           upstream.signal,
           connectMs,
           parsed.stream,
-          providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-            providerName: route.providerName,
-            modelId: route.modelId,
-          }),
+          // The replay-dispatched signal is what bounds the rest of this logical request, so it
+          // has to describe a send that actually happened. fetchWithHeaderTimeout awaits pacing
+          // admission BEFORE calling the executor, so signalling at the call site would spend the
+          // budget even when a rejected pacing wait means nothing reaches the network. Wrapping
+          // the executor moves the signal to the last moment before the send, where a throw from
+          // here on is a genuine transport attempt.
+          storedPoolReplayDispatchNotifier(
+            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              providerName: route.providerName,
+              modelId: route.modelId,
+            }),
+            codex401ReplayKind === "stored" ? options.onStoredPool401ReplayDispatched : undefined,
+          ),
           route.provider.authMode === "forward",
         ).then(response => {
           settleObservedHostResponse();
@@ -3995,7 +4060,7 @@ async function handleResponsesInner(
       continue passthroughRecovery;
     }
 
-    if (codexMain401ReplayAttempted && upstreamResponse.status === 401) break;
+    if (codex401ReplayKind !== null && upstreamResponse.status === 401) break;
 
     // Native Responses providers return before the generic adapter recovery loop below. Keep
     // their OAuth contract identical: one pre-stream 401 forces a credential refresh and one
@@ -4196,6 +4261,14 @@ async function handleResponsesInner(
       }
 
       if (poolRetryOutcome !== undefined) {
+        // A stored Pool 401 spent this request's account budget on its own refresh and replay, so
+        // nothing afterwards may be paid for out of a DIFFERENT account. One flag carries that,
+        // rather than a status check here as well: a quota failure has no same-account move, so
+        // `sameAccountOnly` makes it terminal by refusing the alternate; the gated-model 400
+        // ladder does have one — retrying the account the refreshed roster still grants — and
+        // keeps it. An earlier revision also broke here on a non-400 outcome, which no test could
+        // justify because this flag already produced the identical result.
+        const storedReplaySpent = codex401ReplayKind === "stored";
         const retry = await retryCodexPoolOnAlternateAccount({
           req,
           config,
@@ -4206,6 +4279,7 @@ async function handleResponsesInner(
           firstAuthCtx: authCtx,
           firstResponse: upstreamResponse,
           outcomeStatus: poolRetryOutcome,
+          sameAccountOnly: storedReplaySpent,
           upstream,
           connectMs,
           passthroughEstimate,
@@ -4406,6 +4480,9 @@ async function handleResponsesInner(
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         routedNamespaceToolAliases.size > 0
           ? createRoutedNamespaceCallRestoreRewrite(routedNamespaceToolAliases)
+          : undefined,
+        authorizedBareNamespaceToolAliases.size > 0
+          ? createRoutedNamespaceCallRestoreRewrite(authorizedBareNamespaceToolAliases)
           : undefined,
         hasResponsesItemIdRepair(repairConfig)
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
@@ -4636,8 +4713,12 @@ async function handleResponsesInner(
           restoreImageGenCallsInJson(text, imageGenCallAliases),
           routedNamespaceToolAliases,
         );
-        const restored = restoreRoutedCustomCallsInJson(
+        const restoredAuthorizedBareNamespace = restoreRoutedNamespaceCallsInJson(
           restoredNamespace,
+          authorizedBareNamespaceToolAliases,
+        );
+        const restored = restoreRoutedCustomCallsInJson(
+          restoredAuthorizedBareNamespace,
           routedCustomToolNames,
           routedCustomToolRepairNames,
           declaredWireToolNames,
@@ -4963,9 +5044,21 @@ async function handleResponsesInner(
   // through web-search instead of being swallowed. runTurn adapters never enter this branch.
   if (canRunWebSearch && wsPlan) {
     parsed.context.tools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
+    // Resolve the mutable route at send time: a 429 rotation replaces route.provider, so retaining
+    // one pre-rotation providerFetch would keep the old credential and transport pin.
+    const routedProviderFetch = ((input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
+      providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+        providerName: route.providerName,
+        modelId: route.modelId,
+      })(input, init)) as typeof globalThis.fetch;
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
-      incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      incomingMeta: {
+        headers: selectedForwardHeaders,
+        abortSignal: options.abortSignal,
+        translatorBudget,
+        providerFetch: routedProviderFetch,
+      },
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
       anthropicSidecar: wsPlan.anthropicSidecar,
@@ -5217,10 +5310,7 @@ async function handleResponsesInner(
         // result (#2472). Retrying by default would re-send a turn that may already have had
         // billable side effects, so the honest default is observability, not recovery.
         : observeEmptyCompletion(eventSource, () => {
-          console.warn(
-            `[opencodex] ${route.providerName}/${route.modelId} completed with no output text `
-            + "and no tool call. Set \"emptyCompletionRetry\": true to retry such turns once.",
-          );
+          console.warn(emptyCompletionNotice(route.providerName, route.modelId));
         });
       const sseStream = bridgeToResponsesSSE(
         guardedSource, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
@@ -5415,6 +5505,13 @@ async function handleResponsesInner(
       { headers: { "Content-Type": "application/json" } },
     );
   }
+  // One request-scoped transient-retry budget owner, declared here so BOTH the initial send
+  // and the later recovery refetches (429, key/account rotation, OAuth replay) share it. A
+  // per-leg budget would let a request that recovers several times multiply upstream load.
+  let transientSendsUsed = 0;
+  const noteTransientSends = (used: number): void => { transientSendsUsed += Math.max(0, used); };
+  const remainingTransientSendBudget = (budget: number): number =>
+    Math.max(1, budget - transientSendsUsed);
   try {
     initialRequest = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
     refreshRoutedNamespaceToolAliases(initialRequest);
@@ -5469,7 +5566,13 @@ async function handleResponsesInner(
       // direct Google AI Studio only (Vertex/Antigravity use fetchResponse above). Other
       // adapters keep reset-only retry so combo failover still hops on the first 5xx
       // instead of burning ~1.2s of same-target retries per hop.
-      const fetchWithRetryPolicy = route.provider.adapter === "google" ? fetchWithTransientRetry : fetchWithResetRetry;
+      // #2643: an opted-in key-auth openai-chat provider also gets transient-5xx retry. The
+      // legacy direct-Google exception is preserved exactly; every other adapter still keeps
+      // reset-only semantics so combo failover hops on the first 5xx.
+      const transientPolicy = transientRetryPolicyFor(route.provider);
+      const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
+        ? fetchWithTransientRetry
+        : fetchWithResetRetry;
       upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
           noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate, recovery);
@@ -5483,7 +5586,13 @@ async function handleResponsesInner(
               modelId: route.modelId,
             }));
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(builtInitialRequest.url) },
+        {
+          abortSignal: upstream.signal,
+          label: safeHostLabel(builtInitialRequest.url),
+          ...(transientPolicy
+            ? { attempts: transientPolicy.attempts, onSendsConsumed: noteTransientSends }
+            : {}),
+        },
       );
     }
   } catch (err) {
@@ -5572,13 +5681,36 @@ async function handleResponsesInner(
               }),
             });
           }
-          return await fetchWithHeaderTimeout(retryRequest.url, {
-            method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
-          }, upstream.signal, connectMs, parsed.stream,
-            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              providerName: route.providerName,
-              modelId: route.modelId,
-            }));
+          // #2643 review: this leg used to call fetchWithHeaderTimeout directly, so an
+          // opted-in provider's transient-5xx policy applied to the initial send and to
+          // native chat but was silently bypassed here — a 429 that recovered into a
+          // retryable 503 got no retry on the Responses path. Route it through the same
+          // selection, and pass what is LEFT of the request-scoped budget rather than a
+          // fresh one, so a recovery loop cannot multiply total upstream sends.
+          const refetchTransientPolicy = transientRetryPolicyFor(route.provider);
+          const refetchWithPolicy = (route.provider.adapter === "google" || refetchTransientPolicy)
+            ? fetchWithTransientRetry
+            : fetchWithResetRetry;
+          return await refetchWithPolicy(
+            recoveryKind => fetchWithHeaderTimeout(retryRequest.url,
+              applyUpstreamRecoveryInit({
+                method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
+              }, recoveryKind), upstream.signal, connectMs, parsed.stream,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                providerName: route.providerName,
+                modelId: route.modelId,
+              })),
+            {
+              abortSignal: upstream.signal,
+              label: safeHostLabel(retryRequest.url),
+              ...(refetchTransientPolicy
+                ? {
+                  attempts: remainingTransientSendBudget(refetchTransientPolicy.attempts),
+                  onSendsConsumed: noteTransientSends,
+                }
+                : {}),
+            },
+          );
         } finally {
           retryRequest.releaseBodyObservation?.();
         }
@@ -5986,7 +6118,10 @@ async function handleResponsesInner(
         }
         // Same #1851 scope guard as the initial send: transient-5xx retry only for direct
         // Google AI Studio; every other adapter keeps reset-only semantics here.
-        const fetchContinuationWithRetryPolicy = route.provider.adapter === "google" ? fetchWithTransientRetry : fetchWithResetRetry;
+        const continuationTransientPolicy = transientRetryPolicyFor(route.provider);
+        const fetchContinuationWithRetryPolicy = (route.provider.adapter === "google" || continuationTransientPolicy)
+          ? fetchWithTransientRetry
+          : fetchWithResetRetry;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
             noteAttemptSend(logCtx.activeAttempt, continuationEstimate, recovery ?? replayKind);
@@ -6006,7 +6141,19 @@ async function handleResponsesInner(
               }),
             );
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(builtContinuationRequest.url) },
+          {
+            abortSignal: upstream.signal,
+            label: safeHostLabel(builtContinuationRequest.url),
+            // Same request-scoped budget as the initial send and the 429/rotation refetches:
+            // a terminal-guard continuation is another leg of ONE request, so handing it a
+            // fresh `attempts` would let one request exceed the configured total-send ceiling.
+            ...(continuationTransientPolicy
+              ? {
+                attempts: remainingTransientSendBudget(continuationTransientPolicy.attempts),
+                onSendsConsumed: noteTransientSends,
+              }
+              : {}),
+          },
           );
       } finally {
         builtContinuationRequest.releaseBodyObservation?.();

@@ -511,19 +511,25 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             <div className="font-semibold">{t("dash.webSearchSidecar")}</div>
             <div className="muted setting-hint">{t("dash.webSearchSidecarHint")}</div>
           </div>
+          {/* Same two-row shape as the vision card: the model select owns the first row,
+              and the secondary control sits right-aligned on its own row below. Sharing the
+              structure is what keeps the two cards' first rows on one line — the streaming
+              label used to sit beside the select and wrap to three lines in ko/ja/tr. */}
           <div className="dash-delegation-controls">
-            <Select
-              value={sidecar?.webSearch.model ?? "gpt-5.6-luna"}
-              options={sidecarModels}
-              onChange={model => {
-                void saveSidecar({ webSearch: webSearchSidecarSelectionForModel(models, sidecarModels, model) });
-              }}
-              disabled={!sidecar || sidecarSaving}
-              label={t("dash.sidecarModel")}
-              align="right"
-            />
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }} title={t("dash.webSearchStreamHint")}>
-              <span className="muted setting-hint">{t("dash.webSearchStream")}</span>
+            <div className="dash-sidecar-select-row">
+              <Select
+                value={sidecar?.webSearch.model ?? "gpt-5.6-luna"}
+                options={sidecarModels}
+                onChange={model => {
+                  void saveSidecar({ webSearch: webSearchSidecarSelectionForModel(models, sidecarModels, model) });
+                }}
+                disabled={!sidecar || sidecarSaving}
+                label={t("dash.sidecarModel")}
+                align="right"
+              />
+            </div>
+            <div className="dash-sidecar-trailing-row" title={t("dash.webSearchStreamHint")}>
+              <span className="muted setting-hint dash-sidecar-toggle-label">{t("dash.webSearchStream")}</span>
               <button
                 type="button"
                 className={`switch ${sidecar?.webSearch.streamRoutedModelOutput ? "on" : ""}`}
@@ -546,7 +552,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             <div className="muted setting-hint">{t("dash.visionSidecarHint")}</div>
           </div>
           <div className="dash-delegation-controls">
-            <div className="dash-vision-select-row">
+            <div className="dash-sidecar-select-row">
               <Select
                 value={visionModel}
                 options={[{ value: "", label: t("dash.visionOff") }, ...visionModels]}
@@ -578,7 +584,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
                 label={`${t("dash.visionSidecar")} — ${t("dash.injectionEffortLabel")}`}
               />
             </div>
-            <div className="dash-vision-advanced-row">
+            <div className="dash-sidecar-trailing-row">
               <button
                 type="button"
                 ref={visionAdvancedTriggerRef}

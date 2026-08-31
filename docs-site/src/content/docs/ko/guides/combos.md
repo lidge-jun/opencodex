@@ -101,6 +101,18 @@ ocx combo set balanced \
 가중치는 비율이며 퍼센트가 아닙니다. `2,1`과 `200,100`은 같은 비율을 뜻합니다. 의도를 분명히 보여 주는 작은 값을 쓰는 편이 좋습니다.
 :::
 
+### `random`: 요청마다 가중 추첨
+
+`random`은 요청마다 적합한 대상 하나를 `weight`에 비례한 확률로 추첨합니다. 각 요청은 독립적으로 추첨되므로 `round-robin`의 결정적 패턴이나 고정성 없이 트래픽이 대상 전체에 분산됩니다. `stickyLimit`은 이 전략에 영향을 주지 않습니다.
+
+### `least-used`: 성공 횟수가 가장 적은 대상 우선
+
+`least-used`는 이 opencodex 프로세스가 기록한 성공 요청 수가 가장 적은 적합한 대상으로 각 요청을 라우팅합니다. 재시작하면 횟수는 0부터 시작하며, 동률이면 설정 순서를 유지합니다. `weight`와 `stickyLimit`은 이 전략에 영향을 주지 않습니다.
+
+### `reset-window`: 가장 가까운 할당량 재설정 따르기
+
+`reset-window`는 캐시된 공급자 할당량 스냅샷에서 가장 가까운 다음 기간 재설정(5시간, 주간, 월간 또는 사용자 지정)이 표시되는 적합한 대상으로 각 요청을 라우팅합니다. 이렇게 하면 가장 먼저 새로 충전되는 공급자를 사용합니다. 최신 할당량 데이터가 없는 대상과 동률인 대상은 설정 순서를 유지합니다. `weight`와 `stickyLimit`은 이 전략에 영향을 주지 않습니다.
+
 ## 대상 실패 시 동작
 
 콤보 실패는 **홉** 실패와 **종결** 실패로 나뉩니다.
@@ -217,9 +229,9 @@ ocx combo remove <id> --yes
 | 필드 | 필수 | 기본값 | 규칙 |
 | --- | --- | --- | --- |
 | `targets` | 예 | — | 설정된 `{ provider, model, weight? }` 대상의 비어 있지 않은 순서가 있는 배열이어야 합니다. 중복된 provider/model 쌍은 거부됩니다. |
-| `targets[].weight` | 아니요 | `1` | 1에서 10,000 사이의 정수입니다. round-robin에서 사용되며 failover에서는 무시됩니다. |
-| `strategy` | 아니요 | `"failover"` | `"failover"` 또는 `"round-robin"`입니다. |
-| `stickyLimit` | 아니요 | `1` | round-robin 선택 한 번당 성공 요청 1에서 100회 사이의 정수입니다. |
+| `targets[].weight` | 아니요 | `1` | 1에서 10,000 사이의 정수입니다. `round-robin`과 `random`에서 사용되며, `failover`, `least-used`, `reset-window`에서는 무시됩니다. |
+| `strategy` | 아니요 | `"failover"` | 허용되는 값은 `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`입니다. |
+| `stickyLimit` | 아니요 | `1` | 한 번의 `round-robin` 선택에 유지되는 성공 요청 수로, 1에서 100 사이의 정수입니다. `round-robin`에만 적용됩니다. |
 | `defaultEffort` | 아니요 | `null` | `low`, `medium`, `high`, `xhigh`, `max`, 또는 `ultra`입니다. 호출자가 effort를 생략하고 대상이 지원을 광고할 때만 적용됩니다. |
 | `alias` | 아니요 | 없음 | 선택적으로 앞뒤 공백을 제거한 공개 모델 ID입니다. 위의 alias 규칙을 따릅니다. 빈 값은 alias 없음으로 저장됩니다. |
 | `nativeAlias` | 아니요 | `false` | 현재 지원되는 bare native alias가 routing/catalog 우선권을 갖도록 명시적으로 허용합니다. |

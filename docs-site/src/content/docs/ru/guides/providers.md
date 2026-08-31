@@ -447,15 +447,23 @@ MCP, запись экрана и computer-use доступны как хуки 
 
 ### Ollama Cloud
 
-Ollama Cloud — это размещённая в облаке (не локальная) Ollama, OpenAI-совместимая по адресу
-`https://ollama.com/v1`, с ключом со страницы
-[ollama.com/settings/keys](https://ollama.com/settings/keys). opencodex классифицирует её облачную
+Ollama Cloud — это размещённая в облаке (не локальная) Ollama. Укажите адрес
+`https://ollama.com/v1` и ключ со страницы
+[ollama.com/settings/keys](https://ollama.com/settings/keys). opencodex обращается к ней через
+собственный REST API Ollama (`POST /api/chat`), а не через OpenAI-совместимую поверхность, и
+получает список моделей от провайдера, поэтому новые модели Ollama Cloud появляются без
+изменения конфигурации. opencodex классифицирует её облачную
 линейку по поддержке изображений, чтобы [vision-сайдкар](/ru/guides/sidecars/) включался
 только для текстовых моделей. Текстовые модели (например, `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`,
 `qwen3-coder`, `minimax-m2.x`, `nemotron-3-*`) перечислены в `noVisionModels`; модели с нативной
 поддержкой изображений (например, `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`,
 `gemini-3-flash-preview`) — нет. Сопоставление терпимо к тегам Ollama вида `:size`, поэтому
 `gpt-oss` покрывает и `gpt-oss:120b`, и `gpt-oss:20b`.
+
+Ollama в документации указывает, что структурированный вывод сейчас не поддерживается на Ollama
+Cloud. Поэтому для канонического `ollama-cloud` opencodex отклоняет такие запросы
+(`text.format`) явной ошибкой, а не молча возвращает свободную прозу; локальные и пользовательские
+`ollama-native` конечные точки сохраняют нативное поведение `format` Ollama.
 
 ## 4. Локальные провайдеры
 

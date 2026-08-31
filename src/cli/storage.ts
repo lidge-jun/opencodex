@@ -173,7 +173,16 @@ async function policy(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     }
     const body: Record<string, unknown> = {};
     if (enabled !== undefined) body.enabled = enabled === "true";
-    if (percent !== undefined) body.percent = percent;
+    // The policy target is nested. A top-level `percent` is not part of the PUT contract:
+    // `normalizeStorageCleanupPolicy` reads only `target`, so the field was dropped and the
+    // previously stored target survived. `--percent 10` on a policy still holding the
+    // default 25% therefore reported success while leaving cleanup authorized to delete
+    // more than the operator asked for.
+    //
+    // An out-of-range value is deliberately still sent: the server owns the 1-100
+    // vocabulary and answers with a named 400, which is a rejected write rather than the
+    // silent wrong write this replaces.
+    if (percent !== undefined) body.target = { removeOldestPercent: percent };
     if (mode !== undefined) body.mode = mode;
     if (schedule !== undefined) body.schedule = schedule;
     if (Object.keys(body).length === 0) {

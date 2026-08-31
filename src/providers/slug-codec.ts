@@ -140,13 +140,21 @@ export function resolveSlugSelection(
   // selection as provider-qualified made `a/b` resolve against provider "a", so the same
   // collision reported ambiguous through the dash spelling and unambiguous through the slash
   // spelling — the exact asymmetry this resolver exists to remove.
-  const qualified = selection.startsWith(`${provider}/`)
+  const matched: string[] = [];
+  let exact: string | undefined;
+  const ids = [...knownIds];
+  // A selection that starts with `<provider>/` is genuinely ambiguous: it reads as the
+  // provider-qualified form of `b`, but it is ALSO the native spelling of a self-namespaced
+  // id `provider/b`. Stripping the prefix unconditionally erased that second reading, so a
+  // published `acme/turbo` became unreachable while a sibling `turbo` silently absorbed the
+  // selection. The native id wins when the roster actually publishes it, because only then is
+  // the literal spelling known to name a real row.
+  const namesNativeId = ids.some(id => id === selection);
+  const qualified = !namesNativeId && selection.startsWith(`${provider}/`)
     ? selection
     : routedSlug(provider, selection);
   const selectionKey = slugEquivalenceKey(qualified);
-  const matched: string[] = [];
-  let exact: string | undefined;
-  for (const id of knownIds) {
+  for (const id of ids) {
     if (slugEquivalenceKey(routedSlug(provider, id)) !== selectionKey) continue;
     matched.push(id);
     if (id === selection || `${provider}/${id}` === selection) exact = id;

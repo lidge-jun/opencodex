@@ -405,6 +405,10 @@ export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
   { endpoint: "/v1/chat/completions", bearer: "accepted", dedicated: "accepted", xApiKey: "rejected" },
   { endpoint: "/v1/messages", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   { endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
+  // #809: least-privilege catalog read for remote Codex clients. Same admission set as
+  // /v1/models and for the same reason — it forwards no caller credential upstream — so a
+  // remote client no longer needs an admin token just to read the model catalog.
+  { endpoint: "/v1/catalog", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
 ];
 
 /** Whether `token` is the environment-provided management secret. */
@@ -578,6 +582,11 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     delete canonicalCandidate.modelContextWindows;
     // User-owned soft compaction policy; it does not alter the canonical transport seed.
     delete canonicalCandidate.modelAutoCompactTokenLimits;
+    // Same category: annotating empty tool outputs is a user-owned request-shaping preference,
+    // not part of the canonical transport seed. Without this the field is accepted by
+    // validation and then rejected by the seed comparison, so canonical OpenAI could never
+    // set OR clear it — the value was admitted and then refused in the same request.
+    delete canonicalCandidate.annotateEmptyToolOutputs;
     const canonical = seed && sameCanonicalProviderSeed(canonicalCandidate, seed);
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;

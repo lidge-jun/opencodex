@@ -35,6 +35,7 @@ import * as windowsAcl from "../src/lib/windows-secret-acl";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
 import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
 import { nextAtomicTempSequence } from "../src/config/atomic-write";
+import { flushConfigDirHardeningForTests } from "../src/config/paths";
 import { providerManagementConfigError } from "../src/server/auth-cors";
 let testDir = "";
 
@@ -2613,25 +2614,37 @@ describe("config.ts – Windows ACL hardening integration", () => {
     }
   });
 
-  test("hardenConfigDir delegates to hardenSecretDir with required:false on win32", () => {
+  test("hardenConfigDir delegates to one async optional flight on win32", async () => {
     const origPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
-      const spy = spyOn(windowsAcl, "hardenSecretDir").mockReturnValue({ ok: true });
+      let release!: () => void;
+      const pending = new Promise<void>(resolve => { release = resolve; });
+      const spy = spyOn(windowsAcl, "hardenSecretDirAsync").mockImplementation(async () => {
+        await pending;
+        return { ok: true };
+      });
       mkdirSync(testDir, { recursive: true });
       hardenConfigDir();
-      expect(spy).toHaveBeenCalledWith(testDir, { required: false });
-      spy.mockRestore();
+      hardenConfigDir();
+      try {
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy).toHaveBeenCalledWith(testDir, { required: false });
+      } finally {
+        release();
+        await flushConfigDirHardeningForTests();
+        spy.mockRestore();
+      }
     } finally {
       Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
     }
   });
 
-  test("hardenConfigDir does not call hardenSecretDir on non-Windows", () => {
+  test("hardenConfigDir does not call async ACL hardening on non-Windows", () => {
     const origPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     try {
-      const spy = spyOn(windowsAcl, "hardenSecretDir");
+      const spy = spyOn(windowsAcl, "hardenSecretDirAsync");
       mkdirSync(testDir, { recursive: true });
       hardenConfigDir();
       expect(spy).not.toHaveBeenCalled();

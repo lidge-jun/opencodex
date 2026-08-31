@@ -78,6 +78,31 @@ describe("readGrokStatus", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // A fence written by the old per-model shape (before model_providers migration) carries
+  // base_url on each [model.*] table and has no [model_providers.opencodex] block.
+  test("falls back to per-model base_url for a legacy-shape fence", () => {
+    const { root, grokHome } = tempGrokHome();
+    try {
+      const legacy = [
+        "# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>",
+        "[model.ocx-gpt-5-6-sol]",
+        'model = "gpt-5.6-sol"',
+        'base_url = "http://127.0.0.1:10190/v1"',
+        'api_backend = "responses"',
+        'api_key = "opencodex-loopback"',
+        "# <<< opencodex managed block <<<",
+      ].join("\n");
+      writeFileSync(join(grokHome, "config.toml"), legacy, "utf8");
+
+      const status = readGrokStatus({ grokHome });
+      expect(status.present).toBe(true);
+      expect(status.baseUrl).toBe("http://127.0.0.1:10190/v1");
+      expect(status.models.map(m => m.id)).toEqual(["gpt-5.6-sol"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 /**

@@ -73,6 +73,21 @@ when a maintainer steps down.
 - Direct pushes are reserved for maintainer-owned integration work, urgent repairs, or incident
   recovery. The same CI and documentation requirements still apply.
 - Promotion from `dev` to `main` and npm releases is maintainer-controlled.
+- **Closing out a release includes moving `dev`'s version line forward.** A published
+  release leaves `dev` carrying a version at or behind it, and
+  `tests/release-version-line.test.ts` then fails on `dev` and on every pull request
+  opened against it — red that contributors inherit and cannot fix from their own diff.
+  This was repaired by hand four times (`32529c2b2`, `e4a85d134`, `076ad3036`,
+  `befcac3e1`) before it was automated.
+
+  `.github/workflows/dev-version-bump.yml` now opens that bump as a pull request when a
+  release publishes. Merging it is part of closing the release; a bot cannot, because
+  `Protect dev` requires an approving review and code-owner sign-off. Two caveats worth
+  knowing: the workflow runs from the DEFAULT branch, so it only fires once it has been
+  promoted to `main`; and a pull request opened with `GITHUB_TOKEN` does not start
+  `pull_request` workflows, so the bump pull request arrives without CI. To re-drive a
+  missed run by hand: `bun scripts/bump-dev-version.ts <released-version> package.json`,
+  then open the pull request normally.
 
 ## The retired `dev2-go` line
 

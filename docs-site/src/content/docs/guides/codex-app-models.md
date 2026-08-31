@@ -105,6 +105,11 @@ them by ignoring `visibility`. See [Codex Desktop native-allowlist compatibility
 for the command, disable-key semantics, and safety constraints.
 
 ## Integration path
+
+`ocx init`, `ocx start`, and `ocx sync` wire the shared Codex config and catalog into the proxy; see
+[Codex Integration](/guides/codex-integration/) for config injection, catalog sync, shims, WebSocket
+fallback, and restore mechanics.
+
 ## Native quota fallback limitation
 
 When the Codex app exhausts its native five-hour quota it can switch to a reserve
@@ -136,11 +141,6 @@ tests. What is not established is whether the app still sends the configured mod
 mode is active; if the client rewrites or refuses it before the request leaves, no proxy-side
 setting changes that. Treat the explicit-selection route as worth trying rather than a confirmed
 workaround.
-
-
-`ocx init`, `ocx start`, and `ocx sync` wire the shared Codex config and catalog into the proxy; see
-[Codex Integration](/guides/codex-integration/) for config injection, catalog sync, shims, WebSocket
-fallback, and restore mechanics.
 
 ## Why routed models show up
 

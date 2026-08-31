@@ -78,6 +78,7 @@ import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerS
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { providerServiceTierConfigError } from "./provider-capability-config";
+import { providerEmptyToolOutputConfigError } from "../../config/provider-validation";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -186,6 +187,17 @@ function applyProviderPatchFields(
   if (Object.hasOwn(rawBody, "liveModels")) {
     if (typeof rawBody.liveModels !== "boolean") return { error: "liveModels must be a boolean" };
     next.liveModels = rawBody.liveModels;
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "annotateEmptyToolOutputs")) {
+    const value = rawBody.annotateEmptyToolOutputs;
+    if (value === null) {
+      delete next.annotateEmptyToolOutputs;
+    } else if (typeof value === "boolean") {
+      next.annotateEmptyToolOutputs = value;
+    } else {
+      return { error: "annotateEmptyToolOutputs must be a boolean or null" };
+    }
     touched = true;
   }
   if (Object.hasOwn(rawBody, "xaiResponsesOptIn")) {
@@ -413,7 +425,8 @@ function canonicalOpenAiBudgetPatchError(
   }
   const applied = applyProviderPatchFields("openai", seed, rawBody, keys, config);
   if ("error" in applied) return applied.error;
-  return providerManagementConfigError("openai", applied.next);
+  return providerManagementConfigError("openai", applied.next)
+    ?? providerEmptyToolOutputConfigError("openai", applied.next);
 }
 
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -485,7 +498,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ error: "provider reload target unavailable" }, 404);
     }
     const provider = diskConfig.providers[name]!;
-    const providerError = providerManagementConfigError(name, provider);
+    const providerError = providerManagementConfigError(name, provider)
+      ?? providerEmptyToolOutputConfigError(name, provider);
     if (providerError) return jsonResponse({ error: "provider reload target invalid" }, 409);
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(
       diskConfig.codexAccountNamespaces,
@@ -544,7 +558,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     let body: { name?: unknown; provider?: unknown; setDefault?: boolean };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const name = typeof body.name === "string" ? body.name.trim() : "";
-    const providerError = providerManagementConfigError(name, body.provider);
+    const providerError = providerManagementConfigError(name, body.provider)
+      ?? providerEmptyToolOutputConfigError(name, body.provider);
     if (providerError) return jsonResponse({ error: providerError }, 400);
     const serviceTierError = providerServiceTierConfigError(name, body.provider);
     if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
@@ -589,6 +604,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const submittedModelAutoCompactTokenLimits = Object.hasOwn(prov, "modelAutoCompactTokenLimits");
     const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
+    // Same trap, one more field: DeepSeek carries a registry default of `true` for
+    // annotateEmptyToolOutputs, so enrichment cannot distinguish "the client omitted it"
+    // from "the registry supplied it" either. Without this sample, an unrelated edit that
+    // omits the key resurrects the registry default over an operator's explicit `false`.
+    const submittedAnnotateEmptyToolOutputs = Object.hasOwn(prov, "annotateEmptyToolOutputs");
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
@@ -619,6 +639,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     if (!submittedContextWindow && existing?.contextWindow !== undefined) {
       prov.contextWindow = existing.contextWindow;
+    }
+    // `!== undefined` rather than a truthiness test: the whole point of this field is that
+    // an explicit `false` must survive, and `false` is falsy.
+    if (!submittedAnnotateEmptyToolOutputs && existing?.annotateEmptyToolOutputs !== undefined) {
+      prov.annotateEmptyToolOutputs = existing.annotateEmptyToolOutputs;
     }
     if (existing?.modelContextWindows) {
       // When the client did send a map, its keys win and the user's other keys survive. When
@@ -724,7 +749,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (applied.editorTouched && !pacingOnly) {
       const providerError = canonicalBudgetOnly
         ? canonicalOpenAiBudgetPatchError(next, rawBody, keys, config)
-        : providerManagementConfigError(name, next);
+        : providerManagementConfigError(name, next)
+          ?? providerEmptyToolOutputConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
       if (!canonicalBudgetOnly) {
         const serviceTierError = providerServiceTierConfigError(name, next);
@@ -757,7 +783,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (replay.editorTouched && !pacingOnly) {
         const syncError = canonicalBudgetOnly
           ? canonicalOpenAiBudgetPatchError(replay.next, rawBody, keys, config)
-          : providerManagementConfigError(name, replay.next);
+          : providerManagementConfigError(name, replay.next)
+            ?? providerEmptyToolOutputConfigError(name, replay.next);
         if (syncError) {
           replayError = syncError;
           return;

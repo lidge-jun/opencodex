@@ -27,6 +27,7 @@ const EXEC_DESCRIPTION =
 
 const WIRE_MODELS: Record<AdapterWire, string> = {
   "openai-chat": "grok-4.6",
+  "ollama-native": "glm-5.3-flash",
   anthropic: "claude-haiku-4-5",
   google: "gemini-3.5-flash",
   "command-code": "deepseek/deepseek-v4-flash",
@@ -38,6 +39,7 @@ const WIRE_MODELS: Record<AdapterWire, string> = {
 function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfig {
   const baseUrls: Record<AdapterWire, string> = {
     "openai-chat": "https://api.x.ai/v1",
+    "ollama-native": "https://ollama.com/v1",
     anthropic: "https://api.anthropic.com",
     google: "https://generativelanguage.googleapis.com",
     "command-code": "https://api.commandcode.ai",
@@ -212,7 +214,8 @@ async function outbound(adapterId: string, parsed: OcxParsedRequest): Promise<st
 
 function advertisedToolNames(wire: AdapterWire, body: string): string[] {
   const parsed = JSON.parse(body) as Record<string, unknown>;
-  if (wire === "openai-chat") {
+  if (wire === "openai-chat" || wire === "ollama-native") {
+    // Ollama's native /api/chat declares tools with the same {type,function:{name}} shape.
     const tools = parsed.tools as Array<{ function?: { name?: string } }> | undefined;
     return (tools ?? []).flatMap(tool => typeof tool.function?.name === "string" ? [tool.function.name] : []);
   }
@@ -475,6 +478,14 @@ describe("registry-derived routed tool conformance", () => {
       parsed.options.toolChoice = { allowedTools: ["exec"], mode: "required" };
       if (contract.wire === "kiro") {
         await expect(outbound(adapterId, parsed)).rejects.toThrow("Kiro supports only automatic tool choice or tool_choice:none");
+        continue;
+      }
+      if (contract.wire === "ollama-native") {
+        // Ollama's native chat API has no tool_choice field, so a "required" selector cannot be
+        // enforced on the wire. The adapter refuses rather than advertising an unenforced choice.
+        await expect(outbound(adapterId, parsed)).rejects.toThrow(
+          "ollama-native does not support required or exact named tool_choice",
+        );
         continue;
       }
       const body = await outbound(adapterId, parsed);

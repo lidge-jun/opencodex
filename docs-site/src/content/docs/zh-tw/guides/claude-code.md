@@ -14,7 +14,9 @@ Code 可以使用每一個已路由的供應商——包括 OAuth 登入、帳�
 
 **實驗性、opt-in** 的 Claude 帳號池（`anthropicAccountPool.enabled`）會在這些 OAuth 帳號之間加入
 sticky session affinity 與 429 冷卻故障轉移。僅對**新**工作階段，`anthropicAccountPool.strategy`
-會在合格帳號之間選擇：`quota`（預設）在用量高於 `autoSwitchThreshold` 時挑選已知 5 小時用量最低者；
+會在合格帳號之間選擇：`quota`（預設）在用量高於 `autoSwitchThreshold` 時，依
+`anthropicAccountPool.quotaWindow` 所設定的視窗挑選已知用量最低者（`five-hour` 為預設，亦可選
+`weekly` 或 `max-utilization`）；
 `round-robin` 平均分散（`stickyLimit`，預設 `1`）；`fill-first` 一直使用作用中帳號直到冷卻、重新認證
 或達到閾值，然後前進。它**預設關閉**、會在 GUI 顯示警告，而且尚未經過實戰驗證——Anthropic 可能
 限制看起來像自動輪換的帳號；輪換並不能保護你免受供應商執行機制的處置。
@@ -26,6 +28,8 @@ sticky session affinity 與 429 冷卻故障轉移。僅對**新**工作階段�
 - Affinity 是**程序本機**的（proxy 重啟後就會遺失）。
 - **401/403** 憑證失敗會隔離該帳號（`needsReauth`），直到重新認證前都不會參與選擇。
 - 如果每個合格帳號都在冷卻，proxy 會回傳 **429**（不是 401），並在已知時附上 `Retry-After`。
+- 復原（包括 429 容錯移轉）會使用 `quotaWindow` 為合格的替代帳號排序，且不改變現有的冷卻或
+  容錯移轉上限；`round-robin` 會忽略 `quotaWindow`。
 
 請見 [Configuration](/zh-tw/reference/configuration/#anthropicaccountpool-experimental)。
 

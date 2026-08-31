@@ -67,7 +67,7 @@ cross-route credential fallback не существует. Строки API GPT-
 
 | Поле | Тип | Значение |
 | --- | --- | --- |
-| `adapter` | `string` | Один из `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (или alias `azure`). |
+| `adapter` | `string` | Один из `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `ollama-native`, `azure-openai` (или alias `azure`). |
 | `baseUrl` | `string` | Базовый URL API upstream'а. Большинство built-in fixed-endpoint'ов игнорируют несовпадение; collision-safe key-preset'ы сохраняют старый custom destination с тем же именем. |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | Опциональное клиентское выравнивание начала исходящих запросов, отдельное от учёта использования, биллинга и индикаторов rate limit апстрима. Лимит провайдера действует на все модели, а `models` сопоставляется с точными ID моделей апстрима и может только увеличить задержку. Ожидание очереди не расходует таймаут заголовков ответа. Поддерживаются HTTP, Responses WebSocket и явные вызовы адаптеров `fetchResponse`/`runTurn`. |
 | `responsesPath?` | `string` | Relative resource path для key-auth запросов `openai-responses`. Должен начинаться с `/` и не может содержать scheme, query или fragment. |
@@ -93,6 +93,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `headers?` | `Record<string, string>` | Дополнительные upstream-header'ы. Заголовки авторизации, cookie, API-key-header'ы, встроенные переводы строк и невалидные имена отклоняются. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Предпочтения по умолчанию для OpenRouter (`order`, `only`, `allowFallbacks`); валидно только для канонического OpenRouter с `openai-chat`. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | Exact override по model id, которые полностью заменяют provider-wide preference для OpenRouter. |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` | Предпочтения по умолчанию для Vercel AI Gateway: `order`, `only` и `sort` (`"cost"` \| `"ttft"` \| `"tps"`); допустимо только для канонического Vercel AI Gateway с `openai-chat`. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | Режим аутентификации (по умолчанию `key`). OAuth/subscription credential'ы хранятся вне `config.json`; `local` разрешён только для тех провайдеров, где это допускает registry-entry. |
 | `codexAccountMode?` | `"pool" \| "direct"` | Только для канонического `openai`; по умолчанию Pool. Direct обходит состояние пула. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Переопределение политики Token Guardian для этого OAuth-провайдера. |
@@ -102,7 +103,9 @@ cross-route credential fallback не существует. Строки API GPT-
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Responses delivery enum по моделям; переписывает уже существующее поле delivery. |
 | `modelAdapters?` | `Record<string, string>` | Wire-override по модели для `openai-chat` или `openai-responses` в gateway с несколькими wire-форматами. Явные записи имеют приоритет над default'ами registry; preset DeepSeek может выбирать native Responses для `deepseek-v4-flash`, а GitHub Copilot объявляет Responses-only default'ы для семейства GPT-5 (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`), потому что эти модели отклоняют `/chat/completions` для агентного трафика. Модели без встроенного default'а (например, `gpt-5.4-nano`) можно включить здесь. Single-wire upstream pin'ы и canonical ChatGPT forward override не принимают. |
 | Opt-in xAI Responses (панель) | переключатель | Только для `xai`: атомарно задаёт или удаляет записи `modelAdapters` для `grok-4.5` и `grok-4.6`. Одна запись отображается как смешанное состояние до следующего переключения. Остальные override и поведение tier не меняются. |
+| `xaiResponsesXSearch?` | `boolean` | По умолчанию отключено. Для назначения xAI Responses декларация `x_search`, размещённая у провайдера, добавляется только тогда, когда действующий инструмент `web_search` сохраняется после окончательной нормализации запроса. Существующие декларации не дублируются, селекторы вызывающей стороны `tool_choice`/`allowed_tools` никогда не расширяются, и эта настройка не связана с параметрами `search.xSearch` сайдкара веб-поиска. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Opt-in для точного model ID в non-forward Responses gateway, который резервирует namespace hosted tool. Сейчас допускается только `["image_generation"]`; совпавшая модель должна использовать wire `openai-responses` и поддерживать этот hosted tool. Прокси удаляет конфликтующие клиентские объявления `image_gen` и переписывает их selectors, сохраняя caller tool choice. Для виртуальных моделей OpenAI API `-pro` сначала сопоставляется выбранный публичный ID, а затем в качестве fallback используется ID базовой wire-модели. `modelAdapters` сначала разрешается по публичному ID, затем по базовому ID; второй результат определяет итоговый wire. Остальные модели сохраняют обычное alias-поведение. |
+| `annotateEmptyToolOutputs?` | `boolean` | Заменяет присутствующий, но пустой результат вызова инструмента короткой меткой до его передачи модели, чтобы пустой результат не воспринимался как отсутствующий. Применяется к пустым строкам и массивам частей, содержащим только текст; части с изображениями, файлами и зашифрованными данными никогда не изменяются. Во встроенном реестре по умолчанию имеет значение `true` для DeepSeek, а для остальных провайдеров не задано. Укажите `false`, чтобы отключить эту возможность для провайдера: явное значение `false` сохраняется при последующих изменениях без этого поля. `PATCH /api/providers?name=<provider>` принимает `true`, `false` или `null`, чтобы удалить переопределение и вернуться к поведению по умолчанию из реестра. |
 | `reasoningEffortMap?` | `Record<string, string>` | Provider-wide wire-alias'ы для reasoning-label'ов. |
 | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Wire-alias'ы для reasoning-label'ов по отдельным моделям. |
 | `reasoningWireFormat?` | `"gateway-object"` | Для OpenAI-совместимых шлюзов, принимающих `reasoning: { enabled, effort }` вместо `reasoning_effort`. Пресет ClinePass задаёт это автоматически. |
@@ -115,6 +118,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | По умолчанию выключенная downstream SSE-repair для exact placeholder-id, отсутствующих terminal-id и (с `repairInvalidIds`) message/reasoning id без канонического префикса `msg_`/`rs_`. Function-call id никогда не переписываются. Встроенный DeepSeek включает последние два по умолчанию. |
 | `responsesSnapshotRepair?` | `boolean` | По умолчанию выключенная клиентская repair для неполных lifecycle snapshot'ов Responses в SSE и JSON. Добавляет отсутствующие status, output и tool metadata, не меняя raw inspection и persistence. |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | Только для провайдеров с API-ключом (`authMode: "key"`). Опциональный повтор при 429 на том же таргете: если `retryOn429` отсутствует, функция выключена; наличие объекта включает её, если только `enabled: false`. При 429: ожидание (`Retry-After` апстрима или фиксированный интервал) и повтор идентичного запроса на том же ключе до любого фейловера ключей — покрывает основной цикл восстановления текстовых ходов, passthrough-канал Responses, мост изображений/видео, sidecar web-search и терминальные продолжения. Повтор допустим только для HTTP 429, полученных до начала потока; пользовательские транспорты `runTurn` не входят в цикл HTTP-повторов. `attempts` — это число повторов на том же ключе после первого 429 (всего отправок = `attempts` + 1) и единый бюджет на запрос, общий для основного цикла восстановления, терминального продолжения и повторов моста. Исчерпание `attempts` лишь останавливает дальнейшие повторы на том же ключе; далее применяется обычный фейловер ключей или финальная обработка ошибки в зависимости от доступных таргетов — на passthrough-канале с ключевой аутентификацией фейловера нет, поэтому исчерпанный 429 возвращается как есть. Codex сам никогда не повторяет 429, поэтому это единственная защита для провайдеров с одним ключом. По умолчанию: `enabled: true`, `attempts: 3`, `intervalMs: 5000`, `maxIntervalMs: 60000` (любое ожидание ограничено `maxIntervalMs`, который сам ограничен 600000), `respectRetryAfter: true`. |
+| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | Только для провайдеров `openai-chat` с аутентификацией по ключу. Опциональный повтор при временных статусах апстрима до начала потока (500, 502, 503, 504, 520, 521, 522): если параметр отсутствует, функция выключена; наличие объекта включает её, если только `enabled: false`. Покрывает исходный запрос `Responses`, продолжение терминального предохранителя, нативный `/v1/chat/completions`, а также повторные запросы при восстановлении после 429 или ошибки учётной записи. `attempts` — ОБЩЕЕ число разрешённых отправок в апстрим для одного запроса, включая первую (1..10, по умолчанию 3). Это единый бюджет на запрос, общий с восстановлением после сброса соединения, поэтому `3` означает, что до провайдера дойдут не более трёх реальных запросов. Ожидание использует экспоненциальную задержку с фиксированной начальной величиной 400 мс, ограниченную 5 с, и учитывает `Retry-After`. Параметр не связан с `retryOn429`, который обрабатывает ограничение частоты запросов; сбои после начала потока никогда не воспроизводятся. |
 | `autoToolChoiceOnlyModels?` | `string[]` | Модели, у которых `tool_choice` принимает только `auto` или `none`; forced choice понижается. |
 | `preserveReasoningContentModels?` | `string[]` | Модели, которым нужен предыдущий assistant `reasoning_content` в chat history. |
 | `requiresReasoningPlaceholderModels?` | `string[]` | Модели, чей upstream отклоняет tool_call-продолжение без `reasoning_content` (DeepSeek thinking mode); при промахе replay-кэша подставляется минимальный placeholder. По умолчанию наследует `preserveReasoningContentModels`; `[]` отключает явно. |
@@ -195,8 +199,9 @@ reauth или порога исчерпания; здоровые привяза
 | Ключ | Тип | По умолчанию | Описание |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | Включить sticky affinity и cooldown failover на 429. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Для новых сессий выбирать аккаунт с наименьшим известным cached 5-hour usage, если активный аккаунт достиг порога. `0` отключает выбор по quota. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Стратегия для новых сессий; quota смотрит только на 5-hour bar'ы. |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Для новых сессий выбирать аккаунт с наименьшим известным cached usage в настроенном окне, если активный аккаунт достиг порога. `0` отключает выбор по quota. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Стратегия для новых сессий; `quota` ранжирует аккаунты по окну, заданному в `quotaWindow` (по умолчанию это 5-hour bar'ы), а `fill-first` в этом же окне оценивает свой порог исчерпания. |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Кешированная полоса использования, сообщённая провайдером и применяемая при выборе по использованию. `five-hour` сохраняет прежнее поведение. `weekly` использует недельный bar и пропускает аккаунты с исчерпанным 5-hour bar, пока остаётся другой доступный аккаунт, но возвращается к ним, если других нет. `max-utilization` использует наибольшее известное значение, поэтому до появления недельных данных может использовать 5-hour usage; если неизвестны оба значения, аккаунт следует порядку unknown usage. Известное использование ранжируется раньше unknown, но если у всех доступных аккаунтов оно неизвестно, выбирается аккаунт в доступном порядке. После описанного сравнения по меньшему значению 5-hour usage полное равенство также сохраняет этот порядок. Здоровая сессия с affinity не перебалансируется заранее. При назначении новой сессии и восстановлении маршрутизации после допустимой замены при 429 `quota` напрямую ранжирует доступных кандидатов по этому окну, `fill-first` идёт в стабильном порядке с учётом порога и правил исчерпания этого окна, а `round-robin` игнорирует настройку. Cooldown, лимиты failover и допустимость повторной аутентификации остаются отдельным локальным состоянием. Недельные bar'ы аккаунтов известны только после опроса на странице Providers в dashboard. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Сколько успешных bind'ов новых сессий удерживать на одном выборе round-robin. Диапазон 1–100. |
 
 Если функция включена, 429 записывает ограниченный cooldown из `Retry-After` или из default
@@ -372,6 +377,47 @@ OpenRouter может обслуживать одну и ту же модель 
 opencodex. При выборе `openrouter/anthropic-claude-sonnet-5` система сначала восстанавливает
 native-id `anthropic/claude-sonnet-5`, а уже затем применяет model rule.
 
+## Маршрутизация провайдеров Vercel AI Gateway
+
+Vercel AI Gateway может маршрутизировать одну модель между несколькими нижележащими
+inference-провайдерами. `vercelGatewayRouting` задаёт предпочтения для всего провайдера, а
+`modelVercelGatewayRouting` полностью заменяет их для точных идентификаторов моделей. Если обе
+настройки отсутствуют, `resolveVercelGatewayRouting()` возвращает `undefined`, поэтому построители
+Chat-запросов не добавляют поле `provider`, а Vercel AI Gateway сохраняет стандартное динамическое
+поведение маршрутизации.
+
+- `order`: slug'и upstream-провайдеров Vercel AI Gateway в порядке приоритета.
+- `only`: явный allowlist допустимых upstream-провайдеров Vercel AI Gateway.
+- `sort`: автоматическая сортировка допустимых провайдеров по `"cost"` (минимальная стоимость),
+  `"ttft"` (время до первого токена) или `"tps"` (токенов в секунду).
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
+        }
+      }
+    }
+  }
+}
+```
+
+Ключи моделей — это публичные селекторы моделей Vercel без внешнего префикса провайдера OpenCodex.
+При выборе `vercel-ai-gateway/zai-glm-5.2` перед применением правила модели восстанавливается нативный
+идентификатор `zai/glm-5.2`. То же преобразование применяется к нативному селектору
+`vercel/<model-id>`: в OpenCodex используйте кодированный селектор
+`vercel-ai-gateway/vercel-<model-id>`, а в качестве ключа модели оставьте `vercel/<model-id>`.
+
 ## Статические allowlist'ы моделей
 
 Задайте `liveModels: false`, чтобы показывать только `models`. Если `models` пуст или отсутствует,
@@ -433,7 +479,6 @@ Pool/Direct рекламирует `922000`; синхронизированны�
       "defaultModel": "claude-sonnet-4-6"
     },
     "ollama-cloud": {
-      "adapter": "openai-chat",
       "baseUrl": "https://ollama.com/v1",
       "apiKey": "${OLLAMA_API_KEY}",
       "defaultModel": "glm-5.2",

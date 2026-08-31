@@ -8,6 +8,7 @@ import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
 import { createOpenAIChatAdapter } from "./openai-chat";
+import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 import type { OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
@@ -21,6 +22,7 @@ export interface AdapterFactoryContext {
 export type AdapterWire =
   | "command-code"
   | "openai-chat"
+  | "ollama-native"
   | "anthropic"
   | "openai-responses"
   | "google"
@@ -61,6 +63,11 @@ export const ADAPTER_REGISTRY = {
     mutation: "codex-owned",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) =>
       withClinePassDeepSeekV4ToolReplayCompatibility(createOpenAIChatAdapter(provider)),
+  },
+  "ollama-native": {
+    wire: "ollama-native",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createOllamaNativeAdapter(provider),
   },
   anthropic: {
     wire: "anthropic",

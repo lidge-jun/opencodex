@@ -67,6 +67,14 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 
 可用時，`input_tokens_details` 亦可包含 `cache_write_tokens`。恆存在的 detail 物件是對嚴格 Responses 客戶端的相容性保證；零可能意指「未回報」，不一定是「供應商未執行此類工作」。
 
+### 將回應與其請求日誌相互關聯
+
+每個通過准入的 HTTP Responses 回覆都帶有 `x-opencodex-request-id` 標頭，其中保存代理產生、格式為 `ocx-<32 hex>` 的識別碼。它是將回應連結至請求日誌及用量報告中對應列的關鍵。
+
+代理一律產生此值，並覆寫呼叫端提供或上游傳回的任何識別碼，因此它專屬於此代理，可安全信任為關聯鍵。該標頭列於 `Access-Control-Expose-Headers` 中，這讓瀏覽器中的 JavaScript 能跨來源讀取它；否則即使自訂 `x-` 標頭已在實際傳輸中，`response.headers.get()` 仍看不到它。
+
+在認證或來源准入階段遭拒的 Responses 請求不會進入此包裝層，也不會帶有識別碼，因此缺少此標頭表示該請求在寫入日誌前已遭拒。
+
 ### 同路徑上的 WebSocket 升級
 
 當 `websockets` 啟用時，客戶端可升級 `/v1/responses` 而非開啟 HTTP POST。認證與來源許可在 WebSocket 握手期間發生。它們不在每個 frame 內重複。

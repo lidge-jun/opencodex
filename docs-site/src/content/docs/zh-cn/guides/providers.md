@@ -386,7 +386,11 @@ Cursor OAuth 和 live model discovery 已在这个实验性 adapter 中启用；
 
 ### Ollama Cloud
 
-Ollama Cloud 是托管（而非本地）的 Ollama，在 `https://ollama.com/v1` 上兼容 OpenAI，密钥来自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 按视觉能力对其云端阵容进行分类，使 [vision sidecar](/zh-cn/guides/sidecars/) 仅对纯文本模型生效。纯文本模型（例如 `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支持视觉的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）则不在其中。匹配能容忍 Ollama 的 `:size` 标签，因此 `gpt-oss` 涵盖 `gpt-oss:120b` 和 `gpt-oss:20b`。
+Ollama Cloud 是托管（而非本地）的 Ollama，配置地址为 `https://ollama.com/v1`，密钥来自 [ollama.com/settings/keys](https://ollama.com/settings/keys)。opencodex 通过 Ollama 自身的 REST API（`POST /api/chat`）连接，而不是 OpenAI 兼容接口，并从提供方动态发现模型列表，因此新的 Ollama Cloud 模型无需改动配置即可出现。opencodex 按视觉能力对其云端阵容进行分类，使 [vision sidecar](/zh-cn/guides/sidecars/) 仅对纯文本模型生效。纯文本模型（例如 `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、`minimax-m2.x`、`nemotron-3-*`）列在 `noVisionModels` 中；原生支持视觉的模型（例如 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`）则不在其中。匹配能容忍 Ollama 的 `:size` 标签，因此 `gpt-oss` 涵盖 `gpt-oss:120b` 和 `gpt-oss:20b`。
+
+Ollama 目前在文档中说明结构化输出在 Ollama Cloud 上不受支持。因此对正典 `ollama-cloud`，
+opencodex 会以明确的错误拒绝结构化输出请求（`text.format`），而不是悄悄返回不受约束的自由
+文本；本地 / 自定义 `ollama-native` 端点保留 Ollama 原生的 `format` 行为。
 
 ## 4. 本地提供商
 

@@ -49,6 +49,7 @@ export function OverviewPanel({
         <div className="cwi-count-pill"><strong>{combos.length}</strong><span>{t("cws.count.total")}</span></div>
         <div className="cwi-count-pill"><strong>{sections.failover.length}</strong><span>{t("cws.count.failover")}</span></div>
         <div className="cwi-count-pill"><strong>{sections.roundRobin.length}</strong><span>{t("cws.count.roundRobin")}</span></div>
+        <div className="cwi-count-pill"><strong>{sections.other.length}</strong><span>{t("cws.count.other")}</span></div>
       </div>
 
       <section className="pwi-section" aria-label={t("cws.howTitle")}>

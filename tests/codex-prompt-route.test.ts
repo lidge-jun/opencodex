@@ -1132,14 +1132,19 @@ describe("020 coverage completions", () => {
    */
   test("34. editing an external base prompt invalidates an in-flight text probe", async () => {
     const fx = fixture("model = \"x\"\n");
-    const externalPath = join(fx.decoyHome, "external-base.md");
+    // On Windows the backslash is a separator; on POSIX it is a legal filename
+    // character that deterministically exercises the same TOML escaping boundary.
+    const externalPath = join(fx.decoyHome, "external\\base.md");
+    mkdirSync(dirname(externalPath), { recursive: true });
     writeFileSync(externalPath, "old-external", "utf8");
-    await call("PUT", "/api/codex-prompt/base/select", fx, {
-      kind: "external", path: externalPath, revision: await revision(fx),
-    });
-    // Selection through the route is not assumed: the fixture config is what the
-    // fingerprint reads, so assert the state this case depends on.
-    writeFileSync(fx.configPath, `model_instructions_file = "${externalPath}"\n`, "utf8");
+    // JSON string encoding is an independent, compatible encoding for this TOML
+    // basic string, so the fixture does not use the production encoder as its oracle.
+    writeFileSync(fx.configPath, `model_instructions_file = ${JSON.stringify(externalPath)}\n`, "utf8");
+    expect(readPromptLayers({
+      configPath: fx.configPath,
+      storePath: fx.storePath,
+      baseVariantDir: fx.baseVariantDir,
+    }).baseSelection).toEqual({ kind: "external", path: externalPath });
 
     const startedPath = join(fx.decoyHome, "external-probe-starts.txt");
     const source = [

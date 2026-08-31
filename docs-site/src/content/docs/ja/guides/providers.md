@@ -412,13 +412,20 @@ MCP、画面録画、computer-use はエグゼキューターフックで開か�
 
 ### Ollama Cloud
 
-Ollama Cloud はホステッド型(ローカルではない)Ollama で、`https://ollama.com/v1` で OpenAI 互換、キーは
-[ollama.com/settings/keys](https://ollama.com/settings/keys) で発行されます。opencodex はクラウド
+Ollama Cloud はホステッド型(ローカルではない)Ollama です。`https://ollama.com/v1` を設定し、キーは
+[ollama.com/settings/keys](https://ollama.com/settings/keys) で発行します。opencodex は OpenAI 互換
+サーフェスではなく Ollama 自身の REST API(`POST /api/chat`)で接続し、モデル一覧はプロバイダーから
+動的に取得するため、新しい Ollama Cloud モデルは設定変更なしで現れます。opencodex はクラウド
 ラインナップをビジョン機能で分類し、[ビジョンサイドカー](/ja/guides/sidecars/)がテキスト専用モデルにのみ
 動作するようにします。テキスト専用モデル(例: `glm-5.2`、`deepseek-v4-pro`、`gpt-oss`、`qwen3-coder`、
 `minimax-m2.x`、`nemotron-3-*`)は `noVisionModels` に列挙され、ビジョンネイティブモデル(例:
 `kimi-k2.6`、`minimax-m3`、`gemma4`、`qwen3.5`、`gemini-3-flash-preview`)は含まれません。マッチングは
 Ollama の `:size` タグに寛容なので `gpt-oss` は `gpt-oss:120b` と `gpt-oss:20b` の両方を含みます。
+
+Ollama は現在、構造化出力は Ollama Cloud では未対応であるとドキュメントしています。正規の
+`ollama-cloud` に対する構造化出力リクエスト（`text.format`）は、自由文を黙って返す代わりに
+opencodex が明示的なエラーで拒否します。ローカル / カスタムの `ollama-native` エンドポイントは
+Ollama ネイティブの `format` 動作を保持します。
 
 ## 4. ローカルプロバイダー
 

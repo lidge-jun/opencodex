@@ -391,19 +391,20 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   // catalog, so the effect is advertisement in discovery, not a newly reachable route. If this
   // test ever needs to flip to rejection, the fix is a real provenance signal, not a longer
   // list of fields to match.
-  test("a full-shape hand-written row IS accepted — the check is plausibility, not provenance", () => {
-    const forged = [{
+  test("full-shape unified_exec and legacy shell_command rows are accepted", () => {
+    const forged = (shell_type: string) => [{
       slug: "gpt-not-a-real-model",
       visibility: "list",
       supported_in_api: true,
       base_instructions: "anything non-empty",
       comp_hash: null,
-      shell_type: "shell_command",
+      shell_type,
       supported_reasoning_levels: [{ effort: "high" }],
       model_messages: {},
     }];
 
-    expect(accountBoundNativeOpenAiSlugs(forged)).toContain("gpt-not-a-real-model");
+    expect(accountBoundNativeOpenAiSlugs(forged("unified_exec"))).toContain("gpt-not-a-real-model");
+    expect(accountBoundNativeOpenAiSlugs(forged("shell_command"))).toContain("gpt-not-a-real-model");
   });
 
   test("exact account disables hide only the matching generated picker row", () => {

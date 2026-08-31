@@ -30,7 +30,12 @@ export const QUOTA_JSON_READ_FAILURE = Symbol("quota-json-read-failure");
 /** Unix 0 / negative values are sentinels, not reset clocks (Command Code fiveHour.resetAt: 0). */
 export function epochMillis(value: number): number | undefined {
   if (!Number.isFinite(value) || value <= 0) return undefined;
-  return value > 10_000_000_000 ? value : value * 1000;
+  const milliseconds = value > 10_000_000_000 ? value : value * 1000;
+  // A finite number is not necessarily a representable date. ECMAScript caps time values at
+  // ±8.64e15 ms, and `Intl.DateTimeFormat.format()` throws a RangeError past that instead of
+  // rendering something wrong. A provider that reports a bogus expiry must not become a
+  // rendering fault in every consumer that formats it.
+  return Number.isFinite(new Date(milliseconds).getTime()) ? milliseconds : undefined;
 }
 
 export function normalizeResetAt(value: unknown): number | undefined {

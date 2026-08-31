@@ -16,6 +16,8 @@ import { computeVersionSkew, type VersionSkew } from "./version-skew";
 import { redactSecretString, redactUserPath } from "../lib/redact";
 import { collectOrcaCodexHomeDiagnostic, type OrcaCodexHomeDiagnostic } from "../codex/home";
 import { grokFenceEndpointDrift, readGrokStatus } from "../grok/status";
+import { claudeDesktopIntegrationEnabled } from "../codex/desired-state";
+import { claudeDesktopPolicyHealth, probeClaudeDesktopPolicy, type ClaudeDesktopPolicyHealth } from "../claude/desktop-policy";
 
 type HealthCheck = {
   ok: boolean;
@@ -77,6 +79,10 @@ export type CliStatusJson = {
     };
   };
   codexHome: OrcaCodexHomeDiagnostic;
+  claudeDesktop: {
+    desiredEnabled: boolean;
+    policy: ClaudeDesktopPolicyHealth;
+  };
   /**
    * This CLI's version against the running proxy's (#2701).
    *
@@ -299,6 +305,10 @@ export async function probeUncleanExitState(input: {
 export async function collectStatus(): Promise<CliStatusView> {
   const configDiagnostics = readConfigDiagnostics();
   const config = configDiagnostics.config;
+  const claudeDesktop = {
+    desiredEnabled: claudeDesktopIntegrationEnabled(config),
+    policy: claudeDesktopPolicyHealth(probeClaudeDesktopPolicy()),
+  };
   // Prefer identity-verified liveness (runtime-port + /healthz) over ocx.pid alone (#618).
   // Pass the already-resolved diagnostics config so findLiveProxy does not re-load and
   // warn on malformed config.json (status --json must stay stderr-clean).
@@ -486,6 +496,7 @@ export async function collectStatus(): Promise<CliStatusView> {
       codexPlugins,
       codexRuntime,
       codexHome,
+      claudeDesktop,
       // Own field rather than a line in `codexRuntime.warning`: a stale ocx on PATH is a
       // fact about this install, not about the Codex runtime, and filing it there would
       // print it under the wrong heading (#2701).

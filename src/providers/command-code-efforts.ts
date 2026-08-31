@@ -73,6 +73,30 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     efforts: ["low", "high", "max"],
     profileUrl: "https://commandcode.ai/models/glm-5-3",
   },
+  /*
+   * GLM-5.3-Flash (#2883). Reported as advertising NO efforts at all: the live
+   * route is `z-ai/glm-5.3-flash`, which shares neither vendor prefix nor model
+   * id with `zai-org/GLM-5.3` above, so `modelRecordValue` cannot bridge them
+   * (exact / colon-family / case-folded only — by design; a substring match here
+   * would merge two genuinely different models across two vendor namespaces).
+   *
+   * PROVENANCE: unlike the #2647 rows above, this ladder is MEASURED, not
+   * reported. commandcode.ai renders the profile client-side, but the delivered
+   * HTML ships a serialized React payload whose string table can be read
+   * directly: in the 2026-08-29 fetch of /models/glm-5-3-flash (HTTP 200,
+   * 228749 bytes) the indices resolve as 224=low, 225=medium, 226=high,
+   * 227=xhigh, 569=max, and this model's array is [224,226,569].
+   *
+   * The index map was cross-validated against every row in this table that the
+   * same page carries: deepseek-v4-pro and -flash [226,569], gpt-5.6-luna
+   * [224,225,226,227,569], gemini-3.7-flash [224,225,226], GLM-5.2 [226,569],
+   * GLM-5.3 [224,226,569] — six for six against the values already committed
+   * here. No authenticated upstream generate probe was performed.
+   */
+  "z-ai/glm-5.3-flash": {
+    efforts: ["low", "high", "max"],
+    profileUrl: "https://commandcode.ai/models/glm-5-3-flash",
+  },
   // Muse Spark: CLI currently prints "has no adjustable reasoning effort" and
   // blocks --effort locally, but the upstream /alpha/generate endpoint accepts
   // reasoning_effort low..max for meta/muse-spark-1.2-contributor (verified

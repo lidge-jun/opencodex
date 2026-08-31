@@ -53,12 +53,38 @@ function decodeUtf16Be(buffer: Uint8Array): string {
  * Western fallback deliberately narrow: treating CP932, CP1250, or CP1251
  * bytes as Windows-1252 can fabricate a different valid-looking filesystem
  * path, which is worse than the previous replacement-character refusal.
+ *
+ * The CJK double-byte pages are named for the same reason `euc-kr` is: they are
+ * the ANSI code page on their own hosts, they are unambiguous for that language
+ * tag, and `decodeStrict` rejects a mismatch instead of inventing a path. A
+ * zh-CN host's schtasks stderr is CP936 (`gbk`), which the UTF-8 attempt above
+ * fails on and which previously fell through to a lossy UTF-8 decode — the
+ * mojibake made every localized message unmatchable (#2914).
+ *
+ * zh-Hant is a separate page (`big5`), not a variant of the same one, so the
+ * region subtag decides: `zh-TW`/`zh-HK`/`zh-MO` are Big5, bare `zh` and
+ * `zh-CN`/`zh-SG` are GBK. Guessing wrong here is exactly the fabricated-path
+ * risk the Western note describes, so an unrecognized `zh-*` region keeps the
+ * mainland default rather than trying both.
  */
-function legacyEncodingForLocale(locale: string): "euc-kr" | "windows-1252" | null {
-  const language = locale.trim().split(/[-_]/, 1)[0]?.toLowerCase();
+function legacyEncodingForLocale(locale: string): LegacyWindowsEncoding | null {
+  const parts = locale.trim().split(/[-_]/);
+  const language = parts[0]?.toLowerCase();
   if (language === "ko") return "euc-kr";
+  if (language === "ja") return "shift_jis";
+  if (language === "zh") return traditionalChineseRegion(parts) ? "big5" : "gbk";
   if (language && WINDOWS_1252_LANGUAGES.has(language)) return "windows-1252";
   return null;
+}
+
+type LegacyWindowsEncoding = "euc-kr" | "shift_jis" | "gbk" | "big5" | "windows-1252";
+
+/** `zh-Hant`, or a region that ships Big5 as its ANSI code page. */
+function traditionalChineseRegion(parts: readonly string[]): boolean {
+  return parts.slice(1).some(part => {
+    const tag = part.toLowerCase();
+    return tag === "hant" || tag === "tw" || tag === "hk" || tag === "mo";
+  });
 }
 
 const WINDOWS_1252_LANGUAGES = new Set([

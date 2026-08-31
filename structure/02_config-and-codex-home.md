@@ -173,6 +173,50 @@ are consumed incrementally and at most 512 stale files are attempted per process
 - 다른 대안 대신 이 방식을 선택한 이유: It repairs known remnants without broad authority over unrelated temp files or active writers.
 - 장점, 단점 및 영향: Old dead-PID files are reclaimed automatically; locked or conservatively classified files remain for a later retry.
 
+Windows runtime response spills never wait on `icacls` through `Bun.spawnSync`. Linux and macOS
+retain the immediate synchronous publication path. On Windows, the resident continuation enters one
+serialized publication queue and remains replayable while `hardenSecretDirAsync` and
+`hardenSecretPathAsync` run. Publication installs a spill stub only when the map still contains the
+same resident object; a superseded job deletes its newly published file instead of overwriting newer
+state. Pending payloads are pinned and capped at 256 MiB, so an ACL outage cannot grow an unbounded
+queue or be misreported as evictable memory. One caller-owned retry is allowed after a real
+`ETIMEDOUT`; the first timeout does not install a `spill-failed` tombstone. Required ACL failures
+remain fail-closed after that bounded recovery. Optional config-directory hardening uses a separate
+per-directory async single-flight, while required config mutation writers retain their existing
+awaited or synchronous fail-closed boundary.
+
+Each ordinary async spill write attempt owns one 30-second ACL budget shared across directory, temp,
+and exclusive-copy destination hardening; the single timeout retry receives one fresh whole-attempt
+budget. No harden step may reopen an independent 30-second window inside either attempt.
+Both icacls and effective-principal subprocess waits are settlement-bounded: at deadline the child is
+killed, unref'd, and abandoned without awaiting `proc.exited`. The caller-level deadline also bounds
+injected/shared runners, so a child that ignores termination cannot pin the serialized spill queue.
+
+Graceful shutdown drains that serialized publication queue to a stable fixed point before snapshot
+serialization. The drain has a wall-clock cap with a reserved synchronous fallback budget; expiry
+supersedes the async writer, claims and removes any temp or destination it still owns, and only then
+starts fallback publication. The writer rechecks supersession before no-replace publication, while
+the fallback splits its reserve across the directory and file ACL hardens. This ordering is
+load-bearing because resident entries over 2 MiB are deliberately excluded from
+`responses-state.json`: serializing first could omit the resident before its durable spill stub
+exists, losing the continuation on restart. Cleanup is attempted for every abandoned writer; any
+failure is retained while fallback and snapshot persistence continue, then returned through the
+shutdown status so process exit is non-zero without sacrificing unrelated replay state.
+If the fallback reserve expires, every remaining resident candidate is terminalized as a bounded
+`spill-failed` tombstone before pruning, so no payload remains eligible for shutdown requeue and the
+snapshot flush always regains control.
+The terminalization pass itself is hard-capped at `MAX_STORED_RESPONSES + 1`; exceeding that
+structural bound records a bounded failure, fail-closes every remaining resident, and returns control
+to snapshot persistence instead of relying on the progress argument alone.
+
+[Decision Log]
+- 목적과 의도: Keep `/healthz` and unrelated requests responsive during intermittent Windows ACL stalls without publishing an unhardened continuation.
+- 기존 구현 및 제약 조건: Response demotion called the synchronous spill writer from request-time state mutations; `Bun.spawnSync(icacls)` could block the only Bun event loop for the full timeout and immediately replace replayable state with a tombstone.
+- 검토한 주요 대안: Increase the ACL timeout, weaken required ACL checks, publish before hardening, move every platform to async state mutation, or isolate only the Windows ACL-dependent publication boundary.
+- 선택한 방식: Preserve non-Windows behavior; serialize Windows publications through async ACL APIs, retain the exact resident generation until compare-before-swap succeeds, cap pending bytes, and retry one proven timeout.
+- 다른 대안 대신 이 방식을 선택한 이유: Longer waits worsen liveness, early publication weakens secret-file ACLs, and a cross-platform async rewrite would disturb mature immediate memory and crash-ordering contracts that do not cause this incident.
+- 장점, 단점 및 영향: Windows health stays schedulable and transient ACL stalls retain continuation replay; pending payloads can temporarily exceed the 64 MiB resident target but are pinned under a 256 MiB local ceiling and remain inside the documented 512 MiB process-owned worst case.
+
 ## Config surface
 
 ### OpenCodex home and live process state

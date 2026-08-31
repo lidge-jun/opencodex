@@ -6,11 +6,27 @@ import { runWebSearch as runOpenAiWebSearch } from "../src/web-search/executor";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../src/providers/openai-sidecar";
+import { handleResponses } from "../src/server/responses/core";
+import { providerFetch } from "../src/server/responses/fetch-helpers";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
 import type { AdapterFetchContext, ProviderAdapter } from "../src/adapters/base";
 import type { OcxMessage, OcxParsedRequest } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
+import { withUpstreamHttpVersion } from "../src/lib/upstream-http-version";
+
+/**
+ * Wrap a fetch so it applies the provider's HTTP-version pin the way `providerFetch` does in
+ * production. The reset-recovery tests need a provider-scoped executor that pins a protocol, so the
+ * composition order in the loop leg is observable without standing up the whole server path.
+ */
+function withUpstreamHttpVersionExecutor(
+  inner: typeof globalThis.fetch,
+  provider: Pick<OcxProviderConfig, "upstreamHttpVersion">,
+): typeof globalThis.fetch {
+  return ((input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
+    inner(input, withUpstreamHttpVersion(input, init, provider))) as typeof globalThis.fetch;
+}
 
 /** Run the web-search loop with a default test translator budget. */
 function runWithWebSearch(
@@ -382,6 +398,117 @@ describe("web-search sidecar planning", () => {
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
+test("issue #2885 — Zhipu-shaped web-search routing preserves the provider HTTP version pin", async () => {
+  let routedProtocol: string | undefined;
+  let routedBody: Record<string, unknown> | undefined;
+  const zhipuProvider = {
+    adapter: "openai-chat",
+    baseUrl: "https://zhipu.test/v4",
+    apiKey: "zhipu-key",
+    upstreamHttpVersion: "http1.1",
+    models: ["glm-4.7"],
+    liveModels: false,
+    fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      routedProtocol = (init as RequestInit & { protocol?: string } | undefined)?.protocol;
+      routedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(
+        'data: {"choices":[{"delta":{"content":"done"},"finish_reason":null}]}\n\n'
+          + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+          + "data: [DONE]\n\n",
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    }) as typeof fetch,
+  } satisfies OcxProviderConfig & { fetch: typeof fetch };
+  const cfg: OcxConfig = {
+    port: 10100,
+    defaultProvider: "zhipu",
+    providers: {
+      zhipu: zhipuProvider,
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+  };
+  globalThis.fetch = (async () => {
+    throw new Error("the routed web-search leg must use the provider fetch");
+  }) as typeof fetch;
+
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-zhipu-search" })}`,
+      "chatgpt-account-id": "acct-zhipu-search",
+    },
+    body: JSON.stringify({
+      model: "zhipu/glm-4.7",
+      input: "Search current docs",
+      stream: true,
+      tools: [{ type: "web_search" }],
+    }),
+  }), cfg, { model: "", provider: "" });
+
+  expect(response.status).toBe(200);
+  const frames = await collectSse(response.body!);
+  expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+  expect((routedBody?.tools as { function?: { name?: string } }[] | undefined)
+    ?.some(tool => tool.function?.name === "web_search")).toBe(true);
+  expect(routedProtocol).toBe("http1.1");
+});
+
+test("web-search adapters receive the provider-scoped fetch executor", async () => {
+  let routedProtocol: string | undefined;
+  const pinnedProvider = {
+    adapter: "openai-chat",
+    baseUrl: "https://routed.test/v1",
+    apiKey: "routed-key",
+    upstreamHttpVersion: "http1.1",
+    fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      routedProtocol = (init as RequestInit & { protocol?: string } | undefined)?.protocol;
+      return new Response("wire", { status: 200 });
+    }) as typeof fetch,
+  } satisfies OcxProviderConfig & { fetch: typeof fetch };
+  const adapter: ProviderAdapter = {
+    name: "executor-aware",
+    buildRequest: (_parsed, incoming) => {
+      expect(incoming.providerFetch).toBeDefined();
+      return { url: "https://routed.test/v1/chat/completions", method: "POST", headers: {}, body: "{}" };
+    },
+    fetchResponse: (request, ctx) => ctx!.executor!(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
+      signal: ctx?.abortSignal,
+    }),
+    async *parseStream() {
+      yield { type: "text_delta", text: "done" };
+      yield { type: "done" };
+    },
+  };
+
+  const response = await runWithWebSearch({
+    parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+    adapter,
+    incomingMeta: {
+      headers: new Headers(),
+      translatorBudget: createTestTranslatorBudget(),
+      providerFetch: providerFetch(pinnedProvider),
+    },
+    forwardProvider,
+    hostedTool: { type: "web_search" },
+    selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+    settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
+    maxSearches: 1,
+  });
+
+  expect(response.status).toBe(200);
+  await collectSse(response.body!);
+  expect(routedProtocol).toBe("http1.1");
+});
+
 test("OpenAI web-search execution uses the pinned canonical URL and selected credentials", async () => {
   const cfg = config({
     providers: {
@@ -397,16 +524,18 @@ test("OpenAI web-search execution uses the pinned canonical URL and selected cre
   const candidate = listOpenAiForwardSidecarCandidates(cfg)[0]!;
   let observedUrl = "";
   let observedHeaders = new Headers();
+  let observedProtocol: string | undefined;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     observedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     observedHeaders = new Headers(init?.headers);
+    observedProtocol = (init as RequestInit & { protocol?: string } | undefined)?.protocol;
     return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
   }) as typeof fetch;
 
   await runOpenAiWebSearch(
     "current docs",
     { type: "web_search" },
-    candidate.provider,
+    { ...candidate.provider, upstreamHttpVersion: "http1.1" },
     new Headers({ authorization: "Bearer selected-token", "chatgpt-account-id": "selected-account" }),
     { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 1_000 },
   );
@@ -414,6 +543,7 @@ test("OpenAI web-search execution uses the pinned canonical URL and selected cre
   expect(observedUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
   expect(observedHeaders.get("authorization")).toBe("Bearer selected-token");
   expect(observedHeaders.get("chatgpt-account-id")).toBe("selected-account");
+  expect(observedProtocol).toBe("http1.1");
 });
 
 async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?: string; data: Record<string, unknown> }[]> {
@@ -2402,3 +2532,123 @@ describe("web-search sidecar live streaming (streamRoutedModelOutput)", () => {
     expect(frames.some(f => f.event === "response.completed")).toBe(true);
   });
 });
+
+describe("connection-reset recovery parity on the web-search legs", () => {
+  const originalGlobalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalGlobalFetch; });
+
+  /** Bun's reset rejection shape, as matched by isConnectionResetError. */
+  function bunResetError(): Error {
+    return new Error("The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()");
+  }
+
+  type Observed = { keepalive: unknown; connection: string | null; protocol: string | undefined; body: unknown; redirect: string | undefined };
+
+  function observe(init: RequestInit | undefined): Observed {
+    const withExtras = init as (RequestInit & { keepalive?: unknown; protocol?: string }) | undefined;
+    return {
+      keepalive: withExtras?.keepalive,
+      connection: new Headers(init?.headers).get("connection"),
+      protocol: withExtras?.protocol,
+      body: init?.body,
+      redirect: init?.redirect,
+    };
+  }
+
+  test("the sidecar leg replays a reset on a fresh connection while keeping the provider HTTP version pin", async () => {
+    const attempts: Observed[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      attempts.push(observe(init));
+      if (attempts.length === 1) throw bunResetError();
+      return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    await runOpenAiWebSearch(
+      "current docs",
+      { type: "web_search" },
+      {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+        upstreamHttpVersion: "http1.1",
+      },
+      new Headers({ authorization: "Bearer selected-token" }),
+      { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 1_000 },
+    );
+
+    expect(attempts.length).toBe(2);
+    // The first attempt must NOT force a fresh connection: pooling is the normal, faster path.
+    expect(attempts[0]!.keepalive).toBeUndefined();
+    expect(attempts[0]!.connection).toBeNull();
+    // The replay must leave the half-closed pooled socket. `keepalive: false` is the field that
+    // actually does it — Bun has ignored a bare `Connection: close` (oven-sh/bun#20492) — so
+    // assert both rather than treating the header as sufficient.
+    expect(attempts[1]!.keepalive).toBe(false);
+    expect(attempts[1]!.connection).toBe("close");
+    // Composition order guard: recovery must not displace the protocol pin, or a user who set
+    // http1.1 to work around a transport failure loses it on exactly the retry that needs it.
+    expect(attempts[0]!.protocol).toBe("http1.1");
+    expect(attempts[1]!.protocol).toBe("http1.1");
+    // Credential-boundary and replayability fields survive the composition.
+    expect(attempts[1]!.redirect).toBe("manual");
+    expect(typeof attempts[1]!.body).toBe("string");
+  });
+
+  test("the routed loop leg replays a reset on a fresh connection through the provider-scoped fetch", async () => {
+    const attempts: Observed[] = [];
+    const routedProvider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://routed.test/v1",
+      apiKey: "routed-key",
+      upstreamHttpVersion: "http1.1",
+    };
+    const providerScopedFetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      attempts.push(observe(init));
+      if (attempts.length === 1) throw bunResetError();
+      return new Response(
+        'data: {"choices":[{"delta":{"content":"answer"},"finish_reason":null}]}\n\n'
+          + 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+          + "data: [DONE]\n\n",
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    }) as typeof fetch;
+    globalThis.fetch = (async () => {
+      throw new Error("the routed leg must use the provider-scoped fetch, not the global one");
+    }) as typeof fetch;
+
+    const parsed = parseRequest({ model: "routed/model", input: "search please", stream: true });
+    const response = await runWithWebSearch({
+      parsed,
+      adapter: createOpenAIChatAdapter(routedProvider),
+      hostedTool: { type: "web_search" },
+      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 1_000 },
+      maxSearches: 1,
+      selectedForwardHeaders: new Headers(),
+      forwardProvider: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+      incomingMeta: {
+        headers: new Headers(),
+        translatorBudget: createTestTranslatorBudget(),
+        providerFetch: withUpstreamHttpVersionExecutor(providerScopedFetch, routedProvider),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(attempts.length).toBeGreaterThanOrEqual(2);
+    expect(attempts[0]!.keepalive).toBeUndefined();
+    expect(attempts[0]!.connection).toBeNull();
+    expect(attempts[1]!.keepalive).toBe(false);
+    expect(attempts[1]!.connection).toBe("close");
+    expect(attempts[1]!.protocol).toBe("http1.1");
+    // The loop sets accept-encoding: identity so raw byte progress stays observable; the recovery
+    // helper clones headers into a Headers instance and must not drop it.
+    expect(typeof attempts[1]!.body).toBe("string");
+  });
+});
+

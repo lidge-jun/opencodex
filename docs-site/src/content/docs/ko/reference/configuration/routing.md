@@ -28,6 +28,16 @@ opencodex는 요청된 model을 다음 순서로 해석합니다:
 
 비활성화된 provider는 제외합니다. 비활성화된 provider의 명시적 네임스페이스는 다음 규칙으로 넘어가지 않고 실패합니다. 여러 provider에 걸쳐 일치할 수 있는 규칙은 JSON에 적힌 삽입 순서대로 provider 항목을 검사하므로, bare model이 애매할 수 있으면 명시적 네임스페이스를 사용하십시오.
 
+### 차단된 모델 리디렉션
+
+`blockedModelRedirects`는 기본적으로 설정되지 않는 선택적 최상위 `Record<string, string>`이며, 정확히 일치하는 해석된 모델 ID의 대체값을 정의합니다. 위 해석 순서가 끝난 후 적용됩니다. 일치하면 이미 선택된 공급자와 계정 경로는 유지하고 업스트림 모델 ID만 교체하며, 경로 사유를 `blocked-model-redirect`로 기록합니다. 이 키를 생략하면 라우팅이 바뀌지 않습니다.
+
+```json
+{
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+}
+```
+
 ## 명시적 Codex 계정 selector
 
 `codexAccountNamespaces`는 `side` 같은 공개 selector를 저장된 Codex 계정 하나에 매핑합니다.
@@ -56,7 +66,7 @@ Codex Auth 페이지에서 이 picker 동작을 opt-in할 수 있습니다. 비�
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | required | 순서가 있는 concrete route입니다. `weight`는 1–10000이며 기본값은 `1`입니다. |
-| `strategy?` | `"failover" \| "round-robin"` | `"failover"` | 선택 전략입니다. 대상 순서는 failover 우선순위이며, weight는 smooth weighted round-robin의 모양을 결정합니다. |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 선택 전략입니다. 대상 순서는 `failover` 우선순위이고, 가중치는 `round-robin`과 `random` 추첨 비율을 결정하며, `least-used`는 기록된 성공 횟수를 따르고, `reset-window`는 가장 가까운 할당량 재설정을 따릅니다. |
 | `stickyLimit?` | `number` | `1` | 한 round-robin 배치에서 유지되는 성공 요청 수입니다. 범위는 1–100입니다. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 호출자가 effort를 생략했고 선택된 대상이 요청한 rung를 광고할 때만 적용됩니다. |
 | `alias?` | `string` | — | 정규화된 picker slug 대신 쓰는 선택적 공개 model id입니다. |
@@ -97,7 +107,7 @@ context metadata가 없는 bare relay id이거나 modalities가 서로 겹치지
 
 CLI: `ocx route policy list`, `ocx route policy show <id>`, `ocx route policy dry-run <id> --model-context <tokens> --tools`, `ocx route policy evaluate <id>`.
 
-콤보는 명시적인 순서·가중치 대상 라우팅 및 장애 조치입니다. 정책 프로필은 후보 간 증거 기반 선택입니다.
+콤보는 선택 가능한 전략(순서가 있는 `failover`, 부드러운 가중 `round-robin` 또는 `random` 분산, `least-used`, `reset-window`)을 사용하는 명시적인 대상 라우팅입니다. 구성된 전략이 대상을 결정하고, 재시도 가능한 실패가 발생하면 목록의 다음 대상으로 넘어갑니다. 정책 프로필은 후보 간 증거 기반 선택입니다.
 
 ## 요청 기록 및 라우팅 분석
 

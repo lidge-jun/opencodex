@@ -516,4 +516,52 @@ describe("#2491 the removal selector uses the shared equivalence relation", () =
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  /**
+   * A provider may publish a native id that is itself namespaced under its own name, so
+   * `acme` owning `acme/turbo` makes the selector `acme/turbo` name that row exactly while
+   * ALSO reading as the provider-qualified form of a sibling `turbo`. The resolver was called
+   * once per row with a singleton roster, so each row matched its own reading, the command saw
+   * two matches and aborted — the exact native spelling could never remove its own row.
+   */
+  test("a self-namespaced selector removes the row it names exactly", () => {
+    const { dir } = freshConfig({
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "acme", modelId: "acme/turbo" },
+        { id: "22222222-2222-4222-8222-222222222222", provider: "acme", modelId: "turbo" },
+      ],
+    });
+    try {
+      const result = runCli(["models", "remove", "acme/turbo", "--yes"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+      // The sibling survives: the selector named the native row, not the qualified reading.
+      expect(config.customModels).toEqual([
+        expect.objectContaining({ provider: "acme", modelId: "turbo" }),
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Guards the narrow path: with no sibling there is no collision, so this already worked and
+   * must keep working. It pins the case the resolver-level fix covers, so a future change that
+   * narrows the roster lookup cannot silently make a sole self-namespaced row unreachable.
+   */
+  test("a self-namespaced row is removable when it is the provider's only row", () => {
+    const { dir } = freshConfig({
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "acme", modelId: "acme/turbo" },
+      ],
+    });
+    try {
+      const result = runCli(["models", "remove", "acme/turbo", "--yes"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+      expect(config.customModels).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

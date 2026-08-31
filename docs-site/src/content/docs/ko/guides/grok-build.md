@@ -11,13 +11,16 @@ opencodex는 로컬 포트에서 OpenAI 호환 `POST /v1/chat/completions`(및 `
 
 ```toml
 # >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>
-[model.ocx-gpt-5-6-sol]
-model = "gpt-5.6-sol"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
-name = "OCX gpt-5.6-sol"
 extra_headers = { "x-opencodex-grok" = "1" }
+
+[model.ocx-gpt-5-6-sol]
+model = "gpt-5.6-sol"
+model_provider = "opencodex"
+name = "OCX gpt-5.6-sol"
 context_window = 272000
 supports_reasoning_effort = true
 reasoning_effort = "low"
@@ -28,7 +31,8 @@ value = "low"
 label = "Low"
 description = "Quick, fast implementations"
 default = true
-# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model,
+# each referencing model_provider = "opencodex" ...
 # <<< opencodex managed block <<<
 ```
 
@@ -62,13 +66,11 @@ Grok 호환 형태로 투영한 결과가 각 관리형 `[model.*]` 테이블에
 Codex 전용 `ultra`를 포함해 지원되지 않거나 중복된 단계는 파일에서 제외되어 기록된
 모든 선택지는 실행 가능합니다.
 
-Grok Build는 Chat Completions를 통해 opencodex와 통신하고 단계 목록이 제공되면
-`reasoning_effort`를 보냅니다. 이 경우 Chat Completions 입력 변환기는 내부 Responses의
-`reasoning.summary` 기본값을 `auto`로 설정하므로 추론 트레이스가
-`delta.reasoning_content`로 Grok에 전달됩니다. 모델은 추론하되 트레이스를 반환하지
-않도록 하려는 클라이언트는 `include_reasoning: false`(또는
-`reasoning.summary: "none"`)를 설정할 수 있습니다. 두 값이 함께 있으면 명시적인
-`reasoning.summary`가 우선합니다.
+Grok Build는 Responses API를 통해 opencodex와 통신합니다. 라우트가 추론 단계 목록을
+광고하면 Responses passthrough가 설정된 대로 `reasoning.summary`를 전달하므로 추론
+트레이스가 Responses reasoning 항목으로 Grok에 그대로 도착합니다. 모델은 추론하되
+트레이스를 반환하지 않게 하려는 클라이언트는 `reasoning.summary: "none"`을 설정할 수
+있습니다. 명시적인 `reasoning.summary`는 라우트 기본값보다 우선합니다.
 
 ## 인증 참고
 
@@ -76,33 +78,39 @@ Grok Build는 루프백에서도 사용자 정의 모델에 비어 있지 않은
 
 **자동 등록은 루프백 전용입니다.** opencodex가 비루프백 호스트에 바인드하면, 모든 인터페이스를 노출하는 와일드카드 `0.0.0.0`와 `::`를 포함해 요청은 실제 admission token을 필요로 하고, 관리 블록은 그 값을 안전하게 담을 수 없습니다. 토큰을 그대로 쓰면 비밀값이 `~/.grok/config.toml`에 들어가고, 다음 `ocx start`/`ensure`/`restart` 때 그 자리에 있던 값이 덮어써집니다. 그래서 opencodex는 그런 경우 아무 것도 쓰지 않고(이전에 루프백 바인드가 남긴 블록도 제거합니다), 사용자는 관리 마커 바깥에서 모델을 직접 설정해야 합니다. 이 위치에서는 opencodex가 어떤 일을 해도 그 설정을 덮어쓸 수 없습니다. 정확한 테이블은 [수동 설정](#manual-recipe-without-auto-registration)을 보시고, `base_url`(실제로 `grok`가 도달할 수 있는 호스트)과 `api_key`(사용자의 `OPENCODEX_API_AUTH_TOKEN`)를 함께 설정합니다.
 
-여기서는 `api_key`를 `env_key`로 바꾸지 마십시오. `model_provider`를 설정하지 않은 상태에서 `env_key`가 해결되지 않아도 요청은 멈추지 않습니다. Grok가 사용자의 xAI 세션 토큰으로 넘어가서 항목이 가리키는 `base_url`로 보냅니다. LAN 배포에서는 그 `base_url`이 xAI가 아닌 평문 HTTP 엔드포인트입니다.
+여기서는 `api_key`를 `env_key`로 바꾸지 마십시오. `env_key`가 해결되지 않아도 요청은 멈추지 않습니다. Grok가 사용자의 xAI 세션 토큰으로 넘어가서 항목이 가리키는 `base_url`로 보냅니다. LAN 배포에서는 그 `base_url`이 xAI가 아닌 평문 HTTP 엔드포인트입니다.
 
-주입된 모델별 `api_key`는 이 모델들에 대한 Grok의 자격 증명 체인에서 가장 먼저 사용되므로, opencodex를 대상으로 하는 요청에는 추가 Grok 로그인이 필요하지 않습니다. xAI에 직접 접속하는 네이티브 grok 모델과 모든 하니스 기능에는 평소 쓰던 `grok login` / `XAI_API_KEY` 구성을 그대로 유지합니다.
+provider 항목에 주입된 `api_key`는 이 모델들에 대한 Grok의 자격 증명 체인에서 가장 먼저 사용되므로, opencodex를 대상으로 하는 요청에는 추가 Grok 로그인이 필요하지 않습니다. xAI에 직접 접속하는 네이티브 grok 모델과 모든 하니스 기능에는 평소 쓰던 `grok login` / `XAI_API_KEY` 구성을 그대로 유지합니다.
 
 ## 수동 설정 (자동 등록 없음)
 
-직접 `~/.grok/config.toml`를 관리하거나 opencodex가 비루프백 호스트에 바인드되어 있다면, `# >>> opencodex managed block` 마커 바깥에 모델별 테이블을 직접 필드 형태로 작성합니다:
+직접 `~/.grok/config.toml`를 관리하거나 opencodex가 비루프백 호스트에 바인드되어 있다면, `# >>> opencodex managed block` 마커 바깥에 `[model_providers.opencodex]` 블록과 이를 참조하는 모델별 테이블을 추가합니다:
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
 네트워크에서 닿을 수 있는 프록시라면 `base_url`을 `grok`가 실제로 연결할 수 있는 주소로 두고 승인 토큰을 사용합니다:
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
-`[model_providers.<id>]` 상속에 엔드포인트를 맡기지 마십시오. Grok Build 0.2.101 기준으로 상속된 `base_url`은 추론 라우팅에 적용되지 않습니다(요청은 기본 xAI 프록시로 넘어가고 401로 실패합니다). 직접 넣은 모델별 필드는 정상적으로 라우팅됩니다.
+관리 블록은 이제 `[model_providers.<id>]` 상속을 사용하며, Grok Build 0.2.109 이상(2026-07-21 출시)이 필요합니다. 이전 버전에서는 상속된 `base_url`이 추론 라우팅에 적용되지 않습니다 — 업그레이드하거나, 각 `[model.*]` 테이블에 모델별 직접 필드(`base_url`/`api_backend`/`api_key`)를 사용하세요.
 
 점이 들어간 별칭은 반드시 따옴표로 감쌉니다. 대괄호만 쓴 `[model.grok-4.5]`는 id `grok-4.5`가 아니라 세 구간짜리 키 경로입니다. 생성된 별칭은 이런 이유로 점을 아예 쓰지 않습니다.
 

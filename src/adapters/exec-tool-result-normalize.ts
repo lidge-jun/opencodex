@@ -17,13 +17,78 @@
  * `Script failed` is deliberately NOT in this set. A failed cell with no captured output is still
  * a FAILURE, and the success guidance below ("not a blocked tool", "do not re-run") would erase the
  * only signal that anything went wrong — reachable through Responses history, where
- * `function_call_output` is parsed with `isError: false`. Cursor keeps its own broader regex for
- * Computer Use, where a failed wrapper is separately marked `isError`.
+ * `function_call_output` is parsed with `isError: false`. Cursor combines this set with
+ * `isFailedEmptyExecWrapper` below for Computer Use, where a failed wrapper is separately marked
+ * `isError`.
  */
 export const EMPTY_EXEC_OUTPUT_REGEX = /^(?:(?:Script completed|Command finished|Execution finished)[^\n]*\n+)?(?:Wall time[^\n]*\n+)?(?:Output:\s*)?(?:<empty>)?\s*$/;
 
-/** Wrapper for a cell that FAILED without emitting output: empty, but not a success. */
-export const FAILED_EXEC_OUTPUT_REGEX = /^Script failed[^\n]*\n*(?:Wall time[^\n]*\n*)?(?:Output:\s*)?(?:<empty>)?\s*$/;
+function skipFailedWrapperBlankSeparators(text: string, start: number): number {
+  let index = start;
+  while (index < text.length) {
+    if (text[index] === "\n") {
+      index += 1;
+      continue;
+    }
+    // A CRLF blank line is one separator, not a stray carriage return. The regex this replaced
+    // matched only `\n`, so a Windows-produced wrapper never classified and the failure guidance
+    // was silently replaced by the empty-SUCCESS message on that platform.
+    if (text[index] === "\r" && text[index + 1] === "\n") {
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+function skipFailedWrapperWhitespace(text: string, start: number): number {
+  let index = start;
+  while (index < text.length && text[index]!.trim() === "") index += 1;
+  return index;
+}
+
+function skipFailedWrapperLine(text: string, start: number): number {
+  const newline = text.indexOf("\n", start);
+  return newline === -1 ? text.length : skipFailedWrapperBlankSeparators(text, newline + 1);
+}
+
+/**
+ * Wrapper for a cell that FAILED without emitting output: empty, but not a success.
+ *
+ * A single forward scan, replacing a regex whose `\n*` and `\s*` runs sat adjacent over the same
+ * span and could be made to backtrack on a long whitespace run followed by one non-matching
+ * character. Every loop here advances an index monotonically and the token checks are fixed-length,
+ * so the work is bounded by the input length with no path that retries a prefix.
+ *
+ * Two boundaries are load-bearing and both were divergences in an earlier attempt at this rewrite:
+ *
+ * - Whitespace after `Output:` may precede the marker, so an INDENTED `<empty>` still classifies.
+ *   Rejecting it would leave the wrapper unnormalized and the failure unexplained.
+ * - Only whitespace may follow the marker, so a DUPLICATE `<empty>` still does not classify.
+ *   Accepting it would erase a real payload as an empty failed wrapper — the damaging direction.
+ *
+ * Behaviour is otherwise identical to the regex; the CRLF separators above are the only
+ * intentional change, verified against a 63-shape differential corpus.
+ */
+export function isFailedEmptyExecWrapper(trimmed: string): boolean {
+  if (!trimmed.startsWith("Script failed")) return false;
+
+  const firstNewline = trimmed.indexOf("\n", "Script failed".length);
+  if (firstNewline === -1) return true;
+
+  let index = skipFailedWrapperBlankSeparators(trimmed, firstNewline + 1);
+  if (trimmed.startsWith("Wall time", index)) {
+    index = skipFailedWrapperLine(trimmed, index);
+  }
+  if (trimmed.startsWith("Output:", index)) {
+    index = skipFailedWrapperWhitespace(trimmed, index + "Output:".length);
+  }
+  if (trimmed.startsWith("<empty>", index)) {
+    index += "<empty>".length;
+  }
+  return skipFailedWrapperWhitespace(trimmed, index) === trimmed.length;
+}
 
 /** Guidance for a failed cell whose output was empty: the failure must survive normalization. */
 export const FAILED_EXEC_OUTPUT_MESSAGE =
@@ -94,6 +159,6 @@ export function normalizeEmptyExecToolResultText(
   if (!isCodexExecBridgeTool(options.toolName, options.toolNamespace)) return undefined;
   const trimmed = text.trim();
   // Failure first: a failed wrapper must never be described as an empty success.
-  if (FAILED_EXEC_OUTPUT_REGEX.test(trimmed)) return FAILED_EXEC_OUTPUT_MESSAGE;
+  if (isFailedEmptyExecWrapper(trimmed)) return FAILED_EXEC_OUTPUT_MESSAGE;
   return EMPTY_EXEC_OUTPUT_REGEX.test(trimmed) ? EMPTY_EXEC_OUTPUT_MESSAGE : undefined;
 }

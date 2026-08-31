@@ -216,6 +216,11 @@ export interface ProviderRegistryEntry {
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
+   * When enabled, tool results that are present but empty are annotated on the wire.
+   * Seeded/backfilled like other fixed wire capabilities.
+   */
+  annotateEmptyToolOutputs?: boolean;
+  /**
    * Registry default for the provider's `service_tier` support; see
    * `OcxProviderConfig.supportsServiceTier`. Registry-only: backfilled (never
    * overriding) at enrich/route time and deliberately NOT seeded into saved
@@ -454,6 +459,7 @@ const XAI_MODELS = [
   "grok-4.6",
   "grok-4.5",
   "grok-4.3",
+  "grok-4.20-multi-agent-0309",
   "grok-4.20-0309-reasoning",
   "grok-4.20-0309-non-reasoning",
   "grok-build-0.1",
@@ -1148,8 +1154,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // 260709 refresh: lineup + metadata from official docs.x.ai (grok-4.5 announced 07-08);
     // grok-composer-2.5-fast kept as account-verified (absent from public docs). Evidence:
     // devlog/model_update/260709_model_refresh/001_xai_lineup.md.
-    // grok-4.20-multi-agent-0309 is intentionally absent: the OAuth chat-completions
-    // transport returns 400 ("Multi Agent requests are not allowed on chat completions").
+    // 260823: grok-4.20-multi-agent-0309 still returns 400 on Chat Completions, but works
+    // on Responses. The server reports this dated id for both it and the floating
+    // grok-4.20-multi-agent-beta-latest alias, so expose only the dated deployment id.
     // 260813: grok-4.6 added per docs.x.ai/developers/grok-4-6. Context/vision still match
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
     models: XAI_MODELS,
@@ -1165,9 +1172,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // than the seeded ones do.
     supportsVerbosity: false,
     defaultModel: "grok-4.5",
-    // Keep Codex Responses callers on the compatibility Chat wire until xAI can replay
-    // opaque reasoning continuation and compaction state across later turns. The scoped
-    // declaration also keeps caller-owned service tiers off the OAuth subscription route.
+    // Keep 4.6/4.5 Responses callers on the compatibility Chat wire until xAI can replay
+    // opaque reasoning continuation and compaction state across later turns. Multi-agent has
+    // no Chat wire, so Responses callers use its only working wire under both auth modes.
+    // Caller-owned service tiers stay off the unclassified OAuth subscription route; key-auth
+    // Fast remains proxy-owned and is still selected through keyAuthServiceTier above.
     modelWireDefaults: {
       "grok-4.6": {
         wire: "openai-chat",
@@ -1181,6 +1190,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
         authModes: ["oauth"],
         forwardCallerServiceTier: false,
       },
+      "grok-4.20-multi-agent-0309": {
+        // Even at high effort it emits no reasoning-summary deltas or encrypted replay
+        // material. Do not encode that as modelSupportsReasoningSummaries:false: through
+        // Codex #1100 that suppresses the entire reasoning object, including the effort
+        // that controls this model's agent count. An empty summary pane is harmless.
+        // Chat Completions returns 400 for this model, so every inbound uses Responses —
+        // `anthropic` included. Omitting it left providerModelWireDefault returning undefined
+        // for the Claude Messages lane, so resolveWireProtocolOverride kept xAI's provider-wide
+        // openai-chat adapter and sent this model to the wire it 400s on.
+        wire: "openai-responses",
+        inbound: ["responses", "chat", "anthropic"],
+        forwardCallerServiceTier: false,
+      },
     },
     // Vision lineup per docs.x.ai model-capabilities/images/understanding: the grok-4.x chat
     // models accept image input (JPEG/PNG, URL or base64). Without this the catalog leaves
@@ -1192,6 +1214,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "grok-4.6": ["text", "image"],
       "grok-4.5": ["text", "image"],
       "grok-4.3": ["text", "image"],
+      "grok-4.20-multi-agent-0309": ["text", "image"],
       "grok-4.20-0309-reasoning": ["text", "image"],
       "grok-4.20-0309-non-reasoning": ["text", "image"],
     },
@@ -1203,13 +1226,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: ["grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"],
     // grok-4.5 reasoning is always-on with low/medium/high (no off tier, no xhigh).
     // grok-4.6 adds xhigh per docs.x.ai/developers/model-capabilities/text/reasoning;
-    // xAI documents high as the upstream default.
-    modelReasoningEfforts: { "grok-4.6": ["low", "medium", "high", "xhigh"], "grok-4.5": ["low", "medium", "high"] },
+    // multi-agent accepts the same four wire values to select 4 or 16 collaborators. xAI
+    // documents high as the 4.6 default but no multi-agent default, so do not invent one.
+    modelReasoningEfforts: {
+      "grok-4.6": ["low", "medium", "high", "xhigh"],
+      "grok-4.5": ["low", "medium", "high"],
+      "grok-4.20-multi-agent-0309": ["low", "medium", "high", "xhigh"],
+    },
     modelDefaultReasoningEfforts: { "grok-4.6": "high" },
     modelContextWindows: {
       "grok-4.6": 500_000,
       "grok-4.5": 500_000,
       "grok-4.3": 1_000_000,
+      "grok-4.20-multi-agent-0309": 1_000_000,
       "grok-4.20-0309-reasoning": 1_000_000,
       "grok-4.20-0309-non-reasoning": 1_000_000,
       "grok-build-0.1": 256_000,
@@ -1784,6 +1813,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // context splits a call from its result (#1292); parallel calls remain one
     // reasoning-bearing assistant batch rather than being split per pair (#1477).
     requiresAdjacentResponsesToolResults: true,
+    // DeepSeek exec tool results can be present-but-empty (a script that ran without
+    // calling text(...)); annotate them so routed models do not silently accept an
+    // empty result or re-issue the same call.
+    annotateEmptyToolOutputs: true,
     /* [Decision Log]
     - 목적: DeepSeek V4 thinking mode multi-turn/tool-call requests must replay prior assistant reasoning_content.
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.
@@ -2554,13 +2587,23 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     id: "ollama-cloud",
     label: "Ollama Cloud",
+    // The upstream /v1 spelling is deliberately unchanged: ollamaNativeChatUrl() normalizes it
+    // to /api/chat, and live model discovery declares its own /v1/models path against the origin,
+    // so the native transport needs no base-URL edit here or in the free-provider directory.
     baseUrl: "https://ollama.com/v1",
-    adapter: "openai-chat",
+    // The native transport must be declared HERE, not in configuration. routedProviderConfig()
+    // overwrites provider.adapter with the registry adapter for every row whose transport
+    // matches, so a config-level adapter is silently discarded.
+    adapter: "ollama-native",
     authKind: "key",
     dashboardUrl: "https://ollama.com/settings/keys",
     // Live IDs verified 2026-07-10; qwen3-coder:480b retires 2026-07-15.
     models: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b", "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b"],
     defaultModel: "glm-5.3",
+    // Owner-audited exact outage fallback: these current Ollama Cloud GLM-5.3 rows have
+    // 1,048,576-token context windows. Live discovery and successful /api/show enrichment keep
+    // their existing precedence; these values prevent a failed show from becoming generic.
+    modelContextWindows: { "glm-5.3": 1_048_576, "glm-5.3-flash": 1_048_576 },
     noVisionModels: [
       // glm-5.3-flash is absent on purpose: native VLM
       // (docs.z.ai/guides/vlm/glm-5.3-flash), so its images skip the sidecar.
@@ -2570,6 +2613,19 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "deepseek-v4-pro", "deepseek-v4-flash",
       "gpt-oss", "qwen3-coder:480b",
     ],
+    // Ollama's native chat API has no `text.verbosity` equivalent and the ollama-native adapter
+    // never emits one, so a routed row must not inherit the Codex template's verbosity picker.
+    // Provider-wide rather than per-model: this catalog is discovery-authoritative, so ids that
+    // arrive later from live discovery must opt out too (the live-discovery gap closed by #2578).
+    supportsVerbosity: false,
+    // Live model discovery: Ollama serves the standard OpenAI-style data[] envelope at /v1/models,
+    // so the generic discovery pipeline needs no special-casing. The path is spelled against the
+    // ORIGIN (model-discovery resolves a leading-slash path against base.origin). A discovery
+    // spec is REQUIRED here: without one the pipeline probes https://ollama.com/models, which
+    // 307-redirects to /search and discovery falls back to the configured list.
+    modelDiscovery: {
+      path: "/v1/models",
+    },
   },
   // FREEZE 2026-07-10: codestral-latest is unconfirmed behind auth. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://console.mistral.ai/api-keys", defaultModel: "codestral-latest" },

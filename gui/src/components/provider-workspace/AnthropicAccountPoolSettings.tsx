@@ -5,20 +5,32 @@
 import { useCallback, useEffect, useState } from "react";
 import { useT } from "../../i18n/shared";
 import {
+  ACCOUNT_POOL_QUOTA_WINDOWS,
+  DEFAULT_ACCOUNT_POOL_QUOTA_WINDOW,
   DEFAULT_ACCOUNT_POOL_STICKY_LIMIT,
   DEFAULT_ACCOUNT_POOL_STRATEGY,
+  normalizeAccountPoolQuotaWindow,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimitDraft,
+  type AccountPoolQuotaWindow,
   type AccountPoolStrategy,
 } from "../../account-pool-strategy";
 import AccountPoolStrategyControls from "../AccountPoolStrategyControls";
+import { Select } from "../../ui";
+
+const QUOTA_WINDOW_LABEL_KEYS = {
+  "five-hour": "accountPool.quotaWindowFiveHour",
+  weekly: "accountPool.quotaWindowWeekly",
+  "max-utilization": "accountPool.quotaWindowMaxUtilization",
+} as const;
 
 type PoolState = {
   enabled: boolean;
   threshold: number;
   strategy: AccountPoolStrategy;
   stickyLimit: number;
+  quotaWindow: AccountPoolQuotaWindow;
 };
 
 export default function AnthropicAccountPoolSettings({
@@ -56,6 +68,7 @@ export default function AnthropicAccountPoolSettings({
           autoSwitchThreshold?: number;
           strategy?: unknown;
           stickyLimit?: unknown;
+          quotaWindow?: unknown;
         }>;
       })
       .then(json => {
@@ -67,6 +80,7 @@ export default function AnthropicAccountPoolSettings({
           threshold: nextThreshold,
           strategy: normalizeAccountPoolStrategy(json.strategy),
           stickyLimit: nextSticky,
+          quotaWindow: normalizeAccountPoolQuotaWindow(json.quotaWindow),
         });
         setDraft(String(nextThreshold));
         setStickyDraft(String(nextSticky));
@@ -87,6 +101,7 @@ export default function AnthropicAccountPoolSettings({
     threshold: number;
     strategy: AccountPoolStrategy;
     stickyLimit: number;
+    quotaWindow: AccountPoolQuotaWindow;
   }) => {
     const previousState = state;
     setState({
@@ -94,6 +109,7 @@ export default function AnthropicAccountPoolSettings({
       threshold: next.threshold,
       strategy: next.strategy,
       stickyLimit: next.stickyLimit,
+      quotaWindow: next.quotaWindow,
     });
     setSaving(true);
     setError(null);
@@ -107,20 +123,24 @@ export default function AnthropicAccountPoolSettings({
           autoSwitchThreshold: next.threshold,
           strategy: next.strategy,
           stickyLimit: next.stickyLimit,
+          quotaWindow: next.quotaWindow,
         }),
       });
       if (!res.ok) throw new Error("save");
       const json = await res.json().catch(() => null) as {
         strategy?: unknown;
         stickyLimit?: unknown;
+        quotaWindow?: unknown;
       } | null;
       const savedStrategy = normalizeAccountPoolStrategy(json?.strategy ?? next.strategy);
       const savedSticky = normalizeAccountPoolStickyLimit(json?.stickyLimit ?? next.stickyLimit);
+      const savedWindow = normalizeAccountPoolQuotaWindow(json?.quotaWindow ?? next.quotaWindow);
       setState({
         enabled: next.enabled,
         threshold: next.threshold,
         strategy: savedStrategy,
         stickyLimit: savedSticky,
+        quotaWindow: savedWindow,
       });
       setDraft(String(next.threshold));
       setStickyDraft(String(savedSticky));
@@ -140,6 +160,14 @@ export default function AnthropicAccountPoolSettings({
   const threshold = state?.threshold ?? 80;
   const strategy = state?.strategy ?? DEFAULT_ACCOUNT_POOL_STRATEGY;
   const stickyLimit = state?.stickyLimit ?? DEFAULT_ACCOUNT_POOL_STICKY_LIMIT;
+  const quotaWindow = state?.quotaWindow ?? DEFAULT_ACCOUNT_POOL_QUOTA_WINDOW;
+  // The window is inert ONLY under round-robin, which never scores a usage bar at any stage.
+  //
+  // A 0 threshold is not inertness: it disables PROACTIVE usage-based switching, but
+  // new-session selection and 429 recovery still consult the configured window (see
+  // pickLowestUsage / rotateAnthropicAccountOn429). Treating fill-first + threshold 0 as
+  // inert told operators the window had no effect when it still governed two routing stages.
+  const quotaWindowInert = strategy === "round-robin";
   const loading = state === null && !loadError;
   // Always allow turning the pool off; only block enabling when fewer than 2 accounts.
   const toggleDisabled = loading || saving || loadError || (!enabled && accountCount < 2);
@@ -155,7 +183,14 @@ export default function AnthropicAccountPoolSettings({
               : loading
                 ? t("common.loading")
                 : enabled
-                  ? t("anthropicPool.enabledDesc", { threshold })
+                  ? threshold === 0
+                    ? t("anthropicPool.enabledNoProactiveDesc", {
+                        window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
+                      })
+                    : t("anthropicPool.enabledDesc", {
+                        threshold,
+                        window: t(QUOTA_WINDOW_LABEL_KEYS[quotaWindow]),
+                      })
                   : t("anthropicPool.disabledDesc")}
           </div>
         </div>
@@ -172,6 +207,7 @@ export default function AnthropicAccountPoolSettings({
               threshold,
               strategy,
               stickyLimit,
+              quotaWindow,
             });
           }}
         >
@@ -214,6 +250,7 @@ export default function AnthropicAccountPoolSettings({
                     threshold: parsed,
                     strategy,
                     stickyLimit,
+                    quotaWindow,
                   });
                 }
               }}
@@ -234,6 +271,7 @@ export default function AnthropicAccountPoolSettings({
                 threshold,
                 strategy: next,
                 stickyLimit,
+                quotaWindow,
               });
             }}
             onStickyDraftChange={setStickyDraft}
@@ -253,9 +291,39 @@ export default function AnthropicAccountPoolSettings({
                 threshold,
                 strategy,
                 stickyLimit: parsed,
+                quotaWindow,
               });
             }}
           />
+
+          <div className="field anthropic-pool-card__field anthropic-pool-card__field--quota-window">
+            <span className="field-label">{t("accountPool.quotaWindow")}</span>
+            <Select
+              id="anthropic-pool-quota-window"
+              value={quotaWindow}
+              options={ACCOUNT_POOL_QUOTA_WINDOWS.map((value) => ({
+                value,
+                label: t(QUOTA_WINDOW_LABEL_KEYS[value]),
+              }))}
+              disabled={saving || quotaWindowInert}
+              label={t("accountPool.quotaWindow")}
+              onChange={(next) => {
+                const parsed = normalizeAccountPoolQuotaWindow(next);
+                if (parsed === quotaWindow) return;
+                void save({
+                  enabled: true,
+                  threshold,
+                  strategy,
+                  stickyLimit,
+                  quotaWindow: parsed,
+                });
+              }}
+            />
+            <div className="card-sub" style={{ marginTop: 4 }}>{t("accountPool.quotaWindowDesc")}</div>
+            <div className="card-sub" style={{ marginTop: 4 }}>
+              {quotaWindowInert ? t("accountPool.quotaWindowInert") : t("accountPool.quotaWindowHint")}
+            </div>
+          </div>
         </>
       )}
 

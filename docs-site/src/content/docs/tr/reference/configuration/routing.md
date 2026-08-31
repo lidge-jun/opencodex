@@ -41,6 +41,22 @@ Birden fazla sağlayıcıyla eşleşebilecek kurallar için sağlayıcı girdile
 ekleme sıralarına göre kontrol edilir, bu nedenle yalın bir model belirsiz
 olabileceğinde açık ad alanları kullanın.
 
+### Engellenen model yeniden yönlendirmeleri
+
+`blockedModelRedirects`, varsayılan olarak ayarlanmamış, tam çözümlenmiş model
+kimliği değiştirmelerinden oluşan isteğe bağlı üst düzey bir
+`Record<string, string>` eşlemesidir. Yukarıdaki çözümleme sırasından sonra
+çalışır: bir eşleşme önceden seçilmiş sağlayıcı ve hesap rotasını korur, yalnızca
+yukarı akış model kimliğini değiştirir ve rota nedenini
+`blocked-model-redirect` olarak kaydeder. Anahtarın atlanması yönlendirmeyi
+değiştirmez.
+
+```json
+{
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+}
+```
+
 ## Tam Codex hesap seçicileri
 
 `codexAccountNamespaces`, `side` gibi genel bir seçiciyi saklanan bir Codex
@@ -92,7 +108,7 @@ aileleri kullanamaz.
 | Anahtar | Tip | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | gerekli | Sıralı somut rotalar. `weight` 1–10000 arasındadır ve varsayılan olarak `1`'dir. |
-| `strategy?` | `"failover" \| "round-robin"` | `"failover"` | Seçim stratejisi. Hedef sırası yük devretme önceliğidir; ağırlıklar pürüzsüz ağırlıklı round-robin'i şekillendirir. |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | Seçim stratejisi. Hedef sırası `failover` önceliğini belirler; `weight` değerleri `round-robin` ve `random` seçimlerini biçimlendirir; `least-used` kaydedilen başarılı istekleri izler; `reset-window` en yakın kota sıfırlamasını izler. |
 | `stickyLimit?` | `number` | `1` | Tek bir round-robin grubunda tutulan başarılı istekler. Aralık 1–100. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | ayarlanmamış | Yalnızca arayan çabayı atladığında ve seçilen hedef istenen basamağı bildirdiğinde uygulanır. |
 | `alias?` | `string` | — | Kurallı seçici slug'ı yerine isteğe bağlı genel model kimliği. |
@@ -216,9 +232,10 @@ deneme çalıştırması bu aday başına hesap alanlarını sağlayamaz.
 
 ### Kombolar ve politika profilleri
 
-- Bir **kombo**, açık sıralı/ağırlıklı hedef yönlendirmesi ve yük devretmesidir:
-  yapılandırılmış sıra (veya pürüzsüz ağırlıklı round-robin) karar verir ve
-  arızalar liste boyunca ilerler.
+- Bir **kombo**, açık sıralı/ağırlıklı hedef yönlendirmesidir (`failover`,
+  ağırlıklı `round-robin` veya `random` dengelemesi, `least-used` ya da
+  `reset-window`): yapılandırılmış strateji karar verir ve yeniden denenebilir arızalar
+  liste boyunca ilerler.
 - Bir **politika profili**, yapılandırılmış adaylar arasında kanıta dayalı
   seçimdir: kesin yetenek gereksinimleri önce filtreler, ardından belirleyici
   puanlama kalanları sıralar.
@@ -293,5 +310,4 @@ değişmeden ayrıştırılır. Geçmiş dizini tek kullanımlıktır -
 otomatik bir yeniden oluşturmayı tetikler; `ocx logs rebuild-index` bunu zorlar.
 Bu sistemdeki hiçbir şey ağırlıkları, bütçeleri veya aday kümelerini otomatik
 olarak ayarlamaz.
-
 

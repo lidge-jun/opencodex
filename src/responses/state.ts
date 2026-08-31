@@ -3,16 +3,23 @@ import { uptime } from "node:os";
 import { dirname, join } from "node:path";
 import { atomicWriteFileAsync, getConfigDir, resolveWriteTarget } from "../config";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
+import { windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import type { OcxProviderContinuationState } from "../types";
 import {
+  cleanupSupersededResponseSpillPublication,
+  createResponseSpillPublicationControl,
   deleteResponseSpill,
+  MAX_RESPONSE_SPILL_PAYLOAD_BYTES,
   noteStubSwapForTest,
   readResponseSpill,
   recoverOrphanedResponseSpills,
   responseSpillDirectory,
   responseSpillPayloadCap,
+  markResponseSpillPublicationSuperseded,
+  type ResponseSpillPublicationControl,
   type ResponseSpillRef,
   writeResponseSpillDurably,
+  writeResponseSpillDurablyAsync,
 } from "./spill-store";
 
 const MAX_STORED_RESPONSES = 1_000;
@@ -51,6 +58,10 @@ const PERIODIC_TEMP_MAX_CLEANUPS = 64;
 const PERIODIC_TEMP_SCAN_DEADLINE_MS = 25;
 const RESPONSE_STATE_TEMP_NAME = /^responses-state\.json\.ocx\.(\d+)\.(\d+)\.tmp$/;
 const MAX_SNAPSHOT_REWRITE_ATTEMPTS = 4;
+const RESPONSE_SPILL_SHUTDOWN_BUDGET_MS = 5_000;
+const RESPONSE_SPILL_SHUTDOWN_FALLBACK_RESERVE_MS = 4_000;
+const RESPONSE_SPILL_ASYNC_ACL_ATTEMPT_BUDGET_MS = 30_000;
+const RESPONSE_SPILL_SHUTDOWN_TERMINALIZATION_MAX_PASSES = MAX_STORED_RESPONSES + 1;
 
 interface ResidentResponseState {
   kind: "resident";
@@ -160,6 +171,424 @@ const pendingSpillUnlinks: ResponseSpillRef[] = [];
 // structured 400 — bounded-loss, never silent corruption or unbounded disk.
 const PENDING_SPILL_UNLINKS_MAX = 128;
 
+/**
+ * Windows keeps the candidate replayable while required ACL hardening runs off the event loop.
+ * Pending bytes are pinned, not evictable; cap them below the process-owned 512 MiB ceiling so an
+ * icacls outage cannot turn the serialized queue into an unbounded resident backlog.
+ */
+const MAX_PENDING_RESPONSE_SPILL_BYTES = MAX_RESPONSE_SPILL_PAYLOAD_BYTES;
+
+interface PendingResponseSpill {
+  id: string;
+  candidate: ResidentResponseState | null;
+  supersededSpill?: ResponseSpillRef;
+  directAdmission: boolean;
+  running: boolean;
+  cancelled: boolean;
+  released: boolean;
+  sizeBytes: number;
+  publicationControl: ResponseSpillPublicationControl;
+}
+
+const pendingResponseSpills = new Set<PendingResponseSpill>();
+const pendingResponseSpillById = new Map<string, PendingResponseSpill>();
+let pendingResponseSpillBytes = 0;
+let responseSpillPublicationTail: Promise<void> = Promise.resolve();
+let responseSpillShutdownBudgetOverride: { totalMs: number; fallbackReserveMs: number } | null = null;
+let responseSpillShutdownTerminalizationPassLimitOverride: number | null = null;
+let responseSpillAsyncAclAttemptBudgetOverride: number | null = null;
+
+function deferSupersededSpill(ref: ResponseSpillRef | undefined): void {
+  if (!ref) return;
+  pendingSpillUnlinks.push(ref);
+  while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
+    deleteResponseSpill(pendingSpillUnlinks.shift()!);
+  }
+}
+
+function releasePendingResponseSpill(job: PendingResponseSpill): void {
+  if (job.released) return;
+  job.released = true;
+  pendingResponseSpillBytes = Math.max(0, pendingResponseSpillBytes - job.sizeBytes);
+  pendingResponseSpills.delete(job);
+  if (pendingResponseSpillById.get(job.id) === job) pendingResponseSpillById.delete(job.id);
+  job.candidate = null;
+}
+
+function cancelPendingResponseSpill(id: string): ResponseSpillRef | undefined {
+  const job = pendingResponseSpillById.get(id);
+  if (!job) return undefined;
+  pendingResponseSpillById.delete(id);
+  job.cancelled = true;
+  markResponseSpillPublicationSuperseded(job.publicationControl);
+  const superseded = job.supersededSpill;
+  // A queued job has not captured the candidate in an async frame yet, so release it now.
+  // A running job retains its accounting until settlement and will discard its stale file.
+  if (!job.running) releasePendingResponseSpill(job);
+  return superseded;
+}
+
+function isAclTimeout(error: unknown): boolean {
+  return !!error && typeof error === "object" && "code" in error
+    && String((error as { code?: unknown }).code) === "ETIMEDOUT";
+}
+
+function spillPayloadForResident(candidate: ResidentResponseState): Parameters<typeof writeResponseSpillDurably>[1] {
+  return {
+    createdAt: candidate.createdAt,
+    ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
+    items: candidate.items,
+    ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
+    ...(candidate.providers ? { providers: candidate.providers } : {}),
+  };
+}
+
+async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void> {
+  if (job.cancelled || !job.candidate) return;
+  job.running = true;
+  const candidate = job.candidate;
+  let ref: ResponseSpillRef | null = null;
+  try {
+    const state = spillPayloadForResident(candidate);
+    try {
+      ref = await writeResponseSpillDurablyAsync(job.id, state, {
+        aclBudgetMs: responseSpillAsyncAclAttemptBudgetMs(),
+        publicationControl: job.publicationControl,
+      });
+    } catch (error) {
+      if (!isAclTimeout(error)) throw error;
+      // The ACL helper permits exactly one caller-owned recovery budget. The resident generation
+      // remains replayable during both attempts, so a transient timeout never becomes a tombstone.
+      ref = await writeResponseSpillDurablyAsync(job.id, state, {
+        aclBudgetMs: responseSpillAsyncAclAttemptBudgetMs(),
+        retryTimedOutOnce: true,
+        publicationControl: job.publicationControl,
+      });
+    }
+    if (ref.payloadBytes > responseSpillPayloadCap()) {
+      deleteResponseSpill(ref);
+      ref = null;
+      if (job.directAdmission) admissionCounters.oversizedDrops += 1;
+      throw Object.assign(new Error("Response spill payload exceeds replay ceiling"), { code: "EFBIG" });
+    }
+    if (states.get(job.id) !== candidate || job.cancelled) {
+      deleteResponseSpill(ref);
+      ref = null;
+      return;
+    }
+    if (swapResidentForSpill(job.id, candidate, ref)) {
+      ref = null;
+      spillCounters.writes += 1;
+      if (job.directAdmission) admissionCounters.directSpills += 1;
+      deferSupersededSpill(job.supersededSpill);
+    }
+  } catch {
+    if (ref) deleteResponseSpill(ref);
+    if (states.get(job.id) === candidate && !job.cancelled) {
+      spillCounters.writeFailures += 1;
+      replaceWithSpillFailure(job.id, candidate);
+      deferSupersededSpill(job.supersededSpill);
+    }
+  } finally {
+    const cancelled = job.cancelled;
+    releasePendingResponseSpill(job);
+    recomputeOldestResident();
+    if (!cancelled) {
+      schedulePersist();
+      pruneResponses();
+      enforceAppOwnedMemoryBudget();
+    }
+  }
+}
+
+function queuePendingResponseSpill(
+  id: string,
+  candidate: ResidentResponseState,
+  options: { supersededSpill?: ResponseSpillRef; directAdmission?: boolean } = {},
+): void {
+  const inheritedSpill = cancelPendingResponseSpill(id) ?? options.supersededSpill;
+  if (pendingResponseSpillBytes + candidate.sizeBytes > MAX_PENDING_RESPONSE_SPILL_BYTES) {
+    spillCounters.writeFailures += 1;
+    replaceWithSpillFailure(id, candidate);
+    deferSupersededSpill(inheritedSpill);
+    return;
+  }
+  const job: PendingResponseSpill = {
+    id,
+    candidate,
+    ...(inheritedSpill ? { supersededSpill: inheritedSpill } : {}),
+    directAdmission: options.directAdmission === true,
+    running: false,
+    cancelled: false,
+    released: false,
+    sizeBytes: candidate.sizeBytes,
+    publicationControl: createResponseSpillPublicationControl(),
+  };
+  pendingResponseSpills.add(job);
+  pendingResponseSpillById.set(id, job);
+  pendingResponseSpillBytes += job.sizeBytes;
+  recomputeOldestResident();
+  responseSpillPublicationTail = responseSpillPublicationTail
+    .then(() => runPendingResponseSpill(job), () => runPendingResponseSpill(job));
+}
+
+function replaceWithPendingResponseSpill(
+  id: string,
+  candidate: ResidentResponseState,
+  expected: StoredResponseState | undefined,
+  options: { directAdmission?: boolean } = {},
+): boolean {
+  const inheritedSpill = pendingResponseSpillById.get(id)?.supersededSpill
+    ?? (expected?.kind === "spill" ? expected.spill : undefined);
+  if (!replaceMapEntry(id, candidate, expected)) return false;
+  queuePendingResponseSpill(id, candidate, {
+    ...(inheritedSpill ? { supersededSpill: inheritedSpill } : {}),
+    directAdmission: options.directAdmission === true,
+  });
+  return true;
+}
+
+/** Test-only: settle every serialized Windows spill publication. */
+export async function flushPendingResponseSpillsForTests(): Promise<void> {
+  await drainResponseSpillPublications();
+}
+
+/** Test-only: observe ordinary queue settlement without invoking shutdown fallback. */
+export async function awaitResponseSpillPublicationTailForTests(): Promise<void> {
+  await responseSpillPublicationTail;
+}
+
+/** Test-only: observe the bounded queue without exposing payloads. */
+export function pendingResponseSpillMetricsForTests(): { count: number; bytes: number } {
+  return { count: pendingResponseSpills.size, bytes: pendingResponseSpillBytes };
+}
+
+/** Test-only: shorten the shutdown drain/fallback budget (null restores production values). */
+export function setResponseSpillShutdownBudgetForTests(
+  budget: { totalMs: number; fallbackReserveMs: number } | null,
+): void {
+  responseSpillShutdownBudgetOverride = budget;
+}
+
+/** Test-only: shorten the ordinary async whole-attempt ACL budget. */
+export function setResponseSpillAsyncAclAttemptBudgetForTests(budgetMs: number | null): void {
+  responseSpillAsyncAclAttemptBudgetOverride = budgetMs;
+}
+
+function responseSpillAsyncAclAttemptBudgetMs(): number {
+  return responseSpillAsyncAclAttemptBudgetOverride ?? RESPONSE_SPILL_ASYNC_ACL_ATTEMPT_BUDGET_MS;
+}
+
+/** Test-only: lower the hard terminalization pass guard (null restores production). */
+export function setResponseSpillShutdownTerminalizationPassLimitForTests(limit: number | null): void {
+  responseSpillShutdownTerminalizationPassLimitOverride = limit;
+}
+
+function responseSpillShutdownTerminalizationPassLimit(): number {
+  return responseSpillShutdownTerminalizationPassLimitOverride
+    ?? RESPONSE_SPILL_SHUTDOWN_TERMINALIZATION_MAX_PASSES;
+}
+
+function responseSpillShutdownBudget(): { totalMs: number; fallbackReserveMs: number } {
+  return responseSpillShutdownBudgetOverride ?? {
+    totalMs: RESPONSE_SPILL_SHUTDOWN_BUDGET_MS,
+    fallbackReserveMs: RESPONSE_SPILL_SHUTDOWN_FALLBACK_RESERVE_MS,
+  };
+}
+
+function awaitResponseSpillTailUntil(observed: Promise<void>, deadline: number): Promise<boolean> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return Promise.resolve(false);
+  return new Promise(resolve => {
+    let finished = false;
+    const finish = (settled: boolean): void => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve(settled);
+    };
+    const timer = setTimeout(() => finish(false), remaining);
+    observed.then(() => finish(true), () => finish(true));
+  });
+}
+
+function installShutdownFallbackSpill(
+  job: PendingResponseSpill,
+  candidate: ResidentResponseState,
+  aclBudgetMs: number,
+): void {
+  let ref: ResponseSpillRef | null = null;
+  try {
+    ref = writeResponseSpillDurably(job.id, spillPayloadForResident(candidate), { aclBudgetMs });
+    if (ref.payloadBytes > responseSpillPayloadCap()) {
+      deleteResponseSpill(ref);
+      ref = null;
+      if (job.directAdmission) admissionCounters.oversizedDrops += 1;
+      throw Object.assign(new Error("Response spill payload exceeds replay ceiling"), { code: "EFBIG" });
+    }
+    if (states.get(job.id) !== candidate) {
+      deleteResponseSpill(ref);
+      ref = null;
+      return;
+    }
+    if (swapResidentForSpill(job.id, candidate, ref)) {
+      ref = null;
+      spillCounters.writes += 1;
+      if (job.directAdmission) admissionCounters.directSpills += 1;
+      deferSupersededSpill(job.supersededSpill);
+    }
+  } catch (error) {
+    if (ref) deleteResponseSpill(ref);
+    if (states.get(job.id) === candidate) {
+      spillCounters.writeFailures += 1;
+      replaceWithSpillFailure(job.id, candidate);
+      deferSupersededSpill(job.supersededSpill);
+    }
+    throw error;
+  }
+}
+
+function terminalizeShutdownFallbackCandidate(
+  job: PendingResponseSpill,
+  candidate: ResidentResponseState,
+): void {
+  if (states.get(job.id) !== candidate) return;
+  spillCounters.writeFailures += 1;
+  replaceWithSpillFailure(job.id, candidate);
+  deferSupersededSpill(job.supersededSpill);
+}
+
+function pendingShutdownFallbackCandidates(): Array<{
+  job: PendingResponseSpill;
+  candidate: ResidentResponseState;
+}> {
+  return [...pendingResponseSpills]
+    .map(job => ({ job, candidate: job.candidate }))
+    .filter((entry): entry is { job: PendingResponseSpill; candidate: ResidentResponseState } => !!entry.candidate);
+}
+
+function supersedeShutdownFallbackBatch(
+  pending: Array<{ job: PendingResponseSpill; candidate: ResidentResponseState }>,
+  failures: Error[],
+): void {
+  for (const { job } of pending) {
+    job.cancelled = true;
+    markResponseSpillPublicationSuperseded(job.publicationControl);
+  }
+  for (const { job } of pending) {
+    const cleanupFailure = cleanupSupersededResponseSpillPublication(job.publicationControl);
+    if (cleanupFailure) failures.push(cleanupFailure);
+    releasePendingResponseSpill(job);
+  }
+}
+
+function stopAtShutdownTerminalizationPassLimit(
+  pending: Array<{ job: PendingResponseSpill; candidate: ResidentResponseState }>,
+  failures: Error[],
+): void {
+  failures.push(Object.assign(new Error("Response spill shutdown terminalization pass limit exceeded"), { code: "ELOOP" }));
+  supersedeShutdownFallbackBatch(pending, failures);
+  for (const { job, candidate } of pending) {
+    terminalizeShutdownFallbackCandidate(job, candidate);
+  }
+  for (const [id, state] of [...states]) {
+    if (state.kind !== "resident") continue;
+    spillCounters.writeFailures += 1;
+    replaceWithSpillFailure(id, state);
+  }
+  recomputeOldestResident();
+  pruneResponses();
+  enforceAppOwnedMemoryBudget();
+}
+
+function terminalizeExhaustedShutdownFallback(
+  initial: Array<{ job: PendingResponseSpill; candidate: ResidentResponseState }>,
+  failures: Error[],
+): void {
+  let pending = initial;
+  let passes = 0;
+  const passLimit = responseSpillShutdownTerminalizationPassLimit();
+  // Every pass replaces each captured resident with a tombstone. Pruning may expose
+  // another finite batch, but resident count strictly decreases until none can requeue.
+  while (pending.length > 0) {
+    if (passes >= passLimit) {
+      stopAtShutdownTerminalizationPassLimit(pending, failures);
+      return;
+    }
+    passes += 1;
+    supersedeShutdownFallbackBatch(pending, failures);
+    for (const { job, candidate } of pending) {
+      failures.push(Object.assign(new Error("Response spill shutdown fallback budget exhausted"), { code: "ETIMEDOUT" }));
+      terminalizeShutdownFallbackCandidate(job, candidate);
+    }
+    recomputeOldestResident();
+    pruneResponses();
+    enforceAppOwnedMemoryBudget();
+    pending = pendingShutdownFallbackCandidates();
+  }
+}
+
+function fallbackPendingResponseSpills(reserveMs: number): Error[] {
+  const deadline = Date.now() + reserveMs;
+  const failures: Error[] = [];
+  for (;;) {
+    const pending = pendingShutdownFallbackCandidates();
+    if (pending.length === 0) return failures;
+    if (Date.now() >= deadline) {
+      terminalizeExhaustedShutdownFallback(pending, failures);
+      return failures;
+    }
+
+    supersedeShutdownFallbackBatch(pending, failures);
+    let reserveExhausted = false;
+    for (let index = 0; index < pending.length; index += 1) {
+      const { job, candidate } = pending[index]!;
+      if (states.get(job.id) !== candidate) continue;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        reserveExhausted = true;
+        for (const exhausted of pending.slice(index)) {
+          failures.push(Object.assign(new Error("Response spill shutdown fallback budget exhausted"), { code: "ETIMEDOUT" }));
+          terminalizeShutdownFallbackCandidate(exhausted.job, exhausted.candidate);
+        }
+        break;
+      }
+      try {
+        installShutdownFallbackSpill(job, candidate, remaining);
+      } catch (error) {
+        failures.push(error instanceof Error ? error : new Error("Response spill shutdown fallback failed"));
+      }
+    }
+    recomputeOldestResident();
+    pruneResponses();
+    enforceAppOwnedMemoryBudget();
+    if (reserveExhausted || Date.now() >= deadline) {
+      terminalizeExhaustedShutdownFallback(pendingShutdownFallbackCandidates(), failures);
+      return failures;
+    }
+  }
+}
+
+async function drainResponseSpillPublications(): Promise<void> {
+  const budget = responseSpillShutdownBudget();
+  const fallbackReserveMs = Math.min(budget.totalMs, Math.max(1, budget.fallbackReserveMs));
+  const drainDeadline = Date.now() + Math.max(0, budget.totalMs - fallbackReserveMs);
+
+  for (;;) {
+    if (pendingResponseSpills.size === 0) return;
+    const observed = responseSpillPublicationTail;
+    const settled = await awaitResponseSpillTailUntil(observed, drainDeadline);
+    if (!settled) {
+      const failures = fallbackPendingResponseSpills(fallbackReserveMs);
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Response spill shutdown fallback incomplete");
+      }
+      return;
+    }
+    if (observed === responseSpillPublicationTail) return;
+  }
+}
+
 function byteCap(): number {
   return byteCapOverride ?? MAX_STORED_RESPONSE_BYTES;
 }
@@ -200,6 +629,7 @@ function recomputeOldestResident(): void {
   oldestResidentAt = null;
   for (const [id, state] of states) {
     if (state.kind !== "resident") continue;
+    if (pendingResponseSpillById.get(id)?.candidate === state) continue;
     if (oldestResidentAt !== null && state.createdAt >= oldestResidentAt) continue;
     oldestResidentId = id;
     oldestResidentAt = state.createdAt;
@@ -248,6 +678,7 @@ function deleteOwnedSpills(entry: StoredResponseState): void {
 function deleteEntry(id: string, options: { deleteSpill?: boolean } = {}): void {
   const existing = states.get(id);
   if (!existing) return;
+  const supersededSpill = cancelPendingResponseSpill(id);
   storedResponseBytes -= existing.sizeBytes;
   if (existing.kind === "resident") {
     residentResponseBytes -= existing.sizeBytes;
@@ -258,6 +689,7 @@ function deleteEntry(id: string, options: { deleteSpill?: boolean } = {}): void 
   if (oldestResidentId === id) recomputeOldestResident();
   stateRevision += 1;
   if (options.deleteSpill !== false) deleteOwnedSpills(existing);
+  if (options.deleteSpill !== false && supersededSpill) deleteResponseSpill(supersededSpill);
 }
 
 function replaceWithSpillFailure(
@@ -362,11 +794,18 @@ function setResidentEntry(id: string, entry: ResidentInput): void {
     pruneResponses();
     return;
   }
+  const pending = pendingResponseSpillById.get(id);
+  if (windowsSecretAclApplies() && (expected?.kind === "spill" || pending?.supersededSpill)) {
+    replaceWithPendingResponseSpill(id, candidate, expected);
+    pruneResponses();
+    return;
+  }
   if (expected?.kind === "spill") {
     replaceSpillEntryAtomically(id, expected, candidate);
     pruneResponses();
     return;
   }
+  if (windowsSecretAclApplies()) cancelPendingResponseSpill(id);
   if (!replaceMapEntry(id, candidate, expected)) return;
   pruneResponses();
 }
@@ -387,6 +826,10 @@ function admitOversizedCandidate(
   if (candidate.sizeBytes > responseSpillPayloadCap()) {
     admissionCounters.oversizedDrops += 1;
     replaceWithSpillFailure(id, expected, { deferSpillUnlink: true });
+    return;
+  }
+  if (windowsSecretAclApplies()) {
+    replaceWithPendingResponseSpill(id, candidate, expected, { directAdmission: true });
     return;
   }
   try {
@@ -927,8 +1370,7 @@ function schedulePersist(): void {
   schedulePersistAt(snapshotPath());
 }
 
-/** Flush any pending debounced snapshot write (graceful shutdown / deterministic tests). */
-export async function flushResponseState(): Promise<void> {
+async function flushResponseSnapshot(): Promise<void> {
   if (persistTimer) {
     await persistNow(pendingPersistPath ?? snapshotPath(), true);
     return;
@@ -939,6 +1381,23 @@ export async function flushResponseState(): Promise<void> {
   // this flush was waiting on the single-flight gate. Shutdown owns one awaited
   // bounded follow-up rather than returning behind that unref'd timer.
   if (persistTimer) await persistNow(pendingPersistPath ?? snapshotPath(), true);
+}
+
+/** Flush publications and snapshot state; report drain failure only after persistence completes. */
+export async function flushResponseState(): Promise<void> {
+  const failures: unknown[] = [];
+  try {
+    await drainResponseSpillPublications();
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await flushResponseSnapshot();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "Response state shutdown flush incomplete");
 }
 
 function inputItems(input: unknown): unknown[] {
@@ -1048,12 +1507,20 @@ function pruneResponses(at = now()): void {
   // Unconditional RAM cap. Resident payloads demote durably; stubs/tombstones are
   // deleted only when even their bounded metadata cannot fit the override.
   while (storedResponseBytes > byteCap() && states.size > 0) {
-    const oldestResident = [...states].find(([, entry]) => entry.kind === "resident");
+    const oldestResident = [...states].find(([id, entry]) => entry.kind === "resident"
+      && pendingResponseSpillById.get(id)?.candidate !== entry);
+    const hasPendingResident = !oldestResident && [...states].some(([id, entry]) => entry.kind === "resident"
+      && pendingResponseSpillById.get(id)?.candidate === entry);
+    if (hasPendingResident) break;
     const oldestId = oldestResident?.[0] ?? states.keys().next().value as string | undefined;
     if (!oldestId) break;
     const entry = states.get(oldestId)!;
     if (entry.kind !== "resident") {
       deleteEntry(oldestId);
+      continue;
+    }
+    if (windowsSecretAclApplies()) {
+      queuePendingResponseSpill(oldestId, entry);
       continue;
     }
     try {
@@ -1143,11 +1610,18 @@ export function sweepAbandonedResponseStateTemps(): number {
 }
 
 export function responseContinuationRetainedStoreSnapshot(): RetainedStoreSnapshot {
+  let currentPendingBytes = 0;
+  for (const job of pendingResponseSpills) {
+    if (job.candidate && states.get(job.id) === job.candidate) currentPendingBytes += job.sizeBytes;
+  }
+  const detachedPendingBytes = Math.max(0, pendingResponseSpillBytes - currentPendingBytes);
+  const bytes = storedResponseBytes + detachedPendingBytes;
+  const evictableBytes = Math.max(0, residentResponseBytes - currentPendingBytes);
   return {
     count: states.size,
-    bytes: storedResponseBytes,
-    evictableBytes: residentResponseBytes,
-    pinnedBytes: Math.max(0, storedResponseBytes - residentResponseBytes),
+    bytes,
+    evictableBytes,
+    pinnedBytes: Math.max(0, bytes - evictableBytes),
     oldestAt: oldestResidentAt,
   };
 }
@@ -1157,6 +1631,11 @@ export function evictOldestResponseContinuationForBudget(): number {
   const id = oldestResidentId;
   const entry = states.get(id);
   if (!entry || entry.kind !== "resident") return 0;
+  if (windowsSecretAclApplies()) {
+    queuePendingResponseSpill(id, entry);
+    schedulePersist();
+    return 0;
+  }
   try {
     const ref = writeResponseSpillDurably(id, {
       createdAt: entry.createdAt,
@@ -1380,7 +1859,7 @@ export function responseStateMetrics(): ResponseStateMetrics {
     residentCount,
     spillStubCount,
     tombstoneCount,
-    totalBytes: storedResponseBytes,
+    totalBytes: responseContinuationRetainedStoreSnapshot().bytes,
     spillPayloadBytes,
     largestBytes,
     oldestAgeMs: states.size > 0 ? at - oldestCreatedAt : 0,
@@ -1492,6 +1971,8 @@ export function clearResponseStateMemoryForTests(): void {
     persistTimer = null;
   }
   pendingPersistPath = null;
+  for (const id of [...pendingResponseSpillById.keys()]) cancelPendingResponseSpill(id);
+  pendingResponseSpillById.clear();
   states.clear();
   storedResponseBytes = 0;
   residentResponseBytes = 0;

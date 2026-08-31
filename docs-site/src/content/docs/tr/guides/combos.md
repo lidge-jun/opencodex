@@ -195,6 +195,29 @@ Ağırlıklar görecelidir, yüzde değildir. `2,1` ve `200,100` ağırlıkları
 oranı ifade eder. Niyeti ileten küçük değerleri tercih edin.
 :::
 
+### `random`: istek başına ağırlıklı seçim
+
+`random`, her istek için uygun hedeflerden birini `weight` ile orantılı
+olasılıkla seçer. Her istek bağımsız bir seçimdir; bu nedenle trafik,
+`round-robin` stratejisinin belirleyici düzeni veya yapışkanlığı olmadan
+hedeflere dağılır. `stickyLimit` bu stratejiyi etkilemez.
+
+### `least-used`: en az başarılı isteğe sahip hedefi tercih et
+
+`least-used`, her isteği bu opencodex sürecinin kaydettiği en az başarılı istek
+sayısına sahip uygun hedefe yönlendirir. Sayaçlar yeniden başlatmada sıfırdan
+başlar ve eşitliklerde yapılandırma sırası korunur. `weight` değerleri ve
+`stickyLimit` bu stratejiyi etkilemez.
+
+### `reset-window`: en yakın kota sıfırlamasını izle
+
+`reset-window`, her isteği önbelleğe alınmış sağlayıcı kota anlık görüntüsünde
+yaklaşan en yakın pencere sıfırlaması (beş saatlik, haftalık, aylık veya özel)
+görünen uygun hedefe yönlendirir. Böylece ilk yenilenecek sağlayıcının kotası
+kullanılır. Güncel kota verisi bulunmayan hedeflerde ve eşitliklerde
+yapılandırma sırası korunur. `weight` değerleri ve `stickyLimit` bu stratejiyi
+etkilemez.
+
 ## Bir hedef başarısız olduğunda ne olur?
 
 Kombo hataları **atlama (hop)** hataları ve **uç (terminal)** hatalar olarak
@@ -346,9 +369,9 @@ saklanır:
 | Alan | Gerekli | Varsayılan | Kurallar |
 | --- | --- | --- | --- |
 | `targets` | Evet | — | Yapılandırılmış `{ provider, model, weight? }` hedeflerinin boş olmayan sıralı dizisi. Yinelenen sağlayıcı/model çiftleri reddedilir. |
-| `targets[].weight` | Hayır | `1` | 1 ile 10.000 arasında tam sayı. Round-robin tarafından kullanılır; yük devretme tarafından yok sayılır. |
-| `strategy` | Hayır | `"failover"` | `"failover"` veya `"round-robin"`. |
-| `stickyLimit` | Hayır | `1` | Round-robin seçimi başına 1 ile 100 arasında başarılı istek tam sayısı. |
+| `targets[].weight` | Hayır | `1` | 1 ile 10.000 arasında tam sayı. `round-robin` ve `random` tarafından kullanılır; `failover`, `least-used` ve `reset-window` tarafından yok sayılır. |
+| `strategy` | Hayır | `"failover"` | İzin verilen değerler: `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`. |
+| `stickyLimit` | Hayır | `1` | Yalnızca `round-robin` için geçerlidir; seçim başına 1 ile 100 arasında başarılı istek tam sayısı. |
 | `defaultEffort` | Hayır | `null` | `low`, `medium`, `high`, `xhigh`, `max` veya `ultra`; yalnızca arayan çabayı atladığında ve hedef desteği bildirdiğinde uygulanır. |
 | `alias` | Hayır | yok | İsteğe bağlı kırpılmış genel model kimliği; yukarıdaki takma ad kurallarını kullanın. Boş bir değer takma ad yok olarak saklanır. |
 | `nativeAlias` | Hayır | `false` | Şu anda desteklenen yalın bir yerel `alias`'ın yönlendirme ve katalog önceliği almasına açıkça izin verin. Asla takma addan çıkarılmaz. |

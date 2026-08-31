@@ -15,7 +15,12 @@ import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
-import { boundProvenanceEntries, STABLE_ZERO_BYTE_COORDINATOR_AGE_MS } from "../src/codex/inject-coordination";
+import {
+  boundProvenanceEntries,
+  CODEX_PROVENANCE_MAX_BYTES,
+  CODEX_PROVENANCE_MAX_TRANSACTIONS,
+  STABLE_ZERO_BYTE_COORDINATOR_AGE_MS,
+} from "../src/codex/inject-coordination";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 const repoRoot = join(import.meta.dir, "..");
@@ -244,6 +249,55 @@ describe("the lock is on the production path", () => {
     expect(readTransition()).toEqual(admitted);
     expect(readFileSync(join(opencodexHome, "integrations", "codex.json"), "utf8"))
       .toBe("{ malformed");
+  });
+
+  test("irreducible ledger extension overhead refuses the append without rewriting", () => {
+    seedNative();
+    const recordPath = join(opencodexHome, "integrations", "codex.json");
+    mkdirSync(join(opencodexHome, "integrations"), { recursive: true });
+    writeFileSync(recordPath, JSON.stringify({
+      version: 1,
+      provenance: {
+        futureLedger: "x".repeat(CODEX_PROVENANCE_MAX_BYTES + 1),
+        entries: [{
+          artifact: { kind: "config" },
+          baseline: { kind: "absent" },
+          postImage: null,
+          txId: "tx-existing",
+          at: "2026-08-30T00:00:00.000Z",
+        }],
+      },
+    }));
+    const before = readFileSync(recordPath, "utf8");
+
+    const result = parseChildJson<{ kind?: string; entryCount?: number }>(
+      runChild(["--eval", `
+        const {
+          captureCodexPreImages,
+          recordCodexNativeTransactionProvenance,
+        } = require("./src/codex/inject-coordination");
+        const result = recordCodexNativeTransactionProvenance(
+          captureCodexPreImages(),
+          "tx-must-not-append",
+        );
+        console.log(JSON.stringify({
+          kind: result.kind,
+          entryCount: result.kind === "updated"
+            ? result.record.provenance?.entries?.length
+            : undefined,
+        }));
+      `], {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        OPENCODEX_HOME: opencodexHome,
+      }),
+      "irreducible ledger extension overhead",
+    );
+
+    expect(result.kind).toBe("updated");
+    expect(result.entryCount).toBe(1);
+    // Exact bytes, not just semantics: a no-op must not pretty-print/rewrite the oversized file.
+    expect(readFileSync(recordPath, "utf8")).toBe(before);
   });
 
   /**
@@ -507,5 +561,151 @@ describe("provenance ledger bound", () => {
   test("a ledger within the window is returned unchanged", () => {
     const entries = Array.from({ length: 16 }, (_, i) => transaction(`tx-${i}`)).flat();
     expect(boundProvenanceEntries(entries, 16)).toBe(entries);
+  });
+
+  test("an oversized baseline is omitted whole rather than amplified into the record", () => {
+    // The native artifacts sit outside this proxy's trust boundary, so a `config.toml` grown to
+    // an arbitrary size would otherwise be copied into the record as base64 and re-serialized on
+    // every append — the transaction window alone does not bound that.
+    const huge = transaction("tx-huge");
+    huge[0] = {
+      ...huge[0]!,
+      baseline: {
+        kind: "present" as const,
+        sha256: "0".repeat(64),
+        bytesBase64: "A".repeat(CODEX_PROVENANCE_MAX_BYTES + 1),
+      },
+    };
+    // The baseline-size prefilter must reject this transaction before JSON.stringify reaches
+    // the tripwire. Only one sibling is oversized; all three must still be omitted together.
+    Object.defineProperty(huge[0]!, "toJSON", {
+      value: () => {
+        throw new Error("oversized transaction was serialized");
+      },
+    });
+    const entries = [...transaction("tx-small"), ...huge];
+
+    const bounded = boundProvenanceEntries(entries, 16);
+
+    expect(bounded.map(e => e.txId)).toEqual(["tx-small", "tx-small", "tx-small"]);
+    expect(Buffer.byteLength(JSON.stringify(bounded), "utf-8"))
+      .toBeLessThanOrEqual(CODEX_PROVENANCE_MAX_BYTES);
+  });
+
+  test("backfills the transaction window after an oversized newest transaction is skipped", () => {
+    const maxBytes = 64 * 1024;
+    const oversized = transaction("tx-16");
+    oversized[0] = {
+      ...oversized[0]!,
+      baseline: {
+        kind: "present" as const,
+        sha256: "0".repeat(64),
+        bytesBase64: "A".repeat(maxBytes + 1),
+      },
+    };
+    const entries = [
+      ...Array.from({ length: 16 }, (_, i) => transaction(`tx-${i}`)).flat(),
+      ...oversized,
+    ];
+
+    const bounded = boundProvenanceEntries(entries, 16, maxBytes);
+    const kept = [...new Set(bounded.map(entry => entry.txId))];
+
+    expect(kept).toEqual(Array.from({ length: 16 }, (_, i) => `tx-${i}`));
+    for (const txId of kept) expect(bounded.filter(entry => entry.txId === txId)).toHaveLength(3);
+  });
+
+  test("the byte ceiling drops whole transactions, oldest first", () => {
+    const padded = (txId: string) => transaction(txId).map(entry => ({
+      ...entry,
+      baseline: {
+        kind: "present" as const,
+        sha256: "0".repeat(64),
+        bytesBase64: "A".repeat(Math.floor(CODEX_PROVENANCE_MAX_BYTES / 4)),
+      },
+    }));
+    const entries = Array.from({ length: 4 }, (_, i) => padded(`tx-${i}`)).flat();
+
+    const bounded = boundProvenanceEntries(entries, 16);
+    const kept = [...new Set(bounded.map(e => e.txId))];
+
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(4);
+    // Newest survive; the dropped ones are the oldest, and each survivor is whole.
+    expect(kept.at(-1)).toBe("tx-3");
+    for (const txId of kept) expect(bounded.filter(e => e.txId === txId)).toHaveLength(3);
+    expect(Buffer.byteLength(JSON.stringify(bounded), "utf-8"))
+      .toBeLessThanOrEqual(CODEX_PROVENANCE_MAX_BYTES);
+  });
+
+  test("the ceiling measures structured extensions in the pretty-printed record shape", () => {
+    const extended = (txId: string) => transaction(txId).map((entry, index) => ({
+      ...entry,
+      // Integration records preserve unknown structured fields. Compact JSON can fit while the
+      // writer's two-space indentation does not, so the bound must use the actual write shape.
+      extension: index === 0
+        ? { rows: Array.from({ length: 400 }, () => ({ left: "x", right: "y" })) }
+        : undefined,
+    }));
+    const entries = [...extended("tx-old"), ...extended("tx-new")];
+    const oneTransactionBytes = Buffer.byteLength(`${JSON.stringify({
+      version: 1,
+      provenance: { entries: extended("tx-new") },
+    }, null, 2)}\n`, "utf-8");
+    const bothCompactBytes = Buffer.byteLength(JSON.stringify(entries), "utf-8");
+    const bothPrettyBytes = Buffer.byteLength(`${JSON.stringify({
+      version: 1,
+      provenance: { entries },
+    }, null, 2)}\n`, "utf-8");
+    const maxBytes = Math.max(oneTransactionBytes, bothCompactBytes);
+
+    expect(bothPrettyBytes).toBeGreaterThan(maxBytes);
+    const bounded = boundProvenanceEntries(entries, 16, maxBytes);
+
+    expect([...new Set(bounded.map(entry => entry.txId))]).toEqual(["tx-new"]);
+  });
+
+  test("unknown ledger extensions consume the same byte budget as entries", () => {
+    const entries = [...transaction("tx-old"), ...transaction("tx-new")];
+    const ledger = {
+      entries,
+      futureLedger: {
+        rows: Array.from({ length: 200 }, () => ({ left: "x", right: "y" })),
+      },
+    };
+    const writeBytes = (candidate: readonly (typeof entries)[number][]) =>
+      Buffer.byteLength(`${JSON.stringify({
+        version: 1,
+        provenance: { ...ledger, entries: candidate },
+      }, null, 2)}\n`, "utf-8");
+    const newest = transaction("tx-new");
+    const maxBytes = writeBytes(newest);
+
+    expect(writeBytes(entries)).toBeGreaterThan(maxBytes);
+    const bounded = boundProvenanceEntries(entries, 16, maxBytes, ledger);
+
+    expect([...new Set(bounded.map(entry => entry.txId))]).toEqual(["tx-new"]);
+    expect(writeBytes(bounded)).toBeLessThanOrEqual(maxBytes);
+  });
+
+  test("a full window of ordinary transactions is still kept whole", () => {
+    // The ceiling exists to refuse pathological artifacts, not to shrink the window above it.
+    // This pins the two together: the 25 KB `config.toml` the window comment describes measures
+    // about 100 KiB per transaction, so a full window is roughly 1.6 MiB and must survive intact.
+    const ordinary = Buffer.from("x".repeat(25 * 1024)).toString("base64");
+    const entries = Array.from(
+      { length: CODEX_PROVENANCE_MAX_TRANSACTIONS },
+      (_, i) => transaction(`tx-${i}`).map(entry => ({
+        ...entry,
+        baseline: { kind: "present" as const, sha256: "0".repeat(64), bytesBase64: ordinary },
+        postImage: "0".repeat(64),
+      })),
+    ).flat();
+
+    const bounded = boundProvenanceEntries(entries);
+
+    expect(bounded).toBe(entries);
+    expect(new Set(bounded.map(e => e.txId)).size).toBe(CODEX_PROVENANCE_MAX_TRANSACTIONS);
+    expect(bounded).toHaveLength(entries.length);
   });
 });

@@ -179,6 +179,33 @@ describe("policy candidate fallback", () => {
     expect(logCtx.activeAttempt).toBe(logCtx.attempts?.[1]);
   });
 
+  test("a stored Pool 401 replay dispatch stops policy candidate fallback", async () => {
+    const trace = policyTrace();
+    const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    const seenModels: string[] = [];
+    let replaySignals = 0;
+
+    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {
+      onStoredPool401ReplayDispatched: () => { replaySignals += 1; },
+    }, {
+      runCore: async (req, _config, childLog, options) => {
+        const body = await req.json() as { model: string };
+        seenModels.push(body.model);
+        childLog.routeDecision = trace;
+        seedAttempt(childLog, "provider-a", "model-a");
+        options.onStoredPool401ReplayDispatched?.();
+        return Response.json(
+          { error: { message: "stored replay exhausted", type: "rate_limit_error" } },
+          { status: 429 },
+        );
+      },
+    });
+
+    expect(response.status).toBe(429);
+    expect(seenModels).toEqual(["policy/daily"]);
+    expect(replaySignals).toBe(1);
+  });
+
   test("returns local pacing overload without switching policy candidates", async () => {
     const trace = policyTrace();
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;

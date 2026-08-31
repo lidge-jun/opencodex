@@ -733,6 +733,63 @@ describe("kiro adapter — parseStream", () => {
     expect(ordered).toEqual(["text:commentary", "tool_call_start", "tool_call_delta", "tool_call_end", "done"]);
   });
 
+  // The "회귀없도록" half of this unit. Measured across 644 Kiro rollouts, same-inference prose of
+  // >=600 chars followed by a real tool call occurs 26 times: 4 are the defect (a question tail the
+  // model then overrides), 22 are ordinary progress narration that must keep working byte for byte.
+  // Their lengths overlap completely (defect 1329-1938, legitimate 608-3141), which is why this unit
+  // ships no prose-shape gate and why the contract change must leave this path untouched. These
+  // lengths are the measured boundary values, defect and legitimate alike -- the point is that the
+  // adapter treats them identically.
+  for (const length of [608, 1329, 1454, 1938, 3141]) {
+    test(`staged prose of ${length} chars followed by a real tool call is relayed unchanged`, async () => {
+      const adapter = createKiroAdapter(provider);
+      await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
+      const prose = "가".repeat(length);
+      const args = '{"command":"ls -la"}';
+
+      const events = await collectAdapterEvents(adapter.parseStream(new Response(streamOf(
+        eventFrame({ content: prose }),
+        eventFrame({ name: "bash", toolUseId: "t-regress" }),
+        eventFrame({ input: args, name: "bash", toolUseId: "t-regress" }),
+        eventFrame({ name: "bash", stop: true, toolUseId: "t-regress" }),
+        eventFrame({ stopReason: "END_TURN" }, "metadataEvent"),
+      ))));
+
+      // Byte-identical commentary, in order, with nothing dropped or promoted to a final answer.
+      expect(events.filter(event => event.type === "text_delta")).toEqual([
+        { type: "text_delta", text: prose, phase: "commentary" },
+      ]);
+
+      // Exactly one tool call, with its arguments intact.
+      const starts = events.filter(event => event.type === "tool_call_start");
+      expect(starts).toHaveLength(1);
+      expect(starts[0]).toMatchObject({ name: "bash" });
+      expect(events.filter(event => event.type === "tool_call_delta")
+        .map(event => (event as { arguments: string }).arguments).join("")).toBe(args);
+      expect(events.filter(event => event.type === "tool_call_end")).toHaveLength(1);
+
+      // Counts and payloads alone would pass on a reordered stream, or on an early `done` followed by
+      // a second one. Pin the positions too: commentary before the call starts, every argument delta
+      // inside the call, and exactly one terminal after it closes.
+      const indicesOf = (type: string) => events
+        .map((event, index) => (event.type === type ? index : -1))
+        .filter(index => index >= 0);
+      const [commentaryAt] = indicesOf("text_delta");
+      const [startAt] = indicesOf("tool_call_start");
+      const [endAt] = indicesOf("tool_call_end");
+      const doneAt = indicesOf("done");
+      expect(commentaryAt).toBeLessThan(startAt);
+      expect(startAt).toBeLessThan(endAt);
+      expect(indicesOf("tool_call_delta").every(at => at > startAt && at < endAt)).toBe(true);
+      expect(doneAt).toHaveLength(1);
+      expect(doneAt[0]).toBeGreaterThan(endAt);
+
+      // The turn stays open for the tool result: no error, no truncation, no premature terminal.
+      expect(events.some(event => event.type === "error")).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: "done", endTurn: false });
+    });
+  }
+
   test("END_TURN does not promote a private completion answer's commentary", async () => {
     const adapter = createKiroAdapter(provider);
     await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));

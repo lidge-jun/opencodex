@@ -170,7 +170,7 @@ describe("Grok fence lifecycle wiring", () => {
     expect(startFn).toContain("if (!restored.success)");
     expect(startFn).toContain("cleanupSucceeded = false");
     expect(startFn).toContain("Native Codex restore failed during shutdown");
-    expect(startFn).toContain("process.exit(restored ? 0 : 1)");
+    expect(startFn).toContain("process.exit(restored && shutdownSucceeded ? 0 : 1)");
   });
 });
 
@@ -220,6 +220,12 @@ describe("POST /api/stop teardown", () => {
     const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
     expect(handler).toContain('await import("../grok/inject")');
     expect(handler).toContain("stripGrokConfig()");
+  });
+
+  test("maps a failed shutdown drain to a nonzero process exit", () => {
+    const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
+    expect(handler).toContain("shutdownSucceeded = await drainAndShutdown");
+    expect(handler).toContain("process.exit(shutdownSucceeded ? 0 : 1)");
   });
 
   test("a 409 does not escalate to a forced kill", () => {

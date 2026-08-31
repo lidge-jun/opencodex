@@ -25,7 +25,7 @@ interface ProviderAdapter {
 ## `openai-chat`
 
 **目標：** OpenAI **Chat Completions**（`POST {baseUrl}/chat/completions`）以及所有相容 provider，
-包括 xAI、Kimi、DeepSeek、GLM、Groq、OpenRouter、Ollama（本機與雲端）等。
+包括 xAI、Kimi、DeepSeek、GLM、Groq、OpenRouter、Ollama（本機）等。
 **認證：** `key`（Bearer）。
 
 - 把內部訊息轉換成 OpenAI role；工具對映為 `{type:"function", function:{…}}` 和
@@ -41,6 +41,38 @@ interface ProviderAdapter {
   `medium`、`high`、`xhigh`、`max` 層級，接受來自 `delta.reasoning_content` 或 `delta.reasoning`
   的 reasoning delta，以 `stream_options.include_usage` 請求串流 usage，並從非串流回應 envelope
   讀取 usage。
+
+## `ollama-native`
+
+**目標：** Ollama 自身的 **Chat API**（`POST /api/chat`），而非其 OpenAI 相容介面。內建的
+`ollama-cloud` 提供者由 registry 選擇到此 adapter；也可以在另外命名的自訂 / 自架 Ollama
+提供者上設定 `adapter: "ollama-native"`。
+**驗證：** cloud / 自訂端點使用 `key`（Bearer）；loopback 或 `authMode: "local"` 端點不會
+收到任何憑證。
+
+- **registry 選擇具有決定性。** 內建 `ollama-cloud` 列保留 `https://ollama.com/v1` 作為
+  `/v1/models` 動態探索的基礎 URL，同時推論會正規化到 `POST https://ollama.com/api/chat`。
+  對該提供者列，設定中的 `adapter` 會被丟棄。一般內建本機 Ollama 仍在 `openai-chat`；為本機
+  或自架端點選擇 `ollama-native` 是明確的提供者設定決定，並依主機判別，因此非 Ollama 目的
+  地不會被默默改寫。
+- **模型中繼資料：** `/v1/models` 不攜帶任何模型級中繼資料，因此在正典 Ollama Cloud 上，
+  提供者會透過 *有界限的* `POST /api/show`（每回應 256 KiB、每請求 8 秒、並行 4、48 個請求、
+  整階段 12 秒期限）補上每個被探索 id 的真實 context window 與 vision 能力。show 請求同源
+  且絕不跟隨重新導向；失敗只會降級該模型，不會讓探索本身失敗。
+- **串流：** Ollama 原生 NDJSON。文字與 `message.thinking` delta 隨到隨轉發；回合僅在
+  `done: true` 終止記錄上完成，緩衝的 `done: false` 或缺少終端會完全抑制部分文字與工具呼叫。
+- **Reasoning：** 對映到 Ollama 原生 `think` 欄位（`low`/`medium`/`high`/`max`，外加布林值），
+  依模型宣告的層級夾限，並遵守上游設定的 `__omit__` sentinel 語義。
+- **圖像：** 在模型具備 vision 能力時，原樣放進訊息的 `images` 陣列送出；video 會被拒絕而非
+  誤送，遠端圖像 URL 不會被擷取。
+- **工具：** 以 Ollama 原生形狀宣告；串流 tool call 是 `arguments` 為物件的整呼叫記錄，
+  tool result 重播按 call id 與工具名嚴格配對。`tool_choice: "none"` 與 `auto` 正常運作；
+  **`required` 或精確名稱選擇會 fail closed**，因為 Ollama 的 `/api/chat` 沒有可用來強制它的
+  `tool_choice` 欄位。
+- **正典 Ollama Cloud 上拒絕結構化輸出。** Ollama 目前在文件中說明其 Cloud 不支援結構化輸出，
+  且 Cloud 不會強制 `format` 欄位，因此 OpenCodex 會讓該請求顯式失敗，而不是在 schema 指定的
+  請求上回傳不受約束的散文。本機 / 自訂 `ollama-native` 端點保留 Ollama 原生的 `format` 映射
+  （`json_object` → `"json"`，`json_schema` → schema 物件本身）。
 
 ## `openai-responses`
 
@@ -107,6 +139,9 @@ Kiro 的 assistant 文字本身沒有可靠的回合結束標記，但終止的 
 只有完全沒有 stop reason 時，opencodex 才新增私有的 `codex_kiro_final_answer` 工具並做一次續寫。
 重複抑制嚴格限定為空白歸一化後的完全一致：改寫過的狀態更新可能改變本回合的結果（從"仍在進行"變成"已完成"），
 丟掉那句話比顯示一次表面重複更糟糕。
+
+當缺少只有使用者能提供的決定、資訊或說明而無法繼續時，契約要求把該問題透過完成工具送出並停止；
+這樣的回合同樣以結束回合的 `final_answer` 抵達，而不是 commentary 或用戶端工具呼叫。
 
 ### Reasoning effort
 

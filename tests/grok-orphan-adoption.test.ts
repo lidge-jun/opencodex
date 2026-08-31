@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { injectGrokConfig, stripGrokConfig } from "../src/grok/inject";
@@ -1325,5 +1325,359 @@ describe("Grok orphan adoption — fence boundary (#511 follow-up)", () => {
     const backup = readFileSync(`${configPath}.bak-opencodex`, "utf8");
     expect(backup).toContain("[model.ocx-gpt-5-6-sol]");
     expect(backup).toContain("[model.ocx-gpt-5-6-sol-2]");
+  });
+
+  // A stale [model_providers.opencodex] block from a previous managed fence (written by
+  // the provider-inheritance shape) sits outside the current fence if the fence was
+  // removed and re-added. The sweep must remove it just like a per-model orphan, or the
+  // next sync writes a second [model_providers.opencodex] and Grok rejects the duplicate.
+  // The fenced writer always emits the durable marker on the provider, so a real leftover
+  // carries it even after a fence removal.
+  test("sweeps a stale model_providers.opencodex block outside the fence", () => {
+    writeFileSync(configPath, [
+      "[model_providers.opencodex]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "responses"',
+      'api_key = "opencodex-loopback"',
+      'extra_headers = { "x-opencodex-grok" = "1" }',
+      "",
+      ...fence("ocx-gpt-5-6-sol"),
+      "",
+    ].join("\n"));
+
+    injectGrokConfig(10100, MODELS, { grokHome });
+
+    const content = readFileSync(configPath, "utf8");
+    // Exactly one [model_providers.opencodex] table survives, inside the fence.
+    expect(content.match(/\[model_providers\.opencodex\]/g) ?? []).toHaveLength(1);
+    expect(content.indexOf("[model_providers.opencodex]")).toBeGreaterThan(content.indexOf(BEGIN_MARKER));
+  });
+
+  test("does not sweep a user-authored model_providers block with a different id", () => {
+    writeFileSync(configPath, [
+      "[model_providers.my-gateway]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "opencodex-loopback"',
+      "",
+      ...fence("ocx-gpt-5-6-sol"),
+      "",
+    ].join("\n"));
+
+    injectGrokConfig(10100, MODELS, { grokHome });
+
+    const content = readFileSync(configPath, "utf8");
+    expect(content).toContain("[model_providers.my-gateway]");
+    // And the managed block's own provider table is separate.
+    expect(content.match(/\[model_providers\.opencodex\]/g) ?? []).toHaveLength(1);
+  });
+
+  test("does not sweep a model_providers.opencodex with a non-loopback base_url", () => {
+    writeFileSync(configPath, [
+      "[model_providers.opencodex]",
+      'base_url = "https://example.com/v1"',
+      'api_key = "opencodex-loopback"',
+      "",
+      ...fence("ocx-gpt-5-6-sol"),
+      "",
+    ].join("\n"));
+
+    injectGrokConfig(10100, MODELS, { grokHome });
+
+    // A remote base_url with our key is not ours to delete.
+    expect(readFileSync(configPath, "utf8")).toContain('base_url = "https://example.com/v1"');
+  });
+
+  // Field state from a real machine (2026-08-27): Grok re-serialized the provider block,
+  // promoting the inline `extra_headers` into a sub-table placed BETWEEN the provider
+  // header and its own keys. The provider-only body then looks empty, and a leftover
+  // child collides with the regenerated block's inline `extra_headers`
+  // ("Cannot redefine key") — the whole TOML layer is rejected.
+  test("sweeps a reserialized provider block whose sub-table precedes its keys", () => {
+    writeFileSync(configPath, [
+      "[model_providers.opencodex]",
+      "[model_providers.opencodex.extra_headers]",
+      'x-opencodex-grok = "1"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "responses"',
+      'api_key = "opencodex-loopback"',
+      "",
+      "[model.ocx-gpt-5-6-sol]",
+      'model = "gpt-5.6-sol"',
+      'model_provider = "opencodex"',
+      'name = "OCX gpt-5.6-sol"',
+      "",
+      "[models]",
+      'default = "ocx-gpt-5-6-sol"',
+    ].join("\n"));
+
+    const result = injectGrokConfig(10100, MODELS, { grokHome });
+    expect(result).toMatchObject({ ok: true, changed: true });
+
+    const content = readFileSync(configPath, "utf8");
+    // The unfenced provider + model are adopted; exactly one of each survives, inside the fence.
+    expect(content.match(/\[model_providers\.opencodex\]/g) ?? []).toHaveLength(1);
+    expect(content.match(/\[model_providers\.opencodex\.extra_headers\]/g) ?? []).toHaveLength(0);
+    expect(tables(content).filter(alias => alias.startsWith("ocx-"))).toHaveLength(1);
+    expect(content.indexOf("[model_providers.opencodex]")).toBeGreaterThan(content.indexOf(BEGIN_MARKER));
+    // default still resolves.
+    const survivor = /^default = "([^"]+)"/m.exec(content)?.[1];
+    expect(content).toContain(`[model.${survivor}]`);
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
+  });
+
+  // The other re-serialization order: keys first, sub-table after. The provider's own
+  // body still judges, and the child must be swallowed or the same key collision returns.
+  test("sweeps a reserialized provider block whose sub-table follows its keys", () => {
+    writeFileSync(configPath, [
+      "[model_providers.opencodex]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "responses"',
+      'api_key = "opencodex-loopback"',
+      "",
+      "[model_providers.opencodex.extra_headers]",
+      'x-opencodex-grok = "1"',
+      "",
+      ...fence("ocx-gpt-5-6-sol"),
+      "",
+    ].join("\n"));
+
+    injectGrokConfig(10100, MODELS, { grokHome });
+
+    const content = readFileSync(configPath, "utf8");
+    expect(content.match(/\[model_providers\.opencodex\]/g) ?? []).toHaveLength(1);
+    expect(content.match(/\[model_providers\.opencodex\.extra_headers\]/g) ?? []).toHaveLength(0);
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
+  });
+
+  // The migration's real regression: model tables in the provider-inheritance shape carry
+  // NO api_key/base_url of their own, so the legacy predicate missed them and every sync
+  // after a Grok rewrite allocated a -2 duplicate beside the stale original. Adoption
+  // must follow the model_provider reference to the owned provider table.
+  test("adopts model_provider-referencing entries left unfenced by a Grok rewrite", () => {
+    writeFileSync(configPath, [
+      "[ui]",
+      'fork_secondary_model = "grok-build"',
+      "",
+      "[model_providers.opencodex]",
+      "[model_providers.opencodex.extra_headers]",
+      'x-opencodex-grok = "1"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "responses"',
+      'api_key = "opencodex-loopback"',
+      "",
+      "[model.ocx-gpt-5-6-sol]",
+      'model = "gpt-5.6-sol"',
+      'model_provider = "opencodex"',
+      'name = "OCX gpt-5.6-sol"',
+      "",
+      "[model.ocx-gpt-5-6-terra]",
+      'model = "gpt-5.6-terra"',
+      'model_provider = "opencodex"',
+      'name = "OCX gpt-5.6-terra"',
+      "",
+      "[models]",
+      'default = "ocx-gpt-5-6-sol"',
+    ].join("\n"));
+
+    const result = injectGrokConfig(10100, MODELS, { grokHome });
+    expect(result).toMatchObject({ ok: true, changed: true });
+
+    const content = readFileSync(configPath, "utf8");
+    // The sol entry collapses into the single regenerated one — no -2 duplicates. The
+    // terra entry is genuinely retired (not in MODELS): explicitly-owned rows are kept
+    // outside the fence rather than deleted by an inject, so it remains — unfenced but
+    // adopted (its alias is reserved and never re-suffixed). One table survives per
+    // model id.
+    expect(tables(content)).toEqual(["ocx-gpt-5-6-terra", "ocx-gpt-5-6-sol"]);
+    expect(content).not.toContain("[model.ocx-gpt-5-6-sol-2]");
+    expect(content).not.toContain("[model.ocx-gpt-5-6-terra-2]");
+    // default still resolves: it names the sol entry, which survives inside the fence.
+    const survivor = /^default = "([^"]+)"/m.exec(content)?.[1];
+    expect(content).toContain(`[model.${survivor}]`);
+    expect(content).toContain("context_window = 372000");
+    // User content survives.
+    expect(content).toContain('fork_secondary_model = "grok-build"');
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
+  });
+
+  test("does not adopt a model referencing a provider that fails the ownership predicate", () => {
+    writeFileSync(configPath, [
+      "[model_providers.my-gateway]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_key = "user-secret"',
+      "",
+      "[model.ocx-mine]",
+      'model = "user/model"',
+      'model_provider = "my-gateway"',
+      'name = "OCX mine"',
+    ].join("\n"));
+
+    const result = injectGrokConfig(10100, MODELS, { grokHome });
+    expect(result).toMatchObject({ ok: true, changed: true });
+
+    const content = readFileSync(configPath, "utf8");
+    // A referenced-but-user-owned provider keeps its model table untouched, and ours
+    // takes a suffixed alias instead of clobbering it.
+    expect(content).toContain("[model.ocx-mine]");
+    expect(content).toContain('model_provider = "my-gateway"');
+    expect(content).not.toContain("[model.ocx-mine-2]");
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
+  });
+
+  test("folds provider sub-tables separated from their parent by a user table", () => {
+    // TOML allows the re-serialized child to sit after an unrelated table. A first-mismatch
+    // stop left the stale provider unfolded: without the marker evidence it stayed, and the
+    // next sync declared a duplicate [model_providers.opencodex] — invalid TOML for Grok.
+    writeFileSync(configPath, [
+      "[model_providers.opencodex]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "responses"',
+      'api_key = "opencodex-loopback"',
+      "",
+      "[ui.detailed]",
+      "verbose = true",
+      "",
+      "[model_providers.opencodex.extra_headers]",
+      'x-opencodex-grok = "1"',
+      "",
+      "[model.ocx-gpt-5-6-sol]",
+      'model = "gpt-5.6-sol"',
+      'model_provider = "opencodex"',
+      'name = "OCX gpt-5.6-sol"',
+      "",
+      "[models]",
+      'default = "ocx-gpt-5-6-sol"',
+    ].join("\n"));
+
+    const result = injectGrokConfig(10100, MODELS, { grokHome });
+    expect(result).toMatchObject({ ok: true, changed: true });
+
+    const content = readFileSync(configPath, "utf8");
+    expect(content.match(/\[model_providers\.opencodex\]/g) ?? []).toHaveLength(1);
+    expect(content.match(/\[model_providers\.opencodex\.extra_headers\]/g) ?? []).toHaveLength(0);
+    // The interleaved user table survives.
+    expect(content).toContain("[ui.detailed]");
+    expect(tables(content).filter(alias => alias.startsWith("ocx-"))).toHaveLength(1);
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
+  });
+
+  test("teardown resolves inherited ownership through the fenced provider", () => {
+    // A retired model kept outside the fence inherits its verdict from the provider table
+    // INSIDE it. Classification must see the fenced provider, or strip removes the fence
+    // but leaves the model with a dangling `model_provider = "opencodex"` reference.
+    writeFileSync(configPath, [
+      "[ui]",
+      'fork_secondary_model = "grok-build"',
+      "",
+      BEGIN_MARKER,
+      "[model_providers.opencodex]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "responses"',
+      'api_key = "opencodex-loopback"',
+      OWNERSHIP_MARKER,
+      "",
+      "[model.ocx-gpt-5-6-sol]",
+      'model = "gpt-5.6-sol"',
+      'model_provider = "opencodex"',
+      'name = "OCX gpt-5.6-sol"',
+      END_MARKER,
+      "",
+      "[model.ocx-gpt-5-6-terra]",
+      'model = "gpt-5.6-terra"',
+      'model_provider = "opencodex"',
+      'name = "OCX gpt-5.6-terra"',
+      "",
+      "[models]",
+      'default = "ocx-gpt-5-6-terra"',
+    ].join("\n"));
+
+    const result = stripGrokConfig({ grokHome });
+    expect(result).toMatchObject({ ok: true, changed: true });
+
+    const content = readFileSync(configPath, "utf8");
+    // The fence and the retired model are both gone; no dangling reference survives.
+    expect(content).not.toContain("model_provider = \"opencodex\"");
+    expect(content).not.toContain("[model_providers.opencodex]");
+    expect(content).toContain('fork_secondary_model = "grok-build"');
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
+  });
+
+  test("does not adopt a user-written model that references the managed provider", () => {
+    // Inheritance must not grant removal authority over every model that references
+    // opencodex: a user is free to write their own [model.*] table that inherits the
+    // managed provider, and adoption without a generated alias deletes it.
+    for (const operation of ["inject", "teardown"] as const) {
+      writeFileSync(configPath, [
+        BEGIN_MARKER,
+        "[model_providers.opencodex]",
+        'base_url = "http://127.0.0.1:10100/v1"',
+        'api_backend = "responses"',
+        'api_key = "opencodex-loopback"',
+        OWNERSHIP_MARKER,
+        "",
+        "[model.ocx-gpt-5-6-sol]",
+        'model = "gpt-5.6-sol"',
+        'model_provider = "opencodex"',
+        'name = "OCX gpt-5.6-sol"',
+        END_MARKER,
+        "",
+        "[model.custom-variant]",
+        'model = "gpt-5.6-sol"',
+        'model_provider = "opencodex"',
+        'name = "my fast variant"',
+        "context_window = 128000",
+        "",
+      ].join("\n"));
+
+      if (operation === "inject") {
+        expect(injectGrokConfig(10100, MODELS, { grokHome }))
+          .toMatchObject({ ok: true, changed: true });
+      } else {
+        expect(stripGrokConfig({ grokHome })).toMatchObject({ ok: true, changed: true });
+      }
+      const content = readFileSync(configPath, "utf8");
+      expect(content).toContain("[model.custom-variant]");
+      expect(content).toContain('name = "my fast variant"');
+      expect(content).toContain("context_window = 128000");
+      expect(() => Bun.TOML.parse(content)).not.toThrow();
+    }
+  });
+
+  test("sweeping a provider-only orphan backs the user's config up first", () => {
+    // Provider orphans carry no alias, so an alias-count backup condition skipped the
+    // backup entirely even though teardown removed the table.
+    writeFileSync(configPath, [
+      "[model_providers.opencodex]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "responses"',
+      'api_key = "opencodex-loopback"',
+      'extra_headers = { "x-opencodex-grok" = "1" }',
+      "",
+      BEGIN_MARKER,
+      "[model_providers.opencodex]",
+      'base_url = "http://127.0.0.1:10100/v1"',
+      'api_backend = "responses"',
+      'api_key = "opencodex-loopback"',
+      'extra_headers = { "x-opencodex-grok" = "1" }',
+      "",
+      "[model.ocx-gpt-5-6-sol]",
+      'model = "gpt-5.6-sol"',
+      'model_provider = "opencodex"',
+      'name = "OCX gpt-5.6-sol"',
+      END_MARKER,
+      "",
+      "[models]",
+      'default = "ocx-gpt-5-6-sol"',
+      "",
+    ].join("\n"));
+
+    const result = stripGrokConfig({ grokHome });
+    expect(result).toMatchObject({ ok: true, changed: true });
+
+    expect(existsSync(join(grokHome, "config.toml.bak-opencodex"))).toBe(true);
+    const content = readFileSync(configPath, "utf8");
+    expect(content).not.toContain("[model_providers.opencodex]");
+    expect(content).toContain("[models]");
+    expect(() => Bun.TOML.parse(content)).not.toThrow();
   });
 });

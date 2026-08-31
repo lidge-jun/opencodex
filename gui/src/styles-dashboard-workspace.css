@@ -69,12 +69,26 @@
 }
 
 /* Sidecar settings: two panels side by side, gap matches --space-4.
-   auto-fit collapses to one column before two columns get too narrow for the
-   title + model select row (~21rem per card), so the select never overlaps or
-   overflows the card between the old 768px breakpoint and desktop widths. */
+
+   The track floor is the width at which a card can still render its real layout — copy
+   on the left, controls on the right, one line. It is NOT merely the width at which the
+   select stops overflowing.
+
+   That distinction is the bug this number fixes. At 21rem the grid handed out cards of
+   309-517px of content, every one of which is below the 36rem stacking query below, so
+   a two-up card was born already stacked: copy on a full-width line, controls on a
+   second full-width line inheriting `justify-content: flex-end`. The model select then
+   floated in the middle of the card with the switch pinned right, which reads as centred
+   and was reported as such.
+
+   39rem = 624px of track, 586px of content after the 19px panel padding — clear of the
+   576px stacking threshold, so any card the grid places two-up can hold a genuine row.
+   The ko row is the widest shipped: 14rem copy floor + 16px gap + 10.5rem select + 8px +
+   the streaming label + 8px + the 34px switch. Below 39rem the grid drops to one column,
+   where a card is wide enough for the same row rather than a stacked approximation of it. */
 .dash-sidecar-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 39rem), 1fr));
   gap: var(--space-4);
   /* Stretch, not start: the two sidecar cards are a matched pair, and a hint that
      wraps to a different line count in one of them should not leave the other
@@ -114,25 +128,48 @@
   overflow-wrap: break-word;
 }
 
-/* The copy block yields; the control group holds its intrinsic width. Letting the
-   controls shrink (`0 1 auto`) does NOT wrap them — `.custom-select` keeps its own
-   min-width, so the children simply overflow their shrunken container and slide
-   left under the hint text. Hold the group at content width and make the copy the
-   only thing that gives way; the narrow-viewport case is handled by stacking the
-   whole card below. */
-.dash-sidecar-row-card .dash-delegation-controls {
-  flex: 0 0 auto;
-  flex-wrap: nowrap;
-  /* Both control groups reserve the same band AND pack from its top, so the first Select
-     of each card lands on one line. Without the band the web-search group is one 34px
-     select row while the vision group is a 59px column (select row + 12px gap + the
-     "advanced" disclosure); without the top packing the shorter group centres inside that
-     band and its Select still sits 13.5px low.
+/* The control group is a FIXED SHARED BAND, not an intrinsic width. The copy block is
+   the only item that yields; the narrow case is handled by stacking the whole card.
 
-     `align-items`, not `align-content`: the web-search group is a single flex line, and
-     `align-content` has no effect on one line. */
+   Intrinsic width was the bug. The two groups do not contain the same controls — the
+   web-search group is one select plus a label and a switch (268px at ja, 344px at fr),
+   the vision group is two selects (408px) — and both packed to the card's right edge.
+   Equal right edges plus unequal widths means unequal LEFT edges: the two model selects
+   began 225-302px apart depending on locale, which is what "start positions differ"
+   describes. Letting the groups shrink instead (`0 1 auto`) does not fix it and breaks
+   worse: `.custom-select` keeps its own min-width, so the children overflow their
+   shrunken container and slide left under the hint text.
+
+   A definite basis with `flex-shrink: 0` makes the band identical in both cards, so the
+   first control of each starts at the same x by construction rather than by coincidence
+   of text width. 26rem = 416px is the widest thing that has to fit: the vision select row
+   at full size (14rem model + 8px + 9rem effort = 408px). The widest web-search row (fr,
+   344px) fits with room left, and the band gives its streaming label enough width to stay
+   on one line instead of wrapping to three.
+
+   `min()` so the basis can never exceed the box it sits in. */
+.dash-sidecar-row-card .dash-delegation-controls {
+  flex: 0 0 min(100%, 26rem);
+  flex-wrap: nowrap;
+  /* Both cards hold the SAME two-row structure: `.dash-sidecar-select-row` for the model
+     pickers, then `.dash-sidecar-trailing-row` for the card's secondary control (the
+     streaming switch on web search, the advanced disclosure on vision). The group is
+     therefore a column in both, which is what puts the two first rows on one line and the
+     two trailing rows on another.
+
+     The web-search group used to be a single horizontal line with the streaming label
+     beside the select. Inside the 26rem band that label had to wrap: three lines at
+     ko/ja/tr, and it dragged the switch away from the card's right edge. Giving it its own
+     right-aligned row is the same treatment the advanced disclosure already had. */
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  /* Main axis is vertical here, so this packs the two ROWS toward the band's top rather
+     than distributing them down a card that the grid stretched taller. */
+  justify-content: flex-start;
+  /* The band reserves both rows in both cards, so the first select of each lands on one
+     line even when one card's trailing row is shorter than the other's. */
   min-height: 3.6875rem;
-  align-items: flex-start;
 }
 
 /* The model select carries the long value: give it a floor wide enough to read a
@@ -174,6 +211,29 @@
    Selects share a baseline. */
 .dash-sidecar-row-card {
   flex-wrap: wrap;
+  /* Pack the two wrapped flex LINES from the top of the card.
+
+     This is the line that makes the pair agree. The grid stretches both cards to the
+     taller one's height, and `align-content` defaults to `stretch` for a multi-line flex
+     container, so each card distributed its own leftover space across its own lines. The
+     two cards have equal outer height but different content height — the vision card's
+     control group carries the advanced disclosure — so the card with more slack pushed its
+     control line down and the two Selects sat 27.4px apart at en/1024, 27.8px at ko/1024,
+     and 7.1px at ru/1100.
+
+     `align-content`, not `align-items`: the mis-distributed thing is the LINES, which is
+     exactly what `align-content` controls. `align-items: center` stays inherited from
+     `.dash-delegation-summary` and still centres each item WITHIN its line, which is what
+     keeps the single-line horizontal layout (one-column regime) vertically centred. In
+     that regime the card has one line, where `align-content` is inert — so this rule acts
+     only where the bug exists.
+
+     Measured with a CDP viewport-override harness: worst paired offset 0.0px across
+     en/ko/ru/fr/ja at 1440/1100/1024/760, with the one-column row layout unchanged.
+
+     The file previously recorded `align-items: flex-start` on ONE card as a failed
+     attempt; that is a different property on a different box, and asymmetric. */
+  align-content: start;
   /* The responsive axis is the CARD, not the window.
 
      This grid is `repeat(auto-fit, ...)`, so card width is decoupled from viewport
@@ -194,38 +254,53 @@
 }
 
 /* Both cards wrap their control group onto a second line, so that line must start at the
-   same y in both. It does not by default: the copy blocks are different heights (the ko
-   hints are 30 vs 41 chars and wrap to a different line count in every locale), and each
-   card's control line simply follows its own copy. Reserving the same copy band in both
-   cards is what puts the two Selects on one line.
+   same y in both. It does not by default: each card's control line simply follows its own
+   copy, and the two hints wrap to a different number of lines in several locales.
 
-   3.9375rem = 63px = 21px title + 3px hint margin + two 19.5px hint lines — the longest
-   shipped hint at the narrowest two-column card. */
-.dash-sidecar-row-card .dash-sidecar-copy {
-  min-height: 3.9375rem;
+   The floor lives on the HINT and is measured in LINES, not on the copy block in pixels.
+   The previous `min-height: 3.9375rem` on the copy block was "63px = 21px title + 3px
+   margin + two 19.5px hint lines" — a pixel count derived from a two-line assumption. It
+   held wherever both hints wrapped to the same count and silently failed where they did
+   not: measured 19.5px of drift at ru and fr, whose vision hint takes a THIRD line at a
+   two-up card (82.5px of copy against 63px).
+
+   `3lh` is that same intent expressed in the unit that actually governs it: three line
+   boxes of the hint's own computed line-height. It covers the longest shipped hint, so the
+   shorter hint reserves the same three lines and both control rows start together. Because
+   it scales with font metrics rather than a hard-coded 19.5px, a font or line-height change
+   cannot invalidate it, and a longer translation only matters if it exceeds three lines.
+
+   The committed regression is source-text only (happy-dom performs no layout): it asserts
+   the floor is expressed in `lh` with at least 3 lines and that the old `rem` band is gone.
+   The three-line number itself came from rendered measurement in a real browser, which is
+   recorded in devlog/_plan/260829_gui_dashboard_slop/013, not re-derived by the test.
+
+   Verified across all eight shipped locales at every two-up width (1600-740): worst offset
+   0.0px, no hint truncated, no card collapsed. */
+.dash-sidecar-row-card .dash-sidecar-copy .setting-hint {
+  min-height: 3lh;
 }
 
-/* The shared sidecar copy rule is `flex: 1 1 0` so a one-row control group can
-   keep its intrinsic width. Vision's control column is two rows, and the number
-   fields alone are ~24rem; with a 0 basis the title collapses to a one-glyph
-   column and the card grows to over 1000px tall. Give copy a readable basis so
-   the card wraps to a stacked layout instead of shrinking the hint. */
+/* The copy block must resolve identically in both cards too, for the same reason the
+   control band must: copy is the item that absorbs leftover width, so a different basis
+   here moves the control band's left edge by the difference. This used to override the
+   shared `flex: 1 1 0` with `1 1 16rem`, which is why the vision band still started at a
+   different x even when both bands were the same width. Only the floor is restated, and
+   only because it is identical to the shared one — the rule is kept as the documented
+   place where a vision-specific copy override would go, if one were ever justified. */
 .dash-vision-sidecar-card .dash-sidecar-copy {
-  flex: 1 1 16rem;
   min-width: min(100%, 14rem);
 }
 
+/* Nothing about the control band is vision-specific any more: the column axis, the gap,
+   and the packing all moved to the shared rule once the web-search card adopted the same
+   two-row structure. Only the bounds stay, and they match the shared band. */
 .dash-vision-sidecar-card .dash-delegation-controls {
-  flex: 1 1 20rem;
   min-width: 0;
   max-width: 100%;
-  flex-direction: column;
-  align-items: stretch;
-  flex-wrap: nowrap;
-  gap: 12px;
 }
 
-.dash-vision-select-row {
+.dash-sidecar-select-row {
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -235,27 +310,43 @@
   width: 100%;
 }
 
-.dash-vision-select-row .custom-select:first-child {
+.dash-sidecar-select-row .custom-select:first-child {
   flex: 1 1 70%;
   min-width: min(100%, 9rem);
   max-width: 16rem;
 }
 
-.dash-vision-select-row .custom-select:nth-child(2) {
+.dash-sidecar-select-row .custom-select:nth-child(2) {
   flex: 1 1 30%;
   min-width: min(100%, 6rem);
   max-width: 9rem;
 }
 
-.dash-vision-select-row .custom-select .select-trigger {
+.dash-sidecar-select-row .custom-select .select-trigger {
   width: 100%;
   max-width: 100%;
 }
 
-.dash-vision-advanced-row {
+.dash-sidecar-trailing-row {
   display: flex;
   justify-content: flex-end;
   width: 100%;
+}
+
+/* The web-search trailing row carries a label AND a switch, where the vision row carries a
+   single button. Both sit at the row's right edge as one cluster, so the label reads as
+   belonging to the control it labels rather than drifting to the opposite edge. */
+.dash-sidecar-trailing-row {
+  align-items: center;
+  gap: 8px;
+}
+
+/* Let the label take the width it needs at the row's left, but never so much that it
+   pushes the switch off the edge; it wraps instead. `text-align: right` keeps a wrapped
+   second line aligned with the cluster rather than ragged against the switch. */
+.dash-sidecar-toggle-label {
+  min-width: 0;
+  text-align: right;
 }
 
 .dash-vision-advanced-trigger {
@@ -351,7 +442,7 @@
     align-items: stretch;
   }
 
-  .dash-vision-sidecar-card .dash-vision-select-row {
+  .dash-vision-sidecar-card .dash-sidecar-select-row {
     justify-content: flex-start;
   }
 }

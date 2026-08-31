@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createKiroAdapter } from "../src/adapters/kiro";
 import {
   KIRO_ANSWER_DELIVERED_MESSAGE,
+  KIRO_COMPLETION_INSTRUCTIONS,
   KIRO_COMPLETION_RETRY_MESSAGE,
   KIRO_COMPLETION_TOOL_NAME,
   KIRO_CONTINUATION_MESSAGE,
@@ -542,6 +543,94 @@ describe("kiro adapter — buildRequest", () => {
       .conversationState.currentMessage.userInputMessage;
     expect(disabled.userInputMessageContext?.tools).toBeUndefined();
     expect(JSON.stringify(disabled)).not.toContain("codex_kiro_final_answer");
+  });
+
+  // The private completion tool is enumerated by the shared tool-catalog nudge alongside ordinary
+  // tools, and that nudge tells every listed name to "count a tool call only after its tool result
+  // returns". Nothing returns a result for this one: the adapter converts the call into the turn's
+  // terminal. Without an explicit terminal statement the model reads a deferrable ordinary tool and
+  // keeps working instead of completing, which is measurable as a selection failure (25 completion
+  // calls across 4069 required-mode attempts) and shows up as finished answers delivered as
+  // commentary with more tool calls after them.
+  //
+  // Both injected surfaces have to carry it. The schema description travels with the tool object the
+  // model is choosing between; the prose contract must not contradict it.
+  test("the completion tool is advertised as terminal on both injected surfaces", async () => {
+    const state = JSON.parse((await createKiroAdapter(provider).buildRequest(
+      parsedWith([{ role: "user", content: "hi" }], [bashTool]),
+    )).body).conversationState;
+    const current = state.currentMessage.userInputMessage;
+    const firstUser = state.history?.find((entry: { userInputMessage?: unknown }) => entry.userInputMessage)?.userInputMessage
+      ?? current;
+    const completion = current.userInputMessageContext.tools
+      .find((tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name === "codex_kiro_final_answer");
+
+    const description: string = completion.toolSpecification.description;
+    expect(description).toContain("not an ordinary work tool");
+    expect(description).toContain("ends the turn");
+    expect(description).toContain("returns no tool result");
+    expect(description).toContain("no text or tool call may follow it");
+
+    const injected: string = firstUser.content;
+    expect(injected).toContain("This completion tool is not an ordinary work tool.");
+    expect(injected).toContain("exception to generic tool-result counting");
+    expect(injected).toContain("ends the turn, returns no tool result, and no text or tool call may follow it");
+
+    // The mid-task contract must survive: commentary still does not end the turn, and the model must
+    // still keep using tools before it completes. Only what happens AFTER the call is constrained.
+    expect(injected).toContain("ordinary assistant text is mid-task commentary");
+    expect(injected).toContain("Continue using tools after progress updates.");
+  });
+
+  // Round one shipped terminal wording and the defect recurred anyway, because terminality was never
+  // the gap. The contract described two states -- still working, fully done -- for a model that has
+  // three. With no endorsed way to say "blocked on the user", a model with a question wrote it as
+  // prose and then answered itself in the SAME inference (measured 4ms apart, sendCount 1), which
+  // reads to the user as an agent that keeps working after its final answer.
+  test("the injected contract endorses a blocking question as the final answer", async () => {
+    const state = JSON.parse((await createKiroAdapter(provider).buildRequest(
+      parsedWith([{ role: "user", content: "hi" }], [bashTool]),
+    )).body).conversationState;
+    const current = state.currentMessage.userInputMessage;
+    const firstUser = state.history?.find((entry: { userInputMessage?: unknown }) => entry.userInputMessage)?.userInputMessage
+      ?? current;
+    const injected: string = firstUser.content;
+
+    // The third state has to be nameable, and the specific defect shape has to be named as wrong.
+    // The trigger covers information and clarification, not just a decision: being blocked on a
+    // missing account id is the same dead end as being blocked on a choice.
+    expect(injected).toContain("cannot continue until the user supplies a decision, information, or a clarification");
+    expect(injected).toContain("that question is your final answer");
+    expect(injected).toContain("Do not write the question as ordinary text and then answer it yourself.");
+
+    // The schema description is the surface the model reads while CHOOSING a tool, so it has to
+    // carry the third state too. Left saying only "fully complete", it contradicts the prose
+    // contract and keeps the narrower reading available at the moment of selection.
+    const completion = current.userInputMessageContext.tools
+      .find((tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name === KIRO_COMPLETION_TOOL_NAME);
+    const description: string = completion.toolSpecification.description;
+    expect(description).toContain("cannot continue until the user supplies a decision, information, or a clarification");
+    expect(completion.toolSpecification.inputSchema.json.properties.answer.description)
+      .toContain("blocking question");
+
+    // Unconditional: the completion tool is always advertised when this instruction is emitted, so the
+    // clause can never name an uncallable tool. No ask tool in this catalog, clause still present.
+    expect(current.userInputMessageContext.tools
+      .some((tool: { toolSpecification: { name: string } }) => tool.toolSpecification.name === "request_user_input")).toBe(false);
+  });
+
+  // This is the one instruction the model sees at the exact moment it failed to complete, so its
+  // wording decides the next move. "Do not ask the user for another task" was meant to stop
+  // soliciting NEW work; it reads as a blanket ban on asking anything, which left continuing to work
+  // as the only endorsed move.
+  test("the completion retry message permits a blocking question but still refuses a new task", () => {
+    expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain("cannot continue until the user supplies a decision, information, or a clarification");
+    expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain(`call ${KIRO_COMPLETION_TOOL_NAME} now with that question as the answer`);
+    // The narrowing must not reopen the loop this message was written to close.
+    expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain("Do not solicit a new task");
+    expect(KIRO_COMPLETION_RETRY_MESSAGE).toContain("progress-only message");
+    // The blanket phrasing is gone, so the model cannot read the narrow rule as a total ban.
+    expect(KIRO_COMPLETION_RETRY_MESSAGE).not.toContain("Do not ask the user for another task");
   });
 
   test("namespaced (MCP) tools advertise + replay the full wire name", async () => {
@@ -1374,6 +1463,54 @@ describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", ()
 
   test("Auto router has no fixed window (omitted)", () => {
     expect(cw["kiro-auto"]).toBeUndefined();
+  });
+});
+
+// The completion contract is charged LAST against MAX_KIRO_INJECTED_INSTRUCTION_CHARS, so a large
+// enough set of earlier injected additions could in principle slice its closing clause mid-sentence
+// and leave the model a truncated instruction. A reservation guard would be dead code -- the two
+// charged inputs (the omission notice and the catalog nudge) are both structurally capped, and the
+// previous unit proved a reservation test can pass with the reservation removed. So pin the property
+// that makes truncation unreachable instead: hostile catalogs at both extremes still deliver the
+// contract COMPLETE. This fails if a future change lets either charged input grow without bound.
+describe("the completion contract survives a hostile tool catalog intact", () => {
+  async function injectedSystemText(tools: unknown[]): Promise<string> {
+    const { body } = await createKiroAdapter(provider).buildRequest(parsedWith([{ role: "user", content: "hi" }], tools));
+    return JSON.parse(body).conversationState.currentMessage.userInputMessage.content as string;
+  }
+
+  test("a maximal admitted catalog (largest nudge) does not truncate the contract", async () => {
+    // Every admitted tool is named in the nudge, so unique 64-char names at the count limit produce
+    // the largest nudge the adapter can emit. Descriptions stay short so nothing is omitted.
+    const tools = Array.from({ length: MAX_KIRO_TOOL_COUNT }, (_unused, index) => ({
+      name: `t${String(index).padStart(2, "0")}${"n".repeat(61)}`.slice(0, 64),
+      description: "d",
+      parameters: { type: "object" },
+    }));
+    const { body } = await createKiroAdapter(provider).buildRequest(parsedWith([{ role: "user", content: "hi" }], tools));
+    const current = JSON.parse(body).conversationState.currentMessage.userInputMessage;
+    const content = current.content as string;
+    // Precondition: the nudge really is present and really did name the tools, and admission kept
+    // every one of them -- otherwise this test would pass while charging less than it claims. Count
+    // the emitted catalog rather than grepping the notice text, which is capitalized and would make
+    // a lowercase absence check vacuous.
+    expect(content).toContain("t00");
+    expect(current.userInputMessageContext.tools).toHaveLength(MAX_KIRO_TOOL_COUNT + 1); // + the completion tool
+    expect(content).toContain(KIRO_COMPLETION_INSTRUCTIONS);
+  });
+
+  test("an omission-forcing catalog (notice plus nudge) does not truncate the contract", async () => {
+    // Oversized descriptions blow the byte budget, so admission omits tools and the omission notice
+    // is charged on top of the nudge. Both charged inputs present at once.
+    const tools = Array.from({ length: MAX_KIRO_TOOL_COUNT * 2 }, (_unused, index) => ({
+      name: `omit_${index}_${"x".repeat(50)}`.slice(0, 64),
+      description: "y".repeat(6000),
+      parameters: { type: "object" },
+    }));
+    const content = await injectedSystemText(tools);
+    // Precondition: admission really did omit tools, so the notice is charged alongside the nudge.
+    expect(content).toMatch(/omitted/i);
+    expect(content).toContain(KIRO_COMPLETION_INSTRUCTIONS);
   });
 });
 

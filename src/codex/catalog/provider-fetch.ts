@@ -71,6 +71,7 @@ import {
   type ProviderModelsApiItem,
   type ResolvedProviderModelDiscovery,
 } from "../../providers/model-discovery";
+import { applyConfiguredHeadersLast, fetchOllamaShowEnrichment, ollamaShowEnrichable } from "../../providers/ollama-show";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } from "../../lib/admission";
 
@@ -975,6 +976,7 @@ export const CALLABLE_CONFIGURED_COMPATIBILITY_MODELS: Readonly<Record<string, R
   ]),
   xai: new Set([
     "grok-4.3",
+    "grok-4.20-multi-agent-0309",
     "grok-4.20-0309-reasoning",
     "grok-4.20-0309-non-reasoning",
     "grok-build-0.1",
@@ -1106,8 +1108,24 @@ function modelInputModalities(
       .filter(value => value === "text" || value === "image" || value === "audio");
     if (inferred.length > 0) return [...new Set(inferred)];
   }
-  if (capabilityRecord?.vision === false) return ["text"];
-  if (capabilityRecord?.vision === true || capabilities?.some(value => (
+  // GitHub Copilot nests vision support one level down as `capabilities.supports.vision`, so the
+  // flat read alone finds nothing and every Copilot model falls through to `["text"]` — Codex then
+  // refuses image attachments on models that accept them (#2941). Precedence is by specificity:
+  // a flat boolean is authoritative when present, the nested boolean is consulted only otherwise,
+  // and a non-boolean at either level decides NOTHING so the signals below still apply. Two things
+  // this ordering deliberately avoids: a deny-wins rule across both levels would flip a provider
+  // reporting flat `true` with nested `false` from image-capable to text-only, changing behaviour
+  // that predates Copilot support; and a truthy test would let the string `"no"` advertise image
+  // input. The payload also carries a SECOND `vision` key under `limits` holding an image count,
+  // which is why this reads one exact path instead of searching `capabilities` for a vision-ish key.
+  const nestedSupports = plainRecord(capabilityRecord?.supports);
+  const explicitVisionSupport = typeof capabilityRecord?.vision === "boolean"
+    ? capabilityRecord.vision
+    : typeof nestedSupports?.vision === "boolean"
+      ? nestedSupports.vision
+      : undefined;
+  if (explicitVisionSupport === false) return ["text"];
+  if (explicitVisionSupport === true || capabilities?.some(value => (
     value === "vision" || value === "image-input" || value === "image_input"
     // llama.cpp and Ollama-compatible servers report vision as "multimodal" —
     // it is the only image signal those servers emit (#1797). Mapped to the
@@ -1383,7 +1401,16 @@ async function fetchProviderModelsWithAuth(
     );
   }
   const url = request.url;
-  const headers = materializeCapturedHeaders(request, apiKey);
+  let headers = materializeCapturedHeaders(request, apiKey);
+  // One Ollama authority contract: for canonical ollama-cloud/ollama-native rows, discovery
+  // (/v1/models), enrichment (/api/show) and inference (/api/chat) must all materialize the
+  // SAME effective credential/header authority. buildModelsRequest's generic tail writes the
+  // generated Bearer AFTER configured headers, but the native inference adapter applies
+  // provider.headers LAST (configured wins, case-insensitive collapse). Reapply the configured
+  // provider headers here so the whole Ollama request family shares that one authority.
+  if (ollamaShowEnrichable(name, prov)) {
+    headers = applyConfiguredHeadersLast(headers, prov.headers);
+  }
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
     ? "vertex-aiplatform"
     : "provider-models";
@@ -1513,13 +1540,40 @@ async function fetchProviderModelsWithAuth(
       return observed(models, "degraded");
     }
     const items = extracted.items;
+    // Ollama Cloud enrichment: /v1/models carries no per-model context or capability metadata,
+    // so a newly announced id would otherwise publish generic defaults. /api/show fills that
+    // per model, fail-soft, bounded, and cached with this gather's result. Explicit configured
+    // metadata keeps its normal precedence (applyProviderConfigHints applies the discovered
+    // window only where exact config is absent, and the provider context cap still caps it).
+    const showEnrichment = ollamaShowEnrichable(name, prov)
+      ? await fetchOllamaShowEnrichment({
+        headers,
+        discoveryUrl: request.url,
+        modelIds: items.map(m => m.id),
+        provider: prov,
+      }).catch(() => undefined)
+      : undefined;
     const live = items.map(m => {
       const ownedBy = boundedOwnedBy(m.owned_by);
+      // Precedence: the authoritative /v1/models row wins; /api/show fills only metadata the
+      // models-API row does not carry. applyProviderConfigHints then applies explicit
+      // configured metadata over both, and the provider context cap still caps the result.
+      const modelsApiHints = catalogHintsFromModelsApiItem(name, m);
+      const show = showEnrichment?.metadata.get(m.id);
+      const discoveredHints = {
+        ...modelsApiHints,
+        ...(modelsApiHints.contextWindow === undefined && show?.contextWindow !== undefined
+          ? { contextWindow: show.contextWindow }
+          : {}),
+        ...(modelsApiHints.inputModalities === undefined && show?.nativeVision === true
+          ? { inputModalities: ["text", "image"] as string[] }
+          : {}),
+      };
       return applyProviderConfigHints(name, prov, {
         id: m.id,
         provider: name,
         ...(ownedBy ? { owned_by: ownedBy } : {}),
-        ...catalogHintsFromModelsApiItem(name, m),
+        ...discoveredHints,
       }, contextCap);
     })
       .filter(m => shouldExposeProviderModel(name, m.id));
@@ -1581,6 +1635,9 @@ export async function fetchProviderModels(
 
 export function shouldExposeProviderModel(providerName: string, modelId: string): boolean {
   if (providerName === "opencode-free") return modelId === "big-pickle" || modelId.endsWith("-free");
+  // xAI /models advertises both the dated deployment and this floating alias.
+  // Keep only grok-4.20-multi-agent-0309; the alias is the same server-side id.
+  if (providerName === "xai" && modelId === "grok-4.20-multi-agent-beta-latest") return false;
   return true;
 }
 

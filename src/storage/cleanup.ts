@@ -2578,6 +2578,11 @@ export interface RestoreTestHooks {
    * reconcile, so cleanup can race an in-flight restore.
    */
   holdAfterFileMovesMs?: number;
+  /**
+   * Test-only: publish a ready file after rollout moves, then wait until the
+   * release file exists. This makes cross-thread race tests phase-driven.
+   */
+  pauseAfterFileMoves?: { readyPath: string; releasePath: string };
 }
 
 /**
@@ -2916,6 +2921,11 @@ export function restoreTrashEntry(
     }
     return { ok: false, trashDir: id, ...partialCounts, error };
   };
+
+  if (hooks?.pauseAfterFileMoves) {
+    writeFileSync(hooks.pauseAfterFileMoves.readyPath, "ready\n");
+    while (!existsSync(hooks.pauseAfterFileMoves.releasePath)) Bun.sleepSync(10);
+  }
 
   if (hooks?.holdAfterFileMovesMs !== undefined) {
     const holdMs = Math.max(0, Math.floor(hooks.holdAfterFileMovesMs));

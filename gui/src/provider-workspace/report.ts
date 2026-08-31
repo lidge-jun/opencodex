@@ -39,6 +39,22 @@ const finite = (value: unknown): number | undefined => (
   typeof value === "number" && Number.isFinite(value) ? value : undefined
 );
 
+/**
+ * A finite number is not necessarily a representable date.
+ *
+ * Reports are also read from persisted cache, so a bogus expiry recorded before the wire-side
+ * guard existed still reaches the GUI. `Intl.DateTimeFormat.format()` throws a RangeError on an
+ * out-of-range time value rather than rendering it, which turns one bad provider field into a
+ * render fault for the whole capacity panel. Drop the field instead: the rest of the credit
+ * figures stay useful without it.
+ */
+const dateTimestamp = (value: unknown): number | undefined => {
+  const timestamp = finite(value);
+  if (timestamp === undefined) return undefined;
+  const milliseconds = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000;
+  return Number.isFinite(new Date(milliseconds).getTime()) ? timestamp : undefined;
+};
+
 function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQuota | null {
   if (!quota || typeof quota !== "object" || Array.isArray(quota)) return null;
   const q = quota as Record<string, unknown>;
@@ -61,7 +77,7 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
   const creditsLimit = finite(creditsRaw?.limit);
   const creditsRemaining = finite(creditsRaw?.remaining);
   const creditsPercent = finite(creditsRaw?.percent);
-  const creditsExpiresAt = finite(creditsRaw?.expiresAt);
+  const creditsExpiresAt = dateTimestamp(creditsRaw?.expiresAt);
   const creditsUsd = creditsUsed !== undefined
     && creditsLimit !== undefined
     && creditsRemaining !== undefined

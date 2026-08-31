@@ -204,12 +204,17 @@ function mergeEntry(previous: CodexProvenanceEntry, next: CodexProvenanceEntry):
 function mergeLedger(previous: CodexProvenanceLedger, next: CodexProvenanceLedger): CodexProvenanceLedger {
   const unused = new Set(previous.entries.map((_, index) => index));
   const entries = next.entries.map((entry, nextIndex) => {
-    let previousIndex = previous.entries.findIndex((candidate, index) =>
+    // Extensions follow provenance identity, never position. A bounded ledger may drop an
+    // oversized transaction, shifting an unrelated entry into that slot, and even within one
+    // transaction and timestamp the artifact may differ. Since this search already requires
+    // txId, timestamp, and artifact identity, any remaining positional match is by definition
+    // a different artifact, so preserving its unknown entry/artifact/baseline fields would
+    // attach false evidence and could regrow the record past the measured byte ceiling.
+    const previousIndex = previous.entries.findIndex((candidate, index) =>
       unused.has(index)
       && candidate.txId === entry.txId
       && candidate.at === entry.at
       && knownArtifactIdentity(candidate.artifact) === knownArtifactIdentity(entry.artifact));
-    if (previousIndex < 0 && unused.has(nextIndex)) previousIndex = nextIndex;
     if (previousIndex < 0) return entry;
     unused.delete(previousIndex);
     return mergeEntry(previous.entries[previousIndex]!, entry);
@@ -245,6 +250,11 @@ export const updateIntegrationRecord = (
       if (read.kind === "invalid") return read;
       const previous: CodexIntegrationRecord = read.kind === "ready" ? read.record : { version: 1 };
       const proposed = mutate(previous);
+      // The mutator can explicitly decline an update by returning the exact record it received.
+      // This matters when a preserved forward-compatible extension already exceeds a caller's
+      // write budget: rewriting the same oversized bytes would amplify I/O while deleting known
+      // entries cannot make that irreducible overhead fit.
+      if (proposed === previous) return { kind: "updated" as const, record: previous };
       if (!validateRecord(proposed)) {
         return { kind: "invalid", message: "Codex integration record update produced a malformed v1 shape" };
       }

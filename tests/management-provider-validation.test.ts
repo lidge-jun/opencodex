@@ -30,6 +30,7 @@ import {
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
 import { providerManagementConfigError } from "../src/server/auth-cors";
+import { providerEmptyToolOutputConfigError } from "../src/config/provider-validation";
 import { providerServiceTierConfigError, withProviderServiceTierDTO } from "../src/server/management/provider-capability-config";
 import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
@@ -322,6 +323,106 @@ describe("provider management validation", () => {
 
     expect(loadConfig().providers.relay?.noStructuredOutputModels)
       .toEqual(["deepseek-v4-flash", "other-model"]);
+  });
+
+  test("provider management validates annotateEmptyToolOutputs as boolean", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1",
+      annotateEmptyToolOutputs: true,
+    };
+    expect(providerEmptyToolOutputConfigError("relay", provider)).toBeNull();
+    for (const annotateEmptyToolOutputs of ["yes", 42, {}, []]) {
+      expect(providerEmptyToolOutputConfigError("relay", {
+        ...provider,
+        annotateEmptyToolOutputs,
+      })).toContain("annotateEmptyToolOutputs");
+    }
+  });
+
+  test("provider POST rejects a non-boolean annotateEmptyToolOutputs at the management boundary", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    // The canonical seed path only engages for the real forward seed, so the plain fixture
+    // provider would never reach the comparison this test exists to cover.
+    saveConfig({ ...config("127.0.0.1"), providers: poolProviders() });
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "relay",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://relay.example/v1",
+            annotateEmptyToolOutputs: "yes",
+          },
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: expect.stringContaining("annotateEmptyToolOutputs"),
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider PATCH sets, clears, and rejects annotateEmptyToolOutputs", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "relay",
+          provider: { adapter: "openai-chat", baseUrl: "https://relay.example/v1" },
+        }),
+      });
+      expect(create.status).toBe(200);
+
+      const reject = await fetch(new URL("/api/providers?name=relay", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: "yes" }),
+      });
+      expect(reject.status).toBe(400);
+      expect(await reject.json()).toMatchObject({ error: "annotateEmptyToolOutputs must be a boolean or null" });
+
+      const enable = await fetch(new URL("/api/providers?name=relay", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: true }),
+      });
+      expect(enable.status).toBe(200);
+      expect(loadConfig().providers.relay?.annotateEmptyToolOutputs).toBe(true);
+
+      const disable = await fetch(new URL("/api/providers?name=relay", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: false }),
+      });
+      expect(disable.status).toBe(200);
+      expect(loadConfig().providers.relay?.annotateEmptyToolOutputs).toBe(false);
+
+      const clear = await fetch(new URL("/api/providers?name=relay", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: null }),
+      });
+      expect(clear.status).toBe(200);
+      expect(loadConfig().providers.relay).not.toHaveProperty("annotateEmptyToolOutputs");
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("provider management rejects modelCosts rows with extra fields", () => {
@@ -756,6 +857,119 @@ describe("provider management validation", () => {
       });
       expect(overwrite.status).toBe(200);
       expect(loadConfig().providers["custom-failover"]?.oauthAccountFailover).toEqual({ enabled: false });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // #1409: the add/edit form's payload type has no member for contextWindow or
+  test("canonical OpenAI can set, clear, and persist annotateEmptyToolOutputs via PATCH", async () => {
+    // The canonical seed comparison rejects any provider that diverges from the built-in
+    // transport seed, so a user-owned overlay must be stripped from the comparison candidate
+    // the same way contextWindow and modelAutoCompactTokenLimits already are. Without that,
+    // validation accepted this field and the seed check then refused the very same request.
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const setFalse = await fetch(new URL("/api/providers?name=openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: false }),
+      });
+      expect(setFalse.status).toBe(200);
+      expect(loadConfig().providers.openai?.annotateEmptyToolOutputs).toBe(false);
+
+      const setTrue = await fetch(new URL("/api/providers?name=openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: true }),
+      });
+      expect(setTrue.status).toBe(200);
+      expect(loadConfig().providers.openai?.annotateEmptyToolOutputs).toBe(true);
+
+      // null clears the overlay and returns the provider to registry-default behavior.
+      const clear = await fetch(new URL("/api/providers?name=openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ annotateEmptyToolOutputs: null }),
+      });
+      expect(clear.status).toBe(200);
+      expect(loadConfig().providers.openai?.annotateEmptyToolOutputs).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // #1409: the add/edit form's payload type has no member for contextWindow or
+  test("provider POST overwrite preserves an explicit annotateEmptyToolOutputs: false", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const create = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "deepseek",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.deepseek.com/v1",
+            apiKey: "sk-deepseek-test",
+            annotateEmptyToolOutputs: false,
+          },
+        }),
+      });
+      expect(create.status).toBe(200);
+      expect(loadConfig().providers.deepseek?.annotateEmptyToolOutputs).toBe(false);
+
+      // DeepSeek carries a registry default of `true`. An overwrite that says nothing about
+      // annotation must not resurrect it: the operator turned the annotation OFF on purpose,
+      // and enrichment cannot tell "client omitted" from "registry supplied" once it has run.
+      const overwrite = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "deepseek",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.deepseek.com/v1",
+            apiKey: "sk-deepseek-rotated",
+          },
+        }),
+      });
+      expect(overwrite.status).toBe(200);
+      expect(loadConfig().providers.deepseek?.annotateEmptyToolOutputs).toBe(false);
+
+      // The stored value is only half the contract — assert the RUNTIME resolution too, since
+      // router.ts backfills the registry default beneath user entries at resolve time.
+      const { routedProviderConfig } = await import("../src/router");
+      const stored = loadConfig().providers.deepseek;
+      expect(stored).toBeDefined();
+      expect(routedProviderConfig("deepseek", stored!).annotateEmptyToolOutputs).toBe(false);
+
+      // An explicit `true` must still win, and a fresh row must still receive the default.
+      const reenable = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "deepseek",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.deepseek.com/v1",
+            apiKey: "sk-deepseek-rotated",
+            annotateEmptyToolOutputs: true,
+          },
+        }),
+      });
+      expect(reenable.status).toBe(200);
+      expect(loadConfig().providers.deepseek?.annotateEmptyToolOutputs).toBe(true);
     } finally {
       await server.stop(true);
     }

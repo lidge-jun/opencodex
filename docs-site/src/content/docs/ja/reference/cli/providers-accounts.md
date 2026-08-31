@@ -111,9 +111,9 @@ Codex pool selection applies to the next request after clearing existing affinit
 }
 ```
 
-### `ocx account list [provider] [--json] [--all]`
+### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
-プロバイダーを使用しない場合、Codex プール、OAuth アカウント、および設定された API キー プールが一覧表示されます。 `--all` が存在しない限り、空のプロバイダーはスキップされます。プロバイダーを使用すると、その資格情報ファミリーのみがリストされます。人間の出力では `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` を使用します。手動で選択した Codex 行には `selected` というマークが付けられます。保存された Kiro アカウントが存在する場合、出力には、Kiro には 1 つのログイン スロットがあり、再度サインインすると現在のアカウントが置き換えられることが示されます。結果が空であっても成功です。 `--json` は次を返します:
+プロバイダーを使用しない場合、Codex プール、OAuth アカウント、および設定された API キー プールが一覧表示されます。 `--all` が存在しない限り、空のプロバイダーはスキップされます。プロバイダーを使用すると、その資格情報ファミリーのみがリストされます。人間の出力では `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` を使用します。手動で選択した Codex 行には `selected` というマークが付けられます。利用可能な Kiro アカウントが 2 つ以上保存されている場合、既定では 429 を受けると別のアカウントへ自動的に切り替え、既知の残り利用枠が最も多いアカウントを優先します。この切り替えはアカウントの存在によって有効になり、`oauthAccountFailover.enabled: false` で無効にできます。`ocx account login kiro` はアカウントを 1 件ずつプールへ追加します。結果が空であっても成功です。 `--json` は次を返します:
 
 ```text
 { accounts: AccountRow[], notes: string[] }

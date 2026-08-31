@@ -34,7 +34,8 @@ import {
   tryAcquireCodexQuotaProbeLease,
 } from "../src/codex/routing";
 import { clearPoolRotationState } from "../src/codex/pool-rotation";
-import { removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
+import { captureConfigGeneration } from "../src/lib/state-store-sweeper";
+import { readCodexAccountRecord, removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
@@ -483,6 +484,138 @@ describe("codex routing", () => {
     expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 403 });
     expect(resolveCodexAccountForThread("credential-403-next", config)).toBe("b");
   });
+
+  test("a 401 does not quarantine a credential that replaced the rejected one AFTER the outcome (#2892 gap 4)", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+
+    // Record the 401 while the rejected credential is still the live one, so every side effect is
+    // legitimately applied. This is the ordering @Ingwannu reproduced: the replacement lands AFTER
+    // recordCodexUpstreamOutcome returns, which no post-write re-read inside it can ever observe.
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+    expect(isAccountNeedsReauth("a")).toBe(true);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 401 });
+
+    // Another process replaces the credential. The 401 was evidence about a credential that no
+    // longer exists, so it must not hold the replacement out of rotation.
+    saveTestCredential("a");
+    expect(readCodexAccountRecord("a")!.generation).toBe(generation + 1);
+
+    expect(isAccountNeedsReauth("a")).toBe(false);
+    expect(getCodexUpstreamHealth("a")).toBeNull();
+    expect(resolveCodexAccountForThread("gap4-replacement-selectable", config)).toBe("a");
+  });
+
+  test("a 401 on the live credential still quarantines the account (#2892 gap 4 does not over-roll-back)", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+
+    // No concurrent replacement: the evidence is about the credential still in the store, so every
+    // side effect must survive. This is the assertion that stops the rollback from being a blanket
+    // "never quarantine" regression.
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+
+    expect(isAccountNeedsReauth("a")).toBe(true);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 401 });
+  });
+
+
+  test("a later transient failure is not deleted by a spent credential-failure tag (#2892 gap 4 review)", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+
+    // G1 401, then the credential is replaced, then a GENUINE 503 against G2 — all before any
+    // health read. Provenance keyed only by account id would spend "whatever health is current"
+    // and delete this 503; provenance on the entry cannot, because the 503 write replaced the tag.
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+    saveTestCredential("a");
+    recordCodexUpstreamOutcome(config, "a", 503);
+
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ lastFailureStatus: 503 });
+    expect(isAccountNeedsReauth("a")).toBe(false);
+  });
+
+  test("a workspace denial overwriting a spent credential failure survives the read (#2892 gap 4 review)", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+    saveTestCredential("a");
+    // A workspace denial is a different ownership class and must not be collateral damage.
+    recordCodexUpstreamOutcome(config, "a", 403, { denial: "workspace" });
+
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ lastFailureStatus: 403 });
+  });
+
+
+  test("a sidecar 401 does not quarantine the credential that replaced it (#2892 gap 4 review)", async () => {
+    const { sidecarOutcomeRecorder } = await import("../src/server/responses/core");
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+
+    // A vision or web-search sidecar returns 401 for a stored Pool credential. Recording that
+    // without the credential generation produced an account-wide quarantine, so the replacement
+    // inherited it and the account stayed unroutable.
+    const record = sidecarOutcomeRecorder(config, {
+      kind: "pool",
+      accountId: "a",
+      // Use the CURRENT captured generation, as a production pool auth context does. A hardcoded 0
+      // is below whatever reconciliation state earlier tests advanced to, so
+      // recordCodexUpstreamOutcome could reject the outcome at its writer-generation guard and the
+      // assertion would pass without ever reaching the credential-generation logic under test.
+      writerGeneration: captureConfigGeneration(),
+      generation,
+      accessToken: "access-a",
+      chatgptAccountId: "acct-a",
+    });
+    expect(record).toBeDefined();
+    record!(401);
+    // Guard the guard: if this is false the outcome never applied, so the assertions below would be
+    // vacuous rather than proving the replacement is not quarantined.
+    expect(isAccountNeedsReauth("a")).toBe(true);
+
+    saveTestCredential("a");
+    expect(isAccountNeedsReauth("a")).toBe(false);
+    expect(getCodexUpstreamHealth("a")).toBeNull();
+  });
+
+
+  test("a spent credential failure does not donate its failure count to a later transient (#2892 gap 4 review)", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10);
+    updateAccountQuota("b", 20);
+    saveTestCredential("a");
+    const generation = readCodexAccountRecord("a")!.generation;
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: generation });
+    saveTestCredential("a");
+    // G2's first genuine transient must start the count at 1. Inheriting the spent 401's count
+    // pushes the account over the failover threshold a failure early, and because the transient
+    // write drops the provenance tag, no later read can detect that it happened.
+    recordCodexUpstreamOutcome(config, "a", 503);
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 503 });
+    // The same inheritance path exists for a workspace denial.
+    clearCodexUpstreamHealthForAccount("a");
+    recordCodexUpstreamOutcome(config, "a", 401, { credentialGeneration: readCodexAccountRecord("a")!.generation });
+    saveTestCredential("a");
+    recordCodexUpstreamOutcome(config, "a", 403, { denial: "workspace" });
+    expect(getCodexUpstreamHealth("a")).toMatchObject({ consecutiveFailures: 1, lastFailureStatus: 403 });
+  });
+
 
   test("connect failures contribute to transient failover", () => {
     const config = makeConfig();

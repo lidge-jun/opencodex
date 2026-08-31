@@ -426,6 +426,31 @@ describe("acceptSystemRestart", () => {
     ]);
   });
 
+  test("a reported drain failure uses the uncertain-cleanup restart handoff", async () => {
+    const calls: string[] = [];
+    let scheduled: (() => void | Promise<void>) | null = null;
+
+    acceptSystemRestart({
+      isDraining: () => false,
+      getActiveTurnCount: () => 0,
+      isSupervisedServiceChild: () => false,
+      listenPort: () => 10123,
+      schedule: fn => { scheduled = fn; },
+      scheduleDeadline: () => () => {},
+      setDraining: () => {},
+      drainAndShutdown: async () => false,
+      stopListener: () => { calls.push("stop"); },
+      spawnStart: (port, waitForHealth) => {
+        calls.push(`start:${port}:${waitForHealth ? "ready" : "deferred"}`);
+      },
+      markRecycling: () => { calls.push("recycle"); },
+      exitProcess: code => { calls.push(`exit:${code}`); },
+    });
+
+    await scheduled!();
+    expect(calls).toEqual(["stop", "start:10123:deferred", "recycle", "exit:1"]);
+  });
+
   test("late drain rejection after timeout is observed without a second terminal action", async () => {
     const calls: string[] = [];
     let scheduled: (() => void | Promise<void>) | null = null;
@@ -620,7 +645,7 @@ describe("acceptSystemRestart", () => {
     });
 
     await scheduled!();
-    expect(calls).toEqual(["latched", "drain", "stop", "start:10123", "recycle", "exit:0"]);
+    expect(calls).toEqual(["latched", "drain", "stop", "start:10123", "recycle", "exit:1"]);
   });
 
   test("spawn failure clears OCX_SERVICE so exit cleanup can restore fences", async () => {

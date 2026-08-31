@@ -170,6 +170,25 @@ Weights are relative, not percentages. Weights `2,1` and `200,100` express the s
 small values that communicate intent.
 :::
 
+### Random: weighted draw per request
+
+`random` draws one eligible target per request, with odds proportional to `weight`. Every request
+is an independent draw, so traffic spreads across targets without the deterministic pattern or
+stickiness of round-robin. `stickyLimit` does not affect this strategy.
+
+### Least-used: favor the target with fewest successes
+
+`least-used` routes each request to the eligible target with the fewest successful requests
+recorded by this opencodex process. Counts start at zero on restart, and ties keep configuration
+order. Weights and `stickyLimit` do not affect this strategy.
+
+### Reset-window: follow the soonest quota reset
+
+`reset-window` routes each request to the eligible target whose cached provider quota snapshot
+shows the soonest upcoming window reset (five-hour, weekly, monthly, or custom). This spends the
+provider that refreshes first. Targets without fresh quota data, and ties, keep configuration
+order. Weights and `stickyLimit` do not affect this strategy.
+
 ## What happens when a target fails
 
 Combo failures are divided into **hop** failures and **terminal** failures.
@@ -323,9 +342,9 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | Field | Required | Default | Rules |
 | --- | --- | --- | --- |
 | `targets` | Yes | — | Non-empty ordered array of configured `{ provider, model, weight? }` targets. Duplicate provider/model pairs are rejected. |
-| `targets[].weight` | No | `1` | Integer from 1 to 10,000. Used by round-robin; ignored by failover. |
-| `strategy` | No | `"failover"` | `"failover"` or `"round-robin"`. |
-| `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. |
+| `targets[].weight` | No | `1` | Integer from 1 to 10,000. Used by round-robin and random; ignored by failover, least-used, and reset-window. |
+| `strategy` | No | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, or `"reset-window"`. |
+| `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. Applies only to round-robin. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; applied only when the caller omits effort and the target advertises support. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |

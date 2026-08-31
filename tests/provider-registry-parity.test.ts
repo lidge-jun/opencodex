@@ -1003,6 +1003,34 @@ describe("provider registry parity", () => {
     // so the request still reaches Command Code as `deepseek/deepseek-v4-flash`.
     expect(entries.find(e => e.slug === "commandcode/deepseek-deepseek-v4-flash")).toBeTruthy();
   });
+
+  /*
+   * #2883, at the surface the reporter actually saw. A live-discovered model with no
+   * row in the effort table falls through `configuredReasoningEfforts` to the
+   * provider-level `reasoningEfforts: []`, which `applyProviderConfigHints` then
+   * writes onto the model — so the Codex App picker renders empty and the request
+   * carries `requestedEffort: "none"`. Asserting the catalog entry rather than just
+   * the table is what makes this a regression test for the symptom.
+   */
+  test("the Command Code GLM-5.3-Flash route reaches the catalog with a selectable ladder", () => {
+    const commandcode = PROVIDER_REGISTRY.find(entry => entry.id === "commandcode");
+    const seed = providerConfigSeed(commandcode!);
+    const model = applyProviderConfigHints("commandcode", seed, {
+      id: "z-ai/glm-5.3-flash",
+      provider: "commandcode",
+    });
+    expect(model.id).toBe("z-ai/glm-5.3-flash");
+    expect(model.reasoningEfforts).toEqual(["low", "high", "max"]);
+
+    const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
+    const entry = entries.find(e => e.slug === "commandcode/z-ai-glm-5.3-flash");
+    expect(entry).toBeTruthy();
+    // The empty ladder is exactly the reported symptom: an empty picker in the app.
+    expect(entry?.supported_reasoning_levels).not.toEqual([]);
+    // Routed catalogs append the synthetic top rung, as every other routed row above does.
+    expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
+      .toEqual(["low", "high", "max", "ultra"]);
+  });
   /*
    * #1043. Zen publishes no modality metadata, so the classification below is an
    * empirical list measured against the live endpoint on 2026-08-05, not something

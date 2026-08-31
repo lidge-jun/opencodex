@@ -27,10 +27,11 @@ export interface GrokInjectResult {
 
 const BEGIN_MARKER = "# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>";
 const END_MARKER = "# <<< opencodex managed block <<<";
-// grok 0.2.101 verified live (2026-07-23): [model_providers.<id>] inheritance parses but the
-// inherited base_url is NOT applied to inference routing — the turn falls through to the default
-// cli-chat-proxy and 401s. Per-model direct fields DO route. So every [model.*] block carries its
-// own base_url/api_backend/api_key and no [model_providers] table is emitted at all.
+// Grok 0.2.109 (2026-07-21) shipped working [model_providers.<id>] inheritance: base_url,
+// api_backend, api_key, and extra_headers declared on the provider are applied to inference
+// routing for inheriting models (verified in grok-build's with_provider_defaults →
+// resolve_model_list → sampling_config_for_model → SamplingClient chain). We emit one shared
+// [model_providers.opencodex] table and each [model.*] references it via model_provider.
 
 /**
  * INTERNAL API shared with `./inspect` (WP2, devlog 260803_integrations_toggle_all/012).
@@ -325,6 +326,9 @@ function userModelAliases(content: string, region: ManagedRegion | null): Set<st
 const OPENCODEX_API_KEY = "opencodex-loopback";
 const OPENCODEX_GROK_MARKER = "x-opencodex-grok";
 
+/** The provider id opencodex owns inside ~/.grok/config.toml. */
+const OPENCODEX_PROVIDER_ID = "opencodex";
+
 /** A plain `[model.<alias>]` table outside the fence that opencodex itself wrote. */
 interface OrphanTable {
   alias: string;
@@ -343,16 +347,39 @@ interface OrphanTable {
 function tableBodyKeys(body: string): Map<string, string> {
   const keys = new Map<string, string>();
   const structure = analyzeTomlStructure(body);
-  const assignment = /^[ \t]*([A-Za-z0-9_-]+)[ \t]*=[ \t]*(.*?)[ \t]*$/gm;
+  // Bare keys only: a quoted dotted segment could otherwise split a quoted value
+  // containing a dot.
+  const assignment =
+    /^[ \t]*([A-Za-z0-9_-]+(?:[ \t]*\.[ \t]*[A-Za-z0-9_-]+)*)[ \t]*=[ \t]*(.*?)[ \t]*$/gm;
   for (const match of structure.view.matchAll(assignment)) {
     if (!structure.containerRootLineStarts.has(match.index!)) continue;
+    const path = match[1]!.split(".").map(part => part.trim());
     const raw = match[2]!;
     const value = raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')
       ? decodeTomlBasicString(raw.slice(1, -1))
       : raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")
         ? raw.slice(1, -1) // TOML literal strings do not process escapes.
         : raw;
-    if (!keys.has(match[1]!)) keys.set(match[1]!, value);
+    if (path.length === 1) {
+      if (!keys.has(path[0]!)) keys.set(path[0]!, value);
+      continue;
+    }
+    // Dotted keys re-open a nested namespace: `extra_headers.k = v` is the key `k` of the
+    // sub-table `extra_headers`, which a folded-body reader must be able to see. Rebuild
+    // the inline-table spelling that hasInlineOwnershipMarker matches (bare word booleans
+    // and numbers keep their TOML spelling — no quoting, so the regex is unchanged).
+    let suffix = value;
+    for (let level = path.length - 1; level >= 1; level -= 1) {
+      const prefixKey = path.slice(0, level).join(".");
+      const inner = `${JSON.stringify(path[level]!)} = ${suffix}`;
+      suffix = `{ ${inner} }`;
+      const existing = keys.get(prefixKey);
+      if (existing === undefined || !existing.startsWith("{")) {
+        keys.set(prefixKey, suffix);
+      } else {
+        keys.set(prefixKey, `{ ${existing.slice(2, -2)}, ${inner} }`);
+      }
+    }
   }
   return keys;
 }
@@ -369,8 +396,10 @@ function isLoopbackBaseUrl(value: string | undefined): boolean {
 
 /** Exact marker emitted inside every modern generated model table. */
 function hasInlineOwnershipMarker(value: string | undefined): boolean {
+  // The reconstructed fold of a Grok dotted re-serialization writes bare `1` for the
+  // boolean literal, so both `= "1"` and `= 1` spellings are accepted here.
   return value !== undefined
-    && /^\{[ \t]*["']x-opencodex-grok["'][ \t]*=[ \t]*["']1["'][ \t]*\}$/.test(value);
+    && /^\{[ \t]*["']x-opencodex-grok["'][ \t]*=[ \t]*(?:"1"|'1'|1)[ \t]*\}$/.test(value);
 }
 
 /** Historical deterministic alias, including collision suffixes allocated by the writer. */
@@ -425,8 +454,24 @@ function isDisabledProviderModelId(
  *     remote host is left alone.
  *   - `x-opencodex-grok = "1"` in generated inline/child extra_headers, OR the historical
  *     chat_completions + `name = "OCX <model>"` + deterministic generated alias shape.
+ *   - PROVIDER-INHERITANCE shape: `model_provider = "opencodex"` with no api_key/base_url of
+ *     its own, adopting the verdict of the `[model_providers.opencodex]` table it references
+ *     (the current block shape carries no per-model evidence; this mirrors Codex-side
+ *     classifyCodexRouting).
  * A loopback base_url ALONE is not enough: aiming your own model at the local proxy is a
  * legitimate thing to do.
+ *
+ * Also sweeps orphaned `[model_providers.opencodex]` blocks from a previous managed block
+ * that used the provider-inheritance shape. Grok's re-serializer promotes the inline
+ * `extra_headers = { ... }` into a separate `[model_providers.<id>.extra_headers]`
+ * sub-table, which can split the parent's body (its own keys then live inside the child's
+ * span) and may interleave user tables between the parent and its children, so each
+ * provider's body is FOLDED with all its same-provider descendants before judging, and
+ * the removal span covers them by their exact ranges. The fenced provider is excluded
+ * from that sweep (the splice owns it) but still counts as ownership evidence, so
+ * teardown does not orphan models that inherit from it. The
+ * durable marker lives on the provider (never on the inheriting model), so the sweep is
+ * what keeps explicit ownership of inherited entries verifiable after a rewrite.
  */
 function findOpencodexOrphans(content: string, region: ManagedRegion | null): OrphanTable[] {
   const orphans: OrphanTable[] = [];
@@ -442,20 +487,94 @@ function findOpencodexOrphans(content: string, region: ManagedRegion | null): Or
     fenceStart >= 0 && start < fenceStart ? Math.min(end, fenceStart) : end;
   // Collect every table header first: a table body runs to the NEXT header, whatever it is.
   const headers = analyzeTomlStructure(content).headers;
+  // [model_providers.<id>] tables outside the fence, folded with their own sub-tables (see
+  // the function doc). A table passing the predicate (our api_key literal + a loopback
+  // base_url + the durable marker inline or in a re-serialized child) contributes to
+  // `ownedProviderIds` for the model scan below; one with OUR id is additionally swept as
+  // an orphan of a previous managed block (a leftover here collides with the regenerated
+  // block's provider table — duplicate key — and alias rewriting skips provider orphans
+  // because they have no alias and no model id). The dot-terminated prefix keeps a user's
+  // `[model_providers.opencodex_backup]` out of scope.
+  const ownedProviderIds = new Set<string>();
+  for (const [position, header] of headers.entries()) {
+    if (header.array || header.segments.length !== 2 || header.segments[0] !== "model_providers") continue;
+    // Inside the fence the regular splice owns the table, but it is still ownership
+    // evidence: models kept outside the fence after a Grok rewrite (retired ids) inherit
+    // their verdict from the fenced provider, so classification must happen while the
+    // fence still exists or teardown leaves them with a dangling model_provider reference.
+    const insideRegion = region !== null
+      && header.index >= region.start && header.index < region.end;
+    const end = clampEnd(header.index, headers[position + 1]?.index ?? content.length);
+    let body = content.slice(header.index + header.length, end);
+    // Re-serialized children may sit non-contiguously (a user table can interleave), so
+    // fold every same-provider descendant globally, like the model scan below, and remove
+    // them by their exact ranges. Never fold across the fence: a pre-fence parent must
+    // judge on pre-fence bytes only, and fenced or below-fence content is not the orphan's.
+    const additionalRanges: Array<{ start: number; end: number }> = [];
+    for (let next = 0; next < headers.length; next += 1) {
+      if (next === position) continue;
+      const child = headers[next]!;
+      if (region && child.index >= region.start && child.index < region.end) continue;
+      if (fenceStart >= 0
+        && (header.index < fenceStart) !== (child.index < fenceStart)) continue;
+      if (child.segments.length <= 2
+        || child.segments[0] !== "model_providers"
+        || child.segments[1] !== header.segments[1]) continue;
+      const childEnd = clampEnd(child.index, headers[next + 1]?.index ?? content.length);
+      body += "\n" + content.slice(child.index + child.length, childEnd);
+      additionalRanges.push({ start: child.index, end: childEnd });
+    }
+    const keys = tableBodyKeys(body);
+    if (keys.get("api_key") !== OPENCODEX_API_KEY) continue;
+    if (!isLoopbackBaseUrl(keys.get("base_url"))) continue;
+    // The durable marker may sit inline on the provider, or be promoted by Grok's
+    // re-serializer into `[model_providers.<id>.extra_headers]` — where the folded body
+    // shows it as a bare `x-opencodex-grok = "1"` assignment. Both forms decide.
+    if (!hasInlineOwnershipMarker(keys.get("extra_headers"))
+      && keys.get(OPENCODEX_GROK_MARKER) !== "1") continue;
+    ownedProviderIds.add(header.segments[1]!);
+    if (insideRegion) continue;
+    if (header.segments[1] === OPENCODEX_PROVIDER_ID) {
+      orphans.push({
+        alias: "",
+        modelId: "",
+        ownership: "explicit",
+        start: header.index,
+        end,
+        additionalRanges,
+      });
+    }
+  }
   for (const [position, header] of headers.entries()) {
     if (header.array || header.segments.length !== 2 || header.segments[0] !== "model") continue;
     // Inside the fence the regular splice already owns it.
     if (region && header.index >= region.start && header.index < region.end) continue;
     const bodyEnd = clampEnd(header.index, headers[position + 1]?.index ?? content.length);
     const keys = tableBodyKeys(content.slice(header.index + header.length, bodyEnd));
-    if (keys.get("api_key") !== OPENCODEX_API_KEY) continue;
-    if (!isLoopbackBaseUrl(keys.get("base_url"))) continue;
     const modelId = keys.get("model");
     if (!modelId) continue;
+    // Two shapes carry our ownership signal. The current managed block routes every model
+    // through a shared provider table (`model_provider = "opencodex"`), so a re-serialized
+    // unfenced entry has NO api_key/base_url of its own — the evidence lives on the provider
+    // table it references (Codex-side precedent: classifyCodexRouting follows model_provider
+    // for the same reason). Inheritance is accepted only from a provider that itself passed
+    // the strict predicate above, and only for rows whose alias carries the generated
+    // fingerprint: a user is free to reference the managed provider from their own
+    // [model.*] table, and inheritance alone must not grant removal authority over it.
+    const providerId = keys.get("model_provider");
+    const inheritedOwned =
+      providerId === OPENCODEX_PROVIDER_ID
+      && ownedProviderIds.has(OPENCODEX_PROVIDER_ID)
+      && isGeneratedAliasForModel(header.segments[1]!, modelId);
+    if (!inheritedOwned) {
+      if (keys.get("api_key") !== OPENCODEX_API_KEY) continue;
+      if (!isLoopbackBaseUrl(keys.get("base_url"))) continue;
+    }
     let hasOwnershipMarker = hasInlineOwnershipMarker(keys.get("extra_headers"));
-    // Swallow the entry's OWN sub-tables (`[model.<alias>.extra_headers]`). Grok may
-    // re-serialize them non-contiguously, so collect exact descendant spans globally rather
-    // than stopping at the first unrelated table.
+    // Swallow the entry's OWN sub-tables (`[model.<alias>.extra_headers]`, and after #1756
+    // `[[model.<alias>.reasoning_efforts]]`). Grok may re-serialize them non-contiguously,
+    // so collect exact descendant spans globally rather than stopping at the first
+    // unrelated table.
     const additionalRanges: Array<{ start: number; end: number }> = [];
     for (let next = 0; next < headers.length; next += 1) {
       if (next === position) continue;
@@ -472,11 +591,17 @@ function findOpencodexOrphans(content: string, region: ManagedRegion | null): Or
       }
     }
     const legacyGenerated = isLegacyGeneratedTable(header.segments[1]!, keys);
-    if (!hasOwnershipMarker && !legacyGenerated) continue;
+    // An inherited model has no per-model marker; its verdict comes from the provider
+    // table it references, which only lands here when that provider proved durable
+    // ownership. A legacy-fingerprint model keeps dev's conservative classification.
+    const ownership: "explicit" | "legacy" = inheritedOwned || hasOwnershipMarker
+      ? "explicit"
+      : "legacy";
+    if (!hasOwnershipMarker && !legacyGenerated && !inheritedOwned) continue;
     orphans.push({
       alias: header.segments[1]!,
       modelId,
-      ownership: hasOwnershipMarker ? "explicit" : "legacy",
+      ownership,
       start: header.index,
       end: bodyEnd,
       additionalRanges,
@@ -877,6 +1002,15 @@ export function buildGrokManagedBlock(
   const baseUrl = `http://${host}:${port}/v1`;
   const lines = [
     BEGIN_MARKER,
+    "",
+    `[model_providers.${OPENCODEX_PROVIDER_ID}]`,
+    `base_url = ${tomlString(baseUrl)}`,
+    'api_backend = "responses"',
+    'api_key = "opencodex-loopback"',
+    // Best-effort attribution tag for the usage dashboard. Upstream Grok sends
+    // extra_headers verbatim on inference calls (11-custom-models.md). This is NOT a
+    // security boundary — any loopback client could send the same header.
+    'extra_headers = { "x-opencodex-grok" = "1" }',
   ];
   const aliasCounts = new Map<string, number>();
   const taken = new Set(reservedAliases ?? []);
@@ -896,19 +1030,12 @@ export function buildGrokManagedBlock(
     // Slot consumed, table not written: this is what keeps every other alias stable
     // across selection changes.
     if (excluded?.has(model.id)) continue;
-    const isFirst = lines.length === 1;
     lines.push(
-      ...(isFirst ? [] : [""]),
+      "",
       `[model.${alias}]`,
       `model = ${tomlString(model.id)}`,
-      `base_url = ${tomlString(baseUrl)}`,
-      'api_backend = "responses"',
-      'api_key = "opencodex-loopback"',
+      `model_provider = ${tomlString(OPENCODEX_PROVIDER_ID)}`,
       `name = ${tomlString(model.name ?? `OCX ${model.id}`)}`,
-      // Best-effort attribution tag for the usage dashboard. Upstream Grok sends
-      // extra_headers verbatim on inference calls (11-custom-models.md). This is NOT a
-      // security boundary — any loopback client could send the same header.
-      'extra_headers = { "x-opencodex-grok" = "1" }',
     );
     if (Number.isFinite(model.contextWindow) && (model.contextWindow ?? 0) > 0) {
       lines.push(`context_window = ${model.contextWindow}`);
@@ -1015,16 +1142,21 @@ export function injectGrokConfig(
       .filter(model => !opts.excluded?.has(model.id))
       .map(model => model.id));
     const orphans = findOpencodexOrphans(originalContent, originalRegion)
-      .filter(orphan => orphan.ownership === "legacy"
-        // A legacy fingerprint is not durable deletion authority. Migrate it only when this
-        // same write will replace the row with a marked managed table.
-        ? emittedModelIds.has(orphan.modelId)
-        : catalogModelIds.has(orphan.modelId)
-          || isDisabledProviderModelId(
-            orphan.modelId,
-            opts.disabledProviderNamespaces,
-            opts.comboPublicModelIds,
-          ));
+      .filter(orphan =>
+        // A provider table carries no alias and no model id: its strict predicate (our key
+        // + loopback + durable marker) is itself the deletion authority, and a leftover
+        // collides with the regenerated provider table (duplicate key).
+        orphan.alias === ""
+        || (orphan.ownership === "legacy"
+          // A legacy fingerprint is not durable deletion authority. Migrate it only when this
+          // same write will replace the row with a marked managed table.
+          ? emittedModelIds.has(orphan.modelId)
+          : catalogModelIds.has(orphan.modelId)
+            || isDisabledProviderModelId(
+              orphan.modelId,
+              opts.disabledProviderNamespaces,
+              opts.comboPublicModelIds,
+            )));
     const content = removeOrphanTables(originalContent, orphans);
     // Removing bytes above the fence MOVES it: recompute rather than adjust arithmetic,
     // so the splice below cannot cut the file in the wrong place.
@@ -1054,7 +1186,10 @@ export function injectGrokConfig(
     }
     const replacements = new Map<string, string | null>();
     for (const removed of [
-      ...orphans.map(orphan => ({ alias: orphan.alias, modelId: orphan.modelId })),
+      // Provider orphans carry no alias and no model id: there is nothing to repoint, and
+      // an empty alias must never enter the rename map.
+      ...orphans.filter(orphan => orphan.alias !== "")
+        .map(orphan => ({ alias: orphan.alias, modelId: orphan.modelId })),
       ...[...previousManagedModels].map(([alias, modelId]) => ({ alias, modelId })),
     ]) {
       if (nextManagedModels.get(removed.alias) === removed.modelId) continue;
@@ -1133,9 +1268,17 @@ export function stripGrokConfig(opts: { grokHome?: string } = {}): GrokInjectRes
       const tailOrphans = findOpencodexOrphans(restOfFile, null)
         .filter(orphan => orphan.ownership === "explicit");
       const removedAliases = new Set(
-        [...fullOrphans, ...prefixOrphans, ...tailOrphans].map(orphan => orphan.alias),
+        [...fullOrphans, ...prefixOrphans, ...tailOrphans]
+          .map(orphan => orphan.alias)
+          // Provider orphans carry no alias; their ranges above already removed the table.
+          .filter(alias => alias !== ""),
       );
-      orphanCount = removedAliases.size;
+      // The backup must cover every removed TABLE, not just aliased rows: provider-only
+      // orphans carry no alias and would otherwise be swept without any backup.
+      orphanCount = new Set(
+        [...fullOrphans, ...prefixOrphans, ...tailOrphans]
+          .flatMap(orphan => orphanRanges([orphan])),
+      ).size;
       const fullRanges = orphanRanges(fullOrphans);
       const prefixRanges = [
         ...orphanRanges(prefixOrphans),
@@ -1168,7 +1311,10 @@ export function stripGrokConfig(opts: { grokHome?: string } = {}): GrokInjectRes
       }
       orphanCount = orphans.length;
       stripped = removeOrphanTables(content, orphans);
-      stripped = removeAliasReferences(stripped, new Set(orphans.map(orphan => orphan.alias)));
+      stripped = removeAliasReferences(
+        stripped,
+        new Set(orphans.map(orphan => orphan.alias).filter(alias => alias !== "")),
+      );
     }
     if (orphanCount > 0) copyBackupOnce(configPath, join(grokHome, "config.toml.bak-opencodex"));
     atomicWriteFile(configPath, applyEol(stripped, eol));

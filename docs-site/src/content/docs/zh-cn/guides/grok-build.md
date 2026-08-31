@@ -11,13 +11,16 @@ opencodex 在本地端口提供一个与 OpenAI 兼容的 `POST /v1/chat/complet
 
 ```toml
 # >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>
-[model.ocx-gpt-5-6-sol]
-model = "gpt-5.6-sol"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
-name = "OCX gpt-5.6-sol"
 extra_headers = { "x-opencodex-grok" = "1" }
+
+[model.ocx-gpt-5-6-sol]
+model = "gpt-5.6-sol"
+model_provider = "opencodex"
+name = "OCX gpt-5.6-sol"
 context_window = 272000
 supports_reasoning_effort = true
 reasoning_effort = "low"
@@ -28,7 +31,8 @@ value = "low"
 label = "Low"
 description = "Quick, fast implementations"
 default = true
-# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model,
+# each referencing model_provider = "opencodex" ...
 # <<< opencodex managed block <<<
 ```
 
@@ -59,12 +63,10 @@ opencodex 会映射已配置的提供方档位（`reasoningEfforts` /
 模型声明的有效 Grok 档位（包括 `none` 和 `minimal`）都会保留。不受支持或重复的档位
 （包括 Codex 专用的 `ultra`）会从文件中省略，从而确保写出的每个选项都可执行。
 
-Grok Build 通过 Chat Completions 与 opencodex 通信，并在声明档位时发送
-`reasoning_effort`。在这种情况下，Chat Completions 入站转换器会将内部 Responses 的
-`reasoning.summary` 默认设为 `auto`，因此推理轨迹会以 `delta.reasoning_content`
-到达 Grok。需要模型执行推理且不返回轨迹的客户端，可以设置
-`include_reasoning: false`（或 `reasoning.summary: "none"`）。两个选项同时出现时，
-显式的 `reasoning.summary` 优先。
+Grok Build 通过 Responses API 与 opencodex 通信。当路由声明推理档位时，Responses
+直通会按配置转发 `reasoning.summary`，因此推理轨迹会以 Responses reasoning 项的形式
+原生到达 Grok。需要模型执行推理且不返回轨迹的客户端，可以设置
+`reasoning.summary: "none"`。显式设置的 `reasoning.summary` 优先于路由默认值。
 
 ## 认证说明
 
@@ -72,33 +74,39 @@ Grok Build 通过 Chat Completions 与 opencodex 通信，并在声明档位时�
 
 **自动注册仅限 loopback。** 当 opencodex 绑定到非 loopback 主机时——包括通配符 `0.0.0.0` 和 `::`，它们会暴露所有网卡——请求需要你的真实接入令牌，而受管理区块无法安全地携带它。把字面令牌写进去会把你的密钥放进 `~/.grok/config.toml`，并在下次 `ocx start`/`ensure`/`restart` 时覆盖你在那里设置的内容。所以在这种情况下，opencodex 根本不会写入任何内容（并且会移除早先 loopback 绑定留下的任何区块），然后你需要在受管理标记之外自己配置这些模型，因为 opencodex 在那里做的任何事都不会覆盖它们。精确表结构见[手动方案](#manual-recipe-without-auto-registration)，并同时设置 `base_url`（从你运行 `grok` 的位置实际可达的主机）和 `api_key`（你的 `OPENCODEX_API_AUTH_TOKEN`）。
 
-不要在这里把 `api_key` 换成 `env_key`。在未设置 `model_provider` 的情况下，解析失败的 `env_key` 不会阻止请求——Grok 会回退到你的 xAI 会话令牌，并把它发送到该条目指定的 `base_url`，而对于局域网部署来说，这通常是一个并非 xAI 的明文 HTTP 端点。
+不要在这里把 `api_key` 换成 `env_key`。解析失败的 `env_key` 不会阻止请求——Grok 会回退到你的 xAI 会话令牌，并把它发送到该条目指定的 `base_url`，而对于局域网部署来说，这通常是一个并非 xAI 的明文 HTTP 端点。
 
-这些模型注入的逐模型 `api_key` 会在 Grok 的凭据链中排在首位，因此对接 opencodex 时不需要额外登录 Grok。原生 grok 模型以及任何会直接联系 xAI 的 harness 功能，仍然保留你正常的 `grok login` / `XAI_API_KEY` 配置。
+注入在 provider 条目上的 `api_key` 会在这些模型的 Grok 凭据链中排在首位，因此对接 opencodex 时不需要额外登录 Grok。原生 grok 模型以及任何会直接联系 xAI 的 harness 功能，仍然保留你正常的 `grok login` / `XAI_API_KEY` 配置。
 
 ## 手动方案（不使用自动注册）
 
-如果你自己管理 `~/.grok/config.toml`——或者 opencodex 绑定在非 loopback 地址上——请在 `# >>> opencodex managed block` 标记之外，添加带有**直接字段**的逐模型表：
+如果你自己管理 `~/.grok/config.toml`——或者 opencodex 绑定在非 loopback 地址上——请在 `# >>> opencodex managed block` 标记之外，添加一个 `[model_providers.opencodex]` 区块以及引用它的逐模型表：
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
 如果代理可通过网络访问，请把 `base_url` 指向 `grok` 实际可以连接的地址，并使用你的接入令牌：
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
-不要依赖 `[model_providers.<id>]` 继承来提供端点：截至 Grok Build 0.2.101，继承下来的 `base_url` 不会应用到推理路由（请求会落回默认的 xAI 代理，并以 401 失败）。直接在逐模型字段中配置可以正确路由。
+托管区块现在使用 `[model_providers.<id>]` 继承，需要 Grok Build 0.2.109 或更高版本（发布于 2026-07-21）。在更早的版本上，继承的 `base_url` 不会应用到推理路由——请升级，或在每个 `[model.*]` 表上使用逐模型直接字段（`base_url`/`api_backend`/`api_key`）。
 
 任何包含点号的别名都要加引号：裸写的 `[model.grok-4.5]` 是一个三段式键路径，而不是 id `grok-4.5`。为此，生成的别名会完全避免使用点号。
 

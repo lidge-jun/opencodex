@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, posix, win32 } from "node:path";
+import { delimiter, isAbsolute, join, posix, win32 } from "node:path";
+import { pathToFileURL } from "node:url";
 import * as serviceModule from "../src/service";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
 import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
@@ -57,6 +59,10 @@ function expectTextToContainPath(text: string, path: string): void {
   expect(pathVariants(path).some(candidate => text.includes(candidate))).toBe(true);
 }
 
+function expectTextNotToContainPath(text: string, path: string): void {
+  expect(pathVariants(path).every(candidate => !text.includes(candidate))).toBe(true);
+}
+
 describe("service listen-port bake", () => {
   test("service ownership state paths stay pinned to the captured OpenCodex home", () => {
     const pinned = join(TEST_DIR, "pinned-opencodex");
@@ -97,6 +103,41 @@ describe("service listen-port bake", () => {
 });
 
 describe("systemd service unit", () => {
+  test("stable launcher discovery skips invalid PATH candidates and keeps the lexical executable", () => {
+    const first = join(TEST_DIR, "first");
+    const second = join(TEST_DIR, "second");
+    const probes: string[] = [];
+    const result = stableLauncherEntry({
+      env: { PATH: [first, second].join(delimiter) },
+      isExecutableFile: candidate => {
+        probes.push(candidate);
+        return candidate === join(second, "ocx");
+      },
+    });
+
+    expect(probes).toEqual([join(first, "ocx"), join(second, "ocx")]);
+    expect(result).toBe(join(second, "ocx"));
+  });
+
+  test("stable launcher discovery requires a regular executable file", () => {
+    if (process.platform === "win32") return;
+    const root = mkdtempSync(join(tmpdir(), "ocx-launcher-path-"));
+    const directoryEntry = join(root, "directory-entry");
+    const nonExecutableEntry = join(root, "non-executable-entry");
+    const executableEntry = join(root, "executable-entry");
+    for (const entry of [directoryEntry, nonExecutableEntry, executableEntry]) mkdirSync(entry);
+    mkdirSync(join(directoryEntry, "ocx"));
+    writeFileSync(join(nonExecutableEntry, "ocx"), "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+    writeFileSync(join(executableEntry, "ocx"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    try {
+      expect(stableLauncherEntry({
+        env: { PATH: [directoryEntry, nonExecutableEntry, executableEntry].join(delimiter) },
+      })).toBe(join(executableEntry, "ocx"));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("bare service installs only when absent and otherwise selects no-admin repair", async () => {
     expect(normalizeServiceSubcommand()).toBe("install");
     expect(normalizeServiceSubcommand("restart")).toBe("repair");
@@ -300,7 +341,7 @@ describe("systemd service unit", () => {
 
     // The write goes through writeServiceDefinitionFile so the unit lands 0600: it can carry a
     // proxy credential (#2107). What this test pins is the ORDER — write, then reload.
-    const writeAt = installSystemd.indexOf('writeServiceDefinitionFile(unitPath(), buildUnit(), "utf8")');
+    const writeAt = installSystemd.indexOf("writeServiceDefinitionFile(unitPath(), buildUnit(");
     const reloadAt = installSystemd.indexOf("systemctl --user daemon-reload");
     const enableAt = installSystemd.indexOf("systemctl --user enable");
     const restartAt = installSystemd.indexOf("systemctl --user restart");
@@ -310,6 +351,15 @@ describe("systemd service unit", () => {
     expect(enableAt).toBeLessThan(restartAt);
     expect(installSystemd).not.toContain("ocx service install");
     expect(installSystemd).not.toContain("process.exit(1)");
+
+    // #2898: the unit and the recorded install state must agree about WHAT is launched, so
+    // the launcher is resolved once and handed to both. Resolving twice would let the
+    // staleness check validate a path the unit does not run.
+    const resolveAt = installSystemd.indexOf("stableLauncherEntry()");
+    expect(resolveAt).toBeGreaterThan(-1);
+    expect(resolveAt).toBeLessThan(writeAt);
+    expect(installSystemd).toContain("writeServiceInstallState(\"scheduler\", launcher)");
+    expect(installSystemd.match(/stableLauncherEntry\(\)/g)).toHaveLength(1);
   });
 });
 
@@ -798,7 +848,16 @@ describe("launchd service plist", () => {
       const trustedPlist = buildPlist();
       expect(trustedPlist).toContain("<key>OCX_BUN_RUNTIME_SOURCE</key><string>override</string>");
       expectTextToContainPath(trustedPlist, process.execPath);
-      expect(buildUnit()).toContain('Environment="OCX_BUN_RUNTIME_SOURCE=override"');
+      // The systemd unit stamps the pair only when it BAKES that pair. A stable-launcher
+      // install runs `ocx` and lets it resolve the current package's Bun, so stamping a
+      // path there would pin the runtime to the directory a version upgrade deletes
+      // (#2898) — the opposite of what #848 asks for. Assert both modes explicitly.
+      expect(buildUnit(resolvedProxyEnv(), { launcher: null })).toContain('Environment="OCX_BUN_RUNTIME_SOURCE=override"');
+      const launched = buildUnit(resolvedProxyEnv(), { launcher: "/opt/shims/ocx" });
+      expect(launched).not.toContain("OCX_BUN_RUNTIME_SOURCE");
+      expect(launched).not.toContain("OCX_BUN_RUNTIME_PATH");
+      expectTextToContainPath(launched, process.execPath);
+      expect(launched).toContain("OPENCODEX_BUN_PATH=");
       expect(buildWindowsServiceScript()).toContain('set "OCX_BUN_RUNTIME_SOURCE=override"');
     } finally {
       if (inheritedOverride === undefined) delete process.env.OPENCODEX_BUN_PATH;
@@ -860,6 +919,85 @@ describe("launchd service plist", () => {
       if (inherited === undefined) delete process.env.CODEX_SQLITE_HOME;
       else process.env.CODEX_SQLITE_HOME = inherited;
     }
+  });
+
+  // #2898. A version manager installs OpenCodex under a versioned directory and deletes the
+  // old one on upgrade; the baked Bun and CLI both live there. The shim does not move, so the
+  // unit has to name the shim and nothing from inside the version directory.
+  test("a stable launcher install names the launcher and bakes no versioned path", () => {
+    const launcher = "/home/u/.local/share/mise/shims/ocx";
+    const unit = buildUnit(resolvedProxyEnv({}), {
+      launcher,
+      runtime: { path: "/opt/opencodex/versioned/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
+    });
+
+    expect(unit).toContain(launcher);
+    expect(unit).toContain("start --port");
+    // The versioned pair must be absent from BOTH the command and the environment: either one
+    // pins the service to a directory the next upgrade removes.
+    expect(unit).not.toContain("OCX_BUN_RUNTIME_PATH");
+    expect(unit).not.toContain("OCX_BUN_RUNTIME_SOURCE");
+    expect(unit).not.toContain("OPENCODEX_BUN_PATH");
+    expect(unit).not.toContain("/opt/opencodex/versioned/bun");
+    expect(unit).not.toContain("cli/index.ts");
+    // The token still comes from the file at start, never from the unit (#2107).
+    expectTextToContainPath(unit, serviceApiTokenFilePath());
+    expect(unit).toContain("OPENCODEX_API_AUTH_TOKEN");
+
+    // Without a launcher the unit keeps the previous shape, so source checkouts are unaffected.
+    const direct = buildUnit(resolvedProxyEnv({}), { launcher: null });
+    expectTextToContainPath(direct, join("cli", "index.ts"));
+    expect(direct).toContain("OCX_BUN_RUNTIME_PATH");
+  });
+
+  // The scenario itself, executed rather than asserted: retarget the shim the way an upgrade
+  // does, delete the old version, and check the generated command still reaches live code.
+  test("the generated launcher command follows a retargeted shim after the old version is gone", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-shim-"));
+    const shimDir = join(root, "shims");
+    const v1 = join(root, "installs", "2.35.0 package's");
+    const v2 = join(root, "installs", "2.36.0 package's");
+    mkdirSync(shimDir, { recursive: true });
+    mkdirSync(v1, { recursive: true });
+    mkdirSync(v2, { recursive: true });
+    const v1Entry = join(v1, "ocx");
+    const v2Entry = join(v2, "ocx");
+    writeFileSync(v1Entry, 'console.log("V1", Bun.argv.slice(2).join(" "));\n');
+    writeFileSync(v2Entry, 'console.log("V2", Bun.argv.slice(2).join(" "));\n');
+
+    const shim = join(shimDir, "ocx");
+    const retargetShim = (target: string): void => {
+      writeFileSync(shim, `await import(${JSON.stringify(pathToFileURL(target).href)});\n`);
+    };
+    const runShim = (): string => execFileSync(
+      process.execPath,
+      [shim, "start", "--port", "1"],
+      { encoding: "utf8" },
+    );
+    retargetShim(v1Entry);
+
+    // stableLauncherEntry finds the shim lexically from PATH — not its versioned target.
+    const found = buildUnit(resolvedProxyEnv({}), { launcher: shim });
+    expectTextToContainPath(found, shim);
+    expectTextNotToContainPath(found, v1);
+
+    // Reproduce Windows' host-path serialization on every platform. systemdQuote() must
+    // escape each backslash in the unit, so raw path substring assertions are invalid.
+    const windowsShim = win32.join("C:\\Users\\runneradmin", "mise", "shims", "ocx");
+    const windowsUnit = buildUnit(resolvedProxyEnv({}), { launcher: windowsShim });
+    expectTextToContainPath(windowsUnit, windowsShim);
+
+    // Exercise the retarget through Bun on every host. Directly executing the old
+    // extensionless #!/bin/sh fixture was itself a POSIX-only assumption.
+    expect(runShim()).toContain("V1");
+
+    // The upgrade: shim retargeted, old version removed.
+    retargetShim(v2Entry);
+    rmSync(v1, { recursive: true, force: true });
+    expect(existsSync(v1Entry)).toBe(false);
+    expect(runShim()).toContain("V2");
+
+    rmSync(root, { recursive: true, force: true });
   });
 
   // The relative case is why the resolve() is there at all: a service unit has no meaningful
@@ -1810,6 +1948,54 @@ describe("service diagnostics", () => {
       // Pre-loop-3 state files without baked paths stay silent.
       writeFileSync(statePath, JSON.stringify({ version: 1, codexHome: stateDir, opencodexHome: stateDir }), "utf8");
       expect(bakedServicePathsDiagnostic()).toBeNull();
+    } finally {
+      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
+    }
+  });
+
+  // #2898: a version manager (mise, asdf) installs OpenCodex into a VERSIONED directory and
+  // deletes the old one on upgrade. The baked Bun and CLI both live in that directory, so the
+  // unit's `exec <old-bun> <old-cli>` stops resolving and Restart=on-failure restart-loops.
+  // When the install went through a stable launcher, the launcher is what systemd runs, so it
+  // is the only path whose absence means anything — and the replaced version directory must
+  // NOT be reported as stale.
+  test("a launcher install judges staleness by the launcher, not the replaced version dir", () => {
+    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
+    const stateDir = join(TEST_DIR, "launcher-paths-home");
+    try {
+      process.env.OPENCODEX_HOME = stateDir;
+      mkdirSync(stateDir, { recursive: true });
+      const statePath = join(stateDir, "service-state.json");
+      const launcher = join(import.meta.dir, "service.test.ts");
+      const removedVersionDir = join(stateDir, "installs", "2.35.0");
+
+      // The upgrade case: version directory gone, launcher intact. Healthy.
+      writeFileSync(statePath, JSON.stringify({
+        version: 2,
+        codexHome: stateDir,
+        opencodexHome: stateDir,
+        bunPath: join(removedVersionDir, "bun"),
+        cliPath: join(removedVersionDir, "cli", "index.ts"),
+        launcherPath: launcher,
+        backend: "scheduler",
+      }), "utf8");
+      expect(bakedServicePathsDiagnostic()).toBeNull();
+
+      // A launcher that is itself gone is genuinely stale, and names the launcher.
+      const missingLauncher = join(stateDir, "shims", "ocx");
+      writeFileSync(statePath, JSON.stringify({
+        version: 2,
+        codexHome: stateDir,
+        opencodexHome: stateDir,
+        bunPath: join(import.meta.dir, "service.test.ts"),
+        cliPath: join(import.meta.dir, "service.test.ts"),
+        launcherPath: missingLauncher,
+        backend: "scheduler",
+      }), "utf8");
+      const diagnostic = bakedServicePathsDiagnostic();
+      expect(diagnostic).toContain("STALE baked paths");
+      expect(diagnostic).toContain(missingLauncher);
     } finally {
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;

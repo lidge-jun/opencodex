@@ -15,13 +15,16 @@ Grok Build — вручную редактировать конфигураци�
 
 ```toml
 # >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>
-[model.ocx-gpt-5-6-sol]
-model = "gpt-5.6-sol"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
-name = "OCX gpt-5.6-sol"
 extra_headers = { "x-opencodex-grok" = "1" }
+
+[model.ocx-gpt-5-6-sol]
+model = "gpt-5.6-sol"
+model_provider = "opencodex"
+name = "OCX gpt-5.6-sol"
 context_window = 272000
 supports_reasoning_effort = true
 reasoning_effort = "low"
@@ -32,7 +35,8 @@ value = "low"
 label = "Low"
 description = "Quick, fast implementations"
 default = true
-# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model,
+# each referencing model_provider = "opencodex" ...
 # <<< opencodex managed block <<<
 ```
 
@@ -74,12 +78,12 @@ Grok проекция этой шкалы записывается в кажду
 когда модель их объявляет. Неподдерживаемые или повторяющиеся уровни, в том числе предназначенный
 для Codex `ultra`, исключаются из файла; каждый записанный пункт остаётся доступным для выбора.
 
-Grok Build обращается к opencodex через Chat Completions и отправляет `reasoning_effort`, когда
-шкала опубликована. В этом случае входной преобразователь Chat Completions задаёт внутреннему
-Responses `reasoning.summary` значение `auto`, поэтому трассировка рассуждений приходит в Grok
-как `delta.reasoning_content`. Клиент может оставить рассуждение модели и скрыть трассировку с
-помощью `include_reasoning: false` (или `reasoning.summary: "none"`). При наличии обоих
-параметров приоритет имеет явно заданный `reasoning.summary`.
+Grok Build обращается к opencodex через Responses API. Когда маршрут объявляет шкалу
+рассуждений, passthrough Responses пересылает `reasoning.summary` в соответствии с настройкой,
+поэтому трассировка рассуждений доходит до Grok нативно в виде элементов reasoning Responses.
+Клиент может оставить рассуждение модели и скрыть трассировку с помощью
+`reasoning.summary: "none"`. Явно заданный `reasoning.summary` имеет приоритет над значением
+по умолчанию для маршрута.
 
 ## Замечание об аутентификации
 
@@ -98,12 +102,12 @@ admission token, а управляемый блок не может безопа
 действительно достижим из того места, где вы запускаете `grok`, и в `api_key` укажите
 `OPENCODEX_API_AUTH_TOKEN`.
 
-Не заменяйте здесь `api_key` на `env_key`. Если `model_provider` не задан, `env_key`, который не
+Не заменяйте здесь `api_key` на `env_key`. `env_key`, который не
 разрешился, не останавливает запрос — Grok откатывается к вашему session token xAI и отправляет
 его на любой `base_url`, указанный в записи, а для LAN-развёртывания это plaintext HTTP-endpoint,
 который не является xAI.
 
-Внедрённый `api_key` на уровне модели стоит первым в цепочке учётных данных Grok для этих моделей,
+Внедрённый в запись провайдера `api_key` стоит первым в цепочке учётных данных Grok для этих моделей,
 поэтому ходам через opencodex не нужен дополнительный `grok login`. Обычную настройку
 `grok login` / `XAI_API_KEY` сохраняйте для нативных grok-моделей и любых harness-функций, которые
 напрямую обращаются к xAI.
@@ -111,31 +115,35 @@ admission token, а управляемый блок не может безопа
 ## Ручной рецепт без авторегистрации
 
 Если вы управляете `~/.grok/config.toml` сами — либо opencodex привязан не к loopback, —
-добавляйте таблицы по одной модели с **прямыми полями**, вне маркеров
-`# >>> opencodex managed block`:
+добавляйте блок `[model_providers.opencodex]` и таблицы по одной модели, которые его
+ссылают, вне маркеров `# >>> opencodex managed block`:
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
 Для прокси, доступного по сети, укажите в `base_url` адрес, до которого `grok` реально может
 дозвониться, и используйте свой admission token:
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
-Не полагайтесь на наследование `[model_providers.<id>]` для endpoint'а: по состоянию на Grok Build
-0.2.101 унаследованный `base_url` не применяется к маршрутизации inference (запросы откатываются к
-прокси xAI по умолчанию и падают с 401). Прямые поля на уровне модели маршрутизируются правильно.
+Управляемый блок теперь использует наследование `[model_providers.<id>]`, что требует Grok Build 0.2.109 или новее (выпущен 2026-07-21). На более старых версиях унаследованный `base_url` не применяется к маршрутизации inference — обновитесь, либо используйте прямые поля на уровне модели (`base_url`/`api_backend`/`api_key` в каждой таблице `[model.*]`).
 
 Любой alias, содержащий точку, берите в кавычки: голый `[model.grok-4.5]` — это путь из трёх
 сегментов, а не id `grok-4.5`. Сгенерированные alias по этой причине вообще избегают точек.

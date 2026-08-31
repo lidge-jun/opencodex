@@ -74,7 +74,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 
 | Alan | Tip | Anlamı |
 | --- | --- | --- |
-| `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (veya takma ad `azure`) seçeneklerinden biri. |
+| `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `ollama-native`, `azure-openai` (veya takma ad `azure`) seçeneklerinden biri. |
 | `baseUrl` | `string` | Yukarı akış API temel URL'si. Çoğu yerleşik sabit uç nokta uyumsuzluğu yok sayar; çakışma güvenli anahtar önayarları aynı adlı daha eski özel bir hedefi korur. |
 | `responsesPath?` | `string` | Anahtar kimlik doğrulamalı `openai-responses` istekleri için göreli kaynak yolu. `/` ile başlamalı ve şema, sorgu veya parça içermemelidir. |
 | `supportsServiceTier?` | `boolean` | Üç durumlu `service_tier` yeteneği. `true`: hızlı mod enjekte edebilir ve arayan değerleri korunur. `false`: alan kaldırılır ve asla enjekte edilmez (desteklemediği belgelenen yukarı akış bunu almamalıdır). Yok: sağlayıcı sınıflandırılmamıştır — arayan tarafından sağlanan değerler dokunulmadan korunur ve hızlı mod asla enjekte etmez. Kayıt defteri kurallı OpenAI'yi (`true`), DeepSeek'i ve Volcengine Ark'ı (`false`) sınıflandırır; bunu yalnızca katmanları gerçekten destekleyen özel ağ geçitleri için açıkça ayarlayın. |
@@ -98,6 +98,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `headers?` | `Record<string, string>` | Ek yukarı akış başlıkları. Yetkilendirme, çerezler, API anahtarı başlıkları, gömülü yeni satırlar ve geçersiz adlar reddedilir. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Varsayılan OpenRouter `order`, `only` ve `allowFallbacks` tercihleri; yalnızca `openai-chat` ile kurallı OpenRouter için geçerlidir. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | Sağlayıcı genelindeki OpenRouter tercihinin yerini alan tam model kimliği geçersiz kılmaları. |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` | Varsayılan Vercel AI Gateway `order`, `only` ve `sort` (`"cost"` \| `"ttft"` \| `"tps"`) tercihleri; yalnızca `openai-chat` ile kurallı Vercel AI Gateway için geçerlidir. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | Kimlik doğrulama modu (varsayılan `key`). OAuth/abonelik kimlik bilgileri `config.json` dışında saklanır; `local`, kayıt defteri girdisi izin veren sağlayıcılarla sınırlıdır. |
 | `codexAccountMode?` | `"pool" \| "direct"` | Yalnızca kurallı `openai`; varsayılan olarak Pool. Direct havuz durumunu atlar. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Bu OAuth sağlayıcısının Token Guardian politikasını geçersiz kılın. |
@@ -107,7 +108,9 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Model başına Responses teslim enum'ı; mevcut bir teslim alanını yeniden yazar. |
 | `modelAdapters?` | `Record<string, string>` | Karışık hatlı ağ geçitleri için model başına `openai-chat` veya `openai-responses` hat geçersiz kılma. Açık girdiler kayıt defteri varsayılanlarını yener. OpenCode Go önayarı, kardeş modelleri belgelenmiş hatlarında bırakırken `gpt-5.6-luna` için Responses'ı seçer; DeepSeek, `deepseek-v4-flash` için yerel Responses seçebilir; ve GitHub Copilot, GPT-5 ailesi (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) için yalnızca Responses varsayılanlarını bildirir çünkü bu modeller ajan trafiği için `/chat/completions`'ı reddeder. Yerleşik varsayılanı olmayan modeller (örneğin `gpt-5.4-nano`) burada dahil edilebilir. Tek hatlı yukarı akış pinleri ve kurallı ChatGPT iletme geçersiz kılmaları reddeder. |
 | xAI Responses katılımı (panel) | anahtar | Yalnızca `xai` için `grok-4.5` ve `grok-4.6` `modelAdapters` girdilerini atomik olarak ayarlar veya temizler. Tek girdi, sonraki anahtar yazımı ikisini eşitleyene kadar karma durum olarak görünür. Diğer geçersiz kılmalar ve katman davranışı değişmez. |
+| `xaiResponsesXSearch?` | `boolean` | Varsayılan olarak devre dışıdır. Bir xAI Responses hedefinde, yalnızca canlı bir `web_search` aracı son istek normalleştirmesinden sağ çıktığında sağlayıcı tarafından barındırılan `x_search` bildirimini ekler. Mevcut bildirimler yinelenmez, çağıranın `tool_choice`/`allowed_tools` seçicileri hiçbir zaman genişletilmez ve bu, web araması yardımcı hizmetinin `search.xSearch` seçeneklerinden ayrıdır. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Barındırılan bir araç ad alanı ayıran iletme harici Responses ağ geçitleri için tam model dahil etme. Şu anda yalnızca `["image_generation"]` kabul eder; eşleşen bir model `openai-responses` hattını kullanmalı ve bu barındırılan aracı desteklemelidir. Çakışan istemci `image_gen` bildirimlerini kaldırır ve arayan araç seçimini korumak için seçicilerini yeniden yazar. OpenAI API sanal `-pro` modelleri için önce seçilen genel kimlik eşleştirilir ve çözümlenen temel hat model kimliği bir geri dönüştür. `modelAdapters` önce genel kimliği, ardından temel kimliği çözer; ikinci çözümleme son hattı belirler. Diğer modeller normal takma ad davranışını korur. |
+| `annotateEmptyToolOutputs?` | `boolean` | Mevcut fakat boş bir araç sonucunu modele ulaşmadan önce kısa bir işaretle değiştirir; böylece boş sonuç eksik sonuç olarak yorumlanmaz. Boş dizelere ve yalnızca metin parçalarından oluşan dizilere uygulanır; görsel, dosya ve şifrelenmiş parçalara hiçbir zaman dokunulmaz. Yerleşik kayıt defterindeki DeepSeek için varsayılan değer `true`dur; diğer durumlarda ayarlanmamıştır. Bir sağlayıcıyı kapsam dışında bırakmak için `false` olarak ayarlayın — açık bir `false` değeri, alanı içermeyen sonraki düzenlemelerde korunur. `PATCH /api/providers?name=<provider>`, geçersiz kılmayı temizleyip kayıt defteri varsayılanı davranışına dönmek üzere `true`, `false` veya `null` kabul eder. |
 | `reasoningEffortMap?` | `Record<string, string>` | Akıl yürütme etiketleri için sağlayıcı genelinde hat takma adları. |
 | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Akıl yürütme etiketleri için model başına hat takma adları. |
 | `reasoningWireFormat?` | `"gateway-object"` | `reasoning_effort` yerine `reasoning: { enabled, effort }` kabul eden OpenAI uyumlu ağ geçitleri için. ClinePass önayarı bunu otomatik olarak ayarlar. |
@@ -120,6 +123,7 @@ alanlı seçilmiş kimlikleri yalın kimliklere yeniden yazar.
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | Tam yer tutucu kimlikleri, eksik terminal kimlikleri ve (`repairInvalidIds` ile) kurallı `msg_`/`rs_` öneki eksik olan mesaj/akıl yürütme kimlikleri için varsayılan olarak devre dışı bırakılmış aşağı akış SSE onarımı. Fonksiyon çağrısı kimlikleri asla yeniden yazılmaz. Yerleşik DeepSeek son ikisini varsayılan olarak etkinleştirir. |
 | `responsesSnapshotRepair?` | `boolean` | SSE ve JSON'daki seyrek Responses yaşam döngüsü anlık görüntüleri için varsayılan olarak devre dışı bırakılmış istemciye yönelik onarım. Ham inceleme ve kalıcılık değişmeden kalırken eksik kurallı durumu, çıktıyı ve araç meta verilerini doldurur. |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | Yalnızca API anahtarı sağlayıcıları (`authMode: "key"`). İsteğe bağlı aynı hedef 429 yeniden denemesi: `retryOn429` olmadığında özellik kapalıdır; nesnenin varlığı `enabled: false` olmadığı sürece özelliği etkinleştirir. 429'da proxy bekler (yukarı akış `Retry-After` veya sabit aralık) ve herhangi bir anahtar yük devretmesinden önce aynı istek üzerinde aynı anahtarla aynı isteği yeniden oynatır — ana metin turu kurtarma döngüsü, Responses doğrudan geçiş hattı, görsel/video köprüsü, web araması sidecar'ı ve terminal devamları genelinde. Yalnızca akış öncesi HTTP 429 yanıtları yeniden oynatma için uygundur; özel `runTurn` aktarımları HTTP yeniden deneme döngüsünün dışındadır. `attempts`, ilk 429'dan sonraki aynı anahtar yeniden oynatmalarını sayar (toplam gönderim = `attempts` + 1) ve ana kurtarma döngüsü, terminal koruma devamı ve köprü yeniden denemeleri tarafından paylaşılan tek bir istek genelinde bütçedir. `attempts`'ı tüketmek yalnızca daha fazla aynı anahtar yeniden oynatmasını durdurur: normal anahtar yük devretmesi veya nihai hata işleme daha sonra kullanılabilir hedeflere göre geçerli olur — anahtar kimlik doğrulamalı doğrudan geçiş hattında yük devretme yoktur, bu nedenle tükenen 429 olduğu gibi görünür. Codex'in kendisi 429'u asla yeniden denemez, bu nedenle tek anahtarlı sağlayıcılar için tek savunma budur. Varsayılanlar: `enabled: true`, `attempts: 3`, `intervalMs: 5000`, `maxIntervalMs: 60000` (tek bir bekleme `maxIntervalMs` ile sınırlandırılır, kendisi de 600000 ile sınırlandırılır), `respectRetryAfter: true`. |
+| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | Yalnızca anahtarla kimlik doğrulanan `openai-chat` sağlayıcıları. Akış öncesi geçici yukarı akış durumları (500, 502, 503, 504, 520, 521, 522) için isteğe bağlı yeniden deneme: seçenek belirtilmezse kapalıdır; nesnenin varlığı, `enabled: false` olmadığı sürece özelliği etkinleştirir. İlk Responses isteğini, terminal koruma devamını, yerel `/v1/chat/completions` isteklerini ve 429/hesap kurtarma yeniden getirmelerini kapsar. `attempts`, bir istek için ilk gönderim dahil izin verilen yukarı akış gönderimlerinin TOPLAM sayısıdır (1..10, varsayılan 3) — bağlantı sıfırlama kurtarmasıyla paylaşılan, istek kapsamlı tek bütçedir; dolayısıyla `3`, sağlayıcıya en fazla üç gerçek isteğin ulaşması anlamına gelir. Beklemelerde 400 ms'lik sabit üstel geri çekilme uygulanır, süre 5 sn ile sınırlandırılır ve `Retry-After` dikkate alınır. Hız sınırlamasını işleyen `retryOn429` seçeneğinden ayrıdır; akış ortası hataları hiçbir zaman yeniden oynatılmaz. |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice`'u yalnızca `auto` veya `none` kabul eden modeller; zorunlu seçimlerin derecesi düşürülür. |
 | `preserveReasoningContentModels?` | `string[]` | Sohbet geçmişinde önceki asistan `reasoning_content`'ini gerektiren modeller. |
 | `requiresReasoningPlaceholderModels?` | `string[]` | Yukarı akışı `reasoning_content` eksik olan bir tool_call devamını reddeden modeller (DeepSeek düşünme modu); yeniden oynatma önbelleği kaçırdığında minimum bir yer tutucu enjekte edilir. Varsayılan olarak `preserveReasoningContentModels`; devre dışı bırakmak için `[]` ayarlayın. |
@@ -219,8 +223,9 @@ ve otomatik rotasyon sağlayıcı kısıtlamalarını tetikleyebilir.
 | Anahtar | Tip | Varsayılan | Açıklama |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | Yapışkan bağlılığı ve 429 soğuma yük devretmesini etkinleştirin. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Yeni oturumlar için bu eşikte veya üzerinde bilinen en düşük önbelleğe alınmış 5 saatlik kullanımı seçin. `0` kota seçimini devre dışı bırakır. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Yeni oturum stratejisi; kota yalnızca 5 saatlik çubukları kullanır. |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Yeni oturumlarda etkin hesap bu eşiğe ulaştığında, yapılandırılan penceredeki bilinen en düşük önbelleğe alınmış kullanımı seçin. `0` kota seçimini devre dışı bırakır. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Yeni oturum stratejisi; `quota`, `quotaWindow` ile belirlenen pencereye (varsayılan 5 saatlik çubuklar) göre hesapları sıralar ve `fill-first` de tükenme eşiğini aynı pencerede değerlendirir. |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Kullanıma dayalı hesap seçiminde kullanılan, sağlayıcının bildirdiği önbelleğe alınmış kullanım çubuğu. `five-hour` mevcut davranışı korur. `weekly` haftalık çubuğu kullanır ve başka uygun hesap kaldığı sürece 5 saatlik çubuğu tükenmiş hesapları atlar; hiçbiri kalmazsa bu hesaplara geri döner. `max-utilization` bilinen en yüksek değeri kullanır; haftalık değer henüz yokken 5 saatlik değeri kullanabilir, ikisi de bilinmiyorsa hesap unknown kullanım sırasını izler. Bilinen kullanım unknown değerlerden önce gelir; tüm uygun hesaplar unknown olsa bile uygun sıradaki bir hesap seçilir. Belgelenen daha düşük 5 saatlik kullanım eşitlik bozmasından sonra tam eşitlikte de uygun sıra korunur. Sağlıklı affinity oturumları önceden yeniden dengelenmez. Yeni oturum ataması ve uygun bir 429 yedeğine geçildikten sonraki yönlendirme kurtarmasında `quota`, uygun adayları doğrudan bu pencereye göre sıralar; `fill-first`, bu pencerenin eşik ve tükenme kurallarıyla kararlı sırada ilerler; `round-robin` ayarı yok sayar. Cooldown, yük devretme sınırları ve yeniden kimlik doğrulama uygunluğu ayrı yerel durum olarak kalır. Hesap başına haftalık çubuklar ancak dashboard Sağlayıcılar sayfasında sorgulandıktan sonra bilinir. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Bir round-robin seçiminde tutulan başarılı yeni oturum bağlamaları. Aralık 1–100. |
 
 Etkinleştirildiğinde 429, `Retry-After`'dan veya varsayılan bir geri çekilmeden
@@ -300,6 +305,7 @@ Bozuk bir `openai-responses` ağ geçidi için onarım sağlayıcı nesnesine ai
   }
 }
 ```
+
 
 Yer tutucu listeleri tam eşleşmelerdir. Normal/durum bilgili Responses
 sağlayıcıları için alanı ayarlanmamış bırakın, böylece doğrudan geçiş bayt bayt
@@ -408,6 +414,47 @@ Model anahtarları, dış opencodex sağlayıcı öneki olmadan tam yerel OpenRo
 kimlikleridir. `openrouter/anthropic-claude-sonnet-5` seçimi model kuralını
 uygulamadan önce yerel `anthropic/claude-sonnet-5`'i geri yükler.
 
+## Vercel AI Gateway sağlayıcı yönlendirmesi
+
+Vercel AI Gateway bir modeli birden çok temel çıkarım sağlayıcısı arasında
+yönlendirebilir. `vercelGatewayRouting` sağlayıcı genelindeki tercihleri
+yapılandırır; `modelVercelGatewayRouting` tam model kimlikleri için onun yerini
+alır. İkisi de ayarlanmazsa `resolveVercelGatewayRouting()` `undefined` döndürür;
+böylece Chat istek oluşturucuları `provider` alanını atlar ve Vercel AI Gateway
+varsayılan dinamik yönlendirme davranışını korur.
+
+- `order`: Öncelik sırasına göre Vercel AI Gateway yukarı akış sağlayıcı slug'ları.
+- `only`: Uygun Vercel AI Gateway yukarı akış sağlayıcılarını sınırlayan açık izin listesi.
+- `sort`: Uygun sağlayıcıları `"cost"` (en düşük maliyet), `"ttft"` (ilk belirtece kadar geçen süre) veya `"tps"` (saniye başına belirteç) ölçütüne göre otomatik sıralar.
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
+        }
+      }
+    }
+  }
+}
+```
+
+Model anahtarları, dış OpenCodex sağlayıcı öneki olmadan herkese açık Vercel
+model seçicileridir. `vercel-ai-gateway/zai-glm-5.2` seçimi, model kuralını
+uygulamadan önce yerel `zai/glm-5.2` kimliğini geri yükler. Aynı eşleme yerel bir
+`vercel/<model-id>` seçicisi için de geçerlidir: OpenCodex'te kodlanmış
+`vercel-ai-gateway/vercel-<model-id>` seçicisini kullanın ve model anahtarı olarak
+`vercel/<model-id>` değerini koruyun.
+
 ## Statik model izin listeleri
 
 Yalnızca `models`'ı göstermek için `liveModels: false` ayarlayın. `models` boşsa
@@ -462,7 +509,6 @@ bildirir; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
       "defaultModel": "claude-sonnet-4-6"
     },
     "ollama-cloud": {
-      "adapter": "openai-chat",
       "baseUrl": "https://ollama.com/v1",
       "apiKey": "${OLLAMA_API_KEY}",
       "defaultModel": "glm-5.2",
@@ -480,4 +526,3 @@ bildirir; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
   "visionSidecar": { "enabled": true }
 }
 ```
-

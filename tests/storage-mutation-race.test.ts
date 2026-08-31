@@ -144,6 +144,18 @@ async function waitForPolicyJob(
   throw new Error("policy job did not finish");
 }
 
+async function waitForCondition(
+  description: string,
+  condition: () => boolean,
+  timeoutMs = 8_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${description}`);
+    await Bun.sleep(20);
+  }
+}
+
 /** Windows can keep SQLite/job handles briefly after stop; retry only transient cleanup codes. */
 function removeTree(path: string): void {
   let lastError: unknown;
@@ -313,13 +325,20 @@ describe("storage mutation coordinator", () => {
 
   test("cleanup quarantine and permanent are rejected while restore holds slot after file moves", async () => {
     const home = isolatedCodexHome!.path;
-    const holdMs = 2500;
+    const movedReadyPath = join(testDir, "restore-files-moved.ready");
+    const releaseRestorePath = join(testDir, "release-restore");
     setRestoreTrashJobTestHooks({
-      restoreTest: { holdAfterFileMovesMs: holdMs },
+      restoreTest: {
+        pauseAfterFileMoves: {
+          readyPath: movedReadyPath,
+          releasePath: releaseRestorePath,
+        },
+      },
     });
     seedArchivedPair(home);
 
     const server = startServer(0);
+    let restorePromise: Promise<Response> | null = null;
     try {
       const preview = await previewDigest(server.url, 50);
       const cleanupRes = await fetch(new URL("/api/storage/cleanup", server.url), {
@@ -336,17 +355,17 @@ describe("storage mutation coordinator", () => {
       const remainingPreview = await previewDigest(server.url, 50);
       expect(remainingPreview.count).toBe(1);
 
-      const restorePromise = fetch(new URL("/api/storage/trash/restore", server.url), {
+      restorePromise = fetch(new URL("/api/storage/trash/restore", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id: trashId }),
       });
 
       const restoredPath = join(home, "archived_sessions", "rollout-old.jsonl");
-      const movedDeadline = Date.now() + 8000;
-      while (!existsSync(restoredPath) && Date.now() < movedDeadline) {
-        await Bun.sleep(20);
-      }
+      await waitForCondition(
+        "restore worker to finish file moves",
+        () => existsSync(movedReadyPath),
+      );
       expect(existsSync(restoredPath)).toBe(true);
       expect(existsSync(join(trashStage, "rollout-old.jsonl"))).toBe(false);
       expect(existsSync(join(trashStage, "restore-pending.json"))).toBe(true);
@@ -378,6 +397,7 @@ describe("storage mutation coordinator", () => {
       expect(permanentDuring.status).toBe(409);
       expect((await permanentDuring.json()).error).toBe("storage_mutation_busy");
 
+      writeFileSync(releaseRestorePath, "release\n");
       const restoreRes = await restorePromise;
       expect(restoreRes.status).toBe(200);
       const restored = await restoreRes.json();
@@ -386,26 +406,41 @@ describe("storage mutation coordinator", () => {
       expect(threadCount(home)).toBe(2);
       expect(readFileSync(restoredPath, "utf8")).toBe("o".repeat(100));
     } finally {
+      // Never strand the Worker if an assertion above fails; also consume the
+      // request so its rejection cannot leak into the next isolated test.
+      writeFileSync(releaseRestorePath, "release\n");
+      if (restorePromise) await restorePromise.catch(() => undefined);
       await stopRaceServer(server);
     }
   }, { timeout: 45_000 });
 
   test("restore is rejected while cleanup holds the shared mutation slot", async () => {
     const home = isolatedCodexHome!.path;
-    const blockMs = 1200;
-    setArchivedCleanupJobTestHooks({ blockMs });
+    const cleanupReadyPath = join(testDir, "cleanup-slot-acquired.ready");
+    const releaseCleanupPath = join(testDir, "release-cleanup");
+    setArchivedCleanupJobTestHooks({
+      pauseAfterAcquire: {
+        kind: "cleanup",
+        readyPath: cleanupReadyPath,
+        releasePath: releaseCleanupPath,
+      },
+    });
     seedArchivedPair(home);
 
     const server = startServer(0);
+    let cleanupPromise: Promise<Response> | null = null;
     try {
       const preview = await previewDigest(server.url, 50);
-      const cleanupPromise = fetch(new URL("/api/storage/cleanup", server.url), {
+      cleanupPromise = fetch(new URL("/api/storage/cleanup", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ percent: 50, mode: "quarantine", digest: preview.digest }),
       });
 
-      await Bun.sleep(80);
+      await waitForCondition(
+        "manual cleanup to acquire the storage mutation slot",
+        () => existsSync(cleanupReadyPath),
+      );
 
       const restoreAttempt = await fetch(new URL("/api/storage/trash/restore", server.url), {
         method: "POST",
@@ -418,6 +453,7 @@ describe("storage mutation coordinator", () => {
       expect(existsSync(join(home, "archived_sessions", "rollout-new.jsonl"))).toBe(true);
       expect(trashStageCount(home)).toBe(0);
 
+      writeFileSync(releaseCleanupPath, "release\n");
       const cleanupRes = await cleanupPromise;
       expect(cleanupRes.status).toBe(200);
       const cleanup = await cleanupRes.json();
@@ -427,6 +463,8 @@ describe("storage mutation coordinator", () => {
       expect(existsSync(join(home, "archived_sessions", "rollout-new.jsonl"))).toBe(true);
       expect(threadCount(home)).toBe(1);
     } finally {
+      writeFileSync(releaseCleanupPath, "release\n");
+      if (cleanupPromise) await cleanupPromise.catch(() => undefined);
       await stopRaceServer(server);
     }
   }, { timeout: 30_000 });

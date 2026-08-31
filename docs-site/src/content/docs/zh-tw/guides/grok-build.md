@@ -11,13 +11,16 @@ opencodex 在本機埠提供 OpenAI 相容的 `POST /v1/chat/completions`（以�
 
 ```toml
 # >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>
-[model.ocx-gpt-5-6-sol]
-model = "gpt-5.6-sol"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
-name = "OCX gpt-5.6-sol"
 extra_headers = { "x-opencodex-grok" = "1" }
+
+[model.ocx-gpt-5-6-sol]
+model = "gpt-5.6-sol"
+model_provider = "opencodex"
+name = "OCX gpt-5.6-sol"
 context_window = 272000
 supports_reasoning_effort = true
 reasoning_effort = "low"
@@ -28,7 +31,8 @@ value = "low"
 label = "Low"
 description = "Quick, fast implementations"
 default = true
-# ... remaining rungs for this model, then one [model.ocx-*] table per visible model ...
+# ... remaining rungs for this model, then one [model.ocx-*] table per visible model,
+# each referencing model_provider = "opencodex" ...
 # <<< opencodex managed block <<<
 ```
 
@@ -58,11 +62,10 @@ reasoning，或把檔位對映到供應商專用欄位。階梯清單為空的�
 條目會保留固定於上游的 reasoning 階梯。模型宣告的有效 Grok 檔位（包括 `none` 與 `minimal`）都會
 保留。不受支援或重複的檔位（包括 Codex 專用的 `ultra`）會從檔案省略，確保寫出的每個選項都能實際使用。
 
-Grok Build 透過 Chat Completions 與 opencodex 通訊，並在條目宣告階梯時送出
-`reasoning_effort`。在這種情況下，Chat Completions 入站轉換器會把內部 Responses 的
-`reasoning.summary` 預設設為 `auto`，因此推理軌跡會以 `delta.reasoning_content` 傳給 Grok。
-需要模型執行推理且不回傳軌跡的用戶端，可以設定 `include_reasoning: false`（或
-`reasoning.summary: "none"`）。兩個選項同時出現時，明確設定的 `reasoning.summary` 優先。
+Grok Build 透過 Responses API 與 opencodex 通訊。當路由宣告推理階梯時，Responses 直通會按
+設定轉發 `reasoning.summary`，因此推理軌跡會以 Responses reasoning 項目的形式原生送達 Grok。
+需要模型執行推理且不回傳軌跡的用戶端，可以設定 `reasoning.summary: "none"`。明確設定的
+`reasoning.summary` 優先於路由預設值。
 
 ## 認證注意事項
 
@@ -70,33 +73,39 @@ Grok Build 透過 Chat Completions 與 opencodex 通訊，並在條目宣告階�
 
 **自動註冊僅限 loopback。** 當 opencodex 綁定非 loopback 主機時——包含會暴露所有介面的萬用字元 `0.0.0.0` 與 `::`——請求需要你的真實 admission token，而受管理區塊無法安全地承載它。把字面 token 寫進去會把你的金鑰放進 `~/.grok/config.toml`，並在下一次 `ocx start`/`ensure`/`restart` 時覆寫你在那裡設定的任何內容。因此在這種情況下 opencodex 完全不寫入（並會移除先前 loopback 綁定留下的任何區塊），而你要在受管理標記之外自行設定模型，opencodex 就無法覆寫它們。精確的表格請見[手動配方](#manual-recipe-without-auto-registration)，並同時設定 `base_url`（你執行 `grok` 之處實際可達的主機）與 `api_key`（你的 `OPENCODEX_API_AUTH_TOKEN`）。
 
-此處不要用 `env_key` 取代 `api_key`。在未設定 `model_provider` 時，無法解析的 `env_key` 不會中止請求——Grok 會回退到你的 xAI 工作階段 token，並把它送到該項目所命名的任何 `base_url`；對 LAN 部署而言，那是一個並非 xAI 的明文 HTTP 端點。
+此處不要用 `env_key` 取代 `api_key`。無法解析的 `env_key` 不會中止請求——Grok 會回退到你的 xAI 工作階段 token，並把它送到該項目所命名的任何 `base_url`；對 LAN 部署而言，那是一個並非 xAI 的明文 HTTP 端點。
 
-注入的 per-model `api_key` 在這些模型的 Grok 憑證鏈中排在第一位，因此對 opencodex 的回合不需要額外的 Grok 登入。請為原生 grok 模型，以及任何直接聯絡 xAI 的 harness 功能，保留你平常的 `grok login` / `XAI_API_KEY` 設定。
+注入在 provider 條目上的 `api_key` 在這些模型的 Grok 憑證鏈中排在第一位，因此對 opencodex 的回合不需要額外的 Grok 登入。請為原生 grok 模型，以及任何直接聯絡 xAI 的 harness 功能，保留你平常的 `grok login` / `XAI_API_KEY` 設定。
 
 ## 手動配方（不使用自動註冊） {#manual-recipe-without-auto-registration}
 
-若你自行管理 `~/.grok/config.toml`——或 opencodex 綁定在非 loopback——請在 `# >>> opencodex managed block` 標記之外，以**直接欄位**新增 per-model 表格：
+若你自行管理 `~/.grok/config.toml`——或 opencodex 綁定在非 loopback——請在 `# >>> opencodex managed block` 標記之外，新增一個 `[model_providers.opencodex]` 區塊以及引用它的 per-model 表格：
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
 對於可經由網路連線的代理程式，將 `base_url` 指向 `grok` 實際可撥號的位址，並使用你的 admission token：
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
-不要依賴 `[model_providers.<id>]` 繼承端點：截至 Grok Build 0.2.101，繼承的 `base_url` 並不會套用到推論路由（請求會回退到預設 xAI 代理並以 401 失敗）。直接的 per-model 欄位才能正確路由。
+託管區塊現在使用 `[model_providers.<id>]` 繼承，需要 Grok Build 0.2.109 或更高版本（發布於 2026-07-21）。在更早的版本上，繼承的 `base_url` 不會套用到推論路由——請升級，或在每個 `[model.*]` 表上使用逐模型直接欄位（`base_url`/`api_backend`/`api_key`）。
 
 含有點號的別名請加上引號：裸的 `[model.grok-4.5]` 是三段式鍵路徑，而不是 id `grok-4.5`。產生的別名因此完全避免點號。
 

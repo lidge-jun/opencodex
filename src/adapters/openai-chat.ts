@@ -8,6 +8,7 @@ import { isDebugEnabled } from "../lib/debug-settings";
 import { isCyberPolicyCode } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { contentPartsToText } from "./image";
+import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "./empty-tool-output-annotation";
 import { identifyRoutedModel } from "./identity";
 import { peekReasoningForCall } from "../responses/reasoning-replay-cache";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
@@ -595,9 +596,22 @@ function isNativeOpenAIChatTarget(provider: OcxProviderConfig): boolean {
  * being flattened to the "[image]" marker the model can't actually see. Data URLs and remote https
  * URLs are both valid in image_url.url, unlike Gemini inline_data which needs base64.
  */
-function toolResultTextForWire(content: string | OcxContentPart[]): string {
-  if (typeof content === "string") return content;
+function toolResultTextForWire(content: string | OcxContentPart[], annotateEmpty = false): string {
+  // An empty content array is a present-but-empty result; `contentPartsToText` would
+  // otherwise fall back to the "[image]" marker and hide the emptiness from the model.
+  if (annotateEmpty && Array.isArray(content) && content.length === 0) return EMPTY_TOOL_OUTPUT_ANNOTATION;
+  if (typeof content === "string") {
+    if (annotateEmpty && content.trim() === "") return EMPTY_TOOL_OUTPUT_ANNOTATION;
+    return content;
+  }
   const text = content.filter((p) => p.type === "text").map((p) => (p as OcxTextContent).text).join("");
+  // A whitespace-only text-part array is the array twin of a blank string; the
+  // shared emptiness contract (same module as the Responses adapter) annotates it
+  // instead of forwarding whitespace the model silently accepts. Image parts and
+  // any other non-text part keep the array non-empty.
+  if (annotateEmpty && isWhitespaceOnlyTextPartArray(content)) {
+    return EMPTY_TOOL_OUTPUT_ANNOTATION;
+  }
   if (text) {
     const untransportableImages = content.filter((p) => p.type === "image" && !p.imageUrl).length;
     return `${text}${"[image]".repeat(untransportableImages)}`;
@@ -784,7 +798,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           out.push({
             role: "tool",
             tool_call_id: toolCallId,
-            content: toolResultTextForWire(msg.content),
+            content: toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
           });
           pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
           pendingToolCalls.splice(matchIdx, 1);
@@ -829,7 +843,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           out.push({
             role: "tool",
             tool_call_id: toolCallId,
-            content: toolResultTextForWire(msg.content),
+            content: toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
           });
           pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
           flushToolResultImages();

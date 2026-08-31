@@ -6,6 +6,7 @@ import {
   readIntegrationRecord,
   updateIntegrationRecord,
 } from "../src/codex/integration-record";
+import { boundProvenanceEntries } from "../src/codex/inject-coordination";
 import type {
   CodexArtifactId,
   CodexIntegrationRecord,
@@ -143,6 +144,95 @@ describe("Codex integration record", () => {
     expect(entries.map(entry => entry.postImage)).toEqual(
       artifacts.map((_, index) => `new-post-image-${index}`),
     );
+  });
+
+  test("does not move an omitted transaction's extensions onto its positional replacement", () => {
+    const maxBytes = 16 * 1024;
+    const entry = (
+      txId: string,
+      at: string,
+      baseline: CodexProvenanceEntry["baseline"],
+      futureEntry?: unknown,
+    ): CodexProvenanceEntry => ({
+      artifact: { kind: "config" },
+      baseline,
+      postImage: null,
+      txId,
+      at,
+      ...(futureEntry === undefined ? {} : { futureEntry }),
+    });
+    const kept = entry("tx-kept", "2026-08-04T00:00:00.000Z", { kind: "absent" });
+    const oversized = entry(
+      "tx-oversized",
+      "2026-08-04T00:00:01.000Z",
+      {
+        kind: "present",
+        sha256: "0".repeat(64),
+        bytesBase64: "A".repeat(maxBytes + 1),
+      },
+      { mustNotMove: "x".repeat(maxBytes * 2) },
+    );
+    writeRecord({ version: 1, provenance: { entries: [kept, oversized] } });
+
+    const appended = entry("tx-new", "2026-08-04T00:00:02.000Z", { kind: "absent" });
+    const result = updateIntegrationRecord(record => ({
+      ...record,
+      provenance: {
+        ...record.provenance,
+        entries: boundProvenanceEntries(
+          [...record.provenance!.entries, appended],
+          16,
+          maxBytes,
+        ),
+      },
+    }));
+
+    expect(result.kind).toBe("updated");
+    const saved = persistedRecord();
+    const entries = (saved.provenance as { entries: Array<Record<string, unknown>> }).entries;
+    expect(entries.map(savedEntry => savedEntry.txId)).toEqual(["tx-kept", "tx-new"]);
+    expect(entries[1]).not.toHaveProperty("futureEntry");
+    expect(Buffer.byteLength(JSON.stringify(saved, null, 2), "utf-8"))
+      .toBeLessThanOrEqual(maxBytes);
+  });
+
+  test("does not move extensions onto a different artifact in the same transaction", () => {
+    const at = "2026-08-04T00:00:00.000Z";
+    writeRecord({
+      version: 1,
+      provenance: {
+        entries: [{
+          artifact: { kind: "config", futureArtifact: { owner: "config" } },
+          baseline: { kind: "absent", futureBaseline: { owner: "config" } },
+          postImage: null,
+          txId: "tx-same",
+          at,
+          futureEntry: { owner: "config" },
+        } as unknown as CodexProvenanceEntry],
+      },
+    });
+
+    const result = updateIntegrationRecord(record => ({
+      ...record,
+      provenance: {
+        ...record.provenance,
+        entries: [{
+          artifact: { kind: "generated-profile" },
+          baseline: { kind: "absent" },
+          postImage: null,
+          txId: "tx-same",
+          at,
+        }],
+      },
+    }));
+
+    expect(result.kind).toBe("updated");
+    const saved = persistedRecord();
+    const entries = (saved.provenance as { entries: Array<Record<string, unknown>> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.artifact).toEqual({ kind: "generated-profile" });
+    expect(entries[0]!.baseline).toEqual({ kind: "absent" });
+    expect(entries[0]).not.toHaveProperty("futureEntry");
   });
 
   test("fails closed on unparseable bytes without invoking the mutator or resetting the file", () => {

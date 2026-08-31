@@ -15,13 +15,16 @@ en `~/.grok/config.toml` :
 
 ```toml
 # >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>
-[model.ocx-gpt-5-6-sol]
-model = "gpt-5.6-sol"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
-name = "OCX gpt-5.6-sol"
 extra_headers = { "x-opencodex-grok" = "1" }
+
+[model.ocx-gpt-5-6-sol]
+model = "gpt-5.6-sol"
+model_provider = "opencodex"
+name = "OCX gpt-5.6-sol"
 context_window = 272000
 supports_reasoning_effort = true
 reasoning_effort = "low"
@@ -32,7 +35,7 @@ value = "low"
 label = "Low"
 description = "Quick, fast implementations"
 default = true
-# ... autres niveaux de ce modèle, puis une table [model.ocx-*] par modèle visible ...
+# ... autres niveaux de ce modèle, puis une table [model.ocx-*] par modèle visible, chacun référençant model_provider = "opencodex" ...
 # <<< opencodex managed block <<<
 ```
 
@@ -77,12 +80,12 @@ en amont fixes, et non les métadonnées configurées pour les modèles routés.
 `none` et `minimal`, sont conservés lorsqu’ils sont annoncés. Les niveaux non pris en charge ou en double,
 notamment `ultra`, propre à Codex, sont omis du fichier afin que chaque option générée reste sélectionnable.
 
-Grok Build communique avec opencodex au moyen de Chat Completions et envoie `reasoning_effort` lorsque
-l’échelle est annoncée. Dans ce cas, le traducteur Chat Completions entrant définit par défaut le champ Responses
-`reasoning.summary` sur `auto` ; les traces de raisonnement parviennent donc à Grok sous la forme
-`delta.reasoning_content` au lieu d’être masquées. Réglez `include_reasoning: false` (ou
-`reasoning.summary: "none"`) si un client souhaite que le modèle réfléchisse sans renvoyer le
-tracé. Une valeur explicite de `reasoning.summary` prévaut lorsque les deux options sont présentes.
+Grok Build communique avec opencodex au moyen de l’API Responses. Lorsque la route annonce une
+échelle de raisonnement, le relais Responses transmet `reasoning.summary` tel que configuré, si bien
+que les traces de raisonnement parviennent à Grok nativement sous forme d’éléments de raisonnement
+Responses. Réglez `reasoning.summary: "none"` si un client souhaite que le modèle réfléchisse sans
+renvoyer le tracé. Une valeur explicite de `reasoning.summary` prévaut sur la valeur par défaut de la
+route.
 
 ## Note d'authentification
 
@@ -101,46 +104,49 @@ dehors des marqueurs gérés, où aucune opération opencodex ne peut les écras
 `base_url` (une adresse réellement accessible depuis l’endroit où vous exécutez `grok`) et `api_key` (votre
 `OPENCODEX_API_AUTH_TOKEN`).
 
-Ne remplacez pas `api_key` par `env_key` ici. En l’absence de `model_provider`, un `env_key` qui ne peut pas être
+Ne remplacez pas `api_key` par `env_key` ici. Un `env_key` qui ne peut pas être
 résolu n’interrompt pas la requête : Grok utilise alors votre jeton de session xAI et l’envoie à l’adresse
 `base_url` indiquée par l’entrée. Pour un déploiement sur le réseau local, cette adresse est un point de terminaison
 HTTP en clair qui n’appartient pas à xAI.
 
-La valeur `api_key` injectée pour chaque modèle se trouve en tête de la chaîne d’identifiants de Grok. Les requêtes
+La valeur `api_key` injectée sur l’entrée du fournisseur se trouve en tête de la chaîne d’identifiants de Grok. Les requêtes
 adressées à opencodex ne nécessitent donc aucune connexion Grok supplémentaire. Conservez votre configuration
 habituelle `grok login` / `XAI_API_KEY` pour les modèles Grok natifs et les fonctions qui contactent directement xAI.
 
 ## Recette manuelle (sans enregistrement automatique)
 
-Si vous gérez `~/.grok/config.toml` vous-même — ou si opencodex est sur une liaison sans bouclage — ajoutez
-tables par modèle avec **champs directs**, en dehors des marqueurs `# >>> opencodex managed block` :
+Si vous gérez `~/.grok/config.toml` vous-même — ou si opencodex est sur une liaison sans bouclage — ajoutez un bloc
+`[model_providers.opencodex]` et des tables par modèle qui le référencent via `model_provider`, en dehors des
+marqueurs `# >>> opencodex managed block` :
 
 ```toml
-[model.ocx-opus]
-model = "anthropic/claude-opus-4-8"
+[model_providers.opencodex]
 base_url = "http://127.0.0.1:10100/v1"
 api_backend = "responses"
 api_key = "opencodex-loopback"
-```
 
-Pour un proxy joignable sur le réseau, pointer `base_url` à l'adresse `grok` peut effectivement
-composez et utilisez votre jeton d'entrée :
-
-```toml
 [model.ocx-opus]
 model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
+```
+
+Pour un proxy joignable sur le réseau, pointez `base_url` vers l’adresse que `grok` peut réellement
+joindre et utilisez votre jeton d’entrée :
+
+```toml
+[model_providers.opencodex]
 base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
+
+[model.ocx-opus]
+model = "anthropic/claude-opus-4-8"
+model_provider = "opencodex"
 ```
 
-Ne comptez pas sur l'héritage `[model_providers.<id>]` pour le point de terminaison : à partir de Grok Build
-0.2.101 le `base_url` hérité n'est pas appliqué au routage d'inférence (les requêtes tombent
-jusqu'au proxy xAI par défaut et échoue avec 401). Itinéraire direct des champs par modèle
-correctement.
+Le bloc géré utilise désormais l’héritage `[model_providers.<id>]`, ce qui nécessite Grok Build 0.2.109 ou ultérieur (publié le 2026-07-21). Sur les versions antérieures, le `base_url` hérité n’est pas appliqué au routage d’inférence — mettez à niveau, ou utilisez des champs directs par modèle (`base_url`/`api_backend`/`api_key` sur chaque table `[model.*]`).
 
-Placez entre guillemets tout alias contenant un point : `[model.grok-4.5]` sans guillemets est un chemin de clé à trois segments, et non
-l'identifiant `grok-4.5`. Les alias générés évitent entièrement les points pour cette raison.
+Placez entre guillemets tout alias contenant un point : `[model.grok-4.5]` sans guillemets est un chemin de clé à trois segments, et non l'identifiant `grok-4.5`. Les alias générés évitent entièrement les points pour cette raison.
 
 ## Limitations connues
 

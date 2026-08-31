@@ -8,7 +8,7 @@
  * redirect: "manual" because Bun forwards custom headers across redirects.
  * Never throws; every error string passes redactSecretString.
  */
-import { fetchWithResetRetry } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry } from "../lib/upstream-retry";
 import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { sidecarEnter } from "../lib/sidecar-tracker";
@@ -39,13 +39,13 @@ export async function runExaWebSearch(
   const t0 = Date.now();
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(EXA_SEARCH_URL, {
+      recovery => fetch(EXA_SEARCH_URL, applyUpstreamRecoveryInit({
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": apiKey },
         body: JSON.stringify({ query, numResults: EXA_NUM_RESULTS, contents: { text: { maxCharacters: EXA_SNIPPET_CHARS } } }),
         signal: linkedSignal.signal,
         redirect: "manual",
-      }),
+      }, recovery)),
       { abortSignal: linkedSignal.signal, label: "exa-web-search-sidecar" },
     );
     const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);

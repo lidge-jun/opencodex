@@ -64,7 +64,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 
 | Champ | Type | Signification |
 | --- | --- | --- |
-| `adapter` | `string` | L'un des `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `azure-openai` (ou alias `azure`). |
+| `adapter` | `string` | L'un des `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `ollama-native`, `azure-openai` (ou alias `azure`). |
 | `baseUrl` | `string` | URL de base de l'API en amont. La plupart des points de terminaison fixes intégrés ignorent une valeur incompatible ; les préréglages de clés protégés contre les collisions préservent une ancienne destination personnalisée portant le même nom. |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | Cadencement facultatif du démarrage des requêtes sortantes côté client, distinct de l’utilisation, de la facturation et des indicateurs de limitation en amont. Le nombre de requêtes par minute est converti en intervalle régulier ; `minIntervalMs` peut imposer un intervalle plus long. Les limites du fournisseur s’appliquent à tous ses modèles, tandis que les entrées `models` ciblent les identifiants exacts des modèles en amont, par exemple `nvidia/llama-3.1-nemotron-ultra-253b-v1`, et ne peuvent qu’ajouter du délai. L’attente dans la file ne consomme pas le délai d’expiration des en-têtes de réponse en amont. Les requêtes HTTP, Responses WebSocket et les distributions explicites `fetchResponse`/`runTurn` des adaptateurs sont couvertes. |
 | `responsesPath?` | `string` | Chemin de ressource relatif pour les requêtes d'authentification par clé `openai-responses`. Il doit commencer par `/` et ne contenir aucun schéma, requête ou fragment. |
@@ -91,6 +91,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `headers?` | `Record<string, string>` | En-têtes supplémentaires en amont. L'autorisation, les cookies, les en-têtes de clé API, les nouvelles lignes intégrées et les noms invalides sont rejetés. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Préférences OpenRouter `order`, `only` et `allowFallbacks` par défaut ; valable uniquement pour les OpenRouter canoniques avec `openai-chat`. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | Remplacements exacts de l'ID de modèle qui remplacent la préférence OpenRouter à l'échelle du fournisseur. |
+| `vercelGatewayRouting?` | `VercelGatewayRouting` | Préférences Vercel AI Gateway par défaut pour `order`, `only` et `sort` (`"cost"` \| `"ttft"` \| `"tps"`) ; valables uniquement pour le fournisseur Vercel AI Gateway canonique avec `openai-chat`. |
 | `authMode?` | `"key" \| "forward" \| "oauth" \| "local"` | Mode d'authentification (`key` par défaut). Les identifiants OAuth ou d'abonnement sont stockés hors de `config.json` ; `local` est réservé aux fournisseurs dont l'entrée de registre l'autorise. |
 | `codexAccountMode?` | `"pool" \| "direct"` | Réservé au fournisseur canonique `openai` ; la valeur par défaut est Pool. Le mode Direct contourne l'état du pool. |
 | `refreshPolicy?` | `"proactive" \| "lazy-only" \| "disabled"` | Remplace la politique Token Guardian de ce fournisseur OAuth. |
@@ -100,7 +101,9 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Énumération de livraison des réponses par modèle ; réécrit un champ de livraison existant. |
 | `modelAdapters?` | `Record<string, string>` | Remplacement du protocole `openai-chat` ou `openai-responses` par modèle pour les passerelles multiprotocoles. Les entrées explicites priment sur les valeurs par défaut du registre. Le préréglage OpenCode Go sélectionne Responses pour `gpt-5.6-luna` tout en laissant les modèles apparentés sur leurs protocoles documentés ; DeepSeek peut sélectionner Responses natif pour `deepseek-v4-flash` ; GitHub Copilot déclare des valeurs par défaut limitées à Responses pour sa famille GPT-5 (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`), car ces modèles rejettent `/chat/completions` pour le trafic des agents. Les modèles sans valeur intégrée par défaut, comme `gpt-5.4-nano`, peuvent être activés ici. Les services en amont à protocole unique et le transfert canonique ChatGPT rejettent ces remplacements. |
 | Activation Responses xAI (tableau de bord) | interrupteur | Pour `xai` uniquement, définit ou efface atomiquement les entrées `modelAdapters` de `grok-4.5` et `grok-4.6`. Une seule entrée apparaît comme un état mixte jusqu’à la prochaine écriture. Les autres remplacements et le comportement des tiers restent inchangés. |
+| `xaiResponsesXSearch?` | `boolean` | Désactivé par défaut. Sur une destination xAI Responses, ajoute la déclaration `x_search` hébergée par le fournisseur uniquement lorsqu’un outil `web_search` actif subsiste après la normalisation finale de la requête. Les déclarations existantes ne sont pas dupliquées, les sélecteurs `tool_choice`/`allowed_tools` de l’appelant ne sont jamais élargis, et cette option est distincte des options `search.xSearch` du service auxiliaire de recherche web. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Activation explicite par modèle exact pour les passerelles Responses hors transfert qui réservent un espace de noms aux outils hébergés. Seul `["image_generation"]` est actuellement accepté ; le modèle correspondant doit utiliser le protocole `openai-responses` et prendre en charge cet outil hébergé. Le proxy supprime les déclarations clientes `image_gen` en conflit et réécrit leurs sélecteurs afin de préserver le choix d'outil de l'appelant. Pour les modèles virtuels `-pro` de l'API OpenAI, l'identifiant public sélectionné est comparé en premier et l'identifiant résolu du modèle de base sur le protocole sert de repli. `modelAdapters` résout d'abord l'identifiant public, puis celui de base ; la seconde résolution détermine le protocole final. Les autres modèles conservent le comportement normal des alias. |
+| `annotateEmptyToolOutputs?` | `boolean` | Remplace un résultat d’outil présent mais vide par un court marqueur avant qu’il n’atteigne le modèle, afin qu’un résultat vide ne soit pas interprété comme manquant. S’applique aux chaînes vides et aux tableaux de parties contenant uniquement du texte ; les parties d’image, de fichier et chiffrées ne sont jamais modifiées. La valeur par défaut issue du registre intégré est `true` pour DeepSeek ; dans les autres cas, elle n’est pas définie. Définissez `false` pour exclure un fournisseur : une valeur `false` explicite est conservée lors des modifications ultérieures qui omettent ce champ. `PATCH /api/providers?name=<provider>` accepte `true`, `false` ou `null` pour effacer le remplacement et revenir au comportement par défaut du registre. |
 | `reasoningEffortMap?` | `Record<string, string>` | Alias ​​de fil à l’échelle du fournisseur pour les étiquettes de raisonnement. |
 | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Alias ​​de fil par modèle pour les étiquettes de raisonnement. |
 | `reasoningWireFormat?` | `"gateway-object"` | Pour les passerelles compatibles avec OpenAI qui acceptent `reasoning: { enabled, effort }` au lieu de `reasoning_effort`. Le préréglage ClinePass définit ce champ automatiquement. |
@@ -114,6 +117,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | Réparation SSE en aval désactivée par défaut pour les identifiants d'espace réservé exacts, les identifiants de terminal manquants et (avec `repairInvalidIds`) les identifiants message/reasoning manquant du préfixe canonique `msg_`/`rs_`. Les identifiants d’appel de fonction ne sont jamais réécrits. Le DeepSeek intégré active les deux derniers par défaut. |
 | `responsesSnapshotRepair?` | `boolean` | Réparation côté client désactivée par défaut pour les instantanés du cycle de vie des réponses clairsemés dans SSE et JSON. Remplit les métadonnées d'état canonique, de sortie et d'outil manquantes tandis que l'inspection brute et la persistance restent inchangées. |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | Fournisseurs à clé API uniquement (`authMode: "key"`). Nouvelle tentative facultative sur la même cible après un 429 : lorsque `retryOn429` est absent, la fonctionnalité est désactivée ; la présence d'un objet l'active, sauf avec `enabled: false`. Après un 429, le proxy attend selon `Retry-After` reçu en amont ou selon l'intervalle fixe, puis relit la requête à l'identique avec la même clé avant tout basculement de clé. Ce comportement couvre la boucle principale de récupération d'un tour textuel, le protocole de transfert Responses, le pont d'images et de vidéos, le service auxiliaire de recherche Web et les continuations du terminal. Seules les réponses HTTP 429 reçues avant le début de la diffusion peuvent être relues ; les transports `runTurn` personnalisés ne font pas partie de la boucle de nouvelle tentative HTTP. `attempts` compte les relectures avec la même clé après le premier 429, soit `attempts` + 1 envois au total, et constitue un budget commun à toute la requête, partagé entre la boucle principale de récupération, la continuation de la garde du terminal et les nouvelles tentatives du pont. L'épuisement de `attempts` arrête uniquement les relectures supplémentaires avec la même clé : le basculement normal de clé ou la gestion de l'erreur finale s'applique ensuite selon les cibles disponibles. Sur le protocole de transfert authentifié par clé, aucun basculement n'est possible ; le 429 final est donc renvoyé sans modification. Codex ne retente jamais lui-même une requête après un 429 : cette option constitue ainsi la seule protection pour les fournisseurs à clé unique. Valeurs par défaut : `enabled: true`, `attempts: 3`, `intervalMs: 5000`, `maxIntervalMs: 60000` (chaque attente est plafonnée à `maxIntervalMs`, lui-même plafonné à 600000), `respectRetryAfter: true`. |
+| `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | Fournisseurs `openai-chat` authentifiés par clé uniquement. Nouvelle tentative facultative pour les états transitoires reçus en amont avant le début de la diffusion (500, 502, 503, 504, 520, 521, 522) : l'absence de l'option la désactive ; la présence d'un objet l'active, sauf avec `enabled: false`. Ce comportement couvre la requête Responses initiale, la continuation de la garde du terminal, le point de terminaison natif `/v1/chat/completions` et les réémissions liées à la récupération après un 429 ou à la récupération de compte. `attempts` représente le nombre TOTAL d'envois en amont autorisés pour une requête, premier envoi compris (de 1 à 10, valeur par défaut : 3). Il constitue un budget commun à la requête, partagé avec la récupération après une réinitialisation de connexion ; ainsi, `3` signifie qu'au plus trois requêtes réelles atteignent le fournisseur. Les attentes utilisent une temporisation exponentielle à base fixe de 400 ms, plafonnée à 5 s, et respectent `Retry-After`. Cette option est distincte de `retryOn429`, qui traite la limitation de débit ; les échecs en cours de diffusion ne sont jamais relus. |
 | `autoToolChoiceOnlyModels?` | `string[]` | Modèles dont `tool_choice` accepte uniquement `auto` ou `none` ; les choix forcés sont dévalorisés. |
 | `preserveReasoningContentModels?` | `string[]` | Modèles nécessitant un assistant préalable `reasoning_content` dans l'historique des discussions. |
 | `requiresReasoningPlaceholderModels?` | `string[]` | Modèles dont le service en amont rejette une continuation tool_call dépourvue de `reasoning_content`, notamment en mode de réflexion DeepSeek ; un contenu de remplacement minimal est injecté en cas d'absence dans le cache de relecture. La valeur par défaut est `preserveReasoningContentModels` ; définissez `[]` pour désactiver ce comportement. |
@@ -193,8 +197,9 @@ rotation automatique peut déclencher des restrictions du fournisseur.
 | Clé | Type | Par défaut | Description |
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | Active l'affinité persistante et le basculement après une temporisation 429. |
-| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Pour les nouvelles sessions, choisir la plus faible utilisation connue et mise en cache sur 5 heures qui atteint ou dépasse ce seuil. `0` désactive la sélection selon le quota. |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Stratégie des nouvelles sessions ; quota utilise uniquement les barres sur 5 heures. |
+| `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | Pour les nouvelles sessions, lorsque le compte actif atteint ce seuil, choisir la plus faible utilisation connue et mise en cache dans la fenêtre configurée. `0` désactive la sélection selon le quota. |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | Stratégie des nouvelles sessions ; `quota` classe les comptes selon la fenêtre définie par `quotaWindow`, par défaut les barres sur 5 heures, et `fill-first` évalue son seuil d'évacuation dans cette même fenêtre. |
+| `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | Barre d'utilisation signalée par le fournisseur, mise en cache et utilisée pour la sélection selon l'utilisation. `five-hour` conserve le comportement actuel. `weekly` utilise la barre hebdomadaire et ignore les comptes dont la barre sur 5 heures est épuisée tant qu'un autre compte admissible reste disponible, mais y revient si aucun autre ne reste. `max-utilization` utilise la valeur connue la plus élevée et peut donc employer la barre sur 5 heures avant que la barre hebdomadaire soit disponible ; si aucune n'est connue, le compte suit l'ordre des utilisations inconnues. Les utilisations connues précèdent les inconnues, mais si tous les comptes admissibles sont inconnus, la sélection en renvoie tout de même un dans leur ordre admissible. Après le départage documenté par la plus faible utilisation sur 5 heures, une égalité exacte conserve cet ordre. Une session saine avec affinité n'est pas rééquilibrée de manière proactive. Pour l'affectation des nouvelles sessions et la reprise du routage après un remplacement admissible à la suite d'un 429, `quota` classe directement les candidats admissibles avec cette fenêtre ; `fill-first` avance dans un ordre stable selon le seuil et les règles d'épuisement de cette fenêtre ; `round-robin` l'ignore. Le délai de récupération, les limites de basculement et l'éligibilité de réauthentification restent des états locaux distincts. Les barres hebdomadaires ne sont connues qu'après leur interrogation dans la page Fournisseurs du tableau de bord. |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | Liaisons de nouvelle session réussies conservées sur une sélection à tour de rôle. Portée 1–100. |
 
 Lorsque cette option est activée, un 429 enregistre une temporisation bornée à partir de `Retry-After` ou d'un délai de repli, puis peut
@@ -370,6 +375,45 @@ Les clés de modèle sont les identifiants OpenRouter natifs exacts, sans le pr�
 `openrouter/anthropic-claude-sonnet-5` restaure l'identifiant natif `anthropic/claude-sonnet-5` avant d'appliquer
 la règle du modèle.
 
+## Routage des fournisseurs Vercel AI Gateway
+
+Vercel AI Gateway peut router un modèle entre plusieurs fournisseurs d'inférence sous-jacents.
+`vercelGatewayRouting` configure les préférences à l'échelle du fournisseur ; `modelVercelGatewayRouting` les remplace
+pour les identifiants de modèle exacts. Lorsque les deux sont omis, `resolveVercelGatewayRouting()` renvoie `undefined`.
+Les générateurs de requêtes Chat omettent alors le champ `provider`, et Vercel AI Gateway conserve son comportement de
+routage dynamique par défaut.
+
+- `order` : identifiants courts des fournisseurs en amont de Vercel AI Gateway, par ordre de priorité.
+- `only` : liste d'autorisation explicite limitant les fournisseurs en amont de Vercel AI Gateway admissibles.
+- `sort` : trie automatiquement les fournisseurs admissibles par `"cost"` (coût le plus faible), `"ttft"` (délai
+  avant le premier jeton) ou `"tps"` (jetons par seconde).
+
+```json
+{
+  "providers": {
+    "vercel-ai-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://ai-gateway.vercel.sh/v1",
+      "apiKey": "${VERCEL_AI_GATEWAY_KEY}",
+      "vercelGatewayRouting": {
+        "sort": "ttft"
+      },
+      "modelVercelGatewayRouting": {
+        "zai/glm-5.2": {
+          "only": ["novita", "deepinfra"],
+          "order": ["novita", "deepinfra"]
+        }
+      }
+    }
+  }
+}
+```
+
+Les clés de modèle sont les sélecteurs de modèle publics de Vercel, sans le préfixe externe du fournisseur OpenCodex.
+La sélection de `vercel-ai-gateway/zai-glm-5.2` restaure l'identifiant natif `zai/glm-5.2` avant d'appliquer la règle du
+modèle. Le même mappage s'applique à un sélecteur natif `vercel/<model-id>` : utilisez le sélecteur encodé
+`vercel-ai-gateway/vercel-<model-id>` dans OpenCodex et conservez `vercel/<model-id>` comme clé de modèle.
+
 ## Listes autorisées de modèles statiques
 
 Réglez `liveModels: false` pour exposer uniquement `models`. Si `models` est vide ou omis, le fournisseur n'expose
@@ -419,7 +463,6 @@ avec un contexte de `922000` et une entrée maximale de `922000` ; OpenRouter i
       "defaultModel": "claude-sonnet-4-6"
     },
     "ollama-cloud": {
-      "adapter": "openai-chat",
       "baseUrl": "https://ollama.com/v1",
       "apiKey": "${OLLAMA_API_KEY}",
       "defaultModel": "glm-5.2",

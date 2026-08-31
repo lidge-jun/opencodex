@@ -22,7 +22,7 @@ interface ProviderAdapter {
 ## `openai-chat`
 
 **対象:** OpenAI **Chat Completions**（`POST {baseUrl}/chat/completions`）および互換プロバイダー
-— xAI、Kimi、DeepSeek、GLM、Groq、OpenRouter、Ollama（ローカルとクラウド）など。
+— xAI、Kimi、DeepSeek、GLM、Groq、OpenRouter、Ollama（ローカル）など。
 **認証:** `key`（Bearer）。
 
 - 内部メッセージを OpenAI role に変換し、ツールは `{type:"function", function:{…}}` と
@@ -40,6 +40,44 @@ interface ProviderAdapter {
   現在このリクエスト形式が明記されていません。アダプターは要求された `low`、`medium`、`high`、
   `xhigh`、`max` tier をそのまま保持し、`delta.reasoning_content` または `delta.reasoning` を
   reasoning delta として扱い、`stream_options.include_usage` でストリーム usage を要求し、非ストリームのレスポンス envelope からも usage を読み取ります。
+
+## `ollama-native`
+
+**対象：** OpenAI 互換サーフェスではなく、Ollama 自身の **Chat API**（`POST /api/chat`）。
+組み込みの `ollama-cloud` プロバイダーはこの adapter にレジストリで選択され、別名のカスタム /
+セルフホスト Ollama プロバイダーに `adapter: "ollama-native"` を設定して使うこともできます。
+**認証：** cloud / カスタム宛先は `key`（Bearer）。loopback または `authMode: "local"`
+の宛先には資格情報を送りません。
+
+- **レジストリ選択が実質的に効きます。** 組み込みの `ollama-cloud` 行は `/v1/models` による
+  ライブ探索のため `https://ollama.com/v1` を維持しつつ、推論は
+  `POST https://ollama.com/api/chat` に正規化されます。このプロバイダー行では設定した
+  `adapter` は破棄されます。通常の組み込みローカル Ollama は `openai-chat` のままです。
+  ローカル / セルフホスト宛先に `ollama-native` を選ぶのは、プロバイダー設定での明示的な判断
+  であり、ホストで判定されるため非 Ollama 宛先が黙って書き換えられることはありません。
+- **モデルメタデータ：** `/v1/models` にはモデルごとのメタデータがないため、正規の Ollama
+  Cloud では *上限付き* の `POST /api/show`（応答 256 KiB、1 要求 8 秒、並列 4、48 要求、
+  フェーズ全体に 12 秒の締切）で発見された各 id を補完し、実際の context window と vision
+  対応を取得します。show 要求は同一オリジンでリダイレクトを追わず、失敗してもその 1 モデル
+  だけが劣化し、発見自体は失敗しません。
+- **ストリーミング：** Ollama ネイティブの NDJSON。テキストと `message.thinking` の delta を
+  到着順に転送し、`done: true` の終端レコードでのみターンを完了します。buffer された
+  `done: false` や終端の欠落では部分的なテキストも tool call も一切出力しません。
+- **Reasoning：** Ollama ネイティブの `think` フィールド（`low` / `medium` / `high` / `max` と
+  boolean）に対応し、モデルの公開 ladder へクランプし、上流で設定された `__omit__` sentinel の
+  意味論に従います。
+- **画像：** vision 対応モデルではメッセージの `images` 配列でネイティブ送信します。video は
+  誤送信ではなく拒否され、リモート画像 URL の取得は行いません。
+- **ツール：** Ollama のネイティブ形状で宣言し、ストリームされる tool call は `arguments` が
+  オブジェクトの whole-call レコード、tool result のリプレイは call id と tool 名で厳密に対応
+  付けられます。`tool_choice: "none"` と `auto` は通常どおりです。**`required` や名前指定は
+  fail closed** です。Ollama の `/api/chat` にはそれを強制できる `tool_choice` フィールドが
+  ありません。
+- **構造化出力は正規の Ollama Cloud では拒否されます。** Ollama は Cloud で構造化出力が未対応
+  であると現在ドキュメントしており、Cloud は `format` フィールドを強制しません。そのため
+  OpenCodex は、schema 指定の要求に対して自由文を返すのではなく、要求を閉じて失敗させます。
+  ローカル / カスタムの `ollama-native` エンドポイントは Ollama ネイティブの `format` マッピング
+  （`json_object` → `"json"`、`json_schema` → schema オブジェクトそのもの）を保持します。
 
 ## `openai-responses`
 
@@ -112,6 +150,7 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 ツール有効ターンでは非公開の `codex_kiro_final_answer` を追加します。再試行は空の assistant/user ターンを
 生成せず、元の user/tool-result を保持し、送信前にロール交互性、空の構造メッセージ、tool use/result の対応を検証します。
 完了ツールの回答は以前の commentary と同じでも `final_answer` として送出します。
+ユーザーしか出せない判断・情報・確認が得られず先に進めない場合も、その質問を完了ツールで送って停止するよう契約が指示します。これも commentary ではなくターンを終えた `final_answer` として届きます。
 
 ### Reasoning effort
 

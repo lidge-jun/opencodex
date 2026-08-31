@@ -65,22 +65,35 @@ export function readGrokStatus(opts: { grokHome?: string } = {}): GrokStatus {
   let baseUrl: string | null = null;
   let current: GrokStatusModel | null = null;
 
+  // The provider block carries base_url in the current shape; per-model base_url is the
+  // legacy fallback for fences written before the model_providers migration.
+  let inProviderBlock = false;
+
   for (const rawLine of region.split("\n")) {
     const line = rawLine.trim();
+    const providerHeader = /^\[model_providers\.([^\]]+)\]$/.exec(line);
+    if (providerHeader) {
+      inProviderBlock = true;
+      continue;
+    }
     const header = /^\[model\.([^\]]+)\]$/.exec(line);
     if (header) {
+      inProviderBlock = false;
       current = { alias: header[1]!, id: "" };
       models.push(current);
       continue;
     }
-    if (!current) continue;
-    if (line.startsWith("model =")) {
-      current.id = tomlStringValue(line) ?? "";
-    } else if (line.startsWith("base_url =")) {
-      baseUrl ??= tomlStringValue(line) ?? null;
-    } else if (line.startsWith("context_window =")) {
-      const value = Number(line.slice(line.indexOf("=") + 1).trim());
-      if (Number.isFinite(value) && value > 0) current.contextWindow = value;
+    if (line.startsWith("base_url =")) {
+      // Prefer the provider block's base_url; fall back to per-model (legacy shape).
+      if (inProviderBlock) baseUrl ??= tomlStringValue(line) ?? null;
+      else if (current && baseUrl === null) baseUrl = tomlStringValue(line) ?? null;
+    } else if (!inProviderBlock && current) {
+      if (line.startsWith("model =")) {
+        current.id = tomlStringValue(line) ?? "";
+      } else if (line.startsWith("context_window =")) {
+        const value = Number(line.slice(line.indexOf("=") + 1).trim());
+        if (Number.isFinite(value) && value > 0) current.contextWindow = value;
+      }
     }
   }
 

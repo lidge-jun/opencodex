@@ -162,6 +162,44 @@ const openAiChatDriver: ToolWireDriver = {
   streamingToolCall: openAiChatToolCall,
 };
 
+const ollamaNativeDriver: ToolWireDriver = {
+  observeOutbound: observeHttpOutbound,
+  extractWireToolName(body, canonicalName) {
+    const parsed = JSON.parse(body) as { tools?: Array<{ function?: { name?: string } }> };
+    const match = parsed.tools?.find(tool => tool.function?.name?.includes(canonicalName))?.function?.name;
+    return requireWireToolName(match, canonicalName, "ollama-native");
+  },
+  streamingToolCall(wireName, wrappedArguments) {
+    // Ollama streams NDJSON, not SSE, and delivers each tool call whole: `arguments` is a JSON
+    // object rather than a string fragmented across frames, so there is nothing to split here.
+    const frames = [
+      {
+        model: "glm-5.3-flash",
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [{
+            type: "function",
+            id: "call_patch",
+            function: { name: wireName, arguments: JSON.parse(wrappedArguments) as Record<string, unknown> },
+          }],
+        },
+        done: false,
+      },
+      {
+        model: "glm-5.3-flash",
+        message: { role: "assistant", content: "" },
+        done: true,
+        done_reason: "stop",
+        prompt_eval_count: 1,
+        eval_count: 1,
+      },
+    ];
+    const ndjson = frames.map(frame => `${JSON.stringify(frame)}\n`).join("");
+    return new Response(ndjson, { headers: { "content-type": "application/x-ndjson" } });
+  },
+};
+
 const anthropicDriver: ToolWireDriver = {
   observeOutbound: observeHttpOutbound,
   extractWireToolName(body, canonicalName) {
@@ -229,6 +267,7 @@ const responsesDriver: ToolWireDriver = {
 
 export const TOOL_WIRE_DRIVERS = {
   "openai-chat": openAiChatDriver,
+  "ollama-native": ollamaNativeDriver,
   anthropic: anthropicDriver,
   google: googleDriver,
   "command-code": commandCodeDriver,

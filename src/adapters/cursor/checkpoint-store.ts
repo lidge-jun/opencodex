@@ -23,7 +23,12 @@ export type CursorCheckpointInvalidationReason =
   | "trailing_tool_result"
   | "force_fresh"
   | "upstream_invalid_argument"
-  | "lineage_mismatch";
+  | "lineage_mismatch"
+  /**
+   * The checkpoint's own roots leave no room for the uncovered suffix inside Cursor's root envelope.
+   * Resuming would send history the model cannot see; a full replay prunes coherently instead.
+   */
+  | "envelope_exhausted";
 
 export interface CursorCheckpointSnapshot {
   ref: string;

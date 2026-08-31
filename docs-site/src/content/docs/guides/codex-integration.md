@@ -265,14 +265,14 @@ Add a display name from the CLI (the proxy syncs the catalog right away when liv
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-Remote Codex clients can fetch the same generated catalog over the management API (same
-admission token as other `/api/*` routes):
+Remote Codex clients can fetch the same generated catalog with an ordinary **data-plane** key
+— the same credential they already use for `/v1/responses`, not an admin token:
 
 ```bash
 dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
 tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
+curl -fsS -H "x-opencodex-api-key: $OPENCODEX_API_AUTH_TOKEN" \
+  "https://proxy.example.com/v1/catalog" > "$tmp" \
   && mv "$tmp" "$dest"
 ocx sync-cache
 ```
@@ -280,6 +280,18 @@ ocx sync-cache
 The response is the raw `opencodex-catalog.json` document (no provider credentials). When
 available, the `x-opencodex-codex-version` header reports the Codex runtime version on the
 server so clients can spot version skew.
+
+`GET /v1/catalog` exists so that reading a list of models does not cost an admin token. It is
+read-only (`GET` and `HEAD`), accepts `x-opencodex-api-key`, a bearer token, or
+`x-api-key`, and serves exactly the same bytes as the management route. Responses carry a
+strong `ETag` — pass it back as `If-None-Match` to re-validate and get a `304` instead of the
+full document — and `Cache-Control: private, no-cache`, since the body sits behind a
+credential.
+
+A data-plane key admitted here gains **nothing** on the management plane: `/api/catalog` and
+every other `/api/*` route still require the admin token or a dashboard session. The older
+`/api/catalog` route keeps working unchanged for the dashboard and for scripts that already
+hold an admin token.
 
 You can also set or edit it through the management API (`POST /api/custom-models`,
 `PUT /api/custom-models/<id>` with a `displayName` string) and the web dashboard. A `/` is rejected

@@ -16,6 +16,7 @@ const PATCH = `*** Begin Patch
 
 const WIRE_MODELS: Record<AdapterWire, string> = {
   "openai-chat": "grok-4.6",
+  "ollama-native": "glm-5.3-flash",
   anthropic: "claude-haiku-4-5",
   google: "gemini-3.5-flash",
   "command-code": "deepseek/deepseek-v4-flash",
@@ -27,6 +28,7 @@ const WIRE_MODELS: Record<AdapterWire, string> = {
 function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfig {
   const baseUrls: Record<AdapterWire, string> = {
     "openai-chat": "https://api.x.ai/v1",
+    "ollama-native": "https://ollama.com/v1",
     anthropic: "https://api.anthropic.com",
     google: "https://generativelanguage.googleapis.com",
     "command-code": "https://api.commandcode.ai",
@@ -85,6 +87,22 @@ function bufferedResponse(wire: AdapterWire, wireName = "apply_patch"): Response
         finish_reason: "tool_calls",
       }],
       usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }));
+  }
+  if (wire === "ollama-native") {
+    // Ollama's native /api/chat buffered envelope: one message object, arguments as a JSON
+    // object rather than the OpenAI-style encoded string, and `done` instead of finish_reason.
+    return new Response(JSON.stringify({
+      model: "glm-5.3-flash",
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ type: "function", id: "call_buffered_patch", function: { name: wireName, arguments: args } }],
+      },
+      done: true,
+      done_reason: "stop",
+      prompt_eval_count: 1,
+      eval_count: 1,
     }));
   }
   if (wire === "anthropic") {

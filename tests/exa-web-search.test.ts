@@ -242,7 +242,8 @@ describe("runExaWebSearch key hygiene (canary)", () => {
       expect(captured).toHaveLength(1);
       expect(captured[0]!.url).toBe("https://api.exa.ai/search");
       expect(captured[0]!.init.redirect).toBe("manual");
-      expect((captured[0]!.init.headers as Record<string, string>)["x-api-key"]).toBe("key-1");
+      // Representation-independent: the init may carry a plain record or a Headers instance.
+      expect(new Headers(captured[0]!.init.headers).get("x-api-key")).toBe("key-1");
     } finally {
       globalThis.fetch = realFetch;
     }

@@ -763,6 +763,16 @@ a.btn, a.btn:hover { text-decoration: none; }
 }
 /* Refresh icon spins while a sync is in flight (the `.spin` keyframes already exist). */
 .spin-icon { animation: spin 0.9s linear infinite; }
+/* The width cap needs two classes to beat `.notice { max-width: var(--prose-measure) }`,
+   which every toast also carries and which is declared LATER in this file. At equal
+   specificity source order won, so the toast resolved to 70ch (542px) rather than its
+   design width — visible as a toast wider than intended at desktop sizes. */
+.action-toast.notice {
+  /* Both halves of the original cap have to be restated here, not just the design width:
+     dropping the viewport term let the toast run to the screen edge at narrow widths
+     (measured left=0 at 430px, losing the 24px inset the right side keeps). */
+  max-width: min(480px, calc(100vw - 48px));
+}
 /* Toast dismiss affordance: quiet ghost button inside the notice row. */
 .action-toast-dismiss {
   flex: none;
@@ -1800,6 +1810,7 @@ dialog.modal-overlay::backdrop {
   margin-top: 12px;
   padding: 0 16px;
 }
+.anthropic-pool-card__field--quota-window { padding-bottom: var(--space-4); }
 .api-active-keys-skeleton {
   min-height: 96px;
   border: 1px solid var(--border-soft);
@@ -2000,7 +2011,12 @@ table.logs-table {
 
 .logs-table-wrap {
   overflow-y: auto;
-  max-height: calc(100vh - 260px);
+  /* `dvh`, not `vh`: static `vh` resolves against the LARGE viewport, so on mobile the
+     cap is computed for a viewport taller than the one the user can see and the last rows
+     sit under the browser chrome. The rest of the shell already moved to `100dvh`
+     (see .app, .sidebar, .main-inner--combos, and the mobile drawer), so this was the
+     outlier rather than the convention. */
+  max-height: calc(100dvh - 260px);
 }
 
 .logs-table thead {

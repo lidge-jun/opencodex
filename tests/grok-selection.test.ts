@@ -67,7 +67,8 @@ test("excluding a colliding model leaves the survivor's alias unchanged", () => 
 test("excluding the first model keeps the TOML shape valid", () => {
   const block = buildGrokManagedBlock(10100, MODELS, undefined, undefined, new Set(["kimi/k3"]));
   const afterMarker = block.split("do not edit (removed by `ocx stop`) >>>\n")[1]!;
-  expect(afterMarker.startsWith("[model.")).toBe(true);
+  // The provider block is always present; the first [model.*] table may be excluded.
+  expect(afterMarker.trimStart().startsWith("[model_providers.")).toBe(true);
   expect(block).not.toContain("\n\n\n");
 });
 

@@ -184,4 +184,43 @@ describe("stateless Responses wire repairs orphaned tool calls", () => {
     expect(input[0]).toMatchObject({ type: "message", role: "user" });
     expect(JSON.stringify(input[0])).toContain("orphan result");
   });
+
+  test("annotates an empty orphan output before repairing it into a user message (regression)", async () => {
+    const { body } = await drive([
+      { type: "function_call_output", call_id: "call_unknown", output: "" },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0]).toMatchObject({ type: "message", role: "user" });
+    expect(JSON.stringify(input[0])).toContain("[ocx] empty tool output");
+  });
+
+  test("never claims a tool ran when an orphan output is null (regression)", async () => {
+    const { body } = await drive([
+      { type: "function_call_output", call_id: "call_unknown", output: null },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[0]).toMatchObject({ type: "message", role: "user" });
+    expect(JSON.stringify(input[0])).not.toContain("[ocx] empty tool output");
+    expect(JSON.stringify(input[0])).not.toContain("no tool result was recorded");
+  });
+
+  test("leaves a paired null output untouched when annotation is enabled (regression)", async () => {
+    const { body } = await drive([
+      { type: "function_call", id: "fc_1", call_id: "call_null", name: "exec_command", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_null", output: null },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[1]).toMatchObject({ type: "function_call_output", call_id: "call_null", output: null });
+    expect(JSON.stringify(body)).not.toContain("[ocx] empty tool output");
+  });
+
+  test("preserves synthetic missing-result placeholders when annotation is enabled (regression)", async () => {
+    const { body } = await drive([
+      { type: "function_call", id: "fc_dangling", call_id: "call_dangling", name: "exec_command", arguments: "{}" },
+    ]);
+    const input = body.input as Array<Record<string, unknown>>;
+    expect(input[1]).toMatchObject({ type: "function_call_output", call_id: "call_dangling" });
+    expect(String((input[1] as { output: unknown }).output)).toContain("no tool result was recorded");
+    expect(JSON.stringify(input[1])).not.toContain("[ocx] empty tool output");
+  });
 });

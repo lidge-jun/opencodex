@@ -111,9 +111,9 @@ Codex pool selection applies to the next request after clearing existing affinit
 }
 ```
 
-### `ocx account list [provider] [--json] [--all]`
+### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
-제공자를 지정하지 않으면 Codex 풀, OAuth 계정, 설정된 API 키 풀을 나열합니다. `--all`이 없으면 비어 있는 제공자는 건너뜁니다. 제공자를 지정하면 해당 자격 증명 계열만 나열합니다. 사람이 보는 출력은 `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` 형식을 사용하며, 수동으로 선택한 Codex 행에는 `selected`가 표시됩니다. 저장된 Kiro 계정이 있으면 출력에 Kiro에는 로그인 슬롯이 하나뿐이고 다시 로그인하면 현재 계정을 바꾼다는 점이 표시됩니다. 빈 결과도 성공입니다. `--json`은 다음을 반환합니다:
+제공자를 지정하지 않으면 Codex 풀, OAuth 계정, 설정된 API 키 풀을 나열합니다. `--all`이 없으면 비어 있는 제공자는 건너뜁니다. 제공자를 지정하면 해당 자격 증명 계열만 나열합니다. 사람이 보는 출력은 `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` 형식을 사용하며, 수동으로 선택한 Codex 행에는 `selected`가 표시됩니다. 사용 가능한 Kiro 계정이 두 개 이상 저장되어 있으면 기본적으로 429 응답 시 다른 계정으로 자동 전환하며, 알려진 잔여 할당량이 가장 많은 계정을 우선합니다. 이 전환은 계정 존재만으로 활성화되며 `oauthAccountFailover.enabled: false`로 끌 수 있습니다. `ocx account login kiro`는 계정을 한 번에 하나씩 풀에 추가합니다. 빈 결과도 성공입니다. `--json`은 다음을 반환합니다:
 
 ```text
 { accounts: AccountRow[], notes: string[] }

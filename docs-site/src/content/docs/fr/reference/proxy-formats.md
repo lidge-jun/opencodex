@@ -96,6 +96,22 @@ Lorsqu'il est disponible, `input_tokens_details` peut également inclure `cache_
 les objets de détail constituent une garantie de compatibilité pour les clients Responses stricts ; zéro peut signifier « non
 signalé », pas nécessairement « le prestataire n’a effectué aucun travail de ce type ».
 
+### Corréler une réponse avec son journal de requête
+
+Chaque réponse HTTP Responses admise comporte un en-tête `x-opencodex-request-id` contenant un identifiant généré
+par le proxy sous la forme `ocx-<32 hex>`. C'est la clé qui relie une réponse à sa ligne dans le journal des requêtes
+et dans les rapports d'utilisation.
+
+Le proxy génère toujours cette valeur et remplace tout identifiant fourni par l'appelant ou renvoyé par le service en
+amont. Elle est donc propre à ce proxy et peut être utilisée en toute confiance comme clé de corrélation. L'en-tête est
+nommé dans `Access-Control-Expose-Headers`, ce qui permet au JavaScript du navigateur de le lire entre différentes
+origines : sans cela, un en-tête `x-` personnalisé reste invisible pour `response.headers.get()`, même lorsqu'il est
+présent sur le réseau.
+
+Les réponses rejetées lors de l'authentification ou de l'admission de l'origine n'atteignent jamais cette couche
+d'encapsulation et ne comportent aucun identifiant. L'absence de cet en-tête signifie donc que la requête a été refusée
+avant sa journalisation.
+
 ### Mise à niveau WebSocket sur le même chemin
 
 Lorsque `websockets` est activé, un client peut mettre à niveau `/v1/responses` au lieu d’ouvrir une requête HTTP POST.

@@ -26,7 +26,7 @@ then turns the events into Responses SSE.
 ## `openai-chat`
 
 **Targets:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`; a trailing `/chat/completions` or `/` on `baseUrl` is stripped first) and every compatible
-provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud), and more.
+provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local), and more.
 **Auth:** `key` (Bearer).
 
 - Converts internal messages to OpenAI roles; maps tools to `{type:"function", function:{…}}` and
@@ -46,6 +46,44 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
   this request shape. The adapter preserves requested `low`, `medium`, `high`, `xhigh`, and `max`
   tiers, accepts reasoning deltas from either `delta.reasoning_content` or `delta.reasoning`, requests
   streamed usage with `stream_options.include_usage`, and reads usage from non-stream response envelopes.
+
+## `ollama-native`
+
+**Targets:** Ollama's own **Chat API** (`POST /api/chat`) rather than its OpenAI-compatible
+surface. The built-in `ollama-cloud` provider is registry-selected onto this adapter; it can also
+be configured on a separately named custom or self-hosted Ollama provider with
+`adapter: "ollama-native"`.
+**Auth:** `key` (Bearer) for cloud/custom endpoints; no credential is sent to loopback or
+`authMode: "local"` targets.
+
+- **Registry selection is load-bearing.** The built-in `ollama-cloud` row keeps the base URL
+  `https://ollama.com/v1` for `/v1/models` live discovery, while inference is normalized onto
+  `POST https://ollama.com/api/chat`. A config-level `adapter` is discarded for that provider row.
+  Ordinary built-in local Ollama stays on `openai-chat`; choosing `ollama-native` for a local or
+  self-hosted endpoint is an explicit provider-configuration decision, detected by host so a
+  non-Ollama destination is never silently rewritten.
+- **Model metadata:** `/v1/models` carries no per-model metadata, so for canonical Ollama Cloud the
+  adapter's provider enriches each discovered id through a *bounded* `POST /api/show` (256 KiB per
+  response, 8 s per request, concurrency 4, 48 requests, a 12 s deadline for the whole phase) to fill
+  the true context window and vision capability. The show request is same-origin and never follows a
+  redirect; failures degrade that one model and never fail discovery.
+- **Streaming:** Ollama's native NDJSON. Text and `message.thinking` deltas are forwarded as they
+  arrive; a turn completes only on a `done: true` terminal record, and buffered `done: false` or a
+  missing terminal suppresses partial text and tool calls entirely.
+- **Reasoning:** maps onto Ollama's native `think` field (`low`/`medium`/`high`/`max`, plus
+  booleans), clamped to the model's advertised ladder, and honours the `__omit__` sentinel semantics
+  upstream configures.
+- **Images:** sent natively in the message `images` array where the model is vision-capable; video
+  is refused rather than mis-sent, and remote image URLs are not fetched.
+- **Tools:** declared in Ollama's native shape, streamed tool calls are whole-call records with
+  object-valued `arguments`, and tool-result replay is paired strictly by call id and tool name.
+  `tool_choice: "none"` and `auto` behave normally; **`required` or an exact named choice fails
+  closed**, because Ollama's `/api/chat` has no `tool_choice` field to enforce it with.
+- **Structured output is refused on canonical Ollama Cloud.** Ollama currently documents structured
+  outputs as unsupported on its Cloud, and Cloud does not enforce the `format` field, so OpenCodex
+  fails that request closed rather than returning unconstrained prose in answer to a schema-shaped
+  request. Local and custom `ollama-native` endpoints keep Ollama's native `format` mapping
+  (`json_object` → `"json"`, `json_schema` → the schema object).
 
 ## `openai-responses`
 
@@ -216,6 +254,15 @@ starts or the stream ends, then releases it as commentary unless the private too
 answer. When the web-search sidecar is active, released
 commentary still streams ahead of the terminal event; only the events needed to decide whether the
 model requested a synthetic search remain buffered.
+
+A question the model cannot proceed without is also a final answer. The injected contract tells a
+routed model that when it needs a decision, a piece of information, or a clarification only the user
+can give, it should deliver that question through `codex_kiro_final_answer` and stop, rather than
+writing the question as ordinary text and continuing. Such a turn arrives like any other completed
+answer: final text with the turn ended, not commentary and not a client tool call. Without this,
+the contract described only "still working" and "fully complete", and a model holding a blocking
+question had no way to say so — the observed result was a question and a self-override emitted as one
+message, followed by another tool call from the same inference.
 
 If Kiro stops without calling the completion tool, the adapter makes one continuation. Reasoning-
 only retries preserve the original valid user/tool-result turn rather than manufacturing an empty

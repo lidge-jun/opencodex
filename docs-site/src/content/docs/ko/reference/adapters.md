@@ -26,7 +26,7 @@ interface ProviderAdapter {
 ## `openai-chat`
 
 **대상:** OpenAI **Chat Completions**(`POST {baseUrl}/chat/completions`)와 모든 호환 프로바이더
-— xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama(로컬 및 클라우드) 등.
+— xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama(로컬) 등.
 **인증:** `key`(Bearer).
 
 - 내부 메시지를 OpenAI role로 변환하고, 툴은 `{type:"function", function:{…}}`과
@@ -46,6 +46,40 @@ interface ProviderAdapter {
   명시되어 있지 않습니다. 어댑터는 요청한 `low`, `medium`, `high`, `xhigh`, `max` 단계를 그대로
   유지하고, `delta.reasoning_content` 또는 `delta.reasoning`을 reasoning delta로 처리하며,
   `stream_options.include_usage`로 스트림 usage를 요청하고 비스트림 응답 envelope에서도 usage를 읽습니다.
+
+## `ollama-native`
+
+**대상:** OpenAI 호환 표면이 아니라 Ollama 자체의 **Chat API**(`POST /api/chat`). 내장
+`ollama-cloud` 공급자는 이 어댑터로 레지스트리에서 선택되며, 별도 이름의 커스텀/셀프호스팅
+Ollama 공급자에 `adapter: "ollama-native"`로 설정할 수도 있습니다.
+**인증:** cloud/커스텀 대상은 `key`(Bearer). loopback 또는 `authMode: "local"` 대상에는
+자격 증명을 보내지 않습니다.
+
+- **레지스트리 선택이 실질적입니다.** 내장 `ollama-cloud` 행은 `/v1/models` 라이브 발견을 위해
+  `https://ollama.com/v1` 기준 URL을 유지하면서 추론은 `POST https://ollama.com/api/chat`으로
+  정규화됩니다. 이 공급자 행에서는 설정한 `adapter`가 버려집니다. 일반 내장 로컬 Ollama는
+  `openai-chat`을 유지하며, 로컬/셀프호스팅 대상에 `ollama-native`를 선택하는 것은 명시적인
+  공급자 구성 결정이고 호스트로 판별되므로 비(非)Ollama 대상이 조용히 재작성되지 않습니다.
+- **모델 메타데이터:** `/v1/models`에는 모델별 메타데이터가 없으므로, 정식 Ollama Cloud에서는
+  *제한된* `POST /api/show`(응답 256 KiB, 요청당 8초, 동시성 4, 48요청, 전체 단계 12초 마감)로
+  발견된 각 id를 보완해 실제 context window와 vision 지원을 채웁니다. show 요청은 동일
+  오리진이며 리다이렉트를 따르지 않고, 실패해도 해당 모델만 저하되고 발견 자체는 실패하지 않습니다.
+- **스트리밍:** Ollama 네이티브 NDJSON. 텍스트와 `message.thinking` delta를 도착 즉시 전달하고,
+  `done: true` 터미널 레코드에서만 턴을 완료합니다. 버퍼된 `done: false`나 누락된 터미널은 부분
+  텍스트와 tool call을 전부 억제합니다.
+- **Reasoning:** Ollama 네이티브 `think` 필드(`low`/`medium`/`high`/`max` 및 불리언)로 매핑되고
+  모델의 공개 ladder로 클램프되며, 업스트림에서 구성한 `__omit__` sentinel 의미를 따릅니다.
+- **이미지:** vision 지원 모델이면 메시지의 `images` 배열로 네이티브 전송됩니다. video는 잘못
+  보내지 않고 거부하며, 원격 이미지 URL은 가져오지 않습니다.
+- **도구:** Ollama 네이티브 형태로 선언되고, 스트림 tool call은 `arguments`가 객체인 whole-call
+  레코드이며 tool result 리플레이는 call id와 tool 이름으로 엄격히 짝지어집니다.
+  `tool_choice: "none"`과 `auto`는 정상 동작합니다. **`required`나 정확한 이름 지정은 fail
+  closed**입니다. Ollama의 `/api/chat`에는 이를 강제할 `tool_choice` 필드가 없기 때문입니다.
+- **구조화 출력은 정식 Ollama Cloud에서 거부됩니다.** Ollama는 현재 Cloud에서 구조화 출력을
+  지원하지 않는다고 문서화하고 있으며 Cloud는 `format` 필드를 강제하지 않습니다. 따라서
+  OpenCodex는 스키마가 지정된 요청에 자유 서술을 돌려주는 대신 요청을 닫고 실패시킵니다. 로컬 /
+  커스텀 `ollama-native` 엔드포인트는 Ollama 네이티브 `format` 매핑(`json_object` → `"json"`,
+  `json_schema` → schema 객체 자체)을 유지합니다.
 
 ## `openai-responses`
 
@@ -129,6 +163,7 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 툴이 있는 턴에는 비공개 `codex_kiro_final_answer`를 추가합니다. 완료 재시도는 빈 assistant/user 턴을 만들지
 않고 원래 user/tool-result를 보존하며, 전송 전에 역할 교대·빈 구조 메시지·tool use/result 짝을 검증합니다.
 완료 툴 답변은 이전 commentary와 같더라도 `final_answer`로 내보냅니다.
+사용자만 줄 수 있는 결정·정보·설명이 없어 더 진행할 수 없을 때도 그 질문을 완료 툴로 보내고 멈추도록 계약이 지시합니다. 이때도 commentary가 아니라 턴이 끝난 `final_answer`로 도착합니다.
 
 ### Reasoning effort
 

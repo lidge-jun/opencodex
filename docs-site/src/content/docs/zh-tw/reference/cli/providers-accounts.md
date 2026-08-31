@@ -92,9 +92,9 @@ Codex 池選擇套用於清除既有親和性後的下一個請求；進行中�
 }
 ```
 
-### `ocx account list [provider] [--json] [--all]`
+### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
-未指定供應商時，列出 Codex 池、OAuth 帳號與已設定的 API-key 池。除非存在 `--all`，否則空的供應商會被跳過。指定供應商時，僅列出該憑證家族。人類輸出使用 `PROVIDER TYPE ID PLAN/LABEL STATUS`；手動選擇的 Codex 列標記為 `selected`。當存在已儲存的 Kiro 帳號時，輸出會註明 Kiro 只有一個登入插槽，再次登入會取代目前帳號。空結果仍為成功。`--json` 回傳：
+未指定供應商時，列出 Codex 池、OAuth 帳號與已設定的 API-key 池。除非存在 `--all`，否則空的供應商會被跳過。指定供應商時，僅列出該憑證家族。人類輸出使用 `PROVIDER TYPE ID PLAN/LABEL STATUS`；手動選擇的 Codex 列標記為 `selected`。當儲存了兩個以上符合資格的 Kiro 帳號時，預設情況下 429 會自動輪換至另一個帳號，並優先選擇已知剩餘額度最多的帳號；輪換由帳號存在與否驅動，可透過 `oauthAccountFailover.enabled: false` 關閉。`ocx account login kiro` 每次將一個帳號加入池中。空結果仍為成功。`--json` 回傳：
 
 ```text
 { accounts: AccountRow[], notes: string[] }

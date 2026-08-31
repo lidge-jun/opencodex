@@ -369,5 +369,38 @@ describe("#2491 one selection resolver reports what it actually matched", () => 
     // Encoded-only: the operator did not type the native spelling.
     expect(match.exact).toBeUndefined();
   });
-});
 
+  /**
+   * A native id may be self-namespaced: provider "acme" publishing `acme/turbo`. Its literal
+   * spelling is indistinguishable from the provider-qualified form of a sibling `turbo`, so
+   * treating every `<provider>/…` selection as qualified made the published row unreachable
+   * and, worse, silently redirected the selection onto the sibling. `ocx models remove` reads
+   * its match from this resolver, so the redirect targets a destructive command.
+   */
+  test("a self-namespaced native id wins over the provider-qualified reading", () => {
+    const match = resolveSlugSelection("acme", "acme/turbo", ["acme/turbo", "turbo"]);
+    expect(match.matched).toEqual(["acme/turbo"]);
+    expect(match.exact).toBe("acme/turbo");
+    expect(match.ambiguous).toBe(false);
+  });
+
+  test("a self-namespaced native id resolves even when it is the only known id", () => {
+    const match = resolveSlugSelection("acme", "acme/turbo", ["acme/turbo"]);
+    expect(match.matched).toEqual(["acme/turbo"]);
+    expect(match.exact).toBe("acme/turbo");
+  });
+
+  test("the sibling is still reachable through its own bare spelling", () => {
+    const match = resolveSlugSelection("acme", "turbo", ["acme/turbo", "turbo"]);
+    expect(match.matched).toEqual(["turbo"]);
+    expect(match.exact).toBe("turbo");
+  });
+
+  test("the provider-qualified reading still applies when no native id matches literally", () => {
+    // Nothing is spelled `acme/turbo` natively here, so the selection keeps its qualified
+    // meaning and resolves against the encoded roster as before.
+    const match = resolveSlugSelection("acme", "acme/turbo", ["turbo"]);
+    expect(match.matched).toEqual(["turbo"]);
+    expect(match.exact).toBe("turbo");
+  });
+});

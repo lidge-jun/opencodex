@@ -34,6 +34,19 @@ Disabled providers are excluded. An explicit namespace for a disabled provider f
 falling through. Provider entries are checked in their JSON insertion order for rules that can match
 more than one provider, so use explicit namespaces when a bare model could be ambiguous.
 
+### Blocked-model redirects
+
+`blockedModelRedirects` is an optional top-level `Record<string, string>` of exact resolved
+model-id replacements, unset by default. It runs **after** the resolution order above: a match
+keeps the provider and account route already selected, replaces only the upstream model id, and
+records the route reason `blocked-model-redirect`. Omitting the key leaves routing unchanged.
+
+```json
+{
+  "blockedModelRedirects": { "gpt-5.6-terra": "gpt-5.6-luna" }
+}
+```
+
 ## Exact Codex account selectors
 
 `codexAccountNamespaces` maps a public selector such as `side` to one stored Codex account. A
@@ -73,8 +86,8 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | required | Ordered concrete routes. `weight` is 1–10000 and defaults to `1`. |
-| `strategy?` | `"failover" \| "round-robin"` | `"failover"` | Selection strategy. Target order is failover priority; weights shape smooth weighted round-robin. |
-| `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100. |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | Selection strategy. Target order is failover priority; weights shape round-robin and random draws; least-used follows recorded successes; reset-window follows the soonest quota reset. |
+| `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100. Applies only to round-robin. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | Applied only when the caller omits effort and the selected target advertises the requested rung. |
 | `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` publishes image only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias?` | `string` | — | Optional public model id in place of the canonical picker slug. |
@@ -183,8 +196,9 @@ echoed as given. The CLI dry-run cannot supply these per-candidate account field
 
 ### Combos vs policy profiles
 
-- A **combo** is explicit ordered/weighted target routing and failover: the configured order (or
-  smooth weighted round-robin) decides, and failures advance through the list.
+- A **combo** is explicit target routing with a selectable strategy (ordered failover, smooth
+  weighted or random balancing, least-used, or reset-window): the configured strategy decides,
+  and retryable failures advance through the list.
 - A **policy profile** is evidence-based selection among configured candidates: hard capability
   requirements filter first, then deterministic scoring ranks the survivors.
 

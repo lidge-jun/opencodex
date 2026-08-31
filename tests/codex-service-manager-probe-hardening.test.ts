@@ -4,11 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  createWindowsTaskListingCache,
   inspectServiceManagerInstallation,
+  type ServiceManagerInstallation,
   type RawProbeRunner,
 } from "../src/service-manager-probe";
 import { inspectNativeCodexOwnership } from "../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
+import { getDefaultConfig } from "../src/config";
+import { startServer } from "../src/server";
 
 let home = "";
 let configDir = "";
@@ -138,6 +142,289 @@ function taskAbsentRunner(calls: Array<{ file: string; args: readonly string[] }
 }
 
 describe("Windows ownership probe hardening regressions", () => {
+  /*
+   * #2914, the reported host: zh-CN Windows, no task, no service, 401 scheduled
+   * tasks. The targeted query answers in CP936, which the English regex cannot
+   * match, so absence is settled by the locale-neutral listing — and that
+   * listing needed 12.3s while the probe killed it at 2s, leaving `unknown` and
+   * an `ocx sync` that refused to write for want of ownership proof.
+   */
+  const GBK_TASK_NOT_FOUND = Buffer.from(
+    "b4edcef33a20cfb5cdb3d5d2b2bbb5bdd6b8b6a8b5c4cec4bcfea1a3",
+    "hex",
+  );
+
+  test("the reported zh-CN host reaches absence through the listing (#2914)", () => {
+    const calls: Array<{ file: string; args: readonly string[]; timeoutMs?: number }> = [];
+    const runRaw: RawProbeRunner = (file, args, runnerOptions) => {
+      calls.push({ file, args, timeoutMs: runnerOptions?.timeoutMs });
+      if (file.toLowerCase().endsWith("sc.exe")) return raw(1, "", "1060");
+      if (args.includes("/xml")) {
+        return { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false };
+      }
+      // 401 tasks, none of them ours.
+      if (args.includes("/fo")) return raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n');
+      return raw(1, "", "");
+    };
+
+    const result = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+    });
+
+    // "absent" is the answer that admits the write; "unknown" is what refused it.
+    expect(result.kind).toBe("absent");
+    // The listing is the only locale-neutral evidence, so it MUST get the budget
+    // that a 401-task host can actually finish inside.
+    const listing = calls.find(call => call.args.includes("/fo"));
+    expect(listing?.timeoutMs).toBe(20_000);
+    // Targeted queries keep the short admission ceiling: this is not a general
+    // relaxation of the probe's budget.
+    for (const call of calls.filter(c => c.args.includes("/xml"))) {
+      expect(call.timeoutMs).toBeUndefined();
+    }
+  });
+
+  test("a listing that outruns even the wider budget stays unknown (#2914)", () => {
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (file.toLowerCase().endsWith("sc.exe")) return raw(1, "", "1060");
+      if (args.includes("/xml")) {
+        return { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false };
+      }
+      if (args.includes("/fo")) return raw(null, "", "", { timedOut: true });
+      return raw(1, "", "");
+    };
+
+    const result = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+    });
+
+    // A wider budget must not become an excuse to guess when it still expires.
+    expect(result.kind).toBe("unknown");
+  });
+
+  test("one startup keeps two targeted queries but shares one unchanged full listing (#2923)", async () => {
+    const codexHome = join(home, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    process.env.CODEX_HOME = codexHome;
+    process.env.OPENCODEX_HOME = configDir;
+    writeFileSync(join(configDir, "config.json"), JSON.stringify({
+      ...getDefaultConfig(),
+      port: 0,
+      hostname: "127.0.0.1",
+      clientIntegrations: { codex: false },
+      subagentModels: [],
+    }, null, 2));
+
+    let targetedQueries = 0;
+    let fullListings = 0;
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
+      if (args.includes("/xml")) {
+        targetedQueries += 1;
+        return { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false };
+      }
+      if (args.includes("/fo")) {
+        fullListings += 1;
+        return raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n');
+      }
+      return raw(1, "", "unexpected query");
+    };
+    const ownerships: string[] = [];
+    const server = startServer(0, {
+      resolveServiceHomes: () => ({ codexHome, opencodexHome: configDir }),
+      inspectNativeCodexOwnership: scope => {
+        const answer = inspectNativeCodexOwnership({
+          ...scope,
+          // `startServer` derives statePaths from the sandbox home AND the default
+          // `homedir()` mirror, which no test env moves — so without pinning this the
+          // fixture reads the developer's real installation and calls it foreign.
+          statePaths: [join(configDir, "service-state.json")],
+          platform: "win32",
+          home,
+          configDir,
+          windowsLocale: "zh-CN",
+          runRaw,
+          winswStatus: () => "nonexistent",
+        });
+        ownerships.push(answer.ownership);
+        return answer;
+      },
+    });
+    try {
+      expect(ownerships.slice(0, 2)).toEqual(["owned", "owned"]);
+      expect(targetedQueries).toBe(2);
+      expect(fullListings).toBe(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a task that appears between cached-listing checks is not reported absent (#2923)", () => {
+    const cache = createWindowsTaskListingCache();
+    let targetedQueries = 0;
+    let fullListings = 0;
+    const launcher = join(configDir, "opencodex-service-launcher.vbs");
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
+      if (args.includes("/xml")) {
+        targetedQueries += 1;
+        return targetedQueries === 1
+          ? { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false }
+          : raw(0, schedulerXml(launcher));
+      }
+      if (args.includes("/fo")) {
+        fullListings += 1;
+        return raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n');
+      }
+      return raw(1, "", "unexpected query");
+    };
+
+    const first = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    });
+    const second = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    });
+
+    expect(first.kind).toBe("absent");
+    expect(second.kind).toBe("unknown");
+    expect(targetedQueries).toBe(2);
+    expect(fullListings).toBe(1);
+  });
+
+  test("changed targeted evidence cannot reuse an earlier absence listing (#2923)", () => {
+    const cache = createWindowsTaskListingCache();
+    let targetedQueries = 0;
+    let fullListings = 0;
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
+      if (args.includes("/xml")) {
+        targetedQueries += 1;
+        return targetedQueries === 1
+          ? { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false }
+          : raw(1, "", "ERROR: Access is denied. (0x80070005)");
+      }
+      if (args.includes("/fo")) {
+        fullListings += 1;
+        return fullListings === 1
+          ? raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n')
+          : raw(0, '"\\opencodex-proxy","N/A","Ready"\r\n');
+      }
+      return raw(1, "", "unexpected query");
+    };
+
+    const first = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    });
+    const second = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    });
+
+    expect(first.kind).toBe("absent");
+    expect(second.kind).toBe("unknown");
+    expect(targetedQueries).toBe(2);
+    expect(fullListings).toBe(2);
+  });
+
+  test("a cached listing failure remains fail-closed (#2923)", () => {
+    const cache = createWindowsTaskListingCache();
+    let fullListings = 0;
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
+      if (args.includes("/xml")) {
+        return { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false };
+      }
+      if (args.includes("/fo")) {
+        fullListings += 1;
+        return raw(null, "", "", { timedOut: true });
+      }
+      return raw(1, "", "unexpected query");
+    };
+
+    const answers = [0, 1].map(() => inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    }));
+
+    expect(answers.map(answer => answer.kind)).toEqual(["unknown", "unknown"]);
+    // Fail-closed on both passes, and the stall was NOT retained as evidence: a
+    // transient timeout must not make ownership unprovable for the whole startup.
+    expect(fullListings).toBe(2);
+  });
+
+  test("a listing that recovers after a stall is not masked by the failed one (#2923)", () => {
+    const cache = createWindowsTaskListingCache();
+    let stall = true;
+    let fullListings = 0;
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (!file.toLowerCase().endsWith("schtasks.exe")) return raw(1, "", "unexpected executable");
+      if (args.includes("/xml")) {
+        // Byte-identical on both passes, so the identity check cannot be what
+        // forces the retry — only refusing to cache the stall can.
+        return { status: 1, stdout: Buffer.alloc(0), stderr: GBK_TASK_NOT_FOUND, timedOut: false, spawnFailed: false };
+      }
+      if (args.includes("/fo")) {
+        fullListings += 1;
+        if (stall) return raw(null, "", "", { timedOut: true });
+        return raw(0, '"\\SomeOtherTask","N/A","Ready"\r\n');
+      }
+      return raw(1, "", "unexpected query");
+    };
+    const probe = (): ServiceManagerInstallation => inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir,
+      windowsLocale: "zh-CN",
+      runRaw,
+      winswStatus: () => "nonexistent",
+      windowsTaskListingCache: cache,
+    });
+
+    expect(probe().kind).toBe("unknown");
+    stall = false;
+    expect(probe().kind).toBe("absent");
+    expect(fullListings).toBe(2);
+  });
+
   test("a scheduler registered for another OpenCodex home does not claim the current home (#2800)", () => {
     const foreignConfigDir = join(home, "foreign-opencodex");
     const foreignLauncher = join(foreignConfigDir, "opencodex-service-launcher.vbs");

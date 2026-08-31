@@ -15,9 +15,17 @@ import {
   writeSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getConfigDir } from "../config";
-import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import {
+  forgetEphemeralSecretPath,
+  forgetHardenedSecretPath,
+  hardenSecretDir,
+  hardenSecretDirAsync,
+  hardenSecretPath,
+  hardenSecretPathAsync,
+  windowsSecretAclApplies,
+} from "../lib/windows-secret-acl";
 import { isValidProviderContinuationOwner } from "./provider-continuation";
 import type { OcxProviderContinuationState } from "../types";
 
@@ -110,9 +118,45 @@ export interface ResponseSpillIoForTest {
 
 let spillIoForTest: ResponseSpillIoForTest | null = null;
 let spillGeneration = 0;
+let spillNowOverride: (() => number) | null = null;
+
+interface ResponseSpillWriteOptions {
+  retryTimedOutOnce?: boolean;
+  /** Total caller-owned ACL budget shared by every harden in this publication. */
+  aclBudgetMs?: number;
+  publicationControl?: ResponseSpillPublicationControl;
+}
+
+export interface ResponseSpillPublicationControl {
+  superseded: boolean;
+  tempPath: string | null;
+  destinationPath: string | null;
+}
+
+interface SpillAclBudget {
+  deadline: number;
+  perCallMs: number;
+}
+
+export function createResponseSpillPublicationControl(): ResponseSpillPublicationControl {
+  return { superseded: false, tempPath: null, destinationPath: null };
+}
+
+export function markResponseSpillPublicationSuperseded(control: ResponseSpillPublicationControl): void {
+  control.superseded = true;
+}
 
 export function setSpillIoForTest(io: ResponseSpillIoForTest | null): void {
   spillIoForTest = io;
+}
+
+/** Test-only: inject the spill deadline clock. */
+export function setResponseSpillNowForTests(now: (() => number) | null): void {
+  spillNowOverride = now;
+}
+
+function spillNow(): number {
+  return spillNowOverride?.() ?? Date.now();
 }
 
 function record(event: "write" | "fsync" | "close" | "harden" | "publish" | "dir-fsync" | "stub-swap"): void {
@@ -175,16 +219,62 @@ function canUseExclusiveCopyFallback(error: unknown): boolean {
     .some(code => isErrno(error, code));
 }
 
-function harden(path: string, mode: number): void {
+function spillAclBudget(totalMs: number | undefined): SpillAclBudget | undefined {
+  if (totalMs === undefined) return undefined;
+  const bounded = Math.max(1, Math.floor(totalMs));
+  return { deadline: spillNow() + bounded, perCallMs: Math.max(1, Math.floor(bounded / 2)) };
+}
+
+function nextSpillHardenDeadlineMs(budget: SpillAclBudget | undefined): number | undefined {
+  if (!budget) return undefined;
+  const remaining = budget.deadline - spillNow();
+  if (remaining <= 0) {
+    throw Object.assign(new Error("Response spill ACL budget exhausted"), { code: "ETIMEDOUT" });
+  }
+  return Math.min(budget.perCallMs, remaining);
+}
+
+function harden(path: string, mode: number, budget?: SpillAclBudget): void {
+  const aclApplies = budget ? windowsSecretAclApplies() : process.platform === "win32";
   try {
     chmodSync(path, mode);
   } catch {
-    if (process.platform !== "win32") throw new Error("Response spill permission hardening failed");
+    if (!aclApplies) throw new Error("Response spill permission hardening failed");
   }
-  if (process.platform === "win32") {
+  if (aclApplies) {
+    const deadlineMs = nextSpillHardenDeadlineMs(budget);
+    const options = {
+      required: true,
+      ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+    };
     const result = mode === 0o700
-      ? hardenSecretDir(path, { required: true })
-      : hardenSecretPath(path, { required: true });
+      ? hardenSecretDir(path, options)
+      : hardenSecretPath(path, options);
+    if (!result.ok) throw new Error("Response spill permission hardening failed");
+  }
+}
+
+async function hardenAsync(
+  path: string,
+  mode: number,
+  budget: SpillAclBudget,
+  retryTimedOutOnce = false,
+): Promise<void> {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    if (!windowsSecretAclApplies()) throw new Error("Response spill permission hardening failed");
+  }
+  if (windowsSecretAclApplies()) {
+    const deadlineMs = nextSpillHardenDeadlineMs(budget);
+    const options = {
+      required: true,
+      retryTimedOutOnce,
+      ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+    };
+    const result = mode === 0o700
+      ? await hardenSecretDirAsync(path, options)
+      : await hardenSecretPathAsync(path, options);
     if (!result.ok) throw new Error("Response spill permission hardening failed");
   }
 }
@@ -231,7 +321,57 @@ function unlinkEphemeral(path: string): void {
   unlink(path, true);
 }
 
-function publishNoReplace(tempPath: string, destinationPath: string): void {
+function supersededPublicationError(): NodeJS.ErrnoException {
+  return Object.assign(new Error("Response spill publication superseded"), { code: "ECANCELED" });
+}
+
+function throwIfPublicationSuperseded(control: ResponseSpillPublicationControl | undefined): void {
+  if (control?.superseded) throw supersededPublicationError();
+}
+
+function clearOwnedPath(
+  control: ResponseSpillPublicationControl,
+  key: "tempPath" | "destinationPath",
+  ephemeral: boolean,
+): unknown {
+  const path = control[key];
+  if (!path) return null;
+  try {
+    if (ephemeral) unlinkEphemeral(path);
+    else unlink(path);
+    control[key] = null;
+    return null;
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) {
+      control[key] = null;
+      return null;
+    }
+    return error;
+  }
+}
+
+/** Claim and remove every path still owned by an abandoned async publication. */
+export function cleanupSupersededResponseSpillPublication(
+  control: ResponseSpillPublicationControl,
+): Error | null {
+  control.superseded = true;
+  const ownedDir = control.destinationPath
+    ? dirname(control.destinationPath)
+    : control.tempPath
+      ? dirname(control.tempPath)
+      : null;
+  const destinationError = clearOwnedPath(control, "destinationPath", false);
+  const tempError = clearOwnedPath(control, "tempPath", true);
+  if (ownedDir) fsyncDirectoryBestEffort(ownedDir);
+  const cleanupError = destinationError ?? tempError;
+  return cleanupError ? responseSpillWriteError(cleanupError) : null;
+}
+
+function publishNoReplace(
+  tempPath: string,
+  destinationPath: string,
+  budget?: SpillAclBudget,
+): void {
   try {
     if (spillIoForTest?.link) spillIoForTest.link(tempPath, destinationPath);
     else linkSync(tempPath, destinationPath);
@@ -243,7 +383,7 @@ function publishNoReplace(tempPath: string, destinationPath: string): void {
       if (spillIoForTest?.copyFileExcl) spillIoForTest.copyFileExcl(tempPath, destinationPath);
       else copyFileSync(tempPath, destinationPath, constants.COPYFILE_EXCL);
       copied = true;
-      harden(destinationPath, 0o600);
+      harden(destinationPath, 0o600, budget);
       const copyFd = openSync(destinationPath, "r");
       try {
         if (spillIoForTest?.fsync) spillIoForTest.fsync(copyFd);
@@ -259,6 +399,83 @@ function publishNoReplace(tempPath: string, destinationPath: string): void {
     }
   }
   record("publish");
+}
+
+async function publishNoReplaceAsync(
+  tempPath: string,
+  destinationPath: string,
+  budget: SpillAclBudget,
+  retryTimedOutOnce: boolean,
+  publicationControl?: ResponseSpillPublicationControl,
+): Promise<void> {
+  throwIfPublicationSuperseded(publicationControl);
+  try {
+    if (spillIoForTest?.link) spillIoForTest.link(tempPath, destinationPath);
+    else linkSync(tempPath, destinationPath);
+  } catch (error) {
+    if (isErrno(error, "EEXIST")) throw error;
+    if (!canUseExclusiveCopyFallback(error)) throw error;
+    let copied = false;
+    try {
+      if (spillIoForTest?.copyFileExcl) spillIoForTest.copyFileExcl(tempPath, destinationPath);
+      else copyFileSync(tempPath, destinationPath, constants.COPYFILE_EXCL);
+      copied = true;
+      await hardenAsync(destinationPath, 0o600, budget, retryTimedOutOnce);
+      throwIfPublicationSuperseded(publicationControl);
+      const copyFd = openSync(destinationPath, "r");
+      try {
+        if (spillIoForTest?.fsync) spillIoForTest.fsync(copyFd);
+        else fsyncSync(copyFd);
+      } finally {
+        closeSync(copyFd);
+      }
+    } catch (copyError) {
+      if (copied) {
+        try { unlink(destinationPath); } catch { /* startup GC reclaims an incomplete publication */ }
+      }
+      throw copyError;
+    }
+  }
+  throwIfPublicationSuperseded(publicationControl);
+  record("publish");
+}
+
+function serializedSpill(
+  responseId: string,
+  state: Omit<ResponseSpillPayload, "version" | "responseId">,
+): {
+  bytes: Buffer;
+  digest: string;
+  idDigest: string;
+  contentDigest: string;
+} {
+  const payload: ResponseSpillPayload = {
+    version: 1,
+    responseId,
+    createdAt: state.createdAt,
+    ...(state.clientThreadId ? { clientThreadId: state.clientThreadId } : {}),
+    items: state.items,
+    ...(state.providerOutputStart !== undefined ? { providerOutputStart: state.providerOutputStart } : {}),
+    ...(state.providers ? { providers: state.providers } : {}),
+  };
+  const serialized = JSON.stringify(payload);
+  if (serialized === undefined) throw new Error("Response spill serialization failed");
+  const bytes = Buffer.from(serialized, "utf8");
+  const digest = sha256(bytes);
+  return {
+    bytes,
+    digest,
+    idDigest: sha256(responseId).slice(0, 12),
+    contentDigest: digest.slice(0, 24),
+  };
+}
+
+function responseSpillWriteError(cause: unknown): NodeJS.ErrnoException {
+  const error = new Error("Response spill write failed", { cause }) as NodeJS.ErrnoException;
+  if (cause && typeof cause === "object" && "code" in cause) {
+    error.code = String((cause as { code?: unknown }).code);
+  }
+  return error;
 }
 
 function validSpillRef(ref: ResponseSpillRef): boolean {
@@ -302,28 +519,16 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
 export function writeResponseSpillDurably(
   responseId: string,
   state: Omit<ResponseSpillPayload, "version" | "responseId">,
+  options: ResponseSpillWriteOptions = {},
 ): ResponseSpillRef {
   let tempPath: string | null = null;
   let fd: number | null = null;
   try {
-    const payload: ResponseSpillPayload = {
-      version: 1,
-      responseId,
-      createdAt: state.createdAt,
-      ...(state.clientThreadId ? { clientThreadId: state.clientThreadId } : {}),
-      items: state.items,
-      ...(state.providerOutputStart !== undefined ? { providerOutputStart: state.providerOutputStart } : {}),
-      ...(state.providers ? { providers: state.providers } : {}),
-    };
-    const serialized = JSON.stringify(payload);
-    if (serialized === undefined) throw new Error("Response spill serialization failed");
-    const bytes = Buffer.from(serialized, "utf8");
-    const digest = sha256(bytes);
-    const idDigest = sha256(responseId).slice(0, 12);
-    const contentDigest = digest.slice(0, 24);
+    const aclBudget = spillAclBudget(options.aclBudgetMs);
+    const { bytes, digest, idDigest, contentDigest } = serializedSpill(responseId, state);
     const dir = responseSpillDirectory();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    harden(dir, 0o700);
+    harden(dir, 0o700, aclBudget);
 
     tempPath = join(dir, `.response-spill.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
     fd = openSync(tempPath, "wx", 0o600);
@@ -331,7 +536,7 @@ export function writeResponseSpillDurably(
     fsyncFile(fd);
     closeFile(fd);
     fd = null;
-    harden(tempPath, 0o600);
+    harden(tempPath, 0o600, aclBudget);
     record("harden");
     const publishTempPath = tempPath;
 
@@ -341,7 +546,7 @@ export function writeResponseSpillDurably(
       if (!OWNED_SPILL_NAME.test(fileName)) throw new Error("Response spill name allocation failed");
       const destinationPath = join(dir, fileName);
       try {
-        publishNoReplace(publishTempPath, destinationPath);
+        publishNoReplace(publishTempPath, destinationPath, aclBudget);
         fsyncDirectoryBestEffort(dir);
         unlinkEphemeral(publishTempPath);
         tempPath = null;
@@ -352,14 +557,114 @@ export function writeResponseSpillDurably(
       }
     }
     throw new Error("Response spill publication retries exhausted");
-  } catch {
+  } catch (cause) {
     if (fd !== null) {
       try { closeSync(fd); } catch { /* best effort */ }
     }
     if (tempPath) {
       try { unlinkEphemeral(tempPath); } catch { /* best effort */ }
     }
-    throw new Error("Response spill write failed");
+    throw responseSpillWriteError(cause);
+  }
+}
+
+/**
+ * Windows runtime counterpart of `writeResponseSpillDurably`.
+ *
+ * The filesystem publication contract stays identical, but required NTFS ACL subprocesses are
+ * awaited through Bun.spawn instead of Bun.spawnSync. State ownership and serialization remain in
+ * `state.ts`; callers must compare the resident generation again before installing the returned
+ * reference because another response can replace it while ACL hardening is pending.
+ */
+export async function writeResponseSpillDurablyAsync(
+  responseId: string,
+  state: Omit<ResponseSpillPayload, "version" | "responseId">,
+  options: ResponseSpillWriteOptions & { aclBudgetMs: number },
+): Promise<ResponseSpillRef> {
+  const publicationControl = options.publicationControl;
+  const aclBudget = spillAclBudget(options.aclBudgetMs);
+  if (!aclBudget) throw new Error("Response spill async ACL budget is required");
+  let tempPath: string | null = null;
+  let fd: number | null = null;
+  try {
+    throwIfPublicationSuperseded(publicationControl);
+    const { bytes, digest, idDigest, contentDigest } = serializedSpill(responseId, state);
+    const dir = responseSpillDirectory();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    await hardenAsync(dir, 0o700, aclBudget, options.retryTimedOutOnce === true);
+    throwIfPublicationSuperseded(publicationControl);
+
+    tempPath = join(dir, `.response-spill.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
+    fd = openSync(tempPath, "wx", 0o600);
+    if (publicationControl) publicationControl.tempPath = tempPath;
+    writeAll(fd, bytes);
+    fsyncFile(fd);
+    closeFile(fd);
+    fd = null;
+    await hardenAsync(tempPath, 0o600, aclBudget, options.retryTimedOutOnce === true);
+    throwIfPublicationSuperseded(publicationControl);
+    record("harden");
+    const publishTempPath = tempPath;
+
+    for (let attempt = 0; attempt < RESPONSE_SPILL_PUBLISH_RETRIES; attempt++) {
+      throwIfPublicationSuperseded(publicationControl);
+      spillGeneration += 1;
+      const fileName = `${sanitizeResponseId(responseId)}.${idDigest}.${contentDigest}.${spillGeneration}.${bytes.byteLength}.spill.json`;
+      if (!OWNED_SPILL_NAME.test(fileName)) throw new Error("Response spill name allocation failed");
+      const destinationPath = join(dir, fileName);
+      if (publicationControl) publicationControl.destinationPath = destinationPath;
+      try {
+        throwIfPublicationSuperseded(publicationControl);
+        await publishNoReplaceAsync(
+          publishTempPath,
+          destinationPath,
+          aclBudget,
+          options.retryTimedOutOnce === true,
+          publicationControl,
+        );
+        throwIfPublicationSuperseded(publicationControl);
+        fsyncDirectoryBestEffort(dir);
+        unlinkEphemeral(publishTempPath);
+        tempPath = null;
+        if (publicationControl) {
+          publicationControl.tempPath = null;
+          publicationControl.destinationPath = null;
+        }
+        return { version: 1, fileName, digest, payloadBytes: bytes.byteLength };
+      } catch (error) {
+        if (publicationControl?.superseded) throw error;
+        if (publicationControl) publicationControl.destinationPath = null;
+        if (isErrno(error, "EEXIST")) continue;
+        throw error;
+      }
+    }
+    throw new Error("Response spill publication retries exhausted");
+  } catch (cause) {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* best effort */ }
+    }
+    if (tempPath) {
+      try {
+        unlinkEphemeral(tempPath);
+        if (publicationControl?.tempPath === tempPath) publicationControl.tempPath = null;
+      } catch (error) {
+        if (isErrno(error, "ENOENT") && publicationControl?.tempPath === tempPath) {
+          publicationControl.tempPath = null;
+        }
+      }
+    }
+    if (publicationControl) {
+      const destinationPath = publicationControl.destinationPath;
+      if (destinationPath) {
+        try {
+          unlink(destinationPath);
+          publicationControl.destinationPath = null;
+        } catch (error) {
+          if (isErrno(error, "ENOENT")) publicationControl.destinationPath = null;
+        }
+      }
+    }
+    throw responseSpillWriteError(cause);
   }
 }
 

@@ -96,6 +96,42 @@ describe("collectDeclaredWireToolNames", () => {
     );
   });
 
+  test("withholds the bare alias when only a namespaced exec was declared", () => {
+    // A bare `exec` in the declared set is not just a name: it switches on nested-helper
+    // normalization, so aliasing a namespaced MCP `exec` under the bare name would authorize
+    // `exec_command`/`shell_command`/`apply_patch` this request never declared.
+    const names = collectDeclaredWireToolNames({
+      tools: [{ type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] }],
+    });
+
+    expect([...names]).toEqual(["mcp__exec"]);
+  });
+
+  test("keeps exec bare in Codex's reserved functions namespace", () => {
+    // Codex groups ordinary top-level tools here; this is not an MCP namespace and the parser
+    // deliberately lowers its children without a namespace.
+    const names = collectDeclaredWireToolNames({
+      tools: [{
+        type: "namespace",
+        name: "functions",
+        tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+      }],
+    });
+
+    expect([...names]).toEqual(["exec"]);
+  });
+
+  test("keeps the bare alias when the request also declared a top-level exec", () => {
+    const names = collectDeclaredWireToolNames({
+      tools: [
+        { type: "custom", name: "exec" },
+        { type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] },
+      ],
+    });
+
+    expect([...names].sort()).toEqual(["exec", "mcp__exec"]);
+  });
+
   test("reads tools carried inside input as an additional_tools item", () => {
     // Codex Desktop's responses_lite WS path ships the catalog there instead of body.tools.
     const names = collectDeclaredWireToolNames({
@@ -711,6 +747,7 @@ describe("empty and absent tool catalogs", () => {
     history: unknown[] = [],
     model = "fixture/deepseek-v4-flash",
     previousResponseId?: string,
+    toolChoice?: unknown,
   ) {
     const savedFetch = globalThis.fetch;
     globalThis.fetch = (async () => upstream()) as typeof fetch;
@@ -730,6 +767,7 @@ describe("empty and absent tool catalogs", () => {
               : [{ type: "additional_tools", role: "developer", tools: additionalTools }]),
           ],
           ...(tools === undefined ? {} : { tools }),
+          ...(toolChoice === undefined ? {} : { tool_choice: toolChoice }),
         }),
       }), requestConfig, { model: "", provider: "" });
     } finally {
@@ -1177,6 +1215,48 @@ describe("empty and absent tool catalogs", () => {
     expect(currentBody.output[0]).toMatchObject({ name: "exec" });
   });
 
+  test("a replayed functions namespace still authorizes its top-level exec", async () => {
+    const previousId = "resp_replay_with_functions_exec";
+    const prime = await post(
+      false,
+      undefined,
+      () => Response.json({ id: previousId, status: "completed", output: [] }),
+      [{ type: "function", name: "historical", parameters: { type: "object" } }],
+    );
+    expect(prime.status).toBe(200);
+    await prime.arrayBuffer();
+
+    const response = await post(
+      false,
+      undefined,
+      () => Response.json({
+        id: "resp_functions_exec",
+        status: "completed",
+        output: [{
+          type: "custom_tool_call",
+          id: "ctc_functions_exec",
+          call_id: "call_functions_exec",
+          name: "exec",
+          input: "echo allowed",
+          status: "completed",
+        }],
+      }),
+      [{
+        type: "namespace",
+        name: "functions",
+        tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+      }],
+      config,
+      [],
+      "fixture/deepseek-v4-flash",
+      previousId,
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject({ name: "exec", type: "custom_tool_call" });
+  });
+
   test("a current tool-search output still authorizes its discovered tool after replay", async () => {
     const previousId = "resp_replay_with_current_tool_search_output";
     const prime = await post(
@@ -1295,6 +1375,84 @@ describe("empty and absent tool catalogs", () => {
     const refusedBody = await refused.json() as { error: { message: string } };
     expect(refusedBody.error.message).toContain('undeclared client tool "apply_patch"');
   });
+
+  test("a bare tool_choice restores only its unambiguous namespaced exec", async () => {
+    const tools = [{
+      type: "namespace",
+      name: "mcp__functions",
+      tools: [{ type: "function", name: "exec", description: "Run a command", parameters: { type: "object" } }],
+    }];
+    const toolChoice = { type: "function", name: "exec" };
+    const upstreamCall = (name: string) => () => Response.json({
+      id: `resp_${name}`,
+      status: "completed",
+      output: [{
+        type: "function_call",
+        id: `fc_${name}`,
+        call_id: `call_${name}`,
+        name,
+        arguments: "{}",
+        status: "completed",
+      }],
+    });
+
+    const accepted = await post(
+      false,
+      tools,
+      upstreamCall("exec"),
+      undefined,
+      config,
+      [],
+      "fixture/deepseek-v4-flash",
+      undefined,
+      toolChoice,
+    );
+    expect(accepted.status).toBe(200);
+    const acceptedBody = await accepted.json() as { output: Array<Record<string, unknown>> };
+    expect(acceptedBody.output[0]).toMatchObject({
+      type: "function_call",
+      name: "exec",
+      namespace: "mcp__functions",
+    });
+
+    for (const name of ["apply_patch", "exec_command", "shell_command"]) {
+      const refused = await post(
+        false,
+        tools,
+        upstreamCall(name),
+        undefined,
+        config,
+        [],
+        "fixture/deepseek-v4-flash",
+        undefined,
+        toolChoice,
+      );
+      expect(refused.status).toBe(502);
+      const body = await refused.json() as { error: { message: string } };
+      expect(body.error.message).toContain(`undeclared client tool "${name}"`);
+    }
+  });
+
+  test("a request that really declares a bare exec still accepts the helper names", () => {
+    return post(
+      false,
+      [
+        { type: "custom", name: "exec", description: "Run a command" },
+        {
+          type: "namespace",
+          name: "mcp__functions",
+          tools: [{ type: "custom", name: "exec", description: "Run a command" }],
+        },
+      ],
+      jsonUpstream,
+    ).then(async response => {
+      expect(response.status).toBe(200);
+      const body = await response.json() as { output: Array<Record<string, unknown>> };
+      // Accepted and normalized onto the declared code-mode shell tool, exactly as before.
+      expect(body.output[0]).toMatchObject({ name: "exec", type: "custom_tool_call" });
+      expect(String(body.output[0]?.input)).toContain("tools.apply_patch");
+    });
+  });
 });
 
 describe("undeclaredToolCallNameInResponse", () => {
@@ -1359,6 +1517,31 @@ describe("undeclaredToolCallNameInResponse", () => {
       "exec_command",
     );
     expect(undeclaredToolCallNameInResponse(namespaced, new Set(["exec", "mcp__server__exec_command"]))).toBeUndefined();
+  });
+
+  test("a namespaced-only exec declaration does not authorize the nested helper names", () => {
+    // End-to-end over the real collector: declaring `exec` inside an MCP namespace must not
+    // hand the request a bare code-mode shell tool.
+    const declared = collectDeclaredWireToolNames({
+      tools: [{ type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] }],
+    });
+
+    for (const name of ["exec_command", "shell_command", "apply_patch", "exec"]) {
+      expect(undeclaredToolCallNameInResponse(
+        { output: [{ type: "function_call", name, call_id: "call_1" }] },
+        declared,
+      )).toBe(name);
+    }
+
+    // The declared tool itself still answers under either coordinate system.
+    expect(undeclaredToolCallNameInResponse(
+      { output: [{ type: "function_call", name: "exec", namespace: "mcp", call_id: "call_1" }] },
+      declared,
+    )).toBeUndefined();
+    expect(undeclaredToolCallNameInResponse(
+      { output: [{ type: "function_call", name: "mcp__exec", call_id: "call_1" }] },
+      declared,
+    )).toBeUndefined();
   });
 });
 

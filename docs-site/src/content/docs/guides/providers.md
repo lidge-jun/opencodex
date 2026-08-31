@@ -602,13 +602,21 @@ Cursor is still not shown in key-login lists.
 
 ### Ollama Cloud
 
-Ollama Cloud is a hosted (not local) Ollama, OpenAI-compatible at `https://ollama.com/v1` with a key
-from [ollama.com/settings/keys](https://ollama.com/settings/keys). opencodex classifies its cloud
+Ollama Cloud is a hosted (not local) Ollama. Configure it at `https://ollama.com/v1` with a key
+from [ollama.com/settings/keys](https://ollama.com/settings/keys). opencodex reaches it over
+Ollama's own REST API (`POST /api/chat`) rather than the OpenAI-compatible surface, and discovers
+the live model roster from the provider, so new Ollama Cloud models appear without a config
+change. opencodex classifies its cloud
 lineup by vision capability so the [vision sidecar](/guides/sidecars/) only kicks in for
 text-only models. Text-only models (e.g. `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`, `qwen3-coder`,
 `minimax-m2.x`, `nemotron-3-*`) are listed in `noVisionModels`; vision-native models (e.g.
 `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5`, `gemini-3-flash-preview`) are not. Matching is
 tolerant of Ollama's `:size` tags, so `gpt-oss` covers `gpt-oss:120b` and `gpt-oss:20b`.
+
+Ollama currently documents structured outputs as unsupported on Ollama Cloud. For canonical
+`ollama-cloud`, opencodex therefore refuses structured-output requests (`text.format`) with a clear
+error instead of silently returning unconstrained prose; local and custom `ollama-native`
+endpoints keep Ollama's native `format` behavior.
 
 ## 4. Local providers
 
@@ -647,13 +655,22 @@ their matching bars. OpenCodex does not reconstruct dollar caps from local usage
 provider using a non-canonical `baseUrl` is never sent the key for this probe.
 
 **Z.AI GLM Coding Plan quota.** The `zai`, `glm`, `glm-cn`, and `zhipu-bigmodel-coding`
-presets read `GET /api/monitor/usage/quota/limit` with the configured key as a Bearer token
-and do not follow redirects. The probe runs against the region the provider points at:
+presets read `GET /api/monitor/usage/quota/limit` and do not follow redirects. The probe
+runs against the region the provider points at:
 `api.z.ai` (bare or `/api/coding/paas/v4`) or `open.bigmodel.cn` (bare,
-`/api/coding/paas/v4`, or the OpenAI Responses endpoint `/api/v1`). The response's `limits`
-rows fill the utilization bars: `TOKENS_LIMIT` / `CREDIT_LIMIT` rows with `unit` 3 /
-`number` 5 fill the 5-hour bar and `unit` 6 / `number` 1 the weekly bar, while
-`TIME_LIMIT` rows fill the monthly MCP bar. The v2 coding-plan protocol reports the
-monthly MCP row; the newer protocol does not, so the monthly bar renders only when that
-row is present. A provider using a non-canonical `baseUrl` is never sent the key for this
-probe.
+`/api/coding/paas/v4`, or the OpenAI Responses endpoint `/api/v1`).
+
+Authentication differs by region: `api.z.ai` takes the key as a Bearer token, while
+`open.bigmodel.cn` expects the key directly in `Authorization` with no scheme prefix and
+rejects a Bearer header. The response's `limits` rows fill the utilization bars:
+`TOKENS_LIMIT` / `CREDIT_LIMIT` rows with `unit` 3 / `number` 5 fill the 5-hour bar and
+`unit` 6 / `number` 1 the weekly bar.
+
+`TIME_LIMIT` rows are **not** model quota and are ignored. They are the shared monthly
+MCP call allowance for Web Search, Web Reader, and Zread, so treating them as a model
+window would let a spent web-search budget read as exhausted model capacity in
+quota-aware account ranking. A plan that reports only `TIME_LIMIT` rows therefore shows
+no quota bars rather than a fabricated one, and windows the plan does not report stay
+absent instead of rendering as 0%.
+
+A provider using a non-canonical `baseUrl` is never sent the key for this probe.

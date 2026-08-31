@@ -181,6 +181,26 @@ test("status reports leftover owned drift as not stale when the durable switch i
   });
 });
 
+test("status reports a managed policy conflict as warning health and drift", async () => {
+  const response = await dispatch("/api/claude-desktop/status", undefined, {
+    probeClaudeDesktopPolicy: () => "present",
+  });
+  const body = await response!.json() as {
+    drift: boolean;
+    driftReason: string | null;
+    health: { ok: boolean; status: string; policy: { state: string; action: string } };
+  };
+
+  expect(body.health).toMatchObject({
+    ok: false,
+    status: "warning",
+    policy: { state: "present" },
+  });
+  expect(body.health.policy.action.length).toBeGreaterThan(0);
+  expect(body.drift).toBe(true);
+  expect(body.driftReason).toBe("managed_policy_present");
+});
+
 test("post-commit unsafe and incomplete refusals disclose desired OFF without contents", async () => {
   writeFileSync(join(root, "config.json"), JSON.stringify(config()));
   writeFileSync(join(root, "metadata-marker"), "");

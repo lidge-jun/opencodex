@@ -49,18 +49,21 @@ describe("Windows identity lookup popup fix (#1278)", () => {
     const options = windowsIdentityPowerShellSpawnOptionsForTests();
     expect(options.windowsHide).toBe(true);
     expect(options.stdin).toBe("ignore");
-    // Assert the exact budget: the identity lookup contract is an 8-second
-    // bound, and a looser assertion would let a silent re-tune through.
+    // Assert the exact budget: a looser assertion would let a silent re-tune through.
     //
-    // Both values are pinned, because there are now two. A contended CI runner cannot start
-    // powershell.exe inside 8s while it runs a quarter of this suite, and the composed
-    // acceptance cases failed there with "Windows effective-account lookup timed out" —
-    // contention, not a hung child, which is the only thing this budget exists to bound.
-    // A user's machine keeps 8s exactly as before.
+    // There is now ONE value, pinned in both environments. The two-value form this
+    // replaces gave a desktop 8s on the theory that only a shared runner is contended
+    // enough to need 30s. A zh-CN Windows 10 host measured 3.2s (SID) and 4.6s
+    // (Add-Type LocalAppData) per spawn, so ordinary jitter breached 8s and `ocx sync`
+    // failed with "Windows effective-account lookup timed out" — the same contention
+    // the CI value existed for, on a desktop (#2914).
+    //
+    // Still exact, and still both environments: the point is that they must AGREE, so a
+    // reintroduced `process.env.CI` branch fails here rather than shipping quietly.
     const previous = process.env.CI;
     try {
       delete process.env.CI;
-      expect(windowsIdentityPowerShellSpawnOptionsForTests().timeout).toBe(8_000);
+      expect(windowsIdentityPowerShellSpawnOptionsForTests().timeout).toBe(30_000);
       process.env.CI = "true";
       expect(windowsIdentityPowerShellSpawnOptionsForTests().timeout).toBe(30_000);
     } finally {

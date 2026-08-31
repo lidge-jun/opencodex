@@ -143,6 +143,12 @@ re-estimated from the pricing active when the summary is read. This is an API-eq
 not a subscription charge. New main-pool requests use the reserved `main` label; legacy bare
 `openai` rows remain in an ambiguous bucket instead of being reassigned from current configuration.
 
+Rows in `models`, `providers`, and `days[].models` also carry `cacheHitRate`: the share of input
+tokens served from the provider's prompt cache, clamped to `[0, 1]`. It is `null` — never `0` —
+when the provider reported no cache telemetry or the row has no input tokens, because "no cache
+data" and "a genuine 0% hit rate" are different facts and a chart that renders them alike is
+misleading.
+
 :::caution
 Storage cleanup endpoints can move or permanently remove archived session data. Always preview
 first and submit the returned digest. Prefer quarantine when recovery may be needed.
@@ -152,7 +158,7 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET /api/catalog` | Return the installed Codex catalog document | 404 catalog not found |
+| `GET /api/catalog` | Return the installed Codex catalog document. Remote clients should prefer the data-plane `GET /v1/catalog`, which still requires an ordinary data-plane credential but not an admin token. | 404 catalog not found |
 | `GET /api/models` | Return the dashboard/CLI model rows | `catalog_busy` when gathering is saturated |
 | `GET /api/client-config?client=...` | Build a read-only client config for any supported file integration | 400 unsupported client; 503 catalog unavailable |
 | `PUT /api/disabled-models` | Replace the shared disabled-model list | 400 invalid JSON |

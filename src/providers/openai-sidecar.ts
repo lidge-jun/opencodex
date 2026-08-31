@@ -140,6 +140,9 @@ export async function resolveFirstUsableOpenAiSidecar(
             probeLeaseId: authContext.probeLeaseId,
             probeQuotaScope: authContext.probeQuotaScope,
             writerGeneration: authContext.writerGeneration,
+            // 401/403 here is evidence about this exact stored credential; without the generation a
+            // replacement inherits the quarantine (#2892 gap 4).
+            ...(authContext.kind === "pool" ? { credentialGeneration: authContext.generation } : {}),
           },
         ),
       };
@@ -172,6 +175,8 @@ export async function resolveFirstUsableOpenAiSidecar(
               threadId: authContext.affinityKey,
               probeLeaseId: authContext.probeLeaseId,
               writerGeneration: authContext.writerGeneration,
+              // Same fence as the exact-account recorder above (#2892 gap 4).
+              ...(authContext.kind === "pool" ? { credentialGeneration: authContext.generation } : {}),
             },
           ),
         }
