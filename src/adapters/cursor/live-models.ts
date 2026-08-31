@@ -262,6 +262,7 @@ async function fetchCursorUsableModelsHttp2Once(opts: CursorUsableModelsOptions)
     req.on("error", () => close({ ok: false, error: "transport", detail: "HTTP/2 request failed" }));
     req.on("end", () => {
       if (bodyRejected) return;
+      if (status === 0) return close({ ok: false, error: "transport", detail: "HTTP/2 response ended before headers" });
       if (status === 401 || status === 403) {
         return close({ ok: false, error: "auth", detail: `HTTP ${status}` });
       }
