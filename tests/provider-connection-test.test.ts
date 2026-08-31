@@ -10,6 +10,7 @@ import { saveCredential } from "../src/oauth/store";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxConfig } from "../src/types";
 import { withRegistryDiscovery } from "./helpers/provider-registry-discovery";
+import { ManagementRequest } from "./helpers/management-auth";
 
 const TEST_DIR = join(tmpdir(), "ocx-conn-test");
 const previousHome = process.env.OPENCODEX_HOME;
@@ -455,7 +456,7 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     }) as typeof fetch;
 
     const config = baseConfig({
-      testprov: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "sk-x" },
+      testprov: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "***" },
     });
 
     const controller = new AbortController();
@@ -480,6 +481,50 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(String(body.error)).not.toContain("stack");
     expect(String(body.error)).not.toContain("Error");
     expect(outboundSignal!.aborted).toBe(true);
+  });
+
+  test("upstream timeout while client signal remains active returns 'Connection test timed out'", async () => {
+    // Regression test for the timeout branch in provider-routes.ts:
+    //   const isTimeout = upstreamSignal.aborted && !clientAborted;
+    // The outbound fetch stays pending until AbortSignal.timeout(8000)
+    // aborts upstreamSignal, while req.signal stays un-aborted.
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      markStarted();
+      // Listen for abort and reject immediately when upstreamSignal fires.
+      await new Promise<void>((_, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        // Hold indefinitely — the 8s upstream timeout will fire first.
+      });
+      return Response.json({ models: [] });
+    }) as typeof fetch;
+
+    const config = baseConfig({
+      testprov: { adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "***", fetch: mockFetch },
+    });
+
+    // Use ManagementRequest to ensure Host header is set automatically.
+    const controller = new AbortController();
+    const req = new ManagementRequest(
+      "http://127.0.0.1/api/providers/test?name=testprov",
+      { method: "POST", signal: controller.signal },
+    );
+    const handlerPromise = handleManagementAPI(req, new URL(req.url), config, {});
+
+    await started;
+    // req.signal must NOT be aborted — timeout should fire on upstreamSignal only.
+    expect(controller.signal.aborted).toBe(false);
+
+    const res = await handlerPromise;
+    expect(res).not.toBeNull();
+    const body = await res!.json() as Record<string, unknown>;
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("Connection test timed out");
+
+    // Clean up — abort the client signal so the dangling fetch is released.
+    controller.abort();
   });
 });
 
