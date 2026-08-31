@@ -338,3 +338,54 @@ describe("store isolation", () => {
     expect(store.findOperation("with-prior")?.priorRecord).toEqual(priorRecord);
   });
 });
+
+/**
+ * `OperationKind` is declared three times and imported zero times across the
+ * boundaries that carry it: the store writes it, the management route re-declares
+ * it in its envelope, and the GUI adapter re-declares it again. Neither of the
+ * latter two imports from `src/integrations/journal`, so the compiler has nothing
+ * to compare and a kind added in one place is a silent gap in the others -- the
+ * rollback list renders a raw i18n key and no build fails.
+ *
+ * Only the GUI's `JOURNAL_KIND_KEY` is compiler-checked, and only against the
+ * GUI's own copy of the union. This reads all three declarations as text, which
+ * is unpleasant and is also the only thing that can see across three trees that
+ * do not share a module graph.
+ */
+describe("the operation-kind union agrees across the three trees that redeclare it", () => {
+  const UNION = /"apply"\s*\|\s*"disable"\s*\|\s*"refresh"\s*\|\s*"restore"[^;]*/;
+
+  function kindsIn(relPath: string, anchor: RegExp): string[] {
+    const source = readFileSync(join(import.meta.dir, "..", relPath), "utf8");
+    const declaration = source.match(anchor);
+    if (!declaration) throw new Error(`no operation-kind union found in ${relPath}`);
+    const union = declaration[0].match(UNION);
+    if (!union) throw new Error(`the union in ${relPath} no longer starts with the four original kinds`);
+    return [...union[0].matchAll(/"([a-z]+)"/g)].map(match => match[1]!).sort();
+  }
+
+  test("the store, the management envelope and the GUI adapter list the same kinds", () => {
+    const store = kindsIn("src/integrations/journal.ts", /export type OperationKind =[^;]*/);
+    const route = kindsIn("src/server/management/integration-routes.ts", /kind: "apply"[^;]*/);
+    const gui = kindsIn("gui/src/pages/integrations/integration-api.ts", /kind: "apply"[^;]*/);
+
+    // Named explicitly so a kind silently dropped from ALL THREE still fails.
+    expect(store).toEqual(["apply", "disable", "overwrite", "refresh", "restore"]);
+    expect(route).toEqual(store);
+    expect(gui).toEqual(store);
+  });
+
+  test("every kind the store can persist has rollback-list copy in the GUI", () => {
+    /*
+     * The failure this catches is not a type error anywhere: `JOURNAL_KIND_KEY`
+     * is exhaustive over the GUI's own union, so a kind missing from BOTH the
+     * GUI union and the map type-checks clean and renders the raw key.
+     */
+    const map = readFileSync(join(import.meta.dir, "..", "gui/src/pages/integrations/overview-clients.ts"), "utf8");
+    const block = map.match(/JOURNAL_KIND_KEY[^}]*}/);
+    if (!block) throw new Error("JOURNAL_KIND_KEY is gone from overview-clients.ts");
+    for (const kind of kindsIn("src/integrations/journal.ts", /export type OperationKind =[^;]*/)) {
+      expect(block[0]).toContain(`${kind}: "integrations.kind.${kind}"`);
+    }
+  });
+});

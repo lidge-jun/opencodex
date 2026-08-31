@@ -164,6 +164,12 @@ export const JOURNAL_KIND_KEY: Record<IntegrationJournalRow["kind"], TKey> = {
   disable: "integrations.kind.disable",
   refresh: "integrations.kind.refresh",
   restore: "integrations.kind.restore",
+  /*
+   * Distinct from `apply` on purpose. This row is the only signal that an
+   * operation replaced a block somebody else wrote, and it sits in the one list
+   * a user reads after a mistake.
+   */
+  overwrite: "integrations.kind.overwrite",
 };
 
 export function isAppliedState(state: VisualIntegrationState): boolean {

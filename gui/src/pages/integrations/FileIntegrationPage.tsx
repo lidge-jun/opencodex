@@ -6,6 +6,7 @@ import { Notice, Switch } from "../../ui";
 import ClientMark from "../../components/ClientMark";
 import { markFor } from "../../components/integration-marks";
 import IntegrationStateBadge from "./IntegrationStateBadge";
+import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import RestoreDialog from "./RestoreDialog";
 import { RollbackHistory } from "./RollbackHistory";
 import { describeRefusal } from "./refusal-copy";
@@ -19,6 +20,27 @@ import {
 } from "./integration-api";
 
 export type { FileIntegrationClientId };
+
+/*
+ * Copy for the overwrite dialog, selected on WHICH conflict it is.
+ *
+ * Same operation, materially different thing being lost: `unowned-key` means a
+ * block we did not write is in the way, `foreign-edit` means the user's own
+ * change inside our block is what gets discarded. One sentence covering both
+ * would have to be vague about the only part that matters.
+ */
+function overwriteCopy(reason: string | undefined, path: string): ConsequenceCopy {
+  return {
+    titleKey: "integrations.dialog.overwrite.title",
+    changesKey: reason === "foreign-edit"
+      ? "integrations.dialog.overwrite.changesForeign"
+      : "integrations.dialog.overwrite.changesUnowned",
+    breakageKey: "integrations.dialog.overwrite.breakage",
+    undoKey: "integrations.dialog.overwrite.undo",
+    confirmKey: "integrations.dialog.overwrite.confirm",
+    vars: { path },
+  };
+}
 
 const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   opencode: "integrations.semantics.opencode",
@@ -63,6 +85,8 @@ export default function FileIntegrationPage({
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
+  /* Open only while the user is confirming an overwrite. */
+  const [overwriting, setOverwriting] = useState(false);
 
   const fetchState = useCallback(
     (signal: AbortSignal) => loadIntegrationState(apiBase, client, signal),
@@ -113,6 +137,27 @@ export default function FileIntegrationPage({
       setFailure(describeRefusal(t, error));
     } finally {
       setPending(false);
+    }
+  };
+
+  /*
+   * The one way past a conflict. Separate from `mutate` because it must not be
+   * reachable from the switch: the switch is locked in this state precisely
+   * because we cannot know what the user wants kept, and the whole point of the
+   * escape hatch is that they say so.
+   *
+   * Errors are NOT swallowed here -- they propagate so ConsequenceDialog can
+   * render them inside the dialog, where the user still has the cancel button.
+   */
+  const overwrite = async () => {
+    if (!status) return;
+    setFailure(null);
+    try {
+      await toggleIntegration(apiBase, client, true, undefined, true);
+      refresh();
+    } catch (error) {
+      setFailure(describeRefusal(t, error));
+      throw error;
     }
   };
 
@@ -176,6 +221,24 @@ export default function FileIntegrationPage({
         </button>
       )}
 
+      {/*
+        Conflict used to be a dead end: the switch locks, the page explains why,
+        and the only way forward was to open the file and edit it by hand -- which
+        is the thing a user came to a dashboard to avoid. The switch stays locked
+        and this is the one way past it, behind a dialog that names the file and
+        says what is lost.
+      */}
+      {status.installed && status.state === "conflict" && (
+        <button
+          type="button"
+          className="btn btn-danger"
+          onClick={() => setOverwriting(true)}
+          disabled={pending}
+        >
+          {t("integrations.action.overwrite")}
+        </button>
+      )}
+
       <p className="page-sub">{t(SEMANTICS_KEY[client])}</p>
       <p className="integration-path">{status.configPath}</p>
 
@@ -216,6 +279,16 @@ export default function FileIntegrationPage({
           row={restoring}
           onClose={() => setRestoring(null)}
           onRestored={refresh}
+        />
+      )}
+      {overwriting && (
+        <ConsequenceDialog
+          copy={overwriteCopy(status.reason, status.configPath)}
+          onClose={() => setOverwriting(false)}
+          onConfirm={async () => {
+            await overwrite();
+            setOverwriting(false);
+          }}
         />
       )}
     </section>

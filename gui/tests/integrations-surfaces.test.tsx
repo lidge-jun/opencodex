@@ -184,6 +184,24 @@ async function mountClient(
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
 }
 
+/**
+ * Mount again inside ONE test, against a fresh fixture.
+ *
+ * `useDataSurface` caches by `apiBase`, so a second mount on the same base
+ * replays the first response and the new `stateResponse` has no effect. Rotating
+ * the base is what makes a state sweep in a single test possible at all.
+ */
+async function remountClient(client: "hermes" | "dsh" = "hermes"): Promise<void> {
+  if (root) {
+    const current = root;
+    await act(async () => { current.unmount(); });
+    root = null;
+  }
+  mountCount += 1;
+  apiBase = `http://ocx-test-${mountCount}.invalid`;
+  await mountClient(true, client);
+}
+
 test("the DSH surface uses localized ownership semantics and its own API route", async () => {
   stateResponse = () => json(status({
     clientId: "dsh",
@@ -271,6 +289,71 @@ test("conflict locks the switch instead of guessing", async () => {
   stateResponse = () => json(status({ state: "conflict", reason: "foreign-edit" }));
   await mountClient();
   expect(toggleSwitch().disabled).toBe(true);
+});
+
+/*
+ * The overwrite escape hatch.
+ *
+ * Conflict was a dead end before it existed: the switch locks and the only way
+ * forward was hand-editing the file. These pin the two halves of the deal --
+ * the button appears for exactly one state, and it costs a confirmation.
+ */
+test("a conflict offers an overwrite, and no other state does", async () => {
+  for (const state of ["absent", "current", "stale", "unsafe"] as const) {
+    stateResponse = () => json(status({ state }));
+    await remountClient();
+    expect(buttonByText("Replace")).toBeUndefined();
+  }
+
+  stateResponse = () => json(status({ state: "conflict", reason: "unowned-key" }));
+  await remountClient();
+  expect(buttonByText("Replace")).toBeDefined();
+});
+
+test("a client with no config on disk is never offered an overwrite", async () => {
+  // installed:false means there is nothing to replace; the server refuses it as
+  // not_installed, so offering the button would only produce an error dialog.
+  stateResponse = () => json(status({ state: "conflict", reason: "unowned-key", installed: false }));
+  await mountClient();
+  expect(buttonByText("Replace")).toBeUndefined();
+});
+
+test("the overwrite button mutates nothing until the dialog is confirmed", async () => {
+  stateResponse = () => json(status({ state: "conflict", reason: "unowned-key" }));
+  await mountClient();
+
+  await act(async () => { buttonByText("Replace")!.click(); });
+  // Opening the dialog is not the operation.
+  expect(requests.some(request => request.method === "PUT")).toBe(false);
+
+  // The dialog names the file the user is about to lose a block from, and says
+  // the change is recoverable.
+  const dialog = container.querySelector(".integration-consequence-dialog")!;
+  expect(dialog.textContent).toContain("/tmp/home/.hermes/config.yaml");
+  expect(dialog.textContent).toContain("rollback list");
+
+  const confirm = Array.from(dialog.querySelectorAll("button")).find(
+    button => (button.textContent ?? "").trim() === "Replace",
+  ) as HTMLButtonElement;
+  await act(async () => { confirm.click(); });
+
+  const put = requests.find(request => request.method === "PUT");
+  expect(put?.body).toEqual({ enabled: true, overwriteConflict: true });
+});
+
+test("a foreign edit and an unowned block get different dialog copy", async () => {
+  stateResponse = () => json(status({ state: "conflict", reason: "foreign-edit" }));
+  await remountClient();
+  await act(async () => { buttonByText("Replace")!.click(); });
+  // The user's own edit is what is discarded, and the copy has to say so.
+  expect(container.querySelector(".integration-consequence-dialog")!.textContent)
+    .toContain("Your edit inside the opencodex block");
+
+  stateResponse = () => json(status({ state: "conflict", reason: "unowned-key" }));
+  await remountClient();
+  await act(async () => { buttonByText("Replace")!.click(); });
+  expect(container.querySelector(".integration-consequence-dialog")!.textContent)
+    .toContain("A block we did not write");
 });
 
 test("unsafe locks the switch instead of guessing", async () => {
@@ -855,4 +938,3 @@ test("the tab strip marks every client tab and leaves the two non-client tabs ba
   // covers the app and SDK too.
   expect(codexTab.textContent).toBe("Codex");
 });
-

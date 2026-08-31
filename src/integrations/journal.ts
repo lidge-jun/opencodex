@@ -19,7 +19,18 @@ import { atomicWriteFile } from "../config";
 import { ensureDir, fingerprint, integrationsDir, type OwnershipRecord } from "./ownership";
 import { isIntegrationClientId, type IntegrationClientId } from "./registry";
 
-export type OperationKind = "apply" | "disable" | "refresh" | "restore";
+/**
+ * `overwrite` is deliberately distinct from `apply`. Both write our block, but
+ * only one of them replaced something the user or another tool had put there,
+ * and the rollback list is exactly where that distinction matters.
+ *
+ * This union is re-declared, not imported, in two other places -- the management
+ * route envelope and the GUI adapter -- because neither imports across that
+ * boundary. `tests/integrations-journal.test.ts` asserts the three agree, since
+ * nothing else can: a kind persisted here and missing there renders as a raw
+ * key with no type error anywhere.
+ */
+export type OperationKind = "apply" | "disable" | "refresh" | "restore" | "overwrite";
 
 /**
  * Tagged so "the file did not exist" and "the snapshot was collected" stay

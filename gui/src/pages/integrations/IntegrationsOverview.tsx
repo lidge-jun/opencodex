@@ -77,12 +77,15 @@ function OverviewCard({
   result,
   onOpen,
   onToggle,
+  onOverwrite,
 }: {
   row: OverviewRow;
   pending: boolean;
   result: { tone: "ok" | "err"; text: string } | null;
   onOpen: () => void;
   onToggle: (() => void) | null;
+  /** Present only for a conflicted file client; null everywhere else. */
+  onOverwrite: (() => void) | null;
 }) {
   const t = useT();
   const detail = row.detail ?? (row.detailKey ? t(row.detailKey, row.detailVars ?? undefined) : null);
@@ -147,6 +150,16 @@ function OverviewCard({
         <button type="button" className="btn btn-ghost" onClick={onOpen} tabIndex={-1}>
           {t("integrations.action.settings")}
         </button>
+        {/*
+          Only in conflict, and only for a file client. The switch beside it stays
+          disabled -- this is not a second way to toggle, it is the way past a state
+          the toggle deliberately refuses to guess about.
+        */}
+        {onOverwrite && (
+          <button type="button" className="btn btn-danger" onClick={onOverwrite} disabled={pending}>
+            {t("integrations.action.overwrite")}
+          </button>
+        )}
       </div>
     </li>
   );
@@ -165,6 +178,8 @@ export default function IntegrationsOverview({
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
   const [cardResults, setCardResults] = useState<Partial<Record<OverviewRow["id"], { tone: "ok" | "err"; text: string }>>>({});
   const [pendingToggle, setPendingToggle] = useState<OverviewRow | null>(null);
+  /* The conflicted row awaiting overwrite confirmation. */
+  const [pendingOverwrite, setPendingOverwrite] = useState<OverviewRow | null>(null);
   const restoreFocusRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
@@ -460,6 +475,31 @@ export default function IntegrationsOverview({
     setPendingToggle(row);
   };
 
+  /*
+   * Replace a conflicted block, after the dialog. File clients only: the native
+   * surfaces have their own ownership model and no writer path that takes this
+   * flag, which is why `row.status` gates the button that opens the dialog.
+   *
+   * Errors propagate so the dialog can show them while the user still has cancel.
+   */
+  const overwriteCard = async (row: OverviewRow) => {
+    if (!row.status) return;
+    setCardPending(row.id);
+    setCardResult(row.id, null);
+    try {
+      await toggleIntegration(apiBase, row.status.clientId, true, undefined, true);
+      refresh();
+    } catch (error) {
+      setCardResult(row.id, {
+        tone: "err",
+        text: describeRefusal(t, error, undefined, row.togglePath ?? undefined),
+      });
+      throw error;
+    } finally {
+      setCardPending(null);
+    }
+  };
+
   return (
     <section className="integrations-overview">
       <div className="integration-summary">
@@ -550,6 +590,9 @@ export default function IntegrationsOverview({
               result={cardResults[row.id] ?? null}
               onOpen={() => navigateHash(row.hash)}
               onToggle={row.toggle ? () => requestToggle(row, !(row.toggleOn ?? row.applied)) : null}
+              onOverwrite={row.status !== null && row.status.state === "conflict" && row.installed
+                ? () => setPendingOverwrite(row)
+                : null}
             />
           ))}
         </ul>
@@ -606,6 +649,25 @@ export default function IntegrationsOverview({
           onConfirm={async () => {
             await toggleCard(pendingToggle, false);
             setPendingToggle(null);
+          }}
+        />
+      )}
+      {pendingOverwrite && pendingOverwrite.status && (
+        <ConsequenceDialog
+          copy={{
+            titleKey: "integrations.dialog.overwrite.title",
+            changesKey: pendingOverwrite.status.reason === "foreign-edit"
+              ? "integrations.dialog.overwrite.changesForeign"
+              : "integrations.dialog.overwrite.changesUnowned",
+            breakageKey: "integrations.dialog.overwrite.breakage",
+            undoKey: "integrations.dialog.overwrite.undo",
+            confirmKey: "integrations.dialog.overwrite.confirm",
+            vars: { path: pendingOverwrite.status.configPath },
+          }}
+          onClose={() => setPendingOverwrite(null)}
+          onConfirm={async () => {
+            await overwriteCard(pendingOverwrite);
+            setPendingOverwrite(null);
           }}
         />
       )}

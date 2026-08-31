@@ -263,7 +263,24 @@ function preflight(input: IntegrationWriteInput) {
   return { failed: undefined, store, io, clientId, spec, exportSpec, configPath, detectDir, before, parsed, contribution, record, classified } as const;
 }
 
-function applyOrRefreshIntegration(input: IntegrationWriteInput, allowAbsent: boolean): WriteOutcome {
+/**
+ * How a conflicted document is treated.
+ *
+ * `refuse` is the default and the only behavior that existed: a conflict means
+ * something we did not write occupies our paths, or our own block was edited,
+ * and guessing which one the user meant to keep is how a toggle deletes work.
+ *
+ * `overwrite` is the explicit escape hatch. It is never reached by a plain
+ * apply -- the caller has to ask for it by name -- because the whole value of
+ * the refusal is that it cannot be triggered by accident.
+ */
+type ConflictPolicy = "refuse" | "overwrite";
+
+function applyOrRefreshIntegration(
+  input: IntegrationWriteInput,
+  allowAbsent: boolean,
+  conflictPolicy: ConflictPolicy = "refuse",
+): WriteOutcome {
   const pre = preflight(input);
   if (pre.failed) return pre.failed;
   const { store, io, clientId, spec, exportSpec, configPath, detectDir, before, parsed, contribution, record, classified } = pre;
@@ -278,10 +295,20 @@ function applyOrRefreshIntegration(input: IntegrationWriteInput, allowAbsent: bo
       `The generated ${clientId} integration is loopback-only and does not emit the admission header a non-loopback bind requires. Give it loopback access instead, through a tunnel or a local forwarder.`);
   }
   if (classified.state === "conflict") {
-    return refuse(clientId, "conflict", "conflict",
-      classified.reason === "foreign-edit"
-        ? `${configPath} changed after opencodex wrote it`
-        : `${configPath} already contains an opencodex block we did not write`);
+    if (conflictPolicy === "refuse") {
+      return refuse(clientId, "conflict", "conflict",
+        classified.reason === "foreign-edit"
+          ? `${configPath} changed after opencodex wrote it`
+          : `${configPath} already contains an opencodex block we did not write`);
+    }
+    /*
+     * The caller asked for the overwrite explicitly, so the merge below runs
+     * against the document as it stands and our block replaces whatever holds
+     * our paths. Everything that makes it recoverable is shared with apply --
+     * the snapshot, the atomic write, the compare-before-commit recheck and the
+     * journal row all come from the same commit() call -- which is why this is a
+     * policy flag on one code path rather than a second implementation.
+     */
   }
   /*
    * `unsafe` from the classifier means the document is not one we may write
@@ -327,7 +354,22 @@ function applyOrRefreshIntegration(input: IntegrationWriteInput, allowAbsent: bo
    */
   const base = classified.state === "stale" && record
     ? removeFragments(parsed, record.fragmentPaths, new Set(record.createdContainers ?? [])).doc
-    : parsed;
+    : classified.state === "conflict" && record
+      /*
+       * A forced overwrite of a `foreign-edit` conflict drops what the previous
+       * record owned for the same reason a stale refresh does: the replacement
+       * record covers the paths we are about to write, so a path the old record
+       * owned and the new one does not would be stranded forever, unremovable by
+       * any later disable.
+       *
+       * With NO record -- an `unowned-key` conflict -- there is nothing to drop and
+       * the merge runs against the user's document directly. That is correct:
+       * createdContainerPaths then attributes every container they already had to
+       * them, so a later disable removes our leaves and leaves their structure
+       * standing.
+       */
+      ? removeFragments(parsed, record.fragmentPaths, new Set(record.createdContainers ?? [])).doc
+      : parsed;
   // Computed against the document as it stands BEFORE the merge: afterwards
   // every container exists and "did we create this?" is unanswerable.
   const created = createdContainerPaths(base, contribution);
@@ -375,7 +417,16 @@ function applyOrRefreshIntegration(input: IntegrationWriteInput, allowAbsent: bo
   const snapshot = store.captureSnapshot(clientId, opId, before);
   const at = new Date(io.now()).toISOString();
   const entry: JournalEntry = {
-    opId, clientId, kind: classified.state === "stale" ? "refresh" : "apply", at, configPath,
+    /*
+     * `overwrite` is its own kind rather than reusing `apply`. The rollback list
+     * is the one place a user goes after a mistake, and "applied" is a lie about
+     * an operation that replaced a block somebody else wrote.
+     */
+    opId, clientId,
+    kind: classified.state === "conflict"
+      ? "overwrite"
+      : classified.state === "stale" ? "refresh" : "apply",
+    at, configPath,
     snapshot, resultFingerprint: fingerprint(text), resultAbsent: false, priorRecord: record,
   };
   const refreshablePaths = refreshablePathsOf(contribution);
@@ -404,6 +455,23 @@ function applyOrRefreshIntegration(input: IntegrationWriteInput, allowAbsent: bo
 
 export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
   return applyOrRefreshIntegration(input, true);
+}
+
+/**
+ * Apply over a conflicted config, replacing whatever holds our paths.
+ *
+ * Separate from `applyIntegration` and never a flag on it: a caller has to name
+ * this function to get the behavior, so no existing call site can acquire it by
+ * passing a default through.
+ *
+ * What it does NOT relax. `unsafe` still refuses -- a blocked container means the
+ * merge would replace a value it cannot reason about, and a snapshot is not a
+ * licence for that. `not_installed` and `non_loopback` still refuse; neither is a
+ * conflict. And a non-conflict state behaves exactly as apply does, so calling
+ * this on a clean file is not a way to skip any other check.
+ */
+export function overwriteIntegration(input: IntegrationWriteInput): WriteOutcome {
+  return applyOrRefreshIntegration(input, true, "overwrite");
 }
 
 /** Refresh an owned stale block, but never create or reconnect an absent one. */
@@ -696,6 +764,13 @@ export function refreshIntegrationCoordinated(
   options?: CoordinatedIntegrationOptions,
 ): Promise<WriteOutcome> {
   return coordinatedWrite(input, refreshIntegration, options);
+}
+
+export function overwriteIntegrationCoordinated(
+  input: IntegrationWriteInput,
+  options?: CoordinatedIntegrationOptions,
+): Promise<WriteOutcome> {
+  return coordinatedWrite(input, overwriteIntegration, options);
 }
 
 export function disableIntegrationCoordinated(

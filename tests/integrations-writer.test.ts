@@ -12,6 +12,7 @@ import { exportContextOf, readIntegrationState } from "../src/integrations/state
 import {
   applyIntegration,
   disableIntegration,
+  overwriteIntegration,
   restoreIntegration,
   type IntegrationWriteInput,
 } from "../src/integrations/writer";
@@ -1155,5 +1156,169 @@ describe("nothing leaks", () => {
 
     const doc = Bun.YAML.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
     expect(doc).toEqual({ providers: {} });
+  });
+});
+
+describe("overwriting a conflict on purpose", () => {
+  /*
+   * Conflict was a dead end. The writer refused unconditionally, the GUI locked
+   * the switch, and the only way forward was editing the file by hand -- the
+   * thing a dashboard exists to avoid. These prove the escape hatch is real AND
+   * that it stays narrow: it waives the conflict refusal and nothing else.
+   */
+
+  test("replaces a block we did not write, and the original is restorable", () => {
+    const configPath = installHermes();
+    // A block occupying our exact paths that we never wrote: unowned-key.
+    writeFileSync(configPath, "providers:\n  opencodex:\n    api: http://someone-else.invalid\n    note: hand written\n");
+    const before = readFileSync(configPath, "utf8");
+
+    // The default still refuses, which is what makes the opt-in meaningful.
+    const refused = applyIntegration(input());
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.reason).toBe("conflict");
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+
+    const forced = overwriteIntegration(input());
+    expect(forced.ok).toBe(true);
+    if (!forced.ok) return;
+    expect(forced.changed).toBe(true);
+    expect(forced.state).toBe("current");
+
+    const after = readFileSync(configPath, "utf8");
+    expect(after).not.toContain("someone-else.invalid");
+    expect(after).not.toContain("hand written");
+    expect(readIntegrationState(input())).toMatchObject({ state: "current" });
+
+    // Journaled as its own kind: "applied" would be a lie about an operation that
+    // replaced somebody else's block, and this list is where a user looks after a
+    // mistake.
+    const operations = store.listOperations("hermes");
+    expect(operations).toHaveLength(1);
+    expect(operations[0]!.kind).toBe("overwrite");
+
+    // And it is undoable, byte for byte.
+    const undone = restoreIntegration({ ...input(), opId: operations[0]!.opId });
+    expect(undone.ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  test("discards an edit inside our own block without stranding what the old record owned", () => {
+    const configPath = installHermes();
+    expect(applyIntegration(input()).ok).toBe(true);
+    writeFileSync(configPath, readFileSync(configPath, "utf8").replace(
+      "api_mode: chat_completions",
+      "api_mode: user_edited",
+    ));
+    expect(readIntegrationState(input())).toMatchObject({ state: "conflict", reason: "foreign-edit" });
+
+    expect(overwriteIntegration(input()).ok).toBe(true);
+
+    const after = readFileSync(configPath, "utf8");
+    expect(after).not.toContain("api_mode: user_edited");
+    expect(after).toContain("api_mode: chat_completions");
+    /*
+     * A foreign-edit force drops what the PREVIOUS record owned before merging,
+     * the same way a stale refresh does. Without that, a path the old record
+     * covered and the new one does not would be stranded, unremovable by any
+     * later disable -- so disable has to return the file to a clean absence.
+     */
+    expect(disableIntegration(input()).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).not.toContain("opencodex");
+  });
+
+  test("leaves the user's own containers standing after a forced apply is disabled", () => {
+    const configPath = installHermes();
+    // The user already owns `providers`, and something they wrote sits in our slot.
+    writeFileSync(configPath, "providers:\n  mine:\n    api: http://user.invalid\n  opencodex:\n    api: http://squatter.invalid\n");
+
+    expect(overwriteIntegration(input()).ok).toBe(true);
+    expect(disableIntegration(input()).ok).toBe(true);
+
+    const doc = Bun.YAML.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    // We did not create `providers`, so pruning it would be a second act of
+    // destruction after the one the user actually authorized.
+    expect(doc.providers).toBeDefined();
+    expect((doc.providers as Record<string, unknown>).mine).toEqual({ api: "http://user.invalid" });
+    expect((doc.providers as Record<string, unknown>).opencodex).toBeUndefined();
+  });
+
+  test("still refuses an unsafe document, where a snapshot is not a licence", () => {
+    const configPath = installHermes();
+    /*
+     * A non-object where we would have to write a section. The merge would
+     * replace a value it cannot reason about, so forcing it is data loss with a
+     * receipt -- the force path must not reach it.
+     */
+    writeFileSync(configPath, "providers: not-a-mapping\n");
+    const before = readFileSync(configPath, "utf8");
+
+    const result = overwriteIntegration(input());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
+  test("behaves exactly like apply when there is no conflict to overwrite", () => {
+    installHermes();
+    /*
+     * Not a way to skip any other check: on a clean file this is an ordinary
+     * apply, journaled as one, and on an already-current file it is the same
+     * no-op apply performs.
+     */
+    const first = overwriteIntegration(input());
+    expect(first.ok).toBe(true);
+    if (first.ok) expect(first.changed).toBe(true);
+    expect(store.listOperations("hermes")[0]!.kind).toBe("apply");
+
+    const second = overwriteIntegration(input());
+    expect(second.ok).toBe(true);
+    if (second.ok) expect(second.changed).toBe(false);
+    expect(store.listOperations("hermes")).toHaveLength(1);
+  });
+
+  test("refuses a client that is not installed", () => {
+    // installHermes() deliberately not called: a missing client is not a conflict.
+    const result = overwriteIntegration(input());
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("not_installed");
+  });
+
+  test("drops a path only the OLD record owned, so nothing is left unremovable", () => {
+    /*
+     * The stranding case the sibling test above cannot see. When every path the
+     * old record owned is also a path the new contribution writes, dropping the
+     * old fragments first changes nothing observable -- the merge overwrites them
+     * anyway. The drop only matters when the layouts DISAGREE, which is what an
+     * upgrade leaves behind: a path we owned under the previous shape and no
+     * longer write. Without the drop, the replacement record never covers it, so
+     * no later disable can ever remove it.
+     */
+    const configPath = installOpencode();
+    const request = input({ clientId: "opencode" });
+    expect(applyIntegration(request).ok).toBe(true);
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      providers: Record<string, Record<string, unknown>>;
+    };
+    document.providers["opencodex-legacy"] = { api: "http://legacy.invalid" };
+    // An edit inside a fragment we DO own is what makes this a foreign-edit
+    // conflict rather than ordinary drift.
+    document.providers.opencodex!.options = { baseURL: "http://user-edited.invalid" };
+    writeFileSync(configPath, `${JSON.stringify(document, null, 2)}\n`);
+
+    const record = { ...store.readRecords().opencode! };
+    record.fragmentPaths = [...record.fragmentPaths, ["providers", "opencodex-legacy"]];
+    store.putRecord(record);
+    expect(readIntegrationState(request)).toMatchObject({ state: "conflict", reason: "foreign-edit" });
+
+    expect(overwriteIntegration(request).ok).toBe(true);
+
+    const after = JSON.parse(readFileSync(configPath, "utf8")) as {
+      providers: Record<string, unknown>;
+    };
+    expect(after.providers["opencodex-legacy"]).toBeUndefined();
+    expect(after.providers.opencodex).toBeDefined();
+    expect(store.readRecords().opencode!.fragmentPaths).not.toContainEqual(["providers", "opencodex-legacy"]);
   });
 });

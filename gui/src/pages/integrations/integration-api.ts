@@ -54,7 +54,7 @@ export interface IntegrationStateListEnvelope {
 export interface IntegrationJournalRow {
   opId: string;
   clientId: IntegrationClientId;
-  kind: "apply" | "disable" | "refresh" | "restore";
+  kind: "apply" | "disable" | "refresh" | "restore" | "overwrite";
   at: string;
   configPath: string;
   snapshot: "none" | "stored" | "expired";
@@ -221,12 +221,17 @@ export async function toggleIntegration(
   client: FileIntegrationClientId,
   enabled: boolean,
   signal?: AbortSignal,
+  /**
+   * Opt in to replacing a conflicted block. Deliberately last and optional: no
+   * existing call site can acquire it, and a caller has to name it.
+   */
+  overwriteConflict?: boolean,
 ) {
   return readResponse<IntegrationToggleResult>(
     await fetch(`${apiBase}/api/client-integrations/${encodeURIComponent(client)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify(overwriteConflict === true ? { enabled, overwriteConflict: true } : { enabled }),
       signal,
     }),
   );

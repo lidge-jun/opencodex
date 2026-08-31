@@ -21,6 +21,7 @@ import { createIntegrationStateStore, type IntegrationStateStore } from "../../i
 import {
   applyIntegrationCoordinated,
   disableIntegrationCoordinated,
+  overwriteIntegrationCoordinated,
   restoreIntegrationCoordinated,
   type IntegrationRestoreInput,
   type IntegrationWriteInput,
@@ -70,7 +71,7 @@ export interface IntegrationJournalEnvelope {
 export interface IntegrationJournalRow {
   opId: string;
   clientId: IntegrationClientId;
-  kind: "apply" | "disable" | "refresh" | "restore";
+  kind: "apply" | "disable" | "refresh" | "restore" | "overwrite";
   at: string;
   configPath: string;
   snapshot: "none" | "stored" | "expired";
@@ -79,6 +80,14 @@ export interface IntegrationJournalRow {
 
 export interface IntegrationToggleBody {
   enabled: boolean;
+  /**
+   * Opt in to replacing a conflicted block with the one opencodex would write.
+   *
+   * Absent and `false` behave identically and are the only states a caller
+   * reaches by accident, which is the point: the conflict refusal protects work
+   * we did not author, so it can only be waived by asking for it by name.
+   */
+  overwriteConflict?: boolean;
 }
 
 export interface IntegrationRestoreBody {
@@ -472,16 +481,38 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
       code: "invalid_enabled",
     }, 400, req, ctx.config);
   }
+  if (parsed.overwriteConflict !== undefined && typeof parsed.overwriteConflict !== "boolean") {
+    return jsonResponse({
+      error: "overwriteConflict must be a boolean",
+      code: "invalid_overwrite_conflict",
+    }, 400, req, ctx.config);
+  }
+  /*
+   * Rejected rather than ignored. Disabling a block we do not own is precisely
+   * the deletion this subsystem exists to prevent, so a caller sending this
+   * combination has misunderstood the field, and silently dropping it would
+   * answer 200 for a request whose intent we refused.
+   */
+  if (parsed.overwriteConflict === true && parsed.enabled === false) {
+    return jsonResponse({
+      error: "overwriteConflict applies only to enabling an integration",
+      code: "invalid_overwrite_conflict",
+    }, 400, req, ctx.config);
+  }
 
   try {
     const input = await buildIntegrationWriteInput(requestedClient, ctx, integrationStore());
     const result = await runIntegrationMutationFlight(
       requestedClient,
-      parsed.enabled ? "apply" : "disable",
+      parsed.enabled ? (parsed.overwriteConflict === true ? "overwrite" : "apply") : "disable",
       input.io?.now ?? Date.now,
-      () => parsed.enabled
-        ? applyIntegrationCoordinated(input, { lockSeams: integrationMutationTestHooks?.lockSeams })
-        : disableIntegrationCoordinated(input, { lockSeams: integrationMutationTestHooks?.lockSeams }),
+      () => {
+        const options = { lockSeams: integrationMutationTestHooks?.lockSeams };
+        if (!parsed.enabled) return disableIntegrationCoordinated(input, options);
+        return parsed.overwriteConflict === true
+          ? overwriteIntegrationCoordinated(input, options)
+          : applyIntegrationCoordinated(input, options);
+      },
     );
     if (!result.ok) return writerFailureResponse(requestedClient, result, ctx);
     return jsonResponse(result satisfies IntegrationToggleEnvelope, 200, req, ctx.config);
