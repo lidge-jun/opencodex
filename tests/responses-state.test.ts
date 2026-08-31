@@ -1028,6 +1028,8 @@ describe("Responses previous_response_id state", () => {
     let entered!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const started = new Promise<void>(resolve => { entered = resolve; });
+    let aclClock = 0;
+    setNowForTests(() => aclClock);
     setAsyncIcaclsRunnerForTests(async () => {
       entered();
       await gate;
@@ -1036,23 +1038,22 @@ describe("Responses previous_response_id state", () => {
     const deadlines: number[] = [];
     setIcaclsRunnerForTests((_args, timeoutMs) => {
       deadlines.push(timeoutMs);
-      Bun.sleepSync(Math.min(20, timeoutMs));
+      aclClock += 20;
       return { success: true, exitCode: 0, timedOut: false, stdout: "" };
     });
     setResponseStateByteCapForTests(1_024);
     rememberLarge("resp_shutdown_budget", "b".repeat(2 * 1024 * 1024 + 4_096));
     await started;
 
-    const beganAt = Date.now();
     try {
       await flushResponseState();
     } finally {
       release();
     }
-    const elapsedMs = Date.now() - beganAt;
+    const logicalElapsedMs = totalMs - fallbackReserveMs + aclClock;
     expect(deadlines.length).toBeGreaterThanOrEqual(6);
     expect(Math.max(...deadlines)).toBeLessThanOrEqual(Math.floor(fallbackReserveMs / 2));
-    expect(elapsedMs).toBeLessThanOrEqual(totalMs);
+    expect(logicalElapsedMs).toBeLessThanOrEqual(totalMs);
   });
 
   test("late async spill completion cannot overwrite the shutdown fallback", async () => {
