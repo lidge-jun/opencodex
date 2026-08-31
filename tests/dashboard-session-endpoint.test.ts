@@ -119,9 +119,104 @@ describe("minted persistent session admission", () => {
     expect(response?.status).toBe(401);
   });
 
+  test("GET with the session token requires the claimed dashboard origin", async () => {
+    const active = state();
+    const body = await (mint({ "X-OpenCodex-API-Key": ADMIN_TOKEN }, active)).json() as { token: string };
+    const get = (headers: Record<string, string>): Response | null =>
+      requireManagementAuth(
+        request("/api/config", { method: "GET", headers }),
+        active,
+        config,
+      );
+    expect(get({ "X-OpenCodex-API-Key": body.token })?.status).toBe(401);
+    expect(get({ "X-OpenCodex-API-Key": body.token, "X-OpenCodex-GUI-Origin": "http://127.0.0.1:20202" })?.status).toBe(401);
+    expect(get({ "X-OpenCodex-API-Key": body.token, "X-OpenCodex-GUI-Origin": ORIGIN })).toBeNull();
+  });
+
   test("environment-backed state initialization still works on this branch", () => {
     process.env.OPENCODEX_ADMIN_AUTH_TOKEN = ADMIN_TOKEN;
     const initialized = initializeManagementAuthState(config);
     expect(initialized.available).toBe(true);
+  });
+});
+
+describe("persistent session transport policy", () => {
+  const remoteHost = "ocx.example.com:10100";
+  const remoteOrigin = `http://${remoteHost}`;
+  const remoteConfig: OcxConfig = { ...config, hostname: "ocx.example.com" };
+
+  const remoteMint = (headers: Record<string, string>, mintConfig: OcxConfig, active: ManagementAuthState): Response =>
+    handleGuiSessionEndpoint(
+      request(GUI_SESSION_ENDPOINT_PATH, { headers: { Host: remoteHost, ...headers }, url: remoteOrigin }),
+      new URL(`${remoteOrigin}${GUI_SESSION_ENDPOINT_PATH}`),
+      active,
+      mintConfig,
+    ) as Response;
+
+  test("refuses a non-loopback plain-HTTP dashboard origin by default", () => {
+    expect(remoteMint({ "X-OpenCodex-API-Key": ADMIN_TOKEN }, remoteConfig, state()).status).toBe(401);
+  });
+
+  test("mints for a non-loopback plain-HTTP origin only with the explicit opt-in", async () => {
+    const active = state();
+    const response = remoteMint(
+      { "X-OpenCodex-API-Key": ADMIN_TOKEN },
+      { ...remoteConfig, allowRemoteDashboardSessions: true },
+      active,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    const body = await response.json() as { origin: string };
+    expect(body.origin).toBe(remoteOrigin);
+  });
+
+  test("binds to the allowlisted external HTTPS origin behind a TLS-terminating proxy", async () => {
+    const active = state();
+    const external = "https://ocx.example.com";
+    const tlsConfig: OcxConfig = { ...config, corsAllowOrigins: [external] };
+    const mintResponse = handleGuiSessionEndpoint(
+      new Request(`${ORIGIN}${GUI_SESSION_ENDPOINT_PATH}`, {
+        method: "POST",
+        headers: { Host: HOST, "X-OpenCodex-API-Key": ADMIN_TOKEN, Origin: external },
+      }),
+      new URL(`${ORIGIN}${GUI_SESSION_ENDPOINT_PATH}`),
+      active,
+      tlsConfig,
+    ) as Response;
+    expect(mintResponse.status).toBe(200);
+    const body = await mintResponse.json() as { token: string; origin: string };
+    expect(body.origin).toBe(external);
+    // Same-origin safe request from the external page: no browser `Origin` header, the
+    // claimed header re-asserts the external binding against the internal request origin.
+    const admitted = requireManagementAuth(
+      new Request(`${ORIGIN}/api/config`, {
+        headers: { Host: HOST, "X-OpenCodex-API-Key": body.token, "X-OpenCodex-GUI-Origin": external },
+      }),
+      active,
+      tlsConfig,
+    );
+    expect(admitted).toBeNull();
+    // A browser `Origin` matching the session also re-asserts the binding.
+    const admittedWithOrigin = requireManagementAuth(
+      new Request(`${ORIGIN}/api/config`, {
+        headers: { Host: HOST, "X-OpenCodex-API-Key": body.token, "X-OpenCodex-GUI-Origin": external, Origin: external },
+      }),
+      active,
+      tlsConfig,
+    );
+    expect(admittedWithOrigin).toBeNull();
+  });
+
+  test("marks every endpoint response no-store", () => {
+    const active = state();
+    expect(mint({ "X-OpenCodex-API-Key": ADMIN_TOKEN }, active).headers.get("Cache-Control")).toBe("no-store");
+    expect(mint({}, active).headers.get("Cache-Control")).toBe("no-store");
+    const method = handleGuiSessionEndpoint(
+      request(GUI_SESSION_ENDPOINT_PATH, { method: "GET" }),
+      new URL(`${ORIGIN}${GUI_SESSION_ENDPOINT_PATH}`),
+      active,
+      config,
+    ) as Response;
+    expect(method.headers.get("Cache-Control")).toBe("no-store");
   });
 });

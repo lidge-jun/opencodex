@@ -35,7 +35,7 @@ import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
 let _corsOrigin = "http://localhost:10100";
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
 /** The config slice management-origin decisions read. Full configs and per-listener policy views are both assignable. */
-export type ManagementPolicyView = Pick<OcxConfig, "hostname" | "corsAllowOrigins">;
+export type ManagementPolicyView = Pick<OcxConfig, "hostname" | "corsAllowOrigins" | "allowRemoteDashboardSessions">;
 /** The proxy's own listening port. No admission check uses it: both loopback predicates key on hostname alone. */
 export function configuredPort(): string {
   try { return new URL(_corsOrigin).port; } catch { return "10100"; }

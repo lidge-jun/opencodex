@@ -660,6 +660,13 @@ export interface OcxConfig {
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
+  /**
+   * Mint persistent dashboard sessions (`POST /api/auth/session`) for non-loopback plain-HTTP
+   * dashboard origins. Plain HTTP carries the raw admin token on the first exchange, so remote
+   * sessions there stay off unless the operator opts in. Loopback and explicitly allowlisted
+   * HTTPS origins need no opt-in.
+   */
+  allowRemoteDashboardSessions?: boolean;
 }
 
 export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";

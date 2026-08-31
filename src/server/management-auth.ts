@@ -295,17 +295,26 @@ function guiSessionAdmitted(req: Request, session: GuiSessionRecord, config: Man
   const requestOrigin = managementRequestOrigin(req, config);
   const claimedOrigin = req.headers.get("x-opencodex-gui-origin");
   const browserOrigin = req.headers.get("Origin");
-  // Safe methods need no CSRF token. The opaque session credential is carried in a
-  // header and remains bound to this exact origin; mutations still demand the full arm.
-  const sameOrigin = requestOrigin === session.origin
-    && (!claimedOrigin || claimedOrigin === session.origin)
-    && (!browserOrigin || browserOrigin === session.origin);
+  // The claimed dashboard origin is mandatory on every method, safe ones included: a stolen
+  // session token must not authorize plain GET/HEAD reads with only a matching Host. Only
+  // the CSRF token and the browser `Origin` stay mutation-only.
+  const claimed = claimedOrigin === session.origin;
+  const browserMatches = browserOrigin === session.origin;
+  // Origin evidence for the minted binding. Normally the request origin must match the
+  // session. Behind a TLS-terminating proxy the process observes the internal `http://`
+  // Host while the session is bound to the allowlisted external `https://` origin, so the
+  // binding is re-asserted instead by the browser `Origin` (unforgeable; present on
+  // mutations) or, for same-origin safe requests that carry no `Origin` header, by the
+  // mandatory claimed header.
+  const sameOrigin = claimed
+    && (requestOrigin === session.origin
+      || browserMatches
+      || !browserOrigin);
   const safeMethod = req.method === "GET" || req.method === "HEAD";
   const csrf = req.headers.get("x-opencodex-csrf-token")?.trim();
   return sameOrigin
     && (safeMethod
-      || (claimedOrigin === session.origin
-        && browserOrigin === session.origin
+      || (browserMatches
         && !!csrf
         && equalSecret(csrf, session.csrfToken)));
 }
@@ -313,9 +322,10 @@ function guiSessionAdmitted(req: Request, session: GuiSessionRecord, config: Man
 /**
  * Mint a GUI session in exchange for the raw admin token (POST /api/auth/session).
  *
- * Unlike issueGuiSession this is not loopback-only: the credential, not the transport,
- * carries the trust. The browser stores this opaque, process-local token at its exact
- * dashboard origin, avoiding hostname-scoped cookie replay to another HTTP port.
+ * The first exchange carries the long-lived admin token, so the transport policy is
+ * explicit: loopback origins mint by default, an explicitly allowlisted non-loopback
+ * HTTPS origin mints because the `corsAllowOrigins` entry is itself the opt-in, and a
+ * non-loopback plain-HTTP origin requires `server.allowRemoteDashboardSessions`.
  */
 export function issueGuiSessionForAdmin(
   req: Request,
@@ -327,15 +337,48 @@ export function issueGuiSessionForAdmin(
     || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
   if (!presented || !equalSecret(presented, state.token)) return null;
   if (!isAllowedManagementOrigin(req, config)) return null;
-  const origin = managementRequestOrigin(req, config);
-  if (!origin) return null;
+  // Bind to the exact browser origin when the request carried one: the admission check
+  // above already validated it (same-origin or an allowlisted entry), and a TLS-terminating
+  // proxy otherwise pins the session to the internal `http://` origin the process observes,
+  // which the dashboard then refuses because it is not `window.location.origin`. A missing
+  // header (Firefox same-origin POST) falls back to the request origin.
+  const origin = browserRequestOrigin(req) ?? managementRequestOrigin(req, config);
+  if (!origin || !persistentSessionTransportAllowed(origin, config)) return null;
   return mintGuiSession(state, origin, GUI_PERSISTENT_SESSION_TTL_MS);
 }
 
+/** A concrete `http(s)` browser `Origin`; null when absent, malformed, or opaque (`null`, extensions). */
+function browserRequestOrigin(req: Request): string | null {
+  const raw = req.headers.get("Origin")?.trim();
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Loopback origins mint by default; allowlisted HTTPS is its own opt-in; plain-HTTP remote needs the explicit flag. */
+function persistentSessionTransportAllowed(origin: string, config: ManagementPolicyView): boolean {
+  try {
+    const parsed = new URL(origin);
+    if (isLoopbackHostname(parsed.hostname)) return true;
+    if (parsed.protocol === "http:") return config.allowRemoteDashboardSessions === true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const NO_STORE_HEADERS = { "Cache-Control": "no-store" } as const;
+
 /**
  * POST /api/auth/session exchanges the admin token for an opaque browser-stored session.
- * The route is mounted only on the dedicated remote dashboard listener; ordinary loopback
- * dashboards use their injected short-lived session instead.
+ * The route is mounted on the ordinary management listener (see src/server/index.ts): a
+ * loopback dashboard keeps its injected short-lived session, while a remote dashboard mints
+ * this persistent one. Every response is no-store — the token is a bearer credential and
+ * must not land in any shared cache.
  */
 export function handleGuiSessionEndpoint(
   req: Request,
@@ -346,15 +389,15 @@ export function handleGuiSessionEndpoint(
   if (url.pathname !== GUI_SESSION_ENDPOINT_PATH) return null;
   if (req.method === "POST") {
     const bootstrap = issueGuiSessionForAdmin(req, config, state);
-    if (!bootstrap) return Response.json({ error: "opencodex admin token required" }, { status: 401 });
+    if (!bootstrap) return Response.json({ error: "opencodex admin token required" }, { status: 401, headers: NO_STORE_HEADERS });
     return Response.json({
       token: bootstrap.token,
       csrfToken: bootstrap.csrfToken,
       origin: bootstrap.origin,
       expiresAt: bootstrap.expiresAt,
-    });
+    }, { headers: NO_STORE_HEADERS });
   }
-  return Response.json({ error: "method not allowed" }, { status: 405 });
+  return Response.json({ error: "method not allowed" }, { status: 405, headers: NO_STORE_HEADERS });
 }
 
 /**
