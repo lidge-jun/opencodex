@@ -7,6 +7,7 @@ import {
   cachedAvailableAccountGatedNativeModels,
   composeGatedClientVersionFloorForTests,
   compareClientVersionsForTests,
+  codexEntitlementNegativeMemoForTests,
   deriveGatedClientVersionFloor,
   ensureCodexEntitlementFreshness,
   entitledCodexAccountIdsForModel,
@@ -391,6 +392,127 @@ describe("ensureCodexEntitlementFreshness", () => {
     });
     expect(credentialReads).toBe(2);
     expect(fetches).toBe(1);
+  });
+
+  test("a local write after absence observation fences stale negative-memo publication by epoch", async () => {
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: "access-publication-local",
+        refresh_token: "refresh-publication-local",
+        account_id: "chatgpt-publication-local",
+      },
+    }));
+    savePoolCredential("pool-publication-local-blocker", "publication-local-blocker");
+    const siblingFetchStarted = deferred();
+    const releaseSiblingFetch = deferred();
+    const initial = ensureCodexEntitlementFreshness(
+      poolConfig("pool-publication-local-blocker"),
+      {
+        waitMs: 60_000,
+        now: 26_000,
+        clientVersion: TEST_CLIENT_VERSION,
+        credentialSnapshot: async accountId => accountId === MAIN_CODEX_ACCOUNT_ID
+          ? null
+          : storedCredentialSnapshot(accountId),
+        fetcher: (async () => {
+          siblingFetchStarted.resolve();
+          await releaseSiblingFetch.promise;
+          return roster(SOL);
+        }) as typeof fetch,
+      },
+    );
+
+    await siblingFetchStarted.promise;
+    await forceRefreshMainAccountToken("access-publication-local", {
+      refreshToken: async () => ({
+        access: "access-publication-local-new",
+        refresh: "refresh-publication-local-new",
+        expires: Date.now() + 60 * 60_000,
+        accountId: "chatgpt-publication-local",
+      }),
+    });
+    releaseSiblingFetch.resolve();
+    await initial;
+
+    expect(codexEntitlementNegativeMemoForTests(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
+  });
+
+  test("an external replacement after absence observation fences stale negative-memo publication by identity", async () => {
+    writeMainAuth("publication-external-old");
+    savePoolCredential("pool-publication-external-blocker", "publication-external-blocker");
+    const siblingFetchStarted = deferred();
+    const releaseSiblingFetch = deferred();
+    const initial = ensureCodexEntitlementFreshness(
+      poolConfig("pool-publication-external-blocker"),
+      {
+        waitMs: 60_000,
+        now: 27_000,
+        clientVersion: TEST_CLIENT_VERSION,
+        credentialSnapshot: async accountId => accountId === MAIN_CODEX_ACCOUNT_ID
+          ? null
+          : storedCredentialSnapshot(accountId),
+        fetcher: (async () => {
+          siblingFetchStarted.resolve();
+          await releaseSiblingFetch.promise;
+          return roster(SOL);
+        }) as typeof fetch,
+      },
+    );
+
+    await siblingFetchStarted.promise;
+    writeMainAuth("publication-external-new");
+    releaseSiblingFetch.resolve();
+    await initial;
+
+    expect(codexEntitlementNegativeMemoForTests(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
+  });
+
+  test("a delayed sibling fetch preserves negative-memo expiry from the absence observation", async () => {
+    savePoolCredential("pool-publication-delay-blocker", "publication-delay-blocker");
+    const originalNow = Date.now;
+    const siblingFetchStarted = deferred();
+    const releaseSiblingFetch = deferred();
+    let credentialReads = 0;
+    let wallNow = 10_000;
+    Date.now = () => wallNow;
+    try {
+      const options = {
+        waitMs: 60_000,
+        clientVersion: TEST_CLIENT_VERSION,
+        credentialSnapshot: async (accountId: string) => {
+          if (accountId === MAIN_CODEX_ACCOUNT_ID) {
+            credentialReads += 1;
+            return null;
+          }
+          return storedCredentialSnapshot(accountId);
+        },
+        fetcher: (async () => {
+          siblingFetchStarted.resolve();
+          await releaseSiblingFetch.promise;
+          return roster(SOL);
+        }) as typeof fetch,
+      };
+      const initial = ensureCodexEntitlementFreshness(
+        poolConfig("pool-publication-delay-blocker"),
+        options,
+      );
+      await siblingFetchStarted.promise;
+
+      wallNow = 40_000;
+      releaseSiblingFetch.resolve();
+      await initial;
+
+      expect(codexEntitlementNegativeMemoForTests(MAIN_CODEX_ACCOUNT_ID)?.expiresAt).toBe(15_000);
+      wallNow = 40_001;
+      await ensureCodexEntitlementFreshness(poolConfig("pool-publication-delay-blocker"), {
+        ...options,
+        waitMs: 1_000,
+      });
+      expect(credentialReads).toBe(2);
+    } finally {
+      Date.now = originalNow;
+      releaseSiblingFetch.resolve();
+    }
   });
 
   test("a local credential write during a flight cannot mask the replacement", async () => {

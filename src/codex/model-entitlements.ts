@@ -921,6 +921,18 @@ export function resetCodexModelEntitlementCacheForTests(): void {
   runtimeVersionMemo = null;
 }
 
+/** Test-only snapshot for proving publication fences, which cache lookup intentionally masks. */
+export function codexEntitlementNegativeMemoForTests(
+  accountId: string,
+): Readonly<{
+  credentialIdentity: string | null;
+  mutationEpoch: number;
+  expiresAt: number;
+}> | null {
+  const memo = negativeCredentialMemo.get(accountId);
+  return memo ? { ...memo } : null;
+}
+
 /**
  * Test-only seam for the memoized tier-2 read.
  *
