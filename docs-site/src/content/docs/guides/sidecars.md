@@ -123,8 +123,11 @@ failures after response headers have started are delivered as `response.failed` 
 
 ## Vision sidecar
 
-When the routed model is listed in its provider's `noVisionModels` and a request carries an image,
-opencodex describes each image **before** the main call and replaces it with text. When
+When the routed model is listed in its provider's `noVisionModels` — or declared text-only for
+that model via `modelInputModalities` — and a request carries an image, opencodex describes each
+image **before** the main call and replaces it with text. The model catalog advertises image input
+for every sidecar-covered model (combos advertise image when every member is covered), so clients
+such as the Codex app allow attachments instead of blocking them before the sidecar runs. When
 `visionSidecar.model` is absent or blank, the OpenAI execution path, Dashboard, and management API
 use the `gpt-5.4-mini` fallback. Startup still migrates an explicitly persisted legacy
 `gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not to an absent
