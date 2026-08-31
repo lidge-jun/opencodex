@@ -56,10 +56,19 @@ confirmed: models !== null,
 An empty `Set` is truthy, so `{"models":[]}` earns `confirmed: true` and the
 five-minute success TTL.
 
-`confirmed` is a single bit for the whole account (`:223-234`) and every
-projection drops the account entirely when it is false (`:547-550`, `:573-593`,
-`:527`). So it cannot carry a per-model judgement, and overloading it would hide
-`gpt-5.5`/`gpt-5.4` — models a `0.142.2` roster legitimately confirms.
+`confirmed` is a single bit for the whole account (`:223-234`) and every gated
+projection requires it (`:547-550`, `:573-593`, `:527`). It cannot carry a
+per-model judgement, which is why 2b had to move to wp5.
+
+Correction from audit round 5: an unconfirmed account does **not** lose
+`gpt-5.5`/`gpt-5.4`. Both projections skip the flag entirely for any slug outside
+`ACCOUNT_GATED_NATIVE_OPENAI_MODELS` — the filter is
+`!ACCOUNT_GATED.has(slug) || (confirmed && entitled.has(slug))`
+(`src/codex/catalog/sync.ts:1617-1620`, `src/codex/convergence.ts:280-284`). So
+`confirmed` suppresses account-gated models only, and the earlier draft's worry
+about ungated native rows was unfounded. What it *does* mean is that a wrong
+`confirmed: true` on an empty roster is a confirmed denial of sol/terra/luna —
+which is the defect.
 
 Two distinct changes:
 
@@ -110,35 +119,80 @@ Decision for this cycle: **do not edit the JSON.** Change 1 makes the stale valu
 harmless, and the max-composition means correcting it later is safe. Record the
 staleness as a follow-up so it is not lost.
 
-## Regressions (each driven red first)
+## Regressions
+
+> Amended after audit round 4 (`007`). Two of the original claims about these
+> tests were wrong, and two regressions were missing. Red-first status is now
+> marked per case rather than asserted for the set.
 
 `tests/codex-model-entitlements.test.ts`
 
-1. Effective floor is `0.144.0`. Red now: returns `0.142.2`.
-2. No inbound and no runtime version, upstream mock returning gated rows only at
-   `>= 0.144.0` -> the request uses `0.144.0` and sol/terra/luna are available.
-   **The existing test at `:226` mocks the gate at `142`, which is why the suite
-   never caught this — that mock must be corrected to match measured upstream.**
-3. `{"models":[]}` -> account not confirmed, failure TTL. Red now: confirmed with
-   the 5-minute TTL (auditor probe: no refetch at 15,001 ms, refetch only after
-   300,001 ms).
-4. A non-empty roster stays confirmed. Guards 2a against over-reach: only the
-   *empty* case changes, so an ordinary short roster must still confirm the account
-   and expose whatever it does grant.
+1. **Red-first.** Effective floor is `0.144.0`. Red now: returns `0.142.2`.
+2. **Red-first only after the mock is corrected.** No inbound and no runtime
+   version, upstream mock returning gated rows only at `>= 0.144.0` -> the request
+   uses `0.144.0` and sol/terra/luna are available. The existing test at `:226`
+   mocks the gate at minor `>= 142`, and `144 >= 142`, so raising the floor alone
+   leaves it green — that mock threshold moves to `>= 144` as part of this
+   regression, along with the comment at `:238-240` that explains it.
+3. **Red-first.** `{"models":[]}` -> account not confirmed, failure TTL. Red now:
+   confirmed with the 5-minute TTL (probe: no refetch at 15,001 ms, refetch only
+   after 300,001 ms).
 
-   (Tests 4/4b/4c from the round-1 draft are withdrawn with 2b. Round 2 also caught
-   that the draft's `gpt-5.5` assertion was vacuous: `gpt-5.5` is **not** in
-   `ACCOUNT_GATED_NATIVE_OPENAI_MODELS` — that set is exactly sol/terra/luna plus
-   Daybreak (`src/codex/catalog/native-models.ts:5-10`), and `gpt-5.5` sits in the
-   ungated native list at `:70`. It was never at risk from `confirmed`, so
-   asserting its survival proved nothing.)
-5. The existing "all rows filtered as hidden/api-disabled" case at `:79` currently
-   asserts *confirmed*; it must assert unconfirmed. This is an intentional
-   assertion change, called out for review rather than quietly flipped.
+   Audit round 5, finding 1: the TTL half of this only proves anything against a
+   **real cache entry**. `boundedCacheSet` runs only when
+   `currentCredentialIdentity(accountId)` equals the snapshot's identity
+   (`src/codex/model-entitlements.ts:486-490`, `:330-340`), and the suite's
+   `credential()` helper mints `test:<account>`
+   (`tests/codex-model-entitlements.test.ts:28-34`), which matches nothing. Use the
+   Direct-caller path — `isDirectCallerEntitledToCodexModel` with
+   `directHeaders(...)`, whose identity is a stable SHA-256 token fingerprint
+   (`direct:<hash>`, `src/codex/model-entitlements.ts:437-451`) — or a genuinely
+   persisted pool/main record. Then assert both halves: **no** refetch before 15s, and **exactly one** after 15,001 ms.
+4. **Green on both sides — characterization guard, not a red-first regression.** A
+   non-empty roster stays confirmed. It bounds 2a against over-reach: only the
+   *empty* case may change, so an ordinary short roster must still confirm the
+   account and expose whatever it grants.
+5. **Red-first.** The existing "all rows filtered as hidden/api-disabled" case at
+   `:79` currently asserts *confirmed* at `:90`; it must assert unconfirmed. This
+   is the single existing assertion anywhere in the suite whose outcome changes,
+   and it is an intentional flip called out for review rather than a quiet edit.
+6. **Red-first. New in round 4.** The floor is a *composition*, so test it as one:
+   with a synthetic derived floor above `0.144.0`, the higher value must win.
+   Without this, replacing the export with the bare literal `0.144.0` passes every
+   other case while destroying the future-snapshot property stated at `:28-36`.
+7. **Red-first. New in round 4.** The all-filtered case must also prove refetch
+   after 15,001 ms, under the same real-cache-entry requirement as regression 3.
+   Flipping `confirmed` while leaving the five-minute TTL in place would otherwise
+   pass regression 5 with the bug still present.
 
 `tests/claude-models-discovery.test.ts` beside the client-version forwarding test
 at `:518`: with no inbound or runtime evidence, `/v1/models` still exposes the
-gated rows.
+gated rows. The backend for this case must be **version-sensitive** — the existing
+no-inbound mock at `:404-411` answers Daybreak for every version, so a
+version-blind copy of it is green on both sides and proves nothing.
+
+## Churn bound for 2a (audit round 4, finding 7)
+
+The 15s failure TTL is demand-driven, not timer-driven, so shortening it opens no
+background traffic. Refetch happens only through `/v1/models`
+(`src/server/index.ts:1158-1164`), Direct gated authorization
+(`src/codex/auth-context.ts:382-385`), catalog sync
+(`src/codex/catalog/sync.ts:1834-1840`) and convergence
+(`src/codex/convergence.ts:409-416`). Identical account and version coalesce onto
+one in-flight request (`:461-470`), and distinct versions are capped at four
+concurrent flights per account (`:472-483`).
+
+Worst case for a legitimately empty account is about four fetches per minute per
+active version under continuous **`/v1/models` or Direct gated** demand.
+Correction from audit round 5: this is **not** dashboard polling today.
+`/api/models` reaches only `listManagementModelRows`
+(`src/server/management/model-routes.ts:352-354`), which never resolves
+entitlements (`src/server/management/model-rows.ts:50-55`). Dashboard polling
+becomes a caller of this path only once wp2 lands, so wp2 inherits the cost bound
+rather than wp1 paying it.
+
+Sequential high-cardinality version cycling is concurrency-bounded but not
+rate-limited; that is pre-existing and out of scope here.
 
 ## Verification
 
@@ -148,5 +202,5 @@ Focused locally during iteration; full suite + typecheck + privacy scan on
 ## Out of scope
 
 Routing, dispatch, the `372000` context window, the roster contract's lack of a
-completeness marker (recorded in `001` as an open question), and anything under
-`src/lab/`.
+completeness marker (recorded in `001` as an open question), sequential
+version-cycling rate limits, and anything under `src/lab/`.

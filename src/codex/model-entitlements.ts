@@ -71,6 +71,23 @@ export function deriveGatedClientVersionFloor(
 }
 
 /**
+ * Lowest `client_version` MEASURED to actually return the account-gated rows.
+ *
+ * The bundled snapshot is not sufficient on its own. It records `0.142.2` for the gpt-5.6
+ * rows, and `0.142.2` is a version upstream answers with 200 and five models, none of them
+ * gpt-5.6; `0.144.0` and above answer with the gated rows present
+ * (devlog/_fin/260817_native_gpt56_1m_context/001_measurement_evidence.md, independently
+ * reproduced by the #2886 and #3022 reporters). So a floor derived from the snapshot alone
+ * asks a question whose honest answer is an empty gated set — and the fail-closed gate then
+ * reads that absence as a confirmed denial, which is how 2.36.0 removed sol/terra/luna from
+ * accounts that own them (#3022).
+ *
+ * This is a measurement, not a preference, which is why it composes with the derivation
+ * instead of replacing it: see `composeGatedClientVersionFloor`.
+ */
+const MEASURED_GATED_CLIENT_VERSION_MINIMUM = "0.144.0";
+
+/**
  * Fallback when the snapshot records no usable gated floor.
  *
  * Not every gated slug carries a `minimal_client_version` — `gpt-daybreak-blue-latest` has no
@@ -80,10 +97,41 @@ export function deriveGatedClientVersionFloor(
  */
 const GATED_MODEL_CLIENT_VERSION_FLOOR_FALLBACK = "0.142.2";
 
-export const GATED_MODEL_CLIENT_VERSION_FLOOR: string =
-  deriveGatedClientVersionFloor(
-    (upstreamModelsSnapshot as { models?: Array<Record<string, unknown>> }).models ?? [],
-  ) ?? GATED_MODEL_CLIENT_VERSION_FLOOR_FALLBACK;
+/**
+ * The floor actually used: the highest of what the snapshot derives, what we have measured
+ * upstream to honour, and the fallback.
+ *
+ * Composed rather than hardcoded so the two sources cannot drift into a contradiction. The
+ * snapshot may raise the floor; it may never lower it below a measurement. When a future
+ * snapshot refresh records `0.144.0` or higher, the derivation takes over naturally and
+ * `MEASURED_GATED_CLIENT_VERSION_MINIMUM` goes inert instead of fighting it.
+ */
+function composeGatedClientVersionFloor(
+  rows: ReadonlyArray<Record<string, unknown>>,
+  gatedSlugs: ReadonlySet<string> = ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
+): string {
+  const derived = deriveGatedClientVersionFloor(rows, gatedSlugs) ?? GATED_MODEL_CLIENT_VERSION_FLOOR_FALLBACK;
+  return compareClientVersions(derived, MEASURED_GATED_CLIENT_VERSION_MINIMUM) >= 0
+    ? derived
+    : MEASURED_GATED_CLIENT_VERSION_MINIMUM;
+}
+
+export const GATED_MODEL_CLIENT_VERSION_FLOOR: string = composeGatedClientVersionFloor(
+  (upstreamModelsSnapshot as { models?: Array<Record<string, unknown>> }).models ?? [],
+);
+
+/** Test-only seam: the composition on synthetic rows, so both directions can be proven. */
+export function composeGatedClientVersionFloorForTests(
+  rows: ReadonlyArray<Record<string, unknown>>,
+  gatedSlugs?: ReadonlySet<string>,
+): string {
+  return composeGatedClientVersionFloor(rows, gatedSlugs);
+}
+
+/** Test-only seam: the ordering the floor composition relies on. */
+export function compareClientVersionsForTests(left: string, right: string): number {
+  return compareClientVersions(left, right);
+}
 
 /** Numeric-segment comparison. Only used to pick the highest floor in a known-good set. */
 function compareClientVersions(left: string, right: string): number {
@@ -414,12 +462,20 @@ async function fetchAccountModels(
     const models = response.ok && body.displaySafe && !body.truncated
       ? parseAccountModels(body.text)
       : null;
+    // A roster is a confirmation only when it lists something usable. `models` is a Set, and an
+    // empty Set is truthy, so `models !== null` used to call `{"models":[]}` — and a response
+    // whose every row was hidden or api-disabled — a confirmed answer, and lock it in for the
+    // five-minute success TTL. Absence of evidence is not evidence of absence: an entitled
+    // account asked under too old a client version answers with no gated rows, and treating
+    // that as authoritative is exactly how 2.36.0 denied sol/terra/luna to accounts that own
+    // them (#3022). No usable rows means unconfirmed, on the 15s failure TTL, asked again.
+    const usable = models !== null && models.size > 0;
     return {
       credentialIdentity: credential.credentialIdentity,
       clientVersion,
-      expiresAt: now + (models ? MODEL_ROSTER_TTL_MS : MODEL_ROSTER_FAILURE_TTL_MS),
+      expiresAt: now + (usable ? MODEL_ROSTER_TTL_MS : MODEL_ROSTER_FAILURE_TTL_MS),
       models: models ?? new Set(),
-      confirmed: models !== null,
+      confirmed: usable,
     };
   } catch {
     return {

@@ -562,3 +562,68 @@ test("the request's client_version reaches entitlement discovery (#2886)", async
     if (server) await server.stop(true);
   }
 });
+
+test("with no inbound or runtime version, /v1/models still exposes the gated rows (#3022)", async () => {
+  // The #3022 path has no client to speak for it: background discovery on a host where the
+  // Codex runtime has never been resolved falls through to tier 3, the build's own gated floor.
+  // 2.36.0 derived that floor from the bundled snapshot (0.142.2) and upstream answers 0.142.2
+  // with no gpt-5.6 at all, so entitled accounts were classified as denying sol/terra/luna.
+  //
+  // The backend here is deliberately VERSION-SENSITIVE. A mock that answers the same roster for
+  // every version — like the no-inbound case earlier in this file — is green on both sides of
+  // the fix and proves nothing. This one returns the gated rows only at >= 0.144.0, which is
+  // what real upstream was measured to do.
+  const config = configWithStaticModels();
+  config.providers.openai = {
+    adapter: "openai-responses",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    liveModels: false,
+  };
+  saveConfig(config);
+  writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
+    tokens: { access_token: "main-token", account_id: "main-account" },
+  }), "utf8");
+
+  const { resetCatalogRuntimeStateForTests } = await import("../src/codex/catalog");
+  const { resetCodexModelEntitlementCacheForTests } = await import("../src/codex/model-entitlements");
+  resetCatalogRuntimeStateForTests();
+  resetCodexModelEntitlementCacheForTests();
+
+  const askedVersions: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input : input.url);
+    if (url.hostname === "chatgpt.com" && url.pathname.endsWith("/models")) {
+      const version = url.searchParams.get("client_version") ?? "";
+      askedVersions.push(version);
+      const minor = Number(version.split(".")[1] ?? "0");
+      const gated = minor >= 144
+        ? ["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+        : ["gpt-5.5"];
+      return Response.json({
+        models: gated.map(slug => ({ slug, supported_in_api: true, visibility: "list" })),
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  let server: ReturnType<typeof startServer> | null = null;
+  try {
+    server = startServer(0);
+    // No client_version on the request, and no persisted runtime in this isolated home.
+    const catalog = await fetch(new URL("/v1/models", server.url))
+      .then(response => response.json()) as { data: Array<{ id: string }> };
+
+    expect(askedVersions.length).toBeGreaterThan(0);
+    // Never the placeholder, and never a version upstream answers without the gated rows.
+    expect(askedVersions).not.toContain("0.0.0");
+    for (const version of askedVersions) {
+      expect(Number(version.split(".")[1] ?? "0")).toBeGreaterThanOrEqual(144);
+    }
+    // And the rows the account actually owns reach the surface.
+    expect(catalog.data.some(model => model.id === "gpt-5.6-sol")).toBe(true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (server) await server.stop(true);
+  }
+});
