@@ -2154,10 +2154,19 @@ async function gatherRoutedModelsUncached(
   const deduped = all.filter(m => !customKeys.has(routedSlug(m.provider, m.id)));
   const models = [...deduped, ...customModels];
   // ponytail: catalog-scale scan; index ids by provider if catalog growth makes this measurable.
-  const aliasDisplayNames = new Map(activeProviders.flatMap(({ name, provider }) => (
-    [...effectiveModelAliases(config, provider, models.filter(model => model.provider === name).map(model => model.id))]
-      .map(([id, { alias }]) => [`${name}/${id}`, `${provider.alias || name}/${alias}`] as const)
-  )));
+  const aliasDisplayNames = new Map(activeProviders.flatMap(({ name, provider }) => {
+    const providerModels = models.filter(model => model.provider === name);
+    const aliases = [...effectiveModelAliases(config, provider, providerModels.map(model => model.id))];
+    return aliases.flatMap(([id, { alias }]) => {
+      const exact = providerModels.filter(model => model.id === id);
+      const matches = exact.length > 0
+        ? exact
+        : providerModels.filter(model => model.id.toLowerCase() === id.toLowerCase());
+      return matches.length === 1
+        ? [[`${name}/${matches[0]!.id}`, `${provider.alias || name}/${alias}`] as const]
+        : [];
+    });
+  }));
   const providerModelOutcomes = providerResults.map(result => (
     result.outcome.provider === OPENAI_API_PROVIDER_ID
       && capture.openAiApiPolicy.state === "captured"

@@ -2009,6 +2009,68 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     }
   });
 
+  test("a case-folded live model id keeps its configured picker alias", async () => {
+    clearModelCache("mixed-case-live");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [{ id: "LIVE-Model" }, { id: "MODEL" }, { id: "model" }],
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "mixed-case-live",
+        providers: {
+          "mixed-case-live": {
+            adapter: "openai-chat",
+            baseUrl: "https://example.invalid/v1",
+            authMode: "key",
+            apiKey: "test-key",
+            liveModels: true,
+            modelAliases: { "live-model": "short", "mOdEl": "ambiguous" },
+          },
+        },
+      });
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const row = entries.find(entry => entry.slug === "mixed-case-live/LIVE-Model");
+
+      expect(row?.display_name).toBe("mixed-case-live/short");
+      expect(row?.slug).toBe("mixed-case-live/LIVE-Model");
+      expect(entries.find(entry => entry.slug === "mixed-case-live/MODEL")?.display_name)
+        .toBe("mixed-case-live/MODEL");
+      expect(entries.find(entry => entry.slug === "mixed-case-live/model")?.display_name)
+        .toBe("mixed-case-live/model");
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("mixed-case-live");
+    }
+  });
+
+  test("built-in model aliases label picker rows without changing routing slugs", async () => {
+    clearModelCache("builtin-alias");
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "builtin-alias",
+        providers: {
+          "builtin-alias": {
+            adapter: "openai-chat",
+            baseUrl: "https://example.invalid/v1",
+            liveModels: false,
+            defaultAliases: true,
+            models: ["grok-4.6"],
+          },
+        },
+      });
+      const row = buildCatalogEntries(nativeTemplate(), [], models)
+        .find(entry => entry.slug === "builtin-alias/grok-4.6");
+
+      expect(row?.display_name).toBe("builtin-alias/grok");
+      expect(row?.slug).toBe("builtin-alias/grok-4.6");
+    } finally {
+      clearModelCache("builtin-alias");
+    }
+  });
+
   test("a custom row clamps its soft budget to the provider max-input ceiling", async () => {
     const models = await gatherRoutedModels({
       port: 10100,
