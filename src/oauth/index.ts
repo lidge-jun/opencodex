@@ -1,7 +1,7 @@
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
-import { loadConfig, resolveEnvValue, saveConfig } from "../config";
+import { ConfigMutationLockError, loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
 import {
@@ -628,27 +628,48 @@ function clearAnthropicRefreshIntentBestEffort(
   }
 }
 
-function clearAnthropicRefreshIntentForKnownFailure(
+const ANTHROPIC_INTENT_MARK_RETRY_DELAYS_MS = [10, 25, 50] as const;
+
+function isConfigMutationLockContention(error: unknown): boolean {
+  if (!(error instanceof ConfigMutationLockError)) return false;
+  const cause = error.cause;
+  const code = cause && typeof cause === "object" && "code" in cause
+    ? String((cause as { code?: unknown }).code)
+    : "";
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED";
+}
+
+async function clearAnthropicRefreshIntentForKnownFailure(
   provider: string,
   accountId: string,
   expected: OAuthRefreshIntent,
   cleanupPending: OAuthRefreshIntentCleanupPending,
   refreshError: unknown,
-): boolean {
+): Promise<boolean> {
   let marked: OAuthRefreshIntent | undefined;
-  try {
-    marked = markOAuthRefreshIntentCleanupPending(
-      provider,
-      accountId,
-      expected,
-      cleanupPending,
-    );
-  } catch (cause) {
-    throw new OAuthRefreshIntentIOError(
-      "mark-cleanup-pending",
-      cause,
-      refreshError,
-    );
+  for (let attempt = 0; attempt <= ANTHROPIC_INTENT_MARK_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      marked = markOAuthRefreshIntentCleanupPending(
+        provider,
+        accountId,
+        expected,
+        cleanupPending,
+      );
+      break;
+    } catch (cause) {
+      const retryDelay = ANTHROPIC_INTENT_MARK_RETRY_DELAYS_MS[attempt];
+      if (!isConfigMutationLockContention(cause) || retryDelay === undefined) {
+        throw new OAuthRefreshIntentIOError(
+          "mark-cleanup-pending",
+          cause,
+          refreshError,
+        );
+      }
+      // The provider has definitively answered, so caller cancellation no longer changes the
+      // settlement obligation. Yield briefly while retaining the per-account refresh lock, then
+      // rerun the existing compare-and-swap marker against current disk state.
+      await Bun.sleep(retryDelay);
+    }
   }
   if (!marked) {
     throw new OAuthRefreshIntentIOError(
@@ -872,7 +893,7 @@ export async function refreshAnthropicAccountWithLock(
         // rotated the token, and replaying it could trip refresh-token-reuse revocation.
         // Those outcomes keep the intent so the guard still refuses a blind replay.
         if ((!refreshMayHaveReachedProvider || definitivelyAnswered(error)) && attemptIntent) {
-          clearAnthropicRefreshIntentForKnownFailure(
+          await clearAnthropicRefreshIntentForKnownFailure(
             provider,
             accountId,
             attemptIntent,

@@ -641,8 +641,13 @@ describe("oauth refresh hardening", () => {
     const id = getAccountSet("anthropic")!.activeAccountId;
     const credential = getAccountCredential("anthropic", id)!;
     const transient = new AnthropicTokenError("server", 503, undefined);
-    const markerFailure = new Error("intent marker write failed");
+    const markerFailure = new configModule.ConfigMutationLockError(
+      "Could not acquire config mutation transaction",
+      { cause: Object.assign(new Error("intent marker write failed"), { code: "EACCES" }) },
+    );
+    let markerCalls = 0;
     const markerSpy = spyOn(storeModule, "markOAuthRefreshIntentCleanupPending").mockImplementation(() => {
+      markerCalls += 1;
       throw markerFailure;
     });
     try {
@@ -662,8 +667,105 @@ describe("oauth refresh hardening", () => {
         cause: markerFailure,
         refreshError: transient,
       });
+      expect(markerCalls).toBe(1);
       const pending = readOAuthRefreshIntent("anthropic", id);
       expect(pending?.cleanupPending).toBeUndefined();
+      expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)!.needsReauth).toBeUndefined();
+    } finally {
+      markerSpy.mockRestore();
+    }
+  });
+
+  test("transient cleanup-marker lock contention settles a retryable rejection without reauth", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    const transient = new AnthropicTokenError("server", 503, undefined);
+    const realMark = storeModule.markOAuthRefreshIntentCleanupPending;
+    let markerCalls = 0;
+    const markerSpy = spyOn(storeModule, "markOAuthRefreshIntentCleanupPending").mockImplementation((...args) => {
+      markerCalls += 1;
+      if (markerCalls <= 2) {
+        throw new configModule.ConfigMutationLockError(
+          "Config mutation already in progress",
+          { cause: Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }) },
+        );
+      }
+      return realMark(...args);
+    });
+    try {
+      let providerCalls = 0;
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+        ...OAUTH_PROVIDERS.anthropic!,
+        refresh: async () => {
+          providerCalls += 1;
+          throw transient;
+        },
+      }, credential)).rejects.toBe(transient);
+
+      expect(providerCalls).toBe(1);
+      expect(markerCalls).toBe(3);
+      expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+      expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)!.needsReauth).toBeUndefined();
+
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, {
+        ...OAUTH_PROVIDERS.anthropic!,
+        refresh: async () => ({
+          access: "fresh",
+          refresh: "rt-fresh",
+          expires: Date.now() + 3_600_000,
+        }),
+      }, getAccountCredential("anthropic", id)!)).resolves.toBe("fresh");
+      expect(getAccountCredential("anthropic", id)?.access).toBe("fresh");
+      expect(readOAuthRefreshIntent("anthropic", id)).toBeUndefined();
+    } finally {
+      markerSpy.mockRestore();
+    }
+  });
+
+  test("persistent cleanup-marker lock contention stays bounded and preserves the replay guard", async () => {
+    await saveCredential("anthropic", { access: "old", refresh: "rt-old", expires: 1, accountId: "acct" });
+    const id = getAccountSet("anthropic")!.activeAccountId;
+    const credential = getAccountCredential("anthropic", id)!;
+    const generation = credentialGeneration(credential);
+    const transient = new AnthropicTokenError("server", 503, undefined);
+    let markerCalls = 0;
+    let lastBusy: configModule.ConfigMutationLockError | undefined;
+    const markerSpy = spyOn(storeModule, "markOAuthRefreshIntentCleanupPending").mockImplementation(() => {
+      markerCalls += 1;
+      lastBusy = new configModule.ConfigMutationLockError(
+        "Config mutation already in progress",
+        { cause: Object.assign(new Error("database table is locked"), { code: "SQLITE_LOCKED" }) },
+      );
+      throw lastBusy;
+    });
+    try {
+      let providerCalls = 0;
+      let rejection: unknown;
+      try {
+        await refreshAnthropicAccountWithLock("anthropic", id, {
+          ...OAUTH_PROVIDERS.anthropic!,
+          refresh: async () => {
+            providerCalls += 1;
+            throw transient;
+          },
+        }, credential);
+      } catch (error) {
+        rejection = error;
+      }
+
+      expect(providerCalls).toBe(1);
+      expect(markerCalls).toBe(4);
+      expect(rejection).toBeInstanceOf(OAuthRefreshIntentIOError);
+      expect(rejection).toMatchObject({
+        operation: "mark-cleanup-pending",
+        code: "OAUTH_REFRESH_INTENT_IO",
+        cause: lastBusy,
+        refreshError: transient,
+      });
+      expect(getAccountCredential("anthropic", id)).toEqual(credential);
+      expect(readOAuthRefreshIntent("anthropic", id)).toMatchObject({ generation });
+      expect(readOAuthRefreshIntent("anthropic", id)?.cleanupPending).toBeUndefined();
       expect(getAccountSet("anthropic")!.accounts.find(account => account.id === id)!.needsReauth).toBeUndefined();
     } finally {
       markerSpy.mockRestore();
