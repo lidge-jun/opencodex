@@ -11,6 +11,16 @@ decade doc as one full PABCD cycle.
 | wp2 | #3023 roster TTL expiry drops entitled rows | `020` | 71/80 |
 | wp3 | #3011 Windows ACL spill stall (PR #3018 audit) | `030` | 71/80 |
 
+Three more work phases were born from audit blockers rather than from the frozen scan,
+so they are recorded here as audit-derived additions rather than as part of the original
+three-target scope:
+
+| wp | target | doc | origin |
+| --- | --- | --- | --- |
+| wp4 | entitlement diagnostic transport | `040` | split out of wp2 by audit round 1 (`004`, blocker 4) |
+| wp5 | tri-state entitlement authority | `050` | split out of wp1 by audit round 2 (`005`, blocker 1) |
+| wp6 | #3023 ensure-freshness implementation | `060` | wp2 closed as a planning cycle; its implementation is wp6 |
+
 ## Why this order
 
 wp1 is the stack base: it changes what `resolveCodexModelEntitlements` records

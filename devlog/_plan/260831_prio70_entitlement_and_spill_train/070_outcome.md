@@ -7,8 +7,10 @@ this train, so suite receipts name `lidge`.
 ## wp0 — roadmap (docs-only)
 
 - Status: closing.
-- Deliverable: 12 docs — `000` plan, `001`-`003` research, `004`-`006` audit
-  syntheses, `010`/`020`/`030`/`040`/`050` decade docs, `070` receipts.
+- Deliverable at the time wp0 closed: 12 docs — `000` plan, `001`-`003` research,
+  `004`-`006` audit syntheses, `010`/`020`/`030`/`040`/`050` decade docs, `070`
+  receipts. The unit now holds **14**: audit rounds 4-8 added `007`-`009`, and wp2's
+  implementation split out as `060`.
 - Branch: `codex/prio70-train-260831` at `903243d04`.
 - Research: three read-only `gpt-5.6-sol` high-effort lanes. Every load-bearing
   claim was re-verified in-tree by the main session before it entered a doc.
@@ -143,10 +145,11 @@ a warm roster and all carry the gated rows. #3023 is about what happens once
 the warm path is intact and the wp6 work is scoped to expiry, not to the rows
 themselves.
 
-## wp3 — LANDED (pending merge of PR #3044)
+## wp3 — LANDED
 
 #3011 fixed by carrying Ingwannu's `aec717722` and closing the shutdown boundary it
-opened. His commit is the base of the branch, unmodified and credited.
+opened. His commit is the base of the branch, unmodified and credited. PR #3044 is
+merged into `dev` as `e5d588669`.
 
 Five review rounds, each returning FAIL until the last, and every finding was a real
 defect rather than a style note. Worth recording as a sequence, because each fix
