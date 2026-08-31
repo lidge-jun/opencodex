@@ -34,6 +34,12 @@ per-row borders are literally what produces that texture.
 | wp4 | 030 | Rollback surface redesign |
 | wp5 | 040 | Brand marks for the nine clients showing a monogram |
 | wp6 | 050 | Stacked PR chain |
+| wp7 | 060 | Marks for the last three monogram clients |
+| wp8 | 070 | Marks on every Integrations surface, not just the API rows |
+| wp9 | 080 | Conflict overwrite: writer, route, GUI dialog |
+
+wp7 through wp9 were appended after the original six. Outcome and corrections:
+`090_outcome.md`.
 
 Research docs: 001 (Aside contract), 002 (registration checklist),
 003 (Integrations UX diagnosis), 004 (brand mark provenance).
