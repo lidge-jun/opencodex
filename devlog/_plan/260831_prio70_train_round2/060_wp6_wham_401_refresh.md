@@ -462,3 +462,64 @@ Outcome-specific settlement, explicitly:
 
 Tests assert both stored fence generations, not just the presence of a record.
 
+
+## Amendment after the wp6 plan audit (round 5) — flight-owned settlement, and one timing contract
+
+Two findings, both accepted. These are the last two blockers; the plan is implementable
+once they are specified.
+
+### 14. Settlement attaches to the FLIGHT, not to any caller
+
+"Whichever caller observes the terminal outcome settles it" is not implementable through
+the proposed API. `forceRefreshCodexPoolToken` returns `awaitOwnCancellation(refreshPromise,
+callerSignal)` (`account-store.ts:917`); cancellation rejects that wrapper while the
+underlying flight keeps running privately. With no joiner, nobody observes the successful
+commit at all — the claim expires and the already-refreshed lineage gets a second refresh,
+which is precisely the hole being closed.
+
+The flight itself is what must settle. `refreshPromise` is already held on the flight record
+(`account-store.ts:912`), so:
+
+- `forceRefreshCodexPoolToken` accepts an optional `onSettled(outcome)` callback and attaches
+  it to `refreshPromise` — **before** the caller-scoped wait, so it fires on the flight's own
+  terminal outcome whether or not any waiter is still there.
+- The callback carries the claim id the caller opened with, so settlement remains a CAS on
+  `(accountId, lineage, claimId)` and a superseded claim is still a no-op.
+- It fires exactly once per flight, for both fulfilment and rejection: a rejected flight
+  settles as the transient or terminal outcome rather than leaving the claim to expire.
+
+Test: cancel the sole waiter, let the background flight commit successfully, assert the
+spent fence lands exactly once and a competing poll during the window is refused.
+
+### 15. One exported deadline, not three literals plus "margin"
+
+The lease cannot be derived today. `CODEX_REFRESH_FLIGHT_STALE_MS` is private
+(`account-store.ts:411`), the flight's own ceiling is a separate inline `30_000`
+(`account-store.ts:749`), and the WHAM timeout is an inline `8000`
+(`auth-api.ts:975`). "Plus margin" is exactly the kind of number that drifts out of
+agreement with the thing it is supposed to cover.
+
+So one authoritative value is exported and consumed by both operations:
+
+```ts
+// account-store.ts
+export const CODEX_REFRESH_FLIGHT_CEILING_MS = 30_000;   // the flight's own AbortSignal.timeout
+// auth-api.ts
+export const WHAM_REQUEST_TIMEOUT_MS = 8_000;            // replaces the inline literal
+// quota-401-recovery.ts
+export const QUOTA_RECOVERY_LEASE_MS = CODEX_REFRESH_FLIGHT_CEILING_MS + WHAM_REQUEST_TIMEOUT_MS * 2;
+```
+
+The replay is counted twice because the sequence is request → refresh → replay, and both
+WHAM legs sit inside the lease.
+
+Test: the lease is strictly greater than the longest admitted flight plus its replay, and
+the test derives that bound from the exported constants rather than restating a number —
+a restated number is how the two drift apart.
+
+### 16. Explicit cross-product case
+
+`external-replacement` together with `rotated: false` is logically covered (no replay, the
+old claim is spent, the returned generation stays free) but nothing asserts it. Added as
+case 13.
+
