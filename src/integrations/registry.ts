@@ -12,6 +12,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   EXPORT_CLIENTS,
+  asideAccountDir,
+  asideConfigPath,
+  asideHomeDir,
   dshConfigPath,
   dshHomeDir,
   gajaeConfigPath,
@@ -52,6 +55,73 @@ export interface IntegrationClientSpec {
   sourcePreservingYaml?: { path: readonly string[] };
   /** Coordinate the complete mutation through a sibling config lock. */
   writerLock?: { suffix: ".lock" };
+  /**
+   * Derive the config path AND the detect directory from one resolution, for a
+   * client whose paths depend on mutable state rather than only env and home.
+   *
+   * Only Aside needs this. Its two paths both come from the account id in
+   * `accounts.json`, so calling `configPath` and `detectDir` in sequence can
+   * straddle an account switch and check one account's install while writing
+   * another's catalog. Reading the id once and deriving both paths from it
+   * removes the window instead of narrowing it.
+   */
+  resolvePaths?: (env?: NodeJS.ProcessEnv, home?: string) => { configPath: string; detectDir: string };
+  /**
+   * Where the client's config WOULD live, for a client whose real path cannot
+   * be resolved yet.
+   *
+   * Only a client with `resolvePaths` needs this, and only because that
+   * resolution can legitimately fail on a machine where the client has never
+   * run. Aside's account id comes from a manifest the app writes at first
+   * launch, so a never-signed-in install has no account directory and no id --
+   * which is "not installed", not "we cannot verify this file".
+   *
+   * The value is a location to SHOW, never a location to write: it names the
+   * account root without an account, so it cannot be mistaken for a real
+   * catalog. `resolveIntegrationPaths` still throws for callers that mutate.
+   */
+  unresolvedPathHint?: (env?: NodeJS.ProcessEnv, home?: string) => string;
+}
+
+/**
+ * The one place that turns a client id into the pair of paths an operation uses.
+ *
+ * A caller that resolves `configPath` and `detectDir` separately is correct for
+ * every client whose paths are a pure function of env and home, and wrong for
+ * one that reads mutable state. Routing both through here lets such a client fix
+ * that for itself without every call site learning why.
+ */
+export function resolveIntegrationPaths(
+  clientId: IntegrationClientId,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): { configPath: string; detectDir: string } {
+  const spec = INTEGRATION_CLIENTS[clientId];
+  if (spec.resolvePaths) return spec.resolvePaths(env, home);
+  return { configPath: spec.configPath(env, home), detectDir: spec.detectDir(env, home) };
+}
+
+/**
+ * The location to name when resolution refused, or `""` when there is none.
+ *
+ * A read-only surface reporting "unresolvable" with an empty path told the user
+ * nothing they could act on, and for Aside it also reported the wrong thing: an
+ * absent account manifest is the ordinary state of an installed-but-never-run
+ * Aside, and the honest answer there is that it is not signed in.
+ */
+export function unresolvedPathHintFor(
+  clientId: IntegrationClientId,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string {
+  const spec = INTEGRATION_CLIENTS[clientId];
+  if (!spec.unresolvedPathHint) return "";
+  try {
+    return spec.unresolvedPathHint(env, home);
+  } catch {
+    // A hint that cannot be computed is still only a hint.
+    return "";
+  }
 }
 
 /**
@@ -148,6 +218,34 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     // that directory directly, so there is no parent to test when the override
     // is set. Same choice as OMP, whose detect signal is `ompAgentDir`.
     detectDir: (env = process.env, home = homedir()) => primeAgentDir(env, home),
+  },
+  aside: {
+    id: "aside",
+    configPath: (env = process.env, home = homedir()) => asideConfigPath(env, home),
+    /*
+     * The ACCOUNT directory, not `~/.aside`. Aside's CLI creates `~/.aside/cli`
+     * for its own update check before any account exists, so the outer directory
+     * is present on a machine that never signed in, and writing a catalog for an
+     * account that does not exist is worse than reporting absent.
+     */
+    detectDir: (env = process.env, home = homedir()) => asideAccountDir(env, home),
+    /*
+     * Both paths from ONE account read. The two resolvers above each consult
+     * the account manifest, so a switch landing between them would let an
+     * operation verify one account's install and then write another's catalog.
+     */
+    resolvePaths: (env = process.env, home = homedir()) => {
+      const detectDir = asideAccountDir(env, home);
+      return { configPath: join(detectDir, "models.json"), detectDir };
+    },
+    /*
+     * The account ROOT, with no account under it. Aside writes `accounts.json`
+     * at first launch, so its absence is the ordinary state of an Aside that has
+     * been installed and never signed into -- and a page that answered "cannot
+     * verify" with an empty path for that case named nothing the user could go
+     * look at.
+     */
+    unresolvedPathHint: (env = process.env, home = homedir()) => join(asideHomeDir(env, home), "u"),
   },
 };
 

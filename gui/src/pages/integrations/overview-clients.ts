@@ -147,6 +147,7 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   mcode: "integrations.tab.mcode",
   zcode: "integrations.tab.zcode",
   prime: "integrations.tab.prime",
+  aside: "integrations.tab.aside",
 };
 
 /** A file client's block is in the file for both `current` and `stale`. */

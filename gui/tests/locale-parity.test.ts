@@ -126,6 +126,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.clientConfig.clientZcode",
   "integrations.tab.prime",
   "api.clientConfig.clientPrime",
+  "integrations.tab.aside",
+  "api.clientConfig.clientAside",
   "integrations.codex.title",
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",

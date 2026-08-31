@@ -12,6 +12,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "mcode",
   "zcode",
   "prime",
+  "aside",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];

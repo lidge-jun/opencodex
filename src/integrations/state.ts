@@ -19,7 +19,12 @@ import {
   semanticProtectedContributionFingerprint,
   validRefreshablePaths,
 } from "./ownership-policy";
-import { INTEGRATION_CLIENTS, type IntegrationClientId } from "./registry";
+import {
+  INTEGRATION_CLIENTS,
+  resolveIntegrationPaths,
+  unresolvedPathHintFor,
+  type IntegrationClientId,
+} from "./registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 
 export type IntegrationState = "absent" | "current" | "stale" | "conflict" | "unsafe";
@@ -424,15 +429,30 @@ export function readIntegrationState(input: IntegrationStateInput): IntegrationS
   let configPath: string;
   let installed: boolean;
   try {
-    configPath = spec.configPath(input.env, input.home);
-    installed = io.statKind(spec.detectDir(input.env, input.home)) === "dir";
+    // One resolution for both, so a client whose paths come from mutable state
+    // cannot report one account's install beside another account's config path.
+    const paths = resolveIntegrationPaths(input.clientId, input.env, input.home);
+    configPath = paths.configPath;
+    installed = io.statKind(paths.detectDir) === "dir";
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
+    /*
+     * Two different situations reach here and they are not the same answer.
+     *
+     * A relative `OPENCLAW_CONFIG_PATH` is a misconfiguration: there is nothing
+     * to name, and "cannot verify" is correct. Aside's absent account manifest
+     * is the ORDINARY state of an Aside that has been installed and never
+     * signed into, and answering that with a red danger badge and an empty path
+     * told the user their config was suspect when in fact there is no account
+     * yet. A client that can name where its config would go gets `installed:
+     * false` and that location, which reads as "not installed" in the UI.
+     */
+    const hint = unresolvedPathHintFor(input.clientId, input.env, input.home);
     return {
       clientId: input.clientId,
-      state: "unsafe",
+      state: hint ? "absent" : "unsafe",
       installed: false,
-      configPath: "",
+      configPath: hint,
       reason: "unresolvable-path",
       ...retention,
     };

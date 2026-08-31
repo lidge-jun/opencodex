@@ -20,7 +20,7 @@
  * targeting it is the caller's explicit act.
  */
 import { homedir } from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
@@ -539,6 +539,84 @@ export function primeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
 }
 
 /**
+ * Aside's state root. Unlike every other client here, Aside ships NO variable
+ * that relocates it: its CLI carries `ASIDE_DAEMON_BASE_URL`,
+ * `ASIDE_PRODUCT_VARIANT` and similar, and the only `.aside` path baked into the
+ * binary is its own update-check file under `~/.aside/cli`. So there is no
+ * client-owned override to mirror, and this registry does not invent one.
+ */
+export function asideHomeDir(_env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(home, ".aside");
+}
+
+/**
+ * Which account's catalog we write.
+ *
+ * Aside is per-ACCOUNT: state lives under `~/.aside/u/<id>/` and the id comes
+ * from `accounts.json`, which Aside maintains. That makes this the only path
+ * resolver here that parses file CONTENTS rather than probing existence — the
+ * module already does the latter at four sites.
+ *
+ * It throws rather than defaulting. A machine can hold several accounts (both
+ * `u/0` and `u/1` existed on the machine this was developed against), so
+ * guessing `0` when the manifest cannot be read would name a real config file
+ * belonging to a DIFFERENT account, pass the installed-directory check, and
+ * write into somebody else's catalog. An unresolvable account is reported the
+ * same way an unresolvable `DSH_HOME` is.
+ *
+ * Callers that need BOTH the config path and the detect directory must derive
+ * them from ONE call to `asideAccountDir` rather than calling the two exported
+ * helpers in sequence: `resolveIntegrationPaths` in the integration registry is
+ * that seam. Caching here cannot substitute for it — a cache keyed on the
+ * manifest's mtime re-reads exactly when the manifest changes, which is the
+ * case the consistency is needed for.
+ */
+function asideCurrentAccountId(root: string): number {
+  const manifest = join(root, "accounts.json");
+  let raw: string;
+  try {
+    raw = readFileSync(manifest, "utf8");
+  } catch {
+    throw new ClientPathError(
+      `Aside's account manifest is missing or unreadable at ${manifest}, so opencodex cannot tell which `
+      + "account's model catalog to write. Launch Aside once to create it.",
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ClientPathError(
+      `Aside's account manifest at ${manifest} is not readable JSON, so the account it names cannot be `
+      + "trusted. Writing a guessed account would target a different account's catalog.",
+    );
+  }
+  const id = (parsed as { currentAccountId?: unknown } | null)?.currentAccountId;
+  if (typeof id !== "number" || !Number.isInteger(id) || id < 0) {
+    throw new ClientPathError(
+      `Aside's account manifest at ${manifest} declares no usable currentAccountId, so opencodex cannot `
+      + "tell which account is current.",
+    );
+  }
+  return id;
+}
+
+/**
+ * The signed-in account's directory. This is also the install signal: the CLI
+ * creates `~/.aside/cli` for its own update check before any account exists, so
+ * the OUTER directory can be present on a machine that never signed in.
+ */
+export function asideAccountDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const root = asideHomeDir(env, home);
+  return join(root, "u", String(asideCurrentAccountId(root)));
+}
+
+/** Aside's custom-provider catalog for the current account. */
+export function asideConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(asideAccountDir(env, home), "models.json");
+}
+
+/**
  * One proxy-routed model destined for a client config. Deliberately narrower than
  * `CatalogModel` so a serializer cannot reach for a field that does not survive the
  * `/api/models` boundary.
@@ -580,7 +658,8 @@ export type ExportClientId =
   | "dsh"
   | "mcode"
   | "zcode"
-  | "prime";
+  | "prime"
+  | "aside";
 
 export interface ExportClientSpec {
   id: ExportClientId;
@@ -1657,6 +1736,29 @@ function buildPrimeContribution(ctx: ExportContext): ManagedContribution {
   return singleFragment("prime", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
+/**
+ * Aside is the strongest case yet for reusing Pi's builder, because the
+ * evidence is a live file rather than a package manifest.
+ *
+ * The machine this landed on already had opencodex wired into Aside BY HAND:
+ * `~/.aside/u/0/models.json` carried a `providers.opencodex` block with the same
+ * four keys, the same `openai-completions` dialect, the same
+ * `opencodex-loopback` placeholder, and 24 models using the same
+ * `thinkingLevelMap` levels this builder emits. A user reproduced Pi's document
+ * from scratch because that is what Aside reads.
+ *
+ * Key ORDER differs (the hand-written file has `apiKey` before `api`), which is
+ * why the devlog claims compatibility rather than byte equality: JSON key order
+ * is not semantic and Aside parses this file rather than diffing it.
+ *
+ * As with prime, only the ownership stamp is Aside's own, so a disable removes
+ * the fragment this client recorded and not one another client wrote.
+ */
+function buildAsideContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildPiClientConfig(ctx);
+  return singleFragment("aside", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
   opencode: {
     id: "opencode",
@@ -1808,6 +1910,24 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // Prime's provider block does accept `headers`, so a dedicated admission
     // header has somewhere to live, but remote credential wiring is deferred
     // from this initial loopback-only integration — same stance as OMP's.
+    loopbackOnly: true,
+  },
+  aside: {
+    id: "aside",
+    // Not a bare `models.json`: a download lands in the user's Downloads folder,
+    // where pi's and prime's files would collide with it. Prime set this
+    // precedent with `prime-models.json`.
+    filename: "aside-models.json",
+    destination: env => asideConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Aside reads a non-secret placeholder from models.json; loopback needs no key.",
+    build: buildPiClientConfig,
+    format: "json",
+    summarize: summarizePi,
+    buildContribution: buildAsideContribution,
+    // The observed provider block has exactly four keys and none is `headers`,
+    // so the dedicated admission header has nowhere to live and a non-loopback
+    // bind would generate a config that 401s.
     loopbackOnly: true,
   },
 };

@@ -28,6 +28,7 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   mcode: "integrations.semantics.mcode",
   zcode: "integrations.semantics.zcode",
   prime: "integrations.semantics.prime",
+  aside: "integrations.semantics.aside",
 };
 
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
@@ -42,6 +43,7 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   mcode: "integrations.tab.mcode",
   zcode: "integrations.tab.zcode",
   prime: "integrations.tab.prime",
+  aside: "integrations.tab.aside",
 };
 
 const KIND_KEY: Record<IntegrationJournalRow["kind"], TKey> = {

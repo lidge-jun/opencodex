@@ -28,7 +28,7 @@ import {
   semanticProtectedContributionFingerprint,
 } from "./ownership-policy";
 import { createdContainerPaths, mergeContribution, removeFragments } from "./merge";
-import { INTEGRATION_CLIENTS, isLoopbackOnly, type IntegrationClientId } from "./registry";
+import { INTEGRATION_CLIENTS, isLoopbackOnly, resolveIntegrationPaths, type IntegrationClientId } from "./registry";
 import { classifyIntegration, exportContextOf } from "./state";
 import type { IntegrationState } from "./state";
 import { serializeDocument, UnserializableValueError } from "./serialize";
@@ -624,10 +624,12 @@ function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegration
   const store = input.store ?? createIntegrationStateStore();
   const io = input.io ?? defaultIntegrationIO(store);
   const spec = INTEGRATION_CLIENTS[input.clientId];
-  const resolvedPaths = {
-    configPath: spec.configPath(env, home),
-    detectDir: spec.detectDir(env, home),
-  };
+  /*
+   * One resolution for both paths. Aside derives them from the account id in
+   * its manifest, so two independent calls could verify one account's install
+   * and then write another account's catalog if a switch landed between them.
+   */
+  const resolvedPaths = resolveIntegrationPaths(input.clientId, env, home);
   return { ...input, env, home, store, io, resolvedPaths };
 }
 
