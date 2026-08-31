@@ -28,6 +28,8 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   kiro: "kiro-color.svg",
   "lm-studio": "lm-studio-color.svg",
   mistral: "mistral-color.svg",
+  minimax: "minimax.svg",
+  "minimax-cn": "minimax.svg",
   moonshot: "moonshot-color.svg",
   nvidia: "nvidia-color.svg",
   ollama: "ollama-color.svg",
@@ -47,7 +49,9 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   vllm: "vllm-color.svg",
   xai: "grok.svg",
   "mimo-free": "xiaomi-color.svg",
+  mimo: "xiaomi-color.svg",
   xiaomi: "xiaomi-color.svg",
+  "xiaomi-mimo": "xiaomi-color.svg",
 };
 
 /**
