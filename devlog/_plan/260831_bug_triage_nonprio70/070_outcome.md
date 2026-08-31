@@ -278,20 +278,25 @@ rewritten to satisfy a coincidence.
 
 ## wp9 — residual issue fixes (#3070, #1527, #3021, #3059)
 
-- Status: one of four shipped. **PR #3113** closes #3059.
+- Status: two of four shipped. **PR #3113** closes #3059; **PR #3115** closes #3070.
 - #3059 is the one whose evidence was fully in the tree. The reporter's mechanism is
   wrong — `refresh()` keeps stale data, so `if (!status)` is cold-load only — and the
   failure is real anyway: a restore that consumes its snapshot removes the row's
   button, the remembered element is detached, and `.focus()` on a detached node succeeds
   silently while focus stays on `<body>`. `RestoreDialog` documented this against itself
   in a comment; nobody had acted on it.
-- **#3070, #1527 and #3021 are carried to the next round, not abandoned.** Each has a
-  bounded design recorded in `001` and none is blocked on missing information:
-  #3070 wants a Logs model/provider query, #1527 wants `envelope_exhausted` to fail
-  closed for external-root models instead of silently full-replaying, and #3021 wants a
-  client-visible Fernet payload replaced with a structured error. #3021 in particular
-  should not be rushed: the tempting fix — widening `ROUTING_HEADER` to `MESSAGE` — creates
-  a plaintext oracle, and the safe fix is refusing to forward, not learning to decrypt.
+- **#3070 shipped as PR #3115.** A Logs search field over `model`, `resolvedModel` and
+  `provider`. `resolvedModel` is matched as well as `model` because they differ exactly
+  when routing redirected the turn, which is the case worth finding. Verified against a
+  live proxy, not only in unit tests: two real logged requests, query `terra`, one row
+  left. The locale-parity test caught `zh.ts` when only `zh-TW.ts` had been updated.
+- **#1527 and #3021 are carried to the next round, not abandoned.** Both have a bounded
+  design in `001` and neither is blocked on missing information: #1527 wants
+  `envelope_exhausted` to fail closed for external-root models instead of silently
+  full-replaying, and #3021 wants a client-visible Fernet payload replaced with a
+  structured error. #3021 should not be rushed — the tempting fix, widening
+  `ROUTING_HEADER` to `MESSAGE`, creates a plaintext oracle. The safe fix is refusing to
+  forward, not learning to decrypt.
 
 ### Receipt — wp9
 
@@ -316,10 +321,10 @@ exactly the region test. The surviving-trigger test is the control.
 | closed outright | PR #3030, PR #3078, PR #3038, PR #3000 |
 | closed by the train during the round | #3068, #3071 |
 | superseded by a new PR | PR #3034, #3041 → #3100; #3052 → #3102; #3039, #3067 → #3104; #3053 → #3105; #3066 → #3107; #3063 → #3109; #2989 → #3111 |
-| new PRs opened | #3100 #3102 #3104 #3105 #3106 #3107 #3109 #3111 #3112 #3113 |
-| issues a merged PR will close | #3051, #3009, #3064, #2999, #3059 |
+| new PRs opened | #3100 #3102 #3104 #3105 #3106 #3107 #3109 #3111 #3112 #3113 #3114 #3115 |
+| issues a merged PR will close | #3051, #3009, #3064, #2999, #3059, #3070 |
 | declared unsolvable | #2813, #1419 |
-| carried to the next round | #3070, #1527, #3021 |
+| carried to the next round | #1527, #3021 |
 | blocked on the train | PR #3003 (needs #3020) |
 
 ### Honest accounting of the acceptance criteria
@@ -338,7 +343,7 @@ exactly the region test. The surviving-trigger test is the control.
   ordered around; #3063 was moved a whole phase when its file list grew mid-round.
 - **c-6, devlog records the round:** met by this unit.
 
-### The two CI failures, and why neither was patched
+### The CI failures, and why none was patched
 
 PR #3106 shard `test 2/4`: `Failed to start server. Is port 33953 in use?` in
 `tests/loopback-listener-integration.test.ts`, which imports nothing that branch
@@ -348,8 +353,27 @@ PR #3104 macOS: `ocx launcher graceful shutdown > SIGINT ...` in
 `tests/shutdown-launcher.test.ts`, which does not import `src/service.ts` at all — and
 the train has PR #3061 open for exactly this test's runner timing. Rerun.
 
-Both were verified as unrelated before rerunning. Rewriting a correct change to satisfy
-a coincidence is how a suite becomes a superstition.
+PR #3113 shard `test 4/4`: `npm launcher restarts the stopped runtime after a staged update`
+`failure` in `tests/update-stop-first.test.ts`, a 91-second process-integration test. That
+PR changes two files, both under `gui/`, and that suite imports neither. Rerun.
+
+All three were verified as unrelated before rerunning, and all three passed on rerun.
+Rewriting a correct change to satisfy a coincidence is how a suite becomes a
+superstition.
+
+### The GUI screenshot gate
+
+Both GUI PRs took `gui-screenshot-waived`, each with its reason posted rather than
+labelled past silently. #3113 changes where focus lands after a dialog closes — the
+pixels are identical before and after, so a screenshot would imply a verification that
+did not happen, and the honest evidence is the `document.activeElement` assertion. #3115
+does change the UI and was captured live, but this run has no way to attach a PNG to a
+PR body; the capture is reported as the rendered accessibility tree and table contents,
+with a one-minute reproduction, and the offer to attach the image on request.
+
+### Final CI state
+
+All twelve pull requests: zero failing checks.
 
 ### What the round is really evidence of
 
