@@ -34,9 +34,19 @@ States to distinguish (from `002` and the wp1/wp2 work):
 
 - no logged-in Codex credential
 - fresh confirmed roster
-- confirmed roster that is genuinely empty for this account
+- `unconfirmed-empty` — upstream returned no usable rows
 - refresh failed (upstream error, timeout)
 - expired, refresh in flight
+
+> Audit round 2 (`005`) removed a state this doc originally listed: "confirmed
+> roster that is genuinely empty". wp1 Change 2a makes every empty parsed roster
+> **unconfirmed**, so that state is unreachable.
+>
+> The deeper reason it must not come back: the roster contract has no completeness
+> marker, so the system genuinely cannot distinguish "this account owns nothing"
+> from "upstream returned an unusable empty answer". Labelling one as the other
+> would be a lie in a status field — precisely what `002` criticised
+> `discovery: ok` for. `unconfirmed-empty` says only what is known.
 
 Do **not** overload `discovery`. It would erase a simultaneously-true routed
 result and cannot express partial per-account success. GUI types admit only

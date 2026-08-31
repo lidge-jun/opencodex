@@ -70,15 +70,45 @@ go.
 So wp3 must define **settlement**, not just waiting:
 
 1. Drain with an explicit wall-clock cap.
-2. On expiry, take a real durable action: force a synchronous publication for the
-   outstanding job, or write the oversized resident to its own spill path directly.
-   Falling back to the snapshot is not an option for exactly the 2 MiB reason.
+2. On expiry, take a real durable action. Falling back to the snapshot is not an
+   option, for exactly the 2 MiB reason.
 3. `Promise.race` alone is **forbidden**: a writer that publishes after snapshot
    serialization is the same lost-continuation bug wearing a timeout.
 
-If P cannot establish a bounded settlement, split the phase: land the drain for the
-common case and file the never-exiting-`icacls` pathology separately. Shipping a
-shutdown hang to fix a startup stall is not a trade worth making.
+### The fallback must share the cap (audit round 2 — `005`, blocker 3)
+
+Round 1 named a synchronous publication as the cap-expiry fallback without checking
+its cost. Verified: the synchronous writer hardens the directory and the temp as
+**separate** calls (`src/responses/spill-store.ts:324`), and each call resolves its
+**own** budget — `HARDEN_DEADLINE_DEFAULT_MS = 30_000`
+(`src/lib/windows-secret-acl.ts:255`, resolved per call at `:799`), with the
+file's own comment documenting a ~90s timeout-path worst case at load and ~60.25s
+on the owner path.
+
+A 5-second drain cap followed by a 60-second fallback is not a bound. So:
+
+1. **One end-to-end shutdown budget** covers drain *and* fallback, not one each.
+2. The fallback **passes its remaining budget down** instead of letting each harden
+   call open a fresh 30s window. `OPENCODEX_ACL_TIMEOUT_MS` proves the deadline is
+   already parameterizable (`:799`); the plumbing is the work.
+3. **Explicit ownership transfer.** When the drain abandons a job, mark the async
+   writer superseded so a late completion cannot publish over the fallback's
+   result. A late writer winning that race is the same lost continuation.
+
+**A synchronous stall is acceptable here specifically.** Only the graceful-shutdown
+path reaches `flushResponseState()`, and no request is being served — #3011 is
+about the request path. But it is acceptable *only* with an enforceable end-to-end
+deadline.
+
+### Split condition, restated concretely
+
+If threading the remaining budget through the harden calls turns out larger than
+the drain itself, land the drain with a cap that simply **abandons** the
+outstanding job and file the bounded-fallback work separately.
+
+Abandoning is not a regression: it leaves exactly today's behaviour for the >2 MiB
+case, which is already lossy. Hanging shutdown would be a new failure. Prefer the
+status quo over a worse trade.
 
 `src/server/lifecycle.ts` needs no change — it already calls `flushResponseState()`
 at the right boundary.
@@ -93,6 +123,17 @@ at the right boundary.
 2. After release, the flush returns only once the stub is installed; then clear
    memory and verify restart replay. Payload **over 2 MiB** so an early snapshot
    cannot mask it.
+2b. **Cap expiry enters the fallback.** Hold the ACL gate past the cap; assert the
+   fallback path runs rather than the flush returning with the job outstanding.
+2c. **The fallback respects the remaining budget.** With the cap nearly spent, the
+   fallback must not open a fresh 30s harden window. Assert total elapsed stays
+   inside the end-to-end budget.
+2d. **A late async completion after cap expiry does not overwrite.** Release the
+   gate after the fallback has published; assert the fallback's result stands and
+   the superseded writer publishes nothing.
+
+   (Round 1's list omitted all three of these, which is what let the unbounded
+   fallback look acceptable.)
 3. (**coverage, not red-first**) Inject an ordinary non-timeout `icacls` failure:
    no stub installed, exactly one write-failure/tombstone, no owned spill or temp
    left. Required-mode throws are at

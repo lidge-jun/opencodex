@@ -40,6 +40,25 @@ Regression: repeated logged-out ensures perform zero credential enumerations aft
 the first. This is the assertion that proves the steady state, and it is red
 against a naive implementation.
 
+### The memo needs an invalidation hook (audit round 2 — `005`)
+
+Credential commits do not invalidate entitlement state today
+(`src/codex/account-store.ts:131`, `src/codex/auth-api.ts:2015`,
+`src/codex/model-entitlements.ts:630`). So a negative memo means a **fresh login
+stays invisible until the memo expires** — the user logs in and the dashboard still
+shows nothing.
+
+Two requirements, both testable:
+
+1. **Pin the TTL explicitly** and keep it short. It bounds how stale a successful
+   login can look, so it is a UX number, not an implementation detail.
+2. **Clear the memo on known credential writes.** The account-store and auth-api
+   commit points above are the hooks. Regression: log in, then the very next ensure
+   sees the credential without waiting out the TTL.
+
+Without (2) this cycle fixes a missing-rows bug by introducing a different
+missing-rows bug.
+
 ## Change 2 — await it from the shared entry point
 
 `src/server/management/model-rows.ts:50`, `listManagementModelRows`: await the

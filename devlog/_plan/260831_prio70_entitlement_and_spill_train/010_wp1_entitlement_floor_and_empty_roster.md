@@ -68,31 +68,26 @@ Two distinct changes:
 `confirmed: false` and take `MODEL_ROSTER_FAILURE_TTL_MS` (15s) rather than
 locking in a wrong answer for five minutes. A non-empty roster stays confirmed.
 
-**2b. Model-scoped: absence is only authoritative when the question could have
-answered it.** The roster already records the `clientVersion` it was fetched under
-(`:230`). Add a predicate — absence of gated model *M* counts as denial only when
-that version is at or above *M*'s known minimum.
+**2b — deferred to wp5.** See `005` (audit round 2, blocker 1). The draft wanted
+model-scoped absence authority: "absence of gated model *M* is denial only when the
+answering version could have returned *M*". It is not implementable inside this
+cycle, for two verified reasons.
 
-- **Positive evidence needs no version test.** A returned row is a grant no matter
-  which version asked.
-- A model with **no known minimum** keeps today's behaviour: omission is denial.
-  `gpt-daybreak-blue-latest` is gated but has no snapshot row at all, so inventing
-  a floor for it would be a guess.
+First, the answering version is not visible where the decision happens.
+`CachedAccountModels` records `clientVersion` (`:230`), but
+`resolveCodexModelEntitlements` discards it when building the snapshot (`:236`,
+`:547-550`).
 
-This is what `models.size > 0` cannot do: the reported short roster contains
-`gpt-5.5`, so it is non-empty while every gated slug is absent for a reason that
-has nothing to do with entitlement.
+Second, the projections are **positive-only**: they compute which accounts/models
+are *granted* (`:570`, `:573`). A third boolean term in a positive-only filter can
+only narrow it (redundant — absence already yields nothing) or widen it to include
+a model upstream never granted. There is no third slot for "unknown" to occupy, so
+expressing it means changing the snapshot contract and all three exported
+projections. That is a subsystem change, not a line.
 
-Where 2b lands: the projections that read `confirmedAccountIds.has(...) &&
-models.has(modelId)` need the third term. Keep the predicate in
-`model-entitlements.ts` and thread it through
-`entitledCodexAccountIdsForModel`, `availableAccountGatedNativeModels`, and
-`isDirectCallerEntitledToCodexModel` so no caller can forget it.
-
-**Fail-closed is preserved.** With Change 1 the resolved version is `0.144.0` or
-higher on every path, so 2b is a *safety net* for a future upstream bump, not the
-primary repair. It never turns absence into entitlement — it turns a decided
-denial back into "unknown", and unknown still yields no gated row.
+Change 1 already fixes the reported defect by asking under `0.144.0`. 2b was only
+ever a safety net against a *future* upstream bump, so it goes to `050` where it
+can be designed with a real tri-state contract.
 
 ## Change 3 (bounded) — correct the stale snapshot metadata
 
@@ -102,10 +97,14 @@ by the in-repo live measurement (`0.144.0`, `272000`).
 
 Treat this as **optional for this cycle and out of scope if it moves anything
 else.** The file is a pinned catalog snapshot consumed as exact model metadata; the
-context-window value in particular feeds
-`NATIVE_GPT56_CONTEXT_WINDOW` consumers and has its own tests
-(`tests/codex-catalog.test.ts:2706`, `:2905`). Changing `372000` is a separate
-behavioural question and must not ride along here.
+context-window value has its own pinned-entry tests
+(`tests/codex-catalog.test.ts:2901-2909`).
+
+Correction from audit round 1: `372000` does **not** feed
+`NATIVE_GPT56_CONTEXT_WINDOW`. That constant is independently `272_000` and
+overrides the snapshot for runtime projections
+(`src/codex/catalog/metadata.ts:130`, `:155-157`). So the stale value is a
+documentation wart with no behavioural reach, which is *why* leaving it is safe.
 
 Decision for this cycle: **do not edit the JSON.** Change 1 makes the stale value
 harmless, and the max-composition means correcting it later is safe. Record the
@@ -123,14 +122,16 @@ staleness as a follow-up so it is not lost.
 3. `{"models":[]}` -> account not confirmed, failure TTL. Red now: confirmed with
    the 5-minute TTL (auditor probe: no refetch at 15,001 ms, refetch only after
    300,001 ms).
-4. Roster with only `gpt-5.5` under `0.142.2` -> `gpt-5.5` stays available while
-   the gated slugs are treated as unknown rather than denied. Explicitly assert
-   `gpt-5.5` is still there: that is the over-denial the first draft would have
-   introduced.
-4b. A roster fetched at `0.144.0` that omits a gated slug -> that slug IS denied.
-   The version was capable of answering, so absence is real evidence.
-4c. `gpt-daybreak-blue-latest` (no known minimum) -> omission remains denial at
-   any version. Guards against the predicate silently un-gating it.
+4. A non-empty roster stays confirmed. Guards 2a against over-reach: only the
+   *empty* case changes, so an ordinary short roster must still confirm the account
+   and expose whatever it does grant.
+
+   (Tests 4/4b/4c from the round-1 draft are withdrawn with 2b. Round 2 also caught
+   that the draft's `gpt-5.5` assertion was vacuous: `gpt-5.5` is **not** in
+   `ACCOUNT_GATED_NATIVE_OPENAI_MODELS` — that set is exactly sol/terra/luna plus
+   Daybreak (`src/codex/catalog/native-models.ts:5-10`), and `gpt-5.5` sits in the
+   ungated native list at `:70`. It was never at risk from `confirmed`, so
+   asserting its survival proved nothing.)
 5. The existing "all rows filtered as hidden/api-disabled" case at `:79` currently
    asserts *confirmed*; it must assert unconfirmed. This is an intentional
    assertion change, called out for review rather than quietly flipped.
