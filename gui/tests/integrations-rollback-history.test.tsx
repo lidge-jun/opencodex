@@ -186,6 +186,31 @@ test("an expired snapshot offers no control anywhere in the list", async () => {
   expect(expired!.querySelector("button")).toBeNull();
 });
 
+test("restoring from inside the fold passes that row, not the newest one", async () => {
+  /*
+   * The newest row's Undo was covered; a folded row's control was not, and the
+   * two are wired separately -- the fold maps over a sliced copy. Passing the
+   * wrong row here is the most destructive defect this component could have: the
+   * user asks to roll back to a specific point in their history and silently
+   * gets a different one, with a confirmation dialog that names the operation
+   * they chose. Nothing downstream can catch it, because the request is
+   * well-formed and the server has no way to know it was not what was meant.
+   */
+  let restored: IntegrationJournalRow | null = null;
+  const journal = rows(12);
+  await mount(journal, { onRestore: value => { restored = value; } });
+  await act(async () => { disclosure()!.open = true; });
+
+  const folded = visibleRows().filter(node => node.closest(".integration-history-older"));
+  const third = folded[2]!;
+  await act(async () => { third.querySelector("button")!.click(); });
+
+  // Row 0 is outside the fold, so the third folded row is journal[3].
+  expect(restored).not.toBeNull();
+  expect(restored!.opId).toBe(journal[3]!.opId);
+  expect(restored!.opId).not.toBe(journal[0]!.opId);
+});
+
 test("the overview names the client on every row; a client tab does not", async () => {
   /*
    * The overview is the only surface showing one chronology across clients, so
