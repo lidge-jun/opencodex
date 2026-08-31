@@ -137,3 +137,48 @@ load-bearing here rather than routine.
 
 `Closes #3019`. Comment on PR #3020 crediting the sequence and naming the scope that
 was left out.
+
+## P-phase re-verification against the landed tree (wp6 start)
+
+Checked at `330470e74`, the dev head after wp5 merged. The plan holds:
+
+- `fetchFreshPoolAccountQuota` still converts any 401 straight into
+  `needsReauth` (`src/codex/auth-api.ts:979-983`). One WHAM request, no refresh attempt.
+- `forceRefreshCodexPoolToken` is still at `src/codex/account-store.ts:588` with the
+  contract the plan's amendments depend on: `rotated` false means replaying earns the same
+  401, and `selfRefreshed` true means this caller's own CAS moved the credential.
+- Nothing in the quota path calls it. The only two callers are the response lanes
+  (`src/server/responses/compact.ts:302` and `core.ts:1806`).
+
+### The existing callers are the template
+
+Both response lanes already do the sequence this phase needs, and both encode the two
+amendments the audit rounds forced into the plan:
+
+```ts
+if (!refreshed.rotated) {
+  return { ok: false, quarantine: true, quarantineGeneration: refreshed.generation, ... };
+}
+if (refreshed.selfRefreshed) {
+  handOffThreadAffinityGeneration(authCtx.accountId, authCtx.generation, refreshed.generation);
+}
+```
+
+Two things to carry deliberately:
+
+1. **Quarantine fences on the RETURNED generation**, never the rejected one. A successful
+   token response can rotate the refresh grant while returning a byte-identical access
+   token, so the credential has already moved by the time `rotated` is false.
+2. `selfRefreshed` gates only the affinity handoff there, because those lanes have no
+   per-credential retry budget. The quota path does need one, which is where the round-3
+   amendment applies: `selfRefreshed === false` means *either* an external replacement
+   *or* a caller that joined an in-flight refresh of the same lineage
+   (`account-store.ts:639-645`). Spending the budget on the joined case and resetting only
+   on a genuine replacement is the distinction regression 8 exists to prove.
+
+### Scope confirmed unchanged
+
+`src/codex/auth-api.ts` plus a new bounded recovery module and
+`tests/codex-auth-api.test.ts`. PR #3020 stays unrebased; its core sequence is carried
+with credit.
+
