@@ -523,3 +523,55 @@ a restated number is how the two drift apart.
 old claim is spent, the returned generation stays free) but nothing asserts it. Added as
 case 13.
 
+
+## Amendment after the wp6 plan audit (round 6) — completion boundary and timing ownership
+
+Two findings, both accepted.
+
+### 17. The completion must be caller-specific, not the raw flight
+
+Attaching `onSettled` to `refreshPromise` settles the wrong thing. Provenance is
+**per caller**: the owner performed the CAS, a joiner awaits the flight and then runs the
+adoption path (`account-store.ts:639-660`), and an early external replacement
+(`account-store.ts:635`) has no flight at all. The raw promise cannot know which of those a
+given caller became.
+
+The cardinality was also wrong. One refresh-grant flight can serve several account aliases
+sharing that grant, each holding its own claim, and "exactly once per flight" would settle
+one of them and drop the rest.
+
+So `forceRefreshCodexPoolToken` builds a **caller-specific completion**:
+
+- It is created for every return path, including the no-flight external-replacement case,
+  and it resolves with that caller's fully classified outcome — after the adoption or
+  replacement branch has run, not before.
+- It is **not** subject to `callerSignal`. Cancellation still rejects the value the caller
+  awaits; the completion continues and fires.
+- One callback is attached per `(accountId, claimId)`, so two aliases sharing one flight
+  settle two claims independently.
+- A throwing callback is swallowed: settlement bookkeeping must never reject the credential
+  result or disturb another waiter.
+
+Tests: sole cancelled owner; cancelled joiner; two aliases on one flight both settled once;
+no-flight external replacement settles; a throwing callback leaves other waiters and the
+returned credential unaffected.
+
+### 18. Timing constants live in a leaf module
+
+The previous layout was an import cycle: `quota-401-recovery.ts` would import
+`WHAM_REQUEST_TIMEOUT_MS` from `auth-api.ts`, while `auth-api.ts` must import the recovery
+module for claim/settle.
+
+New file `src/codex/quota-recovery-timing.ts`, importing nothing from either:
+
+```ts
+export const CODEX_REFRESH_FLIGHT_CEILING_MS = 30_000;
+export const WHAM_REQUEST_TIMEOUT_MS = 8_000;
+export const QUOTA_RECOVERY_LEASE_MS =
+  CODEX_REFRESH_FLIGHT_CEILING_MS + WHAM_REQUEST_TIMEOUT_MS * 2;
+```
+
+`account-store.ts`, `auth-api.ts` and `quota-401-recovery.ts` all import from it, replacing
+their inline literals (`account-store.ts:749`, `auth-api.ts:975`). The derived-bound test
+imports the same leaf rather than restating 46_000.
+
