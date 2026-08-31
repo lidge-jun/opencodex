@@ -39,6 +39,14 @@ export interface GracefulStopIo {
    * and keep the self-contained behaviour.
    */
   deferSharedTeardownNonce?: string;
+  /**
+   * Endpoint the caller already resolved for this pid.
+   *
+   * `ocx stop` records this same snapshot in its pending-teardown receipt. Re-reading the
+   * runtime file here could pick up a different one, which would make the receipt name an
+   * endpoint the stop never contacted — and recovery probes exactly that endpoint.
+   */
+  runtimeEndpoint?: { hostname: string; port: number };
 }
 
 /**
@@ -77,7 +85,7 @@ export class ProxyOwnershipRefusedError extends Error {}
  */
 export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}): Promise<GracefulStopResult> {
   const readRuntime = io.readRuntime ?? readRuntimePort;
-  const runtime = readRuntime(pid);
+  const runtime = io.runtimeEndpoint ?? readRuntime(pid);
   if (!runtime?.port) return false;
   const env = io.env ?? process.env;
   const headers: Record<string, string> = {};
@@ -126,7 +134,7 @@ function drainDeadlineMs(): number {
 /** Graceful-first stop: management-API drain, then the platform kill ladder. */
 export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<void> {
   if (!isProcessAlive(pid)) return;
-  const runtime = readRuntimePort(pid);
+  const runtime = io.runtimeEndpoint ?? readRuntimePort(pid);
   const graceful = await stopProxyGracefully(pid, io);
   if (graceful === "refused") {
     // The proxy refused on purpose (foreign service owns it). Forcing would strip shared

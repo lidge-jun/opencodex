@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { atomicWriteFile } from "./atomic-write";
@@ -15,21 +15,22 @@ import { getConfigDir } from "./paths";
  * shared config keeps pointing at a proxy that is gone, with nothing on disk saying so.
  *
  * The receipt is that missing state. The parent writes it BEFORE asking for a deferred
- * stop and clears it only after its own restore, so any later `ocx stop`/`ocx update`
- * can see the abandoned obligation and finish it once no live proxy remains.
+ * stop and removes it only after its own restore, so a later `ocx stop`/`ocx update` can
+ * see the abandoned obligation and finish it once that proxy is proven down.
+ *
+ * ## Why the nonce is the FILENAME
+ *
+ * One shared file cannot be cleared safely. Read-compare-unlink is three syscalls, and a
+ * concurrent stop replacing the file between the compare and the unlink means this run
+ * deletes an obligation it never owned — the check passed against bytes that are already
+ * gone. Giving each claim its own path removes the race rather than serializing it:
+ * `unlink` names one specific obligation, so it can only ever delete that one. Two
+ * concurrent stops hold two receipts, which is the truth of the situation.
  */
 export type PendingTeardownReceipt = {
   /** Process that accepted the obligation, so a live owner is distinguishable from a dead one. */
   ownerPid: number;
-  /**
-   * Unguessable identity for THIS claim.
-   *
-   * A pid is neither secret nor stable: it is guessable by any local caller, and it is
-   * reused after the owner exits. The nonce is what makes "the caller that asked for the
-   * deferral is the caller that claimed it" checkable, and what makes a clear safe — a
-   * recovery run deletes the exact receipt it read, never whatever happens to be on disk
-   * by the time it finishes.
-   */
+  /** Identity of this claim; also its filename, which is what makes a clear a single-syscall delete. */
   nonce: string;
   /** ISO timestamp, for diagnostics only; recovery is decided by liveness, not by age. */
   createdAt: string;
@@ -44,11 +45,28 @@ export type PendingTeardownReceipt = {
   endpoint: { hostname: string; port: number };
 };
 
-export function getPendingTeardownPath(): string {
-  return join(getConfigDir(), "pending-teardown.json");
+/**
+ * What is on disk, kept distinct from what it means.
+ *
+ * Collapsing a malformed file into "no receipt" loses the one fact recovery needs: an
+ * obligation may still be outstanding, and its owner can no longer be identified. That
+ * state must not silently authorize a deferral, and it must not wedge every later stop
+ * either — see {@link quarantinePendingTeardown}.
+ */
+export type PendingTeardownRead =
+  | { state: "missing" }
+  | { state: "valid"; receipt: PendingTeardownReceipt }
+  | { state: "invalid"; nonce: string; detail: string };
+
+const PREFIX = "pending-teardown-";
+const SUFFIX = ".json";
+const NONCE_RE = /^[0-9a-f]{32}$/;
+
+export function pendingTeardownPathFor(nonce: string): string {
+  return join(getConfigDir(), `${PREFIX}${nonce}${SUFFIX}`);
 }
 
-function isReceipt(value: unknown): value is PendingTeardownReceipt {
+function isReceipt(value: unknown, nonce: string): value is PendingTeardownReceipt {
   if (!value || typeof value !== "object") return false;
   const receipt = value as Record<string, unknown>;
   const endpoint = receipt.endpoint as Record<string, unknown> | undefined;
@@ -61,108 +79,124 @@ function isReceipt(value: unknown): value is PendingTeardownReceipt {
     && Number(endpoint.port) <= 65535;
   return Number.isSafeInteger(receipt.ownerPid)
     && Number(receipt.ownerPid) > 0
-    && typeof receipt.nonce === "string"
-    && /^[0-9a-f]{32}$/.test(receipt.nonce)
+    // The body must agree with the name: a receipt whose nonce was edited to name a
+    // different claim would let a request authorize a deferral it does not own.
+    && receipt.nonce === nonce
     && typeof receipt.createdAt === "string"
     && endpointOk;
 }
 
-/** Identity for a file we cannot attribute: its exact bytes. */
-function fingerprintOf(raw: string): string {
-  return createHash("sha256").update(raw).digest("hex");
-}
-
-/**
- * What is on disk, kept distinct from what it means.
- *
- * Collapsing a malformed file into "no receipt" loses the one fact recovery needs: an
- * obligation may still be outstanding, and its owner can no longer be identified. That
- * state must not silently authorize either a deferral or a clear.
- */
-export type PendingTeardownRead =
-  | { state: "missing" }
-  | { state: "valid"; receipt: PendingTeardownReceipt }
-  | { state: "invalid"; fingerprint: string };
-
-/** Claim the deferred teardown for this process. Returns the receipt that was written. */
+/** Claim a deferred teardown for this process. Returns the receipt that was written. */
 export function claimPendingTeardown(
   endpoint: { hostname: string; port: number },
   ownerPid: number = process.pid,
 ): PendingTeardownReceipt {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
-  const receipt: PendingTeardownReceipt = {
-    ownerPid,
-    nonce: randomBytes(16).toString("hex"),
-    createdAt: new Date().toISOString(),
-    endpoint,
-  };
-  atomicWriteFile(getPendingTeardownPath(), JSON.stringify(receipt, null, 2) + "\n");
+  const nonce = randomBytes(16).toString("hex");
+  const receipt: PendingTeardownReceipt = { ownerPid, nonce, createdAt: new Date().toISOString(), endpoint };
+  atomicWriteFile(pendingTeardownPathFor(nonce), JSON.stringify(receipt, null, 2) + "\n");
   return receipt;
 }
 
-export function readPendingTeardownState(): PendingTeardownRead {
+export function readPendingTeardown(nonce: string): PendingTeardownRead {
+  if (!NONCE_RE.test(nonce)) return { state: "missing" };
   let raw: string;
   try {
-    raw = readFileSync(getPendingTeardownPath(), "utf-8");
+    raw = readFileSync(pendingTeardownPathFor(nonce), "utf-8");
   } catch (error) {
     // Only "there is no file" is absence. A permission error, or a directory sitting where
     // the receipt belongs, means something IS there and cannot be read; calling that
     // missing hides an obligation that may still be outstanding.
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return { state: "missing" };
-    return { state: "invalid", fingerprint: `unreadable:${code ?? "unknown"}` };
+    return { state: "invalid", nonce, detail: `unreadable (${code ?? "unknown"})` };
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    return isReceipt(parsed)
-      ? { state: "valid", receipt: parsed }
-      : { state: "invalid", fingerprint: fingerprintOf(raw) };
+    if (isReceipt(parsed, nonce)) return { state: "valid", receipt: parsed };
+    const digest = createHash("sha256").update(raw).digest("hex").slice(0, 12);
+    return { state: "invalid", nonce, detail: `malformed receipt (sha256 ${digest})` };
   } catch {
-    return { state: "invalid", fingerprint: fingerprintOf(raw) };
+    return { state: "invalid", nonce, detail: "unparseable JSON" };
   }
 }
 
-export function readPendingTeardown(): PendingTeardownReceipt | null {
-  const read = readPendingTeardownState();
-  return read.state === "valid" ? read.receipt : null;
+/** An obligation that exists on disk — the "missing" case cannot occur in a listing. */
+export type OutstandingTeardown = Exclude<PendingTeardownRead, { state: "missing" }>;
+
+/** Every obligation currently on disk, attributable or not. */
+export function listPendingTeardowns(): OutstandingTeardown[] {
+  let names: string[];
+  try {
+    names = readdirSync(getConfigDir());
+  } catch {
+    return [];
+  }
+  const out: OutstandingTeardown[] = [];
+  for (const name of names) {
+    if (!name.startsWith(PREFIX) || !name.endsWith(SUFFIX)) continue;
+    const nonce = name.slice(PREFIX.length, name.length - SUFFIX.length);
+    if (!NONCE_RE.test(nonce)) continue;
+    const read = readPendingTeardown(nonce);
+    if (read.state !== "missing") out.push(read);
+  }
+  return out;
 }
 
-/** Is an obligation outstanding on disk, whether or not it can still be attributed? */
+/** Is any obligation outstanding, whether or not it can still be attributed? */
 export function pendingTeardownOutstanding(): boolean {
-  return readPendingTeardownState().state !== "missing";
+  return listPendingTeardowns().length > 0;
 }
 
 /**
- * Clear exactly the state that was read.
+ * Remove exactly one obligation.
  *
- * Identity is the whole point. Clearing "whatever is there now" lets a recovery run
- * delete an obligation a different stop wrote while this one was restoring — silently,
- * and it puts the config back in the state the receipt existed to prevent. That applies
- * to an unparseable file too: its bytes are hashed at read time, so even an
- * unattributable obligation is deleted only when it is still the same one.
+ * The nonce is the filename, so this is a compare-and-delete in one syscall: it can never
+ * remove a receipt another process wrote, because that receipt lives at a different path.
+ * Returns whether the obligation is gone — a failed unlink is reported rather than
+ * swallowed, since a receipt that survives its discharge re-triggers recovery forever.
  */
-export function clearPendingTeardown(read: PendingTeardownRead): void {
-  if (read.state === "missing") return;
-  const path = getPendingTeardownPath();
-  if (!existsSync(path)) return;
-  const current = readPendingTeardownState();
-  if (read.state === "valid") {
-    if (current.state !== "valid" || current.receipt.nonce !== read.receipt.nonce) return;
-  } else if (current.state !== "invalid" || current.fingerprint !== read.fingerprint) return;
-  try { unlinkSync(path); } catch { /* ignore */ }
+export function clearPendingTeardown(nonce: string): boolean {
+  try {
+    unlinkSync(pendingTeardownPathFor(nonce));
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
+/**
+ * Move an unattributable obligation aside.
+ *
+ * An invalid receipt names no endpoint, so nothing can prove its proxy is down, so it can
+ * never be discharged the normal way. Left in place it is not merely useless: both
+ * updater gates treat an outstanding receipt as a reason to run the stop, and that stop
+ * would fail on the same receipt every time — an update that can never proceed.
+ *
+ * Quarantining keeps the evidence under a name the scan ignores, so the operator can look
+ * at it, while letting the stop that found it perform the restore the receipt stood for.
+ * Returns the path it was moved to, or null when it could not be moved.
+ */
+export function quarantinePendingTeardown(nonce: string): string | null {
+  const from = pendingTeardownPathFor(nonce);
+  if (!existsSync(from)) return null;
+  const to = join(getConfigDir(), `pending-teardown-unreadable-${nonce}-${Date.now()}.bak`);
+  try {
+    renameSync(from, to);
+    return to;
+  } catch {
+    return null;
+  }
 }
 
 /**
  * True when a previous deferred stop left its obligation unfinished.
  *
  * A receipt whose owner is still alive belongs to a stop that is still running: leave it
- * alone. An invalid receipt is also outstanding — it names no live owner, so it cannot be
- * waited on, and leaving it forever would strand the restore it represents.
- *
- * Only an abandoned obligation is recoverable, and the caller must still prove no proxy
- * is live before acting on it: restoring client config under a running proxy is the
- * failure the deferral exists to prevent.
+ * alone. Only an abandoned obligation is a candidate, and a VALID one still has to prove
+ * its endpoint is down before anything is restored — an invalid one never can, which is
+ * what {@link quarantinePendingTeardown} exists for.
  */
 export function isPendingTeardownAbandoned(
   read: PendingTeardownRead,
@@ -175,8 +209,8 @@ export function isPendingTeardownAbandoned(
   return !isAlive(read.receipt.ownerPid);
 }
 
-/** Does this request name the receipt it claims to own? */
-export function deferralMatchesReceipt(nonce: string | null, read: PendingTeardownRead): boolean {
-  if (!nonce) return false;
-  return read.state === "valid" && read.receipt.nonce === nonce;
+/** Does this request name an obligation that exists and is readable? */
+export function deferralMatchesReceipt(nonce: string | null): boolean {
+  if (!nonce || !NONCE_RE.test(nonce)) return false;
+  return readPendingTeardown(nonce).state === "valid";
 }

@@ -1,5 +1,5 @@
 import type { CodexNativeRestoreResult } from "../codex/inject";
-import { deferralMatchesReceipt, type PendingTeardownRead } from "../config/pending-teardown";
+import { deferralMatchesReceipt } from "../config/pending-teardown";
 
 /**
  * Shared-teardown decision and execution for `POST /api/stop` (#3008).
@@ -13,8 +13,8 @@ import { deferralMatchesReceipt, type PendingTeardownRead } from "../config/pend
 export type GrokStripResult = { ok: boolean; changed: boolean; message: string };
 
 export type StopTeardownIo = {
-  /** The caller's pending-teardown receipt as it stands on disk. */
-  readReceipt?: () => PendingTeardownRead;
+  /** Does the nonce this request carries name a readable obligation on disk? */
+  ownsReceipt?: (nonce: string | null) => boolean;
   restoreNativeCodex?: () => Promise<CodexNativeRestoreResult>;
   stripGrok?: () => GrokStripResult;
 };
@@ -38,15 +38,15 @@ export type StopTeardownBody = {
  * the 0700 config directory, which is already the trust boundary for the admin token)
  * can know.
  */
-export function deferralHonored(url: URL, readReceipt: () => PendingTeardownRead): boolean {
+export function deferralHonored(url: URL, ownsReceipt: (nonce: string | null) => boolean): boolean {
   if (url.searchParams.get("deferSharedTeardown") !== "1") return false;
-  return deferralMatchesReceipt(url.searchParams.get("teardownNonce"), readReceipt());
+  return ownsReceipt(url.searchParams.get("teardownNonce"));
 }
 
 /** Run (or skip) the shared teardown and describe the outcome truthfully. */
 export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Promise<StopTeardownBody> {
-  const readReceipt = io.readReceipt ?? ((): PendingTeardownRead => ({ state: "missing" }));
-  if (deferralHonored(url, readReceipt)) {
+  const ownsReceipt = io.ownsReceipt ?? deferralMatchesReceipt;
+  if (deferralHonored(url, ownsReceipt)) {
     // Not "native Codex restored": nothing was restored here, and claiming otherwise
     // would be a success message the operator cannot verify.
     return {
