@@ -123,6 +123,75 @@ describe("dispatchCommand exit codes", () => {
   });
 });
 
+/**
+ * `ocx health` probed once. A proxy that has only just bound can miss a single
+ * probe while its event loop is still settling startup work, so health run
+ * seconds after a service restart reported "Proxy not healthy" and exited 1 for
+ * a proxy that was in fact serving. The stop paths already retry this exact race
+ * under SERVICE_STOP_LIVENESS (#764); health did not.
+ */
+describe("health retries a just-started proxy", () => {
+  test("passes a retry budget to findLiveProxy", async () => {
+    const seen: (number | undefined)[] = [];
+    const deps = {
+      ...fakeDeps,
+      args: ["health"],
+      findLiveProxy: async (io?: { attempts?: number }) => {
+        seen.push(io?.attempts);
+        return { pid: 4242, port: 10100 } as never;
+      },
+    } as unknown as CliDispatchDeps;
+
+    expect(await dispatchCommand({ kind: "command", command: "health", args: deps.args }, deps)).toBe(0);
+    // More than one: a single attempt is the defect. The exact number is the
+    // stop path's, and is asserted rather than inferred so a silent drop back to
+    // one probe fails here.
+    expect(seen).toEqual([3]);
+  });
+
+  test("still reports an absent proxy as unhealthy", async () => {
+    const deps = {
+      ...fakeDeps,
+      args: ["health"],
+      findLiveProxy: async () => null,
+    } as unknown as CliDispatchDeps;
+
+    expect(await dispatchCommand({ kind: "command", command: "health", args: deps.args }, deps)).toBe(1);
+  });
+});
+
+/**
+ * `handleStart` skipped the configured-port probe whenever the pid file and the
+ * runtime-port record were both absent. That absence proves nothing: a
+ * fallback-port sibling overwrites both records when it starts and removes them
+ * when it stops, so `start` shadowed a healthy configured-port proxy with an
+ * ephemeral-port copy and re-pointed client config at the copy.
+ *
+ * Source-level because the executable path binds real ports and spawns a real
+ * child; this pins the one option that decides the behavior, next to the
+ * `handleEnsure` call site that already had it right.
+ */
+describe("start probes the configured port before shadowing it (source-level)", () => {
+  const cliSource = readFileSync(join(import.meta.dir, "../src/cli/index.ts"), "utf8");
+
+  test("every findProxyOwnerBeforeJournalRecovery call site asks for the probe", () => {
+    const calls = cliSource.match(/findProxyOwnerBeforeJournalRecovery\s*\(([^)]*)\)/g) ?? [];
+    // The declaration plus both call sites (handleStart, handleEnsure).
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    const invocations = calls.filter(call => !call.includes("options:"));
+    expect(invocations.length).toBe(2);
+    for (const call of invocations) {
+      expect(call).toContain("probeConfiguredPort: true");
+    }
+  });
+
+  test("the probe option still gates on an explicit true", () => {
+    // A truthy-but-not-true default would silently probe for callers that pass
+    // nothing, which is a different behavior than the one asserted above.
+    expect(cliSource).toContain("options.probeConfiguredPort === true");
+  });
+});
+
 describe("logout parses argv before touching the credential store", () => {
   /**
    * `ocx logout --json` used to lowercase `--json`, pass it to removeCredential as a provider
