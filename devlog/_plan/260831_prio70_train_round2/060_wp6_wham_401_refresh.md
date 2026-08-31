@@ -182,3 +182,96 @@ Two things to carry deliberately:
 `tests/codex-auth-api.test.ts`. PR #3020 stays unrebased; its core sequence is carried
 with credit.
 
+
+## Amendment after the wp6 plan audit (round 1)
+
+Four findings, all accepted. The plan had the right recovery direction and could not have
+established either security property as written.
+
+### 1. The lineage rule needs an account-store contract change — mandatory, not conditional
+
+The plan said "if the returned contract cannot express the middle row today, the phase adds
+that distinction to the primitive's return". It cannot. `forceRefreshCodexPoolToken`
+returns `rotated` and `selfRefreshed` only (`account-store.ts:588-607`), and the
+join-and-adopt path at `account-store.ts:639-660` returns nothing that separates it from an
+external replacement — which is exactly the ambiguity the round-3 amendment was written
+about.
+
+So `src/codex/account-store.ts` **is in scope**, and the change is a provenance value
+rather than a boolean:
+
+| provenance | meaning | budget |
+| --- | --- | --- |
+| `self-refresh` | this call's own CAS moved the credential | spend |
+| `joined-lineage` | joined an in-flight refresh of the same grant and adopted its result | spend |
+| `external-replacement` | the stored credential was replaced by someone else | reset |
+
+`selfRefreshed` stays as a derived boolean so the two response lanes
+(`compact.ts:302`, `core.ts:1806`) keep working unchanged; it is `provenance === "self-refresh"`.
+Every return path of `resolveCodexToken` gets a regression asserting its provenance,
+because a value nothing tests is a value that will drift.
+
+### 2. Cases 4 and 8 could not produce a refresh joiner
+
+Same-account quota calls already coalesce at `auth-api.ts:1043-1051`: a second caller for
+the same account joins the existing **quota** flight and never reaches WHAM, let alone
+`forceRefreshCodexPoolToken`. Two concurrent quota calls therefore produce one flight, not
+an owner and a joiner — so case 8 would have passed under the precise reset-on-join bug it
+was written to catch. That is the wrong-reason pattern this train has hit repeatedly.
+
+Replacement:
+
+- **8a (primitive level).** Two concurrent `forceRefreshCodexPoolToken` calls against one
+  account, one owner and one joiner, asserting the joiner reports `joined-lineage` and that
+  exactly one token request was issued.
+- **8b (path level).** Drive the joiner through the recovery module directly rather than
+  through two quota calls, then issue a third 401 on the returned generation and assert no
+  second refresh.
+- **9 (new).** A late quota caller arriving after the generation advanced but before the
+  WHAM replay finished. The flight's `resolvedCredentialGeneration` must be updated to the
+  RETURNED generation before the replay, or the join predicate at `auth-api.ts:1045` sees a
+  stale generation and starts a redundant flight.
+
+### 3. "Bounded" was asserted, not designed
+
+`registerStateStore` only registers callbacks (`state-store-sweeper.ts:49`); it imposes no
+bound. One live account churning lineages would accumulate records forever.
+
+The design is now explicit: **one replaceable record per account.** A new lineage replaces
+the previous record rather than adding to it, so the map is bounded by the number of
+accounts, which is already bounded by config. The record additionally carries a TTL so a
+stale budget cannot outlive its usefulness, and the store registers centrally in
+`STATE_STORE_REGISTRATIONS` (`state-store-registrations.ts:76`) with both
+`sweepExpired` and `reconcileGeneration`, so a deleted or re-added account drops its record.
+`src/lib/state-store-registrations.ts` is in scope.
+
+Tests: lineage churn on one account leaves exactly one record; an expired record is swept;
+delete-and-re-add clears it.
+
+### 4. Terminal classification and secrecy need their own cases
+
+"Structured terminal evidence" needs an allowlist, and one already exists for the main
+account: `MAIN_TERMINAL_AUTH_CODES` at `auth-api.ts:602` (`invalid_workspace_selected`,
+`invalid_refresh_token`) with the bounded-parser reasoning documented right below it. The
+pool path reuses that set and that parser rather than inventing a second vocabulary.
+
+The pool catch currently marks EVERY `TokenRefreshError` terminal (`auth-api.ts:1024`), so
+the phase must separate a revoked or expired grant from an unknown or transient refresh
+failure; only the former sets `needsReauth`.
+
+Added cases:
+
+- **10.** Replay returns a 401 carrying a terminal code — `needsReauth: true`, no second refresh.
+- **11.** The refresh itself fails transiently (not a terminal code) — `needsReauth` stays
+  false and the budget is not marked spent, so the next poll may try again.
+- **12.** Neither the rejected bearer nor the rotated one appears in any log line, debug
+  buffer, or serialized response on any of these paths. Asserted at runtime by capturing
+  the log surfaces during the flow; `privacy:scan` is a static check and does not prove it.
+
+### Scope, corrected
+
+`src/codex/auth-api.ts`, `src/codex/account-store.ts`, a new
+`src/codex/quota-401-recovery.ts`, `src/lib/state-store-registrations.ts`, and
+`tests/codex-auth-api.test.ts` plus `tests/codex-account-store*.test.ts` for the provenance
+regressions.
+
