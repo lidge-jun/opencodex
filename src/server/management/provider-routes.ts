@@ -752,7 +752,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (!canonicalBudgetOnly) {
         const serviceTierError = providerServiceTierConfigError(name, next);
         if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
-        const resolvedError = await providerDestinationResolvedError(name, next);
+        // Same DNS gate as POST and re-enable: the canonical built-in OpenAI forward
+        // provider may resolve through Clash/Mihomo fake-IP DNS (198.18.0.0/15), so the
+        // ordinary PATCH must not reject the very same destination the provider was
+        // created with. Loopback, RFC1918, metadata, and mixed dangerous answers still
+        // fail closed; nothing else gains the exception.
+        const allowBenchmarkAddresses = name === "openai" && isCanonicalOpenAiForwardProvider(next);
+        const resolvedError = await providerDestinationResolvedError(name, next, { allowBenchmarkAddresses });
         if (resolvedError) return jsonResponse({ error: resolvedError }, 400);
       }
     } else if (applied.enablingOpenAi) {

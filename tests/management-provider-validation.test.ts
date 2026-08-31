@@ -2462,6 +2462,149 @@ describe("provider management validation", () => {
     }
   });
 
+  test("canonical OpenAI PATCH passes allowBenchmarkAddresses into destination resolution", async () => {
+    // The ordinary field-mask PATCH resolves the SAME canonical chatgpt.com destination
+    // POST and re-enable already admit. Without the benchmark opt-in here, a Clash/Mihomo
+    // fake-IP user (chatgpt.com → 198.18.0.0/15) could create the provider but could never
+    // patch a context overlay onto it. Loopback/RFC1918/metadata and mixed dangerous
+    // answers still fail closed (covered by destination-policy-resolved tests and below).
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      defaultProvider: "openai",
+      providers: {
+        openai: { ...canonicalDirect },
+      },
+    };
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockResolvedValue(null);
+
+    try {
+      const patch = async (name: string, body: unknown) => {
+        const request = new Request(`http://127.0.0.1/api/providers?name=${encodeURIComponent(name)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        return handleManagementAPI(request, new URL(request.url), liveConfig, {
+          createManagementConvergeCodex: catalogConvergenceFactory(),
+        });
+      };
+
+      const canonical = await patch("openai", { modelContextWindows: { "gpt-5.6-luna": 900000 } });
+      expect(canonical?.status).toBe(200);
+      expect(resolvedError).toHaveBeenCalledWith(
+        "openai",
+        expect.objectContaining({ baseUrl: canonicalDirect.baseUrl }),
+        { allowBenchmarkAddresses: true },
+      );
+    } finally {
+      resolvedError.mockRestore();
+    }
+  });
+
+  test("PATCH destination benchmark exception stays scoped to the canonical openai row", async () => {
+    // A non-canonical openai row and any OpenAI-LOOKING custom provider must not inherit
+    // the fake-IP exception: their PATCHes still fail closed on benchmark answers.
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      defaultProvider: "openai",
+      providers: {
+        openai: { ...canonicalDirect },
+        mirror: {
+          adapter: "openai-chat",
+          baseUrl: "https://mirror.example.test/v1",
+          apiKey: "sk-secret-value",
+        },
+        "openai-proxy": {
+          adapter: "openai-chat",
+          baseUrl: "https://mirror.example.test/v1",
+          apiKey: "sk-secret-value",
+        },
+      },
+    };
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockResolvedValue(
+        "baseUrl hostname mirror.example.test resolves to a benchmark address (198.18.0.30); set allowPrivateNetwork:true only for intentionally local/self-hosted providers",
+      );
+
+    try {
+      const patch = async (name: string, body: unknown) => {
+        const request = new Request(`http://127.0.0.1/api/providers?name=${encodeURIComponent(name)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        return handleManagementAPI(request, new URL(request.url), liveConfig, {
+          createManagementConvergeCodex: catalogConvergenceFactory(),
+        });
+      };
+
+      const custom = await patch("mirror", { defaultModel: "gpt-x" });
+      expect(custom?.status).toBe(400);
+      expect(resolvedError).toHaveBeenCalledWith(
+        "mirror",
+        expect.anything(),
+        { allowBenchmarkAddresses: false },
+      );
+
+      // Non-canonical row named "openai"-adjacent: no exception either.
+      const openaiProxy = await patch("openai-proxy", { defaultModel: "gpt-x" });
+      expect(openaiProxy?.status).toBe(400);
+      expect(resolvedError).toHaveBeenCalledWith(
+        "openai-proxy",
+        expect.anything(),
+        { allowBenchmarkAddresses: false },
+      );
+    } finally {
+      resolvedError.mockRestore();
+    }
+  });
+
+  test("canonical OpenAI PATCH still rejects non-benchmark private destination answers", async () => {
+    // The benchmark opt-in must not relax the rest of the SSRF guard: if the probe
+    // classifies the canonical destination as loopback/private/metadata, the PATCH fails.
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      defaultProvider: "openai",
+      providers: {
+        openai: { ...canonicalDirect },
+      },
+    };
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockResolvedValue("baseUrl hostname chatgpt.com resolves to a loopback address (127.0.0.1); set allowPrivateNetwork:true only for intentionally local/self-hosted providers");
+
+    try {
+      const request = new Request("http://127.0.0.1/api/providers?name=openai", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ modelContextWindows: { "gpt-5.6-luna": 900000 } }),
+      });
+      const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
+        createManagementConvergeCodex: catalogConvergenceFactory(),
+      });
+      expect(response?.status).toBe(400);
+      expect(await response?.json()).toMatchObject({
+        error: expect.stringContaining("loopback address"),
+      });
+      expect(resolvedError).toHaveBeenCalledWith(
+        "openai",
+        expect.anything(),
+        { allowBenchmarkAddresses: true },
+      );
+    } finally {
+      resolvedError.mockRestore();
+    }
+  });
+
   test("disabled-only PATCH cannot re-enable a noncanonical openai row unchanged", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
