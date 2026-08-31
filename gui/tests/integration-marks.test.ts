@@ -177,3 +177,19 @@ test("the three newest marks are painted the way their artwork requires", () => 
   expect(inksOf(bodyOf("/provider-icons/gajae-code.svg")).size).toBeGreaterThan(1);
   expect(/<linearGradient[\s>]/.test(bodyOf("/provider-icons/minimax.svg"))).toBe(true);
 });
+
+/*
+ * The stylesheet rule the mobile dialog depends on.
+ *
+ * A config path is one long unbroken token and the dialog is 370px wide at a 390px
+ * viewport, so without an in-word break opportunity the path overflows and the one
+ * fact the user needs -- WHICH file is about to change -- goes off screen. This is
+ * a CSS declaration with no type or render coverage in a DOM-less suite, so it is
+ * asserted as text.
+ */
+test("the consequence dialog lets a long path break mid-token", () => {
+  const css = readFileSync(join(import.meta.dir, "..", "src", "styles-integrations.css"), "utf8");
+  const rule = css.match(/\.integration-consequence-body code \{[^}]*\}/);
+  expect(rule).not.toBeNull();
+  expect(rule![0]).toMatch(/overflow-wrap:\s*anywhere/);
+});
