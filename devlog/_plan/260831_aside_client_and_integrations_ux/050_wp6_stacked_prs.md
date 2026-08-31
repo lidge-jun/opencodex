@@ -39,3 +39,53 @@ wp2 lands, then retargets to `dev`.
 
 Requires explicit user approval per LOOP-GIT-01. The user asked for stacked PRs
 in the original request, which authorizes the push for this scope.
+
+## Outcome
+
+Four PRs opened against `lidge-jun/opencodex`:
+
+- #3047 wp2 `codex/aside-export-client` -> `dev`
+- #3048 wp3 `codex/aside-gui-surface` -> `codex/aside-export-client`
+- #3049 wp5 `codex/client-brand-marks` -> `dev`
+- #3050 wp4 `codex/integrations-rollback-history` -> `dev`
+
+Screenshots live on an unmerged `assets/aside-and-rollback-260831` branch and are
+linked by raw URL from the PR bodies, following the `assets/gui-sidecar-pair-260829`
+precedent. They are evidence, not shipped files, so they do not enter a code PR.
+
+### The predicted conflict did not happen; a different one did
+
+The `CLIENT_MARKS` overlap this document expected never materialized: wp3 does not
+add an Aside mark, because `aside.com/favicon.svg` is a 404 and Aside keeps a
+monogram. All four branches merge into one scratch branch with no conflict.
+
+What did go wrong is the wp2/wp3 boundary, and CI is what found it. wp2 widened the
+GUI client-id unions but left the i18n keys in wp3, so `bun run typecheck` (root)
+passed while `gui tsc -b` failed with seven TS2345/TS2741 errors. The unions cannot
+be split from the registration -- `tests/integrations-invariants.test.ts` compares
+them against the backend registry -- so the label keys, three exhaustive
+`Record<FileIntegrationClientId, TKey>` maps, and four client-list assertions moved
+down into wp2. wp3 keeps what is genuinely separable: the `integration-tabs.ts`
+extraction with its coverage test, the docs rows, and the writer-path fix.
+
+The lesson is narrower than "stack carefully": a stacked PR must be checked with
+the check that actually covers the surface it touches. `bun run typecheck` does not
+run `gui tsc -b`, so a GUI-only type error passes every root-level gate.
+
+### Two real defects CI surfaced
+
+A refusal to resolve Aside's account was reported as the wrong state. An absent
+`accounts.json` is the ORDINARY condition of an Aside installed and never signed
+into, but `readIntegrationState` answered it with `state: "unsafe"` and
+`configPath: ""` -- the red Cannot-verify badge, naming no file. It surfaced as
+`tests/management-integration-routes.test.ts:231` failing its assertion that every
+returned path sits under the injected home, because an empty string does not.
+A client that can say where its config WOULD live now supplies an
+`unresolvedPathHint`, and the read reports absent/not-installed with that location.
+Mutation still refuses. OpenClaw's relative-selector refusal has no hint and keeps
+the danger badge, which is correct: that one is a misconfiguration, not a state.
+
+And `integrations.catalog.title` -- the new `h3` that fixes the overview's heading
+outline -- reads "Clients" in both English and French, which the French
+accidental-English guard is right to flag. It is on the intentional-English
+allowlist now.
