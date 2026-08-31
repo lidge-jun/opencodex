@@ -13,6 +13,7 @@ import {
 } from "./provider-presets";
 import { shouldShowLoginHint, type CatalogLoginHint } from "./login-hint-visibility";
 import { LoginHint } from "../login-url-block";
+import { ProviderIcon } from "../provider-workspace/ProviderRail";
 
 export type AccountLoginStatus = { loggedIn: boolean; email?: string; error?: string; needsReauth?: boolean };
 export type AccountLoginRow = {
@@ -149,6 +150,14 @@ export default function ProviderCatalog({
         )}
         {tier !== "accounts" && rows.map(p => (
           <button type="button" key={p.id} className="list-row" onClick={() => onSelectPreset(p)}>
+            {/*
+              The one list a user reads to CHOOSE a provider, and until now the only
+              provider surface with no marks at all. `CatalogPreset.id` is the
+              registry id, so this reuses `providerIconSrc` and, with it, the
+              mask/plate decision the rail already owns -- a mark cannot be legible
+              in the workspace and invisible here.
+            */}
+            <ProviderIcon name={p.id} adapter={p.adapter} cls="provider-icon provider-icon-sm" />
             <div>
               <div className="title">{p.label}</div>
               <div className="sub"><code className="chip">{p.adapter}</code>{p.note ? ` · ${p.note}` : ""}</div>
@@ -174,6 +183,9 @@ export default function ProviderCatalog({
           return (
             <div key={row.id} className={`list-row provider-catalog-account-row${showHint ? " provider-catalog-account-row--waiting" : ""}`}>
               <div className="provider-catalog-account-row-head">
+              {/* Account rows are providers too. A logo beside Cursor and a bare
+                  tile beside Kiro reads as a bug, not as a distinction. */}
+              <ProviderIcon name={row.id} cls="provider-icon provider-icon-sm" />
               <div>
                 <div className="title">{row.label}</div>
                 <div className="sub">{statusText}</div>

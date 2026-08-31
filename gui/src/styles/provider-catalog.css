@@ -60,6 +60,16 @@
   text-overflow: ellipsis;
 }
 
+/* Both row kinds are space-between, so a mark placed before the title would push
+   the badges into the middle of the row. The text block takes the free space
+   instead, and `min-width: 0` lets a long provider label ellipsize rather than
+   widen the row past the modal.
+
+   Scoped to the catalog on purpose: `.list-row` is shared, and the other lists
+   that use it have no mark to lay out. */
+.provider-catalog-rows .provider-icon { flex: 0 0 auto; }
+.provider-catalog-rows .provider-icon + div { flex: 1 1 auto; min-width: 0; }
+
 /* An account row is normally one horizontal line (`.list-row` is a row flex).
    While a login for that row is in flight it grows a second line for the
    authorization URL, device code, and paste field, so the head keeps the
