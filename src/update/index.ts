@@ -27,6 +27,26 @@ export function historyRestoreIncomplete(configDir = getConfigDir()): boolean {
   }
 }
 
+/**
+ * Whether the update may replace the package once `ocx stop` has returned, and
+ * whether its exit status is worth mentioning.
+ *
+ * The only precondition the update has is that nothing is still serving —
+ * package replacement cannot run under a live proxy. But `ocx stop` does more
+ * than stop the proxy: it also restores Codex resume-history and reverts
+ * environment ownership, and it reports a non-zero status when any of that
+ * fails. A busy history DB is ordinary on Windows, so reading the status as the
+ * gate aborted updates whose proxy had already stopped cleanly, leaving nothing
+ * on the port and the old version installed (#3008).
+ */
+export function classifyStopForUpdate(outcome: {
+  status: number | null;
+  proxyStillUp: boolean;
+}): { proceed: false } | { proceed: true; stopStatus: number | null } {
+  if (outcome.proxyStillUp) return { proceed: false };
+  return { proceed: true, stopStatus: outcome.status === 0 ? null : outcome.status };
+}
+
 export const PKG = "@bitkyc08/opencodex";
 const HERE = dirname(fileURLToPath(import.meta.url)); // .../opencodex/src/update
 
@@ -256,7 +276,11 @@ export async function runUpdate(): Promise<void> {
       windowsHide: true,
     });
     if (stopStdio === "pipe") logSpawnOutput("", stop);
-    if (stop.status !== 0 || readPid() || readRuntimePort()) {
+    const stopOutcome = classifyStopForUpdate({
+      status: stop.status,
+      proxyStillUp: Boolean(readPid() || readRuntimePort()),
+    });
+    if (!stopOutcome.proceed) {
       if (trayWasRunning) {
         try {
           const { startWindowsTray } = await import("../tray/windows");
@@ -265,6 +289,11 @@ export async function runUpdate(): Promise<void> {
       }
       console.error("⚠️  Could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
       process.exit(1);
+    }
+    if (stopOutcome.stopStatus !== null) {
+      console.warn(
+        `⚠️  'ocx stop' exited ${stopOutcome.stopStatus}, but the proxy is stopped; continuing the update.`,
+      );
     }
     if (historyRestoreIncomplete()) {
       console.warn(
