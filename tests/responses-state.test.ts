@@ -48,6 +48,7 @@ import {
   setResponseStateByteCapForTests,
   setSpilledResponseByteCapForTests,
   getSpilledResponseBytesForTests,
+  getAccountedResponseSpillBytesForTests,
   setResponseStatePersistAttemptHookForTests,
   setResponseSpillShutdownBudgetForTests,
   getStoredResponseBytesForTests,
@@ -876,6 +877,52 @@ describe("Responses previous_response_id state", () => {
     await flushPendingResponseSpillsForTests();
     expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
     expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 1, spillWrites: 1, spillWriteFailures: 0 });
+  });
+
+  test("counts an in-flight Windows publication against the disk cap", async () => {
+    // The cap is a promise about the volume, and a file being created by
+    // writeResponseSpillDurablyAsync is on the volume. On Windows the gap between
+    // "queued" and "installed in states" is however long icacls takes, so accounting
+    // that walks only installed spills reports a satisfied budget while the directory
+    // grows. The measured incident behind this cap put 6.8 GiB on disk in 44 minutes.
+    setPlatformForTests("win32");
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+      }
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+
+    rememberLarge("resp_reserved_inflight", "x".repeat(8_000));
+    await started;
+    try {
+      // Nothing is installed yet, so the walk over `states` sees nothing on disk.
+      expect(getSpilledResponseBytesForTests()).toBe(0);
+      // The reservation prices the publication anyway, at its PEAK footprint: publication
+      // can fall back from hard-linking to an exclusive copy, and during that fallback the
+      // temp and the destination exist together. Reserving one envelope would leave the
+      // overshoot intact at half its size.
+      const accounted = getAccountedResponseSpillBytesForTests();
+      const pending = pendingResponseSpillMetricsForTests();
+      expect(pending.count).toBe(1);
+      expect(accounted).toBe(pending.bytes * 2);
+    } finally {
+      release();
+    }
+    await flushPendingResponseSpillsForTests();
+    // Settled: the reservation is released exactly once and the accounting collapses to
+    // the real file. A leaked reservation would be monotonic - it would ratchet the usable
+    // cap toward zero until nothing could spill at all.
+    expect(getAccountedResponseSpillBytesForTests()).toBe(getSpilledResponseBytesForTests());
+    expect(getSpilledResponseBytesForTests()).toBeGreaterThan(0);
   });
 
   test("Windows spill retries one transient ACL timeout without installing a tombstone", async () => {

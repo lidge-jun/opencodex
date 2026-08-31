@@ -211,12 +211,41 @@ interface PendingResponseSpill {
   cancelled: boolean;
   released: boolean;
   sizeBytes: number;
+  /** Peak on-disk bytes reserved for this publication; released exactly once on settle. */
+  reservedBytes: number;
   publicationControl: ResponseSpillPublicationControl;
 }
 
 const pendingResponseSpills = new Set<PendingResponseSpill>();
 const pendingResponseSpillById = new Map<string, PendingResponseSpill>();
 let pendingResponseSpillBytes = 0;
+/**
+ * On-disk bytes a queued publication is about to occupy but has not yet installed into
+ * `states`.
+ *
+ * `spilledResponseBytes()` walks installed spills and deferred unlinks — files that
+ * already exist. It cannot see one that `writeResponseSpillDurablyAsync` is in the
+ * middle of creating, and on Windows that middle can last as long as `icacls` takes.
+ * Without a reservation the cap holds only when writes are fast, which is not a cap.
+ *
+ * The reserved figure is the PEAK footprint, not the payload: publication can fall back
+ * from hard-linking to an exclusive copy, and during that fallback the destination copy
+ * and the temp file exist simultaneously. Reserving one envelope would leave the overshoot
+ * intact at half its magnitude.
+ *
+ * Ownership is single: a job holds its reservation from queue until
+ * `releasePendingResponseSpill`, which every exit from the publication path reaches
+ * through the `finally` in `runPendingResponseSpill` and through cancellation of a
+ * not-yet-running job. A leaked reservation is monotonic — it would ratchet the usable
+ * cap toward zero — so the release must stay on the settlement path rather than in a
+ * parallel bookkeeping pass.
+ */
+let reservedResponseSpillBytes = 0;
+
+/** Peak on-disk footprint of publishing `payloadBytes`: temp plus destination copy. */
+function publicationFootprintBytes(payloadBytes: number): number {
+  return payloadBytes * 2;
+}
 let responseSpillPublicationTail: Promise<void> = Promise.resolve();
 let responseSpillShutdownBudgetOverride: { totalMs: number; fallbackReserveMs: number } | null = null;
 let responseSpillShutdownTerminalizationPassLimitOverride: number | null = null;
@@ -234,6 +263,7 @@ function releasePendingResponseSpill(job: PendingResponseSpill): void {
   if (job.released) return;
   job.released = true;
   pendingResponseSpillBytes = Math.max(0, pendingResponseSpillBytes - job.sizeBytes);
+  reservedResponseSpillBytes = Math.max(0, reservedResponseSpillBytes - job.reservedBytes);
   pendingResponseSpills.delete(job);
   if (pendingResponseSpillById.get(job.id) === job) pendingResponseSpillById.delete(job.id);
   job.candidate = null;
@@ -337,6 +367,21 @@ function queuePendingResponseSpill(
     deferSupersededSpill(inheritedSpill);
     return;
   }
+  // Enforce the disk cap BEFORE the temp or destination file is created. Deleting the
+  // overflow afterwards is not equivalent: on Windows the file can outlive the decision
+  // by as long as ACL hardening takes, which is the window the measured 6.8 GiB
+  // accumulated in. Reclaim first, and only refuse if the peak footprint still does not
+  // fit — an eviction pass can free a live continuation's worth of room.
+  const footprint = publicationFootprintBytes(candidate.sizeBytes);
+  if (accountedResponseSpillBytes() + footprint > spillByteCap()) {
+    enforceSpilledResponseBudget();
+    if (accountedResponseSpillBytes() + footprint > spillByteCap()) {
+      spillCounters.writeFailures += 1;
+      replaceWithSpillFailure(id, candidate);
+      deferSupersededSpill(inheritedSpill);
+      return;
+    }
+  }
   const job: PendingResponseSpill = {
     id,
     candidate,
@@ -346,11 +391,13 @@ function queuePendingResponseSpill(
     cancelled: false,
     released: false,
     sizeBytes: candidate.sizeBytes,
+    reservedBytes: publicationFootprintBytes(candidate.sizeBytes),
     publicationControl: createResponseSpillPublicationControl(),
   };
   pendingResponseSpills.add(job);
   pendingResponseSpillById.set(id, job);
   pendingResponseSpillBytes += job.sizeBytes;
+  reservedResponseSpillBytes += job.reservedBytes;
   recomputeOldestResident();
   responseSpillPublicationTail = responseSpillPublicationTail
     .then(() => runPendingResponseSpill(job), () => runPendingResponseSpill(job));
@@ -442,6 +489,13 @@ function installShutdownFallbackSpill(
   aclBudgetMs: number,
 ): void {
   let ref: ResponseSpillRef | null = null;
+  // Supersession released this job's reservation, but the synchronous write below is the
+  // largest publication of the shutdown path and has its own link-then-copy fallback
+  // holding a temp and a destination at once. Re-reserve for its duration so the cap is
+  // not blind exactly where the drain does its heaviest work, and settle in `finally` so
+  // every return, throw and mismatch releases it.
+  const footprint = publicationFootprintBytes(candidate.sizeBytes);
+  reservedResponseSpillBytes += footprint;
   try {
     ref = writeResponseSpillDurably(job.id, spillPayloadForResident(candidate), { aclBudgetMs });
     if (ref.payloadBytes > responseSpillPayloadCap()) {
@@ -469,6 +523,8 @@ function installShutdownFallbackSpill(
       deferSupersededSpill(job.supersededSpill);
     }
     throw error;
+  } finally {
+    reservedResponseSpillBytes = Math.max(0, reservedResponseSpillBytes - footprint);
   }
 }
 
@@ -652,6 +708,19 @@ function spilledResponseBytes(): number {
   return total;
 }
 
+/**
+ * Accounted on-disk bytes: files that exist, plus the peak footprint of publications
+ * already in flight.
+ *
+ * The cap is enforced against this rather than against `spilledResponseBytes()` alone,
+ * because a publication that has not finished is still consuming the volume. On Windows
+ * the gap between "queued" and "installed" is however long `icacls` takes, and the
+ * measured incident this cap answers accumulated 6.8 GiB in 44 minutes.
+ */
+function accountedResponseSpillBytes(): number {
+  return spilledResponseBytes() + reservedResponseSpillBytes;
+}
+
 /** Test-only: lower/restore the durable spill cap (null restores the default). */
 export function setSpilledResponseByteCapForTests(bytes: number | null): void {
   spillByteCapOverride = bytes;
@@ -660,6 +729,11 @@ export function setSpilledResponseByteCapForTests(bytes: number | null): void {
 /** Test-only: current durable spill accounting (proves evictions unlink their files). */
 export function getSpilledResponseBytesForTests(): number {
   return spilledResponseBytes();
+}
+
+/** Test-only: on-disk bytes plus in-flight publication reservations. */
+export function getAccountedResponseSpillBytesForTests(): number {
+  return accountedResponseSpillBytes();
 }
 
 function serializedBytes(value: unknown): number | null {
@@ -1572,7 +1646,9 @@ export function replayOverlapSkipsForTests(): number {
  * account for, and not the directory as a whole.
  */
 function enforceSpilledResponseBudget(): number {
-  let spilledBytes = spilledResponseBytes();
+  // Price in-flight publications too: a file being created by
+  // `writeResponseSpillDurablyAsync` occupies the volume before it reaches `states`.
+  let spilledBytes = accountedResponseSpillBytes();
   if (spilledBytes <= spillByteCap()) return 0;
   const before = spilledBytes;
   // Deferred generations go first. They are already superseded, so releasing one
