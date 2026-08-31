@@ -286,7 +286,8 @@ export interface CodexModelEntitlementCredentialSnapshot {
 
 export type CodexModelEntitlementProvenance =
   | { readonly kind: "parsed-empty" }
-  | { readonly kind: "http-error"; readonly httpStatus?: number }
+  | { readonly kind: "http-error"; readonly httpStatus: number }
+  | { readonly kind: "network-error" }
   | { readonly kind: "timeout" }
   | { readonly kind: "unparseable" };
 
@@ -294,10 +295,11 @@ export type CodexModelEntitlementStatus =
   | { readonly status: "unavailable" }
   | { readonly status: "fresh" }
   | { readonly status: "unconfirmed-empty" }
+  | { readonly status: "failed"; readonly reason: "http-error"; readonly httpStatus: number }
   | {
       readonly status: "failed";
-      readonly reason: Exclude<CodexModelEntitlementProvenance["kind"], "parsed-empty">;
-      readonly httpStatus?: number;
+      readonly reason: Exclude<CodexModelEntitlementProvenance["kind"], "parsed-empty" | "http-error">;
+      readonly httpStatus?: never;
     }
   | { readonly status: "expired-refresh-in-flight" };
 
@@ -588,7 +590,7 @@ async function fetchAccountModels(
   } catch (error) {
     const provenance = isTimeoutError(error) || isTimeoutError(controller.signal.reason)
       ? { kind: "timeout" } as const
-      : { kind: "http-error" } as const;
+      : { kind: "network-error" } as const;
     return unconfirmedAccountModels(credential, clientVersion, now, provenance);
   } finally {
     clearTimeout(timer);
@@ -884,12 +886,12 @@ export function getCodexModelEntitlementStatus(
   const live = entries.flatMap(({ credentialIdentity, entry }) => (
     entry && entry.credentialIdentity === credentialIdentity && entry.expiresAt > now ? [entry] : []
   ));
+  // Deliberate failure-first aggregation keeps a partial Pool refresh failure visible.
   const failed = live.find(entry => entry.provenance && entry.provenance.kind !== "parsed-empty");
   if (failed?.provenance?.kind === "http-error") {
-    return failed.provenance.httpStatus === undefined
-      ? { status: "failed", reason: "http-error" }
-      : { status: "failed", reason: "http-error", httpStatus: failed.provenance.httpStatus };
+    return { status: "failed", reason: "http-error", httpStatus: failed.provenance.httpStatus };
   }
+  if (failed?.provenance?.kind === "network-error") return { status: "failed", reason: "network-error" };
   if (failed?.provenance?.kind === "timeout") return { status: "failed", reason: "timeout" };
   if (failed?.provenance?.kind === "unparseable") return { status: "failed", reason: "unparseable" };
   if (live.some(entry => entry.provenance?.kind === "parsed-empty")) {

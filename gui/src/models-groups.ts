@@ -12,10 +12,11 @@ export type ProviderEntitlementSummary =
   | { status: "unavailable" }
   | { status: "fresh" }
   | { status: "unconfirmed-empty" }
+  | { status: "failed"; reason: "http-error"; httpStatus: number }
   | {
       status: "failed";
-      reason: "http-error" | "timeout" | "unparseable";
-      httpStatus?: number;
+      reason: "network-error" | "timeout" | "unparseable";
+      httpStatus?: never;
     }
   | { status: "expired-refresh-in-flight" };
 

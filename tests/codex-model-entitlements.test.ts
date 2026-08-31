@@ -116,6 +116,11 @@ describe("Codex account model entitlements", () => {
           expected: { status: "failed", reason: "http-error", httpStatus: 503 },
         },
         {
+          name: "network-error",
+          fetcher: (async () => { throw new TypeError("connection refused"); }) as typeof fetch,
+          expected: { status: "failed", reason: "network-error" },
+        },
+        {
           name: "timeout",
           fetcher: (async () => { throw new DOMException("timed out", "TimeoutError"); }) as typeof fetch,
           expected: { status: "failed", reason: "timeout" },
@@ -140,6 +145,37 @@ describe("Codex account model entitlements", () => {
           testCase.name,
         ).toEqual(testCase.expected);
       }
+    } finally {
+      isolated.restore();
+    }
+  });
+
+  test("default entitlement status uses the same client-version cache key as resolution", async () => {
+    const isolated = installIsolatedCodexHome("ocx-entitlement-default-version-");
+    const accountId = "pool-default-version";
+    const config = {
+      codexAccounts: [{ id: accountId, email: "pool-default-version@example.test", isMain: false }],
+    };
+    try {
+      saveCodexAccountCredential(accountId, {
+        accessToken: "default-version-access",
+        refreshToken: "default-version-refresh",
+        expiresAt: Date.now() + 60_000,
+        chatgptAccountId: "chatgpt-default-version",
+      });
+      const generation = readCodexAccountRecord(accountId)!.generation;
+      await resolveCodexModelEntitlements(config, {
+        credentials: [{
+          accountId,
+          accessToken: "default-version-access",
+          chatgptAccountId: "chatgpt-default-version",
+          credentialIdentity: `pool:${generation}:chatgpt-default-version`,
+        }],
+        fetcher: (async () => roster(SOL)) as typeof fetch,
+        now: 1_000,
+      });
+
+      expect(getCodexModelEntitlementStatus(config, 1_001)).toEqual({ status: "fresh" });
     } finally {
       isolated.restore();
     }
