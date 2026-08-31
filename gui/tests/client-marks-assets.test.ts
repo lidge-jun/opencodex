@@ -88,3 +88,21 @@ test("a single-ink mark whose ink is a brand color is not masked", () => {
   const body = readFileSync(join(PUBLIC_DIR, CLIENT_MARKS.dsh!.replace(/^\//, "")), "utf8");
   expect([...inksOf(body)]).toEqual(["#4d6bfe"]);
 });
+
+/*
+ * Every mark here is somebody else's trademark, used on the strength of being
+ * that vendor's own published asset. The README is where that claim lives -- the
+ * source it came from and when -- and it is the only record of it. A mark added
+ * without an entry is one nobody can later confirm the provenance of, which is
+ * the state this directory is specifically trying not to be in.
+ *
+ * Prose is checked here rather than a manifest because prose is what the README
+ * is; the assertion is only that each committed mark is named somewhere in it.
+ */
+test("every mark's provenance is recorded in the README", () => {
+  const readme = readFileSync(join(PUBLIC_DIR, "provider-icons", "README.md"), "utf8");
+  const undocumented = Object.values(CLIENT_MARKS)
+    .map(src => src!.split("/").pop()!)
+    .filter(file => !readme.includes(file));
+  expect(undocumented).toEqual([]);
+});
