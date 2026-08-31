@@ -22,6 +22,12 @@ let testWindow: Window;
 let container: HTMLElement;
 let root: Root | null = null;
 
+/*
+ * No `as` cast. An assertion here would let a fixture name a client this build
+ * does not have -- `gui/tests` sits outside every tsconfig `include`, so a bad
+ * literal would not even be caught by typecheck, and the test would pass while
+ * documenting a client that does not exist.
+ */
 function row(overrides: Partial<IntegrationJournalRow> & { opId: string }): IntegrationJournalRow {
   return {
     clientId: "hermes",
@@ -31,7 +37,7 @@ function row(overrides: Partial<IntegrationJournalRow> & { opId: string }): Inte
     snapshot: "stored",
     undoable: false,
     ...overrides,
-  } as IntegrationJournalRow;
+  };
 }
 
 /** Newest first, which is the order the journal route returns. */
@@ -175,11 +181,11 @@ test("the overview names the client on every row; a client tab does not", async 
    * a row there is ambiguous without its client. On a client tab the heading
    * already says it.
    */
-  await mount([row({ opId: "op-a", clientId: "aside" })], { showClient: true });
-  expect(container.querySelector(".integration-history-client")?.textContent).toBe("aside");
+  await mount([row({ opId: "op-a", clientId: "dsh" })], { showClient: true });
+  expect(container.querySelector(".integration-history-client")?.textContent).toBe("dsh");
 
   await act(async () => { root!.unmount(); root = null; });
-  await mount([row({ opId: "op-a", clientId: "aside" })]);
+  await mount([row({ opId: "op-a", clientId: "dsh" })]);
   expect(container.querySelector(".integration-history-client")).toBeNull();
 });
 
@@ -193,4 +199,30 @@ test("rows share one boundary instead of one border each", async () => {
   await mount(rows(3));
   expect(container.querySelector(".integration-history")).not.toBeNull();
   expect(container.querySelectorAll(".integration-history-list").length).toBeGreaterThan(0);
+});
+
+test("the disclosure is keyboard-operable and its summary is the only added tab stop", async () => {
+  /*
+   * Collapsing rows behind <details> hides them from the accessibility tree and
+   * from Tab in a real browser. happy-dom keeps closed-<details> children in the
+   * DOM, so a presence assertion cannot prove reachability -- these assertions
+   * pin the two structural facts that DO carry it: the disclosure is a native
+   * <details> with a real <summary>, which is natively focusable and operable by
+   * Enter/Space. A div-with-onClick would leave the older rows unreachable by
+   * keyboard while every DOM-presence assertion still passed.
+   */
+  await mount(rows(20));
+  const details = disclosure()!;
+  expect(details.tagName).toBe("DETAILS");
+  const summary = details.querySelector("summary");
+  expect(summary).not.toBeNull();
+  // A div+onClick would render the older rows unreachable by keyboard.
+  expect(summary!.tagName).toBe("SUMMARY");
+
+  // The summary is the ONE tab stop the collapse adds: no other node in the
+  // region takes one, so the disclosure costs a keyboard user a single keystroke.
+  const region = container.querySelector(".integration-history")!;
+  const extraStops = Array.from(region.querySelectorAll("[tabindex]"))
+    .filter(node => node.getAttribute("tabindex") !== "-1");
+  expect(extraStops).toHaveLength(0);
 });
