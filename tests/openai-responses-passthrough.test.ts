@@ -1355,6 +1355,30 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(input[2].action).toEqual({ type: "search", query: "", queries: [""] });
   });
 
+  test("repairs a partly-malformed or already-queried empty action (#3071)", () => {
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "provider-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "provider-model",
+        input: [
+          { type: "web_search_call", id: "ws_mixed", status: "completed", action: { type: "search", queries: ["a", 42] } },
+          { type: "web_search_call", id: "ws_qempty", status: "completed", action: { type: "search", query: "legacy", queries: [] } },
+        ],
+      },
+    }, meta);
+    const input = (JSON.parse(request.body) as { input: Array<{ action: Record<string, unknown> }> }).input;
+
+    // Left alone: deriving `query: "a"` would satisfy Console Go and leave DeepSeek to
+    // reject the same replay over the non-string second member.
+    expect(input[0].action).toEqual({ type: "search", queries: ["a", 42] });
+    // Canonicalized without discarding the query the item already carried.
+    expect(input[1].action).toEqual({ type: "search", query: "legacy", queries: ["legacy"] });
+  });
+
   test("strips invalid type-specific ids from serialized input items", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const encryptedContent = "opaque-openai-encrypted-content";

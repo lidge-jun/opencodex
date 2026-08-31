@@ -912,10 +912,12 @@ function annotateEmptyResponsesToolOutputs(body: unknown, enabled: boolean): unk
  * ways.
  *
  * Input items carry a loose schema, so a stored `queries` is not necessarily an array of
- * strings. A non-string first member is left alone rather than copied into `query`:
- * writing `query: 123` would satisfy the presence check and still fail the validator this
- * repair exists to satisfy, while claiming a successful repair. An empty `queries: []`
- * canonicalizes to the same shape the bridge emits for an empty search.
+ * strings. A partly- or wholly-malformed array is left alone rather than used as a source
+ * for the singular field: writing `query: 123` would satisfy the presence check and still
+ * fail the validator this repair exists to satisfy, and deriving `query` from
+ * `["a", 42]` would satisfy Console Go while leaving DeepSeek to reject the same replay.
+ * An empty `queries: []` canonicalizes to the shape the bridge emits for an empty search,
+ * keeping an existing `query` when the item has one.
  *
  * Runs on every Responses request, on both `input` items and the `action` nested inside
  * them. Returns the original reference when nothing needs repair, so the common path
@@ -932,20 +934,26 @@ function backfillWebSearchQueries(body: unknown): unknown {
     // DeepSeek native Responses requires `queries`; Console Go requires `query`.
     const rep: Record<string, unknown> = { ...action };
     let itemChanged = false;
-    if (typeof action.query !== "string" && Array.isArray(action.queries)) {
-      if (action.queries.length === 0) {
-        // An empty array satisfies neither validator. Canonicalize to the empty-search
-        // shape the bridge emits rather than inventing a query.
-        rep.query = "";
-        rep.queries = [""];
-        itemChanged = true;
-      } else if (typeof action.queries[0] === "string") {
-        rep.query = action.queries[0];     // multi-query item recorded before the fix
+    const hasQuery = typeof action.query === "string";
+    const queries = Array.isArray(action.queries) ? action.queries : undefined;
+    if (queries !== undefined && queries.length === 0) {
+      // An empty array satisfies neither validator. Canonicalize to the empty-search
+      // shape the bridge emits, keeping an existing query rather than discarding it.
+      const query = hasQuery ? action.query as string : "";
+      rep.query = query;
+      rep.queries = [query];
+      itemChanged = true;
+    } else if (!hasQuery && queries !== undefined) {
+      // A plural array is only a usable source for the singular field when EVERY member
+      // is a string: deriving `query` from a partly-malformed array would satisfy Console
+      // Go while leaving DeepSeek to reject the same replay. Wholly malformed arrays are
+      // left untouched — coercing or dropping members would invent semantics the stored
+      // item never had.
+      if (queries.every(entry => typeof entry === "string")) {
+        rep.query = queries[0];            // multi-query item recorded before the fix
         itemChanged = true;
       }
-      // A non-string first member is left untouched: copying it would produce an invalid
-      // singular field while reporting a successful repair.
-    } else if (typeof action.query === "string" && !Array.isArray(action.queries)) {
+    } else if (hasQuery && queries === undefined) {
       rep.queries = [action.query];        // single-query item recorded before the fix
       itemChanged = true;
     }
@@ -2125,9 +2133,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = repairOversizedReplayCallIds(outBody);
       }
       outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
-      // Repair stored history from before the bridge emitted both keys: a conversation
-      // that already recorded a single-query web_search_call replays it every turn, and
-      // a strict parser rejects the whole request over it (#930).
+      // Repair stored history from before the bridge emitted both keys, in either
+      // direction: a conversation that already recorded a web_search_call replays it
+      // every turn, and a strict parser rejects the whole request over the missing key —
+      // `queries` for DeepSeek (#930), `query` for Console Go (#3071).
       outBody = backfillWebSearchQueries(outBody);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         outBody = promoteClientLoadedTools(outBody);
