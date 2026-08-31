@@ -93,3 +93,50 @@ at 20px.
   is 292 px and a fixed area floor would have dropped it — it is the visor
   green, which is the feature that makes the character recognizable, so the
   floor is a fraction of the opaque area instead.
+
+## How a mark is painted
+
+Provenance is not the only fact that has to survive a handoff. Every mark is
+drawn one of two ways, and picking wrong makes a logo vanish rather than look
+slightly off:
+
+- **image** — the `<svg>` is rendered as-is, keeping its own colors. Correct for
+  anything multi-color, and for a single ink that *is* the brand.
+- **mask** — the file is used as a shape and filled with the surrounding text
+  color, so it follows the theme. Correct for a neutral silhouette, which would
+  otherwise be invisible against one of the two surfaces.
+
+The set lives in `gui/src/components/integration-marks.ts`. It is derived from
+`MONOCHROME_CLIENT_MARKS` for export clients, plus `MASKED_NATIVE_MARKS` for rows
+that have no export client to be keyed by.
+
+Decisions that are not obvious from looking at the file:
+
+- `grok.svg` **is masked.** One `#000000` fill on transparency measured about
+  1.9:1 on the dark card surface (`rgb(48,48,48)`) — effectively gone. Masking
+  does not modify xAI's file; it reads it as a shape, which is how xAI renders it
+  on their own dark surfaces. 11.17:1 dark and 17.67:1 light afterwards.
+- `openai.svg` **is not masked**, despite also being a single fill. That fill is
+  #10A37F, OpenAI's brand green, and repainting it discards information a reader
+  uses to identify the mark. Neutrality is the test, not ink count.
+- `deepseek-harness.svg` **is not masked** for the same reason: #4d6bfe is
+  DeepSeek blue. Its dark-theme contrast is adequate; if it ever is not, the fix
+  is a surface change, not a repaint.
+- `hermes-agent.svg` **is masked.** The trace is one near-black path, so it is
+  invisible on `#0d1117` untinted. Nothing about the Hermes brand is carried by
+  that particular black.
+- `minimax.svg` and `gajae-code.svg` **are not masked.** A gradient wave and a
+  seven-layer mascot respectively; masking would flatten both to one ink.
+- `prime-agent.svg` **is masked.** White on transparency, so as an image it was
+  invisible in light mode. This one shipped broken.
+- `opencode.svg` (#211E1E) and `kimi-color.svg` (#1A1A1A) **are masked.** Both
+  near-black single inks, invisible in dark mode as images. Both shipped broken
+  too, which is what established the rule.
+- `aside.svg` **is masked.** It already paints with `currentColor`, so it would
+  follow the theme either way; masking keeps it consistent with the other
+  silhouettes rather than depending on inherited color.
+
+Both directions are enforced in `gui/tests/integration-marks.test.ts`, including a
+luminance check that fails any single-ink near-neutral mark left as an image. That
+direction was missing until it caught `grok`; the same class of defect had already
+shipped once for `prime`, `opencode` and `kimi`.

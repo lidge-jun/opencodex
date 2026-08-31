@@ -121,6 +121,37 @@ test("every export client has a mark", () => {
 });
 
 /*
+ * Provenance is documented; how a mark is PAINTED was not, and that is the fact
+ * that actually broke. `grok.svg` sat unmasked at roughly 1.9:1 on the dark card
+ * because the reasoning for leaving it an image lived only in a code comment that
+ * was wrong about what masking does.
+ *
+ * This pins the README section rather than the decision itself -- the decision is
+ * enforced in integration-marks.test.ts. What it prevents is the next person
+ * re-litigating a case that was already measured, which is how grok stayed broken
+ * through two passes over the same file.
+ */
+test("the README explains how marks are painted, not only where they came from", () => {
+  const readme = readFileSync(join(PUBLIC_DIR, "provider-icons", "README.md"), "utf8");
+  expect(readme).toContain("## How a mark is painted");
+
+  /*
+   * Every masked mark has to be argued for by name. A mark added to the mask set
+   * without a line here is a decision nobody can review, and "it looked
+   * monochrome" is precisely the reasoning that needs to be written down.
+   */
+  const section = readme.slice(readme.indexOf("## How a mark is painted"));
+  const unexplained = [...MONOCHROME_CLIENT_MARKS]
+    .map(clientId => CLIENT_MARKS[clientId]!.split("/").pop()!)
+    .filter(file => !section.includes(file));
+  expect(unexplained).toEqual([]);
+
+  // The two cases a reader is most likely to get backwards.
+  expect(section).toContain("grok.svg");
+  expect(section).toContain("openai.svg");
+});
+
+/*
  * Two of the newest marks are traced from raster sources, which is a different
  * provenance claim from "fetched" and the one a reader is most likely to doubt.
  * The README has to carry the reproduction detail: the source file, and the
