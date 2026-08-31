@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { installedServiceCanRespawn, isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
+import { installedServiceRespawnRisk, isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
 const ENSURE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "ensure-desired-integrations.ts"), "utf8");
@@ -403,26 +403,34 @@ describe("POST /api/stop teardown", () => {
     // Stopping the Task Scheduler task and then returning 409 left the proxy running with
     // its manager stopped — worse than either outcome, and the dashboard's Stop button
     // sends a bare request on every backend.
-    expect(handler).toContain("!holdsReceipt && installedServiceCanRespawn()");
+    expect(handler).toContain('const respawnRisk = holdsReceipt ? "none" : installedServiceRespawnRisk();');
     expect(handler).toContain('code: "respawnable_service"');
-    expect(handler.indexOf("installedServiceCanRespawn()")).toBeLessThan(handler.indexOf("stopServiceIfInstalledDetailed()"));
+    expect(handler.indexOf("installedServiceRespawnRisk()")).toBeLessThan(handler.indexOf("stopServiceIfInstalledDetailed()"));
     // The refusal must say nothing was changed, because nothing was.
     expect(handler).toContain("Nothing was changed.");
+    // An unreadable scheduler state is its own answer: sending that operator to `ocx stop`
+    // would be a loop, because it maps the same unknown probe to a stop failure.
+    expect(handler).toContain('code: "service_state_unknown"');
+    const unknownBranch = handler.slice(handler.indexOf('code: "service_state_unknown"'), handler.indexOf('code: "service_state_unknown"') + 500);
+    expect(unknownBranch).toContain("ocx service status");
+    expect(unknownBranch).not.toContain("run `ocx stop`");
   });
 
   test("only a proven absence is safe to stop inline", () => {
     // Behavioural, not source-shaped: the previous assertion matched an unrelated
     // `return true` in the catch and therefore passed while "unknown" was let through.
-    expect(installedServiceCanRespawn(() => ({ status: "present" }) as never, "win32")).toBe(true);
+    expect(installedServiceRespawnRisk(() => ({ status: "present" }) as never, "win32")).toBe("respawnable");
     // "unknown" is an ordinary return value from the probe, not a throw. Treating it as
     // absence let the route kill scheduler wrappers before refusing.
-    expect(installedServiceCanRespawn(() => ({ status: "unknown" }) as never, "win32")).toBe(true);
-    expect(installedServiceCanRespawn(() => { throw new Error("schtasks unavailable"); }, "win32")).toBe(true);
+    // It is also kept distinct from "respawnable", because the remedy differs: `ocx stop`
+    // maps the same unknown to a stop failure, so telling that operator to run it loops.
+    expect(installedServiceRespawnRisk(() => ({ status: "unknown" }) as never, "win32")).toBe("unknown");
+    expect(installedServiceRespawnRisk(() => { throw new Error("schtasks unavailable"); }, "win32")).toBe("unknown");
     // A proven absence is the only case that proceeds.
-    expect(installedServiceCanRespawn(() => ({ status: "absent" }) as never, "win32")).toBe(false);
+    expect(installedServiceRespawnRisk(() => ({ status: "absent" }) as never, "win32")).toBe("none");
     // Every other platform is down when it says so; no wrapper can respawn.
-    expect(installedServiceCanRespawn(() => ({ status: "present" }) as never, "darwin")).toBe(false);
-    expect(installedServiceCanRespawn(() => ({ status: "present" }) as never, "linux")).toBe(false);
+    expect(installedServiceRespawnRisk(() => ({ status: "present" }) as never, "darwin")).toBe("none");
+    expect(installedServiceRespawnRisk(() => ({ status: "present" }) as never, "linux")).toBe("none");
   });
 
   test("the daemon's exit status reflects the shared teardown, not just the drain", () => {

@@ -24,7 +24,7 @@ ocx start --port 8080
 
 ### `ocx stop`
 
-停止正在运行的代理（按 PID），移除 PID 文件，并恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘中的 **Stop** 按钮也提供同样的操作（`POST /api/stop`）。
+停止正在运行的代理（按 PID），移除 PID 文件，并恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘的 **Stop** 按钮在多数后端执行同样的操作（`POST /api/stop`），但 Windows 任务计划程序除外：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口，因此仪表盘会以 `respawnable_service` 拒绝、不做任何更改，并提示改用 `ocx stop`。
 
 ### `ocx restart`
 

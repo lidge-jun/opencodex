@@ -37,8 +37,7 @@ ocx start --port 8080
 
 Çalışan proxy'yi (PID'ye göre) durdurun, PID dosyasını kaldırın ve yerel Codex'i
 geri yükleyin. Yönetilen bir arka plan servisi kuruluysa `ocx stop` proxy'yi
-yeniden oluşturamaması için önce onu da durdurur. Aynı eylem web kontrol
-panelinin **Durdur** düğmesinden de (`POST /api/stop`) kullanılabilir.
+yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin **Durdur** düğmesi aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
 
 ### `ocx restart`
 

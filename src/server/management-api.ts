@@ -256,7 +256,7 @@ export async function handleManagementAPI(
   if (routed) return routed;
 
   if (url.pathname === "/api/stop" && req.method === "POST") {
-    const { installedServiceCanRespawn, stopServiceIfInstalledDetailed, isServiceOwnershipError } = await import("../service");
+    const { installedServiceRespawnRisk, stopServiceIfInstalledDetailed, isServiceOwnershipError } = await import("../service");
     // `ocx stop` performs its own shared teardown AFTER verifying the scheduler did not
     // respawn the proxy (#3008). Without this the child restores native Codex and strips
     // the Grok fence here, so a survivor found moments later has already had the shared
@@ -275,11 +275,22 @@ export async function handleManagementAPI(
     const { deferralMatchesReceipt } = await import("../config/pending-teardown");
     const { deferralHonored, performStopTeardown } = await import("./stop-teardown");
     const holdsReceipt = deferralHonored(url, deferralMatchesReceipt);
-    if (!holdsReceipt && installedServiceCanRespawn()) {
+    const respawnRisk = holdsReceipt ? "none" : installedServiceRespawnRisk();
+    if (respawnRisk === "respawnable") {
       return jsonResponse({
         success: false,
         code: "respawnable_service",
         message: "This proxy is managed by a Task Scheduler wrapper that can respawn it, so the stop must be run by `ocx stop`, which verifies the respawn window. Nothing was changed.",
+      }, 409, req, config);
+    }
+    if (respawnRisk === "unknown") {
+      // Do NOT send them to `ocx stop`: it maps the same unanswerable probe to a stop
+      // failure, so that advice would be a loop. The scheduler query itself is what needs
+      // fixing (#3008).
+      return jsonResponse({
+        success: false,
+        code: "service_state_unknown",
+        message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Nothing was changed. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
       }, 409, req, config);
     }
     let serviceStop: "absent" | "stopped" | "stopped-respawnable" | "failed";

@@ -195,7 +195,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/system/memory` | 返回标量级的进程、堆、流、响应状态、看门狗和活跃回合指标 | — |
 | `POST /api/system/restart` | 在不移除客户端注入的情况下，开始一次考虑排空的进程重启 | 返回 202；重复调用会报告现有排空 |
-| `POST /api/stop` | 停止服务、恢复原生 Codex、移除受管 Grok 注入并排空代理 | 409 服务所有权冲突；当 Windows 任务计划程序包装器可能重新拉起代理且调用方不是 `ocx stop` 时返回 409 `respawnable_service`（不会做任何更改）；已安装的管理器拒绝停止时返回 409；当 Windows 任务计划程序包装器可能重新拉起代理且调用方不是 `ocx stop` 时返回 409 `respawnable_service`（不会做任何更改）；已安装的管理器拒绝停止时返回 409 |
+| `POST /api/stop` | 停止服务、恢复原生 Codex、移除受管 Grok 注入并排空代理 | 409 服务所有权冲突；当 Windows 任务计划程序包装器可能重新拉起代理且调用方不是 `ocx stop` 时返回 409 `respawnable_service`（不会做任何更改）；已安装的管理器拒绝停止时返回 409；无法读取任务计划程序状态时返回 409 `service_state_unknown`（不会做任何更改；修复查询后重试） |
 
 ### Codex 身份验证委托
 

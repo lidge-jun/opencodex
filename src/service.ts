@@ -3641,20 +3641,27 @@ export function stopServiceIfInstalled(): boolean {
  * wrapper survives and respawns its child (#764); launchd, systemd and WinSW are down when
  * they report stopped.
  */
-export function installedServiceCanRespawn(
+export function installedServiceRespawnRisk(
   probe: () => WindowsSchedulerTaskProbe = probeWindowsSchedulerTask,
   platform: NodeJS.Platform = process.platform,
-): boolean {
-  if (platform !== "win32") return false;
+): "none" | "respawnable" | "unknown" {
+  // launchd, systemd and WinSW are down when they report stopped; only the Task Scheduler
+  // wrapper survives its task ending (#764).
+  if (platform !== "win32") return "none";
   try {
-    // Only a PROVEN absence is safe. `probeWindowsSchedulerTask` returns "unknown" as an
-    // ordinary value when its queries fail — not by throwing — so testing for "present"
-    // let an unanswerable probe through, and the route then killed scheduler wrappers
-    // before refusing: the mutate-then-refuse defect, back again (#3008).
-    return probe().status !== "absent";
+    // `probeWindowsSchedulerTask` returns "unknown" as an ordinary value when its queries
+    // fail — it does not throw — so testing for "present" let an unanswerable probe
+    // through, and the route then killed scheduler wrappers before refusing.
+    //
+    // "unknown" is kept SEPARATE from "respawnable" because the remedies differ. Telling
+    // an operator whose schtasks query is broken to run `ocx stop` is circular: that
+    // command maps the same unknown to a stop failure, so it cannot finish either.
+    const status = probe().status;
+    if (status === "absent") return "none";
+    return status === "present" ? "respawnable" : "unknown";
   } catch {
     // A probe that cannot answer is not evidence of absence either.
-    return true;
+    return "unknown";
   }
 }
 
