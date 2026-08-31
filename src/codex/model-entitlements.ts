@@ -284,6 +284,23 @@ export interface CodexModelEntitlementCredentialSnapshot {
   readonly credentialIdentity: string;
 }
 
+export type CodexModelEntitlementProvenance =
+  | { readonly kind: "parsed-empty" }
+  | { readonly kind: "http-error"; readonly httpStatus?: number }
+  | { readonly kind: "timeout" }
+  | { readonly kind: "unparseable" };
+
+export type CodexModelEntitlementStatus =
+  | { readonly status: "unavailable" }
+  | { readonly status: "fresh" }
+  | { readonly status: "unconfirmed-empty" }
+  | {
+      readonly status: "failed";
+      readonly reason: Exclude<CodexModelEntitlementProvenance["kind"], "parsed-empty">;
+      readonly httpStatus?: number;
+    }
+  | { readonly status: "expired-refresh-in-flight" };
+
 interface CachedAccountModels {
   readonly credentialIdentity: string;
   /**
@@ -295,6 +312,7 @@ interface CachedAccountModels {
   readonly expiresAt: number;
   readonly models: ReadonlySet<string>;
   readonly confirmed: boolean;
+  readonly provenance?: CodexModelEntitlementProvenance;
 }
 
 export interface CodexModelEntitlementSnapshot {
@@ -483,6 +501,26 @@ function parseAccountModels(text: string): ReadonlySet<string> | null {
   }
 }
 
+function unconfirmedAccountModels(
+  credential: CodexModelEntitlementCredentialSnapshot,
+  clientVersion: string,
+  now: number,
+  provenance: CodexModelEntitlementProvenance,
+): CachedAccountModels {
+  return {
+    credentialIdentity: credential.credentialIdentity,
+    clientVersion,
+    expiresAt: now + MODEL_ROSTER_FAILURE_TTL_MS,
+    models: new Set(),
+    confirmed: false,
+    provenance,
+  };
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === "TimeoutError";
+}
+
 async function fetchAccountModels(
   credential: CodexModelEntitlementCredentialSnapshot,
   fetcher: typeof fetch,
@@ -507,9 +545,19 @@ async function fetchAccountModels(
       maxBytes: MODEL_ROSTER_MAX_BYTES,
       fatalUtf8: true,
     });
-    const models = response.ok && body.displaySafe && !body.truncated
-      ? parseAccountModels(body.text)
-      : null;
+    if (!response.ok) {
+      return unconfirmedAccountModels(credential, clientVersion, now, {
+        kind: "http-error",
+        httpStatus: response.status,
+      });
+    }
+    if (!body.displaySafe || body.truncated) {
+      return unconfirmedAccountModels(credential, clientVersion, now, { kind: "unparseable" });
+    }
+    const models = parseAccountModels(body.text);
+    if (models === null) {
+      return unconfirmedAccountModels(credential, clientVersion, now, { kind: "unparseable" });
+    }
     // A roster is a confirmation only when it lists something usable. `models` is a Set, and an
     // empty Set is truthy, so `models !== null` used to call `{"models":[]}` — and a response
     // whose every row was hidden or api-disabled — a confirmed answer, and lock it in for the
@@ -517,28 +565,28 @@ async function fetchAccountModels(
     // account asked under too old a client version answers with no gated rows, and treating
     // that as authoritative is exactly how 2.36.0 denied sol/terra/luna to accounts that own
     // them (#3022). No usable rows means unconfirmed, on the 15s failure TTL, asked again.
-    const usable = models !== null && models.size > 0;
-    const hasUnknownGatedAbsence = usable && [...ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS]
+    const usable = models.size > 0;
+    if (!usable) {
+      return unconfirmedAccountModels(credential, clientVersion, now, { kind: "parsed-empty" });
+    }
+    const hasUnknownGatedAbsence = [...ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS]
       .some(([modelId, minimum]) => (
         !models.has(modelId) && compareClientVersions(clientVersion, minimum) < 0
       ));
     return {
       credentialIdentity: credential.credentialIdentity,
       clientVersion,
-      expiresAt: now + (usable && !hasUnknownGatedAbsence
+      expiresAt: now + (!hasUnknownGatedAbsence
         ? MODEL_ROSTER_TTL_MS
         : MODEL_ROSTER_FAILURE_TTL_MS),
-      models: models ?? new Set(),
-      confirmed: usable,
+      models,
+      confirmed: true,
     };
-  } catch {
-    return {
-      credentialIdentity: credential.credentialIdentity,
-      clientVersion,
-      expiresAt: now + MODEL_ROSTER_FAILURE_TTL_MS,
-      models: new Set(),
-      confirmed: false,
-    };
+  } catch (error) {
+    const provenance = isTimeoutError(error) || isTimeoutError(controller.signal.reason)
+      ? { kind: "timeout" } as const
+      : { kind: "http-error" } as const;
+    return unconfirmedAccountModels(credential, clientVersion, now, provenance);
   } finally {
     clearTimeout(timer);
   }
@@ -798,6 +846,48 @@ export async function ensureCodexEntitlementFreshness(
   } catch {
     // The shared management boundary must degrade to the last confirmed fail-closed projection.
   }
+}
+
+export function getCodexModelEntitlementStatus(
+  config: Pick<OcxConfig, "codexAccounts">,
+  now = Date.now(),
+  clientVersion?: string | null,
+): CodexModelEntitlementStatus {
+  const version = resolveCodexEntitlementClientVersion(clientVersion);
+  const accounts = candidateAccountIds(config).flatMap(accountId => {
+    const credentialIdentity = currentCredentialIdentity(accountId);
+    return credentialIdentity ? [{ accountId, credentialIdentity }] : [];
+  });
+  if (accounts.length === 0) return { status: "unavailable" };
+
+  const entries = accounts.map(({ accountId, credentialIdentity }) => ({
+    accountId,
+    credentialIdentity,
+    entry: accountModelsCache.get(cacheKeyFor(accountId, version)),
+  }));
+  if (entries.some(({ accountId, credentialIdentity, entry }) => (
+    entry
+    && entry.credentialIdentity === credentialIdentity
+    && entry.expiresAt <= now
+    && accountModelsFlights.has(`${accountId}\u0000${credentialIdentity}\u0000${version}`)
+  ))) return { status: "expired-refresh-in-flight" };
+
+  const live = entries.flatMap(({ credentialIdentity, entry }) => (
+    entry && entry.credentialIdentity === credentialIdentity && entry.expiresAt > now ? [entry] : []
+  ));
+  const failed = live.find(entry => entry.provenance && entry.provenance.kind !== "parsed-empty");
+  if (failed?.provenance?.kind === "http-error") {
+    return failed.provenance.httpStatus === undefined
+      ? { status: "failed", reason: "http-error" }
+      : { status: "failed", reason: "http-error", httpStatus: failed.provenance.httpStatus };
+  }
+  if (failed?.provenance?.kind === "timeout") return { status: "failed", reason: "timeout" };
+  if (failed?.provenance?.kind === "unparseable") return { status: "failed", reason: "unparseable" };
+  if (live.some(entry => entry.provenance?.kind === "parsed-empty")) {
+    return { status: "unconfirmed-empty" };
+  }
+  if (live.some(entry => entry.confirmed)) return { status: "fresh" };
+  return { status: "unavailable" };
 }
 
 /**

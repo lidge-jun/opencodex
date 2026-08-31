@@ -14,6 +14,7 @@ import {
   ensureCodexEntitlementFreshness,
   entitledCodexAccountIdsForModel,
   GATED_MODEL_CLIENT_VERSION_FLOOR,
+  getCodexModelEntitlementStatus,
   isDirectCallerEntitledToCodexModel,
   isUsableCodexClientVersion,
   memoizeRuntimeVersionForTests,
@@ -35,6 +36,8 @@ import {
 import { clearCodexRuntimeResolveCache, loadPersistedCodexRuntime } from "../src/codex/runtime";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
 import upstreamModelsSnapshot from "../src/codex/data/upstream-models.json";
+import { readCodexAccountRecord, saveCodexAccountCredential } from "../src/codex/account-store";
+import { installIsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 const TEST_CLIENT_VERSION = "0.146.0";
 const DAYBREAK = "gpt-daybreak-blue-latest";
@@ -77,6 +80,71 @@ function deferred<T = void>(): {
 beforeEach(() => resetCodexModelEntitlementCacheForTests());
 
 describe("Codex account model entitlements", () => {
+  test("keeps parsed-empty distinct from refresh failures end to end", async () => {
+    const isolated = installIsolatedCodexHome("ocx-entitlement-provenance-");
+    const accountId = "pool-provenance";
+    const config = {
+      codexAccounts: [{ id: accountId, email: "pool-provenance@example.test", isMain: false }],
+    };
+    try {
+      saveCodexAccountCredential(accountId, {
+        accessToken: "provenance-access",
+        refreshToken: "provenance-refresh",
+        expiresAt: Date.now() + 60_000,
+        chatgptAccountId: "chatgpt-provenance",
+      });
+      const generation = readCodexAccountRecord(accountId)!.generation;
+      const storedCredential: CodexModelEntitlementCredentialSnapshot = {
+        accountId,
+        accessToken: "provenance-access",
+        chatgptAccountId: "chatgpt-provenance",
+        credentialIdentity: `pool:${generation}:chatgpt-provenance`,
+      };
+      const cases: Array<{
+        name: string;
+        fetcher: typeof fetch;
+        expected: Record<string, unknown>;
+      }> = [
+        {
+          name: "parsed-empty",
+          fetcher: (async () => Response.json({ models: [] })) as typeof fetch,
+          expected: { status: "unconfirmed-empty" },
+        },
+        {
+          name: "http-error",
+          fetcher: (async () => new Response("upstream failed", { status: 503 })) as typeof fetch,
+          expected: { status: "failed", reason: "http-error", httpStatus: 503 },
+        },
+        {
+          name: "timeout",
+          fetcher: (async () => { throw new DOMException("timed out", "TimeoutError"); }) as typeof fetch,
+          expected: { status: "failed", reason: "timeout" },
+        },
+        {
+          name: "unparseable",
+          fetcher: (async () => new Response("not-json")) as typeof fetch,
+          expected: { status: "failed", reason: "unparseable" },
+        },
+      ];
+
+      for (const testCase of cases) {
+        resetCodexModelEntitlementCacheForTests();
+        await resolveCodexModelEntitlements(config, {
+          credentials: [storedCredential],
+          fetcher: testCase.fetcher,
+          now: 1_000,
+          clientVersion: TEST_CLIENT_VERSION,
+        });
+        expect(
+          getCodexModelEntitlementStatus(config, 1_001, TEST_CLIENT_VERSION),
+          testCase.name,
+        ).toEqual(testCase.expected);
+      }
+    } finally {
+      isolated.restore();
+    }
+  });
+
   test("keeps account-gated models scoped to the authenticated account roster", async () => {
     const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
       credentials: [credential("main"), credential("secondary")],
