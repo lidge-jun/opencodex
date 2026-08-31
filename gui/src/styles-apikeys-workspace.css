@@ -492,6 +492,28 @@
   border-radius: var(--radius-sm);
 }
 
+/* Single-ink marks are drawn as a mask tinted with the row's text color, so the
+   ink follows the theme instead of the file. A white-on-transparent logo would
+   otherwise be invisible in light mode, and a near-black one invisible in dark.
+   The mask sits inside the slot rather than filling it: unlike the plated brand
+   SVGs, a silhouette has no plate of its own to align to the slot edge. */
+.awi-clientconfig-mark-mask {
+  width: 20px;
+  height: 20px;
+  background: var(--text);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+
+.awi-clientconfig-mark:has(.awi-clientconfig-mark-mask) {
+  border-color: transparent;
+  background: none;
+}
+
 /* Fallback for a client with no brand asset. Honest about being a placeholder,
    and the slot a real mark drops into later. */
 .awi-clientconfig-monogram {

@@ -43,10 +43,13 @@ export const CLIENT_LABEL_KEYS = {
  * harness is first-party DeepSeek but it is a different product from the model
  * provider, and the provider logo would be a borrowed mark.
  *
- * Three clients are absent on purpose. `gajae` publishes only raster marks,
- * `hermes` upstream ships a text-glyph placeholder with no path data, and
- * `aside` has no first-party web asset at all. Each renders a monogram, which is
- * what this map's rule prescribes; the README records the reason for each.
+ * `aside` is the one mark not taken from the web: Aside publishes no favicon.svg,
+ * so its symbol comes out of the shipping application, where the vendor names the
+ * module `official-brand-symbol`. Still first-party, just not fetched.
+ *
+ * Two clients are absent on purpose. `gajae` publishes only raster marks and
+ * `hermes` upstream ships a text-glyph placeholder with no path data. Both render
+ * a monogram, which is what this map's rule prescribes; the README records why.
  */
 export const CLIENT_MARKS: Partial<Record<ExportClientId, string>> = {
   opencode: "/provider-icons/opencode.svg",
@@ -57,7 +60,29 @@ export const CLIENT_MARKS: Partial<Record<ExportClientId, string>> = {
   dsh: "/provider-icons/deepseek-harness.svg",
   zcode: "/provider-icons/zcode.svg",
   prime: "/provider-icons/prime-agent.svg",
+  aside: "/provider-icons/aside.svg",
 };
+
+/**
+ * Marks whose artwork is a single-ink silhouette, so the ink has to come from the
+ * theme rather than from the file. Drawn through a CSS mask tinted with the row's
+ * text color, the way `.provider-icon-mask` already handles provider logos.
+ *
+ * Without this each of them disappears against one of the two themes: `prime`
+ * ships white-on-transparent and vanishes in light mode, while `opencode`
+ * (#211E1E) and `kimi` (#1A1A1A) vanish in dark. That is not hypothetical -- a
+ * rendered check of every mark showed `prime` blank on white and `opencode` and
+ * `kimi` blank on #0d1117.
+ *
+ * A multi-color mark must never be listed here: masking discards its colors and
+ * would flatten a brand palette into one ink.
+ */
+export const MONOCHROME_CLIENT_MARKS: ReadonlySet<ExportClientId> = new Set<ExportClientId>([
+  "opencode",
+  "kimi",
+  "prime",
+  "aside",
+]);
 
 /** The `/api/client-config` 200 envelope, read off the route rather than a design doc. */
 export interface ClientConfigEnvelope {

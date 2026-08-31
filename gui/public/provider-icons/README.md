@@ -37,8 +37,17 @@ Export-client marks (used by the API tab's connect rows, not the provider list):
   carries its authoring tool's generator comment).
 - `kimi-color.svg` — already in the baseline as a provider icon; the API tab reuses
   it for the Kimi Code client, which is the same Moonshot AI brand.
+- `aside.svg` — extracted 2026-08-31 from the installed Aside application, module
+  `Contents/Frameworks/Aside Framework.framework/Versions/1.0.825.1/Libraries/AsideAgentManager/assets/official-brand-symbol-*.js`.
+  It is Aside's own brand symbol, named as such by the vendor and rendered by
+  Aside's onboarding, permission, and settings surfaces. The module is a compiled
+  React component rather than a file, so the single 24x24 `evenodd` path was
+  lifted verbatim into a standalone SVG with its original `viewBox` and its
+  `currentColor` fill; no path data was redrawn. Aside does not publish this mark
+  on the web (`aside.com/favicon.svg` is a 404), so the shipping application is
+  the first-party source.
 
-Three export clients deliberately have NO mark and render a monogram instead,
+Two export clients deliberately have NO mark and render a monogram instead,
 because the rule is that a client without a real first-party asset gets a
 monogram rather than a borrowed or unreliable one:
 
@@ -49,5 +58,3 @@ monogram rather than a borrowed or unreliable one:
   entire body is a `<text>` element rendering one unicode glyph. It has no path
   data, so it renders differently per machine and blank where the glyph is
   missing. It passes an automated SVG check and is still not a brand mark.
-- `aside` — `aside.com/favicon.svg` is a 404 and only `favicon.ico` exists; the app
-  bundle ships `app.icns`, a local macOS resource rather than a web asset.
