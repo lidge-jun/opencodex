@@ -545,14 +545,20 @@ function installShutdownFallbackSpill(
   const footprint = publicationFootprintBytes(job.id, candidate);
   reservedResponseSpillBytes += footprint;
   try {
+    // Supersession released this job, so its superseded generation is no longer visible
+    // to the accounting walk — but the file is still on the volume until
+    // `deferSupersededSpill` or a delete takes it. Price it here or the fallback decides
+    // against a total short by that whole envelope, which is exactly the gap that lets
+    // `debt + footprint <= cap < old + debt + footprint` publish over budget.
+    const supersededBytes = job.supersededSpill?.payloadBytes ?? 0;
     // The drain must not publish over the cap either. Reclaim first; if the footprint
     // still does not fit — which is what unreclaimable cleanup debt looks like — the
     // honest close-out is a tombstone, not another file on a volume that is already
     // over budget. `replaceWithSpillFailure` is the same fail-closed ending the budget
     // exhaustion path uses, so replay reports `spill_failed` and the client resends.
-    if (accountedResponseSpillBytes() > spillByteCap()) {
+    if (accountedResponseSpillBytes() + supersededBytes > spillByteCap()) {
       enforceSpilledResponseBudget();
-      if (accountedResponseSpillBytes() > spillByteCap()) {
+      if (accountedResponseSpillBytes() + supersededBytes > spillByteCap()) {
         if (states.get(job.id) === candidate) {
           spillCounters.writeFailures += 1;
           replaceWithSpillFailure(job.id, candidate);

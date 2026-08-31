@@ -1273,6 +1273,57 @@ describe("Responses previous_response_id state", () => {
     }
   });
 
+  test("shutdown fallback prices the job-owned superseded generation before publishing", async () => {
+    // Supersession releases the job, so its superseded generation leaves the accounting
+    // walk while the FILE stays on the volume. Without pricing it, the fallback decides
+    // against a total short by a whole envelope, and a cap sitting between
+    // (debt + footprint) and (old + debt + footprint) admits a publication that puts the
+    // directory over budget.
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let announced = false;
+    setAsyncIcaclsRunnerForTests(async () => {
+      if (!announced) {
+        announced = true;
+        entered();
+      }
+      await gate;
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+    setResponseStateByteCapForTests(1_024);
+
+    // First generation settles to a real file, then a same-id replacement makes the job
+    // the owner of that superseded generation.
+    rememberLarge("resp_shutdown_superseded", "o".repeat(8_000));
+    await flushPendingResponseSpillsForTests();
+    const oldBytes = getSpilledResponseBytesForTests();
+    expect(oldBytes).toBeGreaterThan(0);
+
+    rememberLarge("resp_shutdown_superseded", "n".repeat(8_000));
+    await started;
+
+    try {
+      // Cap allows the new publication on its own, but not alongside the superseded
+      // generation the job still owns.
+      setSpilledResponseByteCapForTests(Math.floor(oldBytes * 2.4));
+      // The refusal surfaces as a shutdown failure, which is the honest signal: the
+      // operator learns a continuation was dropped rather than the volume being
+      // silently overfilled.
+      await expect(flushResponseState()).rejects.toThrow(/shutdown fallback incomplete/);
+      // Fail-closed rather than over-budget: the drain refused to add a third envelope.
+      expect(bytesOnDisk(home)).toBeLessThanOrEqual(Math.floor(oldBytes * 2.4));
+      expect(spillTempNames(home)).toHaveLength(0);
+      expect(pendingResponseSpillMetricsForTests()).toEqual({ count: 0, bytes: 0 });
+    } finally {
+      release();
+    }
+  });
+
   test("shutdown fallback spends only its reserved ACL budget", async () => {
     setPlatformForTests("win32");
     const totalMs = 500;
