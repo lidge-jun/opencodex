@@ -388,12 +388,19 @@ function runNpmSelfUpdate() {
     const decision = decidePostStopUpdate({
       status: stopRes.status,
       hasRuntimeState: stillHasRuntimeState,
+      // Re-checked AFTER the stop: a quarantined receipt lets the stop itself succeed
+      // (there is nothing left to stop), so a pre-stop check alone let the retry install
+      // over a teardown that never ran.
+      teardownOutstanding: hasPendingTeardownIn(readdirSync, configDir()),
       liveness: probeProxyLiveness(bakePort, bakeHostname),
     });
     const historyOnlyStop = decision.reason === "history-only";
     if (!decision.proceed) {
       if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
-      console.error(decision.reason === "proxy-unknown"
+      if (decision.reason === "teardown-outstanding") {
+        console.error("opencodex: a shared teardown from an earlier stop is still outstanding and needs manual review; aborting the update.");
+        console.error("opencodex: confirm no proxy is running, run 'ocx restore', then remove the pending-teardown file in the opencodex home.");
+      } else console.error(decision.reason === "proxy-unknown"
         ? `opencodex: could not confirm the proxy on ${bakeHostname}:${bakePort} is stopped; aborting the update. Run 'ocx stop' and retry.`
         : "opencodex: could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
       process.exit(1);

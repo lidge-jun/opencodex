@@ -745,10 +745,10 @@ async function handleStop() {
   const inheritedTeardowns = listPendingTeardowns()
     .filter(read => isPendingTeardownAbandoned(read, isProcessAlive));
   let teardownNonce: string | undefined;
-  const claimTeardown = (endpoint: { hostname: string; port: number }) => {
+  const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce) return;
     try {
-      teardownNonce = claimPendingTeardown(endpoint).nonce;
+      teardownNonce = claimPendingTeardown(endpoint, endpointSource).nonce;
     } catch (err) {
       // Without a receipt the proxy performs its own teardown, which is the pre-#3008
       // behaviour: correct for every backend that cannot respawn, and merely early for
@@ -773,16 +773,20 @@ async function handleStop() {
    * the endpoint this process would restore anyway. It is the configured listen address,
    * which is the same address every recovery probe would ask about, and an obligation
    * recorded against it is strictly better than none: at worst the probe cannot confirm
-   * it dead and a later stop refuses to restore, which is the safe direction.
+   * A guessed endpoint is NOT evidence, so the receipt records which kind it holds: a
+   * guessed one fails closed into manual recovery rather than letting a later probe read
+   * "the configured port refuses" as proof that the right proxy is down.
    */
   const stopWithDeferral = async (pid: number, discovered?: { hostname: string; port: number } | null): Promise<void> => {
-    const endpoint = discovered ?? endpointOf(readRuntimePort(pid)) ?? configuredEndpoint();
-    claimTeardown(endpoint);
+    // Resolve ONCE. Reading the runtime record twice let the receipt name the configured
+    // guess while the request went to a runtime endpoint that appeared in between.
+    const exact = discovered ?? endpointOf(readRuntimePort(pid));
+    claimTeardown(exact ?? configuredEndpoint(), exact ? "exact" : "guessed");
     await stopProxy(pid, {
       deferSharedTeardownNonce: teardownNonce,
-      // Only a DISCOVERED endpoint may direct the request; the configured fallback is a
-      // guess good enough to record an obligation against, not to POST a stop to.
-      runtimeEndpoint: discovered ?? endpointOf(readRuntimePort(pid)) ?? undefined,
+      // Only an exact endpoint may direct the request; the configured fallback is a guess
+      // good enough to record an obligation against, not to POST a stop to.
+      runtimeEndpoint: exact ?? undefined,
     });
   };
   try {
@@ -933,6 +937,17 @@ async function handleStop() {
         console.error(`❌ A pending-teardown receipt could not be read (${read.detail}).`);
         console.error("   It names no endpoint, so this stop cannot prove the proxy it belonged to is down.");
         console.error("   Confirm no proxy is running, then rerun 'ocx stop' to complete the teardown.");
+        continue;
+      }
+      if (read.receipt.endpointSource === "guessed") {
+        // The recorded address is the configured one, not the one that stop contacted. A
+        // proxy on an explicit --port can be respawned there while this address refuses,
+        // so "dead" here proves nothing and must not authorize a restore.
+        inheritedBlocks = true;
+        stopFailed = true;
+        console.error("❌ A shared teardown from an earlier stop is outstanding, but that stop could not record the address it was stopping.");
+        console.error(`   Only the configured address (${read.receipt.endpoint.hostname}:${read.receipt.endpoint.port}) was recorded, which cannot prove the right proxy is down.`);
+        console.error(`   Confirm no proxy is running, then run 'ocx restore' and remove ${pendingTeardownPathFor(read.receipt.nonce)}.`);
         continue;
       }
       if (await abandonedTeardownIsSafeToFinish(read.receipt.endpoint)) {

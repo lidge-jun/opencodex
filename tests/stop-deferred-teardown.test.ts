@@ -128,7 +128,7 @@ describe("performStopTeardown", () => {
 
   test("the real ownership check accepts only a nonce with a readable receipt on disk", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
     let restored = 0;
     const deferred = await performStopTeardown(new URL(`http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=${claimed.nonce}`), {
       restoreNativeCodex: async () => { restored += 1; return restoreResult(true); },
@@ -162,7 +162,7 @@ describe("performStopTeardown", () => {
 
   test("an unreadable receipt does not authorize a deferral", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
     writeFileSync(mod.pendingTeardownPathFor(claimed.nonce), "{not json");
     let restored = 0;
     const body = await performStopTeardown(new URL(`http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=${claimed.nonce}`), {
@@ -189,7 +189,7 @@ describe("receipt naming is shared by both update lanes", () => {
   test("the launcher's scan and the TypeScript listing agree on what is outstanding", async () => {
     const mod = await import("../src/config/pending-teardown");
     const names = await import("../src/config/pending-teardown-names.mjs");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
 
     // bin/ocx.mjs runs under plain Node and cannot import the TypeScript module, so the
     // naming rule lives in one shared .mjs. Spelling it twice is exactly how the npm lane
@@ -226,10 +226,59 @@ describe("receipt naming is shared by both update lanes", () => {
   });
 });
 
+describe("endpoint provenance", () => {
+  test("a guessed endpoint is recorded as such and is not exact evidence", async () => {
+    const mod = await import("../src/config/pending-teardown");
+    const guessed = mod.claimPendingTeardown({ hostname: "127.0.0.1", port: 10100 }, "guessed", 1234);
+    const read = mod.readPendingTeardown(guessed.nonce);
+    expect(read.state === "valid" && read.receipt.endpointSource).toBe("guessed");
+
+    // A proxy started with an explicit --port can be respawned there while the configured
+    // address refuses, so a dead probe of THIS address proves nothing. handleStop reads
+    // the provenance and fails closed rather than restoring on it.
+    const exact = mod.claimPendingTeardown({ hostname: "127.0.0.1", port: 19999 }, "exact", 1234);
+    expect(mod.readPendingTeardown(exact.nonce)).toMatchObject({ state: "valid" });
+  });
+
+  test("a receipt without provenance is invalid, so an old-format file cannot be trusted", async () => {
+    const mod = await import("../src/config/pending-teardown");
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
+    writeFileSync(
+      mod.pendingTeardownPathFor(claimed.nonce),
+      JSON.stringify({ ownerPid: 1234, nonce: claimed.nonce, createdAt: "t", endpoint: ENDPOINT }),
+    );
+    expect(mod.readPendingTeardown(claimed.nonce).state).toBe("invalid");
+    writeFileSync(
+      mod.pendingTeardownPathFor(claimed.nonce),
+      JSON.stringify({ ownerPid: 1234, nonce: claimed.nonce, createdAt: "t", endpoint: ENDPOINT, endpointSource: "maybe" }),
+    );
+    expect(mod.readPendingTeardown(claimed.nonce).state).toBe("invalid");
+  });
+});
+
+describe("post-stop update decision", () => {
+  test("an outstanding obligation aborts the install even when the stop succeeded", async () => {
+    const { decidePostStopUpdate } = await import("../src/update/stop-decision.mjs");
+    // A quarantined receipt lets the stop itself succeed — there is nothing left to stop —
+    // so checking only BEFORE the stop let the retry sail through and install over a
+    // teardown that never ran.
+    expect(decidePostStopUpdate({ status: 0, hasRuntimeState: false, liveness: "dead", teardownOutstanding: true }))
+      .toEqual({ proceed: false, reason: "teardown-outstanding" });
+    expect(decidePostStopUpdate({ status: 0, hasRuntimeState: false, liveness: "dead", teardownOutstanding: false }))
+      .toEqual({ proceed: true, reason: "ok" });
+    // Omitting the field keeps the previous behaviour for any caller that has not adopted it.
+    expect(decidePostStopUpdate({ status: 0, hasRuntimeState: false, liveness: "dead" }))
+      .toEqual({ proceed: true, reason: "ok" });
+    // A real stop failure still wins: it is the stronger signal.
+    expect(decidePostStopUpdate({ status: 1, hasRuntimeState: false, liveness: "dead", teardownOutstanding: true }))
+      .toEqual({ proceed: false, reason: "stop-failed" });
+  });
+});
+
 describe("pending teardown receipts", () => {
   test("a claim is durable and carries the endpoint it was stopping", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
     expect(claimed.nonce).toMatch(/^[0-9a-f]{32}$/);
     expect(existsSync(mod.pendingTeardownPathFor(claimed.nonce))).toBe(true);
     const read = mod.readPendingTeardown(claimed.nonce);
@@ -245,8 +294,8 @@ describe("pending teardown receipts", () => {
     // can be replaced between the compare and the unlink. The nonce is the filename now,
     // so the replacement is a DIFFERENT file and the delete cannot reach it — no ordering
     // of the two operations matters.
-    const abandoned = mod.claimPendingTeardown(ENDPOINT, 1111);
-    const concurrent = mod.claimPendingTeardown(ENDPOINT, 2222);
+    const abandoned = mod.claimPendingTeardown(ENDPOINT, "exact", 1111);
+    const concurrent = mod.claimPendingTeardown(ENDPOINT, "exact", 2222);
     expect(mod.listPendingTeardowns()).toHaveLength(2);
 
     expect(mod.clearPendingTeardown(abandoned.nonce)).toBe(true);
@@ -257,12 +306,12 @@ describe("pending teardown receipts", () => {
 
   test("clearing reports whether the obligation is actually gone", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
     expect(mod.clearPendingTeardown(claimed.nonce)).toBe(true);
     // Already gone is still "gone" — an idempotent discharge is not a failure.
     expect(mod.clearPendingTeardown(claimed.nonce)).toBe(true);
     // A receipt that cannot be removed must be reported, or recovery repeats forever.
-    const stuck = mod.claimPendingTeardown(ENDPOINT, 1234);
+    const stuck = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
     rmSync(mod.pendingTeardownPathFor(stuck.nonce));
     mkdirSync(mod.pendingTeardownPathFor(stuck.nonce), { recursive: true });
     mkdirSync(join(mod.pendingTeardownPathFor(stuck.nonce), "child"), { recursive: true });
@@ -272,7 +321,7 @@ describe("pending teardown receipts", () => {
 
   test("an unreadable receipt is invalid, outstanding, and quarantinable", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
     writeFileSync(mod.pendingTeardownPathFor(claimed.nonce), "{not json");
     const read = mod.readPendingTeardown(claimed.nonce);
     expect(read.state).toBe("invalid");
@@ -291,7 +340,7 @@ describe("pending teardown receipts", () => {
 
   test("a directory where a receipt belongs is invalid, not missing", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
     rmSync(mod.pendingTeardownPathFor(claimed.nonce));
     mkdirSync(mod.pendingTeardownPathFor(claimed.nonce), { recursive: true });
     // Reading that as absence hides an obligation that may still be outstanding.
@@ -302,10 +351,10 @@ describe("pending teardown receipts", () => {
 
   test("a receipt whose body disagrees with its filename is invalid", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
     writeFileSync(
       mod.pendingTeardownPathFor(claimed.nonce),
-      JSON.stringify({ ownerPid: 1234, nonce: FOREIGN_NONCE, createdAt: "t", endpoint: ENDPOINT }),
+      JSON.stringify({ ownerPid: 1234, nonce: FOREIGN_NONCE, createdAt: "t", endpoint: ENDPOINT, endpointSource: "exact" }),
     );
     // Otherwise an edited body could claim an identity the file name does not carry.
     expect(mod.readPendingTeardown(claimed.nonce).state).toBe("invalid");
@@ -314,9 +363,9 @@ describe("pending teardown receipts", () => {
 
   test("a receipt without a usable endpoint is invalid, because recovery could not locate it", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 1234);
     const path = mod.pendingTeardownPathFor(claimed.nonce);
-    const base = { ownerPid: 7, nonce: claimed.nonce, createdAt: "t" };
+    const base = { ownerPid: 7, nonce: claimed.nonce, createdAt: "t", endpointSource: "exact" };
     writeFileSync(path, JSON.stringify(base));
     expect(mod.readPendingTeardown(claimed.nonce).state).toBe("invalid");
     writeFileSync(path, JSON.stringify({ ...base, endpoint: { hostname: "", port: 10100 } }));
@@ -327,7 +376,7 @@ describe("pending teardown receipts", () => {
 
   test("only an abandoned receipt is recoverable", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 4242);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 4242);
     const live = mod.readPendingTeardown(claimed.nonce);
 
     // A stop that is still running owns its own obligation; finishing it from here would
@@ -342,7 +391,7 @@ describe("pending teardown receipts", () => {
 
   test("deferralMatchesReceipt needs a well-formed nonce that names a readable receipt", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(ENDPOINT, 7);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, "exact", 7);
     expect(mod.deferralMatchesReceipt(claimed.nonce)).toBe(true);
     expect(mod.deferralMatchesReceipt(FOREIGN_NONCE)).toBe(false);
     expect(mod.deferralMatchesReceipt(null)).toBe(false);

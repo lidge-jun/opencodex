@@ -43,6 +43,17 @@ export type PendingTeardownReceipt = {
    * one keeps serving, and its client config gets torn out from under it.
    */
   endpoint: { hostname: string; port: number };
+  /**
+   * How the endpoint was obtained.
+   *
+   * `exact` came from the runtime record or a successful liveness probe — the address the
+   * stop actually contacted. `guessed` is the configured listen address, recorded because
+   * an obligation with a weak address beats no obligation at all, but it is NOT evidence:
+   * a proxy on an explicit `--port` can be respawned there while the configured port
+   * refuses, and treating that refusal as proof would restore under a live proxy. A
+   * guessed receipt therefore fails closed into manual recovery.
+   */
+  endpointSource: "exact" | "guessed";
 };
 
 /**
@@ -90,18 +101,20 @@ function isReceipt(value: unknown, nonce: string): value is PendingTeardownRecei
     // different claim would let a request authorize a deferral it does not own.
     && receipt.nonce === nonce
     && typeof receipt.createdAt === "string"
+    && (receipt.endpointSource === "exact" || receipt.endpointSource === "guessed")
     && endpointOk;
 }
 
 /** Claim a deferred teardown for this process. Returns the receipt that was written. */
 export function claimPendingTeardown(
   endpoint: { hostname: string; port: number },
+  endpointSource: "exact" | "guessed",
   ownerPid: number = process.pid,
 ): PendingTeardownReceipt {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
   const nonce = randomBytes(16).toString("hex");
-  const receipt: PendingTeardownReceipt = { ownerPid, nonce, createdAt: new Date().toISOString(), endpoint };
+  const receipt: PendingTeardownReceipt = { ownerPid, nonce, createdAt: new Date().toISOString(), endpoint, endpointSource };
   atomicWriteFile(pendingTeardownPathFor(nonce), JSON.stringify(receipt, null, 2) + "\n");
   return receipt;
 }

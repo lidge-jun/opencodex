@@ -274,6 +274,10 @@ export async function runUpdate(): Promise<void> {
     const decision = decidePostStopUpdate({
       status: stop.status,
       hasRuntimeState: !!(readPid() || readRuntimePort()),
+      // Re-checked AFTER the stop: a quarantined receipt lets the stop itself succeed
+      // (there is nothing left to stop), so a pre-stop check alone let the retry install
+      // over a teardown that never ran.
+      teardownOutstanding: pendingTeardownOutstanding(),
       liveness: identity ? "live" : probeProxyLiveness(capturedListen.port, capturedListen.hostname),
     });
     const historyOnlyStop = decision.reason === "history-only";
@@ -284,9 +288,14 @@ export async function runUpdate(): Promise<void> {
           startWindowsTray();
         } catch { /* preserve the proxy stop failure */ }
       }
-      console.error(decision.reason === "proxy-unknown"
-        ? `⚠️  Could not confirm the proxy on ${capturedListen.hostname}:${capturedListen.port} is stopped; aborting the update. Run 'ocx stop' and retry.`
-        : "⚠️  Could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
+      if (decision.reason === "teardown-outstanding") {
+        console.error("⚠️  A shared teardown from an earlier stop is still outstanding and needs manual review; aborting the update.");
+        console.error("    Confirm no proxy is running, run 'ocx restore', then remove the pending-teardown file in your opencodex home.");
+      } else {
+        console.error(decision.reason === "proxy-unknown"
+          ? `⚠️  Could not confirm the proxy on ${capturedListen.hostname}:${capturedListen.port} is stopped; aborting the update. Run 'ocx stop' and retry.`
+          : "⚠️  Could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
+      }
       process.exit(1);
     }
     if (historyOnlyStop || historyRestoreIncomplete()) {

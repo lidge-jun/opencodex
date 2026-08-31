@@ -192,20 +192,26 @@ describe("Grok fence lifecycle wiring", () => {
     // The deferral is an obligation, so it is claimed on disk BEFORE it is requested and
     // released only after THIS process has restored the shared config itself. A bare
     // query flag could not survive the parent dying mid-stop.
-    const claimAt = stopFn.indexOf("claimTeardown(endpoint);");
+    const claimAt = stopFn.indexOf("claimTeardown(exact ?? configuredEndpoint()");
     expect(claimAt).toBeGreaterThan(-1);
     expect(claimAt).toBeLessThan(stopFn.indexOf("deferSharedTeardownNonce: teardownNonce"));
     // One resolved stop target feeds BOTH the receipt and the request, so the endpoint
     // recorded is the endpoint contacted — recovery probes exactly that one.
-    expect(stopFn).toContain("const endpoint = discovered ?? endpointOf(readRuntimePort(pid)) ?? configuredEndpoint();");
+    // The endpoint is resolved ONCE: reading the runtime record twice let the receipt name
+    // the configured guess while the request went to one that appeared in between.
+    expect(stopFn).toContain("const exact = discovered ?? endpointOf(readRuntimePort(pid));");
     // Every stop claims a receipt, including the one that resolves no endpoint at all —
     // that path goes straight to the kill ladder with no child teardown, so a warning
     // instead of a receipt is exactly the parent-crash window this exists to close.
-    expect(stopFn).toContain("claimTeardown(endpoint);");
-    expect(stopFn).not.toContain("if (endpoint) claimTeardown(endpoint);");
-    // A guessed endpoint is good enough to record an obligation against, not to POST to.
-    expect(stopFn).toContain("runtimeEndpoint: discovered ?? endpointOf(readRuntimePort(pid)) ?? undefined");
-    expect(stopFn).toContain("runtimeEndpoint: discovered ?? endpointOf(readRuntimePort(pid)) ?? undefined");
+    expect(stopFn).toContain('claimTeardown(exact ?? configuredEndpoint(), exact ? "exact" : "guessed");');
+    // A guessed endpoint records an obligation but must not direct the stop request.
+    expect(stopFn).toContain("runtimeEndpoint: exact ?? undefined");
+    // Nor may it authorize a later recovery: "the configured port refuses" is not proof
+    // that a proxy on an explicit --port is down.
+    expect(stopFn).toContain('if (read.receipt.endpointSource === "guessed")');
+    const guessedBranch = stopFn.slice(stopFn.indexOf('if (read.receipt.endpointSource === "guessed")'), stopFn.indexOf("if (await abandonedTeardownIsSafeToFinish("));
+    expect(guessedBranch).toContain("inheritedBlocks = true;");
+    expect(guessedBranch).toContain("stopFailed = true;");
     expect(controlSource).toContain("io.runtimeEndpoint ?? readRuntime(pid)");
     // Inherited obligations are snapshotted BEFORE this run claims anything, so its own
     // receipt is never mistaken for one it inherited.
@@ -274,6 +280,13 @@ describe("Grok fence lifecycle wiring", () => {
     expect(launcherSource).toContain("hasPendingTeardownIn(readdirSync, configDir())");
     expect(launcherSource).not.toContain('"pending-teardown.json"');
     expect(launcherSource).toContain("serviceWasInstalled || hasRuntimeState || hasPendingTeardown");
+    // Checked AFTER the stop too: a quarantined receipt lets the stop succeed, so a
+    // pre-stop check alone let the retry install over a teardown that never ran.
+    expect(launcherSource).toContain("teardownOutstanding: hasPendingTeardownIn(readdirSync, configDir())");
+    const updateSource2 = readFileSync(join(import.meta.dir, "..", "src", "update", "index.ts"), "utf8");
+    expect(updateSource2).toContain("teardownOutstanding: pendingTeardownOutstanding()");
+    const decisionSource = readFileSync(join(import.meta.dir, "..", "src", "update", "stop-decision.mjs"), "utf8");
+    expect(decisionSource).toContain('if (teardownOutstanding) return { proceed: false, reason: "teardown-outstanding" };');
     const receiptSource = readFileSync(join(import.meta.dir, "..", "src", "config", "pending-teardown.ts"), "utf8");
     expect(receiptSource).toContain('from "./pending-teardown-names.mjs"');
     expect(receiptSource).toContain("isPendingTeardownFileName(name)");
