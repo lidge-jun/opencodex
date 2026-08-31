@@ -559,10 +559,13 @@ export async function handleResponsesCompact(
     }
   }
 
-  // Native /responses/compact exists on the canonical ChatGPT backend and on the
-  // official OpenAI API. Any other Responses-shaped gateway must take the routed
-  // summarizer path below, or compaction fails against an endpoint it never had (#422).
-  if (supportsNativeResponsesCompactEndpoint(route.providerName, route.provider) && !accountGatedCompactWireModel) {
+ // Native /responses/compact exists on the canonical ChatGPT backend and on the
+ // official OpenAI API. Any other Responses-shaped gateway must take the routed
+ // summarizer path below, or compaction fails against an endpoint it never had (#422).
+  // Combo-resolved targets skip native compact so failover can advance through the
+  // combo target list when the picked model returns 429/5xx — the routed path below
+  // dispatches through handleResponses → handleComboResponses with full failover.
+  if (supportsNativeResponsesCompactEndpoint(route.providerName, route.provider) && !accountGatedCompactWireModel && !route.combo) {
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
     }
