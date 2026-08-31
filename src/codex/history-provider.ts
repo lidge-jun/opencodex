@@ -549,7 +549,7 @@ function snapshotRolloutForRestore(entry: CodexHistoryBackupEntry): RestoreRollo
   if (identityBefore === null) {
     throw new CodexHistoryIntegrityError("history_backup_rollout_unrestorable");
   }
-  const latest = readLatestSessionMeta(entry.rolloutPath);
+  const latest = readLatestSessionMetaForId(entry.rolloutPath, entry.id);
   if (!latest
     || (!rolloutMatchesRestoreTuple(latest, entry, entry.modelProvider, entry.source)
       && !rolloutMatchesExpectedPostImage(latest, entry))) {
@@ -628,7 +628,7 @@ function assertRestoreReadback(
       || !rowMatchesRestoreTuple(row, entry.modelProvider, entry.source, entry.hasUserEvent)) {
       throw new CodexHistoryIntegrityError("history_backup_database_readback_mismatch");
     }
-    const latest = readLatestSessionMeta(entry.rolloutPath);
+    const latest = readLatestSessionMetaForId(entry.rolloutPath, entry.id);
     if (inspectFirstLineProvider(entry.rolloutPath, entry.id, entry.modelProvider) !== "current"
       || !latest
       || !rolloutMatchesRestoreTuple(latest, entry, entry.modelProvider, entry.source)) {
@@ -663,6 +663,19 @@ function parseSessionMetaLine(line: string): ParsedSessionMeta | null {
 export function readLatestSessionMeta(path: string): ParsedSessionMeta | null {
   const raw = readFileSync(path, "utf8");
   return readLatestSessionMetaFromText(raw);
+}
+
+/**
+ * Same fold as {@link readLatestSessionMeta}, restricted to this thread's own metadata.
+ *
+ * A forked/branched rollout appends the SOURCE thread's `session_meta` after its own, and the
+ * app discards any record whose payload id is not the canonical thread id (codex-rs
+ * `apply_session_meta_from_item`). Reading the last line regardless of id therefore answers
+ * with a foreign thread's provider, which is neither what the app honors nor what we may patch.
+ */
+function readLatestSessionMetaForId(path: string, expectedId: string): ParsedSessionMeta | null {
+  const raw = readFileSync(path, "utf8");
+  return readLatestSessionMetaForIdFromText(raw, expectedId);
 }
 
 function readLatestSessionMetaFromText(raw: string): ParsedSessionMeta | null {
@@ -875,18 +888,15 @@ function updateSessionMeta(
     return { changed: false, durableProvider: false, conflict: true };
   }
 
-  const latest = readLatestSessionMeta(path);
+  // Resolve by id. The app ignores `session_meta` lines whose payload id != the canonical
+  // thread id (codex-rs `apply_session_meta_from_item`), and a forked rollout trails the source
+  // session's metadata, so the last line is not necessarily this thread's. Patching that record
+  // would clone the wrong thread's meta into a line the app discards; skipping the file entirely
+  // left forked threads unroutable and, once routed, unrestorable.
+  const latest = readLatestSessionMetaForId(path, expectedId);
   if (!latest) return { changed: false, durableProvider: false };
   const record = latest.record;
 
-  // The app ignores `session_meta` lines whose payload id != the canonical thread id
-  // (codex-rs `apply_session_meta_from_item`). Forked rollouts can embed a source session's
-  // metadata, so an id-mismatched latest line means we'd be cloning the wrong thread's meta and
-  // appending a line the app would discard. Skip rather than write a no-op/misleading line.
-  const payloadId = record.payload.id;
-  if (typeof payloadId !== "string" || payloadId !== expectedId) {
-    return { changed: false, durableProvider: false };
-  }
   const latestProvider = typeof record.payload.model_provider === "string" && record.payload.model_provider
     ? record.payload.model_provider
     : "openai";
