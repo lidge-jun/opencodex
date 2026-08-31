@@ -243,14 +243,34 @@ let pendingResponseSpillBytes = 0;
  */
 let reservedResponseSpillBytes = 0;
 /**
- * Bytes of spill publications that could not be cleaned up and will not be released.
+ * Paths a failed cleanup left on the volume, with the bytes each one occupies.
  *
- * A failed cleanup leaves a real file behind. Counting it as a reservation would be
- * wrong — reservations settle — so it is tracked separately and never decremented: the
- * only honest way to price a file nobody can delete. Startup orphan recovery is what
- * reclaims these across a restart.
+ * A failed unlink leaves a real file behind, so the cap has to keep seeing it. But a
+ * never-decremented total would be phantom debt: a Windows lock that clears a moment
+ * later, or the async writer's own retry, can remove the file while the charge stays
+ * forever — and with 256 MiB payloads two conservative charges consume the whole default
+ * cap, after which nothing can spill for the life of the process.
+ *
+ * So the debt is per PATH, priced at what that path actually holds, and settled the
+ * moment the path is gone. `reconcileUnreclaimableSpillPaths` re-checks on every read of
+ * the accounted total, which is the same tick that would otherwise refuse an admission.
  */
-let unreclaimableResponseSpillBytes = 0;
+const unreclaimableSpillPaths = new Map<string, number>();
+
+function chargeUnreclaimableSpillPath(path: string | null | undefined, bytes: number): void {
+  if (!path || bytes <= 0) return;
+  unreclaimableSpillPaths.set(path, bytes);
+}
+
+/** Drop charges for paths that have since disappeared; returns the surviving total. */
+function reconcileUnreclaimableSpillPaths(): number {
+  let total = 0;
+  for (const [path, bytes] of [...unreclaimableSpillPaths]) {
+    if (existsSync(path)) total += bytes;
+    else unreclaimableSpillPaths.delete(path);
+  }
+  return total;
+}
 
 /**
  * Peak on-disk footprint of publishing this candidate: temp plus destination copy.
@@ -295,6 +315,11 @@ function cancelPendingResponseSpill(id: string): ResponseSpillRef | undefined {
   job.cancelled = true;
   markResponseSpillPublicationSuperseded(job.publicationControl);
   const superseded = job.supersededSpill;
+  // Ownership TRANSFERS to the caller. Leaving the ref on the cancelled job would let the
+  // accounting walk count the same physical file twice — once here and once on the
+  // replacement — and an overcount evicts live continuations to make room for bytes that
+  // are not there.
+  delete job.supersededSpill;
   // A queued job has not captured the candidate in an async frame yet, so release it now.
   // A running job retains its accounting until settlement and will discard its stale file.
   if (!job.running) releasePendingResponseSpill(job);
@@ -392,9 +417,13 @@ function queuePendingResponseSpill(
   // accumulated in. Reclaim first, and only refuse if the peak footprint still does not
   // fit — an eviction pass can free a live continuation's worth of room.
   const footprint = publicationFootprintBytes(id, candidate);
-  if (accountedResponseSpillBytes() + footprint > spillByteCap()) {
+  // The superseded generation this job is about to own is already off `states` and not
+  // yet on the job, so it is invisible to the walk. Price it here or admission decides
+  // against a total that is short by a whole envelope.
+  const inheritedBytes = inheritedSpill?.payloadBytes ?? 0;
+  if (accountedResponseSpillBytes() + footprint + inheritedBytes > spillByteCap()) {
     enforceSpilledResponseBudget();
-    if (accountedResponseSpillBytes() + footprint > spillByteCap()) {
+    if (accountedResponseSpillBytes() + footprint + inheritedBytes > spillByteCap()) {
       spillCounters.writeFailures += 1;
       replaceWithSpillFailure(id, candidate);
       deferSupersededSpill(inheritedSpill);
@@ -516,6 +545,22 @@ function installShutdownFallbackSpill(
   const footprint = publicationFootprintBytes(job.id, candidate);
   reservedResponseSpillBytes += footprint;
   try {
+    // The drain must not publish over the cap either. Reclaim first; if the footprint
+    // still does not fit — which is what unreclaimable cleanup debt looks like — the
+    // honest close-out is a tombstone, not another file on a volume that is already
+    // over budget. `replaceWithSpillFailure` is the same fail-closed ending the budget
+    // exhaustion path uses, so replay reports `spill_failed` and the client resends.
+    if (accountedResponseSpillBytes() > spillByteCap()) {
+      enforceSpilledResponseBudget();
+      if (accountedResponseSpillBytes() > spillByteCap()) {
+        if (states.get(job.id) === candidate) {
+          spillCounters.writeFailures += 1;
+          replaceWithSpillFailure(job.id, candidate);
+          deferSupersededSpill(job.supersededSpill);
+        }
+        throw Object.assign(new Error("Response spill shutdown fallback exceeds the durable disk cap"), { code: "ENOSPC" });
+      }
+    }
     ref = writeResponseSpillDurably(job.id, spillPayloadForResident(candidate), { aclBudgetMs });
     if (ref.payloadBytes > responseSpillPayloadCap()) {
       deleteResponseSpill(ref);
@@ -578,14 +623,17 @@ function supersedeShutdownFallbackBatch(
     const cleanupFailure = cleanupSupersededResponseSpillPublication(job.publicationControl);
     if (cleanupFailure) {
       failures.push(cleanupFailure);
-      // Cleanup failed, so the async temp or destination is STILL on the volume. Releasing
+      // Cleanup failed, so an async temp or destination is STILL on the volume. Releasing
       // the reservation would un-account a file that exists, and the fallback write that
       // follows reserves only its own footprint — three envelopes on disk priced as two.
       //
-      // These bytes are not a reservation: nothing will release them, because the file
-      // could not be removed. They are unreclaimable occupancy, and the cap has to keep
-      // seeing them or it stops describing the volume.
-      unreclaimableResponseSpillBytes += job.reservedBytes;
+      // Charge the surviving PATHS rather than a flat two envelopes: `clearOwnedPath`
+      // nulls whichever it managed to remove, so one failure is one file, not two. The
+      // charge is settled automatically once the path disappears, which a retried unlink
+      // or a released Windows lock can still do.
+      const perPath = Math.max(1, Math.floor(job.reservedBytes / 2));
+      chargeUnreclaimableSpillPath(job.publicationControl.tempPath, perPath);
+      chargeUnreclaimableSpillPath(job.publicationControl.destinationPath, perPath);
     }
     releasePendingResponseSpill(job);
   }
@@ -757,7 +805,7 @@ function accountedResponseSpillBytes(): number {
     if (job.supersededSpill) ownedBySpillJobs += job.supersededSpill.payloadBytes;
   }
   return spilledResponseBytes() + reservedResponseSpillBytes + ownedBySpillJobs
-    + unreclaimableResponseSpillBytes;
+    + reconcileUnreclaimableSpillPaths();
 }
 
 /** Test-only: lower/restore the durable spill cap (null restores the default). */
@@ -2226,7 +2274,7 @@ export function clearResponseStateForTests(): void {
   for (const entry of states.values()) deleteOwnedSpills(entry);
   clearResponseStateMemoryForTests();
   reservedResponseSpillBytes = 0;
-  unreclaimableResponseSpillBytes = 0;
+  unreclaimableSpillPaths.clear();
   try {
     unlinkSync(snapshotPath());
   } catch {

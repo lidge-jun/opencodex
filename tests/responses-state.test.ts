@@ -135,6 +135,17 @@ function spillTempNames(home: string): string[] {
   return existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith(".tmp")) : [];
 }
 
+/** Real bytes the spill directory occupies, temps included. */
+function bytesOnDisk(home: string): number {
+  const dir = responseSpillDirectory(home);
+  if (!existsSync(dir)) return 0;
+  let total = 0;
+  for (const name of readdirSync(dir)) {
+    try { total += statSync(join(dir, name)).size; } catch { /* raced with an unlink */ }
+  }
+  return total;
+}
+
 interface ShutdownBudgetChildResult {
   settled: boolean;
   reported: boolean;
@@ -915,6 +926,16 @@ describe("Responses previous_response_id state", () => {
     expect(existingBytes).toBeGreaterThan(0);
     expect(spillFileNames(home)).toHaveLength(1);
 
+    // Room for the two-envelope publication and nothing more. The seeded spill does not
+    // fit alongside it, so correct admission must reclaim it before publishing; without
+    // the check, seeded + temp + destination sit on disk together and blow the cap.
+    // Generous enough that this publication is admitted: the point of THIS test is that
+    // the accounting sees the in-flight bytes. The cap-refusal behaviour is proven
+    // separately below, where admission is the only thing standing between the request
+    // and an over-budget directory.
+    const spillCap = existingBytes * 4;
+    setSpilledResponseByteCapForTests(spillCap);
+
     // Force the exclusive-copy fallback, then gate the destination hardening that follows
     // it, so the observation below happens with BOTH files present.
     setSpillIoForTest({
@@ -935,6 +956,10 @@ describe("Responses previous_response_id state", () => {
       // covers what is actually on the volume.
       expect(getAccountedResponseSpillBytesForTests())
         .toBeGreaterThanOrEqual(existingBytes * 3);
+      // And the bytes ACTUALLY on disk stay inside the configured cap. This is the
+      // assertion the admission check has to earn: without it, the seeded spill plus the
+      // temp plus the destination copy exceed a cap sized for two envelopes.
+      expect(bytesOnDisk(home)).toBeLessThanOrEqual(spillCap);
     } finally {
       release();
       setSpillIoForTest(null);
@@ -949,6 +974,40 @@ describe("Responses previous_response_id state", () => {
     // fail-closed path into the ordinary one.
     expect(JSON.stringify(expandPreviousResponseInput({ previous_response_id: "resp_cap_inflight", input: "next" })))
       .toContain("xxxxxxxx");
+  });
+
+  test("refuses a publication whose peak footprint does not fit the disk cap", async () => {
+    // Enforcement, not accounting: a publication that cannot fit must be refused BEFORE
+    // any file is created. Deleting the overflow afterwards is not equivalent — on
+    // Windows the file outlives the decision by however long ACL hardening takes, which
+    // is the window the measured 6.8 GiB accumulated in.
+    setPlatformForTests("win32");
+    setResponseStateByteCapForTests(1_024);
+    setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+
+    rememberLarge("resp_cap_seed", "s".repeat(8_000));
+    await flushPendingResponseSpillsForTests();
+    const seededBytes = getSpilledResponseBytesForTests();
+    expect(spillFileNames(home)).toHaveLength(1);
+
+    // Room for the seeded spill and nothing else. The next publication needs two
+    // envelopes at peak, and the seeded file is live rather than reclaimable-on-sight,
+    // so admission has to refuse.
+    setSpilledResponseByteCapForTests(Math.floor(seededBytes * 1.5));
+
+    rememberLarge("resp_cap_refused", "r".repeat(8_000));
+    await flushPendingResponseSpillsForTests();
+
+    // No second file, and no temp left behind: the refusal happened before publication.
+    expect(spillFileNames(home)).toHaveLength(1);
+    expect(spillTempNames(home)).toHaveLength(0);
+    expect(bytesOnDisk(home)).toBeLessThanOrEqual(Math.floor(seededBytes * 1.5));
+    // Fail-closed, and it says so: the refused continuation is a spill failure, not a
+    // silent drop, so replay reports it and the client resends.
+    expect(responseStateMetrics()).toMatchObject({ spillWriteFailures: 1 });
+    // The seeded continuation is untouched — a refusal must not cost an unrelated replay.
+    expect(JSON.stringify(expandPreviousResponseInput({ previous_response_id: "resp_cap_seed", input: "next" })))
+      .toContain("ssssssss");
   });
 
   test("Windows spill retries one transient ACL timeout without installing a tombstone", async () => {
