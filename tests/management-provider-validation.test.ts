@@ -914,6 +914,93 @@ describe("provider management validation", () => {
     }
   });
 
+  // Regression: the alias overlays (defaultAliases, alias, modelAliases) are user-owned
+  // display/routing preferences written by the alias management API (PUT /api/default-aliases,
+  // /api/providers/{name}/alias, /api/providers/{name}/model-aliases) and read at runtime
+  // (defaultAliasesEnabled, router.ts alias lookup, effectiveModelAliases). They never alter
+  // the canonical transport identity, so the seed comparison must ignore them exactly like
+  // requestPacing and modelCosts already do. Before the fix, a canonical OpenAI provider that
+  // had ever set any alias was permanently locked out of full-object writes (POST/PATCH/PUT)
+  // with "must equal the canonical built-in provider seed".
+  test("canonical seed comparison ignores user-owned alias overlays", () => {
+    expect(providerManagementConfigError("openai", { ...canonicalDirect, defaultAliases: true })).toBeNull();
+    expect(providerManagementConfigError("openai", { ...canonicalDirect, defaultAliases: false })).toBeNull();
+    expect(providerManagementConfigError("openai", {
+      ...canonicalDirect,
+      alias: "my-openai",
+      modelAliases: { "gpt-5.6-luna": "luna" },
+    })).toBeNull();
+    expect(providerManagementConfigError("openai", {
+      ...canonicalDirect,
+      defaultAliases: true,
+      alias: "my-openai",
+      modelAliases: { "gpt-5.6-luna": "luna" },
+    })).toBeNull();
+  });
+
+  test("canonical seed guard still rejects transport tampering alongside alias overlays", () => {
+    // The alias exclusions must not weaken the canonical guard: mutating the transport
+    // identity (baseUrl / adapter / authMode) is still rejected even when alias overlays
+    // are present on the same payload.
+    expect(providerManagementConfigError("openai", {
+      ...canonicalDirect,
+      defaultAliases: true,
+      baseUrl: "https://attacker.example/backend-api/codex",
+    })).toContain("canonical built-in provider seed");
+    expect(providerManagementConfigError("openai", {
+      ...canonicalDirect,
+      defaultAliases: true,
+      adapter: "openai-chat",
+    })).toContain("canonical built-in provider seed");
+    expect(providerManagementConfigError("openai", {
+      ...canonicalDirect,
+      defaultAliases: true,
+      authMode: "key",
+    })).toContain("canonical built-in provider seed");
+    // Non-openai providers keep their existing behavior: no canonical seed comparison.
+    expect(providerManagementConfigError("deepseek", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.deepseek.com/v1",
+      apiKey: "sk-test",
+      defaultAliases: true,
+    })).toBeNull();
+  });
+
+  test("canonical OpenAI with defaultAliases can still PATCH modelContextWindows", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      // Match a post-migration config (openaiProviderTierVersion set) so the startup
+      // openai tier migration does not rewrite the row: this test targets the seed
+      // comparison, not the one-time legacy migration.
+      openaiProviderTierVersion: 2,
+      defaultProvider: "openai",
+      providers: {
+        openai: { ...canonicalDirect, defaultAliases: true },
+      },
+    } as OcxConfig);
+    // This test targets the seed comparison, not the DNS policy; stub the destination
+    // probe so the assertion stays independent of how chatgpt.com resolves locally.
+    spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+
+    const server = startServer(0);
+    try {
+      const patch = await fetch(new URL("/api/providers?name=openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ modelContextWindows: { "gpt-5.6-luna": 900000 } }),
+      });
+      expect(patch.status).toBe(200);
+      expect(loadConfig().providers.openai?.modelContextWindows).toEqual({ "gpt-5.6-luna": 900000 });
+      // The alias overlay itself must survive the patch untouched.
+      expect(loadConfig().providers.openai?.defaultAliases).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   // #1409: the add/edit form's payload type has no member for contextWindow or
   test("provider POST overwrite preserves an explicit annotateEmptyToolOutputs: false", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
