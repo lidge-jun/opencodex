@@ -48,6 +48,16 @@ async function seedAccount(id: string): Promise<number> {
   return readCodexAccountRecord(id)!.generation;
 }
 
+/** Register the account in config too, so the account-list API actually returns a row. */
+async function seedListedAccount(id: string): Promise<number> {
+  const generation = await seedAccount(id);
+  const { loadConfig, saveConfig } = await import("../src/config");
+  const config = loadConfig();
+  const accounts = [...(config.codexAccounts ?? []).filter(a => a.id !== id), { id, label: id }];
+  saveConfig({ ...config, codexAccounts: accounts });
+  return generation;
+}
+
 test("a refresh settles the budget even when the caller cancels first", async () => {
   const { forceRefreshCodexPoolToken } = await import("../src/codex/account-store");
   const { claimQuotaRecovery, quotaRecoveryRecordForTests, settleQuotaRecovery, releaseQuotaRecovery } =
@@ -122,7 +132,9 @@ test("exactly one of two callers on a shared flight performed the CAS", async ()
   // `self-refresh` and reports a CAS it never performed.
   expect(outcomes).toHaveLength(2);
   expect(outcomes.filter(p => p === "self-refresh")).toHaveLength(1);
-  expect(outcomes.filter(p => p !== "self-refresh")).toHaveLength(1);
+  // Specifically joined-lineage: an "external-replacement" joiner is also non-self, and
+  // would wrongly leave this lineage's budget unspent.
+  expect(outcomes.filter(p => p === "joined-lineage")).toHaveLength(1);
 });
 
 test("a revoked grant routes to terminal settlement, a slow one does not", async () => {
@@ -170,6 +182,59 @@ test("a revoked grant routes to terminal settlement, a slow one does not", async
   expect(quotaRecoveryRecordForTests("slow-grant")).toMatchObject({ state: "backoff" });
 });
 
+test("a revoked grant stays needs-reauth across polls, through the real quota path", async () => {
+  const { listCodexAuthAccounts } = await import("../src/codex/auth-api");
+  const { loadConfig } = await import("../src/config");
+  await seedListedAccount("dead-grant");
+
+  // Bare WHAM 401 -> token endpoint says invalid_grant -> the account list re-polls.
+  // Routing this through listCodexAuthAccounts is the point: a local reimplementation of
+  // the settlement callback stays green with the production wiring deleted.
+  let tokenCalls = 0;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.includes("/wham/usage")) return new Response("{}", { status: 401 });
+    tokenCalls += 1;
+    return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+  }) as typeof fetch;
+
+  const config = loadConfig();
+  const first = await listCodexAuthAccounts(config, true);
+  expect(first.find(row => row.id === "dead-grant")?.needsReauth).toBe(true);
+
+  // The evidence has to be DURABLE, not just present in the response that discovered it.
+  // The recovery record alone cannot carry it: by the time the next poll runs, the claim is
+  // spent and a spent budget reports transient. Assert the account-level mark directly, so
+  // dropping markAccountNeedsReauth fails here rather than being masked by a cached quota.
+  const { isAccountNeedsReauth } = await import("../src/codex/auth-api");
+  expect(isAccountNeedsReauth("dead-grant")).toBe(true);
+
+  const second = await listCodexAuthAccounts(config, true);
+  expect(second.find(row => row.id === "dead-grant")?.needsReauth).toBe(true);
+  // And the dead grant is not retried on every poll.
+  expect(tokenCalls).toBe(1);
+});
+
+test("a transient refresh failure does not quarantine the account", async () => {
+  const { listCodexAuthAccounts } = await import("../src/codex/auth-api");
+  const { loadConfig } = await import("../src/config");
+  const { quotaRecoveryRecordForTests } = await import("../src/codex/quota-401-recovery");
+  await seedListedAccount("slow-grant");
+
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    if (String(input).includes("/wham/usage")) return new Response("{}", { status: 401 });
+    throw new Error("socket hang up");
+  }) as typeof fetch;
+
+  const rows = await listCodexAuthAccounts(loadConfig(), true);
+  // A network failure proves nothing about the grant.
+  expect(rows.find(row => row.id === "slow-grant")?.needsReauth).toBe(false);
+  // Nor may it leave a durable quarantine behind.
+  const { isAccountNeedsReauth } = await import("../src/codex/auth-api");
+  expect(isAccountNeedsReauth("slow-grant")).toBe(false);
+  expect(quotaRecoveryRecordForTests("slow-grant")).toMatchObject({ state: "backoff" });
+});
+
 test("no bearer reaches the console, the debug buffer, or a serialized account row", async () => {
   const { forceRefreshCodexPoolToken } = await import("../src/codex/account-store");
   const { getDebugLogEntries } = await import("../src/lib/debug-log-buffer");
@@ -205,13 +270,10 @@ test("no bearer reaches the console, the debug buffer, or a serialized account r
   const debugText = JSON.stringify(getDebugLogEntries({ after: before, limit: 500 }));
   for (const secret of secrets) expect(debugText).not.toContain(secret);
 
-  // And nothing the store hands out for an account may carry a bearer: the account list
-  // serializes from these records, so a leak here becomes a leak over the management API.
-  const { listCodexAccountIds, readCodexAccountRecord } = await import("../src/codex/account-store");
-  const publicView = JSON.stringify(listCodexAccountIds().map(id => {
-    const record = readCodexAccountRecord(id);
-    // Mirror what the account list exposes: identity and freshness, never the credential.
-    return record && { id, generation: record.generation, deletedAt: record.deletedAt };
-  }));
-  for (const secret of secrets) expect(publicView).not.toContain(secret);
+  // And the REAL serializer, not a hand-built stand-in: a leak has to be caught in what
+  // the management API actually returns.
+  const { listCodexAuthAccounts } = await import("../src/codex/auth-api");
+  const { loadConfig } = await import("../src/config");
+  const rows = JSON.stringify(await listCodexAuthAccounts(loadConfig(), false));
+  for (const secret of secrets) expect(rows).not.toContain(secret);
 });

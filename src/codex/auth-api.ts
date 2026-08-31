@@ -995,6 +995,9 @@ async function recoverPoolQuotaFrom401(ctx: {
   // Structured terminal evidence short-circuits everything: the same allowlist and bounded
   // parser the main account uses, because it is the same endpoint answering.
   if (await isTerminalPoolAuthResponse(resp)) {
+    // Durable, not just this response: the account list re-polls, and without a recorded
+    // mark the next bare 401 finds nothing terminal and reports the account healthy.
+    markAccountNeedsReauth(accountId);
     return { quota: existing ?? null, needsReauth: true, credentialGeneration: rejectedGeneration };
   }
 
@@ -1036,6 +1039,7 @@ async function recoverPoolQuotaFrom401(ctx: {
     // A refresh that failed terminally is the one case where the credential really is gone.
     // Everything else is unknown, and unknown is not proof.
     if (e instanceof TokenRefreshError && isTerminalRefreshError(e)) {
+      markAccountNeedsReauth(accountId);
       return { quota: existing ?? null, needsReauth: true, credentialGeneration: rejectedGeneration };
     }
     return { quota: existing ?? null, needsReauth: false, credentialGeneration: rejectedGeneration };
@@ -1062,6 +1066,9 @@ async function recoverPoolQuotaFrom401(ctx: {
   });
   if (!replay.ok) {
     if (replay.status === 401 && await isTerminalPoolAuthResponse(replay)) {
+      // The refresh already settled this claim non-terminally, so the record alone would
+      // let the next poll call a dead credential healthy.
+      markAccountNeedsReauth(accountId);
       return { quota: existing ?? null, needsReauth: true, credentialGeneration: refreshed.generation };
     }
     return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation };
@@ -1085,11 +1092,10 @@ async function isTerminalPoolAuthResponse(resp: Response): Promise<boolean> {
 
 /** A revoked or expired grant is terminal; an unknown or transport failure is not. */
 function isTerminalRefreshError(error: TokenRefreshError): boolean {
-  const text = `${error.message}`.toLowerCase();
-  return text.includes("invalid_grant")
-    || text.includes("invalid_refresh_token")
-    || text.includes("revoked")
-    || text.includes("expired");
+  // Read the discriminator, not the message. TokenRefreshError carries `reason`, and
+  // matching on human text would let a durable quarantine decision change the next time
+  // somebody rewords an error string.
+  return error.reason === "revoked" || error.reason === "expired";
 }
 
 /** Parse and store a successful WHAM response. Shared by the first attempt and the replay. */
