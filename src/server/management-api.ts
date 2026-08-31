@@ -256,7 +256,7 @@ export async function handleManagementAPI(
   if (routed) return routed;
 
   if (url.pathname === "/api/stop" && req.method === "POST") {
-    const { stopServiceIfInstalled, isServiceOwnershipError } = await import("../service");
+    const { stopServiceIfInstalledDetailed, isServiceOwnershipError } = await import("../service");
     // `ocx stop` performs its own shared teardown AFTER verifying the scheduler did not
     // respawn the proxy (#3008). Without this the child restores native Codex and strips
     // the Grok fence here, so a survivor found moments later has already had the shared
@@ -268,8 +268,9 @@ export async function handleManagementAPI(
     // caller could set it and simply exit, leaving client config pointed at a proxy that
     // no longer exists. Honour the deferral only when the caller left a pending-teardown
     // receipt on disk, which a later stop/update can find and finish.
+    let serviceStop: "absent" | "stopped" | "stopped-respawnable" | "failed";
     try {
-      stopServiceIfInstalled();
+      serviceStop = stopServiceIfInstalledDetailed();
     } catch (err) {
       if (isServiceOwnershipError(err)) {
         // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn
@@ -279,12 +280,31 @@ export async function handleManagementAPI(
       }
       throw err;
     }
+    // The boolean helper collapses "failed" into the same false as "no service installed",
+    // so this route used to tear down shared config and exit while a manager that refused
+    // to stop was still there to respawn the proxy (#3008).
+    if (serviceStop === "failed") {
+      return jsonResponse({
+        success: false,
+        message: "The installed service manager did not stop; it may respawn the proxy. Shared client config was left alone. Run `ocx stop` from the home that owns the service.",
+      }, 409, req, config);
+    }
+    // A stopped Task Scheduler can still respawn through its wrapper, and this process
+    // cannot verify its own post-exit respawn window — only the parent `ocx stop` can,
+    // which is what the receipt-backed deferral exists for. Refuse rather than tear down
+    // shared config that a survivor would still be using.
+    const { deferralMatchesReceipt } = await import("../config/pending-teardown");
+    const { deferralHonored, performStopTeardown } = await import("./stop-teardown");
+    if (serviceStop === "stopped-respawnable" && !deferralHonored(url, deferralMatchesReceipt)) {
+      return jsonResponse({
+        success: false,
+        message: "This proxy is managed by a Task Scheduler wrapper that can respawn it, so shared teardown must be performed by `ocx stop`, which verifies the respawn window. Run `ocx stop`.",
+      }, 409, req, config);
+    }
     // Both managed configs come down together on an explicit teardown. The daemon's own
     // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
     // which is exactly why an intentional stop has to do it here — unless the caller is
     // `ocx stop`, which does it itself once the proxy is proven down.
-    const { deferralMatchesReceipt } = await import("../config/pending-teardown");
-    const { performStopTeardown } = await import("./stop-teardown");
     const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
     setTimeout(async () => {
       let shutdownSucceeded = false;

@@ -61,12 +61,24 @@ export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Pr
   const grok = io.stripGrok
     ? io.stripGrok()
     : (await import("../grok/inject")).stripGrokConfig();
+  // Success means BOTH halves came down. Deciding it from the native restore alone and
+  // appending the Grok text let a caller read `success: true` while the fence still
+  // pointed at a proxy that was exiting — the teardown reported done with half of it
+  // undone (#3008).
   const grokNote = grok.ok ? "" : ` Grok config cleanup failed: ${grok.message}`;
-  return restore.success
-    ? { success: true, message: `Proxy stopping, native Codex restored.${grokNote}`, sharedTeardown: "performed" }
-    : {
+  if (restore.success && grok.ok) {
+    return { success: true, message: "Proxy stopping, native Codex restored.", sharedTeardown: "performed" };
+  }
+  if (restore.success) {
+    return {
       success: false,
-      message: `Proxy stopping, but native Codex restore failed: ${restore.message}. Run \`ocx restore\`.${grokNote}`,
+      message: `Proxy stopping, native Codex restored, but the Grok fence was not removed:${grokNote} Run \`ocx restore\`.`,
       sharedTeardown: "performed",
     };
+  }
+  return {
+    success: false,
+    message: `Proxy stopping, but native Codex restore failed: ${restore.message}. Run \`ocx restore\`.${grokNote}`,
+    sharedTeardown: "performed",
+  };
 }

@@ -930,6 +930,15 @@ async function handleStop() {
   let inheritedBlocks = false;
   if (inheritedTeardowns.length > 0 && !ownershipBlocked) {
     for (const read of inheritedTeardowns) {
+      if (read.state === "unscannable") {
+        // No file, no nonce: nothing to quarantine and nothing to remove. The home itself
+        // may be hiding an obligation, so block and ask for the directory to be fixed.
+        inheritedBlocks = true;
+        stopFailed = true;
+        console.error(`❌ ${read.detail}, so this stop cannot tell whether a shared teardown is still owed.`);
+        console.error("   Skipping shared teardown. Fix access to the opencodex home, then rerun 'ocx stop'.");
+        continue;
+      }
       if (read.state === "invalid") {
         unreadable.push(read);
         inheritedBlocks = true;

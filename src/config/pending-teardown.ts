@@ -69,6 +69,15 @@ export type PendingTeardownRead =
   | { state: "valid"; receipt: PendingTeardownReceipt }
   | { state: "invalid"; nonce: string; detail: string };
 
+/**
+ * The home itself could not be listed.
+ *
+ * Distinct from an invalid receipt: there is no file to quarantine and no nonce to name,
+ * so it must never be fed to the receipt machinery. It blocks like any obligation, but the
+ * remedy is to fix the directory and retry, not to remove something.
+ */
+export type TeardownScanFailure = { state: "unscannable"; detail: string };
+
 import {
   isPendingTeardownFileName,
   isAnyTeardownObligationFileName,
@@ -143,7 +152,7 @@ export function readPendingTeardown(nonce: string): PendingTeardownRead {
 }
 
 /** An obligation that exists on disk — the "missing" case cannot occur in a listing. */
-export type OutstandingTeardown = Exclude<PendingTeardownRead, { state: "missing" }>;
+export type OutstandingTeardown = Exclude<PendingTeardownRead, { state: "missing" }> | TeardownScanFailure;
 
 /**
  * Every obligation currently on disk, attributable or not.
@@ -159,11 +168,10 @@ export function listPendingTeardowns(): OutstandingTeardown[] {
     names = readdirSync(getConfigDir());
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    return [{
-      state: "invalid",
-      nonce: "00000000000000000000000000000000",
-      detail: `the opencodex home could not be scanned (${(error as NodeJS.ErrnoException).code ?? "unknown"})`,
-    }];
+    // Not an invalid RECEIPT: there is no file here and no nonce to name. Synthesizing one
+    // would hand a fabricated identity to the quarantine and clear paths, which could then
+    // rename or delete a real receipt that happened to carry it.
+    return [{ state: "unscannable", detail: `the opencodex home could not be listed (${(error as NodeJS.ErrnoException).code ?? "unknown"})` }];
   }
   const out: OutstandingTeardown[] = [];
   for (const name of names) {
@@ -258,11 +266,14 @@ export function quarantinePendingTeardown(nonce: string): string | null {
  * what {@link quarantinePendingTeardown} exists for.
  */
 export function isPendingTeardownAbandoned(
-  read: PendingTeardownRead,
+  read: PendingTeardownRead | TeardownScanFailure,
   isAlive: (pid: number) => boolean,
   selfPid: number = process.pid,
 ): boolean {
   if (read.state === "missing") return false;
+  // A home that cannot be listed may be hiding an obligation. It is not recoverable and
+  // not removable; the caller blocks on it and asks for the directory to be fixed.
+  if (read.state === "unscannable") return true;
   if (read.state === "invalid") return true;
   if (read.receipt.ownerPid === selfPid) return false;
   return !isAlive(read.receipt.ownerPid);

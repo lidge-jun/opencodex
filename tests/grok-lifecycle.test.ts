@@ -387,6 +387,36 @@ describe("POST /api/stop teardown", () => {
     expect(handler).toContain("process.exit(shutdownSucceeded ? 0 : 1)");
   });
 
+  test("the route consumes the detailed service outcome instead of the boolean", () => {
+    const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
+    // stopServiceIfInstalled collapses "failed" into the same false as "not installed", so
+    // this route used to tear down shared config while a manager that refused to stop was
+    // still there to respawn the proxy (#3008).
+    expect(handler).toContain("stopServiceIfInstalledDetailed()");
+    expect(handler).not.toContain("stopServiceIfInstalled();");
+    expect(handler).toContain('if (serviceStop === "failed")');
+    // A Task Scheduler wrapper can respawn after a clean stop, and this process cannot
+    // verify its own post-exit window — only the receipt-backed parent can.
+    expect(handler).toContain('serviceStop === "stopped-respawnable" && !deferralHonored(url, deferralMatchesReceipt)');
+    expect(handler.indexOf('if (serviceStop === "failed")')).toBeLessThan(handler.indexOf("performStopTeardown"));
+  });
+
+  test("direct service stop and uninstall fail when a shared teardown half fails", () => {
+    const serviceSource = readFileSync(join(import.meta.dir, "..", "src", "service.ts"), "utf8");
+    // These paths logged the failure and exited 0, so a script could not tell a complete
+    // teardown from one that left Grok aimed at a stopped proxy.
+    const stopCase = serviceSource.slice(
+      serviceSource.indexOf("service stopped + native Codex restored"),
+      serviceSource.indexOf('case "status": {'),
+    );
+    expect(stopCase).toContain("if (!restore.success) process.exitCode = 1;");
+    expect((stopCase.match(/process\.exitCode = 1;/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    const uninstallStart = serviceSource.indexOf("`⚠️ native Codex restore FAILED:");
+    expect(uninstallStart).toBeGreaterThan(-1);
+    const uninstallCase = serviceSource.slice(uninstallStart, uninstallStart + 700);
+    expect((uninstallCase.match(/process\.exitCode = 1;/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+
   test("a 409 does not escalate to a forced kill", () => {
     // Escalating would run the daemon's cleanup and strip shared config while the foreign
     // service keeps the proxy alive — the exact hole the ownership gate exists to close.

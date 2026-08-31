@@ -183,6 +183,31 @@ describe("performStopTeardown", () => {
     expect(body.message).toContain("ocx restore");
     expect(body.message).toContain("Grok config cleanup failed");
   });
+
+  test("a Grok-only failure is not reported as a successful teardown", async () => {
+    // The native restore succeeding said nothing about the fence. Deciding success from
+    // the native half alone let a caller read success: true while Grok still pointed at a
+    // proxy that was exiting — the previous test masked it by failing both halves.
+    const body = await performStopTeardown(new URL("http://127.0.0.1:10100/api/stop"), {
+      ownsReceipt: () => false,
+      restoreNativeCodex: async () => restoreResult(true),
+      stripGrok: () => ({ ok: false, changed: false, message: "grok home is read-only" }),
+    });
+    expect(body.success).toBe(false);
+    expect(body.sharedTeardown).toBe("performed");
+    expect(body.message).toContain("Grok fence was not removed");
+    expect(body.message).toContain("ocx restore");
+  });
+
+  test("both halves succeeding is the only success", async () => {
+    const body = await performStopTeardown(new URL("http://127.0.0.1:10100/api/stop"), {
+      ownsReceipt: () => false,
+      restoreNativeCodex: async () => restoreResult(true),
+      stripGrok: () => ({ ok: true, changed: true, message: "Grok config restored" }),
+    });
+    expect(body.success).toBe(true);
+    expect(body.message).not.toContain("Grok config cleanup failed");
+  });
 });
 
 describe("receipt naming is shared by both update lanes", () => {
@@ -232,7 +257,7 @@ describe("receipt naming is shared by both update lanes", () => {
     expect(names.hasPendingTeardownIn(() => { throw new Error("no code at all"); }, home)).toBe(true);
   });
 
-  test("a home that cannot be scanned surfaces as one unreadable obligation", async () => {
+  test("a home that cannot be scanned is its own state, not a fabricated receipt", async () => {
     const mod = await import("../src/config/pending-teardown");
     const previous = process.env.OPENCODEX_HOME;
     // A file where the home should be: readdir fails with ENOTDIR, which is not absence.
@@ -243,7 +268,11 @@ describe("receipt naming is shared by both update lanes", () => {
       const listed = mod.listPendingTeardowns();
       // handleStop must see something blocking rather than an empty set it would restore over.
       expect(listed).toHaveLength(1);
-      expect(listed[0]!.state).toBe("invalid");
+      // Not "invalid": that carries a nonce, and a synthesized one would be handed to the
+      // quarantine and clear paths, which could rename or delete a real receipt.
+      expect(listed[0]!.state).toBe("unscannable");
+      expect(listed[0]).not.toHaveProperty("nonce");
+      expect(mod.isPendingTeardownAbandoned(listed[0]!, () => false, 1)).toBe(true);
       expect(mod.pendingTeardownOutstanding()).toBe(true);
     } finally {
       if (previous === undefined) delete process.env.OPENCODEX_HOME;

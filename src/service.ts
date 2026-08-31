@@ -4254,11 +4254,17 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         const restore = await restoreNativeCodexAsync();
         if (restore.success) console.log("✅ service stopped + native Codex restored.");
         else console.error(`⚠️ service stopped, but native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` (or check $CODEX_HOME/config.toml) before using native Codex.`);
+        if (!restore.success) process.exitCode = 1;
         // The Grok fence is the other managed config this command owns. Leaving it behind
         // pointed grok at a dead endpoint while native Codex was already restored.
         const grok = stripGrokConfig();
         if (grok.changed) console.log(`↩️  ${grok.message}`);
-        else if (!grok.ok) console.error(`⚠️  ${grok.message}`);
+        else if (!grok.ok) {
+          // A failed strip leaves Grok aimed at a proxy this command just stopped. Exiting
+          // 0 tells a script the teardown finished when half of it did not.
+          console.error(`⚠️  ${grok.message}`);
+          process.exitCode = 1;
+        }
       }
       break;
     }
@@ -4292,10 +4298,14 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         const restore = await restoreNativeCodexAsync();
         if (!restore.success) {
           console.error(`⚠️ native Codex restore FAILED: ${restore.message}\nRun \`ocx restore\` before using native Codex.`);
+          process.exitCode = 1;
         }
         const grok = stripGrokConfig();
         if (grok.changed) console.log(`↩️  ${grok.message}`);
-        else if (!grok.ok) console.error(`⚠️  ${grok.message}`);
+        else if (!grok.ok) {
+          console.error(`⚠️  ${grok.message}`);
+          process.exitCode = 1;
+        }
       }
       removeServiceInstallState();
       try { if (existsSync(serviceApiTokenFilePath())) unlinkSync(serviceApiTokenFilePath()); } catch { /* best-effort */ }
