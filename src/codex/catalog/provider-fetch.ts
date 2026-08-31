@@ -936,9 +936,30 @@ export function resolveComboCatalogMember(
   };
 }
 
+/**
+ * A date-stamped deployment suffix, in the two widths providers actually publish:
+ * `YYYYMMDD` (Anthropic: `claude-haiku-4-5-20251001`) and `MMDD` (Alibaba Token Plan / DeepSeek:
+ * `deepseek-v4-pro-0813`). The four-digit branch validates the month and day so an ordinary
+ * numeric suffix — a `-4096` context size, a `-2025` year — cannot be read as a deployment date.
+ * The eight-digit branch stays a bare digit run on purpose: tightening it to a real calendar date
+ * would change which ids fold today, which is not what this fixes.
+ */
+const DATED_VARIANT_SUFFIX = /^(\d{8}|(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))$/;
+
+function hasDatedSuffix(longer: string, shorter: string): boolean {
+  return longer.startsWith(`${shorter}-`)
+    && DATED_VARIANT_SUFFIX.test(longer.slice(shorter.length + 1));
+}
+
+/**
+ * True when the two ids name the same deployment family and differ only by a date suffix, in
+ * EITHER direction. The fold used to run one way only — configured base against a dated live id —
+ * so a provider that advertises just the base id while the account is entitled to a dated one
+ * (#3024) had that configured id silently dropped from the live catalog while `discovery` still
+ * reported `ok`.
+ */
 export function isDatedVariantId(liveId: string, configuredId: string): boolean {
-  if (!liveId.startsWith(`${configuredId}-`)) return false;
-  return /^\d{8}$/.test(liveId.slice(configuredId.length + 1));
+  return hasDatedSuffix(liveId, configuredId) || hasDatedSuffix(configuredId, liveId);
 }
 
 export const lastDropWarnSignature = new Map<string, string>();

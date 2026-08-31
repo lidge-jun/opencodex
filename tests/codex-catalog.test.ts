@@ -3651,12 +3651,81 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
+  // #3024, end to end: the Alibaba Token Plan shape. The account is entitled to a dated id that
+  // upstream advertises only under its base id, so the configured id used to vanish from the live
+  // catalog while `discovery` still reported ok.
+  test("configured dated id is retained when live advertises only the base (issue #3024)", async () => {
+    clearModelCache("token-plan");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [
+        { id: "deepseek-v4-pro" },
+        { id: "deepseek-v4-flash-0731" },
+        { id: "qwen3.8-max" },
+      ],
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        providers: {
+          "token-plan": {
+            baseUrl: "https://example.invalid",
+            adapter: "openai-chat",
+            authMode: "key",
+            apiKey: "k",
+            models: [
+              "qwen3.8-max",
+              "deepseek-v4-pro",
+              "deepseek-v4-pro-0813",
+              "deepseek-v4-flash-0731",
+              "deepseek-retired-9",
+            ],
+          },
+        },
+      });
+      const ids = models.map(m => m.id);
+      expect(ids).toContain("deepseek-v4-pro-0813"); // the id the report loses
+      expect(ids).toContain("deepseek-v4-pro"); // base still advertised upstream
+      expect(ids).toContain("deepseek-v4-flash-0731"); // four-digit id advertised verbatim
+      expect(ids).not.toContain("deepseek-retired-9"); // no live relative: still drops
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("token-plan");
+    }
+  });
+
   test("isDatedVariantId matches only <alias>-YYYYMMDD", () => {
     expect(isDatedVariantId("claude-haiku-4-5-20251001", "claude-haiku-4-5")).toBe(true);
     expect(isDatedVariantId("claude-haiku-4-5-2025", "claude-haiku-4-5")).toBe(false);
     expect(isDatedVariantId("claude-haiku-4-5-latest", "claude-haiku-4-5")).toBe(false);
     expect(isDatedVariantId("claude-haiku-4-5", "claude-haiku-4-5")).toBe(false);
     expect(isDatedVariantId("claude-haiku-4-5-20251001", "claude-haiku-4")).toBe(false);
+  });
+
+  // #3024: the fold ran one direction only and accepted one suffix width, so an account entitled
+  // to a dated id that upstream advertises only under its base id lost that configured id.
+  test("isDatedVariantId folds a four-digit MMDD suffix", () => {
+    expect(isDatedVariantId("deepseek-v4-pro-0813", "deepseek-v4-pro")).toBe(true);
+    expect(isDatedVariantId("deepseek-v4-flash-0731", "deepseek-v4-flash")).toBe(true);
+    expect(isDatedVariantId("model-1231", "model")).toBe(true);
+    expect(isDatedVariantId("model-0101", "model")).toBe(true);
+  });
+
+  test("isDatedVariantId folds in both directions", () => {
+    // configured dated, live base — the shape in the report.
+    expect(isDatedVariantId("deepseek-v4-pro", "deepseek-v4-pro-0813")).toBe(true);
+    expect(isDatedVariantId("claude-haiku-4-5", "claude-haiku-4-5-20251001")).toBe(true);
+  });
+
+  // A numeric suffix is not automatically a date. Month and day are range-checked so an ordinary
+  // one cannot be swallowed and aliased onto an unrelated live row's metadata.
+  test("isDatedVariantId refuses numeric suffixes that are not dates", () => {
+    expect(isDatedVariantId("model-4096", "model")).toBe(false);  // context size, month 40
+    expect(isDatedVariantId("model-1332", "model")).toBe(false);  // month 13
+    expect(isDatedVariantId("model-0000", "model")).toBe(false);  // month 00
+    expect(isDatedVariantId("model-0230", "model")).toBe(true);   // 02-30: calendar-invalid, width-valid
+    expect(isDatedVariantId("model-1240", "model")).toBe(false);  // day 40
+    expect(isDatedVariantId("model-081", "model")).toBe(false);   // three digits
+    expect(isDatedVariantId("model-08133", "model")).toBe(false); // five digits
   });
 
   test("disabled providers are excluded from routed model gathering", async () => {
