@@ -3630,6 +3630,28 @@ export function stopServiceIfInstalled(): boolean {
 }
 
 /**
+ * Would stopping the installed manager leave something that can respawn the proxy?
+ *
+ * Answered WITHOUT stopping anything, because a caller that must refuse the stop has to
+ * refuse before it acts: `POST /api/stop` briefly ended the Task Scheduler task and then
+ * returned 409, which left the proxy running with its manager stopped — worse than either
+ * outcome it was choosing between.
+ *
+ * Task Scheduler only. `schtasks /end` ends the task instance while the `cmd :loop`
+ * wrapper survives and respawns its child (#764); launchd, systemd and WinSW are down when
+ * they report stopped.
+ */
+export function installedServiceCanRespawn(): boolean {
+  if (process.platform !== "win32") return false;
+  try {
+    return probeWindowsSchedulerTask().status === "present";
+  } catch {
+    // A probe that cannot answer is not evidence of absence; assume the risk exists.
+    return true;
+  }
+}
+
+/**
  * Outcome of stopping an installed process manager.
  *
  * `stopServiceIfInstalled` collapses "no service was installed" and "a service was

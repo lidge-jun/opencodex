@@ -256,7 +256,7 @@ export async function handleManagementAPI(
   if (routed) return routed;
 
   if (url.pathname === "/api/stop" && req.method === "POST") {
-    const { stopServiceIfInstalledDetailed, isServiceOwnershipError } = await import("../service");
+    const { installedServiceCanRespawn, stopServiceIfInstalledDetailed, isServiceOwnershipError } = await import("../service");
     // `ocx stop` performs its own shared teardown AFTER verifying the scheduler did not
     // respawn the proxy (#3008). Without this the child restores native Codex and strips
     // the Grok fence here, so a survivor found moments later has already had the shared
@@ -268,6 +268,20 @@ export async function handleManagementAPI(
     // caller could set it and simply exit, leaving client config pointed at a proxy that
     // no longer exists. Honour the deferral only when the caller left a pending-teardown
     // receipt on disk, which a later stop/update can find and finish.
+    // Decide BEFORE touching the manager. Stopping the Task Scheduler task and then
+    // refusing left the proxy running with its manager stopped — worse than either
+    // outcome. This process cannot verify its own post-exit respawn window; only the
+    // receipt-backed parent `ocx stop` can, which is what the deferral exists for.
+    const { deferralMatchesReceipt } = await import("../config/pending-teardown");
+    const { deferralHonored, performStopTeardown } = await import("./stop-teardown");
+    const holdsReceipt = deferralHonored(url, deferralMatchesReceipt);
+    if (!holdsReceipt && installedServiceCanRespawn()) {
+      return jsonResponse({
+        success: false,
+        code: "respawnable_service",
+        message: "This proxy is managed by a Task Scheduler wrapper that can respawn it, so the stop must be run by `ocx stop`, which verifies the respawn window. Nothing was changed.",
+      }, 409, req, config);
+    }
     let serviceStop: "absent" | "stopped" | "stopped-respawnable" | "failed";
     try {
       serviceStop = stopServiceIfInstalledDetailed();
@@ -289,18 +303,8 @@ export async function handleManagementAPI(
         message: "The installed service manager did not stop; it may respawn the proxy. Shared client config was left alone. Run `ocx stop` from the home that owns the service.",
       }, 409, req, config);
     }
-    // A stopped Task Scheduler can still respawn through its wrapper, and this process
-    // cannot verify its own post-exit respawn window — only the parent `ocx stop` can,
-    // which is what the receipt-backed deferral exists for. Refuse rather than tear down
-    // shared config that a survivor would still be using.
-    const { deferralMatchesReceipt } = await import("../config/pending-teardown");
-    const { deferralHonored, performStopTeardown } = await import("./stop-teardown");
-    if (serviceStop === "stopped-respawnable" && !deferralHonored(url, deferralMatchesReceipt)) {
-      return jsonResponse({
-        success: false,
-        message: "This proxy is managed by a Task Scheduler wrapper that can respawn it, so shared teardown must be performed by `ocx stop`, which verifies the respawn window. Run `ocx stop`.",
-      }, 409, req, config);
-    }
+    // The pre-check above already refused the respawnable case without a receipt, so
+    // reaching here with one means the parent owns the verification.
     // Both managed configs come down together on an explicit teardown. The daemon's own
     // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
     // which is exactly why an intentional stop has to do it here — unless the caller is
@@ -313,7 +317,10 @@ export async function handleManagementAPI(
       } catch {
         console.warn("[opencodex] shutdown drain failed");
       }
-      process.exit(shutdownSucceeded ? 0 : 1);
+      // A drained proxy whose shared teardown failed did not finish the job. Exiting 0
+      // told a supervisor the stop was clean while native Codex or the Grok fence was
+      // still pointed at this process (#3008).
+      process.exit(shutdownSucceeded && teardown.success ? 0 : 1);
     }, 200);
     return jsonResponse(teardown);
   }

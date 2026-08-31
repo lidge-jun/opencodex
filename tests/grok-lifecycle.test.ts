@@ -384,7 +384,7 @@ describe("POST /api/stop teardown", () => {
   test("maps a failed shutdown drain to a nonzero process exit", () => {
     const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
     expect(handler).toContain("shutdownSucceeded = await drainAndShutdown");
-    expect(handler).toContain("process.exit(shutdownSucceeded ? 0 : 1)");
+    expect(handler).toContain("process.exit(shutdownSucceeded && teardown.success ? 0 : 1)");
   });
 
   test("the route consumes the detailed service outcome instead of the boolean", () => {
@@ -395,10 +395,33 @@ describe("POST /api/stop teardown", () => {
     expect(handler).toContain("stopServiceIfInstalledDetailed()");
     expect(handler).not.toContain("stopServiceIfInstalled();");
     expect(handler).toContain('if (serviceStop === "failed")');
-    // A Task Scheduler wrapper can respawn after a clean stop, and this process cannot
-    // verify its own post-exit window — only the receipt-backed parent can.
-    expect(handler).toContain('serviceStop === "stopped-respawnable" && !deferralHonored(url, deferralMatchesReceipt)');
-    expect(handler.indexOf('if (serviceStop === "failed")')).toBeLessThan(handler.indexOf("performStopTeardown"));
+    expect(handler.indexOf('if (serviceStop === "failed")')).toBeLessThan(handler.indexOf("await performStopTeardown"));
+  });
+
+  test("a respawnable backend is refused BEFORE the manager is touched", () => {
+    const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
+    // Stopping the Task Scheduler task and then returning 409 left the proxy running with
+    // its manager stopped — worse than either outcome, and the dashboard's Stop button
+    // sends a bare request on every backend.
+    expect(handler).toContain("!holdsReceipt && installedServiceCanRespawn()");
+    expect(handler).toContain('code: "respawnable_service"');
+    expect(handler.indexOf("installedServiceCanRespawn()")).toBeLessThan(handler.indexOf("stopServiceIfInstalledDetailed()"));
+    // The refusal must say nothing was changed, because nothing was.
+    expect(handler).toContain("Nothing was changed.");
+    // The predicate answers without stopping anything.
+    const serviceSource = readFileSync(join(import.meta.dir, "..", "src", "service.ts"), "utf8");
+    const predicate = serviceSource.slice(serviceSource.indexOf("export function installedServiceCanRespawn"), serviceSource.indexOf("export function installedServiceCanRespawn") + 500);
+    expect(predicate).toContain("probeWindowsSchedulerTask().status === \"present\"");
+    expect(predicate).not.toContain("stopWindows");
+    // A probe that cannot answer is not evidence of absence.
+    expect(predicate).toContain("return true;");
+  });
+
+  test("the daemon's exit status reflects the shared teardown, not just the drain", () => {
+    const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
+    // A drained proxy whose restore failed did not finish the job; exiting 0 told a
+    // supervisor the stop was clean while client config still pointed at this process.
+    expect(handler).toContain("process.exit(shutdownSucceeded && teardown.success ? 0 : 1)");
   });
 
   test("direct service stop and uninstall fail when a shared teardown half fails", () => {
