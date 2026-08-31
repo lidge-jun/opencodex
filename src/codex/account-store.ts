@@ -17,7 +17,7 @@ type LegacyCodexAccountStore = Record<string, CodexAccountCredentials>;
 type CodexAccountStore = Record<string, CodexAccountCredentialRecord>;
 type RawCodexAccountStore = Record<string, CodexAccountCredentials | CodexAccountCredentialRecord>;
 
-const REFRESH_SKEW_MS = 60_000;
+export const CODEX_TOKEN_REFRESH_SKEW_MS = 60_000;
 const REFRESH_LOCK_STALE_MS = 60_000;
 const REFRESH_LOCK_WAIT_MS = REFRESH_LOCK_STALE_MS + 5_000;
 const REFRESH_LOCK_POLL_MS = 50;
@@ -128,6 +128,17 @@ export function getCodexAccountCredential(id: string): CodexAccountCredentials |
   return record.credential ?? null;
 }
 
+function nextCredentialReplacedAt(current: CodexAccountCredentialRecord | undefined): number | undefined {
+  if (!current) return undefined;
+  const previous = current.replacedAt;
+  if (previous === undefined) return Date.now();
+  const next = previous + 1;
+  // A malformed/out-of-range legacy value must not be reused as lineage evidence. A current
+  // timestamp differs from it and therefore fails closed instead of pretending continuity.
+  if (!Number.isSafeInteger(previous) || previous < 0 || !Number.isSafeInteger(next)) return Date.now();
+  return Math.max(Date.now(), next);
+}
+
 export function saveCodexAccountCredential(id: string, cred: CodexAccountCredentials): void {
   withCredentialMutationLockSync(() => {
     const store = loadCodexAccountRecordStore();
@@ -139,7 +150,9 @@ export function saveCodexAccountCredential(id: string, cred: CodexAccountCredent
       credential: cred,
       generation: (current?.generation ?? 0) + 1,
       refreshGrantFingerprint,
-      replacedAt: current ? Date.now() : undefined,
+      // External replacement is the lineage fence used to distinguish reauthentication from a
+      // refresh-owned CAS. Advance it even when two saves share one millisecond.
+      replacedAt: nextCredentialReplacedAt(current),
       ...preservedValidationMetadata(current),
     };
     persist(store);
@@ -314,7 +327,13 @@ export function tombstoneCodexAccount(id: string): number {
     const store = loadCodexAccountRecordStore();
     const current = store[id];
     const generation = (current?.generation ?? 0) + 1;
-    store[id] = { generation, deletedAt: Date.now() };
+    store[id] = {
+      generation,
+      deletedAt: Date.now(),
+      // Delete/re-add is also an external replacement boundary. Retaining an advanced fence
+      // prevents a same-millisecond recreation from looking like a refresh-owned descendant.
+      replacedAt: nextCredentialReplacedAt(current),
+    };
     persist(store);
     return generation;
   });
@@ -376,13 +395,7 @@ function withCredentialMutationLockSync<T>(fn: () => T): T {
   }
 }
 
-type CodexTokenResult = {
-  accessToken: string;
-  chatgptAccountId: string;
-  generation: number;
-  /** This call's own generation CAS produced the returned credential. */
-  selfRefreshed?: boolean;
-};
+type CodexTokenResult = { accessToken: string; chatgptAccountId: string; generation: number };
 type CodexRefreshResult = CodexTokenResult & {
   credential?: CodexAccountCredentials;
   /**
@@ -515,7 +528,7 @@ function findFreshCredentialForGrant(
     // just rejected. Reusing it would bump the generation and replay the identical
     // bearer — a second 401 dressed up as recovery.
     if (rejectedAccessToken !== undefined && candidate.credential.accessToken === rejectedAccessToken) continue;
-    if (candidate.credential.expiresAt > now + REFRESH_SKEW_MS) return candidate.credential;
+    if (candidate.credential.expiresAt > now + CODEX_TOKEN_REFRESH_SKEW_MS) return candidate.credential;
   }
   return null;
 }
@@ -615,17 +628,6 @@ export async function getValidCodexToken(id: string): Promise<CodexTokenResult> 
   };
 }
 
-/** Quota recovery also needs to distinguish this call's refresh from an external replacement. */
-export async function getValidCodexTokenWithLineage(id: string): Promise<CodexTokenResult> {
-  const result = await resolveCodexToken(id);
-  return {
-    accessToken: result.accessToken,
-    chatgptAccountId: result.chatgptAccountId,
-    generation: result.generation,
-    ...(result.selfRefreshed !== undefined ? { selfRefreshed: result.selfRefreshed } : {}),
-  };
-}
-
 async function resolveCodexToken(
   id: string,
   forced?: ForcedRefreshFence,
@@ -643,7 +645,7 @@ async function resolveCodexToken(
   // is still the one that was rejected. Once it has been replaced, the shortcut is
   // correct again and refreshing would burn a rotation for nothing.
   const forcedTargetsStoredCredential = forced !== undefined && !forcedFenceSuperseded(record.generation, forced);
-  if (cred.expiresAt > Date.now() + REFRESH_SKEW_MS && !forcedTargetsStoredCredential) {
+  if (cred.expiresAt > Date.now() + CODEX_TOKEN_REFRESH_SKEW_MS && !forcedTargetsStoredCredential) {
     return { accessToken: cred.accessToken, chatgptAccountId: cred.chatgptAccountId, generation: record.generation };
   }
 
@@ -697,7 +699,7 @@ async function resolveCodexToken(
       if (
         current && currentCred
         && forcedFenceSuperseded(current.generation, forced)
-        && currentCred.expiresAt > Date.now() + REFRESH_SKEW_MS
+        && currentCred.expiresAt > Date.now() + CODEX_TOKEN_REFRESH_SKEW_MS
         && !(forced !== undefined && currentCred.accessToken === forced.rejectedAccessToken)
       ) {
         return {
@@ -773,7 +775,7 @@ async function resolveCodexToken(
     const startGeneration = lockedRecord.generation;
     const lockedRefreshGrantFingerprint = recordGrantFingerprint(lockedRecord);
     if (lockedRefreshGrantFingerprint !== refreshGrantFingerprint) {
-      if (lockedCred.expiresAt > Date.now() + REFRESH_SKEW_MS) {
+      if (lockedCred.expiresAt > Date.now() + CODEX_TOKEN_REFRESH_SKEW_MS) {
         return {
           accessToken: lockedCred.accessToken,
           chatgptAccountId: lockedCred.chatgptAccountId,
@@ -793,7 +795,7 @@ async function resolveCodexToken(
     // authoritative, so a superseded forced refresh stops here rather than
     // spending a rotation on a credential nobody rejected.
     const forcedStillTargetsStored = forced !== undefined && !forcedFenceSuperseded(startGeneration, forced);
-    if (lockedCred.expiresAt > Date.now() + REFRESH_SKEW_MS && !forcedStillTargetsStored) {
+    if (lockedCred.expiresAt > Date.now() + CODEX_TOKEN_REFRESH_SKEW_MS && !forcedStillTargetsStored) {
       return {
         accessToken: lockedCred.accessToken,
         chatgptAccountId: lockedCred.chatgptAccountId,

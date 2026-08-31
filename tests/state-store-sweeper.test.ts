@@ -159,6 +159,35 @@ describe("state-store sweeper", () => {
     expect(getLivePoolQuota401Recovery("swept-quota-account", generation)).toBeUndefined();
   });
 
+  test("a stale generation lookup cannot erase a newer live quota recovery row", () => {
+    const accountId = "quota-recovery-stale-reader";
+    const first = {
+      accessToken: "stale-reader-old",
+      refreshToken: "stale-reader-old-grant",
+      expiresAt: Date.now() + 3600_000,
+      chatgptAccountId: "acct-stale-reader",
+    };
+    saveCodexAccountCredential(accountId, first);
+    const staleGeneration = readCodexAccountRecord(accountId)!.generation;
+    saveCodexAccountCredential(accountId, {
+      ...first,
+      accessToken: "stale-reader-new",
+      refreshToken: "stale-reader-new-grant",
+    });
+    const liveGeneration = readCodexAccountRecord(accountId)!.generation;
+    setPoolQuota401Recovery(accountId, {
+      generation: liveGeneration,
+      disposition: "spent",
+      retryAt: Date.now() + 300_000,
+    });
+
+    expect(getLivePoolQuota401Recovery(accountId, staleGeneration)).toBeUndefined();
+    expect(getLivePoolQuota401Recovery(accountId, liveGeneration)).toMatchObject({
+      generation: liveGeneration,
+      disposition: "spent",
+    });
+  });
+
   test("a sweeper tick expires continuation and Antigravity rows without store traffic", () => {
     rememberResponseState({ input: "old" }, { id: "resp_sweeper_ttl", output: [], status: "completed" });
     observeAntigravityReplay("gemini-3-pro", "session-old", [{

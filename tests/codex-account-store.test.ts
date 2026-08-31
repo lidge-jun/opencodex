@@ -196,6 +196,50 @@ describe("codex-account-store CRUD", () => {
     expect(getCodexAccountCredential("cas")).toEqual(second);
   });
 
+  test("external replacement lineage advances even within one millisecond", async () => {
+    const {
+      readCodexAccountRecord,
+      saveCodexAccountCredential,
+      saveCodexAccountCredentialIfGeneration,
+      tombstoneCodexAccount,
+    } = await import("../src/codex/account-store");
+    const credential = { accessToken: "first", refreshToken: "first-r", expiresAt: 1, chatgptAccountId: "acc" };
+    let refreshedReplacedAt: number | undefined;
+    const clock = spyOn(Date, "now").mockReturnValue(1234);
+    try {
+      saveCodexAccountCredential("replacement-lineage", credential);
+      saveCodexAccountCredential("replacement-lineage", { ...credential, accessToken: "second" });
+      const second = readCodexAccountRecord("replacement-lineage")!;
+      saveCodexAccountCredential("replacement-lineage", { ...credential, accessToken: "third" });
+      const third = readCodexAccountRecord("replacement-lineage")!;
+
+      expect(second.replacedAt).toBe(1234);
+      expect(third.replacedAt).toBe(1235);
+      expect(saveCodexAccountCredentialIfGeneration(
+        "replacement-lineage",
+        third.generation,
+        { ...credential, accessToken: "refreshed" },
+      )).toBe(true);
+      const refreshed = readCodexAccountRecord("replacement-lineage")!;
+      expect(refreshed.replacedAt).toBe(third.replacedAt);
+      refreshedReplacedAt = refreshed.replacedAt;
+    } finally {
+      clock.mockRestore();
+    }
+
+    const tombstoneClock = spyOn(Date, "now").mockReturnValue(2234);
+    try {
+      tombstoneCodexAccount("replacement-lineage");
+      const tombstone = readCodexAccountRecord("replacement-lineage")!;
+      saveCodexAccountCredential("replacement-lineage", credential);
+      const recreated = readCodexAccountRecord("replacement-lineage")!;
+      expect(tombstone.replacedAt).toBeGreaterThan(refreshedReplacedAt!);
+      expect(recreated.replacedAt).toBeGreaterThan(tombstone.replacedAt!);
+    } finally {
+      tombstoneClock.mockRestore();
+    }
+  });
+
   test("validation metadata survives credential replacement and CAS refresh saves", async () => {
     const {
       markCodexAccountValidated,

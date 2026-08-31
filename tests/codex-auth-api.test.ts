@@ -18,6 +18,7 @@ import {
   type CodexAuthAccountDto,
   listCodexAuthAccounts,
   isCodexQuotaRefreshFlightCurrentForTests,
+  setPoolQuotaRecoveryDepsForTests,
   setAccountQuotaFromParsed,
 } from "../src/codex/auth-api";
 import {
@@ -276,6 +277,7 @@ beforeEach(() => {
   resetMainCodexAccountIdentityTrackingForTests();
   resetJwtPlanNotesForTests();
   clearCodexQuotaPrimeState();
+  setPoolQuotaRecoveryDepsForTests(null);
 });
 
 afterEach(() => {
@@ -291,6 +293,7 @@ afterEach(() => {
   clearPoolRotationState();
   clearCodexWebSocketRegistry();
   clearCodexQuotaPrimeState();
+  setPoolQuotaRecoveryDepsForTests(null);
   globalThis.fetch = previousFetch;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
@@ -1468,7 +1471,7 @@ describe("codex-auth API", () => {
         const authorization = new Headers(init?.headers).get("Authorization");
         if (whamCalls === 1) {
           expect(authorization).toBe("Bearer old-plan-access");
-          return new Response("", { status: 401 });
+          return Response.json({ detail: { code: "invalid_refresh_token" } }, { status: 401 });
         }
         expect(authorization).toBe(`Bearer ${refreshedAccess}`);
         return Response.json({
@@ -1503,11 +1506,40 @@ describe("codex-auth API", () => {
     });
   });
 
-  test("terminal refresh or WHAM evidence is memoized for the affected credential generation", async () => {
+  test("an expired credential invalid_grant marks canonical reauth exactly once before WHAM", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-expired-invalid-grant",
+      email: "pool-expired-invalid-grant@example.com",
+      accessToken: "expired-access",
+      refreshToken: "expired-refresh",
+      chatgptAccountId: "acct-expired-invalid-grant",
+      expiresAt: 0,
+    });
+    let refreshCalls = 0;
+    globalThis.fetch = (async input => {
+      const target = String(input);
+      if (target === "https://auth.openai.com/oauth/token") {
+        refreshCalls += 1;
+        return Response.json({ error: "invalid_grant" }, { status: 400 });
+      }
+      throw new Error(`WHAM must not run after terminal expiry refresh: ${target}`);
+    }) as typeof fetch;
+
+    const list = async () => (await listCodexAuthAccounts(config, true))
+      .find(candidate => candidate.id === "pool-expired-invalid-grant");
+    expect(await list()).toMatchObject({ needsReauth: true });
+    expect(isAccountNeedsReauth("pool-expired-invalid-grant")).toBe(true);
+    expect(resolveCodexAccountForThread("terminal-refresh-routing", config)).toBeNull();
+    expect(await list()).toMatchObject({ needsReauth: true });
+    expect(refreshCalls).toBe(1);
+  });
+
+  test("terminal refresh evidence is canonical and memoized for the affected credential generation", async () => {
     for (const scenario of [
-      { id: "pool-terminal-first", terminalAt: "initial" as const, expectedWhamCalls: 1, expectedRefreshCalls: 0 },
-      { id: "pool-invalid-grant", terminalAt: "refresh" as const, expectedWhamCalls: 1, expectedRefreshCalls: 1 },
-      { id: "pool-terminal-retry", terminalAt: "retry" as const, terminalStatus: 403, expectedWhamCalls: 2, expectedRefreshCalls: 1 },
+      { id: "pool-invalid-grant", terminalAt: "refresh" as const, expectedWhamCalls: 1 },
+      { id: "pool-terminal-retry", terminalAt: "retry" as const, expectedWhamCalls: 2 },
+      { id: "pool-terminal-same-bearer", terminalAt: "same-bearer" as const, expectedWhamCalls: 1 },
     ]) {
       const config = makeConfig();
       const oldAccess = `old-${scenario.id}`;
@@ -1527,22 +1559,24 @@ describe("codex-auth API", () => {
         const target = String(input);
         if (target === "https://auth.openai.com/oauth/token") {
           refreshCalls += 1;
+          if (scenario.terminalAt === "same-bearer") expect(isAccountNeedsReauth(scenario.id)).toBe(false);
           if (scenario.terminalAt === "refresh") {
             return Response.json({ error: "invalid_grant" }, { status: 400 });
           }
           return Response.json({
-            access_token: refreshedAccess,
+            access_token: scenario.terminalAt === "same-bearer" ? oldAccess : refreshedAccess,
             refresh_token: `rotated-${scenario.id}`,
             expires_in: 3600,
           });
         }
         if (target === "https://chatgpt.com/backend-api/wham/usage") {
           authorizations.push(new Headers(init?.headers).get("Authorization"));
-          if (scenario.terminalAt === "initial") {
-            return Response.json({ detail: { code: "invalid_refresh_token" } }, { status: 401 });
+          if (authorizations.length === 1) {
+            return scenario.terminalAt === "same-bearer"
+              ? Response.json({ code: "invalid_workspace_selected" }, { status: 401 })
+              : new Response("", { status: 401 });
           }
-          if (authorizations.length === 1) return new Response("", { status: 401 });
-          return Response.json({ code: "invalid_workspace_selected" }, { status: scenario.terminalStatus ?? 401 });
+          return Response.json({ code: "invalid_workspace_selected" }, { status: 401 });
         }
         throw new Error(`Unexpected fetch: ${target}`);
       }) as typeof fetch;
@@ -1551,10 +1585,11 @@ describe("codex-auth API", () => {
         .find(account => account.id === scenario.id);
       expect(await list()).toMatchObject({ needsReauth: true });
       expect(authorizations).toHaveLength(scenario.expectedWhamCalls);
-      expect(refreshCalls).toBe(scenario.expectedRefreshCalls);
+      expect(refreshCalls).toBe(1);
+      expect(isAccountNeedsReauth(scenario.id)).toBe(true);
       expect(await list()).toMatchObject({ needsReauth: true });
       expect(authorizations).toHaveLength(scenario.expectedWhamCalls);
-      expect(refreshCalls).toBe(scenario.expectedRefreshCalls);
+      expect(refreshCalls).toBe(1);
     }
   });
 
@@ -1562,7 +1597,6 @@ describe("codex-auth API", () => {
     for (const scenario of [
       { id: "pool-same-bearer", sameBearer: true, expectedWhamCalls: 1 },
       { id: "pool-second-bare-401", sameBearer: false, expectedWhamCalls: 2 },
-      { id: "pool-expiry-refresh-then-401", sameBearer: false, expired: true, expectedWhamCalls: 1 },
     ]) {
       const config = makeConfig();
       const oldAccess = `old-${scenario.id}`;
@@ -1574,7 +1608,7 @@ describe("codex-auth API", () => {
         accessToken: oldAccess,
         refreshToken: `refresh-${scenario.id}`,
         chatgptAccountId: `acct-${scenario.id}`,
-        expiresAt: scenario.expired ? 0 : Date.now() + 24 * 60 * 60_000,
+        expiresAt: Date.now() + 24 * 60 * 60_000,
       });
       let refreshCalls = 0;
       const authorizations: Array<string | null> = [];
@@ -1612,7 +1646,56 @@ describe("codex-auth API", () => {
     }
   });
 
-  test("an ambiguous token refresh is not repeated, and the same bearer is re-probed after backoff", async () => {
+  test("an ordinary expiry refresh clears the old spent fence and retains one WHAM recovery", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-spent-then-expired",
+      email: "pool-spent-then-expired@example.com",
+      accessToken: "spent-expired-old",
+      refreshToken: "spent-expired-grant",
+      chatgptAccountId: "acct-spent-then-expired",
+      expiresAt: 0,
+    });
+    const generation = readCodexAccountRecord("pool-spent-then-expired")!.generation;
+    quotaRecoveryModule.setPoolQuota401Recovery("pool-spent-then-expired", {
+      generation,
+      disposition: "spent",
+      retryAt: Date.now() + 5 * 60_000,
+    });
+    let refreshCalls = 0;
+    let whamCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const target = String(input);
+      if (target === "https://auth.openai.com/oauth/token") {
+        refreshCalls += 1;
+        if (refreshCalls === 2) expect(isAccountNeedsReauth("pool-spent-then-expired")).toBe(false);
+        return Response.json({
+          access_token: refreshCalls === 1 ? "spent-expired-ordinary" : "spent-expired-forced",
+          refresh_token: refreshCalls === 1 ? "spent-expired-ordinary-grant" : "spent-expired-forced-grant",
+          expires_in: 3600,
+        });
+      }
+      if (target === "https://chatgpt.com/backend-api/wham/usage") {
+        whamCalls += 1;
+        const authorization = new Headers(init?.headers).get("Authorization");
+        if (whamCalls === 1) {
+          expect(authorization).toBe("Bearer spent-expired-ordinary");
+          return Response.json({ detail: { code: "invalid_refresh_token" } }, { status: 401 });
+        }
+        expect(authorization).toBe("Bearer spent-expired-forced");
+        return Response.json({ rate_limit: { primary_window: { used_percent: 11 } } });
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
+    }) as typeof fetch;
+
+    const account = (await listCodexAuthAccounts(config, false))
+      .find(candidate => candidate.id === "pool-spent-then-expired");
+    expect(account).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 11 } });
+    expect({ refreshCalls, whamCalls }).toEqual({ refreshCalls: 2, whamCalls: 2 });
+    expect(readCodexAccountRecord("pool-spent-then-expired")?.generation).toBe(generation + 2);
+  });
+
+  test("a transient token refresh can retry and recover after backoff", async () => {
     const config = makeConfig();
     seedPoolAccount(config, {
       id: "pool-transient-refresh",
@@ -1623,7 +1706,6 @@ describe("codex-auth API", () => {
       chatgptAccountId: "acct-transient-refresh",
       expiresAt: Date.now() + 24 * 60 * 60_000,
     });
-    saveConfig(structuredClone(config));
     let whamCalls = 0;
     let refreshCalls = 0;
     const authorizations: Array<string | null> = [];
@@ -1631,14 +1713,19 @@ describe("codex-auth API", () => {
       const target = String(input);
       if (target === "https://auth.openai.com/oauth/token") {
         refreshCalls += 1;
-        return Response.json({ error: "server_error" }, { status: 503 });
+        if (refreshCalls === 1) return Response.json({ error: "server_error" }, { status: 503 });
+        return Response.json({
+          access_token: "new-transient-access",
+          refresh_token: "new-transient-refresh",
+          expires_in: 3600,
+        });
       }
       if (target === "https://chatgpt.com/backend-api/wham/usage") {
         whamCalls += 1;
-        authorizations.push(new Headers(init?.headers).get("Authorization"));
-        if (whamCalls === 1) return new Response("", { status: 401 });
+        const authorization = new Headers(init?.headers).get("Authorization");
+        authorizations.push(authorization);
+        if (authorization === "Bearer old-transient-access") return new Response("", { status: 401 });
         return Response.json({
-          plan_type: "prolite",
           rate_limit: { primary_window: { used_percent: 18, reset_at: 1782628379 } },
         });
       }
@@ -1654,21 +1741,24 @@ describe("codex-auth API", () => {
     expect(await list(false)).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
     expect(whamCalls).toBe(1);
     expect(refreshCalls).toBe(1);
+    expect(await list(true)).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+    expect(whamCalls).toBe(1);
+    expect(refreshCalls).toBe(1);
     const now = Date.now();
     const clock = spyOn(Date, "now").mockReturnValue(now + 5 * 60_000 + 1);
     try {
       const recovered = await list(false);
       expect(recovered).toMatchObject({
-        plan: "prolite",
         needsReauth: false,
         quota: { weeklyPercent: 18 },
       });
       expect(recovered?.quotaProbeSkipped).toBeUndefined();
-      expect(whamCalls).toBe(2);
-      expect(refreshCalls).toBe(1);
+      expect(whamCalls).toBe(3);
+      expect(refreshCalls).toBe(2);
       expect(authorizations).toEqual([
         "Bearer old-transient-access",
         "Bearer old-transient-access",
+        "Bearer new-transient-access",
       ]);
     } finally {
       clock.mockRestore();
@@ -1684,23 +1774,31 @@ describe("codex-auth API", () => {
       chatgptAccountId: "acct-terminal-old",
     });
     let whamCalls = 0;
-    globalThis.fetch = (async (_input, init) => {
-      whamCalls += 1;
-      const authorization = new Headers(init?.headers).get("Authorization");
-      if (whamCalls === 1) {
-        expect(authorization).toBe("Bearer terminal-old");
-        return Response.json({ detail: { code: "invalid_refresh_token" } }, { status: 401 });
+    let refreshCalls = 0;
+    globalThis.fetch = (async (input, init) => {
+      const target = String(input);
+      if (target === "https://auth.openai.com/oauth/token") {
+        refreshCalls += 1;
+        return Response.json({ error: "invalid_grant" }, { status: 400 });
       }
-      expect(authorization).toBe("Bearer terminal-replacement");
-      return Response.json({
-        plan_type: "prolite",
-        rate_limit: { primary_window: { used_percent: 7 } },
-      });
+      if (target === "https://chatgpt.com/backend-api/wham/usage") {
+        whamCalls += 1;
+        const authorization = new Headers(init?.headers).get("Authorization");
+        if (authorization === "Bearer terminal-old") return new Response("", { status: 401 });
+        expect(authorization).toBe("Bearer terminal-replacement");
+        return Response.json({
+          plan_type: "prolite",
+          rate_limit: { primary_window: { used_percent: 7 } },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
     }) as typeof fetch;
 
     const list = async () => (await listCodexAuthAccounts(config, true))
       .find(account => account.id === "pool-terminal-replaced");
     expect(await list()).toMatchObject({ needsReauth: true });
+    expect(isAccountNeedsReauth("pool-terminal-replaced")).toBe(true);
+    expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 1, refreshCalls: 1 });
     saveCodexAccountCredential("pool-terminal-replaced", {
       accessToken: "terminal-replacement",
       refreshToken: "terminal-replacement-grant",
@@ -1708,10 +1806,12 @@ describe("codex-auth API", () => {
       chatgptAccountId: "acct-terminal-replacement",
     });
     expect(await list()).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 7 } });
+    expect(isAccountNeedsReauth("pool-terminal-replaced")).toBe(false);
     expect(whamCalls).toBe(2);
+    expect(refreshCalls).toBe(1);
   });
 
-  test("a pre-resolution external replacement keeps its own WHAM recovery budget", async () => {
+  test("a pre-resolution external replacement is probed and may spend its own recovery budget", async () => {
     const config = makeConfig();
     seedPoolAccount(config, {
       id: "pool-pre-resolution-replacement",
@@ -1720,19 +1820,23 @@ describe("codex-auth API", () => {
       refreshToken: "pre-resolution-old-grant",
       chatgptAccountId: "acct-pre-resolution-old",
     });
-    const realGetValidWithLineage = accountStoreModule.getValidCodexTokenWithLineage;
+    const realGetValidToken = accountStoreModule.getValidCodexToken;
     let replacementWritten = false;
-    const lineageSpy = spyOn(accountStoreModule, "getValidCodexTokenWithLineage").mockImplementation(async id => {
-      if (!replacementWritten && id === "pool-pre-resolution-replacement") {
-        replacementWritten = true;
-        saveCodexAccountCredential(id, {
-          accessToken: "pre-repl",
-          refreshToken: "pre-resolution-replacement-grant",
-          expiresAt: Date.now() + 3600_000,
-          chatgptAccountId: "acct-pre-resolution-replacement",
-        });
-      }
-      return realGetValidWithLineage(id);
+    const lineageIds: string[] = [];
+    setPoolQuotaRecoveryDepsForTests({
+      getValidToken: async id => {
+        lineageIds.push(id);
+        if (!replacementWritten && id === "pool-pre-resolution-replacement") {
+          replacementWritten = true;
+          saveCodexAccountCredential(id, {
+            accessToken: "pre-repl",
+            refreshToken: "pre-resolution-replacement-grant",
+            expiresAt: Date.now() + 3600_000,
+            chatgptAccountId: "acct-pre-resolution-replacement",
+          });
+        }
+        return realGetValidToken(id);
+      },
     });
     let whamCalls = 0;
     let refreshCalls = 0;
@@ -1749,7 +1853,7 @@ describe("codex-auth API", () => {
       if (target === "https://chatgpt.com/backend-api/wham/usage") {
         whamCalls += 1;
         const authorization = new Headers(init?.headers).get("Authorization");
-        if (whamCalls <= 2) {
+        if (whamCalls === 1) {
           expect(authorization).toBe("Bearer pre-repl");
           return new Response("", { status: 401 });
         }
@@ -1759,17 +1863,200 @@ describe("codex-auth API", () => {
       throw new Error(`Unexpected fetch: ${target}`);
     }) as typeof fetch;
 
-    try {
-      const list = async () => (await listCodexAuthAccounts(config, true))
-        .find(account => account.id === "pool-pre-resolution-replacement");
-      expect(await list()).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
-      expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 1, refreshCalls: 0 });
-      expect(await list()).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 9 } });
-      expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 3, refreshCalls: 1 });
-      expect(lineageSpy).toHaveBeenCalledWith("pool-pre-resolution-replacement");
-    } finally {
-      lineageSpy.mockRestore();
-    }
+    const list = async () => (await listCodexAuthAccounts(config, true))
+      .find(account => account.id === "pool-pre-resolution-replacement");
+    expect(await list()).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 9 } });
+    expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 2, refreshCalls: 1 });
+    expect(lineageIds).toContain("pool-pre-resolution-replacement");
+  });
+
+  test("a joined forced refresh persists a spent fence without caller-owned CAS metadata", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-joined-lineage",
+      email: "pool-joined-lineage@example.com",
+      accessToken: "joined-old",
+      refreshToken: "joined-old-grant",
+      chatgptAccountId: "acct-joined-lineage",
+      expiresAt: Date.now() + 3600_000,
+    });
+    const start = readCodexAccountRecord("pool-joined-lineage")!;
+    let resolutionCalls = 0;
+    let forcedRefreshCalls = 0;
+    setPoolQuotaRecoveryDepsForTests({
+      getValidToken: async id => {
+        resolutionCalls += 1;
+        expect(id).toBe("pool-joined-lineage");
+        return {
+          accessToken: "joined-old",
+          chatgptAccountId: "acct-joined-lineage",
+          generation: start.generation,
+        };
+      },
+      forceRefreshToken: async (id, options) => {
+        forcedRefreshCalls += 1;
+        expect(id).toBe("pool-joined-lineage");
+        expect(options).toMatchObject({
+          rejectedGeneration: start.generation,
+          rejectedAccessToken: "joined-old",
+        });
+        const credential = {
+          accessToken: "joined-new",
+          refreshToken: "joined-new-grant",
+          expiresAt: Date.now() + 3600_000,
+          chatgptAccountId: "acct-joined-lineage",
+        };
+        expect(saveCodexAccountCredentialIfGeneration(id, start.generation, credential)).toBe(true);
+        return {
+          accessToken: credential.accessToken,
+          chatgptAccountId: credential.chatgptAccountId,
+          generation: start.generation + 1,
+          rotated: true,
+          selfRefreshed: false,
+        };
+      },
+    });
+    let whamCalls = 0;
+    const authorizations: Array<string | null> = [];
+    globalThis.fetch = (async (input, init) => {
+      const target = String(input);
+      if (target !== "https://chatgpt.com/backend-api/wham/usage") {
+        throw new Error(`Unexpected fetch: ${target}`);
+      }
+      whamCalls += 1;
+      authorizations.push(new Headers(init?.headers).get("Authorization"));
+      return new Response("", { status: 401 });
+    }) as typeof fetch;
+
+    const account = (await listCodexAuthAccounts(config, true))
+      .find(candidate => candidate.id === "pool-joined-lineage");
+    expect(account).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+    expect({ resolutionCalls, forcedRefreshCalls, whamCalls }).toEqual({
+      resolutionCalls: 1,
+      forcedRefreshCalls: 1,
+      whamCalls: 2,
+    });
+    expect(authorizations).toEqual(["Bearer joined-old", "Bearer joined-new"]);
+
+    const firstCounts = { resolutionCalls, forcedRefreshCalls, whamCalls };
+    expect((await listCodexAuthAccounts(config, false))
+      .find(candidate => candidate.id === "pool-joined-lineage"))
+      .toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+    expect({ resolutionCalls, forcedRefreshCalls, whamCalls }).toEqual(firstCounts);
+    expect(authorizations).toEqual(["Bearer joined-old", "Bearer joined-new"]);
+  });
+
+  test("a failed WHAM replay preserves the spent fence for the refreshed generation", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-replay-network-failure",
+      email: "pool-replay-network-failure@example.com",
+      accessToken: "replay-old",
+      refreshToken: "replay-old-grant",
+      chatgptAccountId: "acct-replay-network-failure",
+      expiresAt: 0,
+    });
+    const startGeneration = readCodexAccountRecord("pool-replay-network-failure")!.generation;
+    let refreshCalls = 0;
+    const authorizations: Array<string | null> = [];
+    globalThis.fetch = (async (input, init) => {
+      const target = String(input);
+      if (target === "https://auth.openai.com/oauth/token") {
+        refreshCalls += 1;
+        return Response.json({
+          access_token: refreshCalls === 1 ? "replay-ordinary" : "replay-forced",
+          refresh_token: refreshCalls === 1 ? "replay-ordinary-grant" : "replay-forced-grant",
+          expires_in: 3600,
+        });
+      }
+      if (target === "https://chatgpt.com/backend-api/wham/usage") {
+        const authorization = new Headers(init?.headers).get("Authorization");
+        authorizations.push(authorization);
+        if (authorization === "Bearer replay-ordinary") return new Response("", { status: 401 });
+        expect(authorization).toBe("Bearer replay-forced");
+        throw new Error("WHAM replay transport failure");
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
+    }) as typeof fetch;
+
+    const list = async (forceRefresh: boolean) => (await listCodexAuthAccounts(config, forceRefresh))
+      .find(candidate => candidate.id === "pool-replay-network-failure");
+    expect(await list(true)).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+    const refreshedGeneration = readCodexAccountRecord("pool-replay-network-failure")!.generation;
+    expect(refreshedGeneration).toBe(startGeneration + 2);
+    expect(quotaRecoveryModule.getLivePoolQuota401Recovery(
+      "pool-replay-network-failure",
+      refreshedGeneration,
+    )?.disposition).toBe("spent");
+    expect(isAccountNeedsReauth("pool-replay-network-failure")).toBe(false);
+    expect({ refreshCalls, authorizations }).toEqual({
+      refreshCalls: 2,
+      authorizations: ["Bearer replay-ordinary", "Bearer replay-forced"],
+    });
+
+    expect(await list(false)).toMatchObject({ needsReauth: false, quotaProbeSkipped: true });
+    expect({ refreshCalls, authorizations }).toEqual({
+      refreshCalls: 2,
+      authorizations: ["Bearer replay-ordinary", "Bearer replay-forced"],
+    });
+  });
+
+  test("an ordinary expiry refresh keeps its WHAM recovery after a first-probe transport failure", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-expiry-first-probe-failure",
+      email: "pool-expiry-first-probe-failure@example.com",
+      accessToken: "expiry-first-old",
+      refreshToken: "expiry-first-old-grant",
+      chatgptAccountId: "acct-expiry-first-probe-failure",
+      expiresAt: 0,
+    });
+    const startGeneration = readCodexAccountRecord("pool-expiry-first-probe-failure")!.generation;
+    let refreshCalls = 0;
+    let whamCalls = 0;
+    let failFirstWham = true;
+    globalThis.fetch = (async (input, init) => {
+      const target = String(input);
+      if (target === "https://auth.openai.com/oauth/token") {
+        refreshCalls += 1;
+        return Response.json({
+          access_token: refreshCalls === 1 ? "expiry-first-ordinary" : "expiry-first-forced",
+          refresh_token: refreshCalls === 1 ? "expiry-first-ordinary-grant" : "expiry-first-forced-grant",
+          expires_in: 3600,
+        });
+      }
+      if (target === "https://chatgpt.com/backend-api/wham/usage") {
+        whamCalls += 1;
+        const authorization = new Headers(init?.headers).get("Authorization");
+        if (failFirstWham) {
+          failFirstWham = false;
+          expect(authorization).toBe("Bearer expiry-first-ordinary");
+          throw new Error("first WHAM transport failure");
+        }
+        if (authorization === "Bearer expiry-first-ordinary") return new Response("", { status: 401 });
+        expect(authorization).toBe("Bearer expiry-first-forced");
+        return Response.json({ rate_limit: { primary_window: { used_percent: 14 } } });
+      }
+      throw new Error(`Unexpected fetch: ${target}`);
+    }) as typeof fetch;
+
+    const list = async () => (await listCodexAuthAccounts(config, true))
+      .find(candidate => candidate.id === "pool-expiry-first-probe-failure");
+    const first = await list();
+    expect(first).toMatchObject({ needsReauth: false });
+    expect(first?.quotaProbeSkipped).toBeUndefined();
+    const ordinaryGeneration = readCodexAccountRecord("pool-expiry-first-probe-failure")!.generation;
+    expect(ordinaryGeneration).toBe(startGeneration + 1);
+    expect(quotaRecoveryModule.getLivePoolQuota401Recovery(
+      "pool-expiry-first-probe-failure",
+      ordinaryGeneration,
+    )).toBeUndefined();
+    expect(isAccountNeedsReauth("pool-expiry-first-probe-failure")).toBe(false);
+    expect({ refreshCalls, whamCalls }).toEqual({ refreshCalls: 1, whamCalls: 1 });
+
+    expect(await list()).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 14 } });
+    expect(readCodexAccountRecord("pool-expiry-first-probe-failure")?.generation).toBe(startGeneration + 2);
+    expect({ refreshCalls, whamCalls }).toEqual({ refreshCalls: 2, whamCalls: 3 });
   });
 
   test("a spent verdict cannot cross an outer-read credential replacement", async () => {
@@ -1785,22 +2072,26 @@ describe("codex-auth API", () => {
     quotaRecoveryModule.setPoolQuota401Recovery("pool-spent-outer-replacement", {
       generation: oldGeneration,
       disposition: "spent",
-      retryAt: 0,
+      retryAt: Date.now() + 5 * 60_000,
     });
     const realGetRecovery = quotaRecoveryModule.getLivePoolQuota401Recovery;
     let replacementWritten = false;
-    const recoverySpy = spyOn(quotaRecoveryModule, "getLivePoolQuota401Recovery").mockImplementation((id, generation) => {
-      const result = realGetRecovery(id, generation);
-      if (!replacementWritten && id === "pool-spent-outer-replacement") {
-        replacementWritten = true;
-        saveCodexAccountCredential(id, {
-          accessToken: "spent-outer-replacement",
-          refreshToken: "spent-outer-replacement-grant",
-          expiresAt: Date.now() + 3600_000,
-          chatgptAccountId: "acct-spent-outer-replacement",
-        });
-      }
-      return result;
+    const recoveryCalls: Array<[string, number | undefined]> = [];
+    setPoolQuotaRecoveryDepsForTests({
+      getRecovery: (id, generation) => {
+        recoveryCalls.push([id, generation]);
+        const result = realGetRecovery(id, generation);
+        if (!replacementWritten && id === "pool-spent-outer-replacement") {
+          replacementWritten = true;
+          saveCodexAccountCredential(id, {
+            accessToken: "spent-outer-replacement",
+            refreshToken: "spent-outer-replacement-grant",
+            expiresAt: Date.now() + 3600_000,
+            chatgptAccountId: "acct-spent-outer-replacement",
+          });
+        }
+        return result;
+      },
     });
     let whamCalls = 0;
     let refreshCalls = 0;
@@ -1827,15 +2118,11 @@ describe("codex-auth API", () => {
       throw new Error(`Unexpected fetch: ${target}`);
     }) as typeof fetch;
 
-    try {
-      const account = (await listCodexAuthAccounts(config, true))
-        .find(candidate => candidate.id === "pool-spent-outer-replacement");
-      expect(account).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 12 } });
-      expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 2, refreshCalls: 1 });
-      expect(recoverySpy).toHaveBeenCalledWith("pool-spent-outer-replacement", oldGeneration);
-    } finally {
-      recoverySpy.mockRestore();
-    }
+    const account = (await listCodexAuthAccounts(config, true))
+      .find(candidate => candidate.id === "pool-spent-outer-replacement");
+    expect(account).toMatchObject({ needsReauth: false, quota: { weeklyPercent: 12 } });
+    expect({ whamCalls, refreshCalls }).toEqual({ whamCalls: 2, refreshCalls: 1 });
+    expect(recoveryCalls).toContainEqual(["pool-spent-outer-replacement", oldGeneration]);
   });
 
   test("quota flights join only an intact refresh-owned G to G+1 settlement window", () => {

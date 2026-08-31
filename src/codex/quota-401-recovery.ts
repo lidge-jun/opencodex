@@ -2,8 +2,8 @@ import type { GenerationContext } from "../lib/state-store-sweeper";
 import { isCodexAccountGenerationLive } from "./account-store";
 
 export type PoolQuota401Recovery =
-  | { generation: number; disposition: "terminal" }
-  | { generation: number; disposition: "spent"; retryAt: number };
+  | { generation: number; disposition: "spent"; retryAt: number }
+  | { generation: number; disposition: "retryable"; retryAt: number };
 
 const recoveryByAccount = new Map<string, PoolQuota401Recovery>();
 
@@ -13,7 +13,11 @@ export function getLivePoolQuota401Recovery(
 ): PoolQuota401Recovery | undefined {
   const state = recoveryByAccount.get(accountId);
   if (state && state.generation !== generation) {
-    recoveryByAccount.delete(accountId);
+    // A stale reader may still be holding G after another flight committed G+1 and installed its
+    // live fence. Never let the stale lookup erase the newer generation's recovery state.
+    if (!isCodexAccountGenerationLive(accountId, state.generation)) {
+      recoveryByAccount.delete(accountId);
+    }
     return undefined;
   }
   return state;
