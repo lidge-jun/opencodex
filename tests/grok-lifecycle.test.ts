@@ -192,13 +192,20 @@ describe("Grok fence lifecycle wiring", () => {
     // The deferral is an obligation, so it is claimed on disk BEFORE it is requested and
     // released only after THIS process has restored the shared config itself. A bare
     // query flag could not survive the parent dying mid-stop.
-    const claimAt = stopFn.indexOf("if (endpoint) claimTeardown(endpoint);");
+    const claimAt = stopFn.indexOf("claimTeardown(endpoint);");
     expect(claimAt).toBeGreaterThan(-1);
     expect(claimAt).toBeLessThan(stopFn.indexOf("deferSharedTeardownNonce: teardownNonce"));
     // One resolved stop target feeds BOTH the receipt and the request, so the endpoint
     // recorded is the endpoint contacted — recovery probes exactly that one.
-    expect(stopFn).toContain("const endpoint = discovered ?? endpointOf(readRuntimePort(pid));");
-    expect(stopFn).toContain("runtimeEndpoint: endpoint ?? undefined");
+    expect(stopFn).toContain("const endpoint = discovered ?? endpointOf(readRuntimePort(pid)) ?? configuredEndpoint();");
+    // Every stop claims a receipt, including the one that resolves no endpoint at all —
+    // that path goes straight to the kill ladder with no child teardown, so a warning
+    // instead of a receipt is exactly the parent-crash window this exists to close.
+    expect(stopFn).toContain("claimTeardown(endpoint);");
+    expect(stopFn).not.toContain("if (endpoint) claimTeardown(endpoint);");
+    // A guessed endpoint is good enough to record an obligation against, not to POST to.
+    expect(stopFn).toContain("runtimeEndpoint: discovered ?? endpointOf(readRuntimePort(pid)) ?? undefined");
+    expect(stopFn).toContain("runtimeEndpoint: discovered ?? endpointOf(readRuntimePort(pid)) ?? undefined");
     expect(controlSource).toContain("io.runtimeEndpoint ?? readRuntime(pid)");
     // Inherited obligations are snapshotted BEFORE this run claims anything, so its own
     // receipt is never mistaken for one it inherited.
@@ -243,9 +250,12 @@ describe("Grok fence lifecycle wiring", () => {
     // The orphan path hands over the endpoint the probe already found; its runtime record
     // is typically what went missing in the first place.
     expect(stopFn).toContain('stopWithDeferral(live.pid, { hostname: live.hostname ?? "127.0.0.1", port: live.port })');
-    // A stop that can resolve no endpoint says so: that is the one case that keeps the
-    // pre-#3008 window open, and it must not be silent.
-    expect(stopFn).toContain("No listen endpoint could be resolved for this proxy");
+    // A live proxy with no killable pid is not "no proxy found": purging state and
+    // restoring over it is the same failure arrived at from the other direction.
+    expect(stopFn).toContain("} else if (live) {");
+    const noPidBranch = stopFn.slice(stopFn.indexOf("} else if (live) {"), stopFn.indexOf('} else if (!stoppedService) {'));
+    expect(noPidBranch).toContain("stopFailed = true;");
+    expect(noPidBranch).toContain("ownershipBlocked = true;");
     const gateFn = sliceFn(CLI_SOURCE, "const abandonedTeardownIsSafeToFinish", "let stopFailed = false;");
     expect(gateFn).toContain('probeProxyLiveness(endpoint.port, endpoint.hostname) === "dead"');
     expect(gateFn).toContain("return false;");

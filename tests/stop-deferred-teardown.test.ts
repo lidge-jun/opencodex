@@ -200,10 +200,22 @@ describe("receipt naming is shared by both update lanes", () => {
     // The retired singleton name is not a receipt.
     expect(names.isPendingTeardownFileName("pending-teardown.json")).toBe(false);
     expect(names.isPendingTeardownFileName(`pending-teardown-${claimed.nonce}.json`)).toBe(true);
-    // A quarantined receipt must not keep an update blocked.
-    expect(names.isPendingTeardownFileName(`pending-teardown-unreadable-${claimed.nonce}-1.bak`)).toBe(false);
+    // A quarantined receipt is no longer READ by the recovery loop...
+    const quarantinedName = `pending-teardown-${claimed.nonce}.unreadable.json`;
+    expect(names.isPendingTeardownFileName(quarantinedName)).toBe(false);
+    // ...but it is still an obligation, so it still blocks an update.
+    expect(names.isQuarantinedTeardownFileName(quarantinedName)).toBe(true);
+    expect(names.isAnyTeardownObligationFileName(quarantinedName)).toBe(true);
 
     mod.quarantinePendingTeardown(claimed.nonce);
+    expect(mod.listPendingTeardowns()).toHaveLength(0);
+    // Both lanes still refuse to install over a teardown that never ran.
+    expect(names.hasPendingTeardownIn(readdirSync, home)).toBe(true);
+    expect(mod.pendingTeardownOutstanding()).toBe(true);
+    expect(mod.listQuarantinedTeardowns()).toHaveLength(1);
+
+    // Only a human removing the file ends the enforcement.
+    rmSync(mod.listQuarantinedTeardowns()[0]!);
     expect(names.hasPendingTeardownIn(readdirSync, home)).toBe(false);
     expect(mod.pendingTeardownOutstanding()).toBe(false);
   });
@@ -265,14 +277,16 @@ describe("pending teardown receipts", () => {
     const read = mod.readPendingTeardown(claimed.nonce);
     expect(read.state).toBe("invalid");
     expect(mod.pendingTeardownOutstanding()).toBe(true);
-    // It names no endpoint, so nothing can prove its proxy down. Left in place it would
-    // wedge every later stop and update; quarantine keeps the evidence and unblocks them.
+    // It names no endpoint, so nothing can prove its proxy down. Quarantine stops the
+    // recovery loop from re-reading garbage on every stop, but the obligation REMAINS
+    // outstanding: filing it away to unblock an update would let the next install land
+    // over a teardown that never ran.
     const moved = mod.quarantinePendingTeardown(claimed.nonce);
     expect(moved).toBeTruthy();
     expect(existsSync(moved!)).toBe(true);
-    expect(mod.pendingTeardownOutstanding()).toBe(false);
-    // The quarantined name is ignored by the scan, so it never re-triggers recovery.
-    expect(readdirSync(home).some(n => n.includes("unreadable"))).toBe(true);
+    expect(mod.listPendingTeardowns()).toHaveLength(0);
+    expect(mod.pendingTeardownOutstanding()).toBe(true);
+    expect(readdirSync(home).some(n => n.endsWith(".unreadable.json"))).toBe(true);
   });
 
   test("a directory where a receipt belongs is invalid, not missing", async () => {

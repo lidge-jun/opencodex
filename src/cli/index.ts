@@ -690,6 +690,19 @@ async function handleStop() {
   // with an explicit --port is not on the configured one.
   const endpointOf = (runtime: { port: number; hostname?: string } | null): { hostname: string; port: number } | null =>
     runtime?.port ? { hostname: runtime.hostname ?? "127.0.0.1", port: runtime.port } : null;
+  // Last-resort endpoint for a receipt: the address this home is configured to serve on,
+  // which is what a later recovery probe would ask about anyway.
+  const configuredEndpoint = (): { hostname: string; port: number } => {
+    try {
+      const config = loadConfig();
+      return {
+        hostname: config.hostname ?? "127.0.0.1",
+        port: typeof config.port === "number" && config.port > 0 ? config.port : 10100,
+      };
+    } catch {
+      return { hostname: "127.0.0.1", port: 10100 };
+    }
+  };
   // Only a definitive "nothing is answering" authorizes finishing somebody else's
   // abandoned teardown. The tri-state probe distinguishes that from "we could not tell"
   // (timeout, a listener that withholds /healthz), which `findLiveProxy` collapses into
@@ -752,19 +765,25 @@ async function handleStop() {
    * and no child teardown runs at all.
    *
    * So the caller supplies whatever endpoint it already discovered: the orphan path knows
-   * one from `findLiveProxy` even when the runtime record is gone. Only when nothing can
-   * be resolved is the stop left undeferred — there is no endpoint to send the nonce to,
-   * so the graceful request cannot happen and the kill has no receipt to leave. That is
-   * reported rather than silent, because it is the one case that keeps the old window.
+   * one from `findLiveProxy` even when the runtime record is gone.
+   *
+   * When nothing resolves, the graceful request cannot be made at all — `stopProxy` goes
+   * straight to the kill ladder, no child teardown runs, and there is no receipt to leave
+   * behind. A warning does not make that durable, so the receipt is claimed FIRST against
+   * the endpoint this process would restore anyway. It is the configured listen address,
+   * which is the same address every recovery probe would ask about, and an obligation
+   * recorded against it is strictly better than none: at worst the probe cannot confirm
+   * it dead and a later stop refuses to restore, which is the safe direction.
    */
   const stopWithDeferral = async (pid: number, discovered?: { hostname: string; port: number } | null): Promise<void> => {
-    const endpoint = discovered ?? endpointOf(readRuntimePort(pid));
-    if (endpoint) claimTeardown(endpoint);
-    else {
-      console.warn("⚠️  No listen endpoint could be resolved for this proxy, so the stop cannot be deferred.");
-      console.warn("   If this process dies before the restore, client config may keep pointing at the stopped proxy; rerun 'ocx stop'.");
-    }
-    await stopProxy(pid, { deferSharedTeardownNonce: teardownNonce, runtimeEndpoint: endpoint ?? undefined });
+    const endpoint = discovered ?? endpointOf(readRuntimePort(pid)) ?? configuredEndpoint();
+    claimTeardown(endpoint);
+    await stopProxy(pid, {
+      deferSharedTeardownNonce: teardownNonce,
+      // Only a DISCOVERED endpoint may direct the request; the configured fallback is a
+      // guess good enough to record an obligation against, not to POST a stop to.
+      runtimeEndpoint: discovered ?? endpointOf(readRuntimePort(pid)) ?? undefined,
+    });
   };
   try {
     const serviceStop = stopServiceIfInstalledDetailed();
@@ -841,6 +860,17 @@ async function handleStop() {
           console.error("   Skipping shared teardown (native Codex restore, Grok config): the foreign proxy is still running.");
         }
       }
+    } else if (live) {
+      // Identity-confirmed live, but no PID this process can kill: a legacy /healthz that
+      // reports no pid, or a pid that failed verification. Treating that as "nothing is
+      // running" purges the state records and then restores shared client config out from
+      // under a proxy that is still serving — the exact failure the deferral exists to
+      // prevent, arrived at from the other direction.
+      stopFailed = true;
+      ownershipBlocked = true;
+      console.error(`❌ A proxy is answering on port ${live.port}, but no process id could be resolved for it, so it cannot be stopped from here.`);
+      console.error("   Skipping shared teardown: restoring client config while it serves would leave both pointing at each other.");
+      console.error("   Stop it from the home that started it, or end the process manually, then rerun 'ocx stop'.");
     } else if (!stoppedService) {
       console.log("No running proxy found.");
     }

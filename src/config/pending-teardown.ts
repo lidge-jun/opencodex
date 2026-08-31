@@ -60,8 +60,10 @@ export type PendingTeardownRead =
 
 import {
   isPendingTeardownFileName,
+  isAnyTeardownObligationFileName,
   PENDING_TEARDOWN_PREFIX as PREFIX,
   PENDING_TEARDOWN_SUFFIX as SUFFIX,
+  PENDING_TEARDOWN_UNREADABLE_SUFFIX as UNREADABLE_SUFFIX,
   pendingTeardownNonceFromFileName,
 } from "./pending-teardown-names.mjs";
 
@@ -150,9 +152,30 @@ export function listPendingTeardowns(): OutstandingTeardown[] {
   return out;
 }
 
-/** Is any obligation outstanding, whether or not it can still be attributed? */
+/**
+ * Is any obligation outstanding, whether or not it can still be attributed?
+ *
+ * Quarantined receipts count. Filing an unreadable one away must not let the next update
+ * install over a teardown that never ran — that would turn "we could not tell" into "it
+ * is fine", which is the failure this whole mechanism exists to prevent.
+ */
 export function pendingTeardownOutstanding(): boolean {
-  return listPendingTeardowns().length > 0;
+  try {
+    return readdirSync(getConfigDir()).some(isAnyTeardownObligationFileName);
+  } catch {
+    return false;
+  }
+}
+
+/** Paths of quarantined obligations awaiting a human. */
+export function listQuarantinedTeardowns(): string[] {
+  try {
+    return readdirSync(getConfigDir())
+      .filter(name => name.startsWith(PREFIX) && name.endsWith(UNREADABLE_SUFFIX))
+      .map(name => join(getConfigDir(), name));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -180,14 +203,17 @@ export function clearPendingTeardown(nonce: string): boolean {
  * updater gates treat an outstanding receipt as a reason to run the stop, and that stop
  * would fail on the same receipt every time — an update that can never proceed.
  *
- * Quarantining keeps the evidence under a name the scan ignores, so the operator can look
- * at it, while letting the stop that found it perform the restore the receipt stood for.
+ * Renaming stops the recovery loop from re-reading garbage on every stop, but it
+ * deliberately does NOT stop the obligation from counting: `pendingTeardownOutstanding`
+ * still sees it, so both updaters keep refusing to install over a teardown that never
+ * ran. Only a human removing the file ends the enforcement.
+ *
  * Returns the path it was moved to, or null when it could not be moved.
  */
 export function quarantinePendingTeardown(nonce: string): string | null {
   const from = pendingTeardownPathFor(nonce);
   if (!existsSync(from)) return null;
-  const to = join(getConfigDir(), `pending-teardown-unreadable-${nonce}-${Date.now()}.bak`);
+  const to = join(getConfigDir(), `${PREFIX}${nonce}${UNREADABLE_SUFFIX}`);
   try {
     renameSync(from, to);
     return to;
