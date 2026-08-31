@@ -1223,10 +1223,12 @@ export function bridgeToResponsesSSE(
                 // Exactly one compaction item per turn; codex-rs takes the first and fatals on 0.
                 const item = {
                   type: "compaction", id: `cmp_${uuid()}`,
-                  encrypted_content: encodeCompactionSummary(compactionText),
+                  encrypted_content: event.compactionEncryptedContent ?? encodeCompactionSummary(compactionText),
                 };
                 emit("response.output_item.done", { output_index: outputIndex, item });
-                retainFinishedItem(item as OutputItem, compactionTextBytes);
+                retainFinishedItem(item as OutputItem, event.compactionEncryptedContent
+                  ? bytesOf(event.compactionEncryptedContent)
+                  : compactionTextBytes);
                 outputIndex++;
               }
               // Recognize every adapter's truncation vocabulary, not just the canonical pair.
@@ -1574,6 +1576,7 @@ function buildResponseJSONWithBudget(
   let sawTerminal = false;
   let compactionText = "";
   let compactionTextBytes = 0;
+  let compactionEncryptedContent: string | undefined;
 
   let currentText = "";
   let currentTextBytes = 0;
@@ -1915,6 +1918,7 @@ function buildResponseJSONWithBudget(
         break;
       case "done":
         usage = e.usage;
+        compactionEncryptedContent = e.compactionEncryptedContent;
         sawTerminal = true;
         endTurn = e.endTurn;
         cleanDone = e.stopReason === undefined;
@@ -1967,7 +1971,11 @@ function buildResponseJSONWithBudget(
     && sawTerminal
     && !isTruncatedStopReason(rawStopReason)
   ) {
-    pushOutput({ type: "compaction", id: `cmp_${uuid()}`, encrypted_content: encodeCompactionSummary(compactionText) }, compactionTextBytes);
+   const item = {
+      type: "compaction", id: `cmp_${uuid()}`,
+      encrypted_content: compactionEncryptedContent ?? encodeCompactionSummary(compactionText),
+    };
+    pushOutput(item, compactionEncryptedContent ? bytesOf(compactionEncryptedContent) : compactionTextBytes);
   }
 
   const failure = errorEvent ? adapterFailureFromEvent(errorEvent) : undefined;

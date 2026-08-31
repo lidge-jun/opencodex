@@ -2981,9 +2981,9 @@ describe("combo compact failover", () => {
     backupUrl?: string,
   ): { config: OcxConfig } {
     const config = comboConfig({
-      openai: {
+      "openai-apikey": {
         adapter: "openai-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
+        baseUrl: "https://api.openai.com/v1",
         authMode: "key",
         apiKey: "combo-compact-key",
       },
@@ -2999,12 +2999,12 @@ describe("combo compact failover", () => {
       return chatStream("compact backup");
     });
     const { config } = canonicalPoolConfig([
-      { provider: "openai", model: "gpt-5.4" },
+      { provider: "openai-apikey", model: "gpt-5.4" },
       { provider: "backup", model: "m1" },
     ], baseUrl(b));
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
       const url = typeof input === "object" && input !== null && "url" in input ? String((input as Request).url) : String(input);
-      if (url.includes("chatgpt.com")) {
+      if (url.includes("api.openai.com")) {
         return Response.json({ error: { message: "rate limited" } }, { status: 429 });
       }
       return originalFetch(input as RequestInfo, init);
@@ -3025,7 +3025,7 @@ describe("combo compact failover", () => {
     const attempts = log.attempts as Array<Record<string, unknown>>;
     expect(attempts).toHaveLength(2);
     expect(attempts[0]).toMatchObject({
-      provider: "openai",
+      provider: "openai-apikey",
       adapter: "openai-responses",
       status: 429,
     });
@@ -3034,15 +3034,17 @@ describe("combo compact failover", () => {
 
   test("combo compact runs the synthetic turn as SSE so a canonical child can serve it", async () => {
     const bodies: Array<Record<string, unknown>> = [];
-    const { config } = canonicalPoolConfig([{ provider: "openai", model: "gpt-5.4" }]);
+    const { config } = canonicalPoolConfig([{ provider: "openai-apikey", model: "gpt-5.4" }]);
     globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
-      const url = input instanceof Request ? input.url : String(input);
-      if (!url.includes("chatgpt.com")) {
+      const url = typeof input === "object" && input !== null && "url" in input
+        ? String((input as Request).url)
+        : String(input);
+      if (!url.includes("api.openai.com")) {
         return originalFetch(input as RequestInfo, init);
       }
       // Only the codex/responses child turn is under test; side probes (e.g. the
       // wham/usage quota check) just get a tolerated non-2xx.
-      if (!url.includes("backend-api/codex/responses")) {
+      if (!url.includes("api.openai.com/v1/responses")) {
         return Response.json({ error: { message: "probe not under test" } }, { status: 403 });
       }
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
@@ -3057,7 +3059,7 @@ describe("combo compact failover", () => {
         response: {
           id: "resp_compact",
           status: "completed",
-          output: [{ type: "compaction", encrypted_content: encodeCompactionSummary("compact summary") }],
+          output: [{ type: "compaction", encrypted_content: "gAAAAABm-native-openai-ciphertext" }],
         },
       };
       return new Response([
@@ -3074,11 +3076,11 @@ describe("combo compact failover", () => {
     const response = await postCompactLogged(config);
     expect(response.status).toBe(200);
     const json = await response.json() as { output?: unknown[] };
-    expect(JSON.stringify(json.output)).toContain("compact summary");
+    expect(json.output).toEqual([expect.objectContaining({
+      type: "compaction", encrypted_content: "gAAAAABm-native-openai-ciphertext",
+    })]);
     expect(bodies).toHaveLength(1);
     expect(bodies[0]!.stream).toBe(true);
-    // Canonical children keep the native compaction_trigger item — only
-    // non-native targets get the summarizer prompt injected (covered above).
-    expect(JSON.stringify(bodies[0]!.input)).toContain("compaction_trigger");
+    expect(JSON.stringify(bodies[0]!.input)).toContain("CONTEXT CHECKPOINT COMPACTION");
   });
 });

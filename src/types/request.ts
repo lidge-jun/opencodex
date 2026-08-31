@@ -333,6 +333,8 @@ export type AdapterEvent =
   | {
       type: "done";
       usage?: OcxUsage;
+      /** Native opaque compaction ciphertext returned by a Responses backend. */
+      compactionEncryptedContent?: string;
       stopReason?: string;
       endTurn?: boolean;
       providerState?: OcxProviderContinuationState;

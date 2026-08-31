@@ -1083,9 +1083,11 @@ export async function handleResponsesCompact(
       `compaction turn produced ${compactionItems.length} compaction items, expected exactly 1`,
     );
   }
-  // The canonical Responses stream returns a real OpenAI-encrypted compaction item. OCX cannot
-  // and should not decrypt it; /responses/compact callers can consume that item directly.
-  if (accountGatedCompactWireModel) {
+  // Native Responses backends return a real opaque OpenAI-encrypted compaction item. OCX cannot
+  // and should not decrypt it; preserve that item for /responses/compact callers. Synthetic
+  // routed summaries are our `ocx1:` envelope and must be decoded into v1 history items.
+  if (accountGatedCompactWireModel || (typeof compactionItems[0]!.encrypted_content === "string"
+    && !compactionItems[0]!.encrypted_content.startsWith("ocx1:"))) {
     const result = new Response(JSON.stringify({ output: compactionItems }), {
       headers: { "Content-Type": "application/json" },
     });
