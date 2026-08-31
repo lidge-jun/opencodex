@@ -13,7 +13,7 @@ import {
   type WorkspaceProvider,
 } from "../../provider-workspace/catalog";
 import { isLocalProvider } from "../../provider-workspace/kind";
-import { formatProviderDisplayName, providerIconSrc } from "../../provider-icons";
+import { formatProviderDisplayName, providerIconPaint, providerIconSrc } from "../../provider-icons";
 
 export function statusLabel(p: WorkspaceProvider, t: TFn): string {
   const s = binProviderStatus(p);
@@ -50,9 +50,30 @@ export function ProviderIcon({ name, adapter, baseUrl, cls }: {
 }) {
   const t = useT();
   const src = providerIconSrc(name, { adapter, baseUrl });
+  /*
+   * Three ways to paint a mark, because two of them are wrong for most files.
+   *
+   * An <img> keeps the vendor's colours, which is what a brand deserves and what
+   * works whenever the artwork has enough contrast against both tiles. A neutral
+   * silhouette does not: one fill of near-black or near-white vanishes against
+   * one of the two surfaces, so it is drawn as a themed mask instead. And a mark
+   * that carries real colour but is dominantly dark can be neither -- masking
+   * would flatten its palette, leaving it alone leaves it invisible -- so its own
+   * artwork sits on a constant light plate, the way a favicon already assumes.
+   */
+  const paint = providerIconPaint(src);
+  const tileClass = paint === "plate" ? `${cls} provider-icon--plate`
+    : paint === "dark-plate" ? `${cls} provider-icon--plate-dark`
+    : cls;
   return (
-    <span className={cls}>
-      {src ? (
+    <span className={tileClass}>
+      {src && paint === "mask" ? (
+        <span
+          className="provider-icon-mask"
+          style={{ maskImage: `url(${src})`, WebkitMaskImage: `url(${src})` }}
+          aria-hidden="true"
+        />
+      ) : src ? (
         <img src={src} alt="" aria-hidden="true" />
       ) : (
         <ProviderFallbackMark name={name} label={formatProviderDisplayName(name, t)} />

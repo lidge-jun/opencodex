@@ -2153,6 +2153,35 @@ table.logs-table {
 .prov-title { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; min-width: 0; }
 .provider-icon { width: 31px; height: 31px; border-radius: var(--radius-xs); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; background: var(--raised); border: 1px solid var(--border-soft); color: var(--text); }
 .provider-icon img { width: 19px; height: 19px; object-fit: contain; display: block; }
+
+/* A single-ink mark painted with the surrounding text colour, so it follows the
+   theme instead of vanishing into one of the two tiles. The tile already sets
+   `color: var(--text)`, so this needs no property of its own. */
+.provider-icon-mask {
+  width: 19px;
+  height: 19px;
+  display: block;
+  background: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+.provider-icon-sm .provider-icon-mask { width: 15px; height: 15px; }
+
+/* Artwork that carries real colour but is dominantly near-black: measured between
+   1.04:1 and 1.59:1 against the dark tile, which is invisible. Masking would
+   flatten the palette, so the vendor's own colours are kept and given the light
+   plate every favicon already assumes it will sit on. */
+.provider-icon--plate { background: #f4f4f4; border-color: rgba(0, 0, 0, 0.12); }
+
+/* The mirror case: artwork drawn in near-white for a dark header, which is
+   invisible on the light tile at roughly 1.0:1. It gets the dark surface its own
+   designers assumed. A theme-following plate would not work -- it would put
+   light-ink art back on a light tile in light mode. */
+.provider-icon--plate-dark { background: #1c1c1c; border-color: rgba(255, 255, 255, 0.14); }
 .prov-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; min-width: 0; }
 .prov-meta > span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-quota { padding-left: 58px; }
