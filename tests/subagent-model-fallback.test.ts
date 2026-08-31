@@ -21,7 +21,7 @@ import {
 } from "../src/codex/subagent-model-fallback";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../src/codex/account-runtime-state";
-import { clearAccountQuota, updateAccountQuota } from "../src/codex/quota";
+import { clearAccountQuota, setAccountQuotaFromParsed, updateAccountQuota } from "../src/codex/quota";
 import {
   canAcquireCodexQuotaProbeLease,
   canAcquireCodexQuotaScopeProbeLease,
@@ -732,6 +732,36 @@ describe("subagent model fallback chain", () => {
     });
     expect(isNativeModelQuotaExhausted("gpt-5.6-sol", config, "pool-a")).toBe(false);
     expect(isSubagentModelUnavailable("gpt-5.6-sol", config, "pool-a")).toBe(false);
+  });
+
+  test("a full burst window makes the native model exhausted only while it holds (#3029)", () => {
+    // Subagent fallback reads the same usage score as pool selection, so a stale terminal
+    // reading pushes subagents off a native model whose five-hour window has already reset.
+    // The clock is passed explicitly and deliberately far from wall time: a fixture whose
+    // clock matches Date.now() cannot tell a threaded clock from a substituted one.
+    const now = 1_700_000_000_000;
+    const config = cfg({
+      activeCodexAccountId: "pool-a",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "pool",
+        },
+      },
+      subagentModelFallback: ["kimi/k3"],
+    });
+
+    resetSubagentModelFallbackStateForTests();
+    clearAccountQuota("pool-a");
+    setAccountQuotaFromParsed("pool-a", { shortPercent: 100, shortResetAt: now + 60_000 });
+    expect(isNativeModelQuotaExhausted("gpt-5.6-sol", config, "pool-a", now)).toBe(true);
+
+    resetSubagentModelFallbackStateForTests();
+    clearAccountQuota("pool-a");
+    setAccountQuotaFromParsed("pool-a", { shortPercent: 100, shortResetAt: now - 60_000 });
+    expect(isNativeModelQuotaExhausted("gpt-5.6-sol", config, "pool-a", now)).toBe(false);
   });
 
   test("openai-direct/gpt-5.5 is accepted as encrypted-task fallback when canonical", () => {

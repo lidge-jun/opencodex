@@ -226,7 +226,10 @@ export function isNativeModelQuotaExhausted(
   const resolvedAccountId = resolveRouteFallbackAccountId(route, config, accountId);
   if (!resolvedAccountId) return false;
   const quota = getAccountQuota(resolvedAccountId);
-  const usage = computeCodexUsageScore(quota, getPoolAccountPlan(config, resolvedAccountId));
+  // Subagent fallback reads the same score, so a stale terminal reading would push
+  // subagents off a native model whose window has already reset. Thread the caller's clock
+  // rather than letting the scorer read wall time - the two would silently diverge.
+  const usage = computeCodexUsageScore(quota, getPoolAccountPlan(config, resolvedAccountId), now);
   if (usage >= CODEX_UNKNOWN_USAGE_SCORE) return false;
   return usage >= quotaThreshold(config);
 }

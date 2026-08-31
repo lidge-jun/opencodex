@@ -17,7 +17,7 @@ import {
   seedPoolRotationAccount,
   selectPriorityTier,
 } from "./pool-rotation";
-import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
 import { isThirtyDayOnlyCodexPlan } from "./plan";
 import {
   MAIN_CODEX_ACCOUNT_ID,
@@ -364,7 +364,8 @@ export function computeCodexUsageScore(quota: {
   weeklyPercent?: number;
   monthlyPercent?: number;
   shortPercent?: number;
-} | null, plan?: unknown): number {
+  shortResetAt?: number;
+} | null, plan?: unknown, now: number = Date.now()): number {
   if (!quota) return CODEX_UNKNOWN_USAGE_SCORE;
   const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
   const longWindows = isThirtyDayOnlyCodexPlan(plan)
@@ -376,9 +377,48 @@ export function computeCodexUsageScore(quota: {
   // account whose weekly/monthly usage is entirely unverified look like the emptiest in the
   // pool, so `pickLowestUsageAmong` would send every request to it. Unknown has to stay
   // unknown until a governing window is actually observed.
-  if (knownLong.length === 0) return CODEX_UNKNOWN_USAGE_SCORE;
+  //
+  // A FULL burst window is the exception (#3029). It is not an optimistic guess about an
+  // unobserved window — it is a direct observation that the account cannot serve a request
+  // right now, whatever its monthly position turns out to be. Unknown-means-selectable is
+  // correct for uncertainty and wrong for a measured refusal: the account stays selected,
+  // `applyQuotaAutoSwitch` never fires, and the pool wedges on an exhausted credential.
+  if (knownLong.length === 0) {
+    return isTerminalShortWindow(quota, now) ? CODEX_EXHAUSTED_USAGE_PERCENT : CODEX_UNKNOWN_USAGE_SCORE;
+  }
   const values = finite(quota.shortPercent) ? [...knownLong, quota.shortPercent] : knownLong;
   return Math.max(...values);
+}
+
+/**
+ * A short-only reading that proves the account is blocked NOW.
+ *
+ * Freshness is not optional. `getAccountQuota` performs no expiry check, partial updates
+ * carry the old short tuple forward, and disk hydration accepts a persisted reading for
+ * hours — so scoring 100 from `shortPercent` alone would keep excluding an account whose
+ * five-hour window has since reset. That is #3029 pointed the other way: the issue is that
+ * an exhausted account stays selected, and "a recovered account stays excluded" trades one
+ * unusable pool for another.
+ *
+ * A reading with no `shortResetAt` cannot be aged, so it stays unknown. The conservative
+ * direction here is the one that keeps an account selectable: a wrongly-selected account
+ * fails one request, while a wrongly-excluded one is invisible until someone reads the pool
+ * by hand.
+ */
+function isTerminalShortWindow(
+  quota: { shortPercent?: number; shortResetAt?: number },
+  now: number,
+): boolean {
+  if (typeof quota.shortPercent !== "number" || !Number.isFinite(quota.shortPercent)) return false;
+  if (quota.shortPercent < CODEX_EXHAUSTED_USAGE_PERCENT) return false;
+  const resetAt = quota.shortResetAt;
+  if (typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt <= 0) return false;
+  // Both units reach storage: `normalizeResetAt` does not scale, and the GUI disambiguates
+  // by magnitude at read time. A comparison written against one assumption is off by 1000x
+  // against the other, and in the seconds-read-as-milliseconds direction every terminal
+  // reading looks like it reset in 1970 — a fix that passes its own test and does nothing.
+  const resetAtMs = resetAt < 10_000_000_000 ? resetAt * 1000 : resetAt;
+  return resetAtMs > now;
 }
 
 export function classifyCodexUpstreamOutcome(
@@ -1163,12 +1203,14 @@ function hasCodexQuotaHeadroom(
   config: OcxConfig,
   accountId: string,
   selectionOptions?: CodexAccountUsabilityOptions,
+  now: number = Date.now(),
 ): boolean {
   const threshold = config.autoSwitchThreshold ?? 80;
   if (threshold <= 0) return true;
   const usage = computeCodexUsageScore(
     getAccountQuota(accountId),
     getPoolAccountPlanForSelection(config, accountId, selectionOptions),
+    now,
   );
   if (isUnknownUsage(usage)) return true;
   return usage < threshold;
@@ -1356,6 +1398,7 @@ function pickLowerUsageAccount(
     const usage = computeCodexUsageScore(
       getAccountQuota(id),
       getPoolAccountPlanForSelection(config, id, selectionOptions),
+      now,
     );
     if (usage < bestUsage) {
       best = id;
@@ -1370,6 +1413,7 @@ function pickLowestUsageAmong(
   config: OcxConfig,
   ids: readonly string[],
   selectionOptions?: CodexAccountUsabilityOptions,
+  now: number = Date.now(),
 ): string | null {
   let best: string | null = null;
   let bestUsage = Number.POSITIVE_INFINITY;
@@ -1377,6 +1421,7 @@ function pickLowestUsageAmong(
     const usage = computeCodexUsageScore(
       getAccountQuota(id),
       getPoolAccountPlanForSelection(config, id, selectionOptions),
+      now,
     );
     if (usage < bestUsage) {
       best = id;
@@ -1600,6 +1645,7 @@ function applyQuotaAutoSwitch(
   const activeUsage = computeCodexUsageScore(
     quota,
     getPoolAccountPlanForSelection(config, active, selectionOptions),
+    now,
   );
   // Unknown usage is not evidence that a user's explicit selection crossed the
   // threshold. Wait for quota priming instead of rotating among guesses.
@@ -1720,6 +1766,7 @@ function previewReusableAffinityAccount(
       const usage = computeCodexUsageScore(
         getAccountQuota(entry.accountId),
         getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions),
+      now,
       );
       if (!isUnknownUsage(usage) && usage >= threshold) {
         const best = pickLowerUsageAccount(
@@ -1755,6 +1802,7 @@ function reevaluateAffinityQuota(
     ? computeCodexUsageScore(
         getAccountQuota(entry.accountId),
         getPoolAccountPlanForSelection(config, entry.accountId, selectionOptions),
+      now,
       )
     : 0;
   const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
@@ -1848,6 +1896,7 @@ export function previewCodexAccountForRequest(
     const usage = computeCodexUsageScore(
       getAccountQuota(active),
       getPoolAccountPlanForSelection(config, active, selectionOptions),
+      now,
     );
     if (!isUnknownUsage(usage) && usage >= threshold) {
       active = pickLowerUsageAccount(config, active, usage, now, quotaScope, selectionOptions);

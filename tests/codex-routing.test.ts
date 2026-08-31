@@ -138,6 +138,39 @@ describe("codex routing", () => {
     expect(computeCodexUsageScore({ weeklyPercent: 40, shortPercent: 0 })).toBe(40);
   });
 
+  test("a full burst window scores terminal while it is still in force (#3029)", () => {
+    // A FULL short window is not an optimistic guess about an unobserved long window - it
+    // is a direct observation that the account cannot serve a request right now. Leaving it
+    // unknown keeps the account selectable and suppresses auto-switch, which is exactly the
+    // pool wedge #3029 reports.
+    const now = 1_700_000_000_000;
+    expect(computeCodexUsageScore({ shortPercent: 100, shortResetAt: now + 60_000 }, undefined, now)).toBe(100);
+
+    // Freshness is the other half. getAccountQuota performs no expiry check, partial
+    // updates carry the old short tuple forward, and disk hydration accepts a persisted
+    // reading for hours - so a reset window must go back to unknown, or #3029 is simply
+    // inverted into a recovered account that stays excluded.
+    expect(computeCodexUsageScore({ shortPercent: 100, shortResetAt: now - 60_000 }, undefined, now))
+      .toBe(CODEX_UNKNOWN_USAGE_SCORE);
+    // No resetAt at all cannot be aged, so it stays unknown: a wrongly-selected account
+    // fails one request, a wrongly-excluded one is invisible until someone reads the pool.
+    expect(computeCodexUsageScore({ shortPercent: 100 }, undefined, now)).toBe(CODEX_UNKNOWN_USAGE_SCORE);
+    // Still narrow: a non-terminal short-only reading is unchanged.
+    expect(computeCodexUsageScore({ shortPercent: 99, shortResetAt: now + 60_000 }, undefined, now))
+      .toBe(CODEX_UNKNOWN_USAGE_SCORE);
+  });
+
+  test("a terminal burst window is read in either unit (#3029)", () => {
+    // normalizeResetAt does not scale, and the GUI disambiguates by magnitude at read time,
+    // so both seconds and milliseconds reach storage. A comparison written against one
+    // assumption is off by 1000x against the other - and in the seconds-read-as-ms
+    // direction every terminal reading looks like it reset in 1970, which is a fix that
+    // passes its own test and does nothing.
+    const now = 1_700_000_000_000;
+    expect(computeCodexUsageScore({ shortPercent: 100, shortResetAt: now + 60_000 }, undefined, now)).toBe(100);
+    expect(computeCodexUsageScore({ shortPercent: 100, shortResetAt: (now + 60_000) / 1000 }, undefined, now)).toBe(100);
+  });
+
   test("exact-account failures record health without rotating the active Pool account", () => {
     const transient = makeConfig({ upstreamFailoverThreshold: 1, activeCodexAccountId: "a" });
     const transientThread = "fixed-transient-thread";
