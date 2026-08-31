@@ -275,3 +275,56 @@ Added cases:
 `tests/codex-auth-api.test.ts` plus `tests/codex-account-store*.test.ts` for the provenance
 regressions.
 
+
+## Amendment after the wp6 plan audit (round 2)
+
+Two findings, both accepted. The provenance enum, the coalescing bypass in 8a/8b, case 9,
+and reusing `MAIN_TERMINAL_AUTH_CODES` were confirmed sound and are unchanged.
+
+### 5. The recovery record needs claim/settle, not replacement — and the TTL contradicted the guarantee
+
+"One replaceable record per account" bounds memory and says nothing about ordering. The
+interleaving that breaks it: lineage A starts a refresh; meanwhile the credential is
+externally replaced by lineage B, which receives a 401 and spends its own budget; A then
+resolves as `external-replacement` and resets the record — handing B a second refresh it
+already used. Replacement is the wrong primitive.
+
+**Claim/settle with an expected lineage.** A caller claims the budget for the lineage it is
+about to refresh, and may settle only the record it claimed:
+
+- `claim(accountId, lineage)` returns `granted` when no record exists for the account, or
+  the record's lineage differs AND that record is not for a lineage the store considers
+  current; otherwise `spent`.
+- `settle(accountId, lineage, provenance)` is a compare-and-set on the lineage. If the
+  stored record has moved to a newer lineage, the completion is stale and is **dropped** —
+  it may never downgrade a newer lineage's spent state to unspent.
+- `external-replacement` does not reset in place. It settles the claimed record as spent
+  for the OLD lineage and lets the NEW lineage claim on its own next 401, which is what
+  "a new grant deserves its own recovery attempt" actually means.
+
+Interleavings to test: a stale completion arriving after a newer lineage has spent; a
+joiner settling after an external replacement; simultaneous external and self outcomes on
+one account.
+
+**The TTL is removed.** It was load-bearing for boundedness in the previous draft, and it
+directly contradicts the security property: expiring a still-live spent record grants the
+same lineage another refresh, which is the unbounded-retry loop this phase exists to
+prevent. Boundedness comes from one record per account plus `reconcileGeneration`, and the
+record is retained until the credential is replaced or the account is deleted. That is a
+strictly stronger guarantee and one less knob.
+
+### 6. The terminal-refresh oracle was unfalsifiable
+
+Case 11 covers only a transient refresh failure, so an implementation that made **every**
+refresh failure transient would pass cases 1-12 — while today's code does the opposite and
+marks every `TokenRefreshError` terminal (`auth-api.ts:1024`). A test suite that cannot
+distinguish the two extremes is not an oracle.
+
+- **11a.** Refresh fails with a revoked grant — `needsReauth: true`.
+- **11b.** Refresh fails with an expired grant — `needsReauth: true`.
+- **11c.** Refresh fails with an unknown or network error — `needsReauth` stays false, the
+  claim is released rather than settled spent, so the next poll may try again.
+
+Case 6 is also strengthened: after `rotated === false`, issue another 401 on the RETURNED
+generation and assert no second refresh is issued before the lineage actually changes.
+
