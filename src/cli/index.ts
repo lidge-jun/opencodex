@@ -684,18 +684,26 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
 }
 
 async function handleStop() {
+  // The receipt must name the endpoint the owner was stopping — an obligation nobody can
+  // locate cannot be proven discharged. Only the runtime record knows it; a proxy started
+  // with an explicit --port is not on the configured one.
+  const endpointOf = (runtime: { port: number; hostname?: string } | null): { hostname: string; port: number } | null =>
+    runtime?.port ? { hostname: runtime.hostname ?? "127.0.0.1", port: runtime.port } : null;
   // Only a definitive "nothing is answering" authorizes finishing somebody else's
   // abandoned teardown. The tri-state probe distinguishes that from "we could not tell"
   // (timeout, a listener that withholds /healthz), which `findLiveProxy` collapses into
   // the same null (#3008).
-  const abandonedTeardownIsSafeToFinish = async (): Promise<boolean> => {
+  const abandonedTeardownIsSafeToFinish = async (
+    endpoint: { hostname: string; port: number } | null,
+  ): Promise<boolean> => {
+    // The endpoint has to come from the receipt. A crashed owner usually leaves no
+    // runtime-port record, and the configured port is the wrong question for a proxy
+    // started with an explicit --port: it refuses while the live one keeps serving.
+    // An obligation that cannot name its endpoint cannot be proven discharged.
+    if (!endpoint) return false;
     try {
       const { probeProxyLiveness } = await import("../update/proxy-liveness-probe.mjs");
-      const runtime = readRuntimePort();
-      const config = loadConfig();
-      const port = runtime?.port ?? (typeof config.port === "number" && config.port > 0 ? config.port : 10100);
-      const hostname = runtime?.hostname ?? config.hostname ?? "127.0.0.1";
-      return probeProxyLiveness(port, hostname) === "dead";
+      return probeProxyLiveness(endpoint.port, endpoint.hostname) === "dead";
     } catch {
       // A probe that could not run is not evidence of absence.
       return false;
@@ -723,11 +731,14 @@ async function handleStop() {
   // including one a concurrent stop wrote while this one was restoring.
   const inheritedTeardownRead: PendingTeardownRead = readPendingTeardownState();
   const inheritedTeardown = isPendingTeardownAbandoned(inheritedTeardownRead, isProcessAlive);
+  let claimedTeardown: PendingTeardownRead | null = null;
   let teardownNonce: string | undefined;
-  const claimTeardown = () => {
-    if (teardownNonce) return;
+  const claimTeardown = (endpoint: { hostname: string; port: number } | null) => {
+    if (teardownNonce || !endpoint) return;
     try {
-      teardownNonce = claimPendingTeardown().nonce;
+      const receipt = claimPendingTeardown(endpoint);
+      teardownNonce = receipt.nonce;
+      claimedTeardown = { state: "valid", receipt };
     } catch (err) {
       // Without a receipt the proxy performs its own teardown, which is the pre-#3008
       // behaviour: correct for every backend that cannot respawn, and merely early for
@@ -768,7 +779,7 @@ async function handleStop() {
       // verification below, so a survivor does not get its client config pulled first.
       // The receipt goes down first — the proxy honours the deferral only when it can
       // see one, so an unrecordable claim degrades to the child doing its own teardown.
-      claimTeardown();
+      claimTeardown(endpointOf(readRuntimePort(pid)));
       await stopProxy(pid, { deferSharedTeardownNonce: teardownNonce });
       console.log(`✅ Proxy (PID ${pid}) stopped.`);
       removePid(pid);
@@ -797,7 +808,7 @@ async function handleStop() {
     const live = await findLiveProxy();
     if (live?.pid) {
       try {
-        claimTeardown();
+        claimTeardown(endpointOf(readRuntimePort(live.pid)));
         await stopProxy(live.pid, { deferSharedTeardownNonce: teardownNonce });
         console.log(`✅ Proxy (PID ${live.pid}) stopped.`);
       } catch (err) {
@@ -840,22 +851,33 @@ async function handleStop() {
     }
   }
   // Recovering somebody else's abandoned obligation is not the same act as finishing this
-  // run's own. This run stopped a proxy and verified the result; the abandoned case has no
+  // run's own. This run stopped a proxy and verified the result; the inherited case has no
   // such evidence, and `findLiveProxy` returning null covers a timeout and a malformed
   // answer as well as a genuinely dead port. Restoring client config under a proxy that is
-  // merely unresponsive is exactly the failure the deferral exists to prevent, so the
-  // recovery is gated on the tri-state probe answering a definitive "dead".
+  // merely unresponsive is exactly the failure the deferral exists to prevent.
+  //
+  // So an inherited obligation this run did not claim GATES the restore itself, rather
+  // than only labelling it: without a definitive "dead" from the tri-state probe, the
+  // restore does not run, the receipt stays for the next stop, and the stop fails. A
+  // warning that lets the restore happen anyway is not a gate.
+  const inheritedOnly = inheritedTeardown && !teardownNonce;
   let inheritedRecoverable = false;
-  if (inheritedTeardown && !teardownNonce && !ownershipBlocked) {
-    inheritedRecoverable = await abandonedTeardownIsSafeToFinish();
+  if (inheritedOnly && !ownershipBlocked) {
+    inheritedRecoverable = await abandonedTeardownIsSafeToFinish(
+      inheritedTeardownRead.state === "valid" ? inheritedTeardownRead.receipt.endpoint : null,
+    );
     if (!inheritedRecoverable) {
-      console.warn("⚠️  A shared teardown from an earlier stop is still outstanding, but the proxy state could not be confirmed down; leaving it for the next stop.");
+      stopFailed = true;
+      console.error("❌ A shared teardown from an earlier stop is still outstanding, and that proxy could not be confirmed down.");
+      console.error("   Skipping shared teardown: restoring client config under a proxy that may still be running is what the deferral exists to prevent.");
+      console.error("   The obligation is preserved; retry once the proxy is confirmed stopped.");
     }
   }
-  if (!ownershipBlocked) {
+  const restoreBlocked = ownershipBlocked || (inheritedOnly && !inheritedRecoverable);
+  if (!restoreBlocked) {
     if (inheritedRecoverable) {
-      // A previous deferred stop died before restoring, and the probe now says nothing is
-      // answering. That is the whole point of leaving the receipt behind.
+      // A previous deferred stop died before restoring, and the probe says its endpoint is
+      // not answering. That is the whole point of leaving the receipt behind.
       console.log("↩️  Finishing a shared teardown left unfinished by an earlier stop.");
     }
     const restore = await restoreSharedClientStateAfterStop();
@@ -866,15 +888,11 @@ async function handleStop() {
     //
     // Clear by the identity that was READ, never by re-reading the file: a concurrent stop
     // may have written its own receipt in the meantime, and deleting that one would drop a
-    // live obligation on the floor.
+    // live obligation on the floor. That holds for an unparseable file too — it is
+    // identified by the hash of the bytes that were read.
     if (!restore.other) {
-      if (teardownNonce) clearPendingTeardown(teardownNonce);
-      else if (inheritedRecoverable) {
-        if (inheritedTeardownRead.state === "valid") clearPendingTeardown(inheritedTeardownRead.receipt.nonce);
-        // An unparseable receipt names no owner to check, so it can only be cleared by a
-        // caller that has just discharged the obligation it stood for. This is that caller.
-        else clearPendingTeardown({ force: true });
-      }
+      if (claimedTeardown) clearPendingTeardown(claimedTeardown);
+      else if (inheritedRecoverable) clearPendingTeardown(inheritedTeardownRead);
     }
   }
   // Set the code rather than exiting inline: this function returns a value its dispatcher

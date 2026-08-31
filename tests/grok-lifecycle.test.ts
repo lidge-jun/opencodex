@@ -95,12 +95,15 @@ describe("Grok fence lifecycle wiring", () => {
 
     expect(stopFn).toContain("isServiceOwnershipError(err)");
     expect(stopFn).toContain("ownershipBlocked = true");
-    expect(stopFn).toContain("if (!ownershipBlocked)");
+    // Ownership is now one of two reasons to skip the restore; the other is an inherited
+    // obligation whose proxy could not be confirmed down (#3008).
+    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked ||");
+    expect(stopFn).toContain("if (!restoreBlocked) {");
     expect(stopFn).toContain("await restoreSharedClientStateAfterStop()");
     expect(restoreFn).toContain("restoreNativeCodexAsync()");
     expect(restoreFn).not.toContain("revertSystemEnv()");
     expect(restoreFn).toContain("stripGrokConfig()");
-    expect(stopFn.indexOf("revertSystemEnv()")).toBeLessThan(stopFn.indexOf("if (!ownershipBlocked)"));
+    expect(stopFn.indexOf("revertSystemEnv()")).toBeLessThan(stopFn.indexOf("if (!restoreBlocked) {"));
   });
 
   test("a refused Grok strip makes ocx stop fail instead of reporting success", () => {
@@ -189,21 +192,40 @@ describe("Grok fence lifecycle wiring", () => {
     // The deferral is an obligation, so it is claimed on disk BEFORE it is requested and
     // released only after THIS process has restored the shared config itself. A bare
     // query flag could not survive the parent dying mid-stop.
-    const claimAt = stopFn.indexOf("claimTeardown();");
+    const claimAt = stopFn.indexOf("claimTeardown(endpointOf(");
     expect(claimAt).toBeGreaterThan(-1);
     expect(claimAt).toBeLessThan(stopFn.indexOf("deferSharedTeardownNonce: teardownNonce"));
     // The inherited receipt is snapshotted BEFORE this run claims anything: re-reading it
     // later would authorize a clear against a receipt a concurrent stop just wrote.
     expect(stopFn).toContain("isPendingTeardownAbandoned(inheritedTeardownRead, isProcessAlive)");
     expect(stopFn.indexOf("readPendingTeardownState()")).toBeLessThan(claimAt);
-    expect(stopFn).toContain("clearPendingTeardown(teardownNonce)");
+    expect(stopFn).toContain("clearPendingTeardown(claimedTeardown)");
     expect(stopFn.indexOf("await restoreSharedClientStateAfterStop()"))
-      .toBeLessThan(stopFn.indexOf("clearPendingTeardown(teardownNonce)"));
+      .toBeLessThan(stopFn.indexOf("clearPendingTeardown(claimedTeardown)"));
+  });
+
+  test("an unconfirmed inherited obligation blocks the restore, it does not merely warn", () => {
+    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
     // Finishing SOMEBODY ELSE's obligation needs a definitive "dead", not findLiveProxy's
-    // null, which also covers a timeout and a listener that withholds /healthz.
-    expect(stopFn).toContain("await abandonedTeardownIsSafeToFinish()");
+    // null, which also covers a timeout and a listener that withholds /healthz. The first
+    // attempt at this only logged a warning and then restored anyway, which is not a gate.
+    expect(stopFn).toContain("await abandonedTeardownIsSafeToFinish(");
+    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || (inheritedOnly && !inheritedRecoverable)");
+    expect(stopFn).toContain("if (!restoreBlocked) {");
+    // The restore is reached only through that gate — no other call site may bypass it.
+    const restoreCalls = stopFn.split("await restoreSharedClientStateAfterStop()").length - 1;
+    expect(restoreCalls).toBe(1);
+    expect(stopFn.indexOf("const restoreBlocked")).toBeLessThan(stopFn.indexOf("await restoreSharedClientStateAfterStop()"));
+    // An obligation that cannot be discharged fails the stop and is preserved.
+    const gateBlock = stopFn.slice(stopFn.indexOf("if (!inheritedRecoverable) {"), stopFn.indexOf("const restoreBlocked"));
+    expect(gateBlock).toContain("stopFailed = true;");
+    expect(gateBlock).not.toContain("clearPendingTeardown");
+    // The probe asks the endpoint the RECEIPT names: a crashed owner leaves no runtime
+    // record, and the configured port is the wrong question for a --port proxy.
+    expect(stopFn).toContain("inheritedTeardownRead.state === \"valid\" ? inheritedTeardownRead.receipt.endpoint : null");
     const gateFn = sliceFn(CLI_SOURCE, "const abandonedTeardownIsSafeToFinish", "let stopFailed = false;");
-    expect(gateFn).toContain('probeProxyLiveness(port, hostname) === "dead"');
+    expect(gateFn).toContain('probeProxyLiveness(endpoint.port, endpoint.hostname) === "dead"');
+    expect(gateFn).toContain("if (!endpoint) return false;");
     expect(gateFn).toContain("return false;");
   });
 

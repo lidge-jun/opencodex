@@ -94,7 +94,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(stopAt).toBeGreaterThan(-1);
     expect(updateAt).toBeGreaterThan(-1);
     expect(stopAt).toBeLessThan(updateAt);
-    expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort())");
+    expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())");
   });
 
   test("integrity pre-flight runs BEFORE the stop so anomalous metadata never unloads the proxy", () => {
@@ -322,8 +322,11 @@ esac
   });
 
   test("the stop gate covers service-managed and orphaned proxies whose pid file is stale/missing", () => {
-    expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort())");
-    expect(launcherSource).toContain("if (serviceWasInstalled || hasRuntimeState)");
+    // A pending-teardown receipt is a fourth reason to stop: after a parent crashed
+    // mid-deferral the service, pid and runtime records can all be absent while shared
+    // client config still points at a proxy that is gone (#3008).
+    expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())");
+    expect(launcherSource).toContain("if (serviceWasInstalled || hasRuntimeState || hasPendingTeardown)");
     // The rule now lives in the shared post-stop decision both lanes import (#3008): a
     // history-only stop proceeds, every other nonzero status and any surviving runtime
     // state aborts. Pinned by tests/update-stop-classification.test.ts.

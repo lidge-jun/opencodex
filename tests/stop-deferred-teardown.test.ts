@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stopProxyGracefully } from "../src/lib/process-control";
@@ -19,6 +19,11 @@ import type { CodexNativeRestoreResult } from "../src/codex/inject";
 let home: string;
 let previousHome: string | undefined;
 const NONCE = "0123456789abcdef0123456789abcdef";
+const ENDPOINT = { hostname: "127.0.0.1", port: 10100 };
+
+function validRead(nonce = NONCE, ownerPid = 4242) {
+  return { state: "valid" as const, receipt: { ownerPid, nonce, createdAt: new Date().toISOString(), endpoint: ENDPOINT } };
+}
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -96,7 +101,7 @@ describe("performStopTeardown", () => {
     let restored = 0;
     let stripped = 0;
     const body = await performStopTeardown(new URL(`http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=${NONCE}`), {
-      readReceipt: () => ({ state: "valid", receipt: { ownerPid: 4242, nonce: NONCE, createdAt: new Date().toISOString() } }),
+      readReceipt: () => validRead(),
       restoreNativeCodex: async () => { restored += 1; return restoreResult(true); },
       stripGrok: () => { stripped += 1; return { ok: true, changed: true, message: "Grok config restored" }; },
     });
@@ -128,7 +133,7 @@ describe("performStopTeardown", () => {
     // obligation: it gets the deferral, owns no recovery, and the real owner's receipt is
     // discharged by a teardown that never happened.
     const body = await performStopTeardown(new URL("http://127.0.0.1:10100/api/stop?deferSharedTeardown=1"), {
-      readReceipt: () => ({ state: "valid", receipt: { ownerPid: 4242, nonce: NONCE, createdAt: new Date().toISOString() } }),
+      readReceipt: () => validRead(),
       restoreNativeCodex: async () => { restored += 1; return restoreResult(true); },
       stripGrok: () => ({ ok: true, changed: true, message: "Grok config restored" }),
     });
@@ -140,7 +145,7 @@ describe("performStopTeardown", () => {
     let restored = 0;
     const wrong = "ffffffffffffffffffffffffffffffff";
     const body = await performStopTeardown(new URL(`http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=${wrong}`), {
-      readReceipt: () => ({ state: "valid", receipt: { ownerPid: 4242, nonce: NONCE, createdAt: new Date().toISOString() } }),
+      readReceipt: () => validRead(),
       restoreNativeCodex: async () => { restored += 1; return restoreResult(true); },
       stripGrok: () => ({ ok: true, changed: true, message: "Grok config restored" }),
     });
@@ -151,7 +156,7 @@ describe("performStopTeardown", () => {
   test("an unparseable receipt on disk does not authorize a deferral", async () => {
     let restored = 0;
     const body = await performStopTeardown(new URL(`http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=${NONCE}`), {
-      readReceipt: () => ({ state: "invalid" }),
+      readReceipt: () => ({ state: "invalid", fingerprint: "abc" }),
       restoreNativeCodex: async () => { restored += 1; return restoreResult(true); },
       stripGrok: () => ({ ok: true, changed: true, message: "Grok config restored" }),
     });
@@ -174,27 +179,28 @@ describe("performStopTeardown", () => {
 describe("pending teardown receipt", () => {
   test("a claim is durable and cleared only by the exact receipt that was read", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const claimed = mod.claimPendingTeardown(1234);
+    const claimed = mod.claimPendingTeardown(ENDPOINT, 1234);
     expect(existsSync(mod.getPendingTeardownPath())).toBe(true);
     expect(mod.readPendingTeardown()?.ownerPid).toBe(1234);
     expect(claimed.nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(mod.readPendingTeardown()?.endpoint).toEqual(ENDPOINT);
 
     // A concurrent stop must not delete an obligation it never accepted.
-    mod.clearPendingTeardown("ffffffffffffffffffffffffffffffff");
+    mod.clearPendingTeardown(validRead("ffffffffffffffffffffffffffffffff"));
     expect(existsSync(mod.getPendingTeardownPath())).toBe(true);
 
-    mod.clearPendingTeardown(claimed.nonce);
+    mod.clearPendingTeardown({ state: "valid", receipt: claimed });
     expect(existsSync(mod.getPendingTeardownPath())).toBe(false);
     expect(mod.readPendingTeardown()).toBeNull();
   });
 
   test("two successive claims get different identities", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const first = mod.claimPendingTeardown(1111);
-    const second = mod.claimPendingTeardown(2222);
+    const first = mod.claimPendingTeardown(ENDPOINT, 1111);
+    const second = mod.claimPendingTeardown(ENDPOINT, 2222);
     expect(second.nonce).not.toBe(first.nonce);
-    // The stale nonce names a receipt that no longer exists, so it clears nothing.
-    mod.clearPendingTeardown(first.nonce);
+    // The stale receipt names an obligation that no longer exists, so it clears nothing.
+    mod.clearPendingTeardown({ state: "valid", receipt: first });
     expect(mod.readPendingTeardown()?.ownerPid).toBe(2222);
   });
 
@@ -204,17 +210,52 @@ describe("pending teardown receipt", () => {
     // run reads it, another stop replaces the receipt with 2222 mid-restore, and the
     // recovery finishes. Clearing "whatever is there now" would drop 2222's live
     // obligation on the floor.
-    const abandoned = mod.claimPendingTeardown(1111);
-    const replacement = mod.claimPendingTeardown(2222);
-    mod.clearPendingTeardown(abandoned.nonce);
+    const abandoned = mod.claimPendingTeardown(ENDPOINT, 1111);
+    const replacement = mod.claimPendingTeardown(ENDPOINT, 2222);
+    mod.clearPendingTeardown({ state: "valid", receipt: abandoned });
     const survivor = mod.readPendingTeardown();
     expect(survivor?.ownerPid).toBe(2222);
     expect(survivor?.nonce).toBe(replacement.nonce);
   });
 
+  test("an unparseable receipt is identified by its bytes, so a replacement survives", async () => {
+    const mod = await import("../src/config/pending-teardown");
+    // Round 9 finding 2: force-clearing an invalid snapshot recreated the same race, this
+    // time against a VALID receipt a concurrent stop wrote during restoration.
+    mod.claimPendingTeardown(ENDPOINT, 1111);
+    writeFileSync(mod.getPendingTeardownPath(), "{not json");
+    const invalidSnapshot = mod.readPendingTeardownState();
+    expect(invalidSnapshot.state).toBe("invalid");
+
+    const replacement = mod.claimPendingTeardown(ENDPOINT, 2222);
+    mod.clearPendingTeardown(invalidSnapshot);
+    expect(mod.readPendingTeardown()?.nonce).toBe(replacement.nonce);
+  });
+
+  test("a read that cannot reach the file is invalid, not missing", async () => {
+    const mod = await import("../src/config/pending-teardown");
+    // Round 9 finding 4, reproduced: a directory where the receipt belongs. Reading that
+    // as absence hides an obligation that may still be outstanding.
+    mkdirSync(mod.getPendingTeardownPath(), { recursive: true });
+    expect(existsSync(mod.getPendingTeardownPath())).toBe(true);
+    expect(mod.readPendingTeardownState().state).toBe("invalid");
+    expect(mod.pendingTeardownOutstanding()).toBe(true);
+    rmSync(mod.getPendingTeardownPath(), { recursive: true, force: true });
+  });
+
+  test("a receipt without an endpoint is invalid, because recovery could not locate it", async () => {
+    const mod = await import("../src/config/pending-teardown");
+    writeFileSync(mod.getPendingTeardownPath(), JSON.stringify({ ownerPid: 7, nonce: NONCE, createdAt: "t" }));
+    expect(mod.readPendingTeardownState().state).toBe("invalid");
+    writeFileSync(mod.getPendingTeardownPath(), JSON.stringify({ ownerPid: 7, nonce: NONCE, createdAt: "t", endpoint: { hostname: "", port: 10100 } }));
+    expect(mod.readPendingTeardownState().state).toBe("invalid");
+    writeFileSync(mod.getPendingTeardownPath(), JSON.stringify({ ownerPid: 7, nonce: NONCE, createdAt: "t", endpoint: { hostname: "127.0.0.1", port: 0 } }));
+    expect(mod.readPendingTeardownState().state).toBe("invalid");
+  });
+
   test("garbage on disk is invalid, not absent", async () => {
     const mod = await import("../src/config/pending-teardown");
-    mod.claimPendingTeardown(1234);
+    mod.claimPendingTeardown(ENDPOINT, 1234);
     writeFileSync(mod.getPendingTeardownPath(), "{not json");
     // Reading it as "no receipt" would let the route perform an immediate teardown while
     // leaving an unattributable obligation on disk forever.
@@ -222,28 +263,33 @@ describe("pending teardown receipt", () => {
     expect(mod.readPendingTeardown()).toBeNull();
     expect(mod.pendingTeardownOutstanding()).toBe(true);
 
-    writeFileSync(mod.getPendingTeardownPath(), JSON.stringify({ ownerPid: -1, nonce: NONCE, createdAt: "x" }));
+    writeFileSync(mod.getPendingTeardownPath(), JSON.stringify({ ownerPid: -1, nonce: NONCE, createdAt: "x", endpoint: ENDPOINT }));
     expect(mod.readPendingTeardownState().state).toBe("invalid");
-    writeFileSync(mod.getPendingTeardownPath(), JSON.stringify({ ownerPid: 5, nonce: "short", createdAt: "x" }));
+    writeFileSync(mod.getPendingTeardownPath(), JSON.stringify({ ownerPid: 5, nonce: "short", createdAt: "x", endpoint: ENDPOINT }));
     expect(mod.readPendingTeardownState().state).toBe("invalid");
   });
 
-  test("an invalid receipt is recoverable and clearable only by an explicit force", async () => {
+  test("an invalid receipt is recoverable and clears only against its own bytes", async () => {
     const mod = await import("../src/config/pending-teardown");
-    mod.claimPendingTeardown(1234);
+    mod.claimPendingTeardown(ENDPOINT, 1234);
     writeFileSync(mod.getPendingTeardownPath(), "{not json");
+    const snapshot = mod.readPendingTeardownState();
     // It names no live owner to wait on, so it is abandoned by definition.
-    expect(mod.isPendingTeardownAbandoned(mod.readPendingTeardownState(), () => true, 1)).toBe(true);
-    // No nonce can match it, so an ordinary clear leaves it alone.
-    mod.clearPendingTeardown(NONCE);
+    expect(mod.isPendingTeardownAbandoned(snapshot, () => true, 1)).toBe(true);
+    // A valid receipt's identity cannot clear it.
+    mod.clearPendingTeardown(validRead());
     expect(existsSync(mod.getPendingTeardownPath())).toBe(true);
-    mod.clearPendingTeardown({ force: true });
+    // Neither can a different invalid file.
+    writeFileSync(mod.getPendingTeardownPath(), "{different garbage");
+    mod.clearPendingTeardown(snapshot);
+    expect(existsSync(mod.getPendingTeardownPath())).toBe(true);
+    mod.clearPendingTeardown(mod.readPendingTeardownState());
     expect(existsSync(mod.getPendingTeardownPath())).toBe(false);
   });
 
   test("only an abandoned receipt is recoverable", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const live = { state: "valid" as const, receipt: { ownerPid: 4242, nonce: NONCE, createdAt: new Date().toISOString() } };
+    const live = validRead();
 
     // A stop that is still running owns its own obligation; finishing it from here would
     // restore client config while that stop is still deciding whether a proxy survived.
@@ -257,11 +303,11 @@ describe("pending teardown receipt", () => {
 
   test("deferralMatchesReceipt needs the exact nonce of a valid receipt", async () => {
     const mod = await import("../src/config/pending-teardown");
-    const valid = { state: "valid" as const, receipt: { ownerPid: 7, nonce: NONCE, createdAt: "t" } };
+    const valid = validRead(NONCE, 7);
     expect(mod.deferralMatchesReceipt(NONCE, valid)).toBe(true);
     expect(mod.deferralMatchesReceipt("ffffffffffffffffffffffffffffffff", valid)).toBe(false);
     expect(mod.deferralMatchesReceipt(null, valid)).toBe(false);
     expect(mod.deferralMatchesReceipt(NONCE, { state: "missing" })).toBe(false);
-    expect(mod.deferralMatchesReceipt(NONCE, { state: "invalid" })).toBe(false);
+    expect(mod.deferralMatchesReceipt(NONCE, { state: "invalid", fingerprint: "abc" })).toBe(false);
   });
 });

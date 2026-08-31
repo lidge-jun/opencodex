@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
@@ -33,6 +33,15 @@ export type PendingTeardownReceipt = {
   nonce: string;
   /** ISO timestamp, for diagnostics only; recovery is decided by liveness, not by age. */
   createdAt: string;
+  /**
+   * Endpoint the owner was stopping.
+   *
+   * Recovery has to prove THAT proxy is down, and after a crash the runtime-port record
+   * is usually gone. Falling back to the configured port asks the wrong question for a
+   * proxy started with an explicit `--port`: the configured port refuses while the live
+   * one keeps serving, and its client config gets torn out from under it.
+   */
+  endpoint: { hostname: string; port: number };
 };
 
 export function getPendingTeardownPath(): string {
@@ -42,11 +51,25 @@ export function getPendingTeardownPath(): string {
 function isReceipt(value: unknown): value is PendingTeardownReceipt {
   if (!value || typeof value !== "object") return false;
   const receipt = value as Record<string, unknown>;
+  const endpoint = receipt.endpoint as Record<string, unknown> | undefined;
+  const endpointOk = !!endpoint
+    && typeof endpoint === "object"
+    && typeof endpoint.hostname === "string"
+    && endpoint.hostname.trim() !== ""
+    && Number.isInteger(endpoint.port)
+    && Number(endpoint.port) > 0
+    && Number(endpoint.port) <= 65535;
   return Number.isSafeInteger(receipt.ownerPid)
     && Number(receipt.ownerPid) > 0
     && typeof receipt.nonce === "string"
     && /^[0-9a-f]{32}$/.test(receipt.nonce)
-    && typeof receipt.createdAt === "string";
+    && typeof receipt.createdAt === "string"
+    && endpointOk;
+}
+
+/** Identity for a file we cannot attribute: its exact bytes. */
+function fingerprintOf(raw: string): string {
+  return createHash("sha256").update(raw).digest("hex");
 }
 
 /**
@@ -59,16 +82,20 @@ function isReceipt(value: unknown): value is PendingTeardownReceipt {
 export type PendingTeardownRead =
   | { state: "missing" }
   | { state: "valid"; receipt: PendingTeardownReceipt }
-  | { state: "invalid" };
+  | { state: "invalid"; fingerprint: string };
 
 /** Claim the deferred teardown for this process. Returns the receipt that was written. */
-export function claimPendingTeardown(ownerPid: number = process.pid): PendingTeardownReceipt {
+export function claimPendingTeardown(
+  endpoint: { hostname: string; port: number },
+  ownerPid: number = process.pid,
+): PendingTeardownReceipt {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
   const receipt: PendingTeardownReceipt = {
     ownerPid,
     nonce: randomBytes(16).toString("hex"),
     createdAt: new Date().toISOString(),
+    endpoint,
   };
   atomicWriteFile(getPendingTeardownPath(), JSON.stringify(receipt, null, 2) + "\n");
   return receipt;
@@ -78,14 +105,21 @@ export function readPendingTeardownState(): PendingTeardownRead {
   let raw: string;
   try {
     raw = readFileSync(getPendingTeardownPath(), "utf-8");
-  } catch {
-    return { state: "missing" };
+  } catch (error) {
+    // Only "there is no file" is absence. A permission error, or a directory sitting where
+    // the receipt belongs, means something IS there and cannot be read; calling that
+    // missing hides an obligation that may still be outstanding.
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return { state: "missing" };
+    return { state: "invalid", fingerprint: `unreadable:${code ?? "unknown"}` };
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    return isReceipt(parsed) ? { state: "valid", receipt: parsed } : { state: "invalid" };
+    return isReceipt(parsed)
+      ? { state: "valid", receipt: parsed }
+      : { state: "invalid", fingerprint: fingerprintOf(raw) };
   } catch {
-    return { state: "invalid" };
+    return { state: "invalid", fingerprint: fingerprintOf(raw) };
   }
 }
 
@@ -100,23 +134,22 @@ export function pendingTeardownOutstanding(): boolean {
 }
 
 /**
- * Clear exactly the receipt named by `nonce`.
+ * Clear exactly the state that was read.
  *
  * Identity is the whole point. Clearing "whatever is there now" lets a recovery run
- * delete an obligation that a different stop wrote while this one was restoring — the
- * failure is silent, and it puts the config back in the state the receipt existed to
- * prevent. An invalid receipt is cleared only by an explicit caller that has already
- * discharged the obligation, since it names no owner to check against.
+ * delete an obligation a different stop wrote while this one was restoring — silently,
+ * and it puts the config back in the state the receipt existed to prevent. That applies
+ * to an unparseable file too: its bytes are hashed at read time, so even an
+ * unattributable obligation is deleted only when it is still the same one.
  */
-export function clearPendingTeardown(nonce: string | { force: true }): void {
+export function clearPendingTeardown(read: PendingTeardownRead): void {
+  if (read.state === "missing") return;
   const path = getPendingTeardownPath();
   if (!existsSync(path)) return;
-  if (typeof nonce !== "string") {
-    try { unlinkSync(path); } catch { /* ignore */ }
-    return;
-  }
-  const read = readPendingTeardownState();
-  if (read.state !== "valid" || read.receipt.nonce !== nonce) return;
+  const current = readPendingTeardownState();
+  if (read.state === "valid") {
+    if (current.state !== "valid" || current.receipt.nonce !== read.receipt.nonce) return;
+  } else if (current.state !== "invalid" || current.fingerprint !== read.fingerprint) return;
   try { unlinkSync(path); } catch { /* ignore */ }
 }
 
