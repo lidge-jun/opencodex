@@ -189,21 +189,27 @@ describe("Codex history provider sync", () => {
     expect(JSON.parse(before.split("\n")[0])).toEqual(JSON.parse(after.split("\n")[0]));
   });
 
-  test("does not append when the latest session_meta belongs to a different thread id", () => {
+  test("appends this thread's own session_meta when the latest one belongs to a different thread id", () => {
     const { dbPath, backupPath, rollout } = makeFixture();
     // Simulate a forked rollout whose trailing session_meta embeds a *different* thread's id.
-    appendFileSync(rollout, JSON.stringify({
+    const foreignLine = JSON.stringify({
       type: "session_meta",
       timestamp: "2026-01-02T00:00:00.000Z",
       payload: { id: "some-other-forked-thread", model_provider: "openai", cwd: "/tmp" },
-    }) + "\n");
+    });
+    appendFileSync(rollout, foreignLine + "\n");
     const before = readFileSync(rollout, "utf8");
 
     const result = syncCodexHistoryProvider("opencodex", dbPath, backupPath);
 
-    // DB row still flips, but the rollout is left untouched (no misleading append for a foreign id).
-    expect(result.files).toBe(0);
-    expect(readFileSync(rollout, "utf8")).toBe(before);
+    // The append describes THIS thread — never a clone of the foreign record, which the app
+    // would discard. Routing the row without the file left the pair unrestorable (#3026).
+    expect(result.files).toBe(1);
+    const after = readFileSync(rollout, "utf8");
+    expect(after.startsWith(before)).toBe(true);
+    expect(latestSessionMetaPayload(rollout)).toMatchObject({ id: "thread-1", model_provider: "opencodex" });
+    // The foreign thread's record is still there, exactly once, exactly as written.
+    expect(after.split("\n").filter(Boolean).filter(line => line === foreignLine)).toHaveLength(1);
     const db = new Database(dbPath);
     expect(db.query("SELECT model_provider FROM threads WHERE id = 'thread-1'").get()).toEqual({ model_provider: "opencodex" });
     db.close();
@@ -628,6 +634,69 @@ describe("Codex history provider sync", () => {
       .toMatchObject({ rows: 1, files: 1, failed: true, failureReason: "integrity" });
     expect(existsSync(fixture.backupPath)).toBe(true);
     expect(latestSessionMetaPayload(fixture.rollout).model_provider).toBe("custom");
+  });
+
+  test("consumes the manifest when a foreign-id session_meta lands after restore readback", () => {
+    const fixture = makeFixture();
+    syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath);
+    // The same last-moment race as the same-id case above, except the arriving record belongs
+    // to another thread. The app discards it, so it is not a newer decision to protect.
+    setBeforeHistoryBackupConsumeForTests(() => {
+      appendFileSync(fixture.rollout, JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-03-04T00:00:00.000Z",
+        payload: { id: "parent-thread", model_provider: "custom", source: "exec" },
+      }) + "\n");
+    });
+
+    expect(syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+    expect(existsSync(fixture.backupPath)).toBe(false);
+  });
+
+  test("restores a forked rollout that trails its parent thread's session_meta", () => {
+    const fixture = makeFixture();
+    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+
+    // A forked/branched session appends the SOURCE thread's session_meta after its own.
+    // codex-rs `apply_session_meta_from_item` ignores a record whose payload id is not the
+    // canonical thread id, so this line is ordinary rollout content, not an integrity fault.
+    appendFileSync(fixture.rollout, JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-03-03T00:00:00.000Z",
+      payload: { id: "parent-thread", model_provider: "openai", source: "cli" },
+    }) + "\n");
+
+    expect(syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+    const db = new Database(fixture.dbPath, { readonly: true });
+    expect(db.query("SELECT model_provider, source FROM threads WHERE id = 'thread-1'").get())
+      .toEqual({ model_provider: "openai", source: "vscode" });
+    db.close();
+    expect(latestSessionMetaPayload(fixture.rollout)).toMatchObject({
+      id: "thread-1",
+      model_provider: "openai",
+      source: "vscode",
+    });
+    expect(existsSync(fixture.backupPath)).toBe(false);
+  });
+
+  test("leaves a foreign trailing session_meta untouched while restoring its own", () => {
+    const fixture = makeFixture();
+    syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath);
+    const parentLine = JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-03-03T00:00:00.000Z",
+      payload: { id: "parent-thread", model_provider: "opencodex", source: "exec" },
+    });
+    appendFileSync(fixture.rollout, parentLine + "\n");
+
+    expect(syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath))
+      .toEqual({ rows: 1, files: 1 });
+    // The parent's record still says what it said: restore repairs this thread only.
+    const lines = readFileSync(fixture.rollout, "utf8").split("\n").filter(Boolean);
+    expect(lines.filter(line => line === parentLine)).toHaveLength(1);
   });
 
   test("reports applied permission progress when manifest finalization is denied", () => {
