@@ -48,6 +48,40 @@ describe("vision-sidecar catalog modalities", () => {
     expect(hinted.inputModalities).toEqual(["text", "image"]);
   });
 
+  test("modelInputModalities-declared text-only models advertise image without a noVisionModels entry", () => {
+    // Regression: isModelTextOnly (the RUNTIME sidecar gate) treats a text-only
+    // modelInputModalities declaration exactly like a noVisionModels entry, but the catalog hint
+    // pass only checked noVisionModels — so sidecar-covered models stayed advertised text-only
+    // and the Codex app blocked image paste before the sidecar could run.
+    const prov: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example/v1",
+      modelInputModalities: { "deepseek-chat": ["text"] },
+    };
+    const hinted = applyProviderConfigHints("azu-lab2", prov, { id: "deepseek-chat", provider: "azu-lab2" });
+    expect(hinted.inputModalities).toEqual(["text", "image"]);
+  });
+
+  test("modelInputModalities declaring image stays untouched (no duplication)", () => {
+    const prov: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example/v1",
+      modelInputModalities: { "glm-5.3": ["text", "image"] },
+    };
+    const hinted = applyProviderConfigHints("vdi", prov, { id: "glm-5.3", provider: "vdi" });
+    expect(hinted.inputModalities).toEqual(["text", "image"]);
+  });
+
+  test("discovery-derived text-only rows are NOT advertised image (the runtime would not convert them)", () => {
+    // Only the two config sources the runtime predicate reads (noVisionModels,
+    // modelInputModalities) may widen the catalog; a listing that merely reports
+    // ["text"] without either must stay text-only.
+    const hinted = applyProviderConfigHints("opencode-go", base, {
+      id: "listing-text-model", provider: "opencode-go", inputModalities: ["text"],
+    });
+    expect(hinted.inputModalities).toEqual(["text"]);
+  });
+
   test("MiMo token-plan sends only the Pro model through the sidecar (#1927)", () => {
     const canonical: OcxProviderConfig = {
       adapter: "openai-chat",
@@ -173,6 +207,39 @@ describe("vision-sidecar custom-model override (#349/#344)", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test("a custom row whose modelId is declared text-only via modelInputModalities still advertises image", async () => {
+    // Same isModelTextOnly parity as the hint pass, applied to the custom-model override path:
+    // the registry/config text-only declaration covers the row at request time, so the catalog
+    // must let images through to the sidecar here too.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => { throw new Error("fetch should not be called"); }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "text-sidecar-provider",
+        providers: {
+          "text-sidecar-provider": {
+            baseUrl: "https://text-sidecar.example/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["baseline-model"],
+            modelInputModalities: { "glm-5.2": ["text"] },
+          },
+        },
+        customModels: [
+          { id: "cm-4", provider: "text-sidecar-provider", modelId: "glm-5.2", displayName: "GLM 5.2", addedAt: "2026-01-01T00:00:00.000Z" },
+        ],
+      });
+      const custom = models.find(m => m.provider === "text-sidecar-provider" && m.id === "glm-5.2");
+      expect(custom).toBeDefined();
+      expect(custom?.inputModalities).toEqual(["text", "image"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("text-sidecar-provider");
+    }
+  });
 });
 
 describe("vision-capable provider models feed combo modalities", () => {
@@ -257,6 +324,31 @@ describe("vision-capable provider models feed combo modalities", () => {
     expect(prov.modelInputModalities?.["grok-4.5"]).toEqual(["text", "image"]);
     const hinted = applyProviderConfigHints("xai", prov, { provider: "xai", id: "grok-4.5" });
     expect(hinted.inputModalities).toEqual(["text", "image"]);
+  });
+
+  test("a combo of modelInputModalities-declared text-only members advertises image through the hints", () => {
+    // End-to-end shape of the /planners bug: every member is sidecar-covered via
+    // modelInputModalities (not noVisionModels). The hinted members all carry image, so the
+    // derived combo keeps image input instead of collapsing to text-only.
+    const memberFor = (provider: string, id: string): CatalogModel => applyProviderConfigHints(provider, {
+      adapter: "openai-chat",
+      baseUrl: `https://${provider}.example/v1`,
+      modelInputModalities: { [id]: ["text"] },
+    }, { id, provider, contextWindow: 200_000 });
+    const memberA = memberFor("azu-lab2", "deepseek-chat");
+    const memberB = memberFor("vdi", "glm-5.2");
+    const derived = deriveComboCatalogModel(
+      "planners",
+      {
+        targets: [
+          { provider: "azu-lab2", model: "deepseek-chat" },
+          { provider: "vdi", model: "glm-5.2" },
+        ],
+        defaultEffort: "high",
+      } as never,
+      [memberA, memberB],
+    );
+    expect(derived?.inputModalities).toEqual(["text", "image"]);
   });
 });
 

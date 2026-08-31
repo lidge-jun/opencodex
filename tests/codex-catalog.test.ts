@@ -1061,7 +1061,9 @@ describe("combo catalog capability intersection", () => {
           liveModels: false,
           models: ["m2"],
           modelContextWindows: { m2: 128_000 },
-          modelInputModalities: { m2: ["text"] },
+          // No declaration: text-only by catalog default, NOT sidecar-covered. A declared
+          // text-only member would widen to image (isModelTextOnly parity) and the pair
+          // would no longer be disjoint.
         },
       },
       combos: {
@@ -1202,7 +1204,9 @@ describe("combo catalog capability intersection", () => {
       contextWindow: 128_000,
       contextCapped: false,
       maxInputTokens: 100_000,
-      inputModalities: ["text"],
+      // The text-only modelInputModalities declaration is sidecar-covered at runtime
+      // (isModelTextOnly), so the combo advertises image input like its member does.
+      inputModalities: ["text", "image"],
       reasoningEfforts: ["high"],
     });
     expect(rows.find(row => row.provider === "combo" && row.id === "nova-sol"))
@@ -1515,7 +1519,7 @@ describe("combo catalog capability intersection", () => {
           liveModels: false,
           models: ["m1"],
           modelContextWindows: { m1: 128_000 },
-          // Disjoint modalities with b → empty intersection (incompatible_modalities).
+          // Image-only member. An image-only declaration is not sidecar-covered.
           modelInputModalities: { m1: ["image"] },
         },
         b: {
@@ -1524,7 +1528,10 @@ describe("combo catalog capability intersection", () => {
           liveModels: false,
           models: ["m2"],
           modelContextWindows: { m2: 128_000 },
-          modelInputModalities: { m2: ["audio"] },
+          // No modality declaration: the member is text-only by catalog default and the
+          // sidecar does not cover it, so text and image stay genuinely disjoint
+          // (incompatible_modalities). A DECLARED text-only member would be widened to
+          // image (isModelTextOnly parity) and no longer be disjoint.
         },
       },
       combos: {
@@ -5335,7 +5342,9 @@ describe("Codex catalog routed normalization", () => {
     expect(models.find(m => m.id === "wide-model")).toMatchObject({
       contextWindow: 100_000,
       maxInputTokens: 100_000,
-      inputModalities: ["text"],
+      // Declared text-only modalities are sidecar-covered at runtime (isModelTextOnly),
+      // so the catalog advertises image on top of the configured base.
+      inputModalities: ["text", "image"],
     });
     expect(models.find(m => m.id === "small-model")?.contextWindow).toBe(64_000);
   });
