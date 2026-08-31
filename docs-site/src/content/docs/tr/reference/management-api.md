@@ -240,7 +240,7 @@ dolaşmamalıdır. Depoya yıldız verip vermeyeceğini kullanıcı seçmelidir.
 | --- | --- | --- |
 | `GET /api/system/memory` | Skaler süreç, yığın (heap), akış, yanıt durumu, denetleyici ve aktif tur metriklerini döndürün | — |
 | `POST /api/system/restart` | İstemci enjeksiyonunu kaldırmadan boşaltma duyarlı bir süreç yeniden başlatması başlatın | 202 döndürür; tekrarlanan çağrılar mevcut boşaltmayı bildirir |
-| `POST /api/stop` | Servisi durdurun, yerel Codex'i geri yükleyin, yönetilen Grok enjeksiyonunu kaldırın ve proxy'yi boşaltın | 409 servis sahipliği çakışması |
+| `POST /api/stop` | Servisi durdurun, yerel Codex'i geri yükleyin, yönetilen Grok enjeksiyonunu kaldırın ve proxy'yi boşaltın | 409 servis sahipliği çakışması; çağıran `ocx stop` değilken bir Windows Görev Zamanlayıcı sarmalayıcısı proxy'yi yeniden başlatabiliyorsa 409 `respawnable_service` (hiçbir şey değiştirilmez); kurulu yönetici durmayı reddederse 409; çağıran `ocx stop` değilken bir Windows Görev Zamanlayıcı sarmalayıcısı proxy'yi yeniden başlatabiliyorsa 409 `respawnable_service` (hiçbir şey değiştirilmez); kurulu yönetici durmayı reddederse 409 |
 
 ### Codex kimlik doğrulama yetkilendirmesi
 

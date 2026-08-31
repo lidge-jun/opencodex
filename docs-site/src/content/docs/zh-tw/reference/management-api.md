@@ -195,7 +195,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | --- | --- | --- |
 | `GET /api/system/memory` | 回傳純量行程、heap、串流、回應狀態、看門狗與活躍回合指標 | — |
 | `POST /api/system/restart` | 在不移除客戶端注入的情況下開始感知排空的行程重啟 | 回傳 202；重複呼叫回報既有的排空 |
-| `POST /api/stop` | 停止服務、還原原生 Codex、移除受管 Grok 注入並排空代理 | 409 服務擁有權衝突 |
+| `POST /api/stop` | 停止服務、還原原生 Codex、移除受管 Grok 注入並排空代理 | 409 服務擁有權衝突；當 Windows 工作排程器包裝程序可能重新啟動 Proxy 且呼叫端不是 `ocx stop` 時回傳 409 `respawnable_service`（不會做任何變更）；已安裝的管理器拒絕停止時回傳 409 |
 
 ### Codex 認證委派
 

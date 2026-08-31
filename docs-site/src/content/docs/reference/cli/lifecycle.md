@@ -32,7 +32,11 @@ ocx start --port 8080
 
 Stop the running proxy (by PID), remove the PID file, and restore native Codex. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
-The same action is available from the web dashboard's **Stop** button (`POST /api/stop`).
+The web dashboard's **Stop** button runs the same action (`POST /api/stop`) on every backend
+except Windows Task Scheduler. There the wrapper can respawn the proxy after the task ends,
+and only a stop running outside the proxy can verify that restart window before restoring
+your client config — so the dashboard refuses with `respawnable_service`, changes nothing,
+and asks you to run `ocx stop`.
 
 ### `ocx restart`
 

@@ -221,7 +221,7 @@ Management-аутентификация доказывает доступ к п�
 | --- | --- | --- |
 | `GET /api/system/memory` | Вернуть скалярные метрики процесса, heap, stream, response-state, watchdog и active-turn | — |
 | `POST /api/system/restart` | Начать restart процесса с учётом drain, не снимая client injection | Возвращает 202; повторные вызовы сообщают о текущем drain |
-| `POST /api/stop` | Остановить службу, восстановить native Codex, убрать managed Grok injection и выполнить drain прокси | 409 service ownership conflict |
+| `POST /api/stop` | Остановить службу, восстановить native Codex, убрать managed Grok injection и выполнить drain прокси | 409 service ownership conflict; 409 `respawnable_service`, когда обёртка планировщика заданий Windows может перезапустить прокси, а вызывающая сторона — не `ocx stop` (ничего не изменяется); 409, когда установленный менеджер отказывается останавливаться; 409 `respawnable_service`, когда обёртка планировщика заданий Windows может перезапустить прокси, а вызывающая сторона — не `ocx stop` (ничего не изменяется); 409, когда установленный менеджер отказывается останавливаться |
 
 ### Делегирование аутентификации Codex
 

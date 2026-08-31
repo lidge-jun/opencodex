@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
+import { installedServiceCanRespawn, isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
 const ENSURE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "ensure-desired-integrations.ts"), "utf8");
@@ -408,13 +408,21 @@ describe("POST /api/stop teardown", () => {
     expect(handler.indexOf("installedServiceCanRespawn()")).toBeLessThan(handler.indexOf("stopServiceIfInstalledDetailed()"));
     // The refusal must say nothing was changed, because nothing was.
     expect(handler).toContain("Nothing was changed.");
-    // The predicate answers without stopping anything.
-    const serviceSource = readFileSync(join(import.meta.dir, "..", "src", "service.ts"), "utf8");
-    const predicate = serviceSource.slice(serviceSource.indexOf("export function installedServiceCanRespawn"), serviceSource.indexOf("export function installedServiceCanRespawn") + 500);
-    expect(predicate).toContain("probeWindowsSchedulerTask().status === \"present\"");
-    expect(predicate).not.toContain("stopWindows");
-    // A probe that cannot answer is not evidence of absence.
-    expect(predicate).toContain("return true;");
+  });
+
+  test("only a proven absence is safe to stop inline", () => {
+    // Behavioural, not source-shaped: the previous assertion matched an unrelated
+    // `return true` in the catch and therefore passed while "unknown" was let through.
+    expect(installedServiceCanRespawn(() => ({ status: "present" }) as never, "win32")).toBe(true);
+    // "unknown" is an ordinary return value from the probe, not a throw. Treating it as
+    // absence let the route kill scheduler wrappers before refusing.
+    expect(installedServiceCanRespawn(() => ({ status: "unknown" }) as never, "win32")).toBe(true);
+    expect(installedServiceCanRespawn(() => { throw new Error("schtasks unavailable"); }, "win32")).toBe(true);
+    // A proven absence is the only case that proceeds.
+    expect(installedServiceCanRespawn(() => ({ status: "absent" }) as never, "win32")).toBe(false);
+    // Every other platform is down when it says so; no wrapper can respawn.
+    expect(installedServiceCanRespawn(() => ({ status: "present" }) as never, "darwin")).toBe(false);
+    expect(installedServiceCanRespawn(() => ({ status: "present" }) as never, "linux")).toBe(false);
   });
 
   test("the daemon's exit status reflects the shared teardown, not just the drain", () => {
