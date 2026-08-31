@@ -920,9 +920,19 @@ function backfillWebSearchQueries(body: unknown): unknown {
     if (!isPlainObject(item) || item.type !== "web_search_call") return item;
     const action = item.action;
     if (!isPlainObject(action) || action.type !== "search") return item;
-    if (typeof action.query !== "string" || Array.isArray(action.queries)) return item;
-    changed = true;
-    return { ...item, action: { ...action, queries: [action.query] } };
+    // Repair whichever side is missing so both strict parsers pass:
+    // DeepSeek native Responses requires `queries`; Console Go requires `query`.
+    const rep: Record<string, unknown> = { ...action };
+    let itemChanged = false;
+    if (typeof action.query !== "string" && Array.isArray(action.queries) && action.queries.length > 0) {
+      rep.query = action.queries[0];       // multi-query item recorded before the fix
+      itemChanged = true;
+    } else if (typeof action.query === "string" && !Array.isArray(action.queries)) {
+      rep.queries = [action.query];        // single-query item recorded before the fix
+      itemChanged = true;
+    }
+    if (itemChanged) changed = true;
+    return itemChanged ? { ...item, action: rep } : item;
   });
   return changed ? { ...body, input } : body;
 }
