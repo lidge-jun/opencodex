@@ -290,13 +290,20 @@ rewritten to satisfy a coincidence.
   when routing redirected the turn, which is the case worth finding. Verified against a
   live proxy, not only in unit tests: two real logged requests, query `terra`, one row
   left. The locale-parity test caught `zh.ts` when only `zh-TW.ts` had been updated.
-- **#1527 and #3021 are carried to the next round, not abandoned.** Both have a bounded
-  design in `001` and neither is blocked on missing information: #1527 wants
-  `envelope_exhausted` to fail closed for external-root models instead of silently
-  full-replaying, and #3021 wants a client-visible Fernet payload replaced with a
-  structured error. #3021 should not be rushed — the tempting fix, widening
-  `ROUTING_HEADER` to `MESSAGE`, creates a plaintext oracle. The safe fix is refusing to
-  forward, not learning to decrypt.
+- **#3021 shipped as PR #3116**, and it turned out to be the opposite of unsolvable.
+  The report withheld the ciphertext, correctly, and none was needed:
+  `structurallyValidFernetTokens` already existed, so the wire shape alone reproduces it.
+  Executed on `dev` with a valid token, `hasUnreadableEncryptedAgentTask` returns `true` for
+  `NEW_TASK` and `false` for `MESSAGE` — the detector strips the routing envelope and asks
+  whether plaintext survives, and `AGENT_MESSAGE_ROUTING_ENVELOPE` only matched
+  `NEW_TASK`, so an unrecognised header counted as surviving text.
+- **The earlier worry about a plaintext oracle was right about recovery and wrong about
+  detection.** Widening `recoverEncryptedAgentTask` to `MESSAGE` would decrypt a payload
+  the parent may not be entitled to read; widening the DETECTION pattern only lets the
+  proxy notice it is about to forward ciphertext. Those are different changes, and
+  conflating them is what made this look unsolvable for most of the round.
+- **#1527 is the only item carried forward.** Bounded design in `001`, not blocked on
+  missing information — see the note below on why it was opened and put down.
 
 ### Receipt — wp9
 
@@ -324,7 +331,8 @@ exactly the region test. The surviving-trigger test is the control.
 | new PRs opened | #3100 #3102 #3104 #3105 #3106 #3107 #3109 #3111 #3112 #3113 #3114 #3115 |
 | issues a merged PR will close | #3051, #3009, #3064, #2999, #3059, #3070 |
 | declared unsolvable | #2813, #1419 |
-| carried to the next round | #1527, #3021 |
+| moved from unsolvable to fixed | #3021 → PR #3116 |
+| carried to the next round | #1527 |
 | blocked on the train | PR #3003 (needs #3020) |
 
 ### Honest accounting of the acceptance criteria
