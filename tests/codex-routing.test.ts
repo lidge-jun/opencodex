@@ -47,6 +47,7 @@ import {
   updateAccountQuota,
 } from "../src/codex/auth-api";
 import { CODEX_UNKNOWN_USAGE_SCORE, isCodexQuotaExhausted } from "../src/codex/quota";
+import { setCodexAccountPriority } from "../src/codex/account-priority";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import { routeModel } from "../src/router";
 import { consumeForInspection } from "../src/server/relay";
@@ -169,6 +170,61 @@ describe("codex routing", () => {
     const now = 1_700_000_000_000;
     expect(computeCodexUsageScore({ shortPercent: 100, shortResetAt: now + 60_000 }, undefined, now)).toBe(100);
     expect(computeCodexUsageScore({ shortPercent: 100, shortResetAt: (now + 60_000) / 1000 }, undefined, now)).toBe(100);
+  });
+
+  test("a live full burst window moves selection off the account (#3029)", () => {
+    // The scorer assertions above prove the value; this proves the pool acts on it. A
+    // clock far from wall time is the point: a fixture whose now matches Date.now() cannot
+    // tell a threaded clock from one that was dropped somewhere in the helper chain.
+    const now = 1_700_000_000_000;
+    const config = makeConfig({ activeCodexAccountId: "a" });
+
+    // A is full for the next hour, recorded in SECONDS. B has ordinary headroom.
+    setAccountQuotaFromParsed("a", { shortPercent: 100, shortResetAt: (now + 3_600_000) / 1000 });
+    updateAccountQuota("b", 10);
+    expect(resolveCodexAccountForThread("thread-terminal-new", config, now)).toBe("b");
+
+    // Same pool, but a thread already bound to A: it must rebind rather than keep an
+    // account that cannot serve it. Milliseconds this time, so both units are exercised
+    // through the real selection path and not only through the scorer.
+    clearAccountQuota("a");
+    setAccountQuotaFromParsed("a", { shortPercent: 100, shortResetAt: now + 3_600_000 });
+    const bound = makeConfig({ activeCodexAccountId: "a" });
+    expect(resolveCodexAccountForThread("thread-terminal-bound", bound, now - 1000)).toBeString();
+    expect(resolveCodexAccountForThread("thread-terminal-bound", bound, now)).toBe("b");
+
+    // And once the window resets, A is selectable again. Without this the fix would trade
+    // "exhausted account stays selected" for "recovered account stays excluded".
+    clearAccountQuota("a");
+    clearAccountQuota("b");
+    setAccountQuotaFromParsed("a", { shortPercent: 100, shortResetAt: now - 60_000 });
+    const recovered = makeConfig({ activeCodexAccountId: "a" });
+    expect(resolveCodexAccountForThread("thread-terminal-recovered", recovered, now)).toBe("a");
+  });
+
+  test("a tiered pool still moves off a terminal high-priority account (#3029)", () => {
+    // The pool carries DIFFERENT priorities here, which is the only shape that reaches
+    // selectPriorityTier's headroom check. A outranks B and B is worse on ordinary usage,
+    // so nothing except the terminal reading can move the selection.
+    //
+    // Note on scope: this asserts the tiered path honours a terminal window. It does NOT
+    // isolate the clock threaded through that helper - selection reaches the same answer
+    // by another route when the clock is dropped there, so a green result here is not
+    // evidence the threading is intact. The scorer and subagent cases carry that proof.
+    const now = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    const config = makeConfig({ activeCodexAccountId: "a" });
+    setCodexAccountPriority(config, "a", 1);
+    setCodexAccountPriority(config, "b", 2);
+
+    setAccountQuotaFromParsed("a", { shortPercent: 100, shortResetAt: now + 3_600_000 });
+    // B is WORSE on ordinary usage, so lowest-usage selection would prefer A. Only the
+    // tier check - which reads the clock through hasCodexQuotaHeadroom - can move the
+    // selection to B, which is what makes this case load-bearing for the clock.
+    updateAccountQuota("b", 70);
+
+    // A outranks B, but its burst window is full at the request's now, so the tier must
+    // fall through to B. Reading Date.now() here would score A unknown and keep it.
+    expect(resolveCodexAccountForThread("thread-priority-terminal", config, now)).toBe("b");
   });
 
   test("exact-account failures record health without rotating the active Pool account", () => {
