@@ -247,9 +247,9 @@ yapılandırmasını dalgalandırmaz.
 
 | Alt komut | Eylem |
 | --- | --- |
-| none | Servis yoksa kurup başlatın; varsa yeniden kaydetmeden yenileyip yeniden başlatın. |
+| none | Servis yoksa kurup başlatın; varsa yenileyip yeniden başlatın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
 | `install` | Servisi oluşturun ve başlatın. Kaydeder, bu da Windows'ta yükseltme gerektirir. |
-| `repair` | Kurulu bir servisi yerinde yenileyin ve yeniden kaydetmeden yeniden başlatın. |
+| `repair` | Kurulu bir servisi yerinde yenileyin ve yeniden başlatın. Sağlıklı bir Windows Task Scheduler tanımı yeniden kullanılır; eski bir tanım yeniden kaydedilebilir ve yükseltme gerektirebilir. |
 | `restart` | `repair` komutunun takma adıdır. |
 | `start` | Kurulu bir servisi başlatın. |
 | `stop` | Servisi durdurun ve yerel Codex'i geri yükleyin. |
@@ -379,7 +379,8 @@ doctor` çalıştırın.
 
 Tamamlanan harici bir Codex güncellemesi kurulu bir dolgunun üzerine yazarsa
 sonraki sıradan `ocx` komutu kararlı yeni başlatıcıyı yedekler ve dağıtımdan
-önce dolguyu geri yükler. Hala değişmekte olan bir başlatıcı dokunulmadan
+önce dolguyu geri yükler. Sıfır etkili `ocx system codex-cli-update check` denetim
+komutu ile ayrılmış `ocx system codex-cli-update` ad alanındaki hatalı çağrılar bu onarımı asla yapmaz. Hala değişmekte olan bir başlatıcı dokunulmadan
 bırakılır ve daha sonra yeniden denenir. Onarım arızaları talep edilen komutu
 başarısız kılmadan uyarır; manuel geri dönüş: `ocx codex-shim install`. Süreç
 düzeyinde bir vazgeçme için `codexShimAutoRestore`'u `false` olarak ayarlayın
@@ -419,6 +420,8 @@ simgeyi kontrol eder; proxy'yi kontrol etmek için menüsünü kullanın.
 adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın.
 
 ## Güncelleme
+
+`ocx update`, Codex CLI'yi değil OpenCodex'in kendisini günceller. Yapılandırılmış Codex CLI adayının provenance bilgisini sınırlı ve salt okunur biçimde denetlemek için [sistem denetim komutları](/tr/reference/cli/agents/) arasındaki `ocx system codex-cli-update check` komutunu kullanın. Komut package registry'ye istek göndermez ve güncelleme kurmaz.
 
 ### `ocx update [--tag latest|preview]`
 

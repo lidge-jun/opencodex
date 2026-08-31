@@ -15,8 +15,8 @@ catalogue visible, puis l’injecte au moyen de la couche d’exécution en lign
 ocx opencode
 ```
 
-Cette commande s’assure que le proxy fonctionne et lance opencode en injectant uniquement le bloc
-`provider.opencodex` généré pour ce processus. Les arguments supplémentaires sont transmis tels quels :
+Cette commande s’assure que le proxy fonctionne et lance opencode en injectant les blocs
+`provider.opencodex` et `providers.opencodex` générés pour ce processus. Les arguments supplémentaires sont transmis tels quels :
 `ocx opencode run "hello"`.
 
 Les modèles acheminés apparaissent dans le sélecteur sous le fournisseur `opencodex` :
@@ -30,21 +30,21 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 
 Le lanceur ne copie ni ne réécrit `~/.config/opencode/opencode.json`,
 les fichiers de projet `opencode.json` / `opencode.jsonc`, ni aucune autre couche de configuration sur disque. Il peut
-lire la configuration globale ou celle du projet afin de détecter une redéfinition de `provider.opencodex`, tandis que vos
+lire la configuration globale ou celle du projet afin de détecter une redéfinition de `provider.opencodex` ou `providers.opencodex`, tandis que vos
 fournisseurs, agents, raccourcis clavier, entrées MCP et références relatives `{file:…}` existants
 continuent d’être résolus depuis leurs fichiers d’origine.
 
-Pour ce lancement uniquement, opencodex ajoute le bloc `provider.opencodex` généré via
+Pour ce lancement uniquement, opencodex ajoute les blocs `provider.opencodex` et `providers.opencodex` générés via
 la couche d’exécution en ligne d’OpenCode. Cette couche est fusionnée après les configurations globale, personnalisée et de projet,
 et ne remplace que les clés en conflit pour le processus enfant.
 
 | Couche | Comportement avec `ocx opencode` |
 | --- | --- |
 | Configuration globale/personnalisée/de projet | Conservée sur disque exactement telle que vous l’avez écrite |
-| Exécution en ligne (`OPENCODE_CONFIG_CONTENT`) | Reçoit uniquement le bloc `provider.opencodex` généré |
+| Exécution en ligne (`OPENCODE_CONFIG_CONTENT`) | Reçoit les blocs `provider.opencodex` et `providers.opencodex` générés (fusionnés dans toute config en ligne héritée) |
 | Chemins relatifs `{file:…}` | Toujours résolus par rapport au fichier de configuration qui les a définis à l’origine |
 
-Si une configuration globale ou de projet définit également `provider.opencodex`, le lanceur affiche une
+Si une configuration globale ou de projet définit également `provider.opencodex` ou `providers.opencodex`, le lanceur affiche une
 note d’information : la couche d’exécution de `ocx opencode` la remplace pour ce lancement.
 
 ## Ajouter le bloc à votre propre configuration
@@ -64,10 +64,10 @@ avertissement et la ligne d'exportation env. Il ne touche jamais à ce fichier �
 déplacer le bloc dans votre configuration est votre acte explicite.
 
 :::caution[Fusionnez, ne remplacez jamais]
-Fusionnez le bloc `provider.opencodex` dans votre configuration existante. Remplacer tout le fichier par le
+Fusionnez les deux blocs — `provider.opencodex` et `providers.opencodex` — dans votre configuration existante. Remplacer tout le fichier par le
 celui exporté détruit vos autres fournisseurs, agents, raccourcis clavier et entrées MCP. `ocx export --out`
 refuse d'écraser un fichier existant exactement pour cette raison, alors pointez `--out` sur un chemin de travail
-et copiez le bloc sur :
+et copiez les blocs :
 
 ```bash
 ocx export --client opencode --out ~/opencodex-opencode.json

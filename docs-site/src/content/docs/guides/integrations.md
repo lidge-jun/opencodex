@@ -19,6 +19,12 @@ file, and removes it again. Ten clients work this way, each with a switch:
 | MiniMax Code | `~/.minimax/config.yaml` | YAML | new sessions, or after opening the model picker | loopback placeholder |
 | Prime Agent | `~/.prime/agent/models.json` | JSON | new sessions | loopback placeholder |
 
+The managed OpenCode integration owns two fragments: `provider.opencodex` (opencode V1) and
+`providers.opencodex` (opencode V2). Only the V2 block carries the per-model reasoning-effort
+variants, so both are written and kept in sync; they name the same provider and model ids, and
+opencode V2 merges them into one provider entry. Apply, Refresh, Disable, and Restore act on both
+fragments, and your other providers, agents, keybinds, and MCP entries stay untouched.
+
 Managed DSH support has a compatibility floor of **DSH 0.1.0-rc.6**. OpenCodex owns only
 `llm-pi-ai.providers.opencodex`; Apply and Refresh replace that fragment, Disable removes only that
 fragment, and Restore puts back a recorded snapshot. DSH hot reloads provider changes. These
@@ -139,10 +145,10 @@ managed integration for now.
 `opencodex-loopback` placeholder rather than a key. No real credential is ever written
 into any client config.
 
-**For `ocx opencode`, the launcher's provider block wins.** That launcher injects
-`provider.opencodex` through `OPENCODE_CONFIG_CONTENT`, which outranks the same entry on
-disk — the rest of your opencode config still applies as usual. The switch here is what
-matters when you launch `opencode` directly.
+**For `ocx opencode`, the launcher's provider blocks win.** That launcher injects
+`provider.opencodex` and `providers.opencodex` through `OPENCODE_CONFIG_CONTENT`, which
+outranks the same entries on disk — the rest of your opencode config still applies as
+usual. The switch here is what matters when you launch `opencode` directly.
 
 ## From the terminal
 

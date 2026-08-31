@@ -82,6 +82,16 @@ describe("runWindowsElevated spawn contract", () => {
     return child;
   }
 
+  test("an armed test cannot launch the live Windows elevation boundary", async () => {
+    // The probe is deliberately inert: if the guard regresses, it can only start an
+    // non-RunAs PowerShell executing a fixed exit 0, never UAC or Task Scheduler mutation.
+    const execution = startPowerShellCommand("exit 0");
+    expect(execution.launcherPid).toBeNull();
+    await expect(execution.completion).rejects.toThrow(
+      "Refusing to launch a live Windows elevation process from an armed test process",
+    );
+  });
+
   test("returns exit code 0", async () => {
     fakeChild({ code: 0 });
     await expect(runWindowsElevated("schtasks.exe", ["/query"])).resolves.toBe(0);
@@ -198,11 +208,24 @@ describe("runWindowsElevated spawn contract", () => {
     expect(elevatedScript).toContain(
       "Trusted ScheduledTasks module does not export Register-ScheduledTask.",
     );
-    expect(elevatedScript).toContain("& $registerTask -TaskName $taskName -Xml $xml -Force");
+    expect(elevatedScript).toContain("& $registerTask -TaskName $taskName -Xml $xml -ErrorAction Stop");
+    expect(elevatedScript).not.toContain("-Xml $xml -Force");
     expect(elevatedScript.match(/\bRegister-ScheduledTask\b/g)).toHaveLength(2);
     expect(elevatedScript).toContain(Buffer.from(xml, "utf16le").toString("base64"));
     expect(commandScript).not.toContain("/xml");
     expect(commandScript).not.toContain("task.xml");
+
+    const predecessor = "<Task><Description>captured-predecessor</Description></Task>";
+    await expect(
+      runWindowsElevatedScheduledTaskRegistration("opencodex-proxy", xml, true, predecessor),
+    ).resolves.toBe(0);
+    const replaceMatch = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(commandScript);
+    expect(replaceMatch).not.toBeNull();
+    const replaceScript = Buffer.from(replaceMatch![1]!, "base64").toString("utf16le");
+    expect(replaceScript).toContain("& $registerTask -TaskName $taskName -Xml $xml -Force");
+    expect(replaceScript).toContain(Buffer.from(predecessor, "utf16le").toString("base64"));
+    expect(replaceScript).toContain("$currentXml = & $schtasks /query /tn $taskName /xml");
+    expect(replaceScript).toContain("Task Scheduler replacement precondition changed.");
   });
 
   test("maps exit 1223 to cancelled", async () => {

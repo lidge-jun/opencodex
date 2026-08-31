@@ -18,6 +18,7 @@ import {
 import { isAbsolute, join, resolve } from "node:path";
 
 import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
+import { WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../lib/windows-user-principal";
 
 import type {
   ResolveCodexCoordinatorDatabasePath,
@@ -55,7 +56,7 @@ const SID_PATTERN = /^S-1-(?:\d+-)+\d+$/i;
  * fails the lookup and the caller still refuses rather than writing. Only the
  * ceiling moved, and it moved for the case where the lookup would have succeeded.
  */
-const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS = 30_000;
+const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS = WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS;
 
 function windowsIdentityLookupTimeoutMs(): number {
   return WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS;

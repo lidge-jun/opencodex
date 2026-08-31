@@ -40,6 +40,44 @@ describe("Cursor tool definitions", () => {
     expect(toJson(ValueSchema, fromBinary(ValueSchema, defs[0]!.inputSchema))).toEqual(tool.parameters);
   });
 
+  test("isolates ordinary bare client identities without renaming proxy-owned or namespaced tools", () => {
+    expect(cursorToolWireName({ name: "read" })).toBe("ocx_client_read");
+    expect(cursorToolWireName({ name: "ocx_client_read" })).toBe("ocx_client_ocx_client_read");
+    expect(cursorToolWireName({ name: "read", namespace: "mcp__workspace" })).toBe("mcp__workspace__read");
+    const bare: OcxTool = { name: "read", description: "Read", parameters: {} };
+    expect(buildCursorToolDefinitions([bare], { name: "read" }).map(tool => tool.toolName))
+      .toEqual(["ocx_client_read"]);
+    expect(buildCursorToolDefinitions([bare], { name: "ocx_client_read" }).map(tool => tool.toolName))
+      .toEqual(["ocx_client_read"]);
+
+    for (const name of [
+      "exec",
+      "wait",
+      "exec_command",
+      "shell_command",
+      "apply_patch",
+      "edit_file",
+      "multi_edit",
+      "tool_search",
+    ]) {
+      expect(cursorToolWireName({ name })).toBe(name);
+    }
+  });
+
+  test("prefers a semantic tool name over a generated client wire alias", () => {
+    const tools: OcxTool[] = [
+      { name: "read", description: "Read", parameters: {} },
+      { name: "ocx_client_read", description: "Literal client-prefixed tool", parameters: {} },
+    ];
+
+    expect(buildCursorToolDefinitions(tools, { name: "ocx_client_read" }).map(tool => tool.toolName))
+      .toEqual(["ocx_client_ocx_client_read"]);
+    expect(buildCursorToolDefinitions(tools, { mode: "required", allowedTools: ["ocx_client_read"] }).map(tool => tool.toolName))
+      .toEqual(["ocx_client_ocx_client_read"]);
+    expect(buildCursorToolDefinitions(tools, { name: "read" }).map(tool => tool.toolName))
+      .toEqual(["ocx_client_read"]);
+  });
+
   test("advertises bare exec_command with compact native exec schema", () => {
     const tool: OcxTool = {
       name: "exec_command",
@@ -255,7 +293,7 @@ describe("Cursor tool definitions", () => {
     expect(cursorToolsForActivePrompt(tools, "Use any 10 tools including MCP resources")?.map(tool => cursorToolWireName(tool))).toEqual([
       "exec_command",
       "tool_search",
-      "list_mcp_resources",
+      "ocx_client_list_mcp_resources",
     ]);
   });
 
@@ -408,7 +446,7 @@ describe("Cursor tool definitions", () => {
     expect(note).toBeDefined();
     if (!note) throw new Error("Expected Cursor tool guidance note");
 
-    expect(note).toContain("available tool names are exactly `exec_command`, `Glob`");
+    expect(note).toContain("available tool names are exactly `exec_command`, `ocx_client_Glob`");
     expect(note).toContain("This turn does not expose neighboring-agent tool names `Read`, `Grep`, `Bash`, `LS`");
     expect(note).not.toContain("`Read`, `Grep`, `Glob`, `Bash`, `LS`");
   });
@@ -425,7 +463,7 @@ describe("Cursor tool definitions", () => {
     expect(note).toBeDefined();
     if (!note) throw new Error("Expected Cursor tool guidance note");
 
-    expect(note).toContain("available tool names are exactly `exec_command`, `read`, `find`, `bash`");
+    expect(note).toContain("available tool names are exactly `exec_command`, `ocx_client_read`, `ocx_client_find`, `ocx_client_bash`");
     expect(note).toContain("This turn does not expose neighboring-agent tool names `Grep`, `LS`");
     expect(note).not.toContain("`Read`");
     expect(note).not.toContain("`Glob`");

@@ -16,8 +16,8 @@ oluşturur ve bunu OpenCode'un satır içi çalışma zamanı katmanı
 ocx opencode
 ```
 
-Bu, proxy'nin çalıştığından emin olur ve bu süreç için yalnızca oluşturulan
-`provider.opencodex` bloğu enjekte edilmiş olarak opencode'u başlatır. Fazladan
+Bu, proxy'nin çalıştığından emin olur ve bu süreç için oluşturulan
+`provider.opencodex` ve `providers.opencodex` blokları enjekte edilmiş olarak opencode'u başlatır. Fazladan
 argümanlar doğrudan iletilir: `ocx opencode run "hello"`.
 
 Yönlendirilen modeller seçicide `opencodex` sağlayıcısı altında görünür:
@@ -31,12 +31,12 @@ opencodex/gpt-5.6-sol      # yerel slug'lar öneksiz kalır
 
 Başlatıcı `~/.config/opencode/opencode.json`, proje `opencode.json` /
 `opencode.jsonc` veya diskteki başka bir yapılandırma katmanını kopyalamaz veya
-yeniden yazmaz. Bir `provider.opencodex` geçersiz kılmasını algılamak için genel
+yeniden yazmaz. Bir `provider.opencodex` veya `providers.opencodex` geçersiz kılmasını algılamak için genel
 veya proje yapılandırmasını okuyabilir, mevcut sağlayıcılarınız, ajanlarınız,
 tuş atamalarınız, MCP girdileriniz ve göreli `{file:…}` referanslarınız orijinal
 dosyalarından çözümlenmeye devam eder.
 
-Yalnızca bu başlatma için opencodex, oluşturulan `provider.opencodex` bloğunu
+Yalnızca bu başlatma için opencodex, oluşturulan `provider.opencodex` ve `providers.opencodex` bloklarını
 OpenCode'un satır içi çalışma zamanı katmanı aracılığıyla ekler. Bu katman,
 genel/özel/proje yapılandırmasından sonra birleşir ve alt süreç için yalnızca
 çakışan anahtarları geçersiz kılar.
@@ -44,10 +44,10 @@ genel/özel/proje yapılandırmasından sonra birleşir ve alt süreç için yal
 | Katman | `ocx opencode` ile Davranış |
 | --- | --- |
 | Genel / özel / proje yapılandırması | Tam olarak yazdığınız gibi diskte bırakılır |
-| Satır içi çalışma zamanı (`OPENCODE_CONFIG_CONTENT`) | Yalnızca oluşturulan `provider.opencodex` bloğunu alır |
+| Satır içi çalışma zamanı (`OPENCODE_CONFIG_CONTENT`) | Oluşturulan `provider.opencodex` ve `providers.opencodex` bloklarını alır (devralınan satır içi yapılandırmayla birleştirilir) |
 | Göreli `{file:…}` yolları | Yine de bunları ilk tanımlayan yapılandırma dosyasına göre çözümlenir |
 
-Bir genel veya proje yapılandırması da `provider.opencodex` tanımlıyorsa,
+Bir genel veya proje yapılandırması da `provider.opencodex` veya `providers.opencodex` tanımlıyorsa,
 başlatıcı bilgilendirici bir not yazdırır: `ocx opencode`'dan gelen çalışma
 zamanı katmanı bu başlatma için onu geçersiz kılar.
 
@@ -71,11 +71,11 @@ dosyaya asla dokunmaz — yukarıdaki bölüm geçerliliğini korur ve bloğu
 yapılandırmanıza taşımak sizin açık eyleminizdir.
 
 :::caution[Birleştirin, asla üzerine yazmayın]
-`provider.opencodex` bloğunu mevcut yapılandırmanızla birleştirin. Tüm dosyanın
+İki bloğu da — `provider.opencodex` ve `providers.opencodex` — mevcut yapılandırmanızla birleştirin. Tüm dosyanın
 dışa aktarılanla değiştirilmesi diğer sağlayıcılarınızı, ajanlarınızı, tuş
 atamalarınızı ve MCP girdilerinizi yok eder. `ocx export --out` tam olarak bu
 nedenle mevcut bir dosyanın üzerine yazmayı reddeder, bu nedenle `--out`'u
-geçici bir yola yönlendirin ve bloğu kopyalayın:
+geçici bir yola yönlendirin ve blokları kopyalayın:
 
 ```bash
 ocx export --client opencode --out ~/opencodex-opencode.json

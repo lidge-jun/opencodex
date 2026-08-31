@@ -11,7 +11,7 @@ opencode 從合併的 JSON 設定層讀取供應商，而不是環境變數，�
 ocx opencode
 ```
 
-這會確保代理程式正在執行，並僅以產生的 `provider.opencodex` 區塊啟動該次 opencode 程序。額外引數會原樣傳遞：`ocx opencode run "hello"`。
+這會確保代理程式正在執行，並以產生的 `provider.opencodex` 與 `providers.opencodex` 區塊啟動該次 opencode 程序。額外引數會原樣傳遞：`ocx opencode run "hello"`。
 
 路由模型會出現在選擇器的 `opencodex` 供應商底下：
 
@@ -22,17 +22,17 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 
 ## 你自己的設定絕不會被修改
 
-啟動器不會複製或改寫 `~/.config/opencode/opencode.json`、專案的 `opencode.json` / `opencode.jsonc`，或任何其他磁碟上的設定層。它可能會讀取全域或專案設定以偵測 `provider.opencodex` 覆寫，而你既有的供應商、agents、keybinds、MCP 項目，以及相對路徑的 `{file:…}` 參考，仍會從原本的檔案解析。
+啟動器不會複製或改寫 `~/.config/opencode/opencode.json`、專案的 `opencode.json` / `opencode.jsonc`，或任何其他磁碟上的設定層。它可能會讀取全域或專案設定以偵測 `provider.opencodex` 或 `providers.opencodex` 覆寫，而你既有的供應商、agents、keybinds、MCP 項目，以及相對路徑的 `{file:…}` 參考，仍會從原本的檔案解析。
 
-僅就此啟動，opencodex 會透過 OpenCode 的內嵌 runtime 層加入產生的 `provider.opencodex` 區塊。該層在全域／自訂／專案設定之後合併，且只覆寫子程序中衝突的鍵。
+僅就此啟動，opencodex 會透過 OpenCode 的內嵌 runtime 層加入產生的 `provider.opencodex` 與 `providers.opencodex` 區塊。該層在全域／自訂／專案設定之後合併，且只覆寫子程序中衝突的鍵。
 
 | 層 | 搭配 `ocx opencode` 的行為 |
 | --- | --- |
 | 全域／自訂／專案設定 | 磁碟上維持你寫下的原樣 |
-| 內嵌 runtime（`OPENCODE_CONFIG_CONTENT`） | 只接收產生的 `provider.opencodex` 區塊 |
+| 內嵌 runtime（`OPENCODE_CONFIG_CONTENT`） | 接收產生的 `provider.opencodex` 與 `providers.opencodex` 兩個區塊（與繼承的內嵌設定合併） |
 | 相對 `{file:…}` 路徑 | 仍相對於原本定義它們的設定檔解析 |
 
-若全域或專案設定也定義了 `provider.opencodex`，啟動器會印出資訊提示：該次啟動由 `ocx opencode` 提供的 runtime 層會覆寫它。
+若全域或專案設定也定義了 `provider.opencodex` 或 `providers.opencodex`，啟動器會印出資訊提示：該次啟動由 `ocx opencode` 提供的 runtime 層會覆寫它。
 
 ## 把區塊放進你自己的設定
 
@@ -49,9 +49,9 @@ ocx export --client opencode
 env 匯出指令。它永遠不會碰那個檔案——前面一節仍然成立，把區塊放進你的設定是你自己的明確行為。
 
 :::caution[合併，不要取代]
-把 `provider.opencodex` 區塊合併進你既有的設定。用匯出的內容取代整個檔案會摧毀你的其他供應商、
+把 `provider.opencodex` 與 `providers.opencodex` 兩個區塊都合併進你既有的設定。用匯出的內容取代整個檔案會摧毀你的其他供應商、
 agents、keybinds 與 MCP 項目。`ocx export --out` 正是為了這個原因拒絕覆寫既有檔案，所以請把
-`--out` 指向暫存路徑，再把區塊複製過去：
+`--out` 指向暫存路徑，再把這兩個區塊複製過去：
 
 ```bash
 ocx export --client opencode --out ~/opencodex-opencode.json

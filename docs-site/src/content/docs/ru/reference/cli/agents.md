@@ -139,9 +139,9 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ### `ocx opencode [opencode args...]`
 
-Убедиться, что прокси запущен, и затем запустить opencode со сгенерированным блоком
-`provider.opencodex` в inline runtime layer OpenCode (`OPENCODE_CONFIG_CONTENT`). Существующая
-inline-конфигурация сохраняется, а только `provider.opencodex` заменяется для этого запуска.
+Убедиться, что прокси запущен, и затем запустить opencode со сгенерированными блоками
+`provider.opencodex` и `providers.opencodex` в inline runtime layer OpenCode (`OPENCODE_CONFIG_CONTENT`). Существующая
+inline-конфигурация сохраняется, а для этого запуска заменяются только эти два ключа.
 Глобальные или проектные `opencode.json` могут читаться, чтобы выдать warning о существующем
 override, но файлы на диске никогда не меняются. Маршрутизируемые модели появляются как
 `opencodex/<provider>/<model>`. Последующий запуск обычного `opencode` работает ровно как раньше.
@@ -222,13 +222,21 @@ env-reference, либо несекретную loopback-заглушку. Loopba
 
 ## Runtime и configuration
 
-### `ocx system <status|settings|startup|diagnostics|sync|update> ...`
+### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 Управляйте headless runtime-setting'ами, startup, sync, diagnostics и update.
 
 ```bash
 ocx system settings --stream-mode eager-relay
 ```
+
+`ocx system update` обновляет сам OpenCodex. Для Codex CLI используйте отдельную read-only команду:
+
+```bash
+ocx system codex-cli-update check --json
+```
+
+`check` не обращается к реестру пакетов и в строго ограниченном объёме проверяет данные о происхождении настроенного кандидата, включая замаскированный путь к исполняемому файлу и подтверждения его принадлежности. Доверенный контекст опубликованного средства запуска подтверждает только подлинность снимка данных о кандидате, но не факт успешного запуска Codex. Поскольку команда выполняет только такую проверку и никогда не запускает Codex, кандидаты из окружения и сохранённых данных отображаются только в отчёте (`managed: false`, обычно `selection_unattested`). В выводе JSON присутствуют `candidateAvailable`, `candidateVersion`, `candidateSource` и `selectionAttested`, причём значение `selectionAttested` всегда равно `false`. Для проверки настроенного кандидата нужен доверенный контекст опубликованного средства запуска. При прямом запуске через Bun или из исходного кода такого подтверждения нет; в этом случае команда игнорирует кандидатов из окружения и сохранённых данных и может вернуть `candidate_unavailable`. В Windows этот первый этап вообще не выполняет файловый ввод-вывод по путям кандидата или конфигурации. Только абсолютный кандидат из окружения, зафиксированный доверенным средством запуска, может получить лексическую метку комплекта приложения или менеджера версий; все остальные кандидаты Windows отклоняются по принципу fail-closed. Команда не запускает Codex или менеджер пакетов, не восстанавливает shim, ничего не записывает в конфигурацию или кеш, не останавливает процессы и ничего не устанавливает. Кандидаты, входящие в комплект приложения, найденные в распознанных путях менеджеров версий, являющиеся непроверенными автономными установками или имеющие неоднозначное состояние shim, отображаются как `unmanaged` или `unknown` и никогда не классифицируются как `managed`.
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 

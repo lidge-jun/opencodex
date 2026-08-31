@@ -233,8 +233,9 @@ function applyReconciliationOutcome(
 /**
  * Execute the existing fixed CLI installer outside the proxy event loop.
  *
- * Repair mode (`options.repair`) runs `ocx service repair` — asset rewrite + restart
- * without Task Scheduler re-registration, so it must not enter the UAC elevation path.
+ * Repair mode (`options.repair`) runs `ocx service repair`. A stale definition may be
+ * re-registered and elevate inside repair; this wrapper must not retry it through the separate
+ * fresh-install UAC path.
  *
  * After an elevation request timeout the lock becomes `indeterminate` until the
  * original elevated transaction completes and is reconciled. A process restart

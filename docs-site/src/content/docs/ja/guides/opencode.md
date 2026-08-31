@@ -11,7 +11,7 @@ opencode は、環境変数ではなくマージされた JSON 構成レイヤ�
 ocx opencode
 ```
 
-これにより、プロキシが確実に実行され、そのプロセスに挿入された生成された `provider.opencodex` ブロックのみを使用してオープンコードが起動されます。追加の引数は `ocx opencode run "hello"` を通過します。
+これにより、プロキシが確実に実行され、そのプロセスに挿入された生成された `provider.opencodex` ブロックと `providers.opencodex` ブロックを使用してオープンコードが起動されます。追加の引数は `ocx opencode run "hello"` を通過します。
 
 ルーティングされたモデルは、ピッカーの `opencodex` プロバイダーの下に表示されます。
 
@@ -22,17 +22,17 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 
 ## あなた自身の設定は決して変更されません
 
-ランチャーは、`~/.config/opencode/opencode.json`、プロジェクト `opencode.json` / `opencode.jsonc`、またはその他のディスク上の構成レイヤーをコピーしたり書き換えたりしません。既存のプロバイダー、エージェント、キーバインド、MCP エントリ、および相対的な `{file:…}` 参照は元のファイルから解決され続けますが、`provider.opencodex` オーバーライドを検出するためにグローバルまたはプロジェクト設定を読み取ることがあります。
+ランチャーは、`~/.config/opencode/opencode.json`、プロジェクト `opencode.json` / `opencode.jsonc`、またはその他のディスク上の構成レイヤーをコピーしたり書き換えたりしません。既存のプロバイダー、エージェント、キーバインド、MCP エントリ、および相対的な `{file:…}` 参照は元のファイルから解決され続けますが、`provider.opencodex` または `providers.opencodex` オーバーライドを検出するためにグローバルまたはプロジェクト設定を読み取ることがあります。
 
-この起動の場合のみ、opencodex は、OpenCode のインライン ランタイム層を介して、生成された `provider.opencodex` ブロックを追加します。そのレイヤーは、グローバル/カスタム/プロジェクト設定の後にマージされ、子プロセスの競合するキーのみをオーバーライドします。
+この起動の場合のみ、opencodex は、OpenCode のインライン ランタイム層を介して、生成された `provider.opencodex` ブロックと `providers.opencodex` ブロックを追加します。そのレイヤーは、グローバル/カスタム/プロジェクト設定の後にマージされ、子プロセスの競合するキーのみをオーバーライドします。
 
 |レイヤー | `ocx opencode` での動作 |
 | --- | --- |
 |グローバル / カスタム / プロジェクト構成 |書き込んだとおりにディスク上に残ります |
-|インライン ランタイム (`OPENCODE_CONFIG_CONTENT`) |生成された `provider.opencodex` ブロックのみを受信します。
-|相対 `{file:…}` パス |最初に定義した設定ファイルに対して引き続き解決します。
+|インライン ランタイム (`OPENCODE_CONFIG_CONTENT`) |生成された `provider.opencodex` ブロックと `providers.opencodex` ブロックを受信します（継承されたインライン設定にマージされます）。|
+|相対 `{file:…}` パス |最初に定義した設定ファイルに対して引き続き解決します。|
 
-グローバルまたはプロジェクト設定でも `provider.opencodex` が定義されている場合、ランチャーは情報メモを出力します。`ocx opencode` のランタイム層がその起動に対してそれをオーバーライドします。
+グローバルまたはプロジェクト設定でも `provider.opencodex` または `providers.opencodex` が定義されている場合、ランチャーは情報メモを出力します。`ocx opencode` のランタイム層がその起動に対してそれをオーバーライドします。
 
 ## ブロックを独自の設定に入れる
 
@@ -45,7 +45,7 @@ ocx export --client opencode
 プロキシが実行されている必要があります。このコマンドは、構成、正規の宛先 (`~/.config/opencode/opencode.json`、またはそれが設定されている場合は `XDG_CONFIG_HOME` の下)、マージ警告、および env エクスポート行を出力します。そのファイルには決して触れません。上記のセクションはそのままであり、ブロックを設定に移動するのは明示的な行為です。
 
 :::caution[マージし、決して置き換えないでください]
-`provider.opencodex` ブロックを既存の設定にマージします。ファイル全体をエクスポートされたファイルで置き換えると、他のプロバイダー、エージェント、キーバインド、および MCP エントリが破壊されます。 `ocx export --out` はまさにこの理由で既存のファイルの上書きを拒否するため、`--out` をスクラッチ パスに指定し、ブロックを次のようにコピーします。
+両方のブロック — `provider.opencodex` と `providers.opencodex` — を既存の設定にマージします。ファイル全体をエクスポートされたファイルで置き換えると、他のプロバイダー、エージェント、キーバインド、および MCP エントリが破壊されます。 `ocx export --out` はまさにこの理由で既存のファイルの上書きを拒否するため、`--out` をスクラッチ パスに指定し、ブロックを次のようにコピーします。
 
 ```bash
 ocx export --client opencode --out ~/opencodex-opencode.json

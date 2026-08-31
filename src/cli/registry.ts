@@ -65,7 +65,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Run as a background service.",
     details: [
       "With no subcommand, installs when absent or repairs/restarts an existing service.",
-      "`restart` is an alias of `repair` and does not re-register an installed service.",
+      "`restart` aliases `repair`; healthy Windows tasks are reused, while stale definitions may re-register and elevate.",
       "Use `ocx service status` to see diagnostics and log paths.",
     ],
   },
@@ -268,8 +268,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "system",
-    usage: "ocx system <status|settings|startup|diagnostics|sync|update> ...",
-    summary: "Manage headless runtime settings, startup, sync, diagnostics, and updates.",
+    usage: "ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...",
+    summary: "Manage headless runtime settings, startup, sync, diagnostics, OpenCodex updates, and read-only Codex CLI inspection.",
+    details: [
+      "system update manages OpenCodex itself.",
+      "ocx system codex-cli-update check [--json]",
+      "The Codex CLI inspection command makes no package-registry request, does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.",
+    ],
   },
   {
     name: "config",
@@ -309,11 +314,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Launch opencode wired to the proxy (runtime provider config).",
     details: [
       "Ensures the proxy is running, then execs `opencode` with the generated `provider.opencodex`",
-      "block injected through OpenCode's inline runtime layer (`OPENCODE_CONFIG_CONTENT`). Any",
-      "existing inline config in the environment is preserved and only `provider.opencodex` is",
-      "overwritten for this launch.",
-      "Global/project opencode.json may be read to warn about an existing provider.opencodex",
-      "override; on-disk files are never modified.",
+      "and `providers.opencodex` blocks injected through OpenCode's inline runtime layer",
+      "(`OPENCODE_CONFIG_CONTENT`). Any existing inline config in the environment is preserved",
+      "and only `provider.opencodex` and `providers.opencodex` are overwritten for this launch.",
+      "Only the V2 block (`providers.opencodex`) carries the reasoning-effort variants.",
+      "Global/project opencode.json may be read to warn about an existing provider.opencodex or",
+      "providers.opencodex override; on-disk files are never modified.",
       "Routed models appear in the model picker as opencodex/<provider>/<model>.",
       "Stop using `ocx opencode` and plain `opencode` behaves exactly as before.",
     ],

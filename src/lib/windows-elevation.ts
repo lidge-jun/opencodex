@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { dlopen, ptr, type Pointer } from "bun:ffi";
+import { isTestHomeGuardArmed } from "./test-home-guard";
 
 type ElevationSpawn = (
   command: string,
@@ -530,6 +531,19 @@ export function startPowerShellCommand(commandScript: string): WindowsElevationE
     };
   }
 
+  // HOME isolation cannot contain UAC children or other machine-global effects. Keep the
+  // final process boundary closed while the real launcher is installed; explicitly injected
+  // launchers remain available to tests that exercise the elevation protocol in memory.
+  if (isTestHomeGuardArmed() && elevationSpawn === spawn) {
+    return {
+      launcherPid: null,
+      completion: Promise.reject(new WindowsElevationError(
+        "launch-failed",
+        "Refusing to launch a live Windows elevation process from an armed test process; inject the elevation launcher instead.",
+      )),
+    };
+  }
+
   let child: ChildProcess;
   try {
     child = elevationSpawn(
@@ -638,8 +652,16 @@ export function runWindowsElevated(file: string, args: string[]): Promise<number
 export function runWindowsElevatedScheduledTaskRegistration(
   taskName: string,
   xml: string,
+  replace = false,
+  expectedExistingXml?: string,
 ): Promise<number> {
+  if (replace && !expectedExistingXml?.trim()) {
+    throw new Error("Elevated Task Scheduler replacement requires a captured existing definition.");
+  }
   const xmlBase64 = Buffer.from(xml, "utf16le").toString("base64");
+  const expectedExistingBase64 = expectedExistingXml === undefined
+    ? null
+    : Buffer.from(expectedExistingXml, "utf16le").toString("base64");
   const powerShellPath = windowsPowerShell();
   const powerShellDirectory = powerShellPath.replace(/[\\/][^\\/]+$/, "");
   const scheduledTasksModule = `${powerShellDirectory}\\Modules\\ScheduledTasks\\ScheduledTasks.psd1`;
@@ -650,7 +672,16 @@ export function runWindowsElevatedScheduledTaskRegistration(
     `$module = Microsoft.PowerShell.Core\\Import-Module -Name ${psSingleQuote(scheduledTasksModule)} -PassThru -Force -ErrorAction Stop`,
     "$registerTask = $module.ExportedCommands['Register-ScheduledTask']",
     "if ($null -eq $registerTask) { throw 'Trusted ScheduledTasks module does not export Register-ScheduledTask.' }",
-    "& $registerTask -TaskName $taskName -Xml $xml -Force -ErrorAction Stop | Out-Null",
+    ...(replace ? [
+      `$expectedBase64 = ${psSingleQuote(expectedExistingBase64!)}`,
+      "$expectedXml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($expectedBase64))",
+      `$schtasks = ${psSingleQuote(resolveTrustedWindowsSchtasksExe())}`,
+      "$currentXml = & $schtasks /query /tn $taskName /xml 2>$null | Out-String",
+      "if ($LASTEXITCODE -ne 0) { throw 'Task Scheduler replacement precondition could not be read.' }",
+      "function Normalize-OcxTaskXml([string]$value) { return (($value.TrimStart([char]0xFEFF) -replace \"`r`n?\", \"`n\").Trim()) }",
+      "if ((Normalize-OcxTaskXml $currentXml) -cne (Normalize-OcxTaskXml $expectedXml)) { throw 'Task Scheduler replacement precondition changed.' }",
+    ] : []),
+    `& $registerTask -TaskName $taskName -Xml $xml${replace ? " -Force" : ""} -ErrorAction Stop | Out-Null`,
   ].join("; ");
   const encodedCommand = Buffer.from(inner, "utf16le").toString("base64");
   const script = [

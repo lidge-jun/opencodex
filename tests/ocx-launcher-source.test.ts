@@ -28,12 +28,22 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(spawnCall).toContain("[BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source");
 
     // Path and source come from one resolution, so the marker cannot describe another binary.
-    expect(source).toContain("const bunRuntime = resolveBun();");
+    expect(source).toContain("const bunRuntime = resolveBun({ allowInstall: !codexCliUpdateInspection });");
     expect(source).toContain("const bun = bunRuntime.path;");
     expect(source).toContain('return { path: bin, source: "bundled" };');
 
     // The launcher's literal name must match the TypeScript constant it mirrors.
     expect(runtimeSource).toContain('export const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";');
+  });
+
+  test("the updater inspection namespace rejects direct Bun execution of the Node launcher", () => {
+    expect(source).toContain('codexCliUpdateInspection && typeof process.versions.bun === "string"');
+    expect(source).toContain("codex-cli-update inspection must use the published Node launcher");
+  });
+
+  test("the Node launcher proof-binds the bounded version-manager root allowlist", () => {
+    expect(source).toContain("CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS");
+    expect(source).toContain("managerRoots: preBunCodexCliManagerRoots");
   });
 
   test("the long-running Bun child stays hidden under a headless Windows launcher (#1236)", () => {
@@ -79,12 +89,51 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(source).toContain("typeof process.env[name] === \"string\" && process.env[name] !== \"\"");
   });
 
+  /**
+   * Windows caps a process environment block at 32,767 characters. The inspection snapshot
+   * already carries PATH, PATHEXT, and the manager-root slots as proof-bound values, and
+   * `inspectCodexCliInstall` reads them from that snapshot rather than the live environment.
+   * Inheriting them again spends the budget twice, so a large-but-valid shell environment
+   * could stop the Bun child from spawning and fail the command before it reports anything.
+   */
+  test("the inspection child does not inherit a duplicate copy of the snapshotted values", () => {
+    expect(source).toContain("const inheritedEnv = { ...process.env };");
+    expect(source).toContain("...inheritedEnv,");
+    // Windows spells the variable `Path` in practice, so an upper-case-only delete would
+    // leave the duplicate behind. The match must be on the lowercase form of every key.
+    expect(source).toContain("if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];");
+    expect(source).toContain('["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase())');
+
+    // The de-duplication is scoped to the one-shot inspection launch; every other launch
+    // must still inherit PATH, or the long-running proxy child loses its tooling lookup.
+    const guard = source.indexOf("if (codexCliUpdateInspection) {", source.indexOf("const inheritedEnv"));
+    expect(guard).toBeGreaterThan(-1);
+
+    // The spawn must no longer splat the raw environment, or the deletes above are pointless.
+    const spawnStart = source.indexOf("const child = spawn(bun, [cliPath,");
+    expect(spawnStart).toBeGreaterThan(-1);
+    expect(source.slice(spawnStart)).not.toContain("...process.env,");
+  });
+
+  /**
+   * A bare `CODEX_CLI_PATH` such as `codex` is an executable-lookup name, not a relative
+   * path. Resolving it against the launch cwd would make the inspector treat it as an
+   * explicit path and stop searching the proof-captured PATH, so a working configuration
+   * would report as unavailable.
+   */
+  test("only separator-bearing configured Codex paths are resolved against the launch cwd", () => {
+    expect(source).toContain("const preBunCodexCliPath = configuredCodexCliPath !== null");
+    expect(source).toContain('configuredCodexCliPath.includes("/") || configuredCodexCliPath.includes("\\\\") || /^[A-Za-z]:/.test(configuredCodexCliPath)');
+    expect(source).toContain("? resolve(configuredCodexCliPath)");
+    expect(source).toContain(": configuredCodexCliPath;");
+  });
+
   test("valid Bun overrides are selected before the bundled runtime", () => {
     expect(source).toContain('const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";');
     expect(source).toContain("const overridePath = resolve(override);");
     expect(source).toContain('if (isRealBunBinary(overridePath)) return { path: overridePath, source: "override" };');
 
-    const resolveStart = source.indexOf("function resolveBun() {");
+    const resolveStart = source.indexOf("function resolveBun({ allowInstall = true } = {}) {");
     const overrideCheck = source.indexOf("process.env[BUN_OVERRIDE_ENV]?.trim()", resolveStart);
     const overrideResolve = source.indexOf("resolve(override)", overrideCheck);
     const bundledLookup = source.indexOf("bunDir = bunBinDir()", resolveStart);

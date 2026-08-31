@@ -177,9 +177,9 @@ eder. Claude Code ayarları için `ocx claude config <status|set> ...` kullanın
 ### `ocx opencode [opencode argumanlari...]`
 
 Proxy'nin çalıştığından emin olun, ardından OpenCode'un satır içi çalışma zamanı
-katmanında (`OPENCODE_CONFIG_CONTENT`) üretilen bir `provider.opencodex`
-bloğuyla opencode'u başlatın. Mevcut satır içi yapılandırma korunur ve bu
-başlatma için yalnızca `provider.opencodex` değiştirilir. Mevcut bir geçersiz
+katmanında (`OPENCODE_CONFIG_CONTENT`) üretilen `provider.opencodex` ve
+`providers.opencodex` bloklarıyla opencode'u başlatın. Mevcut satır içi yapılandırma korunur ve bu
+başlatma için yalnızca bu iki anahtar değiştirilir. Mevcut bir geçersiz
 kılma hakkında uyarmak için genel veya proje `opencode.json` dosyaları
 okunabilir, ancak diskteki dosyalar asla değiştirilmez. Yönlendirilen modeller
 `opencodex/<saglayici>/<model>` olarak görünür. Daha sonra düz `opencode`
@@ -267,7 +267,7 @@ sekmesinde işlenir; böylece CLI, API ve GUI aynı baytları kullanır.
 
 ## Çalışma zamanı ve yapılandırma
 
-### `ocx system <status|settings|startup|diagnostics|sync|update> ...`
+### `ocx system <status|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...`
 
 Başsız çalışma zamanı ayarlarını, başlatmayı, senkronizasyonu, tanılamayı ve
 güncellemeleri yönetin.
@@ -275,6 +275,14 @@ güncellemeleri yönetin.
 ```bash
 ocx system settings --stream-mode eager-relay
 ```
+
+`ocx system update` OpenCodex'in kendisini günceller. Codex CLI için ayrı, salt okunur komutu kullanın:
+
+```bash
+ocx system codex-cli-update check --json
+```
+
+`check` paket kayıt defterine istek göndermez ve yapılandırmada belirtilen kurulum adayına ilişkin provenance kanıtını, maskelenmiş yürütülebilir dosya konumu ve sahiplik kanıtı dâhil, sınırlı biçimde inceler. Yayımlanmış başlatıcıdan gelen güvenilir bağlam aday anlık görüntüsünü doğrular; Codex'in başarıyla çalıştırıldığını doğrulamaz. Bu tek seferlik komut Codex'i hiçbir zaman çalıştırmadığından, ortamdan ve kalıcı kayıtlardan gelen adaylar yalnızca raporlanır (`managed: false`, genellikle `selection_unattested`). JSON çıktısında `candidateAvailable`, `candidateVersion` ve `candidateSource` alanları bulunur; `selectionAttested` değeri ise `false` kalır. Yapılandırmada belirtilen kurulum adayını incelemek için yayımlanmış başlatıcıdan gelen güvenilir bağlam gerekir; Bun ile veya kaynak koddan doğrudan başlatıldığında bu kanıt bulunmadığından ortamdaki ve kalıcı kayıtlardaki aday durumu yok sayılır ve `candidate_unavailable` bildirilebilir. Windows'ta bu ilk parça, aday veya yapılandırma yollarında hiçbir dosya sistemi G/Ç işlemi yapmaz. Yalnızca güvenilir başlatıcının yakaladığı mutlak bir ortam adayı sözcüksel olarak uygulama paketi ya da sürüm yöneticisi etiketi alabilir; diğer tüm Windows adayları kapalı başarısızlıkla reddedilir. Komut Codex veya bir paket yöneticisi çalıştırmaz, shim'i onarmaz, yapılandırmaya ya da önbellek durumuna yazmaz, hiçbir süreci durdurmaz ve hiçbir şey kurmaz. Uygulamayla birlikte paketlenmiş adaylar, tanınan sürüm yöneticisi yollarında bulunan adaylar, doğrulanmamış bağımsız adaylar ve belirsiz shim durumları `unmanaged` veya `unknown` olarak raporlanır; hiçbir zaman `managed` olarak sınıflandırılmaz.
 
 ### `ocx config <show|get|set|unset|validate|export|import> ...`
 

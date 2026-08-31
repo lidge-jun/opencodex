@@ -347,8 +347,9 @@ export async function runUpdate(): Promise<void> {
           }
         }
         if (!serviceRefreshed || !serviceViable) {
-          // A repair needs no elevation (it never calls `schtasks /create`), but it can
-          // still fail — or exit 0 while leaving stale/missing assets that never start
+          // Repair normally avoids elevation for a healthy scheduler task, but a stale
+          // definition may require guarded create/elevation. It can also fail — or exit 0
+          // while leaving stale/missing assets that never start
           // the proxy. Fall back to a direct detached proxy start so the update
           // never leaves the user without a running proxy — but only when the port is free.
           if (!freed) {

@@ -156,6 +156,91 @@ describe("relocated OpenCode serializer (accept criterion 1)", () => {
   });
 });
 
+/**
+ * Reasoning efforts reach opencode as model variants, and only through the V2 `providers`
+ * block: a `variants` array under the legacy `provider` block is parsed and then ignored
+ * (verified against opencode 0.0.0-beta-18684), which is why both blocks are emitted.
+ */
+describe("OpenCode V2 block (reasoning-effort variants)", () => {
+  const LADDER_ROWS: ExportModel[] = [
+    // Deliberately out of canonical order, with a duplicate and an unknown value.
+    { namespaced: "opencode-go/glm-5.3", provider: "opencode-go", id: "glm-5.3", reasoningEfforts: ["max", "low", "high", "low", "turbo"], contextWindow: 1_000_000 },
+    // `none` is a declared sentinel, but the chat ingress has no such wire effort, so it is
+    // dropped: offering it would be a selection that silently falls back to the proxy default.
+    // `minimal` is a real wire effort and stays.
+    { namespaced: "opencode-go/deepseek-v4-flash", provider: "opencode-go", id: "deepseek-v4-flash", reasoningEfforts: ["high", "minimal", "none"], contextWindow: 1_000_000 },
+    { namespaced: "opencode-go/no-ladder", provider: "opencode-go", id: "no-ladder", contextWindow: 1_000_000 },
+    { namespaced: "opencode-go/empty-ladder", provider: "opencode-go", id: "empty-ladder", reasoningEfforts: [], contextWindow: 1_000_000 },
+    // A ladder made only of the dropped sentinel leaves nothing selectable.
+    { namespaced: "opencode-go/none-only", provider: "opencode-go", id: "none-only", reasoningEfforts: ["none"], contextWindow: 1_000_000 },
+  ];
+
+  function ladderCtx(config: OcxConfig = cfg()): ExportContext {
+    return { baseUrl: BASE_URL, models: LADDER_ROWS, config };
+  }
+
+  test("one variant per declared effort, in canonical ladder order", () => {
+    const models = (buildClientConfig("opencode", ladderCtx()) as OpencodeGeneratedConfig)
+      .providers.opencodex!.models;
+    expect(models["opencode-go/glm-5.3"]!.variants).toEqual([
+      { id: "low", settings: { reasoningEffort: "low" } },
+      { id: "high", settings: { reasoningEffort: "high" } },
+      { id: "max", settings: { reasoningEffort: "max" } },
+    ]);
+    expect(models["opencode-go/deepseek-v4-flash"]!.variants).toEqual([
+      { id: "minimal", settings: { reasoningEffort: "minimal" } },
+      { id: "high", settings: { reasoningEffort: "high" } },
+    ]);
+  });
+
+  test("`none` is never offered: it has no wire effort and would silently no-op", () => {
+    const models = (buildClientConfig("opencode", ladderCtx()) as OpencodeGeneratedConfig)
+      .providers.opencodex!.models;
+    const ids = models["opencode-go/deepseek-v4-flash"]!.variants!.map(variant => variant.id);
+    expect(ids).not.toContain("none");
+    // A ladder consisting only of `none` leaves nothing selectable at all.
+    expect(models["opencode-go/none-only"]!.variants).toBeUndefined();
+  });
+
+  test("a model without a usable ladder carries no variants key at all", () => {
+    const models = (buildClientConfig("opencode", ladderCtx()) as OpencodeGeneratedConfig)
+      .providers.opencodex!.models;
+    expect(models["opencode-go/no-ladder"]!.variants).toBeUndefined();
+    expect(models["opencode-go/empty-ladder"]!.variants).toBeUndefined();
+  });
+
+  test("the legacy block stays variant-free instead of carrying fields opencode ignores", () => {
+    const config = buildClientConfig("opencode", ladderCtx()) as OpencodeGeneratedConfig;
+    for (const entry of Object.values(config.provider.opencodex!.models)) {
+      expect(entry).not.toHaveProperty("variants");
+      expect(entry).not.toHaveProperty("settings");
+    }
+  });
+
+  test("both blocks describe the same model set and the same connection", () => {
+    const config = buildClientConfig("opencode", ladderCtx()) as OpencodeGeneratedConfig;
+    const v1 = config.provider.opencodex!;
+    const v2 = config.providers.opencodex!;
+    expect(Object.keys(v2.models)).toEqual(Object.keys(v1.models));
+    expect(v2.settings).toEqual(v1.options);
+    // opencode V2 merges both blocks by provider and model id, so the same ids must not
+    // produce duplicate picker entries.
+    expect(v2.package).toBe("@opencode-ai/ai/providers/openai-compatible");
+    for (const [key, entry] of Object.entries(v2.models)) {
+      expect(entry.name).toBe(v1.models[key]!.name);
+      expect(entry.limit).toEqual(v1.models[key]!.limit);
+    }
+  });
+
+  test("a non-loopback bind moves admission to the header branch in both blocks", () => {
+    const config = buildClientConfig("opencode", ladderCtx(cfg({ hostname: "0.0.0.0" }))) as OpencodeGeneratedConfig;
+    for (const block of [config.provider.opencodex!.options, config.providers.opencodex!.settings]) {
+      expect(block.headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
+      expect(block.apiKey).toBeUndefined();
+    }
+  });
+});
+
 describe("Pi serializer (accept criterion 2)", () => {
   test("models is an array keyed by id, not a keyed object", () => {
     const provider = piConfig().providers.opencodex!;
@@ -527,7 +612,7 @@ describe("EXPORT_CLIENTS registry", () => {
    * a single byte for the two that already shipped — indentation and the one
    * trailing newline included — and only a fixed expected string proves that.
    */
-  test("opencode bytes are unchanged, to the last newline", () => {
+  test("opencode bytes carry both provider generations, to the last newline", () => {
     const built = buildClientConfigText("opencode", ctx({ config: cfg() }));
     expect(built.format).toBe("json");
     expect(built.text).toBe(`{
@@ -537,6 +622,42 @@ describe("EXPORT_CLIENTS registry", () => {
       "npm": "@ai-sdk/openai-compatible",
       "name": "OpenCodex",
       "options": {
+        "baseURL": "http://127.0.0.1:10100/v1",
+        "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+      },
+      "models": {
+        "anthropic/claude-opus-5": {
+          "name": "Claude Opus 5 (anthropic)",
+          "limit": {
+            "context": 200000,
+            "output": 32000
+          }
+        },
+        "custom/no-context": {
+          "name": "no-context (custom)"
+        },
+        "gpt-5.6-luna": {
+          "name": "gpt-5.6-luna (native)",
+          "limit": {
+            "context": 272000,
+            "output": 32000
+          }
+        },
+        "tiny/small-ctx": {
+          "name": "small-ctx (tiny)",
+          "limit": {
+            "context": 8000,
+            "output": 8000
+          }
+        }
+      }
+    }
+  },
+  "providers": {
+    "opencodex": {
+      "package": "@opencode-ai/ai/providers/openai-compatible",
+      "name": "OpenCodex",
+      "settings": {
         "baseURL": "http://127.0.0.1:10100/v1",
         "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
       },

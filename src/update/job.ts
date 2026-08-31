@@ -459,8 +459,8 @@ export function restartCommand(
   const startArgs = pinPort
     ? [launcher, "start", "--port", String(Math.trunc(port))]
     : [launcher, "start"];
-  // Default to the non-registering refresh: an update path reaching here has an already
-  // installed service, and `install` would demand elevation on Windows scheduler backends.
+  // Default to the in-place refresh: `install` always registers, while repair reuses a healthy
+  // Windows scheduler definition and re-registers only when the live definition is stale.
   const svcArgs = serviceInstalled ? [launcher, ...(serviceArgs ?? ["service", "repair"])] : startArgs;
   if (installer === "npm") {
     const bin = nodeBin();
@@ -1116,12 +1116,10 @@ async function restartAfterUpdate(
     const preServiceAllow = reclaimKillAllowlist();
     const freed = await waitFn(port, hostname, reclaimOptsFor(preServiceAllow));
     let skipServiceInstall = false;
-    // This skip existed because the refresh ran `ocx service install`, whose Windows
-    // scheduler path always reaches `schtasks /create` — elevation the GUI update worker
-    // (OCX_SERVICE=1) never has. `service repair` rewrites the wrapper assets and
-    // restarts the EXISTING task with no `/create`, so the reason no longer applies and
-    // skipping would leave the dashboard-triggered update — the most common Windows
-    // path — with a stale service it could have refreshed.
+    // This skip existed because refresh ran `ocx service install`, whose Windows path always
+    // registers. `service repair` normally reuses the live task and can refresh a stale
+    // definition through its guarded create/elevation path, so the install-only skip no longer
+    // applies and would leave the common dashboard update with stale service assets.
     //
     // Only a caller that still passes install argv keeps the old behavior.
     const refreshRegisters = (svcArgs ?? []).includes("install");
@@ -1161,9 +1159,10 @@ async function restartAfterUpdate(
         const result = run(job, cmd.bin, cmd.args);
         serviceOk = result.status === 0;
         if (!serviceOk) {
-          // The refresh that just failed was `ocx service repair` (serviceReinstallArgs),
-          // which needs no elevation because it never calls `schtasks /create`. Advising
-          // `install` here would send the user to re-registration — a UAC prompt on
+          // The refresh that just failed was `ocx service repair` (serviceReinstallArgs).
+          // It normally reuses a healthy registration, but a stale definition may have tried
+          // guarded re-registration/elevation. Advising `install` here would unconditionally
+          // send the user to re-registration — a UAC prompt on
           // Windows and a possible WinSW-to-scheduler backend switch — to fix a service
           // that is already registered. Point at the same command that failed so its
           // output explains why, on every platform.

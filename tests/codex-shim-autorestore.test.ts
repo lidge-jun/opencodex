@@ -41,6 +41,11 @@ describe("Codex shim CLI auto-restore policy", () => {
       expect(skipsCodexShimAutoRestore("codex-shim", ["codex-shim", subcommand])).toBe(true);
     }
     expect(skipsCodexShimAutoRestore("codex-shim", ["codex-shim", "status"])).toBe(false);
+    for (const action of ["check", "future-action", "bad", undefined]) {
+      const args = ["system", "codex-cli-update", ...(action ? [action] : [])];
+      expect(skipsCodexShimAutoRestore("system", args)).toBe(true);
+    }
+    expect(skipsCodexShimAutoRestore("system", ["system", "update", "check"])).toBe(false);
     expect(skipsCodexShimAutoRestore("status", ["status"])).toBe(false);
   });
 
@@ -123,6 +128,53 @@ describe("Codex shim CLI auto-restore policy", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("an actionable shim replacement stays byte-identical for the updater inspection namespace", async () => {
+    if (process.platform === "win32") return;
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-update-inspection-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-update-inspection-home-"));
+    const wrapper = join(binDir, "codex");
+    const backup = join(binDir, "codex.opencodex-real");
+    const statePath = join(home, "codex-shim.json");
+    const replacement = "#!/bin/sh\necho externally updated codex\n";
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    try {
+      process.env.PATH = binDir;
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(wrapper, "#!/bin/sh\necho original codex\n", "utf8");
+      chmodSync(wrapper, 0o755);
+      expect(installCodexShim().installed).toBe(true);
+      writeFileSync(wrapper, replacement, "utf8");
+      chmodSync(wrapper, 0o755);
+      await Bun.sleep(120);
+      const beforeWrapper = readFileSync(wrapper);
+      const beforeBackup = readFileSync(backup);
+      const beforeState = readFileSync(statePath);
+
+      const result = spawnSync(process.execPath, [
+        join(import.meta.dir, "..", "src", "cli", "index.ts"),
+        "system", "codex-cli-update", "check", "--json",
+      ], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: binDir, OPENCODEX_HOME: home },
+      });
+
+      expect(result.status).toBe(0);
+      expect(() => JSON.parse(result.stdout)).not.toThrow();
+      expect(result.stderr).not.toContain("automatic repair after Codex update");
+      expect(readFileSync(wrapper)).toEqual(beforeWrapper);
+      expect(readFileSync(backup)).toEqual(beforeBackup);
+      expect(readFileSync(statePath)).toEqual(beforeState);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   test("shim replaced -> next ocx command auto-restores and warns", async () => {
     if (process.platform === "win32") return;

@@ -2087,6 +2087,156 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     }
   });
 
+  test("provider and model aliases label picker rows without changing routing slugs", async () => {
+    clearModelCache("google-antigravity");
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "google-antigravity",
+        providers: {
+          "google-antigravity": {
+            baseUrl: "https://example.invalid/v1",
+            adapter: "openai-chat",
+            liveModels: false,
+            models: ["gemini-3.7-flash"],
+            alias: "ga",
+            modelAliases: { "gemini-3.7-flash": "g3f" },
+          },
+        },
+      });
+      const row = buildCatalogEntries(nativeTemplate(), [], models)
+        .find(entry => entry.slug === "google-antigravity/gemini-3.7-flash");
+
+      expect(row?.display_name).toBe("ga/g3f");
+      expect(row?.slug).toBe("google-antigravity/gemini-3.7-flash");
+    } finally {
+      clearModelCache("google-antigravity");
+    }
+  });
+
+  test("the issue reproduction uses the effective model alias for the picker label", async () => {
+    clearModelCache("google-antigravity");
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "google-antigravity",
+        providers: {
+          "google-antigravity": {
+            adapter: "google",
+            baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+            authMode: "oauth",
+            liveModels: false,
+            models: ["gemini-3.7-flash"],
+            modelAliases: { "gemini-3.7-flash": "gemini-3.7" },
+          },
+        },
+      });
+      const row = buildCatalogEntries(nativeTemplate(), [], models)
+        .find(entry => entry.slug === "google-antigravity/gemini-3.7-flash");
+
+      expect(row?.display_name).toBe("google-antigravity/gemini-3.7");
+      expect(row?.slug).toBe("google-antigravity/gemini-3.7-flash");
+    } finally {
+      clearModelCache("google-antigravity");
+    }
+  });
+
+  test("an explicit custom displayName wins over an effective model alias", async () => {
+    clearModelCache("google-antigravity");
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "google-antigravity",
+        providers: {
+          "google-antigravity": {
+            adapter: "google",
+            baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+            authMode: "oauth",
+            liveModels: false,
+            models: ["gemini-3.7-flash"],
+            modelAliases: { "gemini-3.7-flash": "gemini-3.7" },
+          },
+        },
+        customModels: [{
+          id: "custom-gemini",
+          provider: "google-antigravity",
+          modelId: "gemini-3.7-flash",
+          displayName: "My Gemini",
+          addedAt: "2026-01-01T00:00:00.000Z",
+        }],
+      });
+      const row = buildCatalogEntries(nativeTemplate(), [], models)
+        .find(entry => entry.slug === "google-antigravity/gemini-3.7-flash");
+
+      expect(row?.display_name).toBe("My Gemini");
+      expect(row?.slug).toBe("google-antigravity/gemini-3.7-flash");
+    } finally {
+      clearModelCache("google-antigravity");
+    }
+  });
+
+  test("a case-folded live model id keeps its configured picker alias", async () => {
+    clearModelCache("mixed-case-live");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [{ id: "LIVE-Model" }, { id: "MODEL" }, { id: "model" }],
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "mixed-case-live",
+        providers: {
+          "mixed-case-live": {
+            adapter: "openai-chat",
+            baseUrl: "https://example.invalid/v1",
+            authMode: "key",
+            apiKey: "test-key",
+            liveModels: true,
+            modelAliases: { "live-model": "short", "mOdEl": "ambiguous" },
+          },
+        },
+      });
+      const entries = buildCatalogEntries(nativeTemplate(), [], models);
+      const row = entries.find(entry => entry.slug === "mixed-case-live/LIVE-Model");
+
+      expect(row?.display_name).toBe("mixed-case-live/short");
+      expect(row?.slug).toBe("mixed-case-live/LIVE-Model");
+      expect(entries.find(entry => entry.slug === "mixed-case-live/MODEL")?.display_name)
+        .toBe("mixed-case-live/MODEL");
+      expect(entries.find(entry => entry.slug === "mixed-case-live/model")?.display_name)
+        .toBe("mixed-case-live/model");
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("mixed-case-live");
+    }
+  });
+
+  test("built-in model aliases label picker rows without changing routing slugs", async () => {
+    clearModelCache("builtin-alias");
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "builtin-alias",
+        providers: {
+          "builtin-alias": {
+            adapter: "openai-chat",
+            baseUrl: "https://example.invalid/v1",
+            liveModels: false,
+            defaultAliases: true,
+            models: ["grok-4.6"],
+          },
+        },
+      });
+      const row = buildCatalogEntries(nativeTemplate(), [], models)
+        .find(entry => entry.slug === "builtin-alias/grok-4.6");
+
+      expect(row?.display_name).toBe("builtin-alias/grok");
+      expect(row?.slug).toBe("builtin-alias/grok-4.6");
+    } finally {
+      clearModelCache("builtin-alias");
+    }
+  });
+
   test("a custom row clamps its soft budget to the provider max-input ceiling", async () => {
     const models = await gatherRoutedModels({
       port: 10100,

@@ -42,6 +42,7 @@ import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryT
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
+import { effectiveModelAliases } from "../../providers/default-aliases";
 import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
@@ -2164,6 +2165,21 @@ async function gatherRoutedModelsUncached(
   // Custom rows override discovered rows that encode to the same Codex-facing slug.
   const customKeys = new Set(customModels.map(c => routedSlug(c.provider, c.id)));
   const deduped = all.filter(m => !customKeys.has(routedSlug(m.provider, m.id)));
+  const models = [...deduped, ...customModels];
+  // ponytail: catalog-scale scan; index ids by provider if catalog growth makes this measurable.
+  const aliasDisplayNames = new Map(activeProviders.flatMap(({ name, provider }) => {
+    const providerModels = models.filter(model => model.provider === name);
+    const aliases = [...effectiveModelAliases(config, provider, providerModels.map(model => model.id))];
+    return aliases.flatMap(([id, { alias }]) => {
+      const exact = providerModels.filter(model => model.id === id);
+      const matches = exact.length > 0
+        ? exact
+        : providerModels.filter(model => model.id.toLowerCase() === id.toLowerCase());
+      return matches.length === 1
+        ? [[`${name}/${matches[0]!.id}`, `${provider.alias || name}/${alias}`] as const]
+        : [];
+    });
+  }));
   const providerModelOutcomes = providerResults.map(result => (
     result.outcome.provider === OPENAI_API_PROVIDER_ID
       && capture.openAiApiPolicy.state === "captured"
@@ -2172,7 +2188,10 @@ async function gatherRoutedModelsUncached(
       : result.outcome
   ));
   return {
-    models: [...deduped, ...customModels],
+    models: models.map(model => {
+      const displayName = aliasDisplayNames.get(`${model.provider}/${model.id}`);
+      return displayName && !model.displayName ? { ...model, displayName } : model;
+    }),
     comboOmissions: localOmissions,
     providerAuthOutcomes: localProviderAuthOutcomes,
     providerModelOutcomes,

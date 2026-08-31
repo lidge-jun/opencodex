@@ -73,6 +73,18 @@ describe("capability table is a leaf data module", () => {
     expect(findCommand("capabilities")?.name).toBe("capabilities");
     expect(CAPABILITIES.some(c => c.command[0] === "capabilities")).toBe(true);
   });
+
+  test("the check-only Codex CLI updater is declared as a local read capability", () => {
+    const cap = CAPABILITIES.find(c => c.command.join(" ") === "system codex-cli-update check");
+    expect(cap).toBeDefined();
+    expect(cap?.routes).toEqual([]);
+    expect(cap?.mutates).toBe(false);
+    expect(cap?.json).toBe("envelope");
+    expect(cap?.flags.some(flag => flag.name === "--json")).toBe(true);
+    expect(cap?.summary).toContain("configured Codex CLI candidate");
+    expect(cap?.details.join(" ")).toContain("does not attest or admit a selected runtime");
+    expect(cap?.details.join(" ")).not.toContain("dry-run");
+  });
 });
 
 describe("ocx capabilities output", () => {

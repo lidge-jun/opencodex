@@ -238,6 +238,42 @@ export function classifyIntegration(input: {
     return { state: "unsafe", reason: "blocked-container" };
   }
   if (!hasOurFragments(input.parsed, input.contribution)) return { state: "absent" };
+
+  /*
+   * Fragments the desired contribution carries beyond the paths this record names. Both
+   * states appear whenever a client gains a second owned block:
+   *
+   *   - occupied by a value we did not write -> refuse. A refresh merges the WHOLE
+   *     contribution, so without this check applying would replace a block the user wrote
+   *     themselves and report success.
+   *   - empty -> our own block is missing, because the record predates it. Report drift so
+   *     a refresh adds it. Without this the file reads `current` forever and the second
+   *     block never arrives, which is exactly what an older installation hits on upgrade.
+   *
+   * A byte-identical value is ours in substance: adopt it instead of dead-ending a
+   * hand-merged config on a conflict the user can only resolve by deleting our own block.
+   */
+  const recordedPaths = new Set((input.record?.fragmentPaths ?? []).map(path => path.join("\u0000")));
+  let addedPathMissing = false;
+  for (const fragment of input.contribution.fragments) {
+    if (recordedPaths.has(fragment.path.join("\u0000"))) continue;
+    const observed = readPath(input.parsed, fragment.path);
+    if (observed === undefined) {
+      addedPathMissing = true;
+      continue;
+    }
+    const one = (value: unknown): string => fingerprint(canonicalContribution({
+      clientId: (input.clientId ?? input.record?.clientId) as IntegrationClientId,
+      fragments: [{ path: fragment.path, value }],
+    }));
+    if (one(observed) !== one(fragment.value)) return { state: "conflict", reason: "unowned-key" };
+  }
+  /*
+   * No record: whatever occupies our paths is not ours to touch. A byte-identical value
+   * would be ours in substance, but `stale` without a record is not actionable — the writer
+   * reads `createdContainers` off the record to decide what it may prune, so adopting a
+   * hand-merged block needs an apply path that creates one first. Refuse, exactly as before.
+   */
   if (!input.record) return { state: "conflict", reason: "unowned-key" };
   /*
    * A record proves ownership of ONE file. Change HOME, XDG_CONFIG_HOME,
@@ -286,6 +322,12 @@ export function classifyIntegration(input: {
     }
     return { state: "stale" };
   }
+  /*
+   * Checked after everything else that could refuse: an owned fragment that no longer
+   * matches, or a sibling edit in a format that cannot be rewritten safely, still wins.
+   * What is left is a block we own on paper and are merely missing on disk.
+   */
+  if (addedPathMissing) return { state: "stale" };
   const desiredFingerprint = typeof input.record.semanticBlockFingerprint === "string"
     ? fingerprint(semanticContribution(input.contribution))
     : fingerprint(canonicalContribution(input.contribution));

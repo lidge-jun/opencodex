@@ -14,15 +14,40 @@ export const ANTHROPIC_PARENT_ENV_SLOTS = [
 ] as const;
 
 export type AnthropicParentEnvSlot = typeof ANTHROPIC_PARENT_ENV_SLOTS[number];
+export type CodexCliVersionManagerRootEnvSlot = typeof CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS[number];
+
+type CodexCliVersionManagerRoots = Readonly<Partial<Record<CodexCliVersionManagerRootEnvSlot, string>>>;
 
 export type TrustedNodeLaunchContext = {
   anthropicEnvSlots: readonly AnthropicParentEnvSlot[];
+  codexCliInspectionEnv: Readonly<{
+    codexCliPath: string | null;
+    path: string | null;
+    pathExt: string | null;
+    managerRoots: CodexCliVersionManagerRoots | null;
+    configDir: string;
+  }> | null;
 };
 
 let trustedContext: TrustedNodeLaunchContext | null = null;
 
 function isLaunchProof(value: string): boolean {
   return /^[A-Za-z0-9_-]{43}$/.test(value);
+}
+
+function parseVersionManagerRoots(value: unknown): CodexCliVersionManagerRoots | null | undefined {
+  // Missing means an older launcher. Preserve compatibility for unrelated
+  // commands, but updater inspection treats the incomplete snapshot as
+  // untrusted and fails closed.
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const allowed = new Set<string>(CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS);
+  const entries = Object.entries(value);
+  if (entries.length > allowed.size || entries.some(([name, root]) =>
+    !allowed.has(name) || typeof root !== "string" || root.length === 0 || root.length > 32 * 1024)) {
+    return undefined;
+  }
+  return Object.freeze(Object.fromEntries(entries)) as CodexCliVersionManagerRoots;
 }
 
 /** Consume the internal proof before normal CLI argument parsing. */
@@ -45,7 +70,7 @@ export function initializeNodeLauncherContext(
   delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
   trustedContext = null;
 
-  if (proofArgs.length !== 1 || !raw || raw.length > 2048) return null;
+  if (proofArgs.length !== 1 || !raw || raw.length > 64 * 1024) return null;
   const proof = proofArgs[0]!;
   if (!isLaunchProof(proof)) return null;
 
@@ -54,6 +79,7 @@ export function initializeNodeLauncherContext(
       version?: unknown;
       proof?: unknown;
       anthropicEnvSlots?: unknown;
+      codexCliInspectionEnv?: unknown;
     };
     if (parsed.version !== 1 || parsed.proof !== proof || !Array.isArray(parsed.anthropicEnvSlots)) {
       return null;
@@ -65,7 +91,31 @@ export function initializeNodeLauncherContext(
     if (slots.length !== parsed.anthropicEnvSlots.length || new Set(slots).size !== slots.length) {
       return null;
     }
-    trustedContext = { anthropicEnvSlots: slots };
+    const inspection = parsed.codexCliInspectionEnv;
+    const managerRoots = inspection && typeof inspection === "object" && !Array.isArray(inspection)
+      ? parseVersionManagerRoots((inspection as Record<string, unknown>).managerRoots)
+      : null;
+    const codexCliInspectionEnv = inspection === null || inspection === undefined
+      ? null
+      : inspection && typeof inspection === "object" && !Array.isArray(inspection)
+        && ["codexCliPath", "path", "pathExt"].every(key => {
+          const value = (inspection as Record<string, unknown>)[key];
+          return value === null || typeof value === "string";
+        })
+        && typeof (inspection as Record<string, unknown>).configDir === "string"
+        && (inspection as Record<string, string>).configDir.length > 0
+        && (inspection as Record<string, string>).configDir.length <= 32 * 1024
+        && managerRoots !== undefined
+        ? Object.freeze({
+            codexCliPath: (inspection as Record<string, string | null>).codexCliPath ?? null,
+            path: (inspection as Record<string, string | null>).path ?? null,
+            pathExt: (inspection as Record<string, string | null>).pathExt ?? null,
+            managerRoots,
+            configDir: (inspection as Record<string, string>).configDir,
+          })
+        : undefined;
+    if (codexCliInspectionEnv === undefined) return null;
+    trustedContext = { anthropicEnvSlots: slots, codexCliInspectionEnv };
     return trustedContext;
   } catch {
     return null;
@@ -75,3 +125,4 @@ export function initializeNodeLauncherContext(
 export function trustedNodeLauncherContext(): TrustedNodeLaunchContext | null {
   return trustedContext;
 }
+import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../update/codex-cli-update-launch-policy.mjs";

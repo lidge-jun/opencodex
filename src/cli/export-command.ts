@@ -80,28 +80,24 @@ function hasContextLimit(model: ExportModel): boolean {
  *
  * `opencodeCatalogFromProxyRows` owns the visibility rules (drop `disabled`, drop dupes,
  * drop native under Codex Direct) — the export core does none of that, so a row filtered
- * here is the only thing keeping a disabled model out of a client's picker. Modalities are
- * re-joined by `namespaced` because the launcher's catalog type does not carry them.
+ * here is the only thing keeping a disabled model out of a client's picker. It also carries
+ * the effort ladder, so the ladder a client receives comes from the same filtered, deduped
+ * row as the model itself: a second lookup over the raw rows would let a hidden or disabled
+ * duplicate donate its ladder to the visible entry.
+ *
+ * Only modalities are re-joined by `namespaced`, because the catalog type does not carry them.
  */
 export function exportModelsFromProxyRows(
   rows: readonly ExportProxyModelRow[],
   config: OcxConfig,
 ): ExportModel[] {
-  const metadata = new Map<string, Pick<ExportModel, "inputModalities" | "reasoningEfforts" | "defaultReasoningEffort">>();
+  const modalities = new Map<string, string[]>();
   for (const row of rows) {
     const namespaced = row.namespaced?.trim();
-    if (!namespaced || metadata.has(namespaced)) continue;
-    metadata.set(namespaced, {
-      ...(Array.isArray(row.inputModalities) && row.inputModalities.length > 0
-        ? { inputModalities: [...row.inputModalities] }
-        : {}),
-      ...(Array.isArray(row.reasoningEfforts) && row.reasoningEfforts.length > 0
-        ? { reasoningEfforts: [...row.reasoningEfforts] }
-        : {}),
-      ...(typeof row.defaultReasoningEffort === "string" && row.defaultReasoningEffort.length > 0
-        ? { defaultReasoningEffort: row.defaultReasoningEffort }
-        : {}),
-    });
+    if (!namespaced || modalities.has(namespaced)) continue;
+    if (Array.isArray(row.inputModalities) && row.inputModalities.length > 0) {
+      modalities.set(namespaced, [...row.inputModalities]);
+    }
   }
   return opencodeCatalogFromProxyRows(rows, config).map(entry => {
     const model: ExportModel = {
@@ -112,7 +108,12 @@ export function exportModelsFromProxyRows(
     if (entry.native) model.native = true;
     if (entry.displayName) model.displayName = entry.displayName;
     if (entry.contextWindow !== undefined) model.contextWindow = entry.contextWindow;
-    Object.assign(model, metadata.get(entry.namespaced));
+    if (entry.reasoningEfforts && entry.reasoningEfforts.length > 0) {
+      model.reasoningEfforts = [...entry.reasoningEfforts];
+    }
+    if (entry.defaultReasoningEffort) model.defaultReasoningEffort = entry.defaultReasoningEffort;
+    const input = modalities.get(entry.namespaced);
+    if (input) model.inputModalities = [...input];
     return model;
   });
 }
@@ -203,7 +204,7 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
       "",
       ...(out !== undefined ? [`Wrote ${out}`] : []),
       `Destination: ${spec.destination(process.env)}`,
-      "Merge this provider block into that file; do not replace it.",
+      "Merge this generated configuration into that file; do not replace it.",
       `Before launching: ${spec.exportHint}`,
       `${models.length} model${models.length === 1 ? "" : "s"}; ${degraded} omit context limits (the client applies its own defaults).`,
     ]);

@@ -827,6 +827,7 @@ describe("Cursor blob handshake", () => {
     expect(tool.case).toBe("mcpToolCall");
     if (tool.case === "mcpToolCall") {
       expect(tool.value.args?.toolCallId).toBe("ocxc1e_");
+      expect(tool.value.args?.toolName).toBe("ocx_client_read_file");
       expect(tool.value.result?.result.case).toBe("success");
       if (tool.value.result?.result.case === "success") {
         const content = tool.value.result.result.value.content[0]?.content;

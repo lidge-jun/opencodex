@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, inspectCodexShimBackingForCommand, installCodexShim, isLocalAbsoluteInspectionPath, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../src/codex/shim";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
@@ -2011,7 +2011,8 @@ describe("version-manager shim destruction (#2412)", () => {
     expect(isVersionManagerOwnedCodexPath("/home/u/.asdf/installs/codex/1.0/bin/codex")).toBe(true);
     expect(isVersionManagerOwnedCodexPath("/home/u/.asdf/shims/codex")).toBe(true);
     expect(isVersionManagerOwnedCodexPath("/home/u/.volta/bin/codex")).toBe(true);
-    expect(isVersionManagerOwnedCodexPath("C:\\Users\\u\\.volta\\bin\\codex.cmd")).toBe(true);
+    expect(isVersionManagerOwnedCodexPath("C:\\Users\\u\\.volta\\bin\\codex.cmd", "win32")).toBe(true);
+    expect(isVersionManagerOwnedCodexPath("/opt/plain\\.volta\\bin/codex", "linux")).toBe(false);
     expect(isVersionManagerOwnedCodexPath("/usr/local/bin/codex")).toBe(false);
     expect(isVersionManagerOwnedCodexPath("/home/u/.npm-global/bin/codex")).toBe(false);
     expect(isVersionManagerOwnedCodexPath("/opt/homebrew/bin/codex")).toBe(false);
@@ -2030,4 +2031,108 @@ describe("version-manager shim destruction (#2412)", () => {
       expect(result.message).toContain("backup");
     });
   });
+});
+
+describe("Codex shim read-only backing inspection", () => {
+  test("local inspection paths reject Windows remote and device namespaces", () => {
+    expect(isLocalAbsoluteInspectionPath("/usr/local/bin/codex", "linux")).toBe(true);
+    expect(isLocalAbsoluteInspectionPath("C:\\OpenCodex\\codex.cmd", "win32")).toBe(true);
+    for (const path of [
+      "\\Windows\\codex.cmd",
+      "/Windows/codex.cmd",
+      "\\\\server\\share\\codex.cmd",
+      "//server/share/codex.cmd",
+      "\\\\?\\C:\\OpenCodex\\codex.cmd",
+      "//?/C:/OpenCodex/codex.cmd",
+      "\\\\.\\PhysicalDrive0",
+    ]) {
+      expect(isLocalAbsoluteInspectionPath(path, "win32")).toBe(false);
+    }
+    expect(isLocalAbsoluteInspectionPath("codex.cmd", "win32")).toBe(false);
+  });
+
+  test("Windows backing inspection fails closed before pathname access on every host", () => {
+    expect(inspectCodexShimBackingForCommand(
+      "C:\\remote-or-local\\codex.cmd",
+      "win32",
+      "C:\\OpenCodex",
+    )).toEqual({
+      status: "unknown",
+      reason: "binding_unavailable",
+    });
+  });
+
+  test.skipIf(process.platform === "win32")("selects only the recorded wrapper backing and fails closed on preserve-only state", () => {
+    withInstalledShim(({ wrappers, backups, statePath }) => {
+      expect(inspectCodexShimBackingForCommand(wrappers[0]!)).toMatchObject({
+        status: "matched",
+        selectedRole: "wrapper",
+        backingPath: backups[0]!,
+        backingKind: "backup",
+      });
+      expect(inspectCodexShimBackingForCommand(backups[0]!)).toMatchObject({
+        status: "matched",
+        selectedRole: "backing",
+        backingPath: backups[0]!,
+        backingKind: "backup",
+      });
+
+      const state = JSON.parse(readFileSync(statePath, "utf8")) as { wrappers: Array<Record<string, unknown>> };
+      state.wrappers[0]!.preserveOnly = true;
+      writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+      expect(inspectCodexShimBackingForCommand(wrappers[0]!)).toEqual({
+        status: "unknown",
+        reason: "preserve_only",
+      });
+    });
+  });
+
+  test.skipIf(process.platform === "win32")("matches hard-link aliases of a recorded wrapper or backing by file identity", () => {
+    withInstalledShim(({ wrappers, backups }) => {
+      const wrapperAlias = `${wrappers[0]!}.alias`;
+      const backingAlias = `${backups[0]!}.alias`;
+      linkSync(wrappers[0]!, wrapperAlias);
+      linkSync(backups[0]!, backingAlias);
+      expect(inspectCodexShimBackingForCommand(wrapperAlias)).toMatchObject({
+        status: "matched",
+        selectedRole: "wrapper",
+        backingPath: backups[0]!,
+      });
+      expect(inspectCodexShimBackingForCommand(backingAlias)).toMatchObject({
+        status: "matched",
+        selectedRole: "backing",
+        backingPath: backups[0]!,
+      });
+    });
+  });
+
+  test.skipIf(process.platform === "win32")("distinguishes absent state from invalid state", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-inspect-invalid-"));
+    const oldHome = process.env.OPENCODEX_HOME;
+    try {
+      process.env.OPENCODEX_HOME = home;
+      expect(inspectCodexShimBackingForCommand(join(home, "codex"))).toEqual({ status: "not-tracked" });
+      writeFileSync(join(home, "codex-shim.json"), "{broken", "utf8");
+      expect(inspectCodexShimBackingForCommand(join(home, "codex"))).toEqual({
+        status: "unknown",
+        reason: "state_invalid",
+      });
+    } finally {
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("fails closed when the recorded backing aliases the wrapper", () => {
+    withInstalledShim(({ wrappers, backups }) => {
+      rmSync(backups[0]!);
+      linkSync(wrappers[0]!, backups[0]!);
+      expect(inspectCodexShimBackingForCommand(wrappers[0]!)).toEqual({
+        status: "unknown",
+        reason: "ambiguous_match",
+      });
+    });
+  });
+
 });

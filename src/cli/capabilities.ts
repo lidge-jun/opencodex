@@ -419,6 +419,20 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["system", "codex-cli-update", "check"],
+    summary: "Inspect a configured Codex CLI candidate and its ownership provenance.",
+    routes: [],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the redacted provenance report as JSON." }],
+    mutates: false,
+    json: "envelope",
+    details: [
+      "Proof-bound published-launcher context authenticates the configured candidate snapshot, not successful Codex execution; this check does not attest or admit a selected runtime.",
+      "On Windows this first slice performs no candidate or configuration filesystem I/O: only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels; every other Windows candidate fails closed.",
+      "Makes no package-registry request.",
+      "Does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.",
+    ],
+  },
+  {
     command: ["system", "codex-restart"],
     summary: "Restart the Codex app-server.",
     routes: [{ method: "POST", path: "/api/system/codex-restart" }],

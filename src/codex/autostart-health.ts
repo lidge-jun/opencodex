@@ -90,9 +90,9 @@ export function deriveStartupHealth(inputs: StartupHealthInputs): StartupHealth 
     : inputs.routingKind === "custom-local" || inputs.routingKind === "unknown"
       ? COMMANDS.restoreNative
     : inputs.serviceSupported
-      // An already-registered service is refreshed in place: `repair` rewrites its assets
-      // and restarts it without re-registering, so it needs no elevation on Windows and
-      // cannot switch a WinSW install to Task Scheduler the way `install` would. Only a
+      // An already-registered service is refreshed in place: `repair` reuses healthy Windows
+      // scheduler definitions, while stale ones may be re-registered and require elevation.
+      // It still cannot switch a WinSW install to Task Scheduler the way `install` would. Only a
       // genuinely absent (or conflicting, which needs uninstall-then-install) service
       // gets the registering command.
       ? (inputs.serviceInstalled && !inputs.serviceConflict ? COMMANDS.repairService : COMMANDS.installService)

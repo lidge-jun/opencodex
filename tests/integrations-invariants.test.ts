@@ -250,30 +250,37 @@ describe("a container we would have to replace is refused, not overwritten", () 
    * our fragment path expects an object lost it to an apply that reported
    * success. Per client, because each one's path shape differs.
    */
-  const NON_OBJECT: Partial<Record<IntegrationClientId, string>> = {
-    pi: '{\n  "providers": ["user-value"]\n}\n',
-    opencode: '{\n  "provider": ["user-value"]\n}\n',
-    hermes: "providers:\n  - user-value\n",
-    kimi: 'models = ["user-value"]\n',
+  const NON_OBJECT: Partial<Record<IntegrationClientId, string[]>> = {
+    pi: ['{\n  "providers": ["user-value"]\n}\n'],
+    // Two containers to check: opencode owns both blocks, so a user value under either
+    // one has to be refused rather than replaced on the way to our leaf.
+    opencode: [
+      '{\n  "provider": ["user-value"]\n}\n',
+      '{\n  "providers": ["user-value"]\n}\n',
+    ],
+    hermes: ["providers:\n  - user-value\n"],
+    kimi: ['models = ["user-value"]\n'],
   };
 
-  for (const [clientId, seed] of Object.entries(NON_OBJECT) as [IntegrationClientId, string][]) {
-    test(`${clientId}: apply refuses and leaves the user's value untouched`, () => {
-      const configPath = installClient(clientId);
-      writeFileSync(configPath, seed);
+  for (const [clientId, seeds] of Object.entries(NON_OBJECT) as [IntegrationClientId, string[]][]) {
+    for (const [index, seed] of seeds.entries()) {
+      test(`${clientId}: apply refuses and leaves the user's value untouched (${index + 1})`, () => {
+        const configPath = installClient(clientId);
+        writeFileSync(configPath, seed);
 
-      const result = applyIntegration({
-        clientId, models: MODELS, config: CONFIG, port: 10100,
-        env: TEST_ENV, home, store,
+        const result = applyIntegration({
+          clientId, models: MODELS, config: CONFIG, port: 10100,
+          env: TEST_ENV, home, store,
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.reason).toBe("unsafe");
+        // The bytes are exactly as the user left them — not restored from a
+        // snapshot afterwards, never written in the first place.
+        expect(readFileSync(configPath, "utf8")).toBe(seed);
+        expect(store.listOperations()).toHaveLength(0);
       });
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.reason).toBe("unsafe");
-      // The bytes are exactly as the user left them — not restored from a
-      // snapshot afterwards, never written in the first place.
-      expect(readFileSync(configPath, "utf8")).toBe(seed);
-      expect(store.listOperations()).toHaveLength(0);
-    });
+    }
   }
 
   test("openclaw: a collision in the NESTED container is refused too", () => {

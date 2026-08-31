@@ -23,6 +23,10 @@ import {
 } from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 import { bootRestoreProbe, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
+import {
+  CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
+  isCodexCliUpdateInspectionArgv,
+} from "../src/update/codex-cli-update-launch-policy.mjs";
 
 const PKG = "@bitkyc08/opencodex";
 const require = createRequire(import.meta.url);
@@ -155,10 +159,9 @@ function runNpmSelfUpdate() {
     process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
   );
   /**
-   * Refresh the existing service without re-registering it. `service repair` discovers
-   * the installed backend itself and, on Windows scheduler installs, rewrites the wrapper
-   * assets and restarts the existing task without `schtasks /create` — the elevation a
-   * non-admin `ocx update` does not have.
+   * Refresh the existing service in place. `service repair` discovers the installed backend;
+   * healthy Windows scheduler registrations avoid `schtasks /create`, while stale definitions
+   * may be re-registered and require elevation.
    */
   function serviceRefreshArgs() {
     return [launcher, "service", "repair"];
@@ -290,7 +293,8 @@ function runNpmSelfUpdate() {
         }
       }
       if (needDirectStart) {
-        // A repair needs no elevation, but it can still fail — or exit 0 while leaving
+        // Repair normally avoids elevation for a healthy registration, but a stale Windows
+        // scheduler definition can require it. It can also fail — or exit 0 while leaving
         // a non-viable manager. Fall back to a direct detached proxy start so the
         // update never leaves the user without a running proxy.
         console.warn(
@@ -468,7 +472,7 @@ function fail(msg) {
   process.exit(1);
 }
 
-function resolveBun() {
+function resolveBun({ allowInstall = true } = {}) {
   // Keep direct npm-launcher starts aligned with durable service/shim installs:
   // a valid explicit runtime must win even when the bundled dependency exists.
   const override = process.env[BUN_OVERRIDE_ENV]?.trim();
@@ -493,7 +497,7 @@ function resolveBun() {
   // Lazy fallback: --ignore-scripts (or a failed postinstall) leaves the
   // ~450-byte placeholder stub. Run the bun package's own installer once.
   const installJs = join(bunDir, "install.js");
-  if (existsSync(installJs)) {
+  if (allowInstall && existsSync(installJs)) {
     const r = spawnSync(process.execPath, [installJs], { stdio: "inherit" });
     if (r.status === 0) bin = findBunBinary(bunDir);
   }
@@ -512,6 +516,12 @@ if (updateHelpRequested) {
   process.exit(0);
 }
 
+const codexCliUpdateInspection = isCodexCliUpdateInspectionArgv(process.argv);
+if (codexCliUpdateInspection && typeof process.versions.bun === "string") {
+  console.error("opencodex: codex-cli-update inspection must use the published Node launcher.");
+  process.exit(1);
+}
+
 if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstall()) {
   runNpmSelfUpdate();
 }
@@ -519,7 +529,7 @@ if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstal
 // #1849 boot probe: a prior update that lost power (or double-faulted) mid-swap leaves a
 // backup sibling and a broken live tree. Restore before anything tries to run from the
 // broken tree; reap stale backups once the live tree verifies healthy.
-if (isNodeModulesInstall() && !isBunGlobalInstall()) {
+if (!codexCliUpdateInspection && isNodeModulesInstall() && !isBunGlobalInstall()) {
   try {
     const probe = bootRestoreProbe(resolve(here, ".."));
     if (probe.action === "restored") {
@@ -530,7 +540,7 @@ if (isNodeModulesInstall() && !isBunGlobalInstall()) {
   } catch { /* the probe must never block launch */ }
 }
 
-const bunRuntime = resolveBun();
+const bunRuntime = resolveBun({ allowInstall: !codexCliUpdateInspection });
 const bun = bunRuntime.path;
 
 // Run the Bun child asynchronously and FORWARD termination signals to it, then wait
@@ -554,12 +564,61 @@ const bun = bunRuntime.path;
 // interpolation and provider settings legitimately read the project environment.
 const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
   .filter(name => typeof process.env[name] === "string" && process.env[name] !== "");
+// A configured CODEX_CLI_PATH may legitimately be cwd-relative (`./tools/codex`), which the
+// ordinary runtime resolver accepts. Inspection only trusts absolute local paths, so capture
+// the absolute form here, in the launcher, while the original cwd is still authoritative;
+// resolving it later would silently reinterpret it against a different working directory.
+//
+// A bare command with no separator (`codex`) is NOT a relative path: the runtime resolver
+// deliberately hands those to executable lookup along PATH. Rewriting it to `<cwd>/codex`
+// would make the inspector treat it as an explicit path and stop searching PATH entirely.
+const configuredCodexCliPath = typeof process.env.CODEX_CLI_PATH === "string" && process.env.CODEX_CLI_PATH !== ""
+  ? process.env.CODEX_CLI_PATH
+  : null;
+const preBunCodexCliPath = configuredCodexCliPath !== null
+    && (configuredCodexCliPath.includes("/") || configuredCodexCliPath.includes("\\") || /^[A-Za-z]:/.test(configuredCodexCliPath))
+  ? resolve(configuredCodexCliPath)
+  : configuredCodexCliPath;
+const preBunPath = typeof process.env.PATH === "string" ? process.env.PATH : null;
+const preBunPathExt = typeof process.env.PATHEXT === "string" ? process.env.PATHEXT : null;
+const preBunCodexCliManagerRoots = Object.fromEntries(
+  CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS.flatMap(name => {
+    const value = process.env[name];
+    return typeof value === "string" && value !== "" ? [[name, value]] : [];
+  }),
+);
 const launchProof = randomBytes(32).toString("base64url");
 const launchContext = JSON.stringify({
   version: 1,
   proof: launchProof,
   anthropicEnvSlots: preBunAnthropicSlots,
+  codexCliInspectionEnv: codexCliUpdateInspection ? {
+    codexCliPath: preBunCodexCliPath,
+    path: preBunPath,
+    pathExt: preBunPathExt,
+    managerRoots: preBunCodexCliManagerRoots,
+    configDir: configDir(),
+  } : null,
 });
+// The inspection snapshot above already carries PATH, PATHEXT, and the manager-root slots as
+// proof-bound values, and `inspectCodexCliInstall` reads them from that snapshot rather than
+// from the live environment. Inheriting them again would spend the 32,767-character Windows
+// environment block twice, so a large-but-valid shell environment could stop the Bun child
+// from spawning and fail the command before it reports anything. Drop the duplicates for the
+// one-shot inspection launch only; every other launch inherits the environment unchanged.
+// Windows environment names are case-insensitive, but this spread produces an ordinary
+// case-sensitive object, and a real Windows environment commonly spells the variable `Path`.
+// Deleting only the canonical upper-case spelling would silently leave that copy behind and
+// reintroduce the duplication this block exists to prevent, so match on the lowercase form.
+const inheritedEnv = { ...process.env };
+if (codexCliUpdateInspection) {
+  const snapshotted = new Set(
+    ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase()),
+  );
+  for (const name of Object.keys(inheritedEnv)) {
+    if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];
+  }
+}
 const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2)], {
   stdio: "inherit",
   // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no
@@ -567,7 +626,7 @@ const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, 
   // the long-running Bun child, and closing that window kills the proxy (#1236).
   windowsHide: true,
   env: {
-    ...process.env,
+    ...inheritedEnv,
     [NODE_LAUNCH_CONTEXT_ENV]: launchContext,
     [BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source,
     [BUN_RUNTIME_PATH_ENV]: bunRuntime.path,

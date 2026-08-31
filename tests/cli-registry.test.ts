@@ -98,6 +98,12 @@ describe("CLI command registry parity", () => {
     const names = CLI_COMMANDS.map(entry => entry.name);
     expect(new Set(names).size).toBe(names.length);
   });
+
+  test("system help exposes the exact Codex CLI inspection grammar", () => {
+    const details = findCommand("system")?.details ?? [];
+    expect(details).toContain("ocx system codex-cli-update check [--json]");
+    expect(details.some(line => line.includes("dry-run"))).toBe(false);
+  });
 });
 
 describe("help banner command coverage", () => {

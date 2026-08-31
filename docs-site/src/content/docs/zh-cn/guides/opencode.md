@@ -11,7 +11,7 @@ opencode 从合并后的 JSON 配置层读取 provider，而不是从环境变�
 ocx opencode
 ```
 
-这会确保代理正在运行，并只为该进程注入生成的 `provider.opencodex` block 来启动 opencode。额外参数会原样透传：`ocx opencode run "hello"`。
+这会确保代理正在运行，并为该进程注入生成的 `provider.opencodex` 和 `providers.opencodex` block 来启动 opencode。额外参数会原样透传：`ocx opencode run "hello"`。
 
 路由模型会在选择器里作为 `opencodex` provider 出现：
 
@@ -22,17 +22,17 @@ opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 
 ## 你的配置绝不会被修改
 
-启动器不会复制或重写 `~/.config/opencode/opencode.json`、项目中的 `opencode.json` / `opencode.jsonc`，也不会处理任何其他磁盘上的配置层。它可能会读取全局或项目配置，以检测是否存在 `provider.opencodex` 覆盖；而你现有的 providers、agents、keybinds、MCP 条目以及相对路径的 `{file:…}` 引用，都会继续从它们原本的文件中解析。
+启动器不会复制或重写 `~/.config/opencode/opencode.json`、项目中的 `opencode.json` / `opencode.jsonc`，也不会处理任何其他磁盘上的配置层。它可能会读取全局或项目配置，以检测是否存在 `provider.opencodex` 或 `providers.opencodex` 覆盖；而你现有的 providers、agents、keybinds、MCP 条目以及相对路径的 `{file:…}` 引用，都会继续从它们原本的文件中解析。
 
-仅在这次启动中，opencodex 会通过 OpenCode 的内联运行时层添加生成的 `provider.opencodex` block。该层会在全局/自定义/项目配置之后合并，并且只会对这个子进程覆盖冲突的键。
+仅在这次启动中，opencodex 会通过 OpenCode 的内联运行时层添加生成的 `provider.opencodex` 和 `providers.opencodex` block。该层会在全局/自定义/项目配置之后合并，并且只会对这个子进程覆盖冲突的键。
 
 | Layer | `ocx opencode` 下的行为 |
 | --- | --- |
 | Global / custom / project config | 原样保留在磁盘上，不做任何改动 |
-| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | 只接收生成的 `provider.opencodex` block |
+| Inline runtime (`OPENCODE_CONFIG_CONTENT`) | 接收生成的 `provider.opencodex` 和 `providers.opencodex` 两个 block（与继承的内联配置合并） |
 | Relative `{file:…}` paths | 仍然按最初定义它们的配置文件来解析 |
 
-如果全局或项目配置里也定义了 `provider.opencodex`，启动器会打印一条提示信息：`ocx opencode` 的运行时层会在这次启动中覆盖它。
+如果全局或项目配置里也定义了 `provider.opencodex` 或 `providers.opencodex`，启动器会打印一条提示信息：`ocx opencode` 的运行时层会在这次启动中覆盖它。
 
 ## 把这个 block 放进你自己的配置里
 
@@ -45,7 +45,7 @@ ocx export --client opencode
 代理必须正在运行。该命令会打印配置、规范目标路径（`~/.config/opencode/opencode.json`，如果设置了 `XDG_CONFIG_HOME` 则位于其下）、合并警告，以及环境变量导出行。它绝不会修改那个文件 - 上面的说明依然成立，而把这个 block 挪进你的配置是你明确做出的动作。
 
 :::caution[合并，不要替换]
-请把 `provider.opencodex` block 合并进你现有的配置。用导出的文件直接替换整个配置会破坏你其他的 providers、agents、keybinds 和 MCP 条目。`ocx export --out` 会明确拒绝覆盖已存在的文件，原因正是如此，因此请把 `--out` 指向一个临时路径，然后把 block 复制过去：
+请把 `provider.opencodex` 和 `providers.opencodex` 两个 block 都合并进你现有的配置。用导出的文件直接替换整个配置会破坏你其他的 providers、agents、keybinds 和 MCP 条目。`ocx export --out` 会明确拒绝覆盖已存在的文件，原因正是如此，因此请把 `--out` 指向一个临时路径，然后把这两个 block 复制过去：
 
 ```bash
 ocx export --client opencode --out ~/opencodex-opencode.json
