@@ -29,7 +29,12 @@ import { QUOTA_RECOVERY_LEASE_MS } from "./quota-recovery-timing";
 
 export type RecoveryRecord =
   | { state: "claimed"; lineage: number; claimId: string; expiresAt: number }
-  | { state: "spent"; lineage: number }
+  /**
+   * `terminal` marks a lineage whose refresh proved the grant is dead. It is spent AND the
+   * account must keep reporting needs-reauth: without it, the next bare 401 finds the
+   * budget used, reports transient, and a dead credential looks healthy.
+   */
+  | { state: "spent"; lineage: number; terminal?: true }
   | { state: "backoff"; lineage: number; nextAttemptAt: number };
 
 export type ClaimResult =
@@ -98,6 +103,25 @@ export function settleQuotaRecovery(
   if (!held) return; // superseded or already settled: never disturb a newer claimant
   const fenced = outcome.provenance === "external-replacement" ? held.lineage : outcome.generation;
   records.set(accountId, { state: "spent", lineage: fenced });
+}
+
+/**
+ * Record a refresh that failed with proof the grant itself is dead.
+ *
+ * Distinct from {@link releaseQuotaRecovery}: a revoked or expired grant will not become
+ * valid on the next poll, so backing off would let a later 401 report the account healthy
+ * while it is not. The lineage is fenced durably and the caller quarantines.
+ */
+export function settleQuotaRecoveryTerminal(accountId: string, claimId: string): void {
+  const held = heldClaim(accountId, claimId);
+  if (!held) return;
+  records.set(accountId, { state: "spent", lineage: held.lineage, terminal: true });
+}
+
+/** Did this lineage's one refresh prove the grant dead? */
+export function quotaRecoveryTerminalFor(accountId: string, lineage: number): boolean {
+  const record = records.get(accountId);
+  return record?.state === "spent" && record.lineage === lineage && record.terminal === true;
 }
 
 /**

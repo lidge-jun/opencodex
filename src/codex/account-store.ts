@@ -633,25 +633,39 @@ export async function forceRefreshCodexPoolToken(
   const settle = (outcome: ForcedRefreshOutcome) => {
     try { options.onSettled?.(outcome); } catch { /* bookkeeping must not break the caller */ }
   };
-  let result: CodexRefreshResult;
-  try {
-    result = await resolveCodexToken(
-      id,
-      { rejectedGeneration: options.rejectedGeneration, rejectedAccessToken: options.rejectedAccessToken },
-      options.signal,
-    );
-  } catch (error) {
-    settle({ kind: "failed", error });
-    throw error;
-  }
-  // Default to the conservative reading. A path that did not classify itself is not
-  // assumed to be this caller's own lineage: charging a replacement for somebody else's
-  // attempt is the failure mode, so an unlabelled path is treated as a replacement and
-  // simply leaves the returned lineage its own budget.
-  const provenance: CodexRefreshProvenance = result.provenance
-    ?? (result.selfRefreshed === true ? "self-refresh" : "external-replacement");
+  const classify = (result: CodexRefreshResult): CodexRefreshProvenance =>
+    // Default to the conservative reading. A path that did not classify itself is not
+    // assumed to be this caller's own lineage: charging a replacement for somebody else's
+    // attempt is the failure mode, so an unlabelled path leaves the returned lineage its
+    // own budget.
+    result.provenance ?? (result.selfRefreshed === true ? "self-refresh" : "external-replacement");
+
+  // The completion is NOT the caller's await.
+  //
+  // `options.signal` cancels what this function returns, while the shared flight keeps
+  // running and commits. Settling from the cancelled await therefore reported "failed" for
+  // a refresh that was about to succeed — releasing the budget, and letting the newly
+  // refreshed lineage claim again moments later. So the settlement rides an uncancelled
+  // resolution and the caller's cancellation is layered on top of it.
+  const completion = resolveCodexToken(
+    id,
+    { rejectedGeneration: options.rejectedGeneration, rejectedAccessToken: options.rejectedAccessToken },
+    // Deliberately no caller signal: the flight is shared and this settlement speaks for
+    // the credential, not for whoever happened to be waiting.
+    undefined,
+  );
+  completion.then(
+    resolved => settle({
+      kind: "resolved",
+      provenance: classify(resolved),
+      generation: resolved.generation,
+      rotated: resolved.accessToken !== options.rejectedAccessToken,
+    }),
+    error => settle({ kind: "failed", error }),
+  );
+  const result = await awaitOwnCancellation(completion, options.signal);
+  const provenance = classify(result);
   const rotated = result.accessToken !== options.rejectedAccessToken;
-  settle({ kind: "resolved", provenance, generation: result.generation, rotated });
   return {
     accessToken: result.accessToken,
     chatgptAccountId: result.chatgptAccountId,
@@ -727,7 +741,13 @@ async function resolveCodexToken(
             generation: current.generation,
             // Adopted the stored result of a flight this caller joined: same grant, same
             // lineage. Not a replacement — that distinction is the whole point of #3019.
-            provenance: "joined-lineage",
+            //
+            // Unless the flight itself returned somebody else's credential: its
+            // grant-mismatch and freshness branches resolve to a credential this flight
+            // did not produce. Adopting those bytes is still an adoption, but the LINEAGE
+            // is a replacement, and fencing it would deny a genuinely new credential its
+            // own budget. Carry the flight's own verdict when it gave one.
+            provenance: refreshed.provenance ?? "joined-lineage",
           };
         }
       }
@@ -839,6 +859,9 @@ async function resolveCodexToken(
           credential: lockedCred,
           // This credential belongs to a DIFFERENT grant than the flight was opened
           // for. Tagging it keeps a joiner from adopting it as its own.
+          // It is also somebody else's credential by definition, so a joiner that ends up
+          // adopting it must not charge it to this lineage's budget (#3019).
+          provenance: "external-replacement",
           ...(lockedRefreshGrantFingerprint !== undefined
             ? { resolvedGrantFingerprint: lockedRefreshGrantFingerprint }
             : {}),
@@ -857,6 +880,9 @@ async function resolveCodexToken(
         chatgptAccountId: lockedCred.chatgptAccountId,
         generation: startGeneration,
         credential: lockedCred,
+        // The stored credential is fresh and no forced fence still targets it: whoever
+        // wrote it, it was not this call. A joiner adopting it inherits that provenance.
+        provenance: "external-replacement",
         resolvedGrantFingerprint: refreshGrantFingerprint,
       };
     }
@@ -999,6 +1025,9 @@ async function resolveCodexToken(
     // produced this generation, and a forced caller needs that to know whether the new
     // credential descends from the one it was holding.
     ...(result.selfRefreshed !== undefined ? { selfRefreshed: result.selfRefreshed } : {}),
+    // Provenance rides out with the rest: a joiner that adopts this result needs the
+    // flight's own classification, not a guess made at the adoption site (#3019).
+    ...(result.provenance !== undefined ? { provenance: result.provenance } : {}),
     ...(result.resolvedGrantFingerprint !== undefined
       ? { resolvedGrantFingerprint: result.resolvedGrantFingerprint }
       : {}),

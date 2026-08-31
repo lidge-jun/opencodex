@@ -126,7 +126,13 @@ import { withNativeMainSharedClaim } from "./native-main-claim";
 import { resolveNativeProfileContext } from "./native-profile-store";
 import { NativeProfileError } from "./native-profile-types";
 import { WHAM_REQUEST_TIMEOUT_MS } from "./quota-recovery-timing";
-import { claimQuotaRecovery, releaseQuotaRecovery, settleQuotaRecovery } from "./quota-401-recovery";
+import {
+  claimQuotaRecovery,
+  quotaRecoveryTerminalFor,
+  releaseQuotaRecovery,
+  settleQuotaRecovery,
+  settleQuotaRecoveryTerminal,
+} from "./quota-401-recovery";
 
 function isNativeMainClaimUnavailable(error: unknown): error is NativeProfileError {
   return error instanceof NativeProfileError
@@ -994,9 +1000,14 @@ async function recoverPoolQuotaFrom401(ctx: {
 
   const claim = claimQuotaRecovery(accountId, rejectedGeneration);
   if (!claim.granted) {
-    // This lineage already spent its attempt, another caller is mid-refresh, or a transient
-    // failure is still backing off. Report transient and let the next poll try — quarantining
-    // here would undo the whole point of the budget.
+    // A lineage fenced by a TERMINAL refresh failure stays terminal. Without this, the
+    // budget being used would make the next bare 401 report a dead credential as healthy.
+    if (quotaRecoveryTerminalFor(accountId, rejectedGeneration)) {
+      return { quota: existing ?? null, needsReauth: true, credentialGeneration: rejectedGeneration };
+    }
+    // Otherwise: this lineage spent its attempt, another caller is mid-refresh, or a
+    // transient failure is backing off. Report transient and let the next poll try —
+    // quarantining here would undo the whole point of the budget.
     return { quota: existing ?? null, needsReauth: false, credentialGeneration: rejectedGeneration };
   }
 
@@ -1060,7 +1071,10 @@ const QUOTA_RECOVERY_BACKOFF_MS = 60_000;
 
 /** Same allowlist and bounded parser as the main account: it is the same endpoint. */
 async function isTerminalPoolAuthResponse(resp: Response): Promise<boolean> {
-  const code = await readMainAuthErrorCode(resp.clone());
+  // Consume the original rather than a clone. `resp.clone()` tees the body, and the
+  // bounded parser's timeout cancels only its own reader — the unread original branch
+  // keeps buffering. Nothing needs this response afterwards, so there is nothing to tee.
+  const code = await readMainAuthErrorCode(resp);
   return typeof code === "string" && MAIN_TERMINAL_AUTH_CODES.has(code);
 }
 
