@@ -246,4 +246,27 @@ describe("Aside client config", () => {
     expect(status.configPath).toBe("");
     expect(status.reason).toBe("unresolvable-path");
   });
+
+  /*
+   * The hint lookup absorbs a path REFUSAL and nothing else.
+   *
+   * An unqualified catch there would read the same for a resolver that threw a
+   * TypeError from a typo or an EACCES from a filesystem probe: the badge would
+   * quietly say not-installed while the real cause went unreported. This drives
+   * a non-ClientPathError through the same seam and requires it to escape.
+   */
+  test("a hint resolver that throws a programming error is not silently degraded", () => {
+    const spec = INTEGRATION_CLIENTS.aside as { unresolvedPathHint?: (env?: NodeJS.ProcessEnv, home?: string) => string };
+    const original = spec.unresolvedPathHint;
+    try {
+      spec.unresolvedPathHint = () => { throw new TypeError("join received undefined"); };
+      expect(() => unresolvedPathHintFor("aside", {}, home)).toThrow(TypeError);
+
+      // A path refusal is still absorbed, which is the whole point of the seam.
+      spec.unresolvedPathHint = () => { throw new ClientPathError("no account yet"); };
+      expect(unresolvedPathHintFor("aside", {}, home)).toBe("");
+    } finally {
+      spec.unresolvedPathHint = original;
+    }
+  });
 });

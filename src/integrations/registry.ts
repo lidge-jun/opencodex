@@ -11,6 +11,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+  ClientPathError,
   EXPORT_CLIENTS,
   asideAccountDir,
   asideConfigPath,
@@ -108,6 +109,11 @@ export function resolveIntegrationPaths(
  * nothing they could act on, and for Aside it also reported the wrong thing: an
  * absent account manifest is the ordinary state of an installed-but-never-run
  * Aside, and the honest answer there is that it is not signed in.
+ *
+ * `""` is a sentinel, not a path: it is what `readIntegrationState` reads to
+ * decide between not-installed and cannot-verify. A config path is never
+ * legitimately empty, and a hint is always an absolute `join` result, so the two
+ * cannot be confused.
  */
 export function unresolvedPathHintFor(
   clientId: IntegrationClientId,
@@ -118,8 +124,16 @@ export function unresolvedPathHintFor(
   if (!spec.unresolvedPathHint) return "";
   try {
     return spec.unresolvedPathHint(env, home);
-  } catch {
-    // A hint that cannot be computed is still only a hint.
+  } catch (error) {
+    /*
+     * Only a path refusal is absorbed. An unqualified catch here would also
+     * swallow a TypeError from a future implementor's typo, an
+     * ERR_INVALID_ARG_TYPE out of `join`, or an EACCES from a resolver that
+     * touches the filesystem -- turning a programming error into a silently
+     * degraded badge. `readIntegrationState` narrows the same way at its own
+     * catch, and this is the matching half.
+     */
+    if (!(error instanceof ClientPathError)) throw error;
     return "";
   }
 }
