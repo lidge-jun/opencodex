@@ -661,6 +661,23 @@ export function installedServiceListenPort(): number {
 export const SERVICE_INSTALL_HEALTH_MS = 20_000;
 
 /**
+ * Windows gets a longer budget because its cold start does more before the
+ * listener exists: NTFS ACL hardening and previous-session journal recovery
+ * both run first, and #3009 recorded a service that bound a few seconds past
+ * the 20s deadline and then stayed healthy. Reporting that as a terminal
+ * repair failure is worse than waiting — the caller's fallback is to start a
+ * second proxy against a port that is about to be taken.
+ */
+export const SERVICE_INSTALL_HEALTH_WINDOWS_MS = 45_000;
+
+/** The health budget for the platform this is running on. */
+export function serviceInstallHealthMs(
+  platform: NodeJS.Platform = process.platform,
+): number {
+  return platform === "win32" ? SERVICE_INSTALL_HEALTH_WINDOWS_MS : SERVICE_INSTALL_HEALTH_MS;
+}
+
+/**
  * Whether a proxy actually answers on the port this install/start just produced.
  *
  * Registration is not service: `launchctl list` reports a job that never bound, and
@@ -690,12 +707,23 @@ export async function confirmServiceServing(
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)));
   const probe = deps.probe ?? (async (p, h) => !!(await proxyIdentityAt(p, { hostname: h })));
-  const deadline = now() + (deps.timeoutMs ?? SERVICE_INSTALL_HEALTH_MS);
+  const deadline = now() + (deps.timeoutMs ?? serviceInstallHealthMs());
+  let waited = false;
   for (;;) {
     if (await probe(port, hostname)) return { ok: true, port };
-    if (now() >= deadline) return { ok: false, port };
+    if (now() >= deadline) break;
     await sleep(500);
+    waited = true;
   }
+  // The probe that ran last started before the deadline, so a service that binds
+  // during it is reported as dead (#3009). Knock once more after a short grace
+  // before calling it a failure. A zero budget means the caller asked not to
+  // wait, so it gets exactly the single probe it asked for and nothing more.
+  if (waited) {
+    await sleep(500);
+    if (await probe(port, hostname)) return { ok: true, port };
+  }
+  return { ok: false, port };
 }
 
 /**

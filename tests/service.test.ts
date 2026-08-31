@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import * as serviceModule from "../src/service";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, deriveWindowsServiceDiagnosticForCurrentUser, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, deriveWindowsServiceDiagnosticForCurrentUser, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
 import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
@@ -3142,7 +3142,55 @@ describe("service serving confirmation", () => {
         now: () => 0,
         timeoutMs: 0,
       });
+      // Exactly one. "At least one" would also pass against a version that
+      // sleeps and knocks again, which is the opposite of what a zero budget
+      // asks for — #3039 relaxed this to toBeGreaterThanOrEqual and that is
+      // precisely the assertion the grace probe must not be allowed to satisfy.
       expect(probes).toBe(1);
+    });
+
+    // #3009: a Windows cold start does NTFS ACL hardening and previous-session
+    // journal recovery before the listener exists, so the service can bind
+    // seconds after the deadline and then stay healthy. `ocx service repair`
+    // reported that as a terminal failure with exit 1, and the caller's fallback
+    // is to start a second proxy against a port that is about to be taken.
+    test("accepts a service that binds during the grace after the deadline", async () => {
+      let now = 0;
+      let probes = 0;
+      const out = await confirmServiceServing({
+        port: 10100,
+        // Answers only once the clock is past the deadline, which is the shape
+        // the report describes: healthy, just not within the budget.
+        probe: async () => { probes += 1; return now > 2_000; },
+        sleep: async ms => { now += ms; },
+        now: () => now,
+        timeoutMs: 2_000,
+      });
+      expect(out).toEqual({ ok: true, port: 10100 });
+      expect(probes).toBeGreaterThan(1);
+    });
+
+    test("still fails a service that never binds", async () => {
+      let now = 0;
+      const out = await confirmServiceServing({
+        port: 10100,
+        probe: async () => false,
+        sleep: async ms => { now += ms; },
+        now: () => now,
+        timeoutMs: 2_000,
+      });
+      expect(out).toEqual({ ok: false, port: 10100 });
+    });
+
+    // Windows is the platform the extra budget exists for; everything else keeps
+    // the original 20s so this cannot slow a healthy Linux install down. Pinned
+    // absolutely, not relatively: a relational assertion accepts 21s, and the
+    // reported service bound past 20s, so the number is the contract.
+    test("gives Windows a longer cold-start budget than the other platforms", () => {
+      expect(serviceInstallHealthMs("win32")).toBe(SERVICE_INSTALL_HEALTH_WINDOWS_MS);
+      expect(SERVICE_INSTALL_HEALTH_WINDOWS_MS).toBe(45_000);
+      expect(serviceInstallHealthMs("linux")).toBe(SERVICE_INSTALL_HEALTH_MS);
+      expect(serviceInstallHealthMs("darwin")).toBe(SERVICE_INSTALL_HEALTH_MS);
     });
 
     // A service reinstall invalidates the pidfile, so resolving the target through
