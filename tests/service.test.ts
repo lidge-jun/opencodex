@@ -1443,6 +1443,59 @@ describe("service lifecycle cleanup ordering", () => {
     expect(stagedNonce).not.toBe("");
   });
 
+  for (const [label, unreadable] of [
+    ["is empty", () => ""],
+    ["throws", () => { throw new Error("query denied"); }],
+  ] as const) {
+    test(`fresh scheduler install retries when the pre-start registration ${label} transiently`, async () => {
+      const calls: string[] = [];
+      const delays: number[] = [];
+      let reads = 0;
+      let stagedNonce = "";
+
+      await installFreshWindowsSchedulerSafely({
+        stageRegistrationXml: nonce => {
+          stagedNonce = nonce;
+          calls.push("stage");
+          return "attempt.xml";
+        },
+        register: async () => { calls.push("register"); },
+        recordOwnership: () => { calls.push("record-ownership"); return true; },
+        prepare: async () => { calls.push("prepare"); },
+        removeNativeService: () => { calls.push("remove-native-service"); },
+        publishAssets: () => { calls.push("publish-assets"); },
+        readSchedulerXml: () => {
+          calls.push("read");
+          reads += 1;
+          return reads === 1
+            ? unreadable()
+            : buildWindowsTaskXml(undefined, undefined, stagedNonce);
+        },
+        settleSchedulerRead: delayMs => { calls.push(`settle:${delayMs}`); delays.push(delayMs); },
+        runTask: () => { calls.push("run-task"); },
+        writeState: () => { calls.push("write-state"); },
+        rollbackTask: async () => { calls.push("rollback-task"); return null; },
+        removeStagedXml: () => { calls.push("remove-stage"); },
+      });
+
+      expect(calls).toEqual([
+        "stage",
+        "register",
+        "remove-stage",
+        "record-ownership",
+        "prepare",
+        "remove-native-service",
+        "publish-assets",
+        "read",
+        "settle:50",
+        "read",
+        "run-task",
+        "write-state",
+      ]);
+      expect(delays).toEqual([50]);
+    });
+  }
+
   test("fresh scheduler staging hardens its private directory and XML before registration", async () => {
     const parent = mkdtempSync(join(tmpdir(), "ocx-service-stage-order-"));
     const stageDir = join(parent, "private-stage");

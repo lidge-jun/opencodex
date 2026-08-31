@@ -2643,6 +2643,22 @@ async function assertSchedulerSnapshotBeforeStart(
   changedMessage: string,
   unreadableMessage: string,
 ): Promise<void> {
+  await assertSchedulerRegistrationBeforeStart(
+    readSchedulerXml,
+    settle,
+    currentXml => windowsSchedulerRegistrationMatchesSnapshot(currentXml, expectedXml),
+    changedMessage,
+    unreadableMessage,
+  );
+}
+
+async function assertSchedulerRegistrationBeforeStart(
+  readSchedulerXml: () => string,
+  settle: (delayMs: number) => void | Promise<void>,
+  matchesExpected: (currentXml: string) => boolean,
+  changedMessage: string,
+  unreadableMessage: string,
+): Promise<void> {
   for (let attempt = 0; attempt <= SCHEDULER_SETTLE_DELAYS_MS.length; attempt += 1) {
     let beforeStartXml = "";
     try {
@@ -2651,7 +2667,7 @@ async function assertSchedulerSnapshotBeforeStart(
       // Treat query errors like the default reader's empty result and retry below.
     }
     if (beforeStartXml.trim()) {
-      if (!windowsSchedulerRegistrationMatchesSnapshot(beforeStartXml, expectedXml)) {
+      if (!matchesExpected(beforeStartXml)) {
         throw new Error(changedMessage);
       }
       return;
@@ -3454,7 +3470,11 @@ export interface FreshWindowsSchedulerInstallDeps {
   prepare?: () => Promise<void>;
   removeNativeService?: () => void;
   publishAssets?: () => void;
-  verifyBeforeRun?: (attemptNonce: string) => void;
+  verifyBeforeRun?: (attemptNonce: string) => void | Promise<void>;
+  /** Reads the newly registered task; empty or throwing reads are retried before rollback. */
+  readSchedulerXml?: () => string;
+  /** Bounded wait before retrying an unreadable fresh-install registration. */
+  settleSchedulerRead?: (delayMs: number) => void | Promise<void>;
   runTask?: () => void;
   writeState?: () => void;
   rollbackTask?: (attemptNonce: string) => Promise<string | null>;
@@ -3478,17 +3498,18 @@ export async function installFreshWindowsSchedulerSafely(
   const prepare = deps.prepare ?? (() => prepareServiceInstall("scheduler"));
   const removeNativeService = deps.removeNativeService ?? removeNativeWindowsServiceForScheduler;
   const publishAssets = deps.publishAssets ?? writeWindowsSchedulerAssets;
-  const verifyBeforeRun = deps.verifyBeforeRun ?? ((nonce: string) => {
-    const liveXml = statusWindowsXml();
-    if (
-      !windowsTaskRegistrationHealthy(liveXml)
-      || !windowsTaskRegistrationOwnedByAttempt(liveXml, nonce)
-    ) {
-      throw new Error(
-        "The fresh Task Scheduler registration changed before start; it was preserved and not run.",
-      );
-    }
-  });
+  const verifyBeforeRun = deps.verifyBeforeRun ?? ((nonce: string) => (
+    assertSchedulerRegistrationBeforeStart(
+      deps.readSchedulerXml ?? statusWindowsXml,
+      deps.settleSchedulerRead ?? settleDelay,
+      liveXml => (
+        windowsTaskRegistrationHealthy(liveXml)
+        && windowsTaskRegistrationOwnedByAttempt(liveXml, nonce)
+      ),
+      "The fresh Task Scheduler registration changed before start; it was preserved and not run.",
+      "The fresh Task Scheduler registration remained unreadable before start; it was preserved and not run.",
+    )
+  ));
   const runTask = deps.runTask ?? startWindows;
   const writeState = deps.writeState ?? (() => writeServiceInstallState("scheduler"));
   const rollbackTask = deps.rollbackTask ?? ((attemptNonce: string) => (
@@ -3523,7 +3544,7 @@ export async function installFreshWindowsSchedulerSafely(
     await prepare();
     removeNativeService();
     publishAssets();
-    verifyBeforeRun(attemptNonce);
+    await verifyBeforeRun(attemptNonce);
     runTask();
     started = true;
     writeState();
