@@ -482,20 +482,29 @@ function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ApplyRowSna
     const previousRelabel = existing.relabel;
     existing.relabel = "pending";
     existing.hadFirstUserMessage = hasFirstUserMessage(row.first_user_message);
-    // `hasUserEvent` is the value restore returns to, and the previous attempt's value can
-    // be two events stale — a restore that already landed, plus whatever the user did
-    // afterwards. But refreshing it needs proof that the previous relabel was UNDONE, and
-    // the original tuple is not that proof: route-then-legacy-recovery lands on the same
-    // tuple, so refreshing there would adopt OpenCodex's own write as the user's baseline.
-    // This is the same ambiguity the classifier refuses on, arriving one layer up.
+    // `hasUserEvent` is the value restore returns to, and the previous attempt's can be two
+    // events stale — a restore that already landed, plus whatever the user did afterwards.
+    // Refreshing it needs proof that the previous relabel was UNDONE, because the original
+    // tuple alone is not proof: route-then-legacy-recovery lands on that same tuple, so
+    // refreshing there would adopt OpenCodex's own write as the user's baseline.
     //
-    // `relabel: "none"` is the proof, written by a restore that actually completed. Absent
-    // it, keep the recorded baseline: an entry that is one event stale still restores to a
-    // state the user was in, while a wrong refresh silently rewrites what OpenCodex owns.
-    if (previousRelabel === "none"
-      && row.model_provider === existing.modelProvider
-      && row.source === existing.source) {
-      existing.hasUserEvent = Number(row.has_user_event) === 1 ? 1 : 0;
+    // `relabel: "none"` is that proof, written by a restore that landed and passed its
+    // readback. With it, the observed row is the honest pre-route baseline.
+    const atOriginalTuple = row.model_provider === existing.modelProvider
+      && row.source === existing.source;
+    const observedEvent: 0 | 1 = Number(row.has_user_event) === 1 ? 1 : 0;
+    if (previousRelabel === "none" && atOriginalTuple) {
+      existing.hasUserEvent = observedEvent;
+      manifest.version = 2;
+      return;
+    }
+    // No proof, and the row disagrees with the recorded baseline. Neither reading is safe:
+    // keeping the record erases activity the user generated, refreshing it preserves an
+    // event OpenCodex authored. That is the same undecidable shape the classifier refuses
+    // on, so refuse here too rather than committing to one interpretation. Restore keeps
+    // working from the manifest that already exists.
+    if (observedEvent !== existing.hasUserEvent) {
+      throw new CodexHistoryIntegrityError("history_apply_ambiguous_reroute");
     }
     manifest.version = 2;
     return;
