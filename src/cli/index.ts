@@ -47,7 +47,7 @@ import { runReady, type ReadyArgs } from "./ready";
 import { runCli } from "./root";
 import { ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
-import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
+import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled } from "../service";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
@@ -687,8 +687,15 @@ async function handleStop() {
   // tried, so local teardown still proceeds.
   let ownershipBlocked = false;
   try {
-    stoppedService = stopServiceIfInstalled();
+    const serviceStop = stopServiceIfInstalledDetailed();
+    stoppedService = serviceStop === "stopped";
     if (stoppedService) console.log("🛑 Service manager stopped (won't respawn).");
+    if (serviceStop === "failed") {
+      // A manager that would not stop can respawn the proxy. That is a real stop failure,
+      // not a history-only one, and an update must not replace files over it (#3008).
+      stopFailed = true;
+      console.error("❌ The installed service manager did not stop; it may respawn the proxy.");
+    }
   } catch (err) {
     if (isServiceOwnershipError(err)) {
       ownershipBlocked = true;
@@ -764,8 +771,8 @@ async function handleStop() {
     if (restore.other) stopFailed = true;
     else if (restore.historyOnly) historyOnlyFailure = true;
   }
-  // Set the code rather than exiting inline: `restart` and the tray coordinator call this
-  // function and need it to RETURN so they can decide what to do next.
+  // Set the code rather than exiting inline: this function returns a value its dispatcher
+  // reads, so exiting here would take that decision away from the caller.
   //
   // A history-only failure gets its own code so `ocx update` can tell "the proxy is down
   // and a manifest needs review" from "the proxy would not stop" (#3008). Ordinary failure

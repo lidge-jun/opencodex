@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "./stop-contract.mjs";
+import { proxyIdentityAt } from "../server/proxy-liveness";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -272,6 +273,20 @@ export async function runUpdate(): Promise<void> {
         } catch { /* preserve the proxy stop failure */ }
       }
       console.error("⚠️  Could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
+      process.exit(1);
+    }
+    // Absent PID and runtime files are weak evidence: a crashed-but-listening proxy, or one
+    // supervised outside our records, looks identical to a stopped one. Ask the captured
+    // endpoint who is there before replacing package files under it.
+    const stillLive = await proxyIdentityAt(capturedListen.port, { hostname: capturedListen.hostname });
+    if (stillLive) {
+      if (trayWasRunning) {
+        try {
+          const { startWindowsTray } = await import("../tray/windows");
+          startWindowsTray();
+        } catch { /* preserve the proxy stop failure */ }
+      }
+      console.error(`⚠️  A proxy is still answering on ${capturedListen.hostname}:${capturedListen.port} after the stop; aborting the update. Run 'ocx stop' and retry.`);
       process.exit(1);
     }
     if (historyOnlyStop || historyRestoreIncomplete()) {

@@ -106,9 +106,11 @@ describe("Grok fence lifecycle wiring", () => {
   test("a refused Grok strip makes ocx stop fail instead of reporting success", () => {
     const restoreFn = sliceFn(CLI_SOURCE, "async function restoreSharedClientStateAfterStop(", "async function handleStop(");
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
-    expect(restoreFn).toContain("else if (!grok.ok) { restored = false;");
+    // A Grok strip failure is "other", never history-only: it points Grok at a dead proxy,
+    // so an update must abort rather than proceed (#3008).
+    expect(restoreFn).toContain("else if (!grok.ok) { other = true;");
     expect(restoreFn).toContain("Grok config restore failed");
-    expect(stopFn).toContain("if (!await restoreSharedClientStateAfterStop()) stopFailed = true");
+    expect(stopFn).toContain("if (restore.other) stopFailed = true");
   });
 
   test("a refused proxy stop reports WHY, not just that it failed", () => {
@@ -152,9 +154,12 @@ describe("Grok fence lifecycle wiring", () => {
     const restoreFn = sliceFn(CLI_SOURCE, "async function restoreSharedClientStateAfterStop(", "async function handleStop(");
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
     expect(restoreFn).toContain("if (result.success) console.log");
-    expect(restoreFn).toContain("restored = false");
+    // Config or catalog failure is a real teardown failure - a client reads those. Only a
+    // history-only failure is separable, and it still surfaces (#3008).
+    expect(restoreFn).toContain('artifacts.config.state === "failed" || artifacts.catalog.state === "failed"');
+    expect(restoreFn).toContain("else other = true");
     expect(restoreFn).toContain("console.error(`⚠️  ${result.message}`)");
-    expect(stopFn).toContain("if (!await restoreSharedClientStateAfterStop()) stopFailed = true");
+    expect(stopFn).toContain("if (restore.other) stopFailed = true");
   });
 
   test("the daemon's exit cleanup keeps the OCX_SERVICE exclusion and adds the ownership check", () => {

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
+import { proxyStillAnswering } from "../src/update/proxy-liveness-probe.mjs";
 
 const repoRoot = join(import.meta.dir, "..");
 const read = (rel: string): string => readFileSync(join(repoRoot, rel), "utf8");
@@ -64,59 +64,66 @@ describe("stop failure classification (#3008)", () => {
     expect(read("src/update/index.ts")).toContain("stop-contract.mjs");
   });
 
-  test("the npm launcher proceeds for the history code and aborts for any other", () => {
-    // Behavioural rather than textual: run the real `bin/ocx.mjs` update path against a
-    // stub launcher whose `stop` exits with a chosen code, and observe whether it went on
-    // to the update or aborted. A source-pattern assertion cannot tell those apart.
-    const dir = mkdtempSync(join(tmpdir(), "ocx-stop-class-"));
+  test("the liveness probe sees a surviving proxy, and fails open when nothing is there", async () => {
+    // Behavioural, not textual: absent PID and runtime files are weak evidence, so the
+    // updaters ask the endpoint. The listener runs in a SEPARATE process because the probe
+    // uses spawnSync - an in-process server could never answer while the parent's event
+    // loop is blocked, which is also why the probe speaks node:http rather than fetch.
+    const listener = spawn(process.execPath, ["-e", [
+      "const http = require('node:http');",
+      "const server = http.createServer((req, res) => {",
+      "  if (req.url !== '/healthz') { res.writeHead(404); res.end(); return; }",
+      "  res.writeHead(200, { 'content-type': 'application/json' });",
+      "  res.end(JSON.stringify({ pid: process.pid, version: 'test' }));",
+      "});",
+      "server.listen(0, '127.0.0.1', () => process.stdout.write(String(server.address().port)));",
+    ].join("\n")], { stdio: ["ignore", "pipe", "ignore"] });
+
+    const port = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("listener did not report a port")), 10_000);
+      listener.stdout.once("data", chunk => { clearTimeout(timer); resolve(Number(String(chunk))); });
+      listener.once("error", error => { clearTimeout(timer); reject(error); });
+    });
+
     try {
-      const configDir = join(dir, "home", ".opencodex");
-      mkdirSync(configDir, { recursive: true });
-      // Runtime state present so the updater enters the stop branch at all, and removed by
-      // the stub so the post-stop liveness check passes.
-      writeFileSync(join(configDir, "runtime-port.json"), JSON.stringify({ port: 65_000 }));
-
-      const stub = join(dir, "stub-launcher.mjs");
-      writeFileSync(stub, [
-        "import { rmSync } from 'node:fs';",
-        "import { join } from 'node:path';",
-        "const code = Number(process.env.OCX_STUB_STOP_CODE ?? '0');",
-        "if (process.argv[2] === 'stop') {",
-        "  rmSync(join(process.env.OCX_STUB_CONFIG_DIR, 'runtime-port.json'), { force: true });",
-        "  process.exit(code);",
-        "}",
-        "process.exit(0);",
-      ].join("\n"));
-
-      const run = (code: number): { status: number | null; stderr: string } => {
-        writeFileSync(join(configDir, "runtime-port.json"), JSON.stringify({ port: 65_000 }));
-        const result = spawnSync(process.execPath, [stub, "stop"], {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OCX_STUB_STOP_CODE: String(code),
-            OCX_STUB_CONFIG_DIR: configDir,
-          },
-        });
-        return { status: result.status, stderr: result.stderr ?? "" };
-      };
-
-      // The stub itself round-trips the code, which is the property bin/ocx.mjs relies on
-      // when it mirrors a child status.
-      expect(run(STOP_HISTORY_INCOMPLETE_EXIT_CODE).status).toBe(STOP_HISTORY_INCOMPLETE_EXIT_CODE);
-      expect(run(1).status).toBe(1);
-      expect(run(0).status).toBe(0);
+      expect(proxyStillAnswering(port)).toBe(true);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      listener.kill();
+      await new Promise<void>(resolve => listener.once("exit", () => resolve()));
     }
+
+    // Fails open: the port is closed now, and a probe that cannot answer must not block an
+    // update on its own uncertainty - the PID and runtime-file gates are still in force.
+    expect(proxyStillAnswering(port)).toBe(false);
+    expect(proxyStillAnswering(0)).toBe(false);
+    expect(proxyStillAnswering(Number.NaN)).toBe(false);
+  });
+
+  test("the decision expression admits only the history code", () => {
+    // The two lanes share one predicate shape, so this evaluates that shape directly over
+    // the whole status domain rather than pattern-matching the source. A stop that did not
+    // finish must never reach the install, and a signal kill (null) carries no evidence
+    // that it did.
+    const proceeds = (status: number | null): boolean => {
+      const historyOnlyStop = status === STOP_HISTORY_INCOMPLETE_EXIT_CODE;
+      return !((status !== 0 && !historyOnlyStop));
+    };
+    expect(proceeds(0)).toBe(true);
+    expect(proceeds(STOP_HISTORY_INCOMPLETE_EXIT_CODE)).toBe(true);
+    expect(proceeds(1)).toBe(false);
+    expect(proceeds(2)).toBe(false);
+    expect(proceeds(4)).toBe(false);
+    expect(proceeds(64)).toBe(false);
+    expect(proceeds(130)).toBe(false);
+    expect(proceeds(null)).toBe(false);
   });
 
   test("handleStop emits the code only for a history-only failure and still returns", () => {
     const cli = read("src/cli/index.ts");
     // Ordinary failure wins: it is the stronger signal.
     expect(cli).toMatch(/if \(stopFailed\) process\.exitCode = 1;\s*\n\s*else if \(historyOnlyFailure\) process\.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;/);
-    // `restart` and the tray coordinator call handleStop and need it to RETURN, so the
-    // code is set rather than exited inline.
+    // The code is set rather than exited inline so the dispatcher still receives the
+    // return value and decides what happens next.
     expect(cli).toMatch(/process\.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;\s*\n\s*return !stopFailed;/);
     // Config and catalog failures are real teardown failures: a client reads those.
     expect(cli).toMatch(/artifacts\.config\.state === "failed" \|\| artifacts\.catalog\.state === "failed"/);

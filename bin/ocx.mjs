@@ -10,6 +10,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
+import { proxyStillAnswering } from "../src/update/proxy-liveness-probe.mjs";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -358,6 +359,14 @@ function runNpmSelfUpdate() {
     if ((stopRes.status !== 0 && !historyOnlyStop) || stillHasRuntimeState) {
       if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
       console.error("opencodex: could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
+      process.exit(1);
+    }
+    // Absent PID and runtime files are weak evidence: a crashed-but-listening proxy, or one
+    // supervised outside our records, looks identical to a stopped one. Ask the captured
+    // endpoint who is there before replacing package files under it.
+    if (proxyStillAnswering(bakePort)) {
+      if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
+      console.error(`opencodex: a proxy is still answering on port ${bakePort} after the stop; aborting the update. Run 'ocx stop' and retry.`);
       process.exit(1);
     }
     if (historyOnlyStop || historyRestoreIncomplete()) {

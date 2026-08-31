@@ -3609,31 +3609,52 @@ export async function installFreshWindowsSchedulerSafely(
  * Returns true if a service was found and stopped.
  */
 export function stopServiceIfInstalled(): boolean {
+  return stopServiceIfInstalledDetailed() === "stopped";
+}
+
+/**
+ * Outcome of stopping an installed process manager.
+ *
+ * `stopServiceIfInstalled` collapses "no service was installed" and "a service was
+ * installed and would not stop" into the same `false`, which is fine for a caller that
+ * only wants to log. It is not fine for one deciding whether an update may replace package
+ * files: a manager that refused to stop can respawn the proxy on top of a half-written
+ * install (#3008).
+ */
+export type ServiceStopOutcome = "absent" | "stopped" | "failed";
+
+export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
   assertServiceEnvironmentMatchesInstall();
   if (process.platform === "darwin") {
     if (existsSync(plistPath())) {
-      try { stopLaunchd(); return true; } catch { return false; }
+      try { stopLaunchd(); return "stopped"; } catch { return "failed"; }
     }
   } else if (process.platform === "win32") {
     // Query BOTH backends regardless of state: a failed switch or stale state can leave
     // two managers installed, and either one would respawn the proxy after `ocx stop`.
     let stopped = false;
+    let failed = false;
     try {
       const q = schtasks(["/query", "/tn", TASK]);
-      if (q.includes(TASK)) { stopWindows(); stopped = true; }
+      if (q.includes(TASK)) {
+        try { stopWindows(); stopped = true; } catch { failed = true; }
+      }
     } catch { /* task not found */ }
     if (statusWinswRaw() !== "nonexistent") {
-      try { stopWinswService(); stopped = true; } catch { /* best-effort */ }
+      try { stopWinswService(); stopped = true; } catch { failed = true; }
     }
     // `schtasks /end` ends the task instance but the cmd `:loop` wrapper survives and
     // respawns its child seconds later (issue #764), resurrecting the proxy during a
     // stop or a tray restart. Kill the launcher/wrapper processes outright.
     killWindowsServiceWrapperProcesses();
-    if (stopped) return true;
+    // A failure on either backend wins: the other one stopping does not make the live one
+    // safe to update over.
+    if (failed) return "failed";
+    if (stopped) return "stopped";
   } else if (process.platform === "linux" && isSystemd() && existsSync(unitPath())) {
-    try { stopSystemd(); return true; } catch { return false; }
+    try { stopSystemd(); return "stopped"; } catch { return "failed"; }
   }
-  return false;
+  return "absent";
 }
 
 /** Delete install-state files; stale state would make `ocx update` "reinstall" a service that no longer exists. */
