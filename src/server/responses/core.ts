@@ -7,6 +7,7 @@ import {
   backfillResponsesFieldsJson,
 } from "./responses-field-backfill";
 import { checkInputAdmission } from "./input-admission";
+import { stripOpenAiInternalRequestMetadata } from "./internal-request-metadata";
 import { nativeContextLimits } from "../../codex/catalog";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import {
@@ -2609,6 +2610,7 @@ async function handleResponsesInner(
     }
     return decodeRequestErrorResponse(err, "responses");
   }
+  stripOpenAiInternalRequestMetadata(body);
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     options.onRequestBodyRead?.();
@@ -2629,6 +2631,7 @@ async function handleResponsesInner(
     copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
   } else {
     body = expandPreviousResponseInput(body, inboundClientThreadId);
+    stripOpenAiInternalRequestMetadata(body);
     if (previousResponseScopeMismatch(body)) {
       console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
     }

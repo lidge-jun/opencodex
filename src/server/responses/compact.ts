@@ -1,5 +1,6 @@
 import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
+import { stripOpenAiInternalRequestMetadata } from "./internal-request-metadata";
 import {
   getConfigPath,
   multiAgentGuidanceEnabled,
@@ -487,6 +488,7 @@ export async function handleResponsesCompact(
   let body: unknown;
   try {
     body = await readJsonRequestBody(req);
+    stripOpenAiInternalRequestMetadata(body);
   } catch (err) {
     return decodeRequestErrorResponse(err, "responses-compact");
   }
