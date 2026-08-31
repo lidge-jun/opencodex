@@ -177,3 +177,27 @@ Suite, typecheck and privacy scan on `ssh lidge`.
 `Closes #3029`. PR #3003 is unrelated to this issue and independently defective
 (two pre-WHAM errors lack `quotaProbeSkipped` at its `src/codex/auth-api.ts:1013-1021`,
 causing false five-minute suppression); do not link it here.
+
+## What implementation added beyond this plan
+
+Three adversarial review rounds (findings 2, 4, 0). The plan's scoring rule survived
+intact; everything the rounds found was in the plumbing and in the tests:
+
+- **The clock leaks below the scorer.** The plan enumerated eight `computeCodexUsageScore`
+  call sites and I threaded all of them. That was not enough: `hasCodexQuotaHeadroom` and
+  `pickLowestUsageAmong` each defaulted to `Date.now()`, and their callers omitted it — so
+  the priority tier, fill-first, preemption, pin release and both shared-health checks all
+  scored against wall time while the resolver above them used the request clock. An
+  injected `now` with a `shortResetAt` between the two reads the same tuple two ways.
+- **Three of my own tests were vacuous, and one was backwards.** The affinity case bound
+  its thread while the account was already terminal, so it proved reuse rather than a
+  rebind. The recovery case left both accounts unknown, where the active one is kept by
+  default — true even against a freshness-blind scorer. And the tiered case had the
+  priority order inverted: higher numbers run earlier
+  (`src/codex/account-priority.ts:18`), so the account I meant to outrank actually lost,
+  and it won for a reason unrelated to the window.
+
+The last one is worth keeping as a rule: a test whose fixture encodes a directional
+assumption should be driven red against the specific defect it names, not merely observed
+to pass. Each of the eight assertions now has a named mutation it fails against, recorded
+in the PR description.
