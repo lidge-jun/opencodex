@@ -37,7 +37,7 @@ export async function pickerVisibleSidecarCandidates(
   auth: SidecarAuthState,
 ): Promise<SidecarCandidate[]> {
   let rows: Awaited<ReturnType<typeof listManagementModelRows>> = [];
-  try { rows = await listManagementModelRows(config); } catch { rows = []; }
+  try { rows = await listManagementModelRows(config, { entitlementWaitMs: 0 }); } catch { rows = []; }
   const byKey = new Map<string, SidecarCandidate>();
   for (const row of rows) {
     if (row.disabled === true) continue;

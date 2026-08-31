@@ -12,6 +12,7 @@ import {
 } from "../config";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
+import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
 
 type LegacyCodexAccountStore = Record<string, CodexAccountCredentials>;
 type CodexAccountStore = Record<string, CodexAccountCredentialRecord>;
@@ -111,6 +112,11 @@ function persist(store: CodexAccountStore): void {
   atomicWriteFile(codexAccountsPath(), JSON.stringify(store, null, 2) + "\n");
 }
 
+function persistCredentialMutation(store: CodexAccountStore): void {
+  persist(store);
+  advanceCodexCredentialMutationEpoch();
+}
+
 function preservedValidationMetadata(record: CodexAccountCredentialRecord | undefined): Pick<
   CodexAccountCredentialRecord,
   "lastCodexValidatedAt" | "lastCodexValidationStatus" | "lastCodexValidationError"
@@ -142,7 +148,7 @@ export function saveCodexAccountCredential(id: string, cred: CodexAccountCredent
       replacedAt: current ? Date.now() : undefined,
       ...preservedValidationMetadata(current),
     };
-    persist(store);
+    persistCredentialMutation(store);
   });
 }
 
@@ -213,7 +219,7 @@ export function saveCodexAccountCredentialIfGeneration(
       replacedAt: current.replacedAt,
       ...preservedValidationMetadata(current),
     };
-    persist(store);
+    persistCredentialMutation(store);
     return true;
   });
 }
@@ -304,7 +310,7 @@ export function commitRefreshedCodexCredentialWithAliases(
         propagatedAliases.push({ id: aliasId, generation: aliasGeneration });
       }
     }
-    persist(store);
+    persistCredentialMutation(store);
     return { committed: true, propagatedAliases };
   });
 }
@@ -315,7 +321,7 @@ export function tombstoneCodexAccount(id: string): number {
     const current = store[id];
     const generation = (current?.generation ?? 0) + 1;
     store[id] = { generation, deletedAt: Date.now() };
-    persist(store);
+    persistCredentialMutation(store);
     return generation;
   });
 }

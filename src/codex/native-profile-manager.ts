@@ -67,6 +67,7 @@ import {
   type NativeProfilePublic,
   type NativeProfileSwitchJournalV1,
 } from "./native-profile-types";
+import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import {
   NATIVE_STAGE_HEARTBEAT_INTERVAL_MS,
   NativeProfileStageStore,
@@ -1307,6 +1308,7 @@ export class NativeProfileManager {
         await this.atomicWrite(this.context.authPath, target.text);
         const observedTarget = this.verifyWrittenEnvelope(target.digest, targetProfile.identityHash, key);
         observedTarget.raw.fill(0);
+        advanceCodexCredentialMutationEpoch();
         await this.onSwitchBoundary("auth-replaced");
         journal.phase = "auth-replaced";
         await this.writeJournal(journal);
@@ -1335,6 +1337,7 @@ export class NativeProfileManager {
           await this.atomicWrite(this.context.authPath, source!.text);
           const restored = this.verifyWrittenEnvelope(source!.digest, nativeIdentityHash(key!.key, source!.accountId), key!);
           restored.raw.fill(0);
+          advanceCodexCredentialMutationEpoch();
           await this.writeVault(beforeVault);
           this.removeJournal();
         } catch {
@@ -1449,6 +1452,7 @@ export class NativeProfileManager {
         await this.atomicWrite(this.context.authPath, sourceEnvelope.text);
         const restored = this.verifyWrittenEnvelope(sourceEnvelope.digest, journal.sourceIdentityHash, key);
         restored.raw.fill(0);
+        advanceCodexCredentialMutationEpoch();
         if (!rollbackVaultPublished) await this.writeVault(rollbackVault);
         this.applyTransition(current.envelope.accountId, sourceEnvelope.accountId);
         this.removeJournal();

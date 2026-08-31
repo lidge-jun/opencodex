@@ -14,6 +14,7 @@ import {
   type NativeEnvelopeSnapshot,
 } from "../src/codex/native-profile-store";
 import { NativeProfileError, type NativeProfileKey, type NativeProfileKeyProvider } from "../src/codex/native-profile-types";
+import { codexCredentialMutationEpoch } from "../src/codex/credential-mutation-epoch";
 
 const roots: string[] = [];
 
@@ -1027,6 +1028,7 @@ describe("native main profile transactions", () => {
   test("automatic recovery reports an externally refreshed target", async () => {
     const f = await enrolledFixture();
     await leavePendingJournal(f);
+    const epochBefore = codexCredentialMutationEpoch();
     const refreshed = envelope("account-target", "target-refreshed-auto");
     writeFileSync(f.manager.context.authPath, refreshed);
     expect(await f.manager.recover(false)).toMatchObject({
@@ -1036,6 +1038,7 @@ describe("native main profile transactions", () => {
       restartRequired: true,
     });
     expect(readFileSync(f.manager.context.authPath, "utf8")).toBe(refreshed);
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore);
   });
 
   // The manager can spend up to 5 s acquiring its SQLite transaction lock.
@@ -1055,6 +1058,7 @@ describe("native main profile transactions", () => {
     expect(vaultText).not.toContain("account-target");
     expect(() => readFileSync(join(f.stage.stagingCodexHome, "auth.json"))).toThrow();
 
+    const epochBefore = codexCredentialMutationEpoch();
     const switched = await f.manager.switch("work", true);
     expect(switched.restartRequired).toBe(true);
     expect(readFileSync(join(f.codexHome, "auth.json"), "utf8")).toBe(f.target);
@@ -1067,6 +1071,7 @@ describe("native main profile transactions", () => {
       "account-source->account-target",
       "account-target->account-source",
     ]);
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore + 2);
   }, 10_000);
 
   // This rollback case uses the same encrypted-vault and SQLite setup as the
@@ -1084,6 +1089,7 @@ describe("native main profile transactions", () => {
         return atomic(path, content);
       },
     });
+    const epochBefore = codexCredentialMutationEpoch();
     let caught: unknown;
     try { await failing.switch("work", true); } catch (error) { caught = error; }
     expect(caught).toBeInstanceOf(NativeProfileError);
@@ -1091,6 +1097,7 @@ describe("native main profile transactions", () => {
     expect(readFileSync(join(f.codexHome, "auth.json"), "utf8")).toBe(f.source);
     expect((await failing.doctor()).recoveryPending).toBe(false);
     expect((await failing.list()).activeProfileId).toBe(f.sourceProfile.id);
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore + 1);
   }, 10_000);
 
   test("rollback verification failure retains the encrypted recovery journal and never claims success", async () => {
@@ -1255,6 +1262,7 @@ describe("native main profile transactions", () => {
     await leavePendingJournal(f);
     const refreshedTarget = envelope("account-target", "target-refreshed");
     writeFileSync(f.manager.context.authPath, refreshedTarget);
+    const epochBefore = codexCredentialMutationEpoch();
 
     const result = await f.manager.recover(true, true);
 
@@ -1280,6 +1288,7 @@ describe("native main profile transactions", () => {
     );
     try { expect(decrypted.text).toBe(refreshedTarget); } finally { decrypted.raw.fill(0); key!.key.fill(0); }
     expect(f.transitions).toEqual(["account-target->account-source"]);
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore + 1);
   });
 
   test("rollback preservation failure leaves refreshed target auth untouched and journaled", async () => {

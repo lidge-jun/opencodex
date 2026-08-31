@@ -89,6 +89,41 @@ describe("codex-account-store CRUD", () => {
     expect(readCodexAccountRecord("wrapped")).toMatchObject({ credential: cred, generation: 1 });
   });
 
+  test("every successful credential commit and tombstone advances one shared mutation epoch", async () => {
+    const {
+      commitRefreshedCodexCredentialWithAliases,
+      markCodexAccountValidated,
+      readCodexAccountRecord,
+      saveCodexAccountCredential,
+      saveCodexAccountCredentialIfGeneration,
+      tombstoneCodexAccount,
+    } = await import("../src/codex/account-store");
+    const { codexCredentialMutationEpoch } = await import("../src/codex/credential-mutation-epoch");
+    const first = { accessToken: "epoch-a", refreshToken: "epoch-r-a", expiresAt: Date.now() + 3600_000, chatgptAccountId: "epoch-account" };
+    const second = { ...first, accessToken: "epoch-b", refreshToken: "epoch-r-b" };
+    const third = { ...second, accessToken: "epoch-c", refreshToken: "epoch-r-c" };
+    const start = codexCredentialMutationEpoch();
+
+    saveCodexAccountCredential("epoch", first);
+    expect(codexCredentialMutationEpoch()).toBe(start + 1);
+
+    markCodexAccountValidated("epoch");
+    expect(codexCredentialMutationEpoch()).toBe(start + 1);
+
+    const firstGeneration = readCodexAccountRecord("epoch")!.generation;
+    expect(saveCodexAccountCredentialIfGeneration("epoch", firstGeneration, second)).toBe(true);
+    expect(codexCredentialMutationEpoch()).toBe(start + 2);
+    expect(saveCodexAccountCredentialIfGeneration("epoch", firstGeneration, first)).toBe(false);
+    expect(codexCredentialMutationEpoch()).toBe(start + 2);
+
+    const secondGeneration = readCodexAccountRecord("epoch")!.generation;
+    expect(commitRefreshedCodexCredentialWithAliases("epoch", secondGeneration, third).committed).toBe(true);
+    expect(codexCredentialMutationEpoch()).toBe(start + 3);
+
+    tombstoneCodexAccount("epoch");
+    expect(codexCredentialMutationEpoch()).toBe(start + 4);
+  });
+
   test("remove credential deletes entry", async () => {
     const { saveCodexAccountCredential, removeCodexAccountCredential, getCodexAccountCredential, listCodexAccountIds, readCodexAccountRecord } = await import("../src/codex/account-store");
     saveCodexAccountCredential("temp", { accessToken: "t", refreshToken: "r", expiresAt: 0, chatgptAccountId: "c" });

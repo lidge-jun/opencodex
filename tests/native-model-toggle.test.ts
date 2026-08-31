@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   accountBoundNativeOpenAiSlugs,
   accountBoundNativeDisplayName,
@@ -26,6 +29,7 @@ import { NATIVE_GPT56_CONTEXT_WINDOW, NATIVE_GPT56_OPT_IN_CONTEXT_WINDOW, native
 import type { OcxConfig } from "../src/types";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
 import {
+  GATED_MODEL_CLIENT_VERSION_FLOOR,
   resetCodexModelEntitlementCacheForTests,
   seedCodexModelEntitlementsForTests,
 } from "../src/codex/model-entitlements";
@@ -664,37 +668,117 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
   });
 
   test("management API surfaces: /api/models leads with native rows; subagent available drops disabled bare slugs", async () => {
-    resetCodexModelEntitlementCacheForTests();
-    const config = makeConfig({ disabledModels: ["gpt-5.6-sol"] });
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    const oldCodexHome = process.env.CODEX_HOME;
+    const root = mkdtempSync(join(tmpdir(), "ocx-native-model-management-"));
+    const codexHome = join(root, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    process.env.OPENCODEX_HOME = join(root, "opencodex");
+    process.env.CODEX_HOME = codexHome;
+    try {
+      resetCodexModelEntitlementCacheForTests();
+      const config = makeConfig({ disabledModels: ["gpt-5.6-sol"] });
 
-    const modelsRes = await handleManagementAPI(
-      new Request("http://localhost/api/models"), new URL("http://localhost/api/models"), config,
-    );
-    const rows = await modelsRes!.json() as Array<{ namespaced: string; native?: boolean; disabled: boolean }>;
-    const nativeRows = rows.filter(r => r.native);
-    expect(nativeRows.map(r => r.namespaced)).toEqual(
-      NATIVE_OPENAI_MODELS.filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)),
-    );
+      const modelsRes = await handleManagementAPI(
+        new Request("http://localhost/api/models"), new URL("http://localhost/api/models"), config,
+      );
+      const rows = await modelsRes!.json() as Array<{ namespaced: string; native?: boolean; disabled: boolean }>;
+      const nativeRows = rows.filter(r => r.native);
+      expect(nativeRows.map(r => r.namespaced)).toEqual(
+        NATIVE_OPENAI_MODELS.filter(slug => !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)),
+      );
 
-    // A confirmed roster makes the gated rows selectable again; a bare disable still wins.
-    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol"]);
-    const confirmedRes = await handleManagementAPI(
-      new Request("http://localhost/api/models"), new URL("http://localhost/api/models"), config,
-    );
-    const confirmedRows = (await confirmedRes!.json() as Array<{ namespaced: string; native?: boolean; disabled: boolean }>)
-      .filter(r => r.native);
-    expect(confirmedRows.map(r => r.namespaced)).toContain("gpt-5.6-sol");
-    expect(confirmedRows.find(r => r.namespaced === "gpt-5.6-sol")?.disabled).toBe(true);
-    // Native rows lead the response so the GUI pins the group first.
-    expect(rows[0]?.native).toBe(true);
+      // A confirmed roster makes the gated rows selectable again; a bare disable still wins.
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+        tokens: { access_token: "toggle-token", account_id: "toggle-main" },
+      }));
+      seedCodexModelEntitlementsForTests(
+        "main",
+        ["gpt-5.6-sol"],
+        Date.now(),
+        GATED_MODEL_CLIENT_VERSION_FLOOR,
+        "main:toggle-main",
+      );
+      const confirmedRes = await handleManagementAPI(
+        new Request("http://localhost/api/models"), new URL("http://localhost/api/models"), config,
+      );
+      const confirmedRows = (await confirmedRes!.json() as Array<{ namespaced: string; native?: boolean; disabled: boolean }>)
+        .filter(r => r.native);
+      expect(confirmedRows.map(r => r.namespaced)).toContain("gpt-5.6-sol");
+      expect(confirmedRows.find(r => r.namespaced === "gpt-5.6-sol")?.disabled).toBe(true);
+      // Native rows lead the response so the GUI pins the group first.
+      expect(rows[0]?.native).toBe(true);
 
-    const subRes = await handleManagementAPI(
-      new Request("http://localhost/api/subagent-models"), new URL("http://localhost/api/subagent-models"), config,
+      const subRes = await handleManagementAPI(
+        new Request("http://localhost/api/subagent-models"), new URL("http://localhost/api/subagent-models"), config,
+      );
+      const sub = await subRes!.json() as { available: string[] };
+      // Bare disabled slugs flow through the existing namespaced-string filter automatically.
+      expect(sub.available).not.toContain("gpt-5.6-sol");
+      expect(sub.available).toContain("gpt-5.6-terra");
+    } finally {
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldOcxHome;
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = oldCodexHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an expired confirmed roster is refreshed before /api/models projects native rows", async () => {
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    const oldCodexHome = process.env.CODEX_HOME;
+    const originalFetch = globalThis.fetch;
+    const root = mkdtempSync(join(tmpdir(), "ocx-native-model-expired-"));
+    const codexHome = join(root, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    process.env.OPENCODEX_HOME = join(root, "opencodex");
+    process.env.CODEX_HOME = codexHome;
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+      tokens: { access_token: "expired-token", account_id: "expired-main" },
+    }));
+    seedCodexModelEntitlementsForTests(
+      "main",
+      ["gpt-5.6-sol"],
+      1_000,
+      GATED_MODEL_CLIENT_VERSION_FLOOR,
+      "main:expired-main",
     );
-    const sub = await subRes!.json() as { available: string[] };
-    // Bare disabled slugs flow through the existing namespaced-string filter automatically.
-    expect(sub.available).not.toContain("gpt-5.6-sol");
-    expect(sub.available).toContain("gpt-5.6-terra");
+    let entitlementFetches = 0;
+    globalThis.fetch = (async input => {
+      const url = new URL(input instanceof globalThis.Request ? input.url : String(input));
+      if (url.hostname === "chatgpt.com" && url.pathname === "/backend-api/codex/models") {
+        entitlementFetches += 1;
+        return Response.json({ models: [
+          { slug: "gpt-5.6-sol", supported_in_api: true, visibility: "list" },
+          { slug: "gpt-5.6-terra", supported_in_api: true, visibility: "list" },
+          { slug: "gpt-5.6-luna", supported_in_api: true, visibility: "list" },
+        ] });
+      }
+      return originalFetch(input);
+    }) as typeof fetch;
+    try {
+      const response = await handleManagementAPI(
+        new Request("http://localhost/api/models"),
+        new URL("http://localhost/api/models"),
+        makeConfig(),
+      );
+      const rows = await response!.json() as Array<{ namespaced: string; native?: boolean }>;
+      const nativeIds = rows.filter(row => row.native).map(row => row.namespaced);
+      expect(entitlementFetches).toBe(1);
+      expect(nativeIds).toEqual(expect.arrayContaining([
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ]));
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldOcxHome;
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = oldCodexHome;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";

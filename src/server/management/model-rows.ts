@@ -25,6 +25,7 @@ import { providerContextCap } from "../../providers/context-cap";
 import { isVisionReasoningEffort } from "../../reasoning-effort";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import type { OcxConfig } from "../../types";
+import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
 
 /**
@@ -47,8 +48,16 @@ export type ManagementModelRow = Partial<CatalogModel> & {
  * models the GUI's Models tab shows — including this function's `disabled` computation,
  * which the export core (src/clients/config-export.ts) deliberately does not perform.
  */
-export async function listManagementModelRows(config: OcxConfig): Promise<ManagementModelRow[]> {
-  const models = await fetchAllModels(config);
+export async function listManagementModelRows(
+  config: OcxConfig,
+  options: { entitlementWaitMs?: number } = {},
+): Promise<ManagementModelRow[]> {
+  const [models] = await Promise.all([
+    fetchAllModels(config),
+    ensureCodexEntitlementFreshness(config, {
+      waitMs: options.entitlementWaitMs ?? 3_000,
+    }),
+  ]);
   const disabled = new Set(config.disabledModels ?? []);
   // Native GPT passthrough rows lead (provider "openai", bare-slug namespaced ids): sourced
   // from the static supported set so a disabled model stays listed and re-enableable.

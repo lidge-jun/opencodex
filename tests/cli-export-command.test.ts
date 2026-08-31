@@ -8,11 +8,13 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { handleExportCommand, exportModelsFromProxyRows } from "../src/cli/export-command";
+import { resetCodexModelEntitlementCacheForTests } from "../src/codex/model-entitlements";
+import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
@@ -61,6 +63,19 @@ function fakeProxy(rows: unknown = ROWS) {
   return { port: server.port, baseUrl: `http://127.0.0.1:${server.port}` };
 }
 
+function managementProxy(managementConfig: OcxConfig) {
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const url = new URL(req.url);
+      return await handleManagementAPI(req, url, managementConfig)
+        ?? new Response("not found", { status: 404 });
+    },
+  });
+  servers.push(server);
+  return { port: server.port, baseUrl: `http://127.0.0.1:${server.port}` };
+}
+
 function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "ocx-export-"));
   tempDirs.push(dir);
@@ -86,6 +101,7 @@ afterEach(() => {
   console.error = originalError;
   for (const server of servers.splice(0)) server.stop(true);
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  resetCodexModelEntitlementCacheForTests();
 });
 
 /** console.log adds exactly one newline per call; this is the byte stream a shell sees. */
@@ -102,6 +118,68 @@ async function run(args: string[], extra: { baseUrl: string; config?: OcxConfig 
 }
 
 describe("ocx export --json (accept criterion 1)", () => {
+  test("the real /api/models handler refreshes expired GPT-5.6 entitlements before export", async () => {
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    const oldCodexHome = process.env.CODEX_HOME;
+    const originalFetch = globalThis.fetch;
+    const root = tempDir();
+    const codexHome = join(root, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    process.env.OPENCODEX_HOME = join(root, "opencodex");
+    process.env.CODEX_HOME = codexHome;
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+      tokens: { access_token: "export-token", account_id: "export-main" },
+    }));
+    let entitlementFetches = 0;
+    globalThis.fetch = (async input => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === "chatgpt.com" && url.pathname === "/backend-api/codex/models") {
+        entitlementFetches += 1;
+        return Response.json({ models: [
+          { slug: "gpt-5.6-sol", supported_in_api: true, visibility: "list" },
+          { slug: "gpt-5.6-terra", supported_in_api: true, visibility: "list" },
+          { slug: "gpt-5.6-luna", supported_in_api: true, visibility: "list" },
+        ] });
+      }
+      return originalFetch(input);
+    }) as typeof fetch;
+    try {
+      const managementConfig = config({
+        defaultProvider: "openai",
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+            liveModels: false,
+            models: [],
+          },
+        },
+      });
+      const proxy = managementProxy(managementConfig);
+      const result = await run(["--client", "opencode", "--json"], {
+        baseUrl: proxy.baseUrl,
+        config: managementConfig,
+      });
+      expect(result.code).toBe(0);
+      const parsed = JSON.parse(result.stdout) as {
+        provider: Record<string, { models: Record<string, unknown> }>;
+      };
+      expect(entitlementFetches).toBe(1);
+      expect(Object.keys(parsed.provider.opencodex!.models)).toEqual(expect.arrayContaining([
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ]));
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldOcxHome;
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = oldCodexHome;
+    }
+  });
+
   test("stdout parses as JSON with zero extra bytes, for both clients", async () => {
     const proxy = fakeProxy();
     for (const client of ["opencode", "pi"] as const) {

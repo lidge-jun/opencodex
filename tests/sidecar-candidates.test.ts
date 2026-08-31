@@ -6,6 +6,7 @@ import * as modelRowsModule from "../src/server/management/model-rows";
 let accountSets: Record<string, { accounts: Array<{ id: string; needsReauth?: boolean }>; activeAccountId?: string }> = {};
 let usableCodexAccounts: Set<string> = new Set();
 let managementRows: Array<Record<string, unknown>> | Error = [];
+let entitlementWaitMs: number | undefined;
 
 mock.module("../src/oauth/store", () => ({
   ...storeModule,
@@ -17,7 +18,8 @@ mock.module("../src/codex/account-usability", () => ({
 }));
 mock.module("../src/server/management/model-rows", () => ({
   ...modelRowsModule,
-  listManagementModelRows: async () => {
+  listManagementModelRows: async (_config: unknown, options?: { entitlementWaitMs?: number }) => {
+    entitlementWaitMs = options?.entitlementWaitMs;
     if (managementRows instanceof Error) throw managementRows;
     return managementRows;
   },
@@ -40,6 +42,7 @@ afterEach(() => {
   accountSets = {};
   usableCodexAccounts = new Set();
   managementRows = [];
+  entitlementWaitMs = undefined;
 });
 
 function loginBoth(): void {
@@ -82,6 +85,7 @@ describe("pickerVisibleSidecarCandidates", () => {
     const cfg = config({ providers: { openai: forward, claude: anthropicOAuth } });
     const all = await pickerVisibleSidecarCandidates(cfg, resolveSidecarAuth(cfg));
     expect(all.map(c => c.id).sort()).toEqual(["claude-haiku-4-5", "gpt-5.6-luna"]);
+    expect(entitlementWaitMs).toBe(0);
   });
 
   test("no logins and empty catalog -> empty set", async () => {

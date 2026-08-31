@@ -13,6 +13,7 @@ import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import { loadPersistedCodexRuntime } from "./runtime";
 import { codexRuntimeStateEpoch } from "./runtime";
 import upstreamModelsSnapshot from "./data/upstream-models.json";
+import { codexCredentialMutationEpoch } from "./credential-mutation-epoch";
 
 const CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models";
 
@@ -230,6 +231,7 @@ function memoizedPersistedRuntimeVersion(
   return selected;
 }
 const MODEL_ROSTER_FAILURE_TTL_MS = 15_000;
+const MODEL_ROSTER_NEGATIVE_CREDENTIAL_TTL_MS = 5_000;
 const MODEL_ROSTER_TIMEOUT_MS = 8_000;
 const MODEL_ROSTER_MAX_BYTES = 2 * 1024 * 1024;
 const MODEL_ROSTER_CACHE_MAX = 64;
@@ -309,10 +311,39 @@ export interface CodexModelEntitlementResolveOptions {
   readonly credentialSnapshot?: typeof accountCredentialSnapshot;
   /** Accounts whose credentials must not be read while another lifecycle owns them. */
   readonly excludeAccountIds?: ReadonlySet<string>;
+  /** Ensure-only fence; ordinary request resolvers retain their established flight identity. */
+  readonly credentialMutationEpoch?: number;
+}
+
+export interface CodexEntitlementFreshnessOptions extends Pick<
+  CodexModelEntitlementResolveOptions,
+  | "clientVersion"
+  | "credentialSnapshot"
+  | "fetcher"
+  | "loadPersistedRuntime"
+  | "nativeMainRefreshDependencies"
+  | "now"
+  | "signal"
+> {
+  readonly waitMs?: number;
 }
 
 const accountModelsCache = new Map<string, CachedAccountModels>();
 const accountModelsFlights = new Map<string, Promise<CachedAccountModels>>();
+
+interface NegativeCredentialMemo {
+  readonly credentialIdentity: string | null;
+  readonly mutationEpoch: number;
+  readonly expiresAt: number;
+}
+
+interface EntitlementEnsureFlight {
+  readonly startedAt: number;
+  readonly promise: Promise<void>;
+}
+
+const negativeCredentialMemo = new Map<string, NegativeCredentialMemo>();
+const entitlementEnsureFlights = new Map<string, EntitlementEnsureFlight>();
 
 /**
  * Cache key. The roster is version-specific, so the version has to be part of the identity —
@@ -513,6 +544,7 @@ async function modelsForCredential(
   fetcher: typeof fetch,
   now: number,
   clientVersion: string,
+  credentialMutationEpoch?: number,
 ): Promise<CachedAccountModels> {
   const cached = accountModelsCache.get(cacheKeyFor(credential.accountId, clientVersion));
   if (
@@ -521,7 +553,8 @@ async function modelsForCredential(
     && cached.expiresAt > now
   ) return cached;
 
-  const flightKey = `${credential.accountId}\u0000${credential.credentialIdentity}\u0000${clientVersion}`;
+  const flightKey = `${credential.accountId}\u0000${credential.credentialIdentity}\u0000${clientVersion}`
+    + (credentialMutationEpoch === undefined ? "" : `\u0000${credentialMutationEpoch}`);
   const existing = accountModelsFlights.get(flightKey);
   if (existing) return existing;
 
@@ -541,7 +574,11 @@ async function modelsForCredential(
   }
   const flight = fetchAccountModels(credential, fetcher, now, clientVersion)
     .then(result => {
-      if (currentCredentialIdentity(credential.accountId) === credential.credentialIdentity) {
+      if (
+        currentCredentialIdentity(credential.accountId) === credential.credentialIdentity
+        && (credentialMutationEpoch === undefined
+          || codexCredentialMutationEpoch() === credentialMutationEpoch)
+      ) {
         boundedCacheSet(credential.accountId, result);
       }
       return result;
@@ -560,6 +597,184 @@ function candidateAccountIds(config: Pick<OcxConfig, "codexAccounts">): string[]
       .filter(isSelectableCodexPoolAccount)
       .map(account => account.id),
   ];
+}
+
+function normalizedCandidateAccountIds(config: Pick<OcxConfig, "codexAccounts">): string[] {
+  return [...new Set(candidateAccountIds(config))].sort();
+}
+
+function freshNegativeCredentialMemo(
+  accountId: string,
+  credentialIdentity: string | null,
+  mutationEpoch: number,
+  now: number,
+): boolean {
+  const memo = negativeCredentialMemo.get(accountId);
+  if (
+    memo
+    && memo.credentialIdentity === credentialIdentity
+    && memo.mutationEpoch === mutationEpoch
+    && memo.expiresAt > now
+  ) return true;
+  if (memo) negativeCredentialMemo.delete(accountId);
+  return false;
+}
+
+function boundedNegativeCredentialMemoSet(accountId: string, memo: NegativeCredentialMemo): void {
+  negativeCredentialMemo.delete(accountId);
+  negativeCredentialMemo.set(accountId, memo);
+  for (const oldest of [...negativeCredentialMemo.keys()].slice(0, Math.max(
+    0,
+    negativeCredentialMemo.size - MODEL_ROSTER_CACHE_MAX,
+  ))) negativeCredentialMemo.delete(oldest);
+}
+
+function needsEntitlementRefresh(
+  accountId: string,
+  credentialIdentity: string | null,
+  clientVersion: string,
+  mutationEpoch: number,
+  now: number,
+): boolean {
+  const cached = accountModelsCache.get(cacheKeyFor(accountId, clientVersion));
+  if (cached && cached.credentialIdentity !== credentialIdentity) {
+    invalidateCodexModelEntitlementsForAccount(accountId);
+  } else if (cached && cached.expiresAt > now) {
+    return false;
+  }
+  return !freshNegativeCredentialMemo(accountId, credentialIdentity, mutationEpoch, now);
+}
+
+function entitlementEnsureFlightKey(
+  candidateAccountIds: readonly string[],
+  clientVersion: string,
+  mutationEpoch: number,
+  identityVector: readonly (readonly [string, string | null])[],
+  workset: readonly string[],
+): string {
+  return JSON.stringify([candidateAccountIds, clientVersion, mutationEpoch, identityVector, workset]);
+}
+
+async function refreshCodexEntitlementWorkset(
+  config: Pick<OcxConfig, "codexAccounts">,
+  workset: readonly string[],
+  identityVector: ReadonlyMap<string, string | null>,
+  clientVersion: string,
+  mutationEpoch: number,
+  options: CodexEntitlementFreshnessOptions,
+): Promise<void> {
+  const credentialSnapshot = options.credentialSnapshot ?? accountCredentialSnapshot;
+  const observations = await Promise.all(workset.map(async accountId => {
+    const credential = await credentialSnapshot(accountId, options);
+    return {
+      accountId,
+      credential,
+      absenceObservedAt: options.now ?? Date.now(),
+    };
+  }));
+  const credentials = observations.flatMap(observation => observation.credential
+    ? [observation.credential]
+    : []);
+  if (credentials.length > 0) {
+    await resolveCodexModelEntitlements(config, {
+      ...options,
+      clientVersion,
+      credentialMutationEpoch: mutationEpoch,
+      credentials,
+    });
+  }
+
+  for (const observation of observations) {
+    if (observation.credential) continue;
+    const capturedIdentity = identityVector.get(observation.accountId) ?? null;
+    if (codexCredentialMutationEpoch() !== mutationEpoch) continue;
+    if ((currentCredentialIdentity(observation.accountId) ?? null) !== capturedIdentity) continue;
+    boundedNegativeCredentialMemoSet(observation.accountId, {
+      credentialIdentity: capturedIdentity,
+      mutationEpoch,
+      expiresAt: observation.absenceObservedAt + MODEL_ROSTER_NEGATIVE_CREDENTIAL_TTL_MS,
+    });
+  }
+}
+
+function waitForEntitlementEnsureFlight(
+  flight: EntitlementEnsureFlight,
+  waitMs: number,
+): Promise<void> {
+  const remaining = Math.max(0, waitMs - Math.max(0, Date.now() - flight.startedAt));
+  if (remaining === 0) return Promise.resolve();
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, remaining);
+    void flight.promise.then(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Refreshes only missing, expired, or credential-mismatched local entitlement entries.
+ * Management deadlines bound the wait, not the upstream work, so a timed-out poll still warms
+ * the cache for the first poll after the shared flight settles.
+ */
+export async function ensureCodexEntitlementFreshness(
+  config: Pick<OcxConfig, "codexAccounts">,
+  options: CodexEntitlementFreshnessOptions = {},
+): Promise<void> {
+  try {
+    const now = options.now ?? Date.now();
+    const clientVersion = resolveCodexEntitlementClientVersion(
+      options.clientVersion,
+      options.loadPersistedRuntime ?? loadPersistedCodexRuntime,
+    );
+    const candidates = normalizedCandidateAccountIds(config);
+    const mutationEpoch = codexCredentialMutationEpoch();
+    const identityEntries = candidates.map(accountId => (
+      [accountId, currentCredentialIdentity(accountId) ?? null] as const
+    ));
+    const identityVector = new Map(identityEntries);
+    const workset = candidates.filter(accountId => needsEntitlementRefresh(
+      accountId,
+      identityVector.get(accountId) ?? null,
+      clientVersion,
+      mutationEpoch,
+      now,
+    ));
+    if (workset.length === 0) return;
+
+    const key = entitlementEnsureFlightKey(
+      candidates,
+      clientVersion,
+      mutationEpoch,
+      identityEntries,
+      workset,
+    );
+    let flight = entitlementEnsureFlights.get(key);
+    if (!flight) {
+      const startedAt = Date.now();
+      let created!: EntitlementEnsureFlight;
+      const promise = refreshCodexEntitlementWorkset(
+        config,
+        workset,
+        identityVector,
+        clientVersion,
+        mutationEpoch,
+        options,
+      ).catch(() => {
+        // Entitlement discovery is fail-closed: callers project only confirmed cache entries.
+      }).finally(() => {
+        if (entitlementEnsureFlights.get(key) === created) entitlementEnsureFlights.delete(key);
+      });
+      created = { startedAt, promise };
+      entitlementEnsureFlights.set(key, created);
+      flight = created;
+    }
+    const requestedWaitMs = options.waitMs ?? 3_000;
+    const waitMs = Number.isFinite(requestedWaitMs) ? Math.max(0, requestedWaitMs) : 0;
+    await waitForEntitlementEnsureFlight(flight, waitMs);
+  } catch {
+    // The shared management boundary must degrade to the last confirmed fail-closed projection.
+  }
 }
 
 /**
@@ -598,7 +813,13 @@ export async function resolveCodexModelEntitlements(
       .filter((value): value is CodexModelEntitlementCredentialSnapshot => value !== null);
   const results = await Promise.all(credentials.map(async credential => ({
     credential,
-    result: await modelsForCredential(credential, fetcher, now, clientVersion),
+    result: await modelsForCredential(
+      credential,
+      fetcher,
+      now,
+      clientVersion,
+      options.credentialMutationEpoch,
+    ),
   })));
   return {
     modelsByAccount: new Map(results.map(({ credential, result }) => [credential.accountId, result.models])),
@@ -695,6 +916,8 @@ export function invalidateCodexModelEntitlementsForAccount(accountId: string | n
 export function resetCodexModelEntitlementCacheForTests(): void {
   accountModelsCache.clear();
   accountModelsFlights.clear();
+  negativeCredentialMemo.clear();
+  entitlementEnsureFlights.clear();
   runtimeVersionMemo = null;
 }
 
@@ -717,9 +940,10 @@ export function seedCodexModelEntitlementsForTests(
   models: readonly string[],
   now = Date.now(),
   clientVersion = "0.146.0",
+  credentialIdentity = `test:${accountId}`,
 ): void {
   boundedCacheSet(accountId, {
-    credentialIdentity: `test:${accountId}`,
+    credentialIdentity,
     clientVersion,
     expiresAt: now + MODEL_ROSTER_TTL_MS,
     models: new Set(models),

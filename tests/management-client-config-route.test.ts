@@ -1,6 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  GATED_MODEL_CLIENT_VERSION_FLOOR,
   resetCodexModelEntitlementCacheForTests,
   seedCodexModelEntitlementsForTests,
 } from "../src/codex/model-entitlements";
@@ -28,7 +31,31 @@ import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
  */
 const REAL_LOOKING_KEY = "ocx_live_9f3c7a2b41d84e6fa05c8e17b3d92764";
 
-afterEach(() => resetCodexModelEntitlementCacheForTests());
+const originalOpenCodexHome = process.env.OPENCODEX_HOME;
+const originalCodexHome = process.env.CODEX_HOME;
+let entitlementTestRoot = "";
+let entitlementCodexHome = "";
+
+beforeAll(() => {
+  entitlementTestRoot = mkdtempSync(join(tmpdir(), "ocx-client-config-entitlement-"));
+  entitlementCodexHome = join(entitlementTestRoot, "codex");
+  mkdirSync(entitlementCodexHome, { recursive: true });
+  process.env.OPENCODEX_HOME = join(entitlementTestRoot, "opencodex");
+  process.env.CODEX_HOME = entitlementCodexHome;
+});
+
+afterAll(() => {
+  if (originalOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = originalOpenCodexHome;
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
+  rmSync(entitlementTestRoot, { recursive: true, force: true });
+});
+
+afterEach(() => {
+  resetCodexModelEntitlementCacheForTests();
+  rmSync(join(entitlementCodexHome, "auth.json"), { force: true });
+});
 
 interface ClientConfigEnvelope {
   client: string;
@@ -196,7 +223,16 @@ describe("GET /api/client-config", () => {
   }, 15_000);
 
   test("DSH response keeps management reasoning metadata in the rc.6 model map", async () => {
-    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-luna"]);
+    writeFileSync(join(entitlementCodexHome, "auth.json"), JSON.stringify({
+      tokens: { access_token: "dsh-token", account_id: "dsh-main" },
+    }));
+    seedCodexModelEntitlementsForTests(
+      "main",
+      ["gpt-5.6-luna"],
+      Date.now(),
+      GATED_MODEL_CLIENT_VERSION_FLOOR,
+      "main:dsh-main",
+    );
     const response = await clientConfigApi(baseConfig(), "?client=dsh");
     expect(response.status).toBe(200);
     const body = await response.json() as ClientConfigEnvelope;
@@ -213,6 +249,57 @@ describe("GET /api/client-config", () => {
       xhigh: "xhigh",
       max: "max",
     });
+  }, 15_000);
+
+  test("an expired management roster is refreshed once before client-config is projected", async () => {
+    writeFileSync(join(entitlementCodexHome, "auth.json"), JSON.stringify({
+      tokens: { access_token: "client-config-token", account_id: "client-config-account" },
+    }));
+    const originalFetch = globalThis.fetch;
+    let entitlementFetches = 0;
+    globalThis.fetch = (async input => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === "chatgpt.com" && url.pathname === "/backend-api/codex/models") {
+        entitlementFetches += 1;
+        return Response.json({ models: [
+          { slug: "gpt-5.6-sol", supported_in_api: true, visibility: "list" },
+          { slug: "gpt-5.6-terra", supported_in_api: true, visibility: "list" },
+          { slug: "gpt-5.6-luna", supported_in_api: true, visibility: "list" },
+        ] });
+      }
+      return originalFetch(input);
+    }) as typeof fetch;
+    try {
+      const config = baseConfig({
+        providers: {
+          ...baseConfig().providers,
+          openai: { authMode: "forward", liveModels: false, models: [] },
+        },
+      });
+      const response = await clientConfigApi(config, "?client=opencode");
+      expect(response.status).toBe(200);
+      const body = await response.json() as ClientConfigEnvelope;
+      const models = (body.config as OpencodeGeneratedConfig).provider[OPENCODE_PROVIDER_ID].models;
+      expect(entitlementFetches).toBe(1);
+      expect(Object.keys(models)).toEqual(expect.arrayContaining([
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ]));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }, 15_000);
+
+  test("an entitlement ensure rejection cannot turn client-config into a 503", async () => {
+    const config = baseConfig();
+    Object.defineProperty(config, "codexAccounts", {
+      get() { throw new Error("entitlement identity unavailable"); },
+      configurable: true,
+    });
+
+    const response = await clientConfigApi(config, "?client=opencode");
+    expect(response.status).toBe(200);
   }, 15_000);
 
   test("MCode response carries catalog context and its usable reasoning ladder", async () => {

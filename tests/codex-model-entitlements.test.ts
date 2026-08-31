@@ -1,10 +1,14 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   availableAccountGatedNativeModels,
   cachedAvailableAccountGatedNativeModels,
   composeGatedClientVersionFloorForTests,
   compareClientVersionsForTests,
   deriveGatedClientVersionFloor,
+  ensureCodexEntitlementFreshness,
   entitledCodexAccountIdsForModel,
   GATED_MODEL_CLIENT_VERSION_FLOOR,
   isDirectCallerEntitledToCodexModel,
@@ -16,7 +20,14 @@ import {
   seedCodexModelEntitlementsForTests,
   type CodexModelEntitlementCredentialSnapshot,
 } from "../src/codex/model-entitlements";
-import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import {
+  forceRefreshMainAccountToken,
+  MAIN_CODEX_ACCOUNT_ID,
+} from "../src/codex/main-account";
+import {
+  readCodexAccountRecord,
+  saveCodexAccountCredential,
+} from "../src/codex/account-store";
 import { clearCodexRuntimeResolveCache, loadPersistedCodexRuntime } from "../src/codex/runtime";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
 import upstreamModelsSnapshot from "../src/codex/data/upstream-models.json";
@@ -40,6 +51,15 @@ function roster(...slugs: string[]): Response {
   return Response.json({
     models: slugs.map(slug => ({ slug, supported_in_api: true, visibility: "list" })),
   });
+}
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(settle => { resolve = settle; });
+  return { promise, resolve };
 }
 
 beforeEach(() => resetCodexModelEntitlementCacheForTests());
@@ -191,6 +211,400 @@ describe("Codex account model entitlements", () => {
     expect([...cachedAvailableAccountGatedNativeModels(1_000)]).toContain(DAYBREAK);
   });
 
+});
+
+describe("ensureCodexEntitlementFreshness", () => {
+  const originalOpenCodexHome = process.env.OPENCODEX_HOME;
+  const originalCodexHome = process.env.CODEX_HOME;
+  let root = "";
+  let codexHome = "";
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "ocx-entitlement-freshness-"));
+    codexHome = join(root, "codex");
+    mkdirSync(codexHome, { recursive: true });
+    process.env.OPENCODEX_HOME = join(root, "opencodex");
+    process.env.CODEX_HOME = codexHome;
+  });
+
+  afterEach(() => {
+    if (originalOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = originalOpenCodexHome;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    rmSync(root, { recursive: true, force: true });
+    resetCodexModelEntitlementCacheForTests();
+  });
+
+  const poolConfig = (...ids: string[]) => ({
+    codexAccounts: ids.map(id => ({ id, email: `${id}@example.test`, isMain: false })),
+  });
+
+  const savePoolCredential = (accountId: string, suffix: string): void => {
+    saveCodexAccountCredential(accountId, {
+      accessToken: `access-${suffix}`,
+      refreshToken: `refresh-${suffix}`,
+      expiresAt: Date.now() + 60 * 60_000,
+      chatgptAccountId: `chatgpt-${suffix}`,
+    });
+  };
+
+  const storedCredentialSnapshot = async (
+    accountId: string,
+  ): Promise<CodexModelEntitlementCredentialSnapshot | null> => {
+    if (accountId === MAIN_CODEX_ACCOUNT_ID) return null;
+    const record = readCodexAccountRecord(accountId);
+    if (!record?.credential || record.deletedAt != null) return null;
+    return {
+      accountId,
+      accessToken: record.credential.accessToken,
+      chatgptAccountId: record.credential.chatgptAccountId,
+      credentialIdentity: `pool:${record.generation}:${record.credential.chatgptAccountId}`,
+    };
+  };
+
+  const writeMainAuth = (suffix: string): void => {
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: `access-${suffix}`,
+        account_id: `chatgpt-${suffix}`,
+      },
+    }));
+  };
+
+  const mainCredentialSnapshot = async (
+    accountId: string,
+  ): Promise<CodexModelEntitlementCredentialSnapshot | null> => {
+    if (accountId !== MAIN_CODEX_ACCOUNT_ID) return null;
+    const parsed = JSON.parse(readFileSync(join(codexHome, "auth.json"), "utf8")) as {
+      tokens: { access_token: string; account_id: string };
+    };
+    return {
+      accountId,
+      accessToken: parsed.tokens.access_token,
+      chatgptAccountId: parsed.tokens.account_id,
+      credentialIdentity: `main:${parsed.tokens.account_id}`,
+    };
+  };
+
+  test("a fresh ensure uses identity reads but performs zero full credential snapshots or network calls", async () => {
+    savePoolCredential("pool-fresh", "fresh");
+    let credentialReads = 0;
+    let fetches = 0;
+    const options = {
+      waitMs: 1_000,
+      now: 1_000,
+      clientVersion: TEST_CLIENT_VERSION,
+      credentialSnapshot: async (accountId: string) => {
+        credentialReads += 1;
+        return storedCredentialSnapshot(accountId);
+      },
+      fetcher: (async () => { fetches += 1; return roster(SOL, TERRA, LUNA); }) as typeof fetch,
+    };
+
+    await ensureCodexEntitlementFreshness(poolConfig("pool-fresh"), options);
+    expect(credentialReads).toBe(2);
+    expect(fetches).toBe(1);
+
+    credentialReads = 0;
+    await ensureCodexEntitlementFreshness(poolConfig("pool-fresh"), { ...options, now: 1_001 });
+    expect(credentialReads).toBe(0);
+    expect(fetches).toBe(1);
+  });
+
+  test("logged-out polls memoize the missing credential for exactly the bounded window", async () => {
+    let credentialReads = 0;
+    const options = {
+      waitMs: 1_000,
+      clientVersion: TEST_CLIENT_VERSION,
+      credentialSnapshot: async () => { credentialReads += 1; return null; },
+    };
+
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, { ...options, now: 10_000 });
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, { ...options, now: 14_999 });
+    expect(credentialReads).toBe(1);
+
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, { ...options, now: 15_001 });
+    expect(credentialReads).toBe(2);
+  });
+
+  test("a credential commit invalidates a negative memo before the next ensure", async () => {
+    let poolReads = 0;
+    let fetches = 0;
+    const snapshot = async (accountId: string) => {
+      if (accountId === "pool-login") poolReads += 1;
+      return storedCredentialSnapshot(accountId);
+    };
+    const options = {
+      waitMs: 1_000,
+      now: 20_000,
+      clientVersion: TEST_CLIENT_VERSION,
+      credentialSnapshot: snapshot,
+      fetcher: (async () => { fetches += 1; return roster(SOL); }) as typeof fetch,
+    };
+
+    await ensureCodexEntitlementFreshness(poolConfig("pool-login"), options);
+    expect(poolReads).toBe(1);
+    expect(fetches).toBe(0);
+
+    savePoolCredential("pool-login", "new-login");
+    await ensureCodexEntitlementFreshness(poolConfig("pool-login"), options);
+    expect(poolReads).toBe(2);
+    expect(fetches).toBe(1);
+  });
+
+  test("a same-identity main-token write invalidates a failed credential memo by epoch", async () => {
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: "access-memo-same",
+        refresh_token: "refresh-memo-same",
+        account_id: "chatgpt-memo-same",
+      },
+    }));
+    let credentialReads = 0;
+    let fetches = 0;
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, {
+      waitMs: 1_000,
+      now: 25_000,
+      clientVersion: TEST_CLIENT_VERSION,
+      credentialSnapshot: async () => { credentialReads += 1; return null; },
+    });
+    expect(credentialReads).toBe(1);
+
+    await forceRefreshMainAccountToken("access-memo-same", {
+      refreshToken: async () => ({
+        access: "access-memo-same-new",
+        refresh: "refresh-memo-same-new",
+        expires: Date.now() + 60 * 60_000,
+        accountId: "chatgpt-memo-same",
+      }),
+    });
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, {
+      waitMs: 1_000,
+      now: 25_001,
+      clientVersion: TEST_CLIENT_VERSION,
+      credentialSnapshot: async accountId => {
+        credentialReads += 1;
+        return mainCredentialSnapshot(accountId);
+      },
+      fetcher: (async () => { fetches += 1; return roster(SOL); }) as typeof fetch,
+    });
+    expect(credentialReads).toBe(2);
+    expect(fetches).toBe(1);
+  });
+
+  test("a local credential write during a flight cannot mask the replacement", async () => {
+    savePoolCredential("pool-local-race", "old");
+    const firstFetchStarted = deferred();
+    const releaseFirstFetch = deferred();
+    let fetches = 0;
+    const fetcher = (async () => {
+      fetches += 1;
+      if (fetches === 1) {
+        firstFetchStarted.resolve();
+        await releaseFirstFetch.promise;
+      }
+      return roster(SOL);
+    }) as typeof fetch;
+    const config = poolConfig("pool-local-race");
+    const options = {
+      waitMs: 0,
+      now: 30_000,
+      clientVersion: TEST_CLIENT_VERSION,
+      credentialSnapshot: storedCredentialSnapshot,
+      fetcher,
+    };
+
+    await ensureCodexEntitlementFreshness(config, options);
+    await firstFetchStarted.promise;
+    savePoolCredential("pool-local-race", "replacement");
+    await ensureCodexEntitlementFreshness(config, { ...options, waitMs: 1_000 });
+    expect(fetches).toBe(2);
+
+    releaseFirstFetch.resolve();
+    await ensureCodexEntitlementFreshness(config, { ...options, waitMs: 1_000 });
+    expect(fetches).toBe(2);
+  });
+
+  test("a same-identity main-token write cannot join its pre-write roster flight", async () => {
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: "access-same-identity",
+        refresh_token: "refresh-same-identity",
+        account_id: "chatgpt-same-identity",
+      },
+    }));
+    const firstFetchStarted = deferred();
+    const releaseFirstFetch = deferred();
+    let fetches = 0;
+    const fetcher = (async () => {
+      fetches += 1;
+      if (fetches === 1) {
+        firstFetchStarted.resolve();
+        await releaseFirstFetch.promise;
+      }
+      return roster(SOL);
+    }) as typeof fetch;
+    const options = {
+      waitMs: 0,
+      now: 35_000,
+      clientVersion: TEST_CLIENT_VERSION,
+      credentialSnapshot: mainCredentialSnapshot,
+      fetcher,
+    };
+
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, options);
+    await firstFetchStarted.promise;
+    await forceRefreshMainAccountToken("access-same-identity", {
+      refreshToken: async () => ({
+        access: "access-same-identity-new",
+        refresh: "refresh-same-identity-new",
+        expires: Date.now() + 60 * 60_000,
+        accountId: "chatgpt-same-identity",
+      }),
+    });
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, { ...options, waitMs: 1_000 });
+    expect(fetches).toBe(2);
+
+    releaseFirstFetch.resolve();
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, { ...options, waitMs: 1_000 });
+    expect(fetches).toBe(2);
+  });
+
+  test("an external auth.json replacement during a flight starts a new identity flight", async () => {
+    writeMainAuth("external-old");
+    const firstFetchStarted = deferred();
+    const releaseFirstFetch = deferred();
+    let fetches = 0;
+    const fetcher = (async () => {
+      fetches += 1;
+      if (fetches === 1) {
+        firstFetchStarted.resolve();
+        await releaseFirstFetch.promise;
+      }
+      return roster(SOL);
+    }) as typeof fetch;
+    const options = {
+      waitMs: 0,
+      now: 40_000,
+      clientVersion: TEST_CLIENT_VERSION,
+      credentialSnapshot: mainCredentialSnapshot,
+      fetcher,
+    };
+
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, options);
+    await firstFetchStarted.promise;
+    writeMainAuth("external-new");
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, { ...options, waitMs: 1_000 });
+    expect(fetches).toBe(2);
+
+    releaseFirstFetch.resolve();
+    await ensureCodexEntitlementFreshness({ codexAccounts: [] }, { ...options, waitMs: 1_000 });
+    expect(fetches).toBe(2);
+  });
+
+  test("an account expiring during an A-only flight is added to a distinct workset", async () => {
+    savePoolCredential("pool-work-b", "work-b");
+    const counts = new Map<string, number>();
+    let holdA = false;
+    const aFetchStarted = deferred();
+    let bRefreshStarted = false;
+    const releaseA = deferred();
+    const fetcher = (async (_input, init) => {
+      const accountId = new Headers(init?.headers).get("chatgpt-account-id") ?? "";
+      counts.set(accountId, (counts.get(accountId) ?? 0) + 1);
+      if (accountId === "chatgpt-work-a" && holdA) {
+        aFetchStarted.resolve();
+        await releaseA.promise;
+      }
+      if (accountId === "chatgpt-work-b" && (counts.get(accountId) ?? 0) === 2) {
+        bRefreshStarted = true;
+      }
+      return roster(SOL);
+    }) as typeof fetch;
+    const baseOptions = {
+      waitMs: 1_000,
+      clientVersion: TEST_CLIENT_VERSION,
+      credentialSnapshot: storedCredentialSnapshot,
+      fetcher,
+    };
+
+    await ensureCodexEntitlementFreshness(poolConfig("pool-work-b"), {
+      ...baseOptions,
+      now: 1_000,
+    });
+    expect(counts.get("chatgpt-work-b")).toBe(1);
+
+    savePoolCredential("pool-work-a", "work-a");
+    holdA = true;
+    await ensureCodexEntitlementFreshness(poolConfig("pool-work-a", "pool-work-b"), {
+      ...baseOptions,
+      waitMs: 0,
+      now: 300_999,
+    });
+    await aFetchStarted.promise;
+
+    await ensureCodexEntitlementFreshness(poolConfig("pool-work-a", "pool-work-b"), {
+      ...baseOptions,
+      waitMs: 0,
+      now: 301_001,
+    });
+    for (let i = 0; i < 10 && !bRefreshStarted; i += 1) await Promise.resolve();
+    expect(bRefreshStarted).toBe(true);
+    expect(counts.get("chatgpt-work-b")).toBe(2);
+
+    releaseA.resolve();
+    await ensureCodexEntitlementFreshness(poolConfig("pool-work-a", "pool-work-b"), {
+      ...baseOptions,
+      now: 301_001,
+    });
+    expect(counts.get("chatgpt-work-a")).toBe(1);
+    expect(counts.get("chatgpt-work-b")).toBe(2);
+  });
+
+  test("a late waiter spends only the flight's remaining management wait budget", async () => {
+    savePoolCredential("pool-wait", "wait");
+    const originalNow = Date.now;
+    const fetchStarted = deferred();
+    const releaseFetch = deferred();
+    let wallNow = 1_000;
+    Date.now = () => wallNow;
+    try {
+      const options = {
+        waitMs: 0,
+        now: 50_000,
+        clientVersion: TEST_CLIENT_VERSION,
+        credentialSnapshot: storedCredentialSnapshot,
+        fetcher: (async () => {
+          fetchStarted.resolve();
+          await releaseFetch.promise;
+          return roster(SOL);
+        }) as typeof fetch,
+      };
+      await ensureCodexEntitlementFreshness(poolConfig("pool-wait"), options);
+      await fetchStarted.promise;
+
+      wallNow = 5_000;
+      let lateWaiterSettled = false;
+      const lateWaiter = ensureCodexEntitlementFreshness(poolConfig("pool-wait"), {
+        ...options,
+        waitMs: 3_000,
+      }).then(() => { lateWaiterSettled = true; });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(lateWaiterSettled).toBe(true);
+
+      releaseFetch.resolve();
+      await lateWaiter;
+      await ensureCodexEntitlementFreshness(poolConfig("pool-wait"), {
+        ...options,
+        waitMs: 1_000,
+      });
+    } finally {
+      Date.now = originalNow;
+      releaseFetch.resolve();
+    }
+  });
 });
 
 describe("entitlement client version (#2886)", () => {

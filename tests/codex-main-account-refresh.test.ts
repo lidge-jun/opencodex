@@ -6,6 +6,7 @@ import {
   getValidMainAccountToken,
   setMainAuthJsonBeforeRenameHookForTests,
 } from "../src/codex/main-account";
+import { codexCredentialMutationEpoch } from "../src/codex/credential-mutation-epoch";
 
 let home: string;
 let previousCodexHome: string | undefined;
@@ -46,6 +47,7 @@ describe("native main token refresh", () => {
       targetDuringPublish = readFileSync(authPath, "utf8");
     });
 
+    const epochBefore = codexCredentialMutationEpoch();
     const token = await getValidMainAccountToken({
       refreshToken: async refreshToken => {
         expect(refreshToken).toBe("old-refresh");
@@ -70,6 +72,7 @@ describe("native main token refresh", () => {
       },
     });
     expect(readdirSync(home).filter(name => name.includes(".tmp"))).toEqual([]);
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore + 1);
   });
 
   test("refuses to overwrite an external auth writer after refresh", async () => {
@@ -90,6 +93,7 @@ describe("native main token refresh", () => {
     });
     setMainAuthJsonBeforeRenameHookForTests(() => writeFileSync(authPath, external));
 
+    const epochBefore = codexCredentialMutationEpoch();
     await expect(getValidMainAccountToken({
       refreshToken: async () => ({
         access: "new-access",
@@ -101,6 +105,7 @@ describe("native main token refresh", () => {
 
     expect(readFileSync(authPath, "utf8")).toBe(external);
     expect(readdirSync(home).filter(name => name.includes(".tmp"))).toEqual([]);
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore);
   });
 
   test("refresh failure leaves the original auth file byte-identical", async () => {

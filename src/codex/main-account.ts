@@ -18,6 +18,7 @@ import { atomicWriteFile, resolveWriteTarget } from "../config/atomic-write";
 import { resolveCodexHomeDir } from "./home";
 import { assertNotRealCodexHomeUnderTest } from "../lib/test-home-guard";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
+import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
 
 export { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
@@ -160,6 +161,7 @@ function persistRefreshedMainAuthJson(
       validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
     },
   );
+  advanceCodexCredentialMutationEpoch();
   return { accessToken, chatgptAccountId };
 }
 
