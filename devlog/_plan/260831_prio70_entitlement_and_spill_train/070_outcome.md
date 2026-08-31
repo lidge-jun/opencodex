@@ -63,3 +63,47 @@ the real output of wp0:
 
 - Status: pending.
 - Receipt: _pending_
+
+## wp1 — CLOSED (shipped)
+
+`#3022` is fixed on `dev`. PR #3035 squash-merged as `4bdc0f6fb`.
+
+Two defects, one file (`src/codex/model-entitlements.ts`): the gated client-version
+floor derived `0.142.2` from the bundled snapshot when upstream only returns the
+gpt-5.6 rows at `0.144.0` and above, and an empty roster was recorded as a
+confirmation because an empty `Set` is truthy. The floor is now composed as
+`max(derived, measured, fallback)`, and a roster with no usable rows is unconfirmed
+on the 15s failure TTL.
+
+Eight regressions, each driven red against the unfixed source. Reverting both changes
+produces exactly six failures in `tests/codex-model-entitlements.test.ts` and one in
+`tests/claude-models-discovery.test.ts`; restoring returns 37/37. One existing
+assertion was intentionally flipped (an all-filtered roster is no longer "confirmed"),
+and one existing mock was corrected — it gated at minor `>= 142`, which is precisely
+why the suite never caught the regression.
+
+Verified on `ssh lidge` at the exact pushed head `1b6b36b96`: privacy scan passed,
+typecheck clean, full suite **16510 pass / 0 fail / 16 skip**, `EXIT=0`. Repo CI green
+across all four test shards, Windows, macOS, keyring, npm-global and the gates.
+
+## wp2 — CLOSED as a planning cycle; implementation is wp6
+
+Four audit rounds, four correctness holes, all in the same place: what a deduplicated
+ensure is allowed to answer for. The flight key grew from a bare timestamp to
+`(candidate set, client version, mutation epoch, identity vector, workset)`, one term
+per round, each added because a reviewer produced a concrete cross-answering sequence.
+
+Round 8's is the one worth remembering: every other term can be unchanged while an
+entry expires mid-flight, so a second caller joins a flight that will never refresh
+the account it came to refresh, and `ocx export` — the surface #3023 actually
+reported — returns short rows having refreshed nothing.
+
+wp2 does not claim an implementation, because there is none. It is registered as wp6.
+
+## wp3 — repair in flight
+
+The drain itself is right: correct ordering before the 2 MiB snapshot exclusion, a
+genuine stable-fixed-point loop, `B=5000`/`R=4000` with the fallback receiving its
+reserved slice, and the shared ACL deadline reaching both hardeners. The review found
+one high defect: supersession reaches the state tracking but not the writer, so an
+abandoned writer can still publish to the filesystem and orphan a temp. Sent back.
