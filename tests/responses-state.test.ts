@@ -87,6 +87,7 @@ import {
   setIcaclsRunnerForTests,
   setNowForTests,
   setPlatformForTests,
+  setStatForTests,
   timedOutSecretPathCountForTests,
 } from "../src/lib/windows-secret-acl";
 
@@ -120,6 +121,11 @@ function fixedResponse(id: string, output: unknown[]): { id: string; output: unk
 function spillFileNames(home: string): string[] {
   const dir = responseSpillDirectory(home);
   return existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith(".spill.json")) : [];
+}
+
+function spillTempNames(home: string): string[] {
+  const dir = responseSpillDirectory(home);
+  return existsSync(dir) ? readdirSync(dir).filter(name => name.endsWith(".tmp")) : [];
 }
 
 function rememberLarge(id: string, text: string, providers?: Parameters<typeof rememberResponseState>[2]): void {
@@ -177,6 +183,7 @@ describe("Responses previous_response_id state", () => {
     setIcaclsRunnerForTests(null);
     setNowForTests(null);
     setPlatformForTests(null);
+    setStatForTests(null);
     resetHardenedStateForTests();
     delete process.env.OPENCODEX_ACL_TIMEOUT_MS;
     setResponseSpillShutdownBudgetForTests(null);
@@ -890,6 +897,48 @@ describe("Responses previous_response_id state", () => {
     expect(responseStateMetrics().spillStubCount).toBe(1);
   });
 
+  test("shutdown drain reaches a stable tail after a publication is appended mid-drain", async () => {
+    setPlatformForTests("win32");
+    setResponseSpillShutdownBudgetForTests({ totalMs: 1_000, fallbackReserveMs: 500 });
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    let firstEntered!: () => void;
+    let secondEntered!: () => void;
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>(resolve => { releaseSecond = resolve; });
+    const firstStarted = new Promise<void>(resolve => { firstEntered = resolve; });
+    const secondStarted = new Promise<void>(resolve => { secondEntered = resolve; });
+    let aclCalls = 0;
+    setAsyncIcaclsRunnerForTests(async () => {
+      aclCalls += 1;
+      if (aclCalls === 1) {
+        firstEntered();
+        await firstGate;
+      } else if (aclCalls === 7) {
+        secondEntered();
+        await secondGate;
+      }
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    setResponseStateByteCapForTests(1_024);
+    rememberLarge("resp_fixed_point_first", "a".repeat(8_000));
+    await firstStarted;
+
+    let flushed = false;
+    const flushing = flushResponseState().then(() => { flushed = true; });
+    rememberLarge("resp_fixed_point_second", "b".repeat(8_000));
+    releaseFirst();
+    await secondStarted;
+    try {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      expect(flushed).toBe(false);
+    } finally {
+      releaseSecond();
+    }
+    await flushing;
+    expect(responseStateMetrics()).toMatchObject({ residentCount: 0, spillStubCount: 2 });
+  });
+
   test("shutdown drain cap expiry enters the synchronous spill fallback", async () => {
     setPlatformForTests("win32");
     setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
@@ -959,24 +1008,31 @@ describe("Responses previous_response_id state", () => {
 
   test("late async spill completion cannot overwrite the shutdown fallback", async () => {
     setPlatformForTests("win32");
+    setStatForTests(() => ({ dev: 1n, ino: 10n, ctimeNs: 100n }));
     setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
     let release!: () => void;
     let entered!: () => void;
-    let secondPublish!: () => void;
+    let tempHardenFinished!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const started = new Promise<void>(resolve => { entered = resolve; });
-    const latePublished = new Promise<void>(resolve => { secondPublish = resolve; });
+    const hardened = new Promise<void>(resolve => { tempHardenFinished = resolve; });
     let publishCount = 0;
     setSpillIoForTest({
       record: event => {
         if (event !== "publish") return;
         publishCount += 1;
-        if (publishCount === 2) secondPublish();
       },
     });
-    setAsyncIcaclsRunnerForTests(async () => {
-      entered();
-      await gate;
+    let tempHardenCalls = 0;
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (String(args[0]).includes(".response-spill.")) {
+        tempHardenCalls += 1;
+        if (tempHardenCalls === 1) {
+          entered();
+          await gate;
+        }
+        if (tempHardenCalls === 3) tempHardenFinished();
+      }
       return { success: true, exitCode: 0, timedOut: false, stdout: "" };
     });
     setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
@@ -986,18 +1042,20 @@ describe("Responses previous_response_id state", () => {
     await started;
 
     let fallbackFile: string | undefined;
+    let abandonedTempCount = -1;
     try {
       await flushResponseState();
       fallbackFile = spillFileNames(home)[0];
       expect(fallbackFile).toBeDefined();
+      abandonedTempCount = spillTempNames(home).length;
     } finally {
       release();
     }
-    await latePublished;
+    await hardened;
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(spillFileNames(home)).toEqual([fallbackFile!]);
-    expect(publishCount).toBe(2);
+    expect({ abandonedTempCount, publishCount }).toEqual({ abandonedTempCount: 0, publishCount: 1 });
     const replay = JSON.stringify(expandPreviousResponseInput({
       previous_response_id: "resp_shutdown_late",
       input: "next",

@@ -6,6 +6,8 @@ import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/
 import { windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import type { OcxProviderContinuationState } from "../types";
 import {
+  cleanupSupersededResponseSpillPublication,
+  createResponseSpillPublicationControl,
   deleteResponseSpill,
   MAX_RESPONSE_SPILL_PAYLOAD_BYTES,
   noteStubSwapForTest,
@@ -13,6 +15,8 @@ import {
   recoverOrphanedResponseSpills,
   responseSpillDirectory,
   responseSpillPayloadCap,
+  markResponseSpillPublicationSuperseded,
+  type ResponseSpillPublicationControl,
   type ResponseSpillRef,
   writeResponseSpillDurably,
   writeResponseSpillDurablyAsync,
@@ -181,6 +185,7 @@ interface PendingResponseSpill {
   cancelled: boolean;
   released: boolean;
   sizeBytes: number;
+  publicationControl: ResponseSpillPublicationControl;
 }
 
 const pendingResponseSpills = new Set<PendingResponseSpill>();
@@ -211,6 +216,7 @@ function cancelPendingResponseSpill(id: string): ResponseSpillRef | undefined {
   if (!job) return undefined;
   pendingResponseSpillById.delete(id);
   job.cancelled = true;
+  markResponseSpillPublicationSuperseded(job.publicationControl);
   const superseded = job.supersededSpill;
   // A queued job has not captured the candidate in an async frame yet, so release it now.
   // A running job retains its accounting until settlement and will discard its stale file.
@@ -241,12 +247,17 @@ async function runPendingResponseSpill(job: PendingResponseSpill): Promise<void>
   try {
     const state = spillPayloadForResident(candidate);
     try {
-      ref = await writeResponseSpillDurablyAsync(job.id, state);
+      ref = await writeResponseSpillDurablyAsync(job.id, state, {
+        publicationControl: job.publicationControl,
+      });
     } catch (error) {
       if (!isAclTimeout(error)) throw error;
       // The ACL helper permits exactly one caller-owned recovery budget. The resident generation
       // remains replayable during both attempts, so a transient timeout never becomes a tombstone.
-      ref = await writeResponseSpillDurablyAsync(job.id, state, { retryTimedOutOnce: true });
+      ref = await writeResponseSpillDurablyAsync(job.id, state, {
+        retryTimedOutOnce: true,
+        publicationControl: job.publicationControl,
+      });
     }
     if (ref.payloadBytes > responseSpillPayloadCap()) {
       deleteResponseSpill(ref);
@@ -305,6 +316,7 @@ function queuePendingResponseSpill(
     cancelled: false,
     released: false,
     sizeBytes: candidate.sizeBytes,
+    publicationControl: createResponseSpillPublicationControl(),
   };
   pendingResponseSpills.add(job);
   pendingResponseSpillById.set(id, job);
@@ -418,6 +430,10 @@ function fallbackPendingResponseSpills(reserveMs: number): void {
       // Ownership moves to the synchronous fallback. The original tail remains intact
       // for global serialization, but its late result can no longer swap this resident.
       job.cancelled = true;
+      markResponseSpillPublicationSuperseded(job.publicationControl);
+    }
+    for (const { job } of pending) {
+      cleanupSupersededResponseSpillPublication(job.publicationControl);
       releasePendingResponseSpill(job);
     }
     for (const { job, candidate } of pending) {

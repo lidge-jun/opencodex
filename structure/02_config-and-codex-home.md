@@ -187,10 +187,12 @@ awaited or synchronous fail-closed boundary.
 
 Graceful shutdown drains that serialized publication queue to a stable fixed point before snapshot
 serialization. The drain has a wall-clock cap with a reserved synchronous fallback budget; expiry
-supersedes the async writer before fallback publication, and the fallback splits its reserve across
-the directory and file ACL hardens. This ordering is load-bearing because resident entries over 2
-MiB are deliberately excluded from `responses-state.json`: serializing first could omit the resident
-before its durable spill stub exists, losing the continuation on restart.
+supersedes the async writer, claims and removes any temp or destination it still owns, and only then
+starts fallback publication. The writer rechecks supersession before no-replace publication, while
+the fallback splits its reserve across the directory and file ACL hardens. This ordering is
+load-bearing because resident entries over 2 MiB are deliberately excluded from
+`responses-state.json`: serializing first could omit the resident before its durable spill stub
+exists, losing the continuation on restart.
 
 [Decision Log]
 - 목적과 의도: Keep `/healthz` and unrelated requests responsive during intermittent Windows ACL stalls without publishing an unhardened continuation.

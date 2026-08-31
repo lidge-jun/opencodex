@@ -15,7 +15,7 @@ import {
   writeSync,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getConfigDir } from "../config";
 import {
   forgetEphemeralSecretPath,
@@ -123,11 +123,26 @@ interface ResponseSpillWriteOptions {
   retryTimedOutOnce?: boolean;
   /** Total caller-owned ACL budget shared by every harden in this publication. */
   aclBudgetMs?: number;
+  publicationControl?: ResponseSpillPublicationControl;
+}
+
+export interface ResponseSpillPublicationControl {
+  superseded: boolean;
+  tempPath: string | null;
+  destinationPath: string | null;
 }
 
 interface SpillAclBudget {
   deadline: number;
   perCallMs: number;
+}
+
+export function createResponseSpillPublicationControl(): ResponseSpillPublicationControl {
+  return { superseded: false, tempPath: null, destinationPath: null };
+}
+
+export function markResponseSpillPublicationSuperseded(control: ResponseSpillPublicationControl): void {
+  control.superseded = true;
 }
 
 export function setSpillIoForTest(io: ResponseSpillIoForTest | null): void {
@@ -285,6 +300,52 @@ function unlinkEphemeral(path: string): void {
   unlink(path, true);
 }
 
+function supersededPublicationError(): NodeJS.ErrnoException {
+  return Object.assign(new Error("Response spill publication superseded"), { code: "ECANCELED" });
+}
+
+function throwIfPublicationSuperseded(control: ResponseSpillPublicationControl | undefined): void {
+  if (control?.superseded) throw supersededPublicationError();
+}
+
+function clearOwnedPath(
+  control: ResponseSpillPublicationControl,
+  key: "tempPath" | "destinationPath",
+  ephemeral: boolean,
+): unknown {
+  const path = control[key];
+  if (!path) return null;
+  try {
+    if (ephemeral) unlinkEphemeral(path);
+    else unlink(path);
+    control[key] = null;
+    return null;
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) {
+      control[key] = null;
+      return null;
+    }
+    return error;
+  }
+}
+
+/** Claim and remove every path still owned by an abandoned async publication. */
+export function cleanupSupersededResponseSpillPublication(
+  control: ResponseSpillPublicationControl,
+): void {
+  control.superseded = true;
+  const ownedDir = control.destinationPath
+    ? dirname(control.destinationPath)
+    : control.tempPath
+      ? dirname(control.tempPath)
+      : null;
+  const destinationError = clearOwnedPath(control, "destinationPath", false);
+  const tempError = clearOwnedPath(control, "tempPath", true);
+  if (ownedDir) fsyncDirectoryBestEffort(ownedDir);
+  const cleanupError = destinationError ?? tempError;
+  if (cleanupError) throw responseSpillWriteError(cleanupError);
+}
+
 function publishNoReplace(
   tempPath: string,
   destinationPath: string,
@@ -323,7 +384,9 @@ async function publishNoReplaceAsync(
   tempPath: string,
   destinationPath: string,
   retryTimedOutOnce: boolean,
+  publicationControl?: ResponseSpillPublicationControl,
 ): Promise<void> {
+  throwIfPublicationSuperseded(publicationControl);
   try {
     if (spillIoForTest?.link) spillIoForTest.link(tempPath, destinationPath);
     else linkSync(tempPath, destinationPath);
@@ -336,6 +399,7 @@ async function publishNoReplaceAsync(
       else copyFileSync(tempPath, destinationPath, constants.COPYFILE_EXCL);
       copied = true;
       await hardenAsync(destinationPath, 0o600, retryTimedOutOnce);
+      throwIfPublicationSuperseded(publicationControl);
       const copyFd = openSync(destinationPath, "r");
       try {
         if (spillIoForTest?.fsync) spillIoForTest.fsync(copyFd);
@@ -350,6 +414,7 @@ async function publishNoReplaceAsync(
       throw copyError;
     }
   }
+  throwIfPublicationSuperseded(publicationControl);
   record("publish");
 }
 
@@ -494,40 +559,56 @@ export async function writeResponseSpillDurablyAsync(
   state: Omit<ResponseSpillPayload, "version" | "responseId">,
   options: ResponseSpillWriteOptions = {},
 ): Promise<ResponseSpillRef> {
+  const publicationControl = options.publicationControl;
   let tempPath: string | null = null;
   let fd: number | null = null;
   try {
+    throwIfPublicationSuperseded(publicationControl);
     const { bytes, digest, idDigest, contentDigest } = serializedSpill(responseId, state);
     const dir = responseSpillDirectory();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     await hardenAsync(dir, 0o700, options.retryTimedOutOnce === true);
+    throwIfPublicationSuperseded(publicationControl);
 
     tempPath = join(dir, `.response-spill.${process.pid}.${randomBytes(8).toString("hex")}.tmp`);
     fd = openSync(tempPath, "wx", 0o600);
+    if (publicationControl) publicationControl.tempPath = tempPath;
     writeAll(fd, bytes);
     fsyncFile(fd);
     closeFile(fd);
     fd = null;
     await hardenAsync(tempPath, 0o600, options.retryTimedOutOnce === true);
+    throwIfPublicationSuperseded(publicationControl);
     record("harden");
     const publishTempPath = tempPath;
 
     for (let attempt = 0; attempt < RESPONSE_SPILL_PUBLISH_RETRIES; attempt++) {
+      throwIfPublicationSuperseded(publicationControl);
       spillGeneration += 1;
       const fileName = `${sanitizeResponseId(responseId)}.${idDigest}.${contentDigest}.${spillGeneration}.${bytes.byteLength}.spill.json`;
       if (!OWNED_SPILL_NAME.test(fileName)) throw new Error("Response spill name allocation failed");
       const destinationPath = join(dir, fileName);
+      if (publicationControl) publicationControl.destinationPath = destinationPath;
       try {
+        throwIfPublicationSuperseded(publicationControl);
         await publishNoReplaceAsync(
           publishTempPath,
           destinationPath,
           options.retryTimedOutOnce === true,
+          publicationControl,
         );
+        throwIfPublicationSuperseded(publicationControl);
         fsyncDirectoryBestEffort(dir);
         unlinkEphemeral(publishTempPath);
         tempPath = null;
+        if (publicationControl) {
+          publicationControl.tempPath = null;
+          publicationControl.destinationPath = null;
+        }
         return { version: 1, fileName, digest, payloadBytes: bytes.byteLength };
       } catch (error) {
+        if (publicationControl?.superseded) throw error;
+        if (publicationControl) publicationControl.destinationPath = null;
         if (isErrno(error, "EEXIST")) continue;
         throw error;
       }
@@ -538,7 +619,25 @@ export async function writeResponseSpillDurablyAsync(
       try { closeSync(fd); } catch { /* best effort */ }
     }
     if (tempPath) {
-      try { unlinkEphemeral(tempPath); } catch { /* best effort */ }
+      try {
+        unlinkEphemeral(tempPath);
+        if (publicationControl?.tempPath === tempPath) publicationControl.tempPath = null;
+      } catch (error) {
+        if (isErrno(error, "ENOENT") && publicationControl?.tempPath === tempPath) {
+          publicationControl.tempPath = null;
+        }
+      }
+    }
+    if (publicationControl) {
+      const destinationPath = publicationControl.destinationPath;
+      if (destinationPath) {
+        try {
+          unlink(destinationPath);
+          publicationControl.destinationPath = null;
+        } catch (error) {
+          if (isErrno(error, "ENOENT")) publicationControl.destinationPath = null;
+        }
+      }
     }
     throw responseSpillWriteError(cause);
   }
