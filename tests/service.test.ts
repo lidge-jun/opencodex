@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import * as serviceModule from "../src/service";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, deriveWindowsServiceDiagnostic, deriveWindowsServiceDiagnosticForCurrentUser, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml, confirmServiceServing, deriveWindowsServiceDiagnostic, deriveWindowsServiceDiagnosticForCurrentUser, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, launchdListenPort, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, serviceLogPath, serviceRetryCommand, serviceStartableFromTray, serviceStatusReport, serviceStatusSummary, stableLauncherEntry, startLaunchd, systemdListenPort, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, taskXmlPathEquals, uninstallSystemd, windowsListenPort, windowsTaskRegistrationHealthy, winswListenPort } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
 import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
@@ -580,6 +580,61 @@ describe("Windows service task", () => {
       xml.replace(wscript, "C:\\Windows\\System32\\cmd.exe"),
       xml.replace(launcher, "C:\\Temp\\foreign.vbs"),
     ]) expect(windowsTaskRegistrationHealthy(mutated, wscript, launcher)).toBe(false);
+  });
+
+
+  // --- #3064: a non-ASCII profile path survives the schtasks code page --------
+  test("accepts a registration whose path the schtasks code page could not carry", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Người\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher).replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    expect(windowsTaskRegistrationHealthy(xml, wscript, launcher)).toBe(true);
+
+    // What `schtasks /query /tn X /xml` actually hands back when stdout is a pipe:
+    // its output goes through the console code page, so characters outside it are
+    // already replaced before we read a single byte.
+    for (const mangled of [
+      xml.replace("Người", "Ng??i"),
+      xml.replace("Người", "Ngi"),
+      xml.replace("Người", "Ng\uFFFDi"),
+    ]) expect(windowsTaskRegistrationHealthy(mangled, wscript, launcher)).toBe(true);
+  });
+
+  test("still rejects a foreign path even when the expected one is non-ASCII", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Người\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher).replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    for (const mutated of [
+      xml.replace(launcher, "C:\\Temp\\foreign.vbs"),
+      xml.replace(launcher, "C:\\Users\\Người\\.opencodex\\other-launcher.vbs"),
+      xml.replace(launcher, "C:\\Users\\Người\\.evil\\service-launcher.vbs"),
+      xml.replace(wscript, "C:\\Windows\\System32\\cmd.exe"),
+    ]) expect(windowsTaskRegistrationHealthy(mutated, wscript, launcher)).toBe(false);
+  });
+
+  test("an ASCII path is compared exactly, with no relaxation", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const xml = buildWindowsTaskXml("ignored.cmd", launcher).replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    // A single character off must still fail: nothing about an ASCII path is
+    // unrepresentable, so there is nothing to forgive.
+    expect(windowsTaskRegistrationHealthy(xml.replace("\\Test\\", "\\Tost\\"), wscript, launcher)).toBe(false);
+    expect(windowsTaskRegistrationHealthy(xml.replace("service-launcher", "service-launcherr"), wscript, launcher)).toBe(false);
+  });
+
+  test("the path comparison forgives only unrepresentable characters", () => {
+    expect(taskXmlPathEquals("C:\\Users\\Người\\x.vbs", "C:\\Users\\Người\\x.vbs")).toBe(true);
+    expect(taskXmlPathEquals("C:\\Users\\Ng??i\\x.vbs", "C:\\Users\\Người\\x.vbs")).toBe(true);
+    // Case-insensitive, matching the exact comparison it replaces.
+    expect(taskXmlPathEquals("c:\\users\\ng??i\\x.vbs", "C:\\Users\\Người\\x.vbs")).toBe(true);
+    // ASCII differences are never forgiven, on either side of the mangled run.
+    expect(taskXmlPathEquals("C:\\Users\\Ng??i\\y.vbs", "C:\\Users\\Người\\x.vbs")).toBe(false);
+    expect(taskXmlPathEquals("D:\\Users\\Ng??i\\x.vbs", "C:\\Users\\Người\\x.vbs")).toBe(false);
+    // The forgiven run may never swallow a path separator: a task pointing at a
+    // different directory must not slip through as "unrepresentable".
+    expect(taskXmlPathEquals("C:\\Users\\Ng\\evil\\i\\x.vbs", "C:\\Users\\Người\\x.vbs")).toBe(false);
+    // An entirely ASCII expectation gets no relaxation at all.
+    expect(taskXmlPathEquals("C:\\Users\\A?c\\x.vbs", "C:\\Users\\Abc\\x.vbs")).toBe(false);
   });
 
   // --- #432: Task Scheduler omits schema defaults when exporting ---------------

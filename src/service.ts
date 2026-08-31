@@ -1935,6 +1935,46 @@ function taskXmlDecodedValueEquals(xml: string, tag: string, expected: string): 
   return taskXmlDecodeEntities(value).trim().toLowerCase() === expected.trim().toLowerCase();
 }
 
+/**
+ * Compare a path Task Scheduler reported against the one we registered.
+ *
+ * `schtasks /query /tn X /xml` writes through the console code page when stdout
+ * is a pipe, not UTF-16, so a profile directory outside that code page is
+ * already mangled in the bytes we receive -- there is nothing left on our side
+ * to decode. A valid task therefore failed the Command/Arguments comparison and
+ * a successful elevated create was rolled back (#3064).
+ *
+ * When, and only when, the path we expect contains characters that transport
+ * could not carry, compare what it *could* carry: every run of non-ASCII on both
+ * sides collapses to one placeholder. A task pointing somewhere genuinely
+ * different still differs in its ASCII structure and still fails.
+ */
+export function taskXmlPathEquals(reported: string, expected: string): boolean {
+  const a = reported.trim().toLowerCase();
+  const b = expected.trim().toLowerCase();
+  if (a === b) return true;
+  if (!/[^\x00-\x7F]/.test(b)) return false;
+  // Match the expected path literally except where the code page could not carry
+  // it. What came back there depends on the conversion -- "?" per character,
+  // U+FFFD, or nothing at all -- so accept any run, but never one containing a
+  // path separator: every directory the path names is still verified, and a task
+  // pointing at a different folder or file still fails.
+  const pattern = b
+    .split(/([^\x00-\x7F]+)/)
+    .map((part, index) =>
+      index % 2 === 1 ? "[^\\\\/]*" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("");
+  return new RegExp(`^${pattern}$`).test(a);
+}
+
+function taskXmlDecodedPathEquals(xml: string, tag: string, expected: string): boolean {
+  if (taskXmlHasPrefixedTag(xml, tag)) return false;
+  if (taskXmlElementCount(xml, tag) !== 1) return false;
+  const value = new RegExp(`<${tag}(?:\\s[^>]*?)?>([^<]*)<\\/${tag}>`, "i").exec(xml)?.[1];
+  if (value === undefined) return false;
+  return taskXmlPathEquals(taskXmlDecodeEntities(value), expected);
+}
+
 function taskXmlOptionalValueEquals(xml: string, tag: string, expected: string): boolean {
   // Check the prefixed form first: treating `<t:Enabled>false</t:Enabled>` as an
   // omission would turn an explicitly disabled task into a healthy one.
@@ -2030,8 +2070,10 @@ function windowsTaskRegistrationBaseHealthy(
     // quotes we wrote as `&quot;` back to literal `"` on export, so an escaped
     // needle never matched and a healthy task read as permanently stale (#608).
     // Case-insensitive: elevated `schtasks /create` may rewrite System32 casing.
-    && taskXmlDecodedValueEquals(action, "Command", wscript)
-    && taskXmlDecodedValueEquals(action, "Arguments", `/b /nologo "${launcher}"`);
+    // Paths, not plain values: both live under the user profile, which schtasks
+    // cannot round-trip through the console code page when it is not ASCII (#3064).
+    && taskXmlDecodedPathEquals(action, "Command", wscript)
+    && taskXmlDecodedPathEquals(action, "Arguments", `/b /nologo "${launcher}"`);
 }
 
 /** Validate the security/lifecycle-critical fields of the registered scheduler task. */
