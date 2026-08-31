@@ -2224,6 +2224,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let doneText = "";
       let snapshot = "";
       let usage: OcxUsage | undefined;
+      let compactionEncryptedContent: string | undefined;
       for await (const event of decodeServerSentEvents(response.body, { translatorBudget: budget })) {
         let payload: unknown;
         try { payload = JSON.parse(event.data); } catch { continue; }
@@ -2258,6 +2259,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
             return;
           case "response.completed":
             {
+              const responsePayload = isPlainObject(payload.response) ? payload.response : undefined;
+              const output = Array.isArray(responsePayload?.output) ? responsePayload.output : [];
+              const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
+              if (isPlainObject(compaction) && typeof compaction.encrypted_content === "string") {
+                compactionEncryptedContent = compaction.encrypted_content;
+              }
               const next = responsesPayloadText(payload.response);
               const previousBytes = budgetEncoder.encode(snapshot).byteLength;
               const reservation = budget.reserveTransient(budgetEncoder.encode(next).byteLength, { kind: "retained_collectors" });
@@ -2274,7 +2281,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       const text = snapshot || doneText || deltas;
       if (text) yield { type: "text_delta", text };
       budget.releaseRetained(budgetEncoder.encode(deltas).byteLength + budgetEncoder.encode(doneText).byteLength + budgetEncoder.encode(snapshot).byteLength, { kind: "retained_collectors" });
-      yield { type: "done", ...(usage ? { usage } : {}) };
+      yield {
+        type: "done",
+        ...(usage ? { usage } : {}),
+        ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),
+      };
     },
 
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
@@ -2299,7 +2310,16 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         return [{ type: "error", message: "upstream compaction returned no summary text" }];
       }
       const usage = usageFromResponsesPayload(payload);
-      return [{ type: "text_delta", text }, { type: "done", ...(usage ? { usage } : {}) }];
+      const output = Array.isArray(payload.output) ? payload.output : [];
+      const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
+      const compactionEncryptedContent = isPlainObject(compaction) && typeof compaction.encrypted_content === "string"
+        ? compaction.encrypted_content
+        : undefined;
+      return [{ type: "text_delta", text }, {
+        type: "done",
+        ...(usage ? { usage } : {}),
+        ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),
+      }];
     },
   };
 }
