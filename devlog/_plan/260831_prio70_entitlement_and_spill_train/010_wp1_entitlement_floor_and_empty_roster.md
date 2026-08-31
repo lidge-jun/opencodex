@@ -38,7 +38,10 @@ rather than conflicting.
 Tiers 1 and 2 are untouched. An inbound or runtime version still wins, because
 those describe a real client and this constant does not.
 
-## Change 2 — an unusable roster is not a confirmation
+## Change 2 — separate "usable answer" from "authoritative about this model"
+
+> Amended after audit round 1 (`004`, blocker 1). The first draft used one
+> account-wide `usable` flag, which would have discarded affirmative rows too.
 
 Same file, `fetchAccountModels` (`:414`).
 
@@ -51,24 +54,45 @@ confirmed: models !== null,
 ```
 
 An empty `Set` is truthy, so `{"models":[]}` earns `confirmed: true` and the
-five-minute success TTL. Two conditions must stop producing confirmation:
+five-minute success TTL.
 
-1. **Empty parsed roster.** No usable row means no evidence, not a denial.
-2. **Roster obtained below the measured minimum.** If the question could not have
-   returned the gated rows, their absence says nothing about entitlement. This is
-   the case `models.size > 0` cannot catch: the reported short roster contains
-   `gpt-5.5`, so it is non-empty while every gated slug is absent.
+`confirmed` is a single bit for the whole account (`:223-234`) and every
+projection drops the account entirely when it is false (`:547-550`, `:573-593`,
+`:527`). So it cannot carry a per-model judgement, and overloading it would hide
+`gpt-5.5`/`gpt-5.4` — models a `0.142.2` roster legitimately confirms.
 
-Both take `MODEL_ROSTER_FAILURE_TTL_MS` (15s) so recovery is prompt once the
-version chain improves, instead of a five-minute lockout.
+Two distinct changes:
 
-Shape: compute a `usable` boolean beside `models`, and derive `confirmed` and the
-TTL from it. Condition 2 needs `clientVersion` compared against the minimum —
-already a parameter of the function.
+**2a. Account-scoped: an empty parsed roster is not a confirmation.**
+`{"models":[]}`, and an all-filtered roster, mean no usable evidence. Set
+`confirmed: false` and take `MODEL_ROSTER_FAILURE_TTL_MS` (15s) rather than
+locking in a wrong answer for five minutes. A non-empty roster stays confirmed.
 
-**Fail-closed is preserved.** An unconfirmed account still yields no gated rows;
-`confirmedAccountIds` still gates every projection. The change makes *unknown*
-distinguishable from *denied*; it does not admit unknown as entitled.
+**2b. Model-scoped: absence is only authoritative when the question could have
+answered it.** The roster already records the `clientVersion` it was fetched under
+(`:230`). Add a predicate — absence of gated model *M* counts as denial only when
+that version is at or above *M*'s known minimum.
+
+- **Positive evidence needs no version test.** A returned row is a grant no matter
+  which version asked.
+- A model with **no known minimum** keeps today's behaviour: omission is denial.
+  `gpt-daybreak-blue-latest` is gated but has no snapshot row at all, so inventing
+  a floor for it would be a guess.
+
+This is what `models.size > 0` cannot do: the reported short roster contains
+`gpt-5.5`, so it is non-empty while every gated slug is absent for a reason that
+has nothing to do with entitlement.
+
+Where 2b lands: the projections that read `confirmedAccountIds.has(...) &&
+models.has(modelId)` need the third term. Keep the predicate in
+`model-entitlements.ts` and thread it through
+`entitledCodexAccountIdsForModel`, `availableAccountGatedNativeModels`, and
+`isDirectCallerEntitledToCodexModel` so no caller can forget it.
+
+**Fail-closed is preserved.** With Change 1 the resolved version is `0.144.0` or
+higher on every path, so 2b is a *safety net* for a future upstream bump, not the
+primary repair. It never turns absence into entitlement — it turns a decided
+denial back into "unknown", and unknown still yields no gated row.
 
 ## Change 3 (bounded) — correct the stale snapshot metadata
 
@@ -96,9 +120,17 @@ staleness as a follow-up so it is not lost.
    `>= 0.144.0` -> the request uses `0.144.0` and sol/terra/luna are available.
    **The existing test at `:226` mocks the gate at `142`, which is why the suite
    never caught this — that mock must be corrected to match measured upstream.**
-3. `{"models":[]}` -> account not confirmed, failure TTL. Red now: confirmed.
-4. Roster with only `gpt-5.5` under `0.142.2` -> unconfirmed; after 15s with a
-   full roster a refetch restores the gated rows. Red now: cached 5 minutes.
+3. `{"models":[]}` -> account not confirmed, failure TTL. Red now: confirmed with
+   the 5-minute TTL (auditor probe: no refetch at 15,001 ms, refetch only after
+   300,001 ms).
+4. Roster with only `gpt-5.5` under `0.142.2` -> `gpt-5.5` stays available while
+   the gated slugs are treated as unknown rather than denied. Explicitly assert
+   `gpt-5.5` is still there: that is the over-denial the first draft would have
+   introduced.
+4b. A roster fetched at `0.144.0` that omits a gated slug -> that slug IS denied.
+   The version was capable of answering, so absence is real evidence.
+4c. `gpt-daybreak-blue-latest` (no known minimum) -> omission remains denial at
+   any version. Guards against the predicate silently un-gating it.
 5. The existing "all rows filtered as hidden/api-disabled" case at `:79` currently
    asserts *confirmed*; it must assert unconfirmed. This is an intentional
    assertion change, called out for review rather than quietly flipped.

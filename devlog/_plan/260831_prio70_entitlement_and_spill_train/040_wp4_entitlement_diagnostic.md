@@ -1,0 +1,61 @@
+# 040 — wp4: an honest entitlement diagnostic
+
+Split out of wp2 by audit round 1 (`004`, blocker 4). Stacks on wp2.
+Lowest priority in this train — it makes an existing silence visible; it does not
+fix a broken behaviour.
+
+## The problem
+
+While entitled rows were missing, `GET /api/providers` still reported
+`discovery: {"status":"ok"}`. The reporter read that as the proxy lying.
+
+It is not lying — it is answering a different question. That field is written by
+routed-provider discovery (`src/codex/catalog/provider-fetch.ts:1510`,
+`src/codex/model-cache.ts:94`) and entitlement resolution never touches it. Routed
+discovery genuinely was ok. Nothing anywhere reports on entitlement freshness, so
+the operator has no way to tell "this account owns nothing" from "we could not ask".
+
+## Why it is not wp2's job
+
+`/api/models` returns a bare array (`src/server/management/model-routes.ts:352-354`)
+and both the GUI and `ocx export` depend on that shape
+(`gui/src/pages/Models.tsx:402-417`, `src/cli/export-command.ts:169-185`). A
+top-level field breaks both consumers; a per-row field stamps one global fact onto
+every row. Neither is acceptable, so the transport is a design decision rather than
+an implementation detail.
+
+## Direction
+
+`/api/providers` already carries `discovery` per provider, so an additive sibling
+there is the natural home for canonical OpenAI: same endpoint, same mental model,
+no shape change for array consumers.
+
+States to distinguish (from `002` and the wp1/wp2 work):
+
+- no logged-in Codex credential
+- fresh confirmed roster
+- confirmed roster that is genuinely empty for this account
+- refresh failed (upstream error, timeout)
+- expired, refresh in flight
+
+Do **not** overload `discovery`. It would erase a simultaneously-true routed
+result and cannot express partial per-account success. GUI types admit only
+provider discovery states today (`gui/src/models-groups.ts:2`), so both sides are
+additive.
+
+## Regression
+
+`tests/management-provider-validation.test.ts` (~`:655`): provider discovery stays
+`ok` while the entitlement status independently reports fresh / failed /
+unavailable. The point of the test is that the two fields are *independent* — that
+is the whole reason this phase exists.
+
+## Scope guard
+
+If this grows past an additive field, its GUI type, and one regression, stop and
+re-plan. It is a diagnostic, not a subsystem.
+
+## Dependency
+
+Needs wp1 and wp2 landed first: the states above only become distinguishable once
+wp1 separates unknown from denied and wp2 knows whether a refresh was attempted.

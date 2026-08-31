@@ -23,6 +23,23 @@ or past their own deadline. It must treat as cached answers:
 It must reuse the existing per-account/version keys and in-flight deduplication
 (`:223`, `:455`) so concurrent pollers collapse into one upstream fetch.
 
+### Amendment after audit round 1 (`004`, blocker 2): the logged-out hole
+
+"Refresh entries that are missing" **misses forever** when there is no credential.
+`MAIN_CODEX_ACCOUNT_ID` is always a candidate (`:500-506`), but
+`accountCredentialSnapshot` returns null without one, so the account is filtered
+out before any cache entry is created (`:539-550`). Nothing is ever cached, so
+every poll re-enters the full resolver — ~24 times/minute, which is precisely the
+cost this cycle forbids.
+
+So the ensure needs a **bounded negative memo**: "no usable credential for account
+X as of T", with its own short TTL, checked before credential enumeration. Absence
+of a credential is a cacheable answer, not a cache miss.
+
+Regression: repeated logged-out ensures perform zero credential enumerations after
+the first. This is the assertion that proves the steady state, and it is red
+against a naive implementation.
+
 ## Change 2 — await it from the shared entry point
 
 `src/server/management/model-rows.ts:50`, `listManagementModelRows`: await the
@@ -54,19 +71,18 @@ enumeration, no allocation of a resolver context, no network. Measured target:
 with a fresh roster, repeated calls perform zero fetches and no credential
 validation. That assertion is a test, not a hope.
 
-## Change 3 — an honest entitlement diagnostic (additive)
+## Change 3 — moved out of this cycle
 
-`discovery: {"status":"ok"}` is produced by routed-provider discovery
-(`src/codex/catalog/provider-fetch.ts:1510`) and is *correct* for what it
-describes. Overloading it would erase a simultaneously true routed result.
+> Removed after audit round 1 (`004`, blocker 4). The draft named no transport.
 
-Add a separate field (`entitlementDiscovery`) distinguishing: no logged-in
-credential, fresh, confirmed-empty, refresh failed, expired-awaiting-refresh. GUI
-types admit only provider states today (`gui/src/models-groups.ts:2`), so this is
-additive on both sides.
+`/api/models` returns a bare **array** (`src/server/management/model-routes.ts:352-354`)
+and both the GUI and `ocx export` depend on that shape
+(`gui/src/pages/Models.tsx:402-417`, `src/cli/export-command.ts:169-185`). A
+top-level field breaks them; a per-row field duplicates global state on every row.
 
-**Scope guard:** if the diagnostic grows past a small additive field plus its GUI
-type, split it into its own work-phase rather than inflating this cycle.
+The honest diagnostic therefore needs its own endpoint decision, which is a design
+question, not a line of code. It is now **wp4** (`040`). wp2 is the refresh fix and
+nothing else.
 
 ## Regressions (each driven red first)
 
@@ -90,6 +106,9 @@ Synchronous `nativeModelRows` must stay synchronous.
 ## Open question to settle during P
 
 Whether a stale management request waits out the 8s entitlement timeout or returns
-a pending diagnostic immediately. Serving stale rows is inconsistent with the
-current posture, so the default is to wait — but 8s on a dashboard poll is its own
-problem. Resolve before B, and record the decision here.
+immediately with short rows. Serving stale rows is inconsistent with the current
+posture, so the default is to wait — but 8s on a dashboard poll is its own problem.
+
+Note the shape of the risk: the wait only happens on the *first* poll after expiry,
+because in-flight deduplication collapses the rest. Resolve before B and record the
+decision here.

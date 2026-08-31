@@ -54,10 +54,31 @@ oversized resident is skipped at serialization time.
 `flushPendingResponseSpillsForTests` should delegate to the same drain so the test
 helper and production cannot diverge.
 
-**Bound it.** Shutdown cannot hang on a wedged `icacls`. The ACL helper already
-has a bounded retry/timeout; confirm during P that the drain inherits a finite
-worst case, and if it does not, add an explicit cap whose expiry leaves the
-resident durably recorded rather than silently dropped.
+### Bounding it (amended after audit round 1 — `004`, blocker 3)
+
+The draft assumed the ACL helper's timeout made the drain finite. It does not.
+`defaultAsyncIcaclsRunner` sets a timer that calls `proc.kill()` and then **still
+awaits `proc.exited`** (`src/lib/windows-secret-acl.ts:329-347`). Killing is not
+settling: a child that ignores the kill leaves that await outstanding, so a drain
+that only awaits the tail inherits an unbounded shutdown wait.
+
+The draft's fallback was also incoherent — it said cap expiry would "leave the
+resident durably recorded", but the reason this bug exists is that residents over
+2 MiB are *excluded* from the snapshot (`:1002-1018`). There is nowhere for it to
+go.
+
+So wp3 must define **settlement**, not just waiting:
+
+1. Drain with an explicit wall-clock cap.
+2. On expiry, take a real durable action: force a synchronous publication for the
+   outstanding job, or write the oversized resident to its own spill path directly.
+   Falling back to the snapshot is not an option for exactly the 2 MiB reason.
+3. `Promise.race` alone is **forbidden**: a writer that publishes after snapshot
+   serialization is the same lost-continuation bug wearing a timeout.
+
+If P cannot establish a bounded settlement, split the phase: land the drain for the
+common case and file the never-exiting-`icacls` pathology separately. Shipping a
+shutdown hang to fix a startup stall is not a trade worth making.
 
 `src/server/lifecycle.ts` needs no change — it already calls `flushResponseState()`
 at the right boundary.
@@ -72,13 +93,18 @@ at the right boundary.
 2. After release, the flush returns only once the stub is installed; then clear
    memory and verify restart replay. Payload **over 2 MiB** so an early snapshot
    cannot mask it.
-3. Inject an ordinary non-timeout `icacls` failure: no stub installed, exactly one
-   write-failure/tombstone, no owned spill or temp left. The code appears
-   fail-closed (`src/lib/windows-secret-acl.ts:872`,
-   `aec717722:src/responses/state.ts:261`) but the PR adds no test for it.
-4. Force link failure into the exclusive-copy fallback, then fail destination
-   hardening: destination removed, never returned as a ref
-   (`aec717722:src/responses/spill-store.ts:286-315`).
+3. (**coverage, not red-first**) Inject an ordinary non-timeout `icacls` failure:
+   no stub installed, exactly one write-failure/tombstone, no owned spill or temp
+   left. Required-mode throws are at
+   `src/lib/windows-secret-acl.ts:877,881` and the state catch is at
+   `aec717722:src/responses/state.ts:261-266`.
+4. (**coverage, not red-first**) Force link failure into the exclusive-copy
+   fallback, then fail destination hardening: destination removed, never returned
+   as a ref (`aec717722:src/responses/spill-store.ts:286-315`).
+
+Audit round 1 established that 3 and 4 **already pass at the PR head** — the code
+is fail-closed there and cleans up. Keep them as coverage for a path no test
+touches, but do not present them as red-first proof. Only 1 and 2 are that.
 
 ## Docs
 
@@ -93,7 +119,11 @@ throwing; swallowing it publishes secrets fail-open. Global serialization of the
 tail (parallelizing invites generation/cleanup races). The pending-byte cap and
 compare-before-swap identity check.
 
-## Carried follow-up (not a blocker)
+## Carried follow-ups (not blockers)
+
+`src/server/lifecycle.ts:489` does not itself call `process.exit` — the real exits
+are `src/server/management-api.ts:280` and `src/cli/index.ts:360,370`. The bypassed
+temp cleanup still follows, but attribute it correctly.
 
 If ACL hardening fails *and* unlink fails, cleanup is best-effort and a full
 payload can remain on disk; whether another local user can read it depends on the
