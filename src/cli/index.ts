@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { currentExternalCodexModelProvider, restoreNativeCodex, restoreNativeCodexAsync, shouldInjectApiAuthHeader } from "../codex/inject";
 import { stripGrokConfig } from "../grok/inject";
+import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../update/stop-contract.mjs";
 import {
   describeHistoryJobFailure,
   resolveCodexHistoryJobTarget,
@@ -631,17 +632,35 @@ async function handleRestartStartWhenStopped(): Promise<boolean | "skipped"> {
   return handleEnsure({ existingIsSuccess: false });
 }
 
-async function restoreSharedClientStateAfterStop(): Promise<boolean> {
-  let restored = true;
+/**
+ * Restore shared client state after a stop.
+ *
+ * Returns the two failure kinds separately. `historyOnly` means teardown succeeded and
+ * only Codex history metadata could not be finalized: the proxy is down, the service is
+ * stopped, and a manifest is waiting for review. `other` means something that actually
+ * removes state a client depends on.
+ *
+ * The distinction exists because `ocx update` must proceed for the first and abort for the
+ * second, and it can only see an exit code (#3008).
+ */
+async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boolean; other: boolean }> {
+  let historyOnly = false;
+  let other = false;
   try {
     const result = await restoreNativeCodexAsync();
     if (result.success) console.log(`↩️  ${result.message}`);
     else {
-      restored = false;
+      // Codex history is the one restore whose failure leaves the runtime consistent: the
+      // manifest is retained and the routed metadata is untouched. Config and catalog are
+      // not — a client reads those, so their failure is a real teardown failure.
+      const artifacts = result.artifacts;
+      const configOrCatalogFailed = artifacts.config.state === "failed" || artifacts.catalog.state === "failed";
+      if (!configOrCatalogFailed && artifacts.history.state === "failed") historyOnly = true;
+      else other = true;
       console.error(`⚠️  ${result.message}`);
     }
   } catch (error) {
-    restored = false;
+    other = true;
     console.error(`⚠️  Native Codex restore failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
@@ -649,16 +668,17 @@ async function restoreSharedClientStateAfterStop(): Promise<boolean> {
   try {
     const grok = stripGrokConfig();
     if (grok.changed) console.log(`↩️  ${grok.message}`);
-    else if (!grok.ok) { restored = false; console.error(`⚠️  ${grok.message}`); }
+    else if (!grok.ok) { other = true; console.error(`⚠️  ${grok.message}`); }
   } catch (error) {
-    restored = false;
+    other = true;
     console.error(`⚠️  Grok config restore failed: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return restored;
+  return { historyOnly, other };
 }
 
 async function handleStop() {
   let stopFailed = false;
+  let historyOnlyFailure = false;
   let stoppedService = false;
   // An ownership mismatch means the service manager was never even contacted: the installed
   // service is still live and will respawn the proxy. Tearing down SHARED state in that
@@ -740,11 +760,18 @@ async function handleStop() {
   // current-home variables; the helper refuses foreign markers on its own.
   try { revertSystemEnv(); } catch { /* best-effort */ }
   if (!ownershipBlocked) {
-    if (!await restoreSharedClientStateAfterStop()) stopFailed = true;
+    const restore = await restoreSharedClientStateAfterStop();
+    if (restore.other) stopFailed = true;
+    else if (restore.historyOnly) historyOnlyFailure = true;
   }
   // Set the code rather than exiting inline: `restart` and the tray coordinator call this
   // function and need it to RETURN so they can decide what to do next.
+  //
+  // A history-only failure gets its own code so `ocx update` can tell "the proxy is down
+  // and a manifest needs review" from "the proxy would not stop" (#3008). Ordinary failure
+  // still wins: it is the stronger signal.
   if (stopFailed) process.exitCode = 1;
+  else if (historyOnlyFailure) process.exitCode = STOP_HISTORY_INCOMPLETE_EXIT_CODE;
   return !stopFailed;
 }
 

@@ -9,6 +9,7 @@
  * src/cli/index.ts — only the published npm `bin` routes through here.)
  */
 import { spawn, spawnSync } from "node:child_process";
+import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -348,12 +349,18 @@ function runNpmSelfUpdate() {
     const stopRes = spawnSync(process.execPath, [launcher, "stop"], { stdio: "inherit", windowsHide: true });
     const stillHasRuntimeState =
       existsSync(join(configDir(), "ocx.pid")) || existsSync(join(configDir(), "runtime-port.json"));
-    if (stopRes.status !== 0 || stillHasRuntimeState) {
+    // A history-only failure means teardown succeeded and a backup manifest is waiting for
+    // review: the proxy is down and replacing package files is safe. Every other nonzero
+    // status is a stop that did not finish, and a signal kill (status null) says nothing
+    // about whether it did - both abort, because replacing files under a live server
+    // leaves it running mixed old and new modules (#3008).
+    const historyOnlyStop = stopRes.status === STOP_HISTORY_INCOMPLETE_EXIT_CODE;
+    if ((stopRes.status !== 0 && !historyOnlyStop) || stillHasRuntimeState) {
       if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
       console.error("opencodex: could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
       process.exit(1);
     }
-    if (historyRestoreIncomplete()) {
+    if (historyOnlyStop || historyRestoreIncomplete()) {
       console.warn(
         "opencodex: WARNING — Codex resume-history metadata restore is incomplete (a backup manifest remains).\n" +
         "  The DB may be busy or the manifest/target may need review; untracked routed history is intentionally unchanged.\n" +

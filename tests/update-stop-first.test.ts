@@ -306,10 +306,12 @@ esac
     // may claim a DB lock or that every routed thread is hidden.
     expect(updateSource).toContain("export function historyRestoreIncomplete(");
     expect(updateSource).toContain('name.startsWith("codex-history-backup-") && name.endsWith(".json")');
-    expect(updateSource).toContain("if (historyRestoreIncomplete())");
+    // The warning now also fires on the dedicated stop code, so the manifest check is one
+    // of two triggers rather than the whole condition (#3008).
+    expect(updateSource).toContain("if (historyOnlyStop || historyRestoreIncomplete())");
     expect(launcherSource).toContain("function historyRestoreIncomplete()");
     expect(launcherSource).toContain('name.startsWith("codex-history-backup-") && name.endsWith(".json")');
-    expect(launcherSource).toContain("if (historyRestoreIncomplete())");
+    expect(launcherSource).toContain("if (historyOnlyStop || historyRestoreIncomplete())");
     const warnAt = launcherSource.indexOf("Codex resume-history metadata restore is incomplete");
     const installAt = launcherSource.indexOf("transactionalNpmUpdate({");
     expect(warnAt).toBeGreaterThan(-1);
@@ -322,7 +324,9 @@ esac
   test("the stop gate covers service-managed and orphaned proxies whose pid file is stale/missing", () => {
     expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort())");
     expect(launcherSource).toContain("if (serviceWasInstalled || hasRuntimeState)");
-    expect(launcherSource).toContain("stopRes.status !== 0 || stillHasRuntimeState");
+    // A history-only stop is the one nonzero status that does NOT abort: teardown
+    // succeeded and a manifest is waiting for review (#3008). Everything else still does.
+    expect(launcherSource).toContain("(stopRes.status !== 0 && !historyOnlyStop) || stillHasRuntimeState");
   });
 
   test("GUI worker update children use pipe stdio so background updates do not open consoles", () => {

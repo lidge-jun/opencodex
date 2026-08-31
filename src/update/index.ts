@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "./stop-contract.mjs";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -256,7 +257,14 @@ export async function runUpdate(): Promise<void> {
       windowsHide: true,
     });
     if (stopStdio === "pipe") logSpawnOutput("", stop);
-    if (stop.status !== 0 || readPid() || readRuntimePort()) {
+    // A history-only failure means teardown succeeded and a backup manifest is waiting for
+    // review: the proxy is down, the service is stopped, and replacing package files is
+    // safe. Every other nonzero status is a stop that did not finish, and `status: null`
+    // is a signal kill that carries no information about whether it did — both abort,
+    // because replacing files under a live server leaves it running mixed old and new
+    // modules (#3008).
+    const historyOnlyStop = stop.status === STOP_HISTORY_INCOMPLETE_EXIT_CODE;
+    if ((stop.status !== 0 && !historyOnlyStop) || readPid() || readRuntimePort()) {
       if (trayWasRunning) {
         try {
           const { startWindowsTray } = await import("../tray/windows");
@@ -266,7 +274,7 @@ export async function runUpdate(): Promise<void> {
       console.error("⚠️  Could not stop the running proxy; aborting the update. Run 'ocx stop' and retry.");
       process.exit(1);
     }
-    if (historyRestoreIncomplete()) {
+    if (historyOnlyStop || historyRestoreIncomplete()) {
       console.warn(
         "⚠️  Codex resume-history metadata restore is incomplete (a backup manifest remains).\n" +
         "    The DB may be busy or the manifest/target may need review; untracked routed history is intentionally unchanged.\n" +
