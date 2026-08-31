@@ -107,3 +107,38 @@ genuine stable-fixed-point loop, `B=5000`/`R=4000` with the fallback receiving i
 reserved slice, and the shared ACL deadline reaching both hardeners. The review found
 one high defect: supersession reaches the state tracking but not the writer, so an
 abandoned writer can still publish to the filesystem and orphan a temp. Sent back.
+
+## v2.37.0 released — #3022 verified live
+
+The 5.6 fix is published and proven on the installed runtime, not just in CI.
+
+- npm `@bitkyc08/opencodex@2.37.0` on `latest`; `gitHead` = `54e2274cff231631c0ea2ff12574ff03829d5fe6`
+- tag `v2.37.0` and the GitHub release both point at that same commit
+- `main` = `54e2274cf` (promotion PR #3037), `dev` = `4180067b4` and an ancestor of it
+
+Both required gates passed on the exact release SHA as push events: Cross-platform CI
+and Service lifecycle. `enforce-target` fails on any promotion by construction —
+`ALLOWED_BASES` is `["dev"]` — which is why #3002 (v2.36.0) merged in the same state.
+
+Release-path proof, in order:
+
+1. The published tarball carries both changes:
+   `MEASURED_GATED_CLIENT_VERSION_MINIMUM = "0.144.0"` at `:88` and
+   `const usable = models !== null && models.size > 0` at `:472`.
+2. The global install had to be forced. `bun add -g` reused a cached 2.37.0 from
+   Aug 30 that predated the fix — same version string, old bytes. Worth remembering:
+   a version match is not a content match, and `grep` on the installed file is the
+   check that actually settles it.
+3. The running proxy was serving the primary checkout, which sat 4 commits behind
+   `dev` while reporting `version: 2.37.0`. So `/healthz` agreed with the release
+   and the code did not. Fast-forwarded the checkout and restarted onto the global
+   install (PID 57341, `~/.bun/install/global/.../@bitkyc08/opencodex`).
+4. On that runtime: `ocx models live --provider openai` lists `gpt-5.6-sol`,
+   `-terra` and `-luna` as native/enabled; `/v1/models` returns all three;
+   `/api/models` and `ocx export --client opencode --json` carry them too.
+
+That last point matters beyond #3022: the three surfaces #3023 names were checked on
+a warm roster and all carry the gated rows. #3023 is about what happens once
+`MODEL_ROSTER_TTL_MS` expires, so this is not a NOOP for it — but it does confirm
+the warm path is intact and the wp6 work is scoped to expiry, not to the rows
+themselves.
