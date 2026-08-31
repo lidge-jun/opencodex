@@ -13,6 +13,7 @@ import {
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
+import { CODEX_REFRESH_FLIGHT_CEILING_MS } from "./quota-recovery-timing";
 
 type LegacyCodexAccountStore = Record<string, CodexAccountCredentials>;
 type CodexAccountStore = Record<string, CodexAccountCredentialRecord>;
@@ -407,7 +408,29 @@ type CodexRefreshResult = CodexTokenResult & {
    * refresh of the one the caller was holding, not somebody else's replacement.
    */
   selfRefreshed?: boolean;
+  /**
+   * Three-way form of {@link selfRefreshed}, kept alongside it so existing callers are
+   * unaffected (#3019). `selfRefreshed` is `provenance === "self-refresh"`.
+   */
+  provenance?: CodexRefreshProvenance;
 };
+
+/**
+ * How THIS caller arrived at the credential it is returning (#3019).
+ *
+ * `selfRefreshed` is a boolean, and a boolean cannot carry three cases. Its `false` means
+ * both "somebody else replaced the credential" and "I joined an in-flight refresh of the
+ * same grant and adopted its result" — and a recovery budget has to treat those opposite
+ * ways. Joining is the same lineage getting its one refresh; replacement is a NEW lineage
+ * that has not had one yet, and charging it for somebody else's attempt would deny the
+ * fresh credential the recovery this exists to grant.
+ */
+export type CodexRefreshProvenance = "self-refresh" | "joined-lineage" | "external-replacement";
+
+/** Terminal outcome of one forced refresh, as seen by the caller that requested it. */
+export type ForcedRefreshOutcome =
+  | { kind: "resolved"; provenance: CodexRefreshProvenance; generation: number; rotated: boolean }
+  | { kind: "failed"; error: unknown };
 const MAX_CODEX_REFRESH_FLIGHTS = 32;
 const CODEX_REFRESH_FLIGHT_STALE_MS = 120_000;
 interface RefreshFlight {
@@ -587,22 +610,58 @@ function awaitOwnCancellation<T>(work: Promise<T>, callerSignal?: AbortSignal): 
  */
 export async function forceRefreshCodexPoolToken(
   id: string,
-  options: { rejectedGeneration: number; rejectedAccessToken: string; signal?: AbortSignal },
-): Promise<CodexTokenResult & { rotated: boolean; selfRefreshed: boolean }> {
-  const result = await resolveCodexToken(
-    id,
-    { rejectedGeneration: options.rejectedGeneration, rejectedAccessToken: options.rejectedAccessToken },
-    options.signal,
-  );
+  options: {
+    rejectedGeneration: number;
+    rejectedAccessToken: string;
+    signal?: AbortSignal;
+    /**
+     * Fires with THIS caller's classified outcome, regardless of `signal` (#3019).
+     *
+     * Cancellation rejects what the caller awaits; the shared flight keeps running and
+     * commits. A recovery budget claimed before the refresh therefore has no one left to
+     * settle it — the claim expires and the already-refreshed lineage gets a second
+     * refresh, which is the loop the budget exists to close. This callback is attached to
+     * the resolution itself, so it fires with no waiter present.
+     *
+     * It is called exactly once per call, for both success and failure, and its own
+     * failures are swallowed: settlement bookkeeping must never reject a credential the
+     * caller successfully obtained, nor disturb another waiter on the same flight.
+     */
+    onSettled?: (outcome: ForcedRefreshOutcome) => void;
+  },
+): Promise<CodexTokenResult & { rotated: boolean; selfRefreshed: boolean; provenance: CodexRefreshProvenance }> {
+  const settle = (outcome: ForcedRefreshOutcome) => {
+    try { options.onSettled?.(outcome); } catch { /* bookkeeping must not break the caller */ }
+  };
+  let result: CodexRefreshResult;
+  try {
+    result = await resolveCodexToken(
+      id,
+      { rejectedGeneration: options.rejectedGeneration, rejectedAccessToken: options.rejectedAccessToken },
+      options.signal,
+    );
+  } catch (error) {
+    settle({ kind: "failed", error });
+    throw error;
+  }
+  // Default to the conservative reading. A path that did not classify itself is not
+  // assumed to be this caller's own lineage: charging a replacement for somebody else's
+  // attempt is the failure mode, so an unlabelled path is treated as a replacement and
+  // simply leaves the returned lineage its own budget.
+  const provenance: CodexRefreshProvenance = result.provenance
+    ?? (result.selfRefreshed === true ? "self-refresh" : "external-replacement");
+  const rotated = result.accessToken !== options.rejectedAccessToken;
+  settle({ kind: "resolved", provenance, generation: result.generation, rotated });
   return {
     accessToken: result.accessToken,
     chatgptAccountId: result.chatgptAccountId,
     generation: result.generation,
-    rotated: result.accessToken !== options.rejectedAccessToken,
+    rotated,
     // Only a CAS this call performed itself proves the new credential descends from the
     // rejected one; anything else is somebody else's replacement and must not be treated
     // as this request's own lineage.
-    selfRefreshed: result.selfRefreshed === true,
+    selfRefreshed: provenance === "self-refresh",
+    provenance,
   };
 }
 
@@ -633,7 +692,15 @@ async function resolveCodexToken(
   // correct again and refreshing would burn a rotation for nothing.
   const forcedTargetsStoredCredential = forced !== undefined && !forcedFenceSuperseded(record.generation, forced);
   if (cred.expiresAt > Date.now() + REFRESH_SKEW_MS && !forcedTargetsStoredCredential) {
-    return { accessToken: cred.accessToken, chatgptAccountId: cred.chatgptAccountId, generation: record.generation };
+    // The freshness shortcut: nothing was refreshed and nothing was adopted. A forced
+    // caller reaches it only once its fence was superseded, which is a replacement by
+    // definition; an ordinary caller does not read this field.
+    return {
+      accessToken: cred.accessToken,
+      chatgptAccountId: cred.chatgptAccountId,
+      generation: record.generation,
+      provenance: "external-replacement",
+    };
   }
 
   const existing = refreshLocks.get(refreshGrantFingerprint);
@@ -658,6 +725,9 @@ async function resolveCodexToken(
             accessToken: currentCred.accessToken,
             chatgptAccountId: currentCred.chatgptAccountId,
             generation: current.generation,
+            // Adopted the stored result of a flight this caller joined: same grant, same
+            // lineage. Not a replacement — that distinction is the whole point of #3019.
+            provenance: "joined-lineage",
           };
         }
       }
@@ -693,6 +763,9 @@ async function resolveCodexToken(
           accessToken: currentCred.accessToken,
           chatgptAccountId: currentCred.chatgptAccountId,
           generation: current.generation,
+          // `forcedFenceSuperseded` is exactly "somebody else moved this credential past
+          // the generation I was holding" — a new lineage, entitled to its own budget.
+          provenance: "external-replacement",
         };
       }
       if (
@@ -720,6 +793,7 @@ async function resolveCodexToken(
           // This joiner performed its own CAS onto its own record, so the resulting
           // generation is its own lineage even though another caller drove the fetch.
           selfRefreshed: true,
+          provenance: "self-refresh",
           resolvedGrantFingerprint: refreshGrantFingerprint,
         };
       }
@@ -747,7 +821,7 @@ async function resolveCodexToken(
    * eviction) and the 30s ceiling remain, because those bound the flight itself.
    */
   const abort = new AbortController();
-  const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(30_000)]);
+  const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(CODEX_REFRESH_FLIGHT_CEILING_MS)]);
   let flight!: RefreshFlight;
   const fetchPromise = withCodexRefreshFileLock(refreshGrantFingerprint, signal, async (): Promise<CodexRefreshResult> => {
     const current = readCodexAccountRecord(id);
@@ -803,6 +877,7 @@ async function resolveCodexToken(
         credential: sameGrantFreshCredential,
         resolvedGrantFingerprint: refreshGrantFingerprint,
         selfRefreshed: true,
+        provenance: "self-refresh",
       };
     }
     const res = await fetch(CHATGPT_TOKEN_URL, {
@@ -882,6 +957,7 @@ async function resolveCodexToken(
       // token — tagging the new grant would make every legitimate joiner look foreign.
       resolvedGrantFingerprint: refreshGrantFingerprint,
       selfRefreshed: true,
+      provenance: "self-refresh",
     };
   });
   /*
