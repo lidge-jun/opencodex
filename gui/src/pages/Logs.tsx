@@ -21,6 +21,7 @@ import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } 
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
 import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
 import { logMatchesSurface } from "./logs-surface-filter";
+import { logMatchesModelQuery } from "./logs-model-filter";
 import {
   sanitizeLogEntryRouteDecision,
   validCachedRouteDecision,
@@ -372,6 +373,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const [surfaceFilter, setSurfaceFilter] = useState<LogSurfaceFilter>("all");
   const [interceptedHelpersOnly, setInterceptedHelpersOnly] = useState(false);
   const [conversationFilter, setConversationFilter] = useState("");
+  const [modelFilter, setModelFilter] = useState("");
   const [conversationQueryHash, setConversationQueryHash] = useState<string | undefined>();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const logRetryRef = useRef<{ key: string; failures: number; nextAttemptAt: number; error: unknown }>(
@@ -511,6 +513,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const filteredLogs = logs.filter(log => (
     logMatchesSurface(log, surfaceFilter)
     && (!interceptedHelpersOnly || Boolean(log.shadowCallRewrittenFrom))
+    && logMatchesModelQuery(log, modelFilter)
     && (!conversationQuery || matchesLogConversationId(log.conversationId, conversationQuery, conversationQueryHash))
   ));
   const conversationTotals = conversationQuery ? summarizeFilteredLogs(filteredLogs) : null;
@@ -628,6 +631,17 @@ export default function Logs({ apiBase }: { apiBase: string }) {
             onChange={e => setConversationFilter(e.target.value)}
             placeholder={t("logs.filter.conversation.placeholder")}
             aria-label={t("logs.filter.conversation.label")}
+          />
+        </label>
+        <label className="muted text-control logs-filter-field">
+          {t("logs.filter.model.label")}
+          <input
+            type="search"
+            className="input mono"
+            value={modelFilter}
+            onChange={e => setModelFilter(e.target.value)}
+            placeholder={t("logs.filter.model.placeholder")}
+            aria-label={t("logs.filter.model.label")}
           />
         </label>
         {conversationQuery && (
