@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,6 +17,9 @@ import {
 } from "../src/clients/config-export";
 import { INTEGRATION_CLIENTS, resolveIntegrationPaths, unresolvedPathHintFor } from "../src/integrations/registry";
 import { readIntegrationState } from "../src/integrations/state";
+import { createIntegrationStateStore } from "../src/integrations/store";
+import { defaultIntegrationIO } from "../src/integrations/config-io";
+import { applyIntegration } from "../src/integrations/writer";
 import type { OcxConfig } from "../src/types";
 
 const CONFIG = {
@@ -172,6 +175,61 @@ describe("Aside client config", () => {
     const paths = resolveIntegrationPaths("prime", {}, "/home/u");
     expect(paths.configPath).toBe(join("/home/u", ".prime", "agent", "models.json"));
     expect(paths.detectDir).toBe(join("/home/u", ".prime", "agent"));
+  });
+
+  /*
+   * The direct writer path, which is the one that stayed broken after the seam
+   * landed. applyIntegration is public and callers may omit resolvedPaths, so
+   * preflight used to resolve configPath while the installation check resolved
+   * detectDir separately. An account switch landing between the two produced a
+   * successful apply that verified one account and wrote the other's catalog.
+   *
+   * The IO seam is where the switch is injected, because that is the moment
+   * between the two resolutions in the original ordering.
+   */
+  test("a direct apply checks the install of the very account it writes", () => {
+    writeManifest(JSON.stringify({ currentAccountId: 0 }));
+    const manifest = join(home, ".aside", "accounts.json");
+    writeFileSync(join(home, ".aside", "u", "0", "models.json"), "{}\n");
+    mkdirSync(join(home, ".aside", "u", "1"), { recursive: true });
+
+    const store = createIntegrationStateStore(mkdtempSync(join(tmpdir(), "ocx-aside-store-")));
+    const io = defaultIntegrationIO(store);
+    const statted: string[] = [];
+    const switching = {
+      ...io,
+      statKind: (path: string) => {
+        statted.push(path);
+        // Aside switches accounts exactly where the second resolution used to be.
+        writeFileSync(manifest, JSON.stringify({ currentAccountId: 1 }));
+        return io.statKind(path);
+      },
+    };
+
+    const applied = applyIntegration({
+      clientId: "aside", models: [], config: CONFIG, port: 10100,
+      env: {}, home, store, io: switching,
+    });
+    expect(applied.ok).toBe(true);
+
+    /*
+     * The property that was violated: the account directory whose existence
+     * authorized the write must be the account the write landed in. With the two
+     * paths resolved separately, the install check statted u/1 while the catalog
+     * was written to u/0 -- an apply authorized by an account it never touched.
+     */
+    const accountDirs = statted.filter(path => /[\\/]u[\\/]\d+$/.test(path));
+    expect(accountDirs.length).toBeGreaterThan(0);
+    const authorized = new Set(accountDirs);
+
+    const owning = ([0, 1] as const).filter(account => {
+      const catalog = join(home, ".aside", "u", String(account), "models.json");
+      if (!existsSync(catalog)) return false;
+      const parsed = JSON.parse(readFileSync(catalog, "utf8")) as { providers?: Record<string, unknown> };
+      return parsed.providers?.opencodex !== undefined;
+    });
+    expect(owning).toHaveLength(1);
+    expect(authorized.has(join(home, ".aside", "u", String(owning[0])))).toBe(true);
   });
 
   test("detects installation by the account directory, not the CLI directory", () => {

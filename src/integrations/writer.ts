@@ -210,8 +210,20 @@ function preflight(input: IntegrationWriteInput) {
    * whole Integrations page because one client is misconfigured.
    */
   let configPath: string;
+  let detectDir: string;
   try {
-    configPath = input.resolvedPaths?.configPath ?? spec.configPath(input.env, input.home);
+    /*
+     * Resolve the PAIR, never one half.
+     *
+     * The coordinated path hands us a frozen pair, but applyIntegration,
+     * refreshIntegration and disableIntegration are public and may be called
+     * without one. Resolving configPath here and detectDir separately later let
+     * an Aside account switch land between the two, so a direct apply could
+     * verify account 1 was installed and then write account 0's catalog.
+     */
+    const resolved = input.resolvedPaths ?? resolveIntegrationPaths(clientId, input.env, input.home);
+    configPath = resolved.configPath;
+    detectDir = resolved.detectDir;
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
     return { failed: refuse(clientId, "unsafe", "unsafe", error.message) } as const;
@@ -248,15 +260,17 @@ function preflight(input: IntegrationWriteInput) {
   const classified = classifyIntegration({
     fileText: before, fileIsRegular: true, parsed, record, contribution, configPath, clientId,
   });
-  return { failed: undefined, store, io, clientId, spec, exportSpec, configPath, before, parsed, contribution, record, classified } as const;
+  return { failed: undefined, store, io, clientId, spec, exportSpec, configPath, detectDir, before, parsed, contribution, record, classified } as const;
 }
 
 function applyOrRefreshIntegration(input: IntegrationWriteInput, allowAbsent: boolean): WriteOutcome {
   const pre = preflight(input);
   if (pre.failed) return pre.failed;
-  const { store, io, clientId, spec, exportSpec, configPath, before, parsed, contribution, record, classified } = pre;
+  const { store, io, clientId, spec, exportSpec, configPath, detectDir, before, parsed, contribution, record, classified } = pre;
 
-  if (io.statKind(input.resolvedPaths?.detectDir ?? spec.detectDir(input.env, input.home)) !== "dir") {
+  // The detect directory preflight already resolved, so it cannot name a
+  // different account than the config path this operation is about to write.
+  if (io.statKind(detectDir) !== "dir") {
     return refuse(clientId, "not_installed", "absent", `${clientId} is not installed`);
   }
   if (isLoopbackOnly(clientId) && !isLoopbackHostname(input.config.hostname)) {
