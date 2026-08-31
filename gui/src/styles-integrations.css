@@ -46,7 +46,7 @@
 .integration-empty { padding: 20px; border: 1px dashed var(--border); border-radius: var(--radius); text-align: center; color: var(--muted); }
 
 .integration-client-head { display: flex; align-items: center; gap: 10px; }
-.integration-client-head h4 { margin: 0; }
+.integration-client-head h3 { margin: 0; }
 .integration-client-head .switch { margin-left: auto; }
 
 /* A config path is the thing a user copies when a refusal tells them to
@@ -58,11 +58,41 @@
 .integration-card .integration-path,
 .integration-card .integration-meta { margin: 0; min-height: calc(var(--text-caption) * var(--leading-ui) * 2); }
 
-.integration-history { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
-.integration-history li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+/*
+  One boundary, separators inside.
+
+  The journal used to give every row its own border and radius, which read as a
+  stack of loose strips rather than a list — and both surfaces rendered up to
+  fifty of them under the real controls. A single container border with
+  `border-top` separators states the same grouping once.
+*/
+.integration-history { margin: 8px 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); overflow: hidden; }
+.integration-history-list { list-style: none; padding: 0; margin: 0; }
+.integration-history-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; }
+/* Separators only BETWEEN rows: the container already draws the outer edges,
+   and the disclosure below supplies its own top rule. */
+.integration-history-list .integration-history-row + .integration-history-row { border-top: 1px solid var(--border-soft); }
+.integration-history-older { border-top: 1px solid var(--border-soft); }
+.integration-history-older > summary { padding: 8px 12px; color: var(--muted); font-size: var(--text-caption); cursor: pointer; }
+.integration-history-older > summary:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+/* The disclosure's own rows sit under the summary, so the first one needs the
+   separator the sibling selector above cannot give it. */
+.integration-history-older .integration-history-row:first-child { border-top: 1px solid var(--border-soft); }
+.integration-history-more { margin: 8px 12px; }
 .integration-history-kind { font-family: var(--font-code); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
 .integration-history-client { font-size: var(--text-caption); color: var(--muted); }
 .integration-history-at { font-size: var(--text-caption); color: var(--muted); margin-right: auto; }
+
+/*
+  At 320-390px the timestamp and the action stop fitting on the label's line.
+  `margin-right: auto` on the timestamp keeps pushing the button to the far
+  edge of whatever line it lands on, so the row needs an explicit stacked
+  arrangement rather than relying on wrap alone.
+*/
+@media (max-width: 420px) {
+  .integration-history-at { margin-right: 0; flex: 1 1 100%; }
+  .integration-history-row .btn { margin-left: auto; }
+}
 
 .integration-restore-dialog .integration-path { margin: 10px 0; }
 

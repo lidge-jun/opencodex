@@ -17,6 +17,7 @@ import type { VisualIntegrationState } from "./IntegrationStateBadge";
 import {
   FILE_INTEGRATION_CLIENTS,
   type FileIntegrationClientId,
+  type IntegrationJournalRow,
   type IntegrationStatus,
 } from "./integration-api";
 import type { NativeIntegrationClientId, NativeStatus } from "./native-api";
@@ -150,6 +151,20 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
 };
 
 /** A file client's block is in the file for both `current` and `stale`. */
+/**
+ * Journal operation kinds to their labels.
+ *
+ * Lives here rather than beside the rollback components because a module that
+ * exports both a component and a constant breaks React fast refresh, and both
+ * Integrations surfaces plus their tests need this map.
+ */
+export const JOURNAL_KIND_KEY: Record<IntegrationJournalRow["kind"], TKey> = {
+  apply: "integrations.kind.apply",
+  disable: "integrations.kind.disable",
+  refresh: "integrations.kind.refresh",
+  restore: "integrations.kind.restore",
+};
+
 export function isAppliedState(state: VisualIntegrationState): boolean {
   return state === "current" || state === "stale";
 }

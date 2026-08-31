@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDataSurface } from "../../data-surface";
+import { DataSurfaceSkeleton } from "../../components/data-surface";
 import { navigateHash } from "../../hash-routing";
-import { useT, type TKey } from "../../i18n/shared";
+import { useT } from "../../i18n/shared";
 import { Notice, Switch } from "../../ui";
 import IntegrationStateBadge from "./IntegrationStateBadge";
 import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import RestoreDialog from "./RestoreDialog";
+import { RollbackHistory } from "./RollbackHistory";
 import { describeRefusal } from "./refusal-copy";
 import {
   buildOverviewRows,
@@ -48,13 +50,6 @@ const DESKTOP_DISABLE_COPY: ConsequenceCopy = {
   undoKey: "integrations.dialog.desktop.undo",
   sideEffectKey: "integrations.dialog.desktop.restart",
   confirmKey: "integrations.dialog.desktop.confirm",
-};
-
-const KIND_KEY: Record<IntegrationJournalRow["kind"], TKey> = {
-  apply: "integrations.kind.apply",
-  disable: "integrations.kind.disable",
-  refresh: "integrations.kind.refresh",
-  restore: "integrations.kind.restore",
 };
 
 function isApplied(status: IntegrationStatus): boolean {
@@ -504,6 +499,13 @@ export default function IntegrationsOverview({
         aggregate, and merging it into the strip would make "Manage keys" read
         as a bulk control beside "Disable all".
       */}
+      {/*
+        The outline used to go h2 (page) straight to h4 (card), so every card
+        title was an orphan level and the rollback section sat at the same depth
+        as the things it is not part of. This h3 owns the catalog; rollback
+        below is its sibling.
+      */}
+      <h3>{t("integrations.catalog.title")}</h3>
       <ApiKeysRow row={keysRow} />
 
       <p className="page-sub">{t("integrations.onboarding")}</p>
@@ -551,36 +553,34 @@ export default function IntegrationsOverview({
         </div>
       )}
 
-      <h4>{t("integrations.rollback.title")}</h4>
-      {history.length === 0 ? (
+      <h3>{t("integrations.rollback.title")}</h3>
+      {/*
+        The newest operation stays visible and the rest collapse. This page
+        already carries a summary, an API row and fifteen cards, so fifty
+        bordered rows below them buried the one control a user wants after a
+        mistake. The older rows are kept rather than dropped: this is the only
+        place showing one chronology ACROSS clients, since each client tab reads
+        its own filtered journal.
+
+        Cold, failed and empty also used to look identical here, because
+        `data ?? []` collapses all three.
+      */}
+      {historyResource.state.showSkeleton ? (
+        <DataSurfaceSkeleton label={t("integrations.rollback.title")} rows={2} />
+      ) : historyResource.state.kind === "failed-cold" ? (
+        <Notice tone="err">
+          {t("integrations.rollback.failed")}{" "}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void historyResource.refresh()}>
+            {t("common.retry")}
+          </button>
+        </Notice>
+      ) : history.length === 0 ? (
         <div className="integration-empty">
           <p>{t("integrations.rollback.empty")}</p>
           <p className="page-sub">{t("integrations.rollback.emptyBody")}</p>
         </div>
       ) : (
-        <ul className="integration-history">
-          {history.map(row => (
-            <li key={row.opId}>
-              <span className="integration-history-kind">{t(KIND_KEY[row.kind])}</span>
-              <span className="integration-history-client">{row.clientId}</span>
-              <span className="integration-history-at">{new Date(row.at).toLocaleString()}</span>
-              {row.snapshot === "expired" ? (
-                <span className="badge badge-muted">{t("integrations.action.snapshotExpired")}</span>
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => setRestoring(row)}
-                >
-                  {/* `undoable` picks the wording; the server owns eligibility. */}
-                  {row.undoable
-                    ? t("integrations.action.undo")
-                    : t("integrations.action.restorePoint")}
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
+        <RollbackHistory rows={history} showClient onRestore={setRestoring} />
       )}
 
       {restoring && (

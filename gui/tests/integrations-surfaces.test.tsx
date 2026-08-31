@@ -720,3 +720,33 @@ test("a loopback-only refusal is localized, not the server's English message", a
   }) as Parameters<typeof describeRefusal>[0], refusal);
   expect(english).toContain("kimi");
 });
+test("a populated overview journal collapses instead of flooding the page", async () => {
+  /*
+   * The overview already carries a summary strip, a credential row and fifteen
+   * cards. It also rendered every row the journal returned — up to the route's
+   * fifty — as individually bordered strips below them, which is what buried
+   * the one control a user reaches for after a mistake.
+   */
+  journalRows = Array.from({ length: 30 }, (_, index) => ({
+    opId: `op-${index}`,
+    clientId: "hermes",
+    kind: "apply" as const,
+    at: new Date(Date.UTC(2026, 7, 31, 10, 0, 0) - index * 60_000).toISOString(),
+    configPath: "/tmp/home/.hermes/config.yaml",
+    snapshot: "stored" as const,
+    undoable: index === 0,
+  }));
+  await mountOverview();
+
+  const outside = Array.from(container.querySelectorAll(".integration-history-row"))
+    .filter(node => !(node as unknown as HTMLElement).closest(".integration-history-older"));
+  expect(outside).toHaveLength(1);
+  // The newest operation's Undo stays a click away, not a disclosure away.
+  expect(buttonByText("Undo")).toBeDefined();
+  const details = container.querySelector(".integration-history-older") as unknown as HTMLDetailsElement;
+  expect(details).not.toBeNull();
+  expect(details.open).toBe(false);
+  // The cross-client chronology is still THERE, just folded.
+  await act(async () => { details.open = true; });
+  expect(container.querySelectorAll(".integration-history-older .integration-history-row").length).toBeGreaterThan(1);
+});

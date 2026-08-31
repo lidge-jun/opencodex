@@ -1,9 +1,11 @@
 import { useCallback, useState } from "react";
 import { useDataSurface } from "../../data-surface";
+import { DataSurfaceSkeleton } from "../../components/data-surface";
 import { useT, type TKey } from "../../i18n/shared";
 import { Notice, Switch } from "../../ui";
 import IntegrationStateBadge from "./IntegrationStateBadge";
 import RestoreDialog from "./RestoreDialog";
+import { RollbackHistory } from "./RollbackHistory";
 import { describeRefusal } from "./refusal-copy";
 import {
   loadIntegrationJournal,
@@ -42,13 +44,6 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   mcode: "integrations.tab.mcode",
   zcode: "integrations.tab.zcode",
   prime: "integrations.tab.prime",
-};
-
-const KIND_KEY: Record<IntegrationJournalRow["kind"], TKey> = {
-  apply: "integrations.kind.apply",
-  disable: "integrations.kind.disable",
-  refresh: "integrations.kind.refresh",
-  restore: "integrations.kind.restore",
 };
 
 export default function FileIntegrationPage({
@@ -190,38 +185,24 @@ export default function FileIntegrationPage({
       {failure && <Notice tone="err">{failure}</Notice>}
 
       <h4>{t("integrations.rollback.title")}</h4>
-      {history.length === 0 ? (
+      {/*
+        Cold, failed and empty used to render identically, because `data ?? []`
+        collapses all three into an empty array and the empty state followed. A
+        user whose journal request failed was told they had no history.
+      */}
+      {historyResource.state.showSkeleton ? (
+        <DataSurfaceSkeleton label={t("integrations.rollback.title")} rows={2} />
+      ) : historyResource.state.kind === "failed-cold" ? (
+        <Notice tone="err">
+          {t("integrations.rollback.failed")}{" "}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void historyResource.refresh()}>
+            {t("common.retry")}
+          </button>
+        </Notice>
+      ) : history.length === 0 ? (
         <p className="page-sub">{t("integrations.rollback.empty")}</p>
       ) : (
-        <ul className="integration-history">
-          {history.map(row => (
-            <li key={row.opId}>
-              <span className="integration-history-kind">{t(KIND_KEY[row.kind])}</span>
-              <span className="integration-history-at">{new Date(row.at).toLocaleString()}</span>
-              {row.snapshot === "expired" ? (
-                // The only genuinely impossible case: the bytes are gone.
-                <span className="badge badge-muted">{t("integrations.action.snapshotExpired")}</span>
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => setRestoring(row)}
-                >
-                  {/*
-                    `undoable` chooses the WORDING, not whether the action
-                    exists. Disabling everything else made the drift
-                    confirmation unreachable: an older row, or one whose file
-                    changed since, is exactly what a user reaches for, and the
-                    server accepts it after an explicit confirm.
-                  */}
-                  {row.undoable
-                    ? t("integrations.action.undo")
-                    : t("integrations.action.restorePoint")}
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
+        <RollbackHistory rows={history} onRestore={setRestoring} />
       )}
 
       {restoring && (
