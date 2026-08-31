@@ -136,10 +136,12 @@ describe("Codex history provider sync", () => {
     expect(existsSync(fixture.backupPath)).toBe(false);
   });
 
-  test("a second routing attempt reopens the relabel marker (#3026)", () => {
-    // A surviving manifest means a previous cycle did not consume it. Its relabel describes
-    // THAT attempt; carrying a stale "committed" into a new route lets a later restore treat
-    // the marker as proof that OpenCodex authored an event flag the user had since set.
+  test("a surviving manifest is re-snapshotted by the next routing attempt (#3026)", () => {
+    // A manifest that outlives its restore is the real hazard: its recorded snapshot
+    // describes the PREVIOUS attempt. Carrying it into a new route makes the new routed row
+    // match the expected post-image, and restore then erases activity that arrived in
+    // between. Forcing the consume to fail is what actually reaches that path - an ordinary
+    // restore deletes the manifest and the reopen code never runs.
     const fixture = makeFixture();
     const db = new Database(fixture.dbPath);
     db.run("UPDATE threads SET first_user_message = NULL, has_user_event = 0 WHERE id = 'thread-1'");
@@ -147,24 +149,40 @@ describe("Codex history provider sync", () => {
 
     expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath))
       .toEqual({ rows: 1, files: 1 });
-    expect((JSON.parse(readFileSync(fixture.backupPath, "utf8")) as {
-      entries: Record<string, { relabel?: string }>;
-    }).entries["thread-1"]?.relabel).toBe("committed");
 
-    // Restore back to openai, then route again while the manifest still exists.
-    expect(syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath))
-      .toEqual({ rows: 1, files: 1 });
-    expect(syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath))
-      .toEqual({ rows: 1, files: 1 });
+    setBeforeHistoryBackupConsumeForTests(() => {
+      throw new Error("manifest consume interrupted");
+    });
+    try {
+      // Reported rather than thrown: the restore itself succeeded, only the consume failed.
+      expect(syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath))
+        .toMatchObject({ failed: true });
+    } finally {
+      setBeforeHistoryBackupConsumeForTests(undefined);
+    }
+    expect(existsSync(fixture.backupPath)).toBe(true);
 
-    // The new attempt's marker describes the new attempt.
+    // The user types while the manifest is still on disk, then a second route runs.
+    const active = new Database(fixture.dbPath);
+    active.run("UPDATE threads SET first_user_message = 'hello', has_user_event = 1 WHERE id = 'thread-1'");
+    active.close();
+    syncCodexHistoryProvider("opencodex", fixture.dbPath, fixture.backupPath);
+
     const after = JSON.parse(readFileSync(fixture.backupPath, "utf8")) as {
       version: number;
       entries: Record<string, { relabel?: string; hadFirstUserMessage?: boolean }>;
     };
     expect(after.version).toBe(2);
-    expect(after.entries["thread-1"]?.relabel).toBe("committed");
-    expect(after.entries["thread-1"]?.hadFirstUserMessage).toBe(false);
+    // Re-snapshotted for THIS attempt: the message is non-empty now, so the expected
+    // post-image is a 1 that OpenCodex itself wrote.
+    expect(after.entries["thread-1"]?.hadFirstUserMessage).toBe(true);
+
+    // And the user's activity survives the restore rather than being read as OpenCodex's.
+    syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath);
+    const restored = new Database(fixture.dbPath, { readonly: true });
+    expect(restored.query("SELECT model_provider, has_user_event FROM threads WHERE id = 'thread-1'").get())
+      .toEqual({ model_provider: "openai", has_user_event: 1 });
+    restored.close();
   });
 
   describe("restore classifier state matrix", () => {

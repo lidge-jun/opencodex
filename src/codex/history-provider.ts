@@ -469,13 +469,31 @@ function rememberOriginal(manifest: CodexHistoryBackupManifest, row: ApplyRowSna
   const existing = manifest.entries[row.id];
   if (existing) {
     // A surviving entry means a previous route/restore cycle did not consume its manifest.
-    // Its `relabel` describes THAT attempt, and this one has not written yet — leaving a
-    // stale `committed` here would let a later restore treat the marker as proof that
-    // OpenCodex authored an event flag the user had since set. The snapshot itself stays:
-    // it is the original provenance and must not be overwritten by a routed row.
+    // Its `relabel` describes THAT attempt, and this one has not written yet, so a stale
+    // `committed` would let a later restore treat the marker as proof that OpenCodex
+    // authored an event flag the user had since set.
+    //
+    // The provenance tuple stays — it is the ORIGINAL, and a routed row must never
+    // overwrite it. But `hadFirstUserMessage` is not provenance: it describes the input to
+    // one routing write, and this attempt has its own. Leaving the previous attempt's value
+    // makes the new routed row match the expected post-image and erases activity that
+    // arrived in between. Re-record it, and promote the manifest so the field is covered by
+    // the schema that declares it.
     existing.relabel = "pending";
+    existing.hadFirstUserMessage = hasFirstUserMessage(row.first_user_message);
+    // `hasUserEvent` is the value restore returns to, and for THIS attempt that is the
+    // row as it stands now. The previous attempt's value predates a restore that already
+    // happened plus whatever the user did afterwards, so keeping it would restore the
+    // thread to a state that is two events old. Provider and source are provenance and
+    // stay; only when the row is back at the recorded original tuple is its event flag
+    // the honest pre-route baseline.
+    if (row.model_provider === existing.modelProvider && row.source === existing.source) {
+      existing.hasUserEvent = Number(row.has_user_event) === 1 ? 1 : 0;
+    }
+    manifest.version = 2;
     return;
   }
+  manifest.version = 2;
   manifest.entries[row.id] = {
     id: row.id,
     rolloutPath: row.rollout_path,
