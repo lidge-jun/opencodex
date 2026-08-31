@@ -47,7 +47,7 @@ import { runReady, type ReadyArgs } from "./ready";
 import { runCli } from "./root";
 import { ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
-import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled } from "../service";
+import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled } from "../service";
 import { formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import { drainAndShutdown, isRecyclingForExit, startServer } from "../server";
 import { injectSystemEnv, reconcileShellHook, revertSystemEnv, uninstallShellHook } from "../server/system-env";
@@ -766,6 +766,20 @@ async function handleStop() {
   // Environment ownership is independent from service ownership. Always roll back
   // current-home variables; the helper refuses foreign markers on its own.
   try { revertSystemEnv(); } catch { /* best-effort */ }
+  // A stopped Windows scheduler is not a proven-down proxy. `killWindowsSchedulerWrappers`
+  // is explicitly best-effort and the `:loop` wrapper respawns its child after ~5s, so an
+  // immediate probe can see a dead interval and an update can start replacing files right
+  // before the proxy comes back. Poll across the restart window before this stop is allowed
+  // to report anything but failure (#3008).
+  if (stoppedService && !ownershipBlocked) {
+    const survivor = await proxyStillLiveAfterStop({ canRespawn: true });
+    if (survivor) {
+      stopFailed = true;
+      console.error(`❌ A proxy is still listening on port ${survivor.port} after the service stop; it is being respawned.`);
+      console.error("   Skipping shared teardown: restoring client config while the proxy runs leaves both pointing at each other.");
+      ownershipBlocked = true;
+    }
+  }
   if (!ownershipBlocked) {
     const restore = await restoreSharedClientStateAfterStop();
     if (restore.other) stopFailed = true;

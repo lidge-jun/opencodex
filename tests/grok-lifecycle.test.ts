@@ -150,6 +150,18 @@ describe("Grok fence lifecycle wiring", () => {
     expect(restartHelper).toContain("requestBoundSystemRestart(previous, deadlineAt)");
   });
 
+  test("a stopped scheduler is verified across the respawn window before stop succeeds", () => {
+    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
+    // killWindowsSchedulerWrappers is best-effort and the `:loop` wrapper respawns after
+    // ~5s, so "stopped" alone is not a proven-down proxy. An update that trusts it can
+    // start replacing files during the dead interval (#3008).
+    expect(stopFn).toContain("proxyStillLiveAfterStop({ canRespawn: true })");
+    // A survivor is an ordinary failure AND blocks shared teardown: restoring client
+    // config while the proxy runs leaves both pointing at each other.
+    expect(stopFn).toContain("stopFailed = true;");
+    expect(stopFn).toContain("ownershipBlocked = true;");
+  });
+
   test("handleStop treats an incomplete native Codex restore as a stop failure", () => {
     const restoreFn = sliceFn(CLI_SOURCE, "async function restoreSharedClientStateAfterStop(", "async function handleStop(");
     const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");

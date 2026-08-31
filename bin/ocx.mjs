@@ -248,10 +248,8 @@ function runNpmSelfUpdate() {
       }
     } catch { /* keep default */ }
   }
-  // A wildcard bind answers on loopback, and a bracketed IPv6 literal is a URL spelling
-  // rather than a host: node:http wants the bare address.
-  if (bakeHostname === "0.0.0.0" || bakeHostname === "::" || bakeHostname === "*") bakeHostname = "127.0.0.1";
-  if (bakeHostname.startsWith("[") && bakeHostname.endsWith("]")) bakeHostname = bakeHostname.slice(1, -1);
+  // Wildcard and bracketed-IPv6 normalization lives in probeProxyLiveness, so both lanes
+  // get it from one place.
 
   const launcher = fileURLToPath(import.meta.url);
 

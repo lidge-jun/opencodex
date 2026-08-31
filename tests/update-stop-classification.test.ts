@@ -138,6 +138,39 @@ describe("stop failure classification (#3008)", () => {
     }
   });
 
+  test("the shared probe normalizes wildcard and bracketed IPv6 hosts", async () => {
+    // Normalization lives in the probe, not at each call site: doing it per-lane fixed
+    // the npm launcher and left the TypeScript updater passing a bracketed literal
+    // straight to node:http, which answers nothing - read as "unknown", which aborts a
+    // healthy update and leaves the service down. That is the original failure shape.
+    const listener = spawn(process.execPath, ["-e", [
+      "const http = require('node:http');",
+      "const server = http.createServer((req, res) => {",
+      "  res.writeHead(200, { 'content-type': 'application/json' });",
+      "  res.end(JSON.stringify({ service: 'opencodex', pid: process.pid }));",
+      "});",
+      "server.listen(0, () => process.stdout.write(String(server.address().port)));",
+    ].join("\n")], { stdio: ["ignore", "pipe", "ignore"] });
+    const port = await new Promise<number>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("listener did not report a port")), 10_000);
+      listener.stdout.once("data", chunk => { clearTimeout(timer); resolve(Number(String(chunk))); });
+      listener.once("error", error => { clearTimeout(timer); reject(error); });
+    });
+
+    try {
+      // A wildcard bind cannot be dialled as a wildcard; it answers on loopback.
+      expect(probeProxyLiveness(port, "0.0.0.0")).toBe("live");
+      expect(probeProxyLiveness(port, "*")).toBe("live");
+      // A URL-spelled literal is unwrapped rather than handed to the socket layer.
+      expect(probeProxyLiveness(port, "[127.0.0.1]")).toBe("live");
+      // Empty falls back to loopback rather than dialling "".
+      expect(probeProxyLiveness(port, "")).toBe("live");
+    } finally {
+      listener.kill();
+      await new Promise<void>(resolve => listener.once("exit", () => resolve()));
+    }
+  });
+
   test("an unreachable or silent endpoint is unknown, not dead", async () => {
     // Fail-open was the wrong default: a listener that accepts connections but withholds
     // /healthz, or a probe that times out, is exactly the state where replacing package

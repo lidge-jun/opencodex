@@ -21,6 +21,16 @@ import { spawnSync } from "node:child_process";
 export function probeProxyLiveness(port, hostname = "127.0.0.1", timeoutMs = 1500) {
   // An unusable port is not an ambiguous probe: there is nothing to ask.
   if (!Number.isFinite(port) || port <= 0 || port > 65535) return "dead";
+  // Normalize HERE rather than at each call site. Leaving it to the callers put the fix in
+  // one lane and not the other, and a bracketed IPv6 literal handed to node:http answers
+  // nothing - which the tri-state correctly reports as "unknown" and the updater correctly
+  // treats as a reason to abort, turning a healthy stop into a refused update.
+  let host = typeof hostname === "string" && hostname.trim() !== "" ? hostname.trim() : "127.0.0.1";
+  // A wildcard bind answers on loopback; `node:http` cannot dial the wildcard itself.
+  if (host === "0.0.0.0" || host === "*") host = "127.0.0.1";
+  if (host === "::" ) host = "::1";
+  // `[::1]` is a URL spelling; the socket layer wants the bare address.
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
   // `node:http` rather than `fetch`: the child inherits a parent whose event loop is
   // blocked on `spawnSync`, and an aborted-before-dispatch fetch reports the same "not
   // live" as a genuinely dead port. A request emitted on the socket cannot be confused
@@ -59,7 +69,7 @@ export function probeProxyLiveness(port, hostname = "127.0.0.1", timeoutMs = 150
   try {
     const probe = spawnSync(
       process.execPath,
-      ["-e", script, hostname, String(port), String(timeoutMs)],
+      ["-e", script, host, String(port), String(timeoutMs)],
       { encoding: "utf8", timeout: timeoutMs + 1500, windowsHide: true },
     );
     const out = probe.stdout ?? "";
