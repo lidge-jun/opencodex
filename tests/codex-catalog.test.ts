@@ -3651,12 +3651,66 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
-  test("isDatedVariantId matches only <alias>-YYYYMMDD", () => {
+  test("isDatedVariantId matches only <alias>-<date>", () => {
     expect(isDatedVariantId("claude-haiku-4-5-20251001", "claude-haiku-4-5")).toBe(true);
     expect(isDatedVariantId("claude-haiku-4-5-2025", "claude-haiku-4-5")).toBe(false);
     expect(isDatedVariantId("claude-haiku-4-5-latest", "claude-haiku-4-5")).toBe(false);
     expect(isDatedVariantId("claude-haiku-4-5", "claude-haiku-4-5")).toBe(false);
     expect(isDatedVariantId("claude-haiku-4-5-20251001", "claude-haiku-4")).toBe(false);
+  });
+
+  // Real ids from a multi-provider install. A `\d{8}`-only rule matched none of them, so
+  // every one of these aliases dropped out of the authoritative live catalog (#3024).
+  test.each([
+    ["YYYYMMDD", "claude-haiku-4-5-20251001", "claude-haiku-4-5"],
+    ["YYYYMMDD leap day", "acme-model-20240229", "acme-model"],
+    ["YYMMDD", "solar-pro4-260806", "solar-pro4"],
+    ["YYMMDD", "syn-pro-251021", "syn-pro"],
+    ["YYMMDD leap day", "acme-model-240229", "acme-model"],
+    ["MMDD", "deepseek/deepseek-v4-pro-0813", "deepseek/deepseek-v4-pro"],
+    ["MMDD", "moonshotai/kimi-k2-0905", "moonshotai/kimi-k2"],
+    ["MMDD", "openai/gpt-3.5-turbo-0613", "openai/gpt-3.5-turbo"],
+    ["MMDD leap day", "acme-model-0229", "acme-model"],
+    ["YYMM", "mistralai/mistral-large-2407", "mistralai/mistral-large"],
+    ["YYMM", "qwen/qwen3-235b-a22b-2507", "qwen/qwen3-235b-a22b"],
+  ])("folds a %s dated variant: %s", (_format, liveId, configuredId) => {
+    expect(isDatedVariantId(liveId, configuredId)).toBe(true);
+  });
+
+  test.each([
+    ["a version number", "mistralai/mistral-medium-3-5", "mistralai/mistral-medium-3"],
+    ["a context size", "openai/gpt-3.5-turbo-16k", "openai/gpt-3.5-turbo"],
+    ["a variant name", "qwen/qwen3-coder-30b-a3b-instruct", "qwen/qwen3-coder"],
+    ["a batch lane of a dated id", "deepseek/deepseek-v4-pro-0813:batch", "deepseek/deepseek-v4-pro"],
+    ["a bare year", "acme-model-2025", "acme-model"],
+    ["an impossible YYMM", "acme-model-1301", "acme-model"],
+    ["a non-leap YYYYMMDD", "acme-model-20250229", "acme-model"],
+    ["a non-leap YYMMDD", "acme-model-250229", "acme-model"],
+    ["an impossible YYYYMMDD month-end", "acme-model-20240431", "acme-model"],
+    ["an impossible YYMMDD month-end", "acme-model-240431", "acme-model"],
+    ["an impossible MMDD month-end", "acme-model-0431", "acme-model"],
+    // Hyphenated ISO is ambiguous against ordinary name segments; out of scope for now.
+    ["a hyphenated ISO date", "openai/gpt-4o-2024-08-06", "openai/gpt-4o"],
+    ["a hyphenated MM-DD", "google/gemini-2.5-pro-preview-05-06", "google/gemini-2.5-pro-preview"],
+  ])("does not fold %s: %s", (_label, liveId, configuredId) => {
+    expect(isDatedVariantId(liveId, configuredId)).toBe(false);
+  });
+
+  test.each(["2048", "4096", "8192"])("a %s context suffix is not a date", suffix => {
+    expect(isDatedVariantId(`acme-model-${suffix}`, "acme-model")).toBe(false);
+  });
+
+  // Known, accepted cost of allowing MMDD: October 24th is a real date, so a `-1024`
+  // context suffix is indistinguishable from one. No month/day tightening can exclude it.
+  test("a -1024 suffix reads as MMDD and is accepted", () => {
+    expect(isDatedVariantId("acme-model-1024", "acme-model")).toBe(true);
+  });
+
+  // The fold stays one-directional: a configured id the provider no longer lists must not
+  // be retained on the strength of a format match alone (#1690 is the explicit opt-in for
+  // that). `deepseek-v4-pro-0813` configured against a live `deepseek-v4-pro` stays dropped.
+  test("does not fold configured=dated against live=base", () => {
+    expect(isDatedVariantId("deepseek-v4-pro", "deepseek-v4-pro-0813")).toBe(false);
   });
 
   test("disabled providers are excluded from routed model gathering", async () => {
