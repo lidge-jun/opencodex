@@ -341,12 +341,14 @@ test("6. empty provider config sends no test requests", async () => {
     config: emptyConfigResponse,
   }));
 
-  // Button may or may not be rendered for empty config — handle both cases
+  // The header button renders whenever config is loaded, including an empty provider map.
   const btn = findTestAllButton(container);
-  if (btn) {
-    await act(async () => { btn.click(); });
-    await driveAsyncBatch();
-  }
+  expect(btn).not.toBeNull();
+  expect(btn!.disabled).toBe(false);
+  await act(async () => { btn!.click(); });
+  await driveAsyncBatch();
+  // The click must hit the names.length === 0 early return, not start a batch.
+  expect(findTestingButton(container)).toBeNull();
 
   // Zero test API calls
   expect(calls).toHaveLength(0);
@@ -426,9 +428,9 @@ test("8. max concurrency ≤ 3", async () => {
   }
 
   // With 6 providers and concurrency 3, at most 3 should be in-flight.
-  // The first 3 workers each pick one item.
-  expect(maxInFlight).toBeLessThanOrEqual(3);
-  expect(maxInFlight).toBeGreaterThanOrEqual(1);
+  // The first 3 workers each pick one item, so the peak is exactly 3. An upper bound
+  // alone would still pass if the workers serialized to 1.
+  expect(maxInFlight).toBe(3);
 
   // Resolve all pending deferreds
   for (const d of pendingDeferreds) {
@@ -447,10 +449,16 @@ test("9. unmount during batch aborts requests without state-update errors", asyn
   const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
   const d = defer<Response>();
 
-  const { root, container } = await mountProviders(makeFetchHandler(calls, {
-    config: cfg,
-    test: () => d.promise,
-  }));
+  const baseHandler = makeFetchHandler(calls, { config: cfg, test: () => d.promise });
+  const { root, container } = await mountProviders(baseHandler);
+
+  const signals: AbortSignal[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("/api/providers/test") && init?.signal) {
+      signals.push(init.signal);
+    }
+    return baseHandler(input, init);
+  }) as typeof fetch;
 
   const btn = findTestAllButton(container)!;
   await act(async () => { btn.click(); });
@@ -468,7 +476,11 @@ test("9. unmount during batch aborts requests without state-update errors", asyn
       jest.advanceTimersByTime(0);
     });
   }
-  // If we reach here without errors, the aliveRef guard worked
+  // Verify signals were captured and aborted
+  expect(signals.length).toBeGreaterThanOrEqual(1);
+  for (const sig of signals) {
+    expect(sig.aborted).toBe(true);
+  }
 });
 
 test("10. toast text accuracy for success case (1 provider)", async () => {
@@ -493,15 +505,16 @@ test("11. unmount aborts batch signal", async () => {
   const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
   const d = defer<Response>();
 
-  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
+  const baseHandler = makeFetchHandler([], { config: cfg });
+  const { root, container } = await mountProviders(baseHandler);
 
-  const origFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).includes("/api/providers/test")) {
       if (init?.signal) signals.push(init.signal);
       return d.promise;
     }
-    return origFetch(input, init);
+    // Stay inside the mock: no test may touch the network.
+    return baseHandler(input, init);
   }) as typeof fetch;
 
   const btn = findTestAllButton(container)!;
@@ -524,12 +537,13 @@ test("12. abort exits Testing UI and shows no toast", async () => {
   const cfg = { providers: { openai: { adapter: "openai", baseUrl: "https://a" }, anthropic: { adapter: "anthropic", baseUrl: "https://b" } } };
   const d = defer<Response>();
 
-  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
+  const baseHandler = makeFetchHandler([], { config: cfg });
+  const { root, container } = await mountProviders(baseHandler);
 
-  const origFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     if (String(input).includes("/api/providers/test")) return d.promise;
-    return origFetch(input);
+    // Stay inside the mock: no test may touch the network.
+    return baseHandler(input);
   }) as typeof fetch;
 
   const btn = findTestAllButton(container)!;
@@ -559,9 +573,8 @@ test("13. overlapping replacement via apiBase change: batch 1 aborted, batch 2 t
   let testCallCount = 0;
   let usedApiBases: string[] = [];
 
-  const origFetch = globalThis.fetch;
-
-  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
+  const baseHandler = makeFetchHandler([], { config: cfg });
+  const { root, container } = await mountProviders(baseHandler);
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -575,7 +588,8 @@ test("13. overlapping replacement via apiBase change: batch 1 aborted, batch 2 t
     }
     // Config fetch for bootstrap: return same config
     if (url.includes("/api/config")) return jsonResponse(cfg);
-    return origFetch(input, init);
+    // Every other route stays inside the mock: no test may touch the network.
+    return baseHandler(input, init);
   }) as typeof fetch;
 
   const btn = findTestAllButton(container)!;
@@ -672,7 +686,7 @@ test("14. max concurrency refills immediately after one request completes", asyn
   }
 
   expect(pendingDeferreds.length).toBeGreaterThanOrEqual(3);
-  expect(maxInFlight).toBeLessThanOrEqual(3);
+  expect(maxInFlight).toBe(3);
 
   await act(async () => { pendingDeferreds[0].resolve(jsonResponse({ ok: true, latencyMs: 5 })); });
 
@@ -691,7 +705,7 @@ test("14. max concurrency refills immediately after one request completes", asyn
   await driveAsyncBatch();
 
   expect(calls.length).toBe(4);
-  expect(maxInFlight).toBeLessThanOrEqual(3);
+  expect(maxInFlight).toBe(3);
 
   await act(async () => { root.unmount(); });
 });
@@ -708,9 +722,8 @@ test("15. apiBase change aborts batch and exits Testing UI, then new batch works
   let testCallCount = 0;
   let usedApiBases: string[] = [];
 
-  const origFetch = globalThis.fetch;
-
-  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
+  const baseHandler = makeFetchHandler([], { config: cfg });
+  const { root, container } = await mountProviders(baseHandler);
 
   // Capture signals and apiBase used for each test request
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -724,7 +737,8 @@ test("15. apiBase change aborts batch and exits Testing UI, then new batch works
       if (testCallCount === 1) return d1.promise;
       return d2.promise;
     }
-    return origFetch(input, init);
+    // Every other route stays inside the mock: no test may touch the network.
+    return baseHandler(input, init);
   }) as typeof fetch;
 
   const btn = findTestAllButton(container)!;
@@ -846,16 +860,17 @@ test("17. stale batch resolve after unmount: no toast, no state corruption", asy
   const d1 = defer<Response>();
 
   let testCallCount = 0;
-  const origFetch = globalThis.fetch;
+  const baseHandler = makeFetchHandler([], { config: cfg });
 
-  const { root, container } = await mountProviders(makeFetchHandler([], { config: cfg }));
+  const { root, container } = await mountProviders(baseHandler);
 
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     if (String(input).includes("/api/providers/test")) {
       testCallCount++;
       return d1.promise;
     }
-    return origFetch(input);
+    // Stay inside the mock: no test may touch the network.
+    return baseHandler(input);
   }) as typeof fetch;
 
   const btn = findTestAllButton(container)!;

@@ -19,10 +19,13 @@ export async function testProviderConnection(
   signal?: AbortSignal,
 ): Promise<ConnectionTestResult> {
   if (signal?.aborted) return { ok: false, error: "Aborted" };
+  // The server bounds its upstream probe at 8s; this guards an unresponsive management API.
+  const deadline = AbortSignal.timeout(20_000);
+  const combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
   try {
     const response = await fetch(
       `${apiBase}/api/providers/test?${new URLSearchParams({ name })}`,
-      { method: "POST", signal },
+      { method: "POST", signal: combined },
     );
     if (signal?.aborted) return { ok: false, error: "Aborted" };
     const result = await readJsonOrThrow<ConnectionTestResult>(response);

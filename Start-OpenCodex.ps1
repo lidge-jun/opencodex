@@ -46,8 +46,9 @@ function Test-IsLocalCheckoutProcess {
       return $false
     }
 
+    $checkoutPrefix = $repoRoot.TrimEnd('\', '/') + '\'
     if (-not [string]::IsNullOrWhiteSpace($runningProcess.ExecutablePath) -and
-        $runningProcess.ExecutablePath.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        $runningProcess.ExecutablePath.StartsWith($checkoutPrefix, [StringComparison]::OrdinalIgnoreCase)) {
       return $true
     }
 

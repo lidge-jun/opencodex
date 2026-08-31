@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { decideDevVersion } from "../scripts/bump-dev-version";
 
 /**
@@ -12,7 +13,7 @@ import { decideDevVersion } from "../scripts/bump-dev-version";
  * case that disproves it, so that row is load-bearing rather than an edge case.
  */
 
-const CLI = new URL("../scripts/bump-dev-version.ts", import.meta.url).pathname;
+const CLI = fileURLToPath(new URL("../scripts/bump-dev-version.ts", import.meta.url));
 
 function tempPackageJson(version: string): string {
   const dir = mkdtempSync(join(tmpdir(), "ocx-bump-"));

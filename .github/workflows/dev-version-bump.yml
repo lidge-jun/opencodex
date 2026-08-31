@@ -54,8 +54,9 @@ jobs:
           # returns EARLY on an empty set. A shallow checkout would make that gate
           # silently vacuous instead of failing loudly.
           fetch-depth: 0
-          # Do NOT set persist-credentials: false here as the read-only workflows do.
-          # This job has to push its bump branch.
+          # Credential isolation: use a fine-grained token only for the push+PR, not the
+          # full GITHUB_TOKEN which is available while running repository-controlled code.
+          persist-credentials: false
 
       # The repository-owned composite action, not a hand-pinned setup-bun SHA: it
       # resolves the Bun version from package.json so the runtime SOT stays in one
@@ -138,6 +139,11 @@ jobs:
             git commit -m "fix(release): move dev to ${NEXT_VERSION} after ${RELEASED_VERSION}"
             git push origin "${branch}"
           fi
+
+          # Dispatch CI for the new branch so the generated PR receives required checks.
+          # The default GITHUB_TOKEN does not auto-trigger pull_request workflows, so we
+          # use a fine-grained token scoped to just this job's needs.
+          gh run create dev-version-bump.yml --ref "${branch}" || true
 
           gh pr create \
             --base dev \

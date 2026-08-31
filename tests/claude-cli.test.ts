@@ -286,6 +286,9 @@ describe("ocx claude env assembly", () => {
     // overrides the caller's own claude.ai OAuth.
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    // With no host credential left, the host-auth assertion must stay off so a valid
+    // claude.ai subscription does not appear logged out (see `#253`).
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
   });
 
   test("a stale admission token is replaced by THIS proxy's key, never carried over", () => {

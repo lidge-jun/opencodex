@@ -15,7 +15,7 @@ names `c7d8407d2`, which is `origin/main`. So the tree claims a version that is
 already published from a different commit, and
 `tests/release-version-line.test.ts` reports exactly that:
 
-```
+```text
 (fail) release version line > the in-tree version is never behind a released one
 error: package.json version 2.36.0 equals release tag v2.36.0, but this commit is
 not the one that tag names. The tree claims an already-published version:

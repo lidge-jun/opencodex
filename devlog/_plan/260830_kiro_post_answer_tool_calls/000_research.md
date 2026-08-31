@@ -28,10 +28,10 @@ behind and is not the reporting surface.
 | 1 | required | true | false | 0 | END_TURN |
 | 1 | text_fallback | false | false | 1 | TOOL_USE |
 
-4069 of 4080 attempts ran in `required` mode and every one of them ended with
-upstream `stopReason: TOOL_USE`. Only 25 attempts ever called the private
-completion tool. The model overwhelmingly prefers another tool call to the
-completion channel.
+4069 of 4080 attempts ran in `required` mode. Of those, 4068 ended with
+upstream `stopReason: TOOL_USE` and one ended with `END_TURN`. The completion
+tool was called in 25 required-mode attempts, or 26 attempts across all modes.
+The model overwhelmingly prefers another tool call to the completion channel.
 
 ## What is NOT the cause
 

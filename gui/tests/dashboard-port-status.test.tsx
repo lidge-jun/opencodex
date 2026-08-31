@@ -4,6 +4,7 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { DashboardOverviewHead } from "../src/pages/dashboard-overview-head";
+import type { StartupHealthStatus } from "../startup-health-ui";
 import type { HealthData, ProviderInfo } from "../src/pages/dashboard-shared";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -30,13 +31,13 @@ afterEach(() => {
 });
 
 const baseProps = {
-  locale: "en",
+  locale: "en" as const,
   health: null as HealthData | null,
   providers: [] as ProviderInfo[],
   usage30d: null as { summary: { requests: number; totalTokens: number; coverageRatio: number } } | null,
   usageLoading: false,
   healthLoading: false,
-  startupHealth: null as string | null,
+  startupHealth: null as StartupHealthStatus | null,
   projectConfigWarnings: [] as Array<{ path: string; issues: string[]; bypass: string }>,
   maMode: "default" as const,
   maBusy: false,
