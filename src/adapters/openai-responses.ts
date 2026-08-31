@@ -237,6 +237,30 @@ function stripCanonicalOnlyToolFields(body: unknown, includeCapabilityGated: boo
 }
 
 /**
+ * Codex keeps this ChatGPT-internal item metadata when its configured provider name is `openai`.
+ * Loopback OpenCodex injection intentionally retains that provider identity for history continuity,
+ * even when the proxy ultimately routes the request to a public Responses destination. Those
+ * destinations reject the private field as an unknown `input[*]` parameter, so remove it at the
+ * noncanonical boundary without mutating the caller-owned raw body.
+ */
+function stripInternalChatMessageMetadataPassthrough(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+
+  let changed = false;
+  const input = body.input.map(item => {
+    if (!isPlainObject(item) || !Object.hasOwn(item, "internal_chat_message_metadata_passthrough")) {
+      return item;
+    }
+    changed = true;
+    const next = { ...item };
+    delete next.internal_chat_message_metadata_passthrough;
+    return next;
+  });
+
+  return changed ? { ...body, input } : body;
+}
+
+/**
  * When `store` is false, the upstream API does not persist response items. Any item ID
  * forwarded in `input` is then interpreted as a reference to a stored item that does not
  * exist, producing a 404. Strip all item IDs in this case — `call_id` pairing is unaffected.
@@ -2102,6 +2126,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // a strict parser rejects the whole request over it (#930).
       outBody = backfillWebSearchQueries(outBody);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
+        outBody = stripInternalChatMessageMetadataPassthrough(outBody);
         outBody = promoteClientLoadedTools(outBody);
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
