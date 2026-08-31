@@ -246,6 +246,12 @@ describe("Grok fence lifecycle wiring", () => {
     // known — moving it earlier would erase it from every future scan while the restore it
     // stood for had not run.
     expect(gateBlock).not.toContain("quarantinePendingTeardown");
+    // Setting aside is not discharging, and the message must not claim otherwise: the
+    // renamed file still blocks an update until an operator removes it.
+    const quarantineBlock = stopFn.slice(stopFn.indexOf("if (unreadable.length > 0"), stopFn.indexOf("// Set the code rather than exiting inline"));
+    expect(quarantineBlock).toContain("It still blocks 'ocx update'");
+    expect(quarantineBlock).toContain("has NOT restored on its behalf");
+    expect(quarantineBlock).not.toContain("no longer blocks an update");
     expect(stopFn.indexOf("await restoreSharedClientStateAfterStop()"))
       .toBeLessThan(stopFn.indexOf("quarantinePendingTeardown(read.nonce)"));
     // Inherited receipts are evaluated whether or not this run claimed one of its own, and

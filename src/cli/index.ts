@@ -990,15 +990,23 @@ async function handleStop() {
       }
     }
   }
-  // Set an unreadable receipt aside only AFTER the outcome is known, and only when nothing
-  // else is still outstanding. Moving it earlier would erase an obligation from every
-  // future scan while the restore it stood for had not run — a crash, a blocking sibling
-  // receipt, or a failed restore would each lose it silently.
+  // Set an unreadable receipt aside only AFTER the outcome is known. Renaming it earlier
+  // would take it out of the recovery loop while the restore it stood for had not run.
+  //
+  // Setting aside is NOT discharging. The renamed file still counts as an outstanding
+  // obligation (`isAnyTeardownObligationFileName`), so both updaters keep refusing to
+  // install until an operator removes it — the rename only stops every later stop from
+  // re-reading the same garbage. Skipped under `ownershipBlocked` because a foreign
+  // service still owns this state and none of it is ours to move.
   if (unreadable.length > 0 && !ownershipBlocked) {
     for (const read of unreadable) {
       const moved = quarantinePendingTeardown(read.nonce);
-      if (moved) console.warn(`⚠️  That unreadable receipt was set aside at ${moved}; it no longer blocks an update, and 'ocx stop' has not restored on its behalf.`);
-      else console.error(`❌ It could not be set aside either: ${pendingTeardownPathFor(read.nonce)}. Remove it manually.`);
+      if (moved) {
+        console.error(`⚠️  That unreadable receipt was set aside at ${moved}. It still blocks 'ocx update', and 'ocx stop' has NOT restored on its behalf.`);
+        console.error("   To clear it: confirm no proxy is running, run 'ocx restore', then delete that file.");
+      } else {
+        console.error(`❌ It could not be set aside either: ${pendingTeardownPathFor(read.nonce)}. Remove it manually after running 'ocx restore'.`);
+      }
     }
   }
   // Set the code rather than exiting inline: this function returns a value its dispatcher
