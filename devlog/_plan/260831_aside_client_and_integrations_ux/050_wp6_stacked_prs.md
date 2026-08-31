@@ -89,3 +89,45 @@ And `integrations.catalog.title` -- the new `h3` that fixes the overview's headi
 outline -- reads "Clients" in both English and French, which the French
 accidental-English guard is right to flag. It is on the intentional-English
 allowlist now.
+
+## Outcome
+
+Seven PRs on `dev`: #3047 (`8c1294828`) the Aside client, #3050 (`efa2ba5ad`) the
+bounded rollback surface, #3049 (`704d0d91a`) the first-party marks, #3048
+(`93b7ee80a`) the Aside GUI surface, #3065 (`7853e8e05`) Aside's own mark and the
+single-ink fix, #3060 (`a1c332e9a`) the MAINTAINERS correction, and #3074 the
+regression guards. Issue #3059 tracks the one deferral.
+
+### What the pre-merge audit changed
+
+An adversarial reviewer ran two rounds against the stack and neither round was
+ceremonial. Round 1 found that squash-merging the parent would strand the child:
+the repo merges by squash, so `git rebase` of the child onto the new `dev`
+conflicts add/add, and `enforce-pr-target` resolves `stackedBase` from **open**
+PRs only, so #3048 flips to `wrong_base` the moment its parent lands and its
+branch is deleted. The fix is `git rebase --onto <new-dev> <recorded-parent-tip>`,
+with the tip captured *before* the merge because `delete_branch_on_merge` removes
+the name.
+
+Round 2 caught the more dangerous one. A fix had landed on the parent after the
+child was cut, so the child was *behind* its own base while touching the same two
+files. Replaying it would have auto-merged cleanly and silently reverted the
+guard. The bad outcome there is not a conflict you resolve; it is the clean
+rebase you do not look at. Cascade first, then `--onto`, and verify by grepping
+for the guard rather than trusting the exit code.
+
+Both are properties of *this* repository's settings, not general stacking advice.
+
+### The claim that was wrong
+
+`aside` was recorded here as having no first-party mark, on the evidence that
+`aside.com/favicon.svg` is a 404. True of the web, wrong about the product: the
+installed application ships the mark in a module the vendor named
+`official-brand-symbol`. The lookup had been scoped to what a vendor publishes
+for the web, and an app that ships no web assets falls through it.
+
+Rendering all nine marks at 28px against both themes then showed three were
+invisible to somebody -- `prime` white-on-transparent in light mode, `opencode`
+and `kimi` near-black in dark. Every existing assertion passed: the files
+existed, the `src` values were right, the geometry check was satisfied. Only
+looking at them found it.
