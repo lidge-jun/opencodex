@@ -226,3 +226,33 @@ that call site are one atomic edit, and the Grok accept-row test belongs to WP3.
 in `040_residuals.md` when WP4 lands rather than leaving it only in prose.
 
 Reviewer's normalized line: `VERDICT: GO-WITH-FIXES (blockers=10)`.
+
+## B11 confirmed by measurement (`.tmp/probe3.ts`, at 7adb1e66a)
+
+The reviewer's claim was not theoretical. Bare `-fast` on a thinking-default base picks the
+REGULAR-fast sibling and diverges from what the Codex toggle would send:
+
+```
+base              default   listed id                       kind          resolved wire (max)
+claude-opus-4-7   thinking  claude-opus-4-7-fast            fast          claude-opus-4-7-max-fast
+                            claude-opus-4-7-thinking-fast   thinkingFast  claude-opus-4-7-thinking-max-fast
+                  umbrella  claude-opus-4-7                 thinking      claude-opus-4-7-thinking-max
+claude-opus-5     thinking  claude-opus-5-fast              fast          claude-opus-5-high-fast   <- clamped AND quarantined family
+                            claude-opus-5-thinking-fast     thinkingFast  claude-opus-5-thinking-max-fast
+grok-4.5          regular   grok-4.5-fast                   fast          grok-4.5-high-fast
+                            grok-4.5-thinking-fast          thinkingFast  grok-4.5                  <- degrades to a bare id
+grok-4.6          regular   grok-4.6-fast                   fast          grok-4.6-xhigh-fast
+                            grok-4.6-thinking-fast          thinkingFast  grok-4.6                  <- degrades to a bare id
+```
+
+Two consequences the fix must respect, both visible above:
+
+1. For a thinking-default base, only `<base>-thinking-fast` round-trips to the variant the
+   toggle picks. `claude-opus-5-fast` additionally clamps max->high and lands in the
+   quarantined regular family.
+2. For a regular-default base, `<base>-thinking-fast` is WRONG the other way: grok has no
+   thinkingFast spec, so `resolveCursorSelection` falls back to `variants.regular` and emits
+   a bare `grok-4.6` with no effort and no fast marker at all.
+
+So the id must be composed per base from `defaultVariant`, exactly as `cursorFastIdFor` in
+030 §1 now does — a single shared suffix would be wrong for one half of the table either way.
