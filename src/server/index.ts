@@ -1566,7 +1566,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
               ...modelCapabilityFields({
                 reasoningEfforts: m.reasoningEfforts,
-                contextWindow: m.contextCap ?? m.contextWindow,
+                // contextWindow is already the post-cap effective value; contextCap is the raw
+                // operator knob and over-reports models whose real window sits below it.
+                contextWindow: m.contextWindow,
                 inputModalities: m.inputModalities,
               }),
             };

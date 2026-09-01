@@ -143,4 +143,21 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
       await server.stop(true);
     }
   });
+
+  test("context_length is the effective window, not the provider cap, when the cap does not bite", async () => {
+    const config = capabilityConfig();
+    // Cap above k3's real window: contextWindow stays 200000 while contextCap records 350000.
+    config.providerContextCaps = { kimi: 350000 };
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/models", server.url));
+      const body = await res.json() as { data: Array<Record<string, unknown>> };
+      const k3 = body.data.find(m => m.id === "kimi/k3");
+      expect(k3).toBeDefined();
+      expect((k3!.capabilities as Record<string, unknown>).context_length).toBe(200000);
+    } finally {
+      await server.stop(true);
+    }
+  });
 });

@@ -15,7 +15,7 @@
  * when NO OpenAI-family type (`chat_completions`/`responses`/`openai_chat`/`openai_responses`)
  * is present. Keep at least one OpenAI-family entry; a unit test guards this.
  */
-export const OPENCODEX_MODEL_API_TYPES: readonly string[] = ["chat_completions", "responses", "anthropic_messages"];
+export const OPENCODEX_MODEL_API_TYPES: readonly string[] = Object.freeze(["chat_completions", "responses", "anthropic_messages"]);
 
 export const OPENAI_FAMILY_API_TYPES: ReadonlySet<string> = new Set(["chat_completions", "responses", "openai_chat", "openai_responses"]);
 
@@ -52,7 +52,7 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
     : undefined;
   const supportsVision = modalities !== undefined ? modalities.includes("image") : undefined;
   return {
-    api_types: OPENCODEX_MODEL_API_TYPES,
+    api_types: [...OPENCODEX_MODEL_API_TYPES],
     capabilities: {
       ...(contextLength !== undefined ? { context_length: contextLength } : {}),
       // Once a gateway advertises api_types, Cursor keeps only rows whose output_modalities
