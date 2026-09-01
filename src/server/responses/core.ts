@@ -327,7 +327,7 @@ import {
 } from "../responses-image-gen-repair";
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
 import {
-  collectAuthorizedBareCustomToolNames,
+  collectSelfNamedNamespaceScrubAuthorization,
   createSelfNamedToolCallNamespaceScrubRewrite,
   scrubSelfNamedToolCallNamespaceInJson,
 } from "../responses-self-named-namespace-scrub";
@@ -3662,9 +3662,9 @@ async function handleResponsesInner(
       parsed._rawBody,
       replayedInputPrefixLength,
     );
-    const selfNamedNamespaceScrubToolNames = collectAuthorizedBareCustomToolNames(
+    const selfNamedNamespaceScrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(
       clientToolAuthorizationBody,
-      toolBridgeMaps.freeformToolNames,
+      toolBridgeMaps.bareCustomToolNames,
     );
     const clientExplicitWireToolCatalog = hasExplicitWireToolCatalog(clientToolAuthorizationBody);
     const clientDeclaredWireToolNames = collectDeclaredWireToolNames(clientToolAuthorizationBody);
@@ -4651,7 +4651,7 @@ async function handleResponsesInner(
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         // #3217: a call whose namespace repeats its own name is unroutable in codex-rs.
-        createSelfNamedToolCallNamespaceScrubRewrite(selfNamedNamespaceScrubToolNames),
+        createSelfNamedToolCallNamespaceScrubRewrite(selfNamedNamespaceScrubAuthorization),
         routedNamespaceToolAliases.size > 0
           ? createRoutedNamespaceCallRestoreRewrite(routedNamespaceToolAliases)
           : undefined,
@@ -4886,7 +4886,7 @@ async function handleResponsesInner(
         const restoredNamespace = restoreRoutedNamespaceCallsInJson(
           scrubSelfNamedToolCallNamespaceInJson(
             restoreImageGenCallsInJson(text, imageGenCallAliases),
-            selfNamedNamespaceScrubToolNames,
+            selfNamedNamespaceScrubAuthorization,
           ),
           routedNamespaceToolAliases,
         );

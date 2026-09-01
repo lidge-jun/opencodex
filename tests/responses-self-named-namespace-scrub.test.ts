@@ -69,6 +69,11 @@ function request(body: Record<string, unknown> = requestBody): Request {
   });
 }
 
+function scrubAuthorization(names: string[]) {
+  const authorizedNames = new Set(names);
+  return { customToolCallNames: authorizedNames, functionCallNames: authorizedNames };
+}
+
 test("a self-named namespace on a passthrough custom_tool_call is scrubbed before the client (#3217)", async () => {
   const call = { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "exec", namespace: "exec", input: "pwd", status: "completed" };
   globalThis.fetch = (async () => new Response(sseFrom([call]), {
@@ -118,7 +123,42 @@ test("a self-named namespace declared by the current turn is preserved", async (
   expect(text).toContain('\"name\":\"exec\",\"namespace\":\"exec\"');
 });
 
-test("a namespaced function wins over a colliding bare custom tool", async () => {
+test("tool_choice for a namespaced custom tool cannot authorize a colliding bare scrub", async () => {
+  const call = { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "exec", namespace: "exec", input: "pwd", status: "completed" };
+  globalThis.fetch = (async () => new Response(sseFrom([call]), {
+    status: 200, headers: { "content-type": "text/event-stream" },
+  })) as typeof fetch;
+  const body = {
+    ...requestBody,
+    tool_choice: { type: "custom", name: "remote__exec" },
+    input: [
+      {
+        type: "additional_tools",
+        role: "developer",
+        tools: [
+          {
+            type: "namespace",
+            name: "functions",
+            tools: [{ type: "custom", name: "exec", description: "local shell" }],
+          },
+          {
+            type: "namespace",
+            name: "remote",
+            tools: [{ type: "custom", name: "exec", description: "remote shell" }],
+          },
+        ],
+      },
+      requestBody.input[1],
+    ],
+  };
+
+  const res = await handleResponses(request(body), forwardConfig(), { model: "", provider: "" });
+  expect(res.status).toBe(200);
+  const text = await res.text();
+  expect(text).toContain('\"name\":\"exec\",\"namespace\":\"exec\"');
+});
+
+test("mixed custom and function collisions are scoped to the response item type", async () => {
   const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "exec", namespace: "exec", arguments: "{}", status: "completed" };
   globalThis.fetch = (async () => new Response(sseFrom([call]), {
     status: 200, headers: { "content-type": "text/event-stream" },
@@ -151,6 +191,16 @@ test("a namespaced function wins over a colliding bare custom tool", async () =>
   const text = await res.text();
   expect(text).toContain('\"type\":\"function_call\"');
   expect(text).toContain('\"name\":\"exec\",\"namespace\":\"exec\"');
+
+  const bareCall = { type: "custom_tool_call", id: "ctc_1", call_id: "call_2", name: "exec", namespace: "exec", input: "pwd", status: "completed" };
+  globalThis.fetch = (async () => new Response(sseFrom([bareCall]), {
+    status: 200, headers: { "content-type": "text/event-stream" },
+  })) as typeof fetch;
+  const bareRes = await handleResponses(request(body), forwardConfig(), { model: "", provider: "" });
+  expect(bareRes.status).toBe(200);
+  const bareText = await bareRes.text();
+  expect(bareText).toContain('\"type\":\"custom_tool_call\"');
+  expect(bareText).not.toContain('\"namespace\":\"exec\"');
 });
 
 test("a genuine MCP namespace on a passthrough call is left alone", async () => {
@@ -184,11 +234,11 @@ test("the bounded JSON (stream:false) passthrough path scrubs the same shape (#3
 
 test("scrub is recursive, shape-preserving, and a no-op on clean payloads", () => {
   const clean = { type: "response.completed", response: { output: [{ type: "custom_tool_call", name: "exec", input: "" }] } };
-  expect(scrubSelfNamedToolCallNamespace(clean, new Set(["exec"]))).toEqual({ value: clean, changed: false });
+  expect(scrubSelfNamedToolCallNamespace(clean, scrubAuthorization(["exec"]))).toEqual({ value: clean, changed: false });
   const dirty = { response: { output: [{ type: "function_call", name: "wait", namespace: "wait", arguments: "{}" }, { type: "message" }] } };
-  const result = scrubSelfNamedToolCallNamespace(dirty, new Set(["wait"]));
+  const result = scrubSelfNamedToolCallNamespace(dirty, scrubAuthorization(["wait"]));
   expect(result.changed).toBe(true);
   expect(result.value).toEqual({ response: { output: [{ type: "function_call", name: "wait", arguments: "{}" }, { type: "message" }] } });
   // An empty name never matches: a namespace equal to "" is not the self-named shape.
-  expect(scrubSelfNamedToolCallNamespace({ type: "custom_tool_call", name: "", namespace: "" }, new Set()).changed).toBe(false);
+  expect(scrubSelfNamedToolCallNamespace({ type: "custom_tool_call", name: "", namespace: "" }, scrubAuthorization([])).changed).toBe(false);
 });
