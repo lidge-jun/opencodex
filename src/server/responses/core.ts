@@ -370,6 +370,7 @@ import {
 } from "../responses-undeclared-tool-guard";
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
 import { responsesJsonToSseStream } from "../responses-json-events";
+import { streamingContextOverflowResponse } from "./context-overflow";
 import { guardTerminalEventStream } from "./terminal-guard";
 import {
   emptyCompletionRetryEnabled,
@@ -2102,7 +2103,7 @@ export async function handleComboResponses(
   comboId: string,
   config: OcxConfig,
   logCtx: RequestLogContext,
-  options: HandleResponsesOptions,
+  options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
 ): Promise<Response> {
   const requestedModel = typeof (rawBody as { model?: unknown } | null)?.model === "string"
     ? (rawBody as { model: string }).model
@@ -2451,6 +2452,12 @@ export async function handleComboResponses(
       code: failure.upstreamCode,
     }) === "stop") {
       adoptFailedChildLog(childLog);
+      if (
+        failure.response.status === 413
+        && (rawBody as { stream?: unknown } | null)?.stream === true
+      ) {
+        return streamingContextOverflowResponse(requestedModel, options.translatorBudget);
+      }
       return lastFailure;
     }
     console.warn(
@@ -2463,6 +2470,12 @@ export async function handleComboResponses(
     });
     if (!nextPick) adoptFailedChildLog(childLog);
     pick = nextPick;
+  }
+  if (
+    lastFailure?.status === 413
+    && (rawBody as { stream?: unknown } | null)?.stream === true
+  ) {
+    return streamingContextOverflowResponse(requestedModel, options.translatorBudget);
   }
   return lastFailure!;
 }
@@ -3097,6 +3110,12 @@ async function handleResponsesInner(
       // instead of treating the first incompatible candidate as the end of the chain. The
       // distinct code is what lets the fallback layer tell the two apart -- an upstream
       // `context_length_exceeded` still stops, because retrying it elsewhere is guesswork.
+      if (clientRequestedStream && !options.comboAttempt) {
+        return streamingContextOverflowResponse(
+          parsed._responseModelId ?? parsed.modelId,
+          translatorBudget,
+        );
+      }
       return formatErrorResponse(
         413,
         "input_admission_refused",
@@ -4432,6 +4451,12 @@ async function handleResponsesInner(
       // The bounded reader owns the original body, deadline, abort settlement, and lock.
       // Unsafe partial data falls back to #452's non-empty status-only JSON.
       const errorText = await readDisplaySafeErrorText(upstreamResponse, upstream.signal, "");
+      if (upstreamResponse.status === 413 && clientRequestedStream) {
+        return streamingContextOverflowResponse(
+          parsed._responseModelId ?? parsed.modelId,
+          translatorBudget,
+        );
+      }
       return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
@@ -5985,6 +6010,12 @@ async function handleResponsesInner(
         );
       } finally {
         cleanupUpstreamAbort();
+      }
+      if (upstreamResponse.status === 413 && clientRequestedStream && !options.comboAttempt) {
+        return streamingContextOverflowResponse(
+          parsed._responseModelId ?? parsed.modelId,
+          translatorBudget,
+        );
       }
       if (!isFixedCodexAccount(authCtx)) {
         recordSubagentQuotaFailureForThreadSpawn(

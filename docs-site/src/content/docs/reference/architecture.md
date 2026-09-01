@@ -150,6 +150,12 @@ upstream WS responses keep the downstream SSE contract and bypass `tee()` throug
 single-reader relay (4 MiB per raw/enveloped frame and an 8 MiB producer queue). Queue overflow
 closes the upstream and emits a terminal downstream `response.failed` event followed by `[DONE]`.
 
+When a provider rejects a streaming request with HTTP 413 before SSE begins, OpenCodex emits one
+terminal `response.failed` event with `context_length_exceeded` instead of relaying the retryable
+unknown status. This lets Codex stop its reconnect loop and apply its own context-compaction policy
+on the next turn. OpenCodex does not silently delete prompts or images; reduce the current input or
+retry after compaction. Non-streaming API callers continue to receive the provider's HTTP 413.
+
 Codex context compaction works for routed models. `server/responses/compact.ts` handles
 `POST /v1/responses/compact` by running an internal routed summarization turn and returning compacted
 history, while `responses/parser.ts` and `bridge.ts` handle remote compaction v2
