@@ -336,8 +336,10 @@ export type ProviderConfigSeed = Pick<
 // same static model seed.
 // 260710 context refresh: Tier-2 evidence in
 // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
-const ANTHROPIC_MODELS = ["claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
-const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
+// 260902 Claude Fable 5.1 (`claude-fable-5-1`): 1M context / 128K output / adaptive thinking
+// always on, per the official models overview and pricing page (platform.claude.com).
+const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
+const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
 
 // 260814 GLM-5.3 is registered pre-emptively alongside 5.2 everywhere 5.2 appears. Z.AI's
 // devpack "How to Switch Models" page (docs.z.ai/devpack/latest-model) lists glm-5.3 and

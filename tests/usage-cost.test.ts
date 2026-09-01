@@ -176,6 +176,29 @@ describe("resolveMatchedPrice", () => {
     expect(price!.cost4).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
   });
 
+  // Claude Fable 5.1 (2026-09-02): 10 / 50 / 12.50 cache write, and a cache-hit rate of
+  // 0.025x base input (0.25) rather than the 0.1x every other family uses. There is no
+  // jawcode row yet, so both Anthropic surfaces resolve from the shipped overlay; an
+  // account-pool log label must collapse onto the same price.
+  test("claude-fable-5-1 resolves to the official Fable 5.1 price on both Anthropic surfaces", () => {
+    const COST4 = { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 };
+    for (const provider of ["anthropic", "anthropic-apikey"]) {
+      const price = resolveMatchedPrice(provider, "claude-fable-5-1");
+      expect(price, provider).toMatchObject({
+        provider,
+        modelId: "claude-fable-5-1",
+        cost4: COST4,
+        source: "expected",
+        status: "verified",
+      });
+      expect(price?.sourceRef).toContain("platform.claude.com");
+      expect(price?.sourceRef).toContain("0.025x");
+    }
+    expect(resolveMatchedPrice("anthropic-pb51d9b", "claude-fable-5-1")?.cost4).toEqual(COST4);
+    // The cheaper cache-hit rate must not leak onto Fable 5, which stays at 0.1x.
+    expect(resolveMatchedPrice("anthropic", "claude-fable-5")?.cost4.cacheRead).toBe(1);
+  });
+
   test("17b. model-level fallback: openai provider gets gpt prices from the openai bundle", () => {
     const price = resolveMatchedPrice("openai", "gpt-5.5");
     expect(price).not.toBeNull();
@@ -269,11 +292,13 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 56 keys, including Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(56);
+  test("16. shipped overlay membership: 58 keys, including Fable 5.1, Opus 5 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(58);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
+      "anthropic/claude-fable-5-1",
+      "anthropic-apikey/claude-fable-5-1",
       "anthropic/claude-opus-5",
       "cursor/claude-opus-5",
       "kiro/claude-opus-5",

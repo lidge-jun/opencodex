@@ -737,6 +737,7 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.defaultModel).toBe("claude-sonnet-5");
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.models).toContain("claude-sonnet-5");
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.models).toContain("claude-fable-5");
+    expect(OAUTH_PROVIDERS.anthropic.providerConfig.models).toContain("claude-fable-5-1");
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-sonnet-5"]).toBe(1_000_000);
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-opus-4-7"]).toBe(1_000_000);
     expect(OAUTH_PROVIDERS.anthropic.providerConfig.modelContextWindows?.["claude-opus-4-6"]).toBe(1_000_000);

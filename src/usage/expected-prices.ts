@@ -66,6 +66,10 @@ const QWEN38_MAX: Cost4 = { input: 2, output: 6, cacheRead: 0, cacheWrite: 0 };
 // Anthropic official list prices (USD / 1M tokens). Cache write uses the published 5-minute rate.
 const CLAUDE_SONNET_46: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 const CLAUDE_OPUS_46: Cost4 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+// Claude Fable 5.1: 10 / 50, 5m cache write 12.50. Cache hits are 0.025x base input
+// (0.25) on Fable 5.1 — NOT the 0.1x (1.00) that Fable 5 and every other family use;
+// the pricing page footnote calls this out explicitly. Verified 2026-09-02.
+const CLAUDE_FABLE_51: Cost4 = { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 };
 // Opus 5 is priced from the maintainer's confirmation that it matches the previous
 // Opus, not from a published Opus 5 page. Hence `verified-derived`, and a source
 // string that states the provenance instead of pointing at ANTHROPIC_PRICING.
@@ -91,6 +95,11 @@ const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cac
 const QWEN38_MAX_PRICING = "https://qwen.ai/blog?id=qwen3.8 (Qwen release announcement; no Model Studio billing row yet; cache rates unpublished -> 0)";
 
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
+  // claude-fable-5-1 has no jawcode row yet, so both Anthropic surfaces need their own
+  // overlay (the overlay lookup is keyed by the configured provider id; only the jawcode
+  // bundle collapses anthropic-apikey onto anthropic).
+  { provider: "anthropic", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
+  { provider: "anthropic-apikey", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
   // claude-opus-5 is exposed by three providers but absent from the jawcode bundle, so
   // cost resolution returned null and the Logs `~$` column rendered an em dash. The
   // model-level vendor fallback only searches jawcode metadata, never overlays, so one

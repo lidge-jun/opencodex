@@ -125,6 +125,7 @@ describe("anthropic provider hardening", () => {
 
     expect(anthropic?.modelContextWindows?.["claude-opus-4-8"]).toBe(1_000_000);
     expect(anthropic?.modelContextWindows?.["claude-opus-5"]).toBe(1_000_000);
+    expect(anthropic?.modelContextWindows?.["claude-fable-5-1"]).toBe(1_000_000);
     expect(anthropic?.modelContextWindows?.["claude-haiku-4-5"]).toBe(200_000);
   });
 });
