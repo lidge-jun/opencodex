@@ -389,6 +389,49 @@ function safeResetCreditConsumeDto(input: unknown): { code: string } {
   return { code: typeof obj.code === "string" ? obj.code : "unknown" };
 }
 
+/**
+ * Background reset-credit access for the auto-redeemer (#822). Goes through the same
+ * account/lease wrapper as the management routes, but takes a caller-owned
+ * `redeem_request_id` so a journaled id can be replayed idempotently after a crash.
+ * Throws on any auth or upstream failure; the caller treats a throw on consume as ambiguous.
+ */
+export function createResetCreditWhamClient(config: OcxConfig, accountId: string): {
+  inspect: () => Promise<{ credits: { granted_at: string; expires_at: string }[] }>;
+  consume: (redeemRequestId: string) => Promise<{ code: string }>;
+} {
+  const run = async <T>(operation: (auth: ResetCreditAuth) => Promise<T>): Promise<T> => {
+    const result = await withResetCreditAuth(getRuntimeConfig(config), accountId, operation);
+    if (result.ok) return result.value;
+    throw new Error(`reset-credit auth unavailable (${result.response.status})`);
+  };
+  return {
+    inspect: () => run(async auth => {
+      const resp = await fetch("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", {
+        headers: { Authorization: `Bearer ${auth.accessToken}`, "ChatGPT-Account-Id": auth.chatgptAccountId },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!resp.ok) { await resp.body?.cancel().catch(() => {}); throw new Error(`upstream ${resp.status}`); }
+      const parsed = await readResetCreditJson(resp, AbortSignal.timeout(8000));
+      if (!parsed.ok) throw new Error("invalid upstream reset-credit response");
+      return { credits: safeResetCreditsDto(parsed.value).credits };
+    }),
+    consume: redeemRequestId => run(async auth => {
+      const resp = await fetch("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${auth.accessToken}`,
+          "ChatGPT-Account-Id": auth.chatgptAccountId,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ redeem_request_id: redeemRequestId }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!resp.ok) { await resp.body?.cancel().catch(() => {}); throw new Error(`upstream ${resp.status}`); }
+      return safeResetCreditConsumeDto(await resp.json());
+    }),
+  };
+}
+
 type ResetCreditJsonRead =
   | { ok: true; value: unknown }
   | { ok: false };

@@ -32,7 +32,8 @@ import {
   type NativeCodexOwnership,
   type OwnershipInspection,
 } from "../integrations/native/ownership-preflight";
-import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
+import { createResetCreditWhamClient, registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
+import { activateResetCreditAutoRedeem } from "../codex/reset-credit-auto-redeem";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
@@ -2336,6 +2337,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   const labConfigDir = getConfigDir();
   if (labActivationRequired(config, labConfigDir)) {
     activateLab(config, labConfigDir);
+  }
+
+  // Reset-credit auto-redemption (#822) is opt-in; a default install constructs nothing here.
+  // Activation is synchronous (timer registration only); network work happens on the timer.
+  if (config.resetCreditAutoRedeem?.enabled === true) {
+    activateResetCreditAutoRedeem(config, {
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+      ...createResetCreditWhamClient(config, MAIN_CODEX_ACCOUNT_ID),
+    });
   }
 
   return server;

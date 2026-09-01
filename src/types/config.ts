@@ -698,6 +698,14 @@ export interface OcxConfig {
    * whole config.
    */
   showCodexSparkQuota?: boolean;
+  /**
+   * Opt-in auto-redemption of a main-account Codex reset credit shortly before it expires
+   * (#822). Default off. `leadTimeMinutes` (1–60, default 10) is how long before
+   * `expires_at` the redeem is attempted; the credit list is re-read upstream right before
+   * every dispatch and the request id is journaled first, so a manual redeem or a crash never
+   * spends a second credit. A malformed value reads as off.
+   */
+  resetCreditAutoRedeem?: { enabled?: boolean; leadTimeMinutes?: number };
   /** Active pool account id for next session. undefined = main (passthrough as-is). */
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */
