@@ -2230,6 +2230,7 @@ describe("server local API auth", () => {
         { id: "main", email: "main@example.test", isMain: true },
         { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
       ],
+      codexAccountNamespaces: { "ws-refresh": "pool-a" },
       activeCodexAccountId: "pool-a",
     } as OcxConfig);
     saveCodexAccountCredential("pool-a", {
@@ -2278,10 +2279,10 @@ describe("server local API auth", () => {
       });
 
       await waitForOpen;
-      ws.send(JSON.stringify({ type: "response.create", model: "gpt-test", input: "hello" }));
+      ws.send(JSON.stringify({ type: "response.create", model: "ws-refresh/gpt-test", input: "hello" }));
       await waitForTerminal();
       Date.now = () => now + 180_000;
-      ws.send(JSON.stringify({ type: "response.create", model: "gpt-test", input: "again" }));
+      ws.send(JSON.stringify({ type: "response.create", model: "ws-refresh/gpt-test", input: "again" }));
       await waitForTerminal();
       ws.close();
 
