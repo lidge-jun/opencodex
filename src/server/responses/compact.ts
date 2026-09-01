@@ -382,7 +382,10 @@ async function resolveAlternateCompactContext(args: {
       requestScopedMainCredential: hasForwardableCodexBearer(req.headers, config),
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
     });
-    if (!authCtx.accountId || authCtx.accountId === excludeAccountId) return null;
+    // Caller-owned main has no Pool account id. It is still a valid one-shot alternate after a
+    // stored account fails; resolveCodexAuthContext already prevents returning it when main is the
+    // excluded credential.
+    if (authCtx.accountId === excludeAccountId) return null;
     const provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
     const headers = new Headers({ "content-type": "application/json" });
     const selected = headersForCodexAuthContext(req.headers, authCtx);
