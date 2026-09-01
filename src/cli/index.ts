@@ -757,6 +757,7 @@ async function handleStop() {
   // restart-window wait; launchd, systemd and WinSW are down when they say so.
   let schedulerCanRespawn = false;
   let stoppedService = false;
+  let nativeRestoreHandledByProxy = false;
   // An ownership mismatch means the service manager was never even contacted: the installed
   // service is still live and will respawn the proxy. Tearing down SHARED state in that
   // situation (native Codex config, the Grok fence) removes config out from under a running
@@ -805,17 +806,22 @@ async function handleStop() {
    * guessed one fails closed into manual recovery rather than letting a later probe read
    * "the configured port refuses" as proof that the right proxy is down.
    */
-  const stopWithDeferral = async (pid: number, discovered?: { hostname: string; port: number } | null): Promise<void> => {
+  const stopWithDeferral = async (pid: number, discovered?: { hostname: string; port: number } | null): Promise<boolean> => {
     // Resolve ONCE. Reading the runtime record twice let the receipt name the configured
     // guess while the request went to a runtime endpoint that appeared in between.
     const exact = discovered ?? endpointOf(readRuntimePort(pid));
     claimTeardown(exact ?? configuredEndpoint(), exact ? "exact" : "guessed");
-    await stopProxy(pid, {
+    const graceful = await stopProxy(pid, {
       deferSharedTeardownNonce: teardownNonce,
       // Only an exact endpoint may direct the request; the configured fallback is a guess
       // good enough to record an obligation against, not to POST a stop to.
       runtimeEndpoint: exact ?? undefined,
     });
+    // A valid receipt means the proxy deferred shared teardown to this process. If the
+    // receipt could not be written, the proxy restores it itself and the caller must not
+    // attempt a second restore after a graceful stop. A hard-kill always leaves restore
+    // to this process.
+    return graceful && !teardownNonce;
   };
   try {
     const serviceStop = stopServiceIfInstalledDetailed();
@@ -858,7 +864,7 @@ async function handleStop() {
       // verification below, so a survivor does not get its client config pulled first.
       // The receipt goes down first — the proxy honours the deferral only when it can
       // see one, so an unrecordable claim degrades to the child doing its own teardown.
-      await stopWithDeferral(pid);
+      nativeRestoreHandledByProxy = await stopWithDeferral(pid);
       console.log(`✅ Proxy (PID ${pid}) stopped.`);
       removePid(pid);
       removeRuntimePort(pid);
@@ -888,7 +894,10 @@ async function handleStop() {
       try {
         // The probe already found where it answers, and on this path the runtime record is
         // typically what went missing in the first place.
-        await stopWithDeferral(live.pid, { hostname: live.hostname ?? "127.0.0.1", port: live.port });
+        nativeRestoreHandledByProxy = await stopWithDeferral(
+          live.pid,
+          { hostname: live.hostname ?? "127.0.0.1", port: live.port },
+        );
         console.log(`✅ Proxy (PID ${live.pid}) stopped.`);
       } catch (err) {
         stopFailed = true;
@@ -1006,7 +1015,7 @@ async function handleStop() {
       console.error("   The obligation is preserved; retry once the proxy is confirmed stopped.");
     }
   }
-  const restoreBlocked = ownershipBlocked || inheritedBlocks;
+  const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy;
   if (!restoreBlocked) {
     if (recoveredNonces.length > 0) {
       // A previous deferred stop died before restoring, and the probe says its endpoint is

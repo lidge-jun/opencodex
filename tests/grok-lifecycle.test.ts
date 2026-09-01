@@ -97,13 +97,21 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("ownershipBlocked = true");
     // Ownership is now one of two reasons to skip the restore; the other is an inherited
     // obligation whose proxy could not be confirmed down (#3008).
-    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked ||");
+    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy;");
     expect(stopFn).toContain("if (!restoreBlocked) {");
     expect(stopFn).toContain("await restoreSharedClientStateAfterStop()");
     expect(restoreFn).toContain("restoreNativeCodexAsync()");
     expect(restoreFn).not.toContain("revertSystemEnv()");
     expect(restoreFn).toContain("stripGrokConfig()");
     expect(stopFn.indexOf("revertSystemEnv()")).toBeLessThan(stopFn.indexOf("if (!restoreBlocked) {"));
+  });
+
+  test("graceful stop skips caller restore only when the proxy performed it", () => {
+    const stopFn = sliceFn(CLI_SOURCE, "async function handleStop(", "async function handleUninstall(");
+    expect(stopFn).toContain("const graceful = await stopProxy(pid, {");
+    expect(stopFn).toContain("return graceful && !teardownNonce;");
+    expect(stopFn).toContain("nativeRestoreHandledByProxy = await stopWithDeferral(pid);");
+    expect(stopFn).toContain("nativeRestoreHandledByProxy = await stopWithDeferral(");
   });
 
   test("a refused Grok strip makes ocx stop fail instead of reporting success", () => {
@@ -261,7 +269,7 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces");
     // The orphan path hands over the endpoint the probe already found; its runtime record
     // is typically what went missing in the first place.
-    expect(stopFn).toContain('stopWithDeferral(live.pid, { hostname: live.hostname ?? "127.0.0.1", port: live.port })');
+    expect(stopFn).toContain('nativeRestoreHandledByProxy = await stopWithDeferral(\n          live.pid,\n          { hostname: live.hostname ?? "127.0.0.1", port: live.port },\n        );');
     // A live proxy with no killable pid is not "no proxy found": purging state and
     // restoring over it is the same failure arrived at from the other direction.
     expect(stopFn).toContain("} else if (live) {");
