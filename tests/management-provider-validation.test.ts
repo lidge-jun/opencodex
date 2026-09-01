@@ -1160,7 +1160,7 @@ describe("provider management validation", () => {
     } as OcxConfig);
     // This test targets the seed comparison, not the DNS policy; stub the destination
     // probe so the assertion stays independent of how chatgpt.com resolves locally.
-    spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
 
     const server = startServer(0);
     try {
@@ -1174,6 +1174,7 @@ describe("provider management validation", () => {
       // The alias overlay itself must survive the patch untouched.
       expect(loadConfig().providers.openai?.defaultAliases).toBe(true);
     } finally {
+      resolvedError.mockRestore();
       await server.stop(true);
     }
   });
