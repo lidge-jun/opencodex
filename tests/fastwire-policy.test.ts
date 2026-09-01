@@ -644,8 +644,17 @@ describe("FastWire config and registry validation", () => {
     })).toBeNull();
   });
 
-  test("A1 adds no explicit registry FastWire declaration", () => {
-    expect(PROVIDER_REGISTRY.every(entry => entry.fastWire === undefined)).toBeTrue();
+  test("cursor is the only registry FastWire declaration, and it is the variant wire", () => {
+    // A1 shipped none; Cursor's Fast is a model VARIANT rather than a service_tier field,
+    // so it must declare its own wire instead of inheriting the OpenAI adapter default.
+    // Every other provider still gets its wire from defaultFastWireForAdapter.
+    const declared = PROVIDER_REGISTRY.filter(entry => entry.fastWire !== undefined);
+    expect(declared.map(entry => entry.id)).toEqual(["cursor"]);
+    expect(declared[0]?.fastWire).toEqual({
+      kind: "cursor-variant",
+      canonicalToWire: { priority: "fast" },
+      foreignCallerTiers: "drop",
+    });
   });
 });
 

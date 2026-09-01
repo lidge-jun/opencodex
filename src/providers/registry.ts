@@ -18,6 +18,7 @@ import {
   cursorModelInputModalities,
   cursorModelReasoningEfforts,
 } from "../adapters/cursor/discovery";
+import { cursorFastCapableBases } from "../adapters/cursor/catalog";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "./command-code-efforts";
 import { isCanonicalOpenRouterTarget } from "./openrouter-routing";
 
@@ -1120,6 +1121,15 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     defaultModel: "auto",
     modelContextWindows: cursorModelContextWindows(CURSOR_STATIC_MODELS),
     modelDisplayNames: cursorModelDisplayNames(),
+    // Cursor's Fast product is a model VARIANT, not a service_tier field, so the wire kind
+    // is cursor-variant and the request builder consumes the decision.
+    fastWire: { kind: "cursor-variant", canonicalToWire: { priority: "fast" }, foreignCallerTiers: "drop" },
+    // Deliberately NO provider-level supportsServiceTier: resolveFastPolicy short-circuits on
+    // `capability.provider === false` BEFORE consulting the per-model map, which would make
+    // these entries dead config. Absent leaves unlisted bases "unclassified", and a
+    // non-service-tier adapter cannot forward a caller tier, so they still publish no toggle.
+    modelSupportsServiceTier: Object.fromEntries(cursorFastCapableBases().map(id => [id, true])),
+    fastTierDescription: "Cursor Fast variant",
     modelInputModalities: cursorModelInputModalities(CURSOR_STATIC_MODELS),
     modelReasoningEfforts: cursorModelReasoningEfforts(CURSOR_STATIC_MODELS),
     // Kimi K3 documents `max` as its API default, and its Cursor ladder has no `medium`

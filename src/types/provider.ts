@@ -106,7 +106,13 @@ export interface ProviderRequestPacingConfig extends RequestPacingRule {
 }
 
 export interface FastWire {
-  kind: "service-tier" | "anthropic-speed";
+  /**
+   * How the provider expresses Fast on the wire. `service-tier` is OpenAI's
+   * `service_tier` request field; `cursor-variant` is a MODEL-VARIANT switch, because
+   * Cursor has no tier field — its fast product is a different model id
+   * (`claude-opus-5-thinking-high-fast`) or a `{id:"fast"}` request parameter for Grok.
+   */
+  kind: "service-tier" | "anthropic-speed" | "cursor-variant";
   /** Canonical tier name to upstream wire spelling. */
   canonicalToWire: Readonly<Record<string, string>>;
   /** Policy for non-canonical caller-provided tier values. */

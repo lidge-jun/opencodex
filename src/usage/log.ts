@@ -322,7 +322,8 @@ function normalizeAttemptTierOutcome(raw: unknown): AttemptTierOutcome | null {
   if ("wireKind" in outcome
     && outcome.wireKind !== null
     && outcome.wireKind !== "service-tier"
-    && outcome.wireKind !== "anthropic-speed") return null;
+    && outcome.wireKind !== "anthropic-speed"
+    && outcome.wireKind !== "cursor-variant") return null;
   if ("wireValue" in outcome && outcome.wireValue !== null && typeof outcome.wireValue !== "string") return null;
   if ("fastDowngradeReason" in outcome
     && (typeof outcome.fastDowngradeReason !== "string"
@@ -337,7 +338,10 @@ function normalizeAttemptTierOutcome(raw: unknown): AttemptTierOutcome | null {
   const responseServiceTier = sanitizeLogMetadataString(outcome.responseServiceTier);
   return {
     ...(outcome.canonical === "priority" ? { canonical: "priority" as const } : {}),
-    ...(outcome.wireKind === null || outcome.wireKind === "service-tier" || outcome.wireKind === "anthropic-speed"
+    ...(outcome.wireKind === null
+      || outcome.wireKind === "service-tier"
+      || outcome.wireKind === "anthropic-speed"
+      || outcome.wireKind === "cursor-variant"
       ? { wireKind: outcome.wireKind }
       : {}),
     ...(outcome.wireValue === null

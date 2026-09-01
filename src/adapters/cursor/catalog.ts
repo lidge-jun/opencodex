@@ -443,6 +443,32 @@ function defaultKindFor(baseId: string): CursorVariantKind {
   return CURSOR_CAPABILITIES[baseId]?.defaultVariant ?? "regular";
 }
 
+/**
+ * Promote a variant to its fast sibling when the base declares one, else leave it alone.
+ *
+ * Thinking must map to thinkingFast rather than to the plain fast variant: the umbrella row
+ * for a Claude base routes THINKING, and its regular-fast sibling is a different product
+ * with a shorter ladder (claude-opus-5-fast stops at high) whose regular family is
+ * quarantined. A base with no fast dimension keeps its kind, so Fast degrades to today's
+ * behavior instead of erroring.
+ */
+export function upgradeToFast(baseId: string, kind: CursorVariantKind): CursorVariantKind {
+  const variants = CURSOR_CAPABILITIES[baseId]?.variants;
+  if (!variants) return kind;
+  if (kind === "thinking" || kind === "thinkingFast") {
+    return variants.thinkingFast ? "thinkingFast" : kind;
+  }
+  return variants.fast ? "fast" : kind;
+}
+
+/** Bases whose capability declares a fast or thinking-fast variant. */
+export function cursorFastCapableBases(): string[] {
+  return Object.entries(CURSOR_CAPABILITIES)
+    .filter(([, capability]) => capability.variants.fast !== undefined
+      || capability.variants.thinkingFast !== undefined)
+    .map(([baseId]) => baseId);
+}
+
 function normalizeRequestedEffort(reasoning: string | undefined): string | undefined {
   const normalized = reasoning?.toLowerCase();
   return normalized === "ultra" ? "max" : normalized;
@@ -523,20 +549,25 @@ export function resolveCursorSelection(
   pickedId: string,
   reasoning: string | undefined,
   liveMaxModeIds?: ReadonlySet<string>,
+  options: { fast?: boolean } = {},
 ): CursorResolvedSelection {
   const parsed = parseCursorVariantId(pickedId);
   if (!parsed.known) {
     return { wireId: pickedId, canonicalId: pickedId, maxMode: false, known: false };
   }
   const capability = CURSOR_CAPABILITIES[parsed.baseId]!;
-  const spec = capability.variants[parsed.kind] ?? capability.variants.regular;
+  // Codex's Fast toggle is a variant switch here; every later read must use the upgraded
+  // kind, not parsed.kind, or the wire id loses its -fast marker (or keeps the cursor-
+  // prefix that only the regular variant takes).
+  const kind = options.fast === true ? upgradeToFast(parsed.baseId, parsed.kind) : parsed.kind;
+  const spec = capability.variants[kind] ?? capability.variants.regular;
   if (!spec) {
     return { wireId: parsed.baseId, canonicalId: parsed.baseId, maxMode: false, known: true };
   }
   const requested = parsed.level ?? reasoning;
   const effort = cursorVariantEffort(spec, requested);
-  const canonicalId = composeWireId(parsed.baseId, parsed.kind, effort);
-  const wireId = capability.wirePrefix && parsed.kind === "regular"
+  const canonicalId = composeWireId(parsed.baseId, kind, effort);
+  const wireId = capability.wirePrefix && kind === "regular"
     ? `${capability.wirePrefix}${canonicalId}`
     : canonicalId;
   const ultraRequested = parsed.ultra || reasoning?.toLowerCase() === "ultra";
@@ -584,9 +615,13 @@ export interface CursorUmbrellaRow {
 export function cursorGrokFastSelection(
   pickedId: string,
   reasoning: string | undefined,
+  fast?: boolean,
 ): { wireBaseId: string; effort: string } | undefined {
   const parsed = parseCursorVariantId(pickedId);
-  if (!parsed.known || parsed.kind !== "fast") return undefined;
+  // Both call paths must learn the flag together: if only resolveCursorSelection did, a
+  // toggled Grok pick would emit a flattened grok-4.6-high-fast id, which the wire rejects.
+  const kind = fast === true ? upgradeToFast(parsed.baseId, parsed.kind) : parsed.kind;
+  if (!parsed.known || kind !== "fast") return undefined;
   const capability = CURSOR_CAPABILITIES[parsed.baseId];
   if (capability?.wirePrefix !== "cursor-") return undefined;
   const spec = capability.variants.fast;

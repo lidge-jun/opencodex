@@ -14,6 +14,9 @@ const FAST_WIRE_ADAPTERS: Readonly<Record<FastWire["kind"], ReadonlySet<string>>
   "service-tier": SERVICE_TIER_ADAPTERS,
   // A1 deliberately has no adapter implementation for Anthropic speed.
   "anthropic-speed": new Set(),
+  // Cursor expresses Fast as a variant dimension of the picked model, resolved in the
+  // request builder, so the adapter set is exactly the cursor adapter.
+  "cursor-variant": new Set(["cursor"]),
 };
 
 const DEFAULT_SERVICE_TIER_FAST_WIRE: FastWire = Object.freeze({
@@ -209,8 +212,13 @@ export function resolveFastPolicy(
   // On classified routes this permission applies only to a caller's foreign tier: proxy-owned
   // canonical Fast has already passed capability validation. On unclassified routes every caller
   // tier still needs the final wire's forwarding permission.
+  // A wire that declares `foreignCallerTiers: "drop"` cannot carry an arbitrary tier string at
+  // all — cursor-variant resolves a MODEL VARIANT, so there is nothing to forward a foreign
+  // value into. Without this, an unclassified route on such a wire projects "unknown" support
+  // and Codex would show a Fast toggle on a base that has no fast variant.
   const forwardCallerTier = capability !== false
     && callerWireAvailable
+    && fastWire?.foreignCallerTiers !== "drop"
     && forwardCallerServiceTier !== false
     && (adapter !== "openai-chat" || authority.capability.chatServiceTier === true);
 
@@ -467,8 +475,8 @@ export function fastWireDeclarationError(source: {
   }
   if (value === null) return null;
   if (!isPlainRecord(value)) return "fastWire must be an object, null, or absent";
-  if (value.kind !== "service-tier" && value.kind !== "anthropic-speed") {
-    return "fastWire.kind must be service-tier or anthropic-speed";
+  if (value.kind !== "service-tier" && value.kind !== "anthropic-speed" && value.kind !== "cursor-variant") {
+    return "fastWire.kind must be service-tier, anthropic-speed, or cursor-variant";
   }
   if (value.foreignCallerTiers !== "verbatim" && value.foreignCallerTiers !== "drop") {
     return "fastWire.foreignCallerTiers must be verbatim or drop";

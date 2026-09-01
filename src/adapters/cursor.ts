@@ -12,6 +12,7 @@ import {
   cursorClientThreadOwner,
   cursorCoveredPrefixDigest,
   cursorInstructionDigest,
+  cursorRequestEmitsFastVariant,
 } from "./cursor/request-builder";
 import {
   createLiveCursorTransport,
@@ -26,6 +27,7 @@ import {
   invalidateCursorCheckpoint,
 } from "./cursor/checkpoint-store";
 import { debugProviderDiagnostic } from "../lib/debug";
+import { createAdapterTierMetadata } from "../providers/fastwire";
 import { estimateTokens } from "../lib/token-estimate";
 import { rememberCursorThreadConversation } from "./cursor/thread-continuity";
 import { runCursorTurnWithRetry } from "./cursor/transport-retry";
@@ -99,6 +101,21 @@ function cursorRequestSizeContext(request: { modelId: string; system: string[]; 
 export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAdapterDeps = {}): ProviderAdapter {
   return {
     name: "cursor",
+
+    // Cursor emits Fast as a model variant, so the generic "no field emitted" fallback in
+    // adapters/registry.ts would report every Fast turn as downgraded. This recomputes the
+    // variant from the same pure inputs the builder uses: tierLogForRunTurn runs BEFORE
+    // runTurn, and createCursorRequest mints conversation ids, so rebuilding it here would
+    // describe a request that was never sent.
+    tierLogForRunTurn(parsed) {
+      const fast = cursorRequestEmitsFastVariant(parsed);
+      return createAdapterTierMetadata(
+        parsed.options.tierObservation,
+        parsed.options.tierDecision,
+        fast ? "cursor-variant" : null,
+        fast ? "fast" : null,
+      );
+    },
 
     buildRequest() {
       return {
