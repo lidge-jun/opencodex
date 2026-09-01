@@ -7,6 +7,11 @@ import {
   backfillResponsesFieldsJson,
 } from "./responses-field-backfill";
 import { checkInputAdmission } from "./input-admission";
+import {
+  checkOutboundBodySize,
+  DEFAULT_MAX_UPSTREAM_BODY_BYTES,
+  describeOutboundBodyRefusal,
+} from "./outbound-body-guard";
 import { nativeContextLimits } from "../../codex/catalog";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import {
@@ -948,6 +953,10 @@ interface CodexPoolAccountRetryArgs {
     authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>,
     request: Awaited<ReturnType<ReturnType<typeof resolveAdapter>["buildRequest"]>>,
   ) => void;
+  refuseOversizedOutboundBody?: (
+    request: AdapterRequest,
+    authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>,
+  ) => Response | undefined;
 }
 
 type CodexPoolAccountRetryResult =
@@ -963,7 +972,8 @@ type CodexPoolAccountRetryResult =
     kind: "transport";
     error: unknown;
     authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
-  };
+  }
+  | { kind: "failed"; response: Response };
 
 /** Keep retry-stage entitlement snapshots inside the native-main selection fence. */
 async function resolveCodexRetryModelEntitlements(
@@ -1187,6 +1197,8 @@ async function retryCodexPoolOnAlternateAccount(
   recordAdapterTier(logCtx, request);
 
   await firstResponse.body?.cancel().catch(() => undefined);
+  const bodyRefusal = args.refuseOversizedOutboundBody?.(request, retryAuthCtx);
+  if (bodyRefusal) return { kind: "failed", response: bodyRefusal };
   options.onCodexAuthContextResolved?.(retryAuthCtx);
   route.provider = retryProvider;
   logCtx.provider = formatCodexProviderForLog(
@@ -3818,6 +3830,33 @@ async function handleResponsesInner(
     const upstream = new AbortController();
     linkAbortSignal(upstream, options.abortSignal);
     const connectMs = config.connectTimeoutMs ?? 200_000;
+    const maxUpstreamBodyBytes = config.maxUpstreamBodyBytes ?? DEFAULT_MAX_UPSTREAM_BODY_BYTES;
+    const refuseOversizedOutboundBody = (
+      builtRequest: AdapterRequest,
+      refusalAuthCtx: CodexAuthContext = authCtx,
+    ): Response | undefined => {
+      const result = checkOutboundBodySize(builtRequest.body, maxUpstreamBodyBytes);
+      if (result.admitted) return undefined;
+
+      // This return happens before the surrounding fetch/finally owns the observation.
+      // Release it here so one refused body cannot occupy translator budget indefinitely.
+      builtRequest.releaseBodyObservation?.();
+      upstream.abort();
+      releaseUpstreamHostAdmission(hostAdmissionLease);
+      hostAdmissionLease = null;
+      releaseCodexAuthContextProbeLease(refusalAuthCtx);
+      logCtx.errorCode = "outbound_body_too_large";
+      console.warn(
+        `[responses] refused an oversized outbound body: bytes=${result.bytes} limit=${result.limit} `
+        + `input_images=${result.imageCount} image_bytes=${result.imageBytes} `
+        + `model=${JSON.stringify(parsed.modelId)} host=${JSON.stringify(safeHostLabel(builtRequest.url))}`,
+      );
+      return formatErrorResponse(
+        413,
+        "outbound_body_too_large",
+        describeOutboundBodyRefusal(result),
+      );
+    };
     let upstreamResponse: Response;
     const transportFailureResponse = (err: unknown): Response => {
       upstream.abort();
@@ -3861,6 +3900,8 @@ async function handleResponsesInner(
         : describeUpstreamConnectFailure(err, connectMs);
       return formatErrorResponse(502, "upstream_error", msg);
     };
+    const initialBodyRefusal = refuseOversizedOutboundBody(request);
+    if (initialBodyRefusal) return initialBodyRefusal;
     try {
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
@@ -3935,6 +3976,8 @@ async function handleResponsesInner(
         retryAdapter.name,
         logCtx.accountLogLabel,
       );
+      const rebuiltBodyRefusal = refuseOversizedOutboundBody(request);
+      if (rebuiltBodyRefusal) return { failed: rebuiltBodyRefusal };
       try {
         return await fetchWithTransientRetry(
           innerRecovery => {
@@ -4136,6 +4179,8 @@ async function handleResponsesInner(
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
       }
       refreshUndeclaredToolGuard(request);
+      const refreshedBodyRefusal = refuseOversizedOutboundBody(request);
+      if (refreshedBodyRefusal) return refreshedBodyRefusal;
       try {
         upstreamResponse = await fetchWithTransientRetry(
           recovery => {
@@ -4287,7 +4332,9 @@ async function handleResponsesInner(
           onResponse: (response, retryAuthCtx, retryRequest) => {
             captureAffinityResponse(response, retryAuthCtx, retryRequest, true);
           },
+          refuseOversizedOutboundBody,
         });
+        if (retry.kind === "failed") return retry.response;
         if (retry.kind === "transport") {
           authCtx = retry.authCtx;
           return transportFailureResponse(retry.error);

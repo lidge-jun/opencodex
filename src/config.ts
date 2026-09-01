@@ -870,6 +870,7 @@ const configSchema = z.object({
     .max(UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD)
     .optional()
     .catch(undefined),
+  maxUpstreamBodyBytes: z.number().int().min(0).optional().catch(undefined),
   appOwnedMemoryBudgetMb: z.number().int()
     .min(MIN_APP_OWNED_MEMORY_BUDGET_MB)
     .max(MAX_APP_OWNED_MEMORY_BUDGET_MB)
