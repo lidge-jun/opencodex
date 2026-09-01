@@ -1279,6 +1279,51 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     parallelToolCalls: false,
   },
   {
+    // Meta Model API documents authenticated GET /v1/models and OpenAI-compatible
+    // POST /v1/responses for third-party coding agents. Muse Code subscription docs
+    // separately restrict the automatically connected subscription credential to Muse
+    // Code itself, so this reverse-engineered account flow is experimental and the GUI
+    // requires a high-risk acknowledgement. Verified 2026-09-01:
+    // - https://dev.meta.ai/docs/models/
+    // - https://dev.meta.ai/docs/protocols/responses/
+    // - https://dev.meta.ai/docs/agent-frameworks/
+    // - https://dev.meta.ai/docs/muse-code/subscriptions/
+    // - https://dev.meta.ai/legal/terms-of-service/
+    // - https://dev.meta.ai/legal/acceptable-use-policy/
+    // The terms identify Meta Platforms, Inc. or Meta Platforms Ireland Limited by
+    // customer location. Maintenance owner: @Lqm1.
+    id: "muse-code",
+    label: "Meta (Muse Code)",
+    adapter: "openai-responses",
+    baseUrl: "https://api.meta.ai/v1",
+    authKind: "oauth",
+    featured: true,
+    dashboardUrl: "https://dev.meta.ai",
+    defaultModel: "muse-spark-1.2",
+    models: ["muse-spark-1.2", "muse-spark-1.1"],
+    liveModels: true,
+    contextWindow: 1_048_576,
+    modelInputModalities: {
+      "muse-spark-1.2": ["text", "image"],
+      "muse-spark-1.1": ["text", "image"],
+    },
+    defaultMaxOutputTokens: 131_072,
+    modelReasoningEfforts: {
+      "muse-spark-1.2": ["minimal", "low", "medium", "high", "xhigh"],
+      "muse-spark-1.1": ["minimal", "low", "medium", "high", "xhigh"],
+    },
+    modelDefaultReasoningEfforts: {
+      "muse-spark-1.2": "high",
+      "muse-spark-1.1": "xhigh",
+    },
+    modelReasoningEffortMap: {
+      "muse-spark-1.2": { minimal: "minimal" },
+      "muse-spark-1.1": { minimal: "minimal" },
+    },
+    parallelToolCalls: true,
+    note: "Experimental Muse Code subscription login. Meta documents subscription credentials for Muse Code only; review the warning before continuing. For an officially supported third-party integration, use a separate Meta Model API key instead.",
+  },
+  {
     id: "anthropic",
     label: "Anthropic Claude",
     adapter: "anthropic",

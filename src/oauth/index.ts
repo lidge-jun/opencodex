@@ -38,6 +38,7 @@ import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
+import { loginMuseCode, refreshMuseCodeToken } from "./muse-code";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
@@ -268,6 +269,15 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("github-copilot"),
     // Unofficial Copilot bridge — keep proactive traffic lazy-only (no background guardian spam).
     defaultRefreshPolicy: "lazy-only",
+  },
+  "muse-code": {
+    login: (ctrl) => loginMuseCode(ctrl),
+    refresh: refreshMuseCodeToken,
+    providerConfig: oauthConfig("muse-code"),
+    defaultModel: oauthDefaultModel("muse-code"),
+    // The minted Model API key is durable. Background refresh would create
+    // traffic without renewing anything and could obscure a revoked key.
+    defaultRefreshPolicy: "disabled",
   },
   chatgpt: {
     login: loginChatGPT,

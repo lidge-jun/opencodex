@@ -353,6 +353,35 @@ describe("DeepSeek Responses endpoint contract", () => {
     }
   });
 
+  test("Muse Code preserves Meta's distinct minimal Responses effort", () => {
+    const entry = getProviderRegistryEntry("muse-code")!;
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "muse-code",
+      providers: {
+        "muse-code": {
+          ...providerConfigSeed(entry),
+          authMode: "key",
+          apiKey: "LLM|12345|test-secret",
+        },
+      },
+    };
+    const route = routeModel(config, "muse-code/muse-spark-1.2");
+    const body = JSON.parse(createResponsesPassthroughAdapter(route.provider).buildRequest({
+      modelId: route.modelId,
+      context: { messages: [] },
+      stream: true,
+      options: { reasoning: "minimal" },
+      _rawBody: {
+        model: route.modelId,
+        input: "ping",
+        reasoning: { effort: "minimal" },
+      },
+    }, { headers: new Headers() }).body) as { reasoning?: { effort?: string } };
+
+    expect(body.reasoning?.effort).toBe("minimal");
+  });
+
   test("a config saved before the fix is backfilled, and a hand-set path is preserved", () => {
     const saved = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test" } as Parameters<typeof enrichProviderFromRegistry>[1];
     enrichProviderFromRegistry("deepseek", saved);

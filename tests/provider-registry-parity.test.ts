@@ -799,7 +799,7 @@ describe("provider registry parity", () => {
   test("GUI preset projection preserves current featured set plus key catalog and custom", () => {
     const featured = deriveFeaturedProviderIds();
     expect(featured).toEqual([
-      "openai", "xai", "command-code", "anthropic", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
+      "openai", "xai", "command-code", "muse-code", "anthropic", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio", "opencode-free",
       "mimo-free",
     ]);
@@ -818,6 +818,18 @@ describe("provider registry parity", () => {
     });
     expect(presets.find(p => p.id === "kimi")?.baseUrl).toBe("https://api.kimi.com/coding/v1");
     expect(presets.find(p => p.id === "anthropic")?.defaultModel).toBe("claude-sonnet-5");
+    expect(presets.find(p => p.id === "muse-code")).toMatchObject({
+      label: "Meta (Muse Code)",
+      adapter: "openai-responses",
+      auth: "oauth",
+      oauthProvider: "muse-code",
+      baseUrl: "https://api.meta.ai/v1",
+      defaultModel: "muse-spark-1.2",
+    });
+    expect(OAUTH_PROVIDERS["muse-code"].providerConfig.modelReasoningEffortMap).toEqual({
+      "muse-spark-1.2": { minimal: "minimal" },
+      "muse-spark-1.1": { minimal: "minimal" },
+    });
     expect(presets.find(p => p.id === "umans")).toMatchObject({
       adapter: "anthropic",
       baseUrl: "https://api.code.umans.ai",
