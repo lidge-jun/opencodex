@@ -131,6 +131,58 @@ function addWireToolSpecs(names: Set<string>, specs: unknown): void {
   }
 }
 
+function addBareCustomToolSpecs(
+  names: Set<string>,
+  sameNameNamespaces: Set<string>,
+  specs: unknown,
+): void {
+  if (!Array.isArray(specs)) return;
+  for (const spec of specs) {
+    if (!isPlainObject(spec)) continue;
+    if (spec.type === "custom" && typeof spec.name === "string" && spec.name.length > 0) {
+      names.add(spec.name);
+      continue;
+    }
+    if (spec.type !== "namespace" || !Array.isArray(spec.tools) || typeof spec.name !== "string") {
+      continue;
+    }
+    for (const inner of spec.tools) {
+      if (
+        !isPlainObject(inner)
+        || inner.type !== "custom"
+        || typeof inner.name !== "string"
+        || inner.name.length === 0
+      ) continue;
+      if (spec.name === BUILTIN_FUNCTIONS_NAMESPACE) names.add(inner.name);
+      else if (spec.name === inner.name) sameNameNamespaces.add(inner.name);
+    }
+  }
+}
+
+/**
+ * Bare custom tools declared by this request's readable catalog.
+ *
+ * Callers must first slice away replayed input with `currentTurnWireToolCatalogBody`. A genuine
+ * same-name namespace such as `exec.exec` makes the upstream shape ambiguous and therefore keeps
+ * the namespace fail-closed.
+ */
+export function collectBareCustomToolNames(body: unknown): Set<string> {
+  const names = new Set<string>();
+  const sameNameNamespaces = new Set<string>();
+  if (!isPlainObject(body)) return names;
+  addBareCustomToolSpecs(names, sameNameNamespaces, body.tools);
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (
+        isPlainObject(item)
+        && (item.type === "additional_tools" || item.type === "tool_search_output")
+      ) addBareCustomToolSpecs(names, sameNameNamespaces, item.tools);
+    }
+  }
+  for (const name of sameNameNamespaces) names.delete(name);
+  return names;
+}
+
 /**
  * Tool names the OUTBOUND Responses body actually declared.
  *

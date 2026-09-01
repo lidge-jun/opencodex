@@ -1740,6 +1740,52 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.tools.some(t => t.type === "image_generation")).toBe(false);
   });
 
+  test("preserves the builtin functions namespace for canonical Spark forward", () => {
+    const builtinFunctions = {
+      type: "namespace",
+      name: "functions",
+      tools: [
+        {
+          type: "custom",
+          name: "exec",
+          description: "Run shell commands",
+          format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+        },
+        { type: "function", name: "wait", defer_loading: true, parameters: { type: "object" } },
+      ],
+    };
+    const routedNamespace = {
+      type: "namespace",
+      name: "workspace",
+      tools: [{ type: "function", name: "read", defer_loading: true, parameters: { type: "object" } }],
+    };
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.3-codex-spark",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.3-codex-spark",
+        input: [{ type: "additional_tools", tools: [builtinFunctions, routedNamespace] }],
+        tools: [builtinFunctions, routedNamespace],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as {
+      tools: Record<string, unknown>[];
+      input: Array<{ type: string; tools: Record<string, unknown>[] }>;
+    };
+
+    expect(body.tools[0]).toEqual(builtinFunctions);
+    expect(body.input[0]?.tools[0]).toEqual(builtinFunctions);
+    expect(body.tools).toContainEqual({ type: "function", name: "read", parameters: { type: "object" } });
+    expect(body.input[0]?.tools).toContainEqual({
+      type: "function",
+      name: "read",
+      parameters: { type: "object" },
+    });
+  });
+
   test("keeps image_generation hosted tool for supported native slugs", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const request = adapter.buildRequest({

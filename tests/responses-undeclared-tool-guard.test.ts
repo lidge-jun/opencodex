@@ -729,6 +729,18 @@ describe("empty and absent tool catalogs", () => {
     },
   } as OcxConfig;
 
+  const forwardConfig = {
+    port: 0,
+    defaultProvider: "fixture",
+    providers: {
+      fixture: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+      },
+    },
+  } as OcxConfig;
+
   const call = {
     type: "function_call",
     id: "fc_1",
@@ -748,13 +760,14 @@ describe("empty and absent tool catalogs", () => {
     model = "fixture/deepseek-v4-flash",
     previousResponseId?: string,
     toolChoice?: unknown,
+    requestHeaders?: Record<string, string>,
   ) {
     const savedFetch = globalThis.fetch;
     globalThis.fetch = (async () => upstream()) as typeof fetch;
     try {
       return await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...requestHeaders },
         body: JSON.stringify({
           model,
           stream,
@@ -788,6 +801,115 @@ describe("empty and absent tool catalogs", () => {
     ].join("\n\n") + "\n\n",
     { headers: { "content-type": "text/event-stream" } },
   );
+
+  test("strips a same-name namespace echoed for a bare Responses Lite custom tool", async () => {
+    const execTool = {
+      type: "namespace",
+      name: "functions",
+      tools: [{
+        type: "custom",
+        name: "exec",
+        description: "Run shell commands",
+        format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+      }],
+    };
+    const execCall = {
+      type: "custom_tool_call",
+      id: "ctc_exec",
+      call_id: "call_exec",
+      name: "exec",
+      namespace: "exec",
+      input: "pwd",
+      status: "completed",
+    };
+    const upstream = (stream: boolean) => () => stream
+      ? new Response(
+        [
+          frame("response.output_item.added", { output_index: 0, item: execCall }),
+          frame("response.completed", { response: { id: "resp_exec", status: "completed", output: [execCall] } }),
+          "data: [DONE]",
+        ].join("\n\n") + "\n\n",
+        { headers: { "content-type": "text/event-stream" } },
+      )
+      : Response.json({ id: "resp_exec", status: "completed", output: [execCall] });
+
+    const jsonResponse = await post(
+      false,
+      undefined,
+      upstream(false),
+      [execTool],
+      forwardConfig,
+      [],
+      "fixture/gpt-5.3-codex-spark",
+      undefined,
+      undefined,
+      { authorization: "Bearer caller-token" },
+    );
+    expect(jsonResponse.status).toBe(200);
+    const json = await jsonResponse.json() as { output: Array<Record<string, unknown>> };
+    expect(json.output[0]).toMatchObject({ type: "custom_tool_call", name: "exec" });
+    expect(json.output[0]?.namespace).toBeUndefined();
+
+    const sseResponse = await post(
+      true,
+      undefined,
+      upstream(true),
+      [execTool],
+      forwardConfig,
+      [],
+      "fixture/gpt-5.3-codex-spark",
+      undefined,
+      undefined,
+      { authorization: "Bearer caller-token" },
+    );
+    const sseBody = await sseResponse.text();
+    expect(sseBody).toContain('"type":"custom_tool_call"');
+    expect(sseBody).toContain('"name":"exec"');
+    expect(sseBody).not.toContain('"namespace":"exec"');
+  });
+
+  test("preserves a same-name namespace for a genuinely namespaced custom tool", async () => {
+    const namespacedExec = {
+      type: "namespace",
+      name: "exec",
+      tools: [{
+        type: "custom",
+        name: "exec",
+        description: "Run a namespaced command",
+        format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+      }],
+    };
+    const call = {
+      type: "custom_tool_call",
+      id: "ctc_namespaced_exec",
+      call_id: "call_namespaced_exec",
+      name: "exec",
+      namespace: "exec",
+      input: "status",
+      status: "completed",
+    };
+
+    const response = await post(
+      false,
+      undefined,
+      () => Response.json({ id: "resp_namespaced_exec", status: "completed", output: [call] }),
+      [namespacedExec],
+      forwardConfig,
+      [],
+      "fixture/gpt-5.3-codex-spark",
+      undefined,
+      undefined,
+      { authorization: "Bearer caller-token" },
+    );
+
+    expect(response.status).toBe(200);
+    const json = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(json.output[0]).toMatchObject({
+      type: "custom_tool_call",
+      name: "exec",
+      namespace: "exec",
+    });
+  });
 
   // A passthrough request may omit `tools` entirely and still receive a tool call the client
   // understands — the Copilot contract in tests/github-copilot-stream-contract.test.ts does
@@ -1091,6 +1213,63 @@ describe("empty and absent tool catalogs", () => {
     expect(response.status).toBe(502);
     const namedBody = await response.json() as { error: { message: string } };
     expect(namedBody.error.message).toContain('undeclared client tool "exec"');
+  });
+
+  test("a replayed bare custom tool cannot dequalify a current namespaced call", async () => {
+    const previousId = "resp_replayed_bare_custom_exec";
+    const historicalExec = {
+      type: "namespace",
+      name: "functions",
+      tools: [{
+        type: "custom",
+        name: "exec",
+        description: "Run shell commands",
+        format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
+      }],
+    };
+    const prime = await post(
+      false,
+      undefined,
+      () => Response.json({ id: previousId, status: "completed", output: [] }),
+      [historicalExec],
+      forwardConfig,
+      [],
+      "fixture/gpt-5.3-codex-spark",
+      undefined,
+      undefined,
+      { authorization: "Bearer caller-token" },
+    );
+    expect(prime.status).toBe(200);
+    await prime.arrayBuffer();
+
+    const response = await post(
+      false,
+      [],
+      () => Response.json({
+        id: "resp_current_deny_all",
+        status: "completed",
+        output: [{
+          type: "custom_tool_call",
+          id: "ctc_current_exec",
+          call_id: "call_current_exec",
+          name: "exec",
+          namespace: "exec",
+          input: "pwd",
+          status: "completed",
+        }],
+      }),
+      undefined,
+      forwardConfig,
+      [],
+      "fixture/gpt-5.3-codex-spark",
+      previousId,
+      undefined,
+      { authorization: "Bearer caller-token" },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(body.output[0]).toMatchObject({ name: "exec", namespace: "exec" });
   });
 
   test("a replayed nameless catalog cannot authorize a deny-all continuation", async () => {

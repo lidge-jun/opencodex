@@ -379,11 +379,12 @@ export function rewriteRoutedNamespaceToolsForUpstream(body: unknown): {
 export function restoreRoutedNamespaceCalls(
   value: unknown,
   aliases: RoutedNamespaceToolAliases,
+  bareCustomToolNames?: ReadonlySet<string>,
 ): { value: unknown; changed: boolean } {
   if (Array.isArray(value)) {
     let changed = false;
     const restored = value.map(entry => {
-      const result = restoreRoutedNamespaceCalls(entry, aliases);
+      const result = restoreRoutedNamespaceCalls(entry, aliases, bareCustomToolNames);
       changed ||= result.changed;
       return result.value;
     });
@@ -394,9 +395,22 @@ export function restoreRoutedNamespaceCalls(
   let changed = false;
   const restored: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
-    const result = restoreRoutedNamespaceCalls(entry, aliases);
+    const result = restoreRoutedNamespaceCalls(entry, aliases, bareCustomToolNames);
     restored[key] = result.value;
     changed ||= result.changed;
+  }
+
+  if (
+    value.type === "custom_tool_call"
+    && typeof value.name === "string"
+    && value.namespace === value.name
+    && bareCustomToolNames?.has(value.name) === true
+  ) {
+    // Some Responses backends echo a bare custom tool as `{name:"exec", namespace:"exec"}`.
+    // Codex concatenates those fields into `execexec`; remove only the duplicate namespace for a
+    // request-authorized bare custom tool. Genuine same-name namespace tools are excluded upstream.
+    delete restored.namespace;
+    changed = true;
   }
 
   if (
@@ -416,20 +430,22 @@ export function restoreRoutedNamespaceCalls(
 export function restoreRoutedNamespaceCallsInJson(
   text: string,
   aliases: RoutedNamespaceToolAliases,
+  bareCustomToolNames?: ReadonlySet<string>,
 ): string {
-  if (aliases.size === 0) return text;
+  if (aliases.size === 0 && (bareCustomToolNames?.size ?? 0) === 0) return text;
   let payload: unknown;
   try {
     payload = JSON.parse(text);
   } catch {
     return text;
   }
-  const restored = restoreRoutedNamespaceCalls(payload, aliases);
+  const restored = restoreRoutedNamespaceCalls(payload, aliases, bareCustomToolNames);
   return restored.changed ? JSON.stringify(restored.value) : text;
 }
 
 export function createRoutedNamespaceCallRestoreRewrite(
   aliases: RoutedNamespaceToolAliases,
+  bareCustomToolNames?: ReadonlySet<string>,
 ): (payload: string) => string {
-  return payload => restoreRoutedNamespaceCallsInJson(payload, aliases);
+  return payload => restoreRoutedNamespaceCallsInJson(payload, aliases, bareCustomToolNames);
 }

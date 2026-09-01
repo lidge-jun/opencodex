@@ -467,14 +467,18 @@ function normalizeConfiguredReasoningSummaryDelivery(
  * namespace, tool_search, web_search, custom) plus extensions (defer_loading,
  * parallel_tool_calls, tool_search_call/output items). Spark's serving path only
  * supports flat function tools and hosted web_search. This function:
- * - Flattens namespace tools → promotes inner functions to top level
+ * - Flattens routed namespace tools → promotes inner functions to top level
+ * - Preserves Codex's reserved `functions` namespace on the canonical native forward route
  * - Drops unsupported tool types (tool_search, custom)
  * - Strips defer_loading from function tools
  * - Strips namespace from input items
  * - Drops tool_search_call/tool_search_output input items
  * - Sets parallel_tool_calls to false
  */
-function stripSparkCompatibility(body: unknown): unknown {
+function stripSparkCompatibility(
+  body: unknown,
+  preserveBuiltinFunctionsNamespace = false,
+): unknown {
   if (!isPlainObject(body)) return body;
   const model = typeof body.model === "string" ? body.model : "";
   if (!model.includes("codex-spark")) return body;
@@ -487,7 +491,14 @@ function stripSparkCompatibility(body: unknown): unknown {
   if (Array.isArray(tools)) {
     const flattened: unknown[] = [];
     for (const t of tools) {
-      if (isPlainObject(t) && t.type === "namespace") {
+      if (
+        isPlainObject(t)
+        && t.type === "namespace"
+        && preserveBuiltinFunctionsNamespace
+        && t.name === "functions"
+      ) {
+        flattened.push(t);
+      } else if (isPlainObject(t) && t.type === "namespace") {
         changed = true;
         if (Array.isArray(t.tools)) {
           for (const inner of t.tools) flattened.push(inner);
@@ -527,7 +538,14 @@ function stripSparkCompatibility(body: unknown): unknown {
         const innerTools = item.tools as unknown[];
         const filteredInner: unknown[] = [];
         for (const t of innerTools) {
-          if (isPlainObject(t) && t.type === "namespace") {
+          if (
+            isPlainObject(t)
+            && t.type === "namespace"
+            && preserveBuiltinFunctionsNamespace
+            && t.name === "functions"
+          ) {
+            filteredInner.push(t);
+          } else if (isPlainObject(t) && t.type === "namespace") {
             changed = true;
             if (Array.isArray(t.tools)) {
               for (const fn of t.tools) filteredInner.push(fn);
@@ -2233,6 +2251,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
               ),
             ),
           ),
+          isCanonicalOpenAiForwardProvider(provider),
         ),
         isXaiSchemaTarget(provider),
       );

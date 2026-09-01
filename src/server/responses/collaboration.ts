@@ -108,12 +108,15 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   /** Declared parameter schema per request-visible tool name (#1611 integer repair). */
   toolParameterSchemas: Map<string, Record<string, unknown>>;
   freeformToolNames: Set<string>;
+  /** Bare custom tools whose echoed same-name namespace may be removed on the client response. */
+  bareCustomToolNames: Set<string>;
   toolSearchToolNames: Set<string>;
 } {
   const toolNsMap = new Map<string, { namespace: string; name: string; freeform?: true }>();
   const declaredToolNames = new Set<string>();
   const toolParameterSchemas = new Map<string, Record<string, unknown>>();
   const freeformToolNames = new Set<string>();
+  const bareCustomToolNames = new Set<string>();
   const toolSearchToolNames = new Set<string>();
   const requestedTools = parsed.context.tools ?? [];
   const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, requestedTools);
@@ -133,6 +136,7 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
     if (t.freeform) {
       budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
       freeformToolNames.add(t.name);
+      if (!t.namespace) bareCustomToolNames.add(t.name);
     }
     if (t.toolSearch) {
       budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
@@ -162,7 +166,14 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
       toolParameterSchemas.set(t.name, t.parameters);
     }
   }
-  return { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames };
+  return {
+    toolNsMap,
+    declaredToolNames,
+    toolParameterSchemas,
+    freeformToolNames,
+    bareCustomToolNames,
+    toolSearchToolNames,
+  };
 }
 
 

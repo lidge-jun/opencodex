@@ -366,6 +366,7 @@ import {
   type RoutedNamespaceToolAliases,
 } from "../../responses/namespace-tool-compat";
 import {
+  collectBareCustomToolNames,
   collectDeclaredNamelessClientCallTypes,
   collectDeclaredWireToolNames,
   collectProviderExecutedCallTypes,
@@ -3659,6 +3660,10 @@ async function handleResponsesInner(
     );
     const clientExplicitWireToolCatalog = hasExplicitWireToolCatalog(clientToolAuthorizationBody);
     const clientDeclaredWireToolNames = collectDeclaredWireToolNames(clientToolAuthorizationBody);
+    const clientBareCustomToolNames = collectBareCustomToolNames(clientToolAuthorizationBody);
+    const authorizedBareCustomToolNames = new Set(
+      [...toolBridgeMaps.bareCustomToolNames].filter(name => clientBareCustomToolNames.has(name)),
+    );
     const clientDeclaredNamelessCallTypes = collectDeclaredNamelessClientCallTypes(
       clientToolAuthorizationBody,
     );
@@ -3748,7 +3753,11 @@ async function handleResponsesInner(
       ),
     );
     const restoreAuthorizedBareNamespaceToolCalls = (value: unknown): unknown =>
-      restoreRoutedNamespaceCalls(value, authorizedBareNamespaceToolAliases).value;
+      restoreRoutedNamespaceCalls(
+        value,
+        authorizedBareNamespaceToolAliases,
+        authorizedBareCustomToolNames,
+      ).value;
     let undeclaredToolGuardActive = false;
     const refreshUndeclaredToolGuard = (builtRequest: AdapterRequest): void => {
       outboundRequestBody = parseOutboundRequestBody(builtRequest.body);
@@ -4644,8 +4653,11 @@ async function handleResponsesInner(
         routedNamespaceToolAliases.size > 0
           ? createRoutedNamespaceCallRestoreRewrite(routedNamespaceToolAliases)
           : undefined,
-        authorizedBareNamespaceToolAliases.size > 0
-          ? createRoutedNamespaceCallRestoreRewrite(authorizedBareNamespaceToolAliases)
+        authorizedBareNamespaceToolAliases.size > 0 || authorizedBareCustomToolNames.size > 0
+          ? createRoutedNamespaceCallRestoreRewrite(
+            authorizedBareNamespaceToolAliases,
+            authorizedBareCustomToolNames,
+          )
           : undefined,
         hasResponsesItemIdRepair(repairConfig)
           ? createResponsesItemIdPayloadRewrite(repairConfig!, translatorBudget)
@@ -4879,6 +4891,7 @@ async function handleResponsesInner(
         const restoredAuthorizedBareNamespace = restoreRoutedNamespaceCallsInJson(
           restoredNamespace,
           authorizedBareNamespaceToolAliases,
+          authorizedBareCustomToolNames,
         );
         const restored = restoreRoutedCustomCallsInJson(
           restoredAuthorizedBareNamespace,
