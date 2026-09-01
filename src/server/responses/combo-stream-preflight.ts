@@ -24,6 +24,24 @@ const TERMINAL_EVENTS = new Set([
   "response.incomplete",
 ]);
 
+const RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS = new Set([
+  "adapter_eof",
+  "missing_terminal_event",
+  "upstream_stall_timeout",
+]);
+
+function retryableZeroOutputTerminal(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const event = payload as {
+    type?: unknown;
+    response?: { incomplete_details?: { reason?: unknown } };
+  };
+  if (event.type === "response.failed") return true;
+  if (event.type !== "response.incomplete") return false;
+  const reason = event.response?.incomplete_details?.reason;
+  return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
+}
+
 /**
  * Decide when replaying the request on another combo target would risk duplicating
  * client-visible output or a tool-side effect. Unknown event types commit the child
@@ -128,14 +146,14 @@ export async function preflightComboStreamResponse(
   let bufferedBytes = 0;
   let outputCommitted = false;
   let terminalStatus: ResponsesTerminalStatus | undefined;
-  let failedPayload: Record<string, unknown> | undefined;
+  let retryableTerminalPayload: Record<string, unknown> | undefined;
   const inspector = createSseInspector({
     logCtx,
     onParsedPayload: payload => {
       if (comboStreamPayloadCommitsOutput(payload)) outputCommitted = true;
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
-      if ((payload as { type?: unknown }).type === "response.failed") {
-        failedPayload = payload as Record<string, unknown>;
+      if (retryableZeroOutputTerminal(payload)) {
+        retryableTerminalPayload = payload as Record<string, unknown>;
       }
     },
     onTerminal: status => { terminalStatus = status; },
@@ -162,9 +180,10 @@ export async function preflightComboStreamResponse(
         inspector.feed(retained);
       }
 
-      if (terminalStatus === "failed" && !outputCommitted && failedPayload) {
-        await reader.cancel("retrying zero-output combo stream failure").catch(() => undefined);
-        return { kind: "failed", response: failedTerminalResponse(response, failedPayload, logCtx) };
+      if ((terminalStatus === "failed" || terminalStatus === "incomplete")
+        && !outputCommitted && retryableTerminalPayload) {
+        await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
+        return { kind: "failed", response: failedTerminalResponse(response, retryableTerminalPayload, logCtx) };
       }
       if (next.done || terminalStatus !== undefined || outputCommitted
         || bufferedBytes >= COMBO_STREAM_PREFLIGHT_MAX_BYTES

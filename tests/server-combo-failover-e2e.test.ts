@@ -204,6 +204,13 @@ function chatStream(text: string): Response {
   return new Response(frames, { headers: { "content-type": "text/event-stream" } });
 }
 
+function chatTruncatedZeroOutputStream(): Response {
+  const frames = [
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: null }] })}\n\n`,
+  ].join("");
+  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
+}
+
 function chatErrorStream(message: string, prefix?: string): Response {
   const frames = [
     ...(prefix
@@ -478,6 +485,41 @@ describe("server combo failover 030 activation matrix", () => {
     const response = await postLogged(config, { stream: true });
     expect(response.status).toBe(200);
     expect(JSON.stringify(await collectSse(response))).toContain("stream backup");
+    expect(hits).toEqual(["a", "b"]);
+
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        resolvedModel: "m2",
+        attempts: [
+          { ordinal: 1, provider: "a", model: "m1", status: 502 },
+          { ordinal: 2, provider: "b", model: "m2", status: 200 },
+        ],
+      });
+      expect(receipt.attempts[0]).not.toHaveProperty("firstOutputMs");
+    }
+  });
+
+  test("zero-output adapter EOF hops to the next combo target", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return chatTruncatedZeroOutputStream();
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return chatStream("stream backup after adapter eof");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+
+    const response = await postLogged(config, { stream: true });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await collectSse(response))).toContain("stream backup after adapter eof");
     expect(hits).toEqual(["a", "b"]);
 
     const { log, usage } = await latestAttemptReceipts(config);

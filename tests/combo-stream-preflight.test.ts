@@ -18,6 +18,7 @@ describe("combo stream preflight", () => {
     expect(comboStreamPayloadCommitsOutput({ type: "response.created" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.heartbeat" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.failed" })).toBe(false);
+    expect(comboStreamPayloadCommitsOutput({ type: "response.incomplete" })).toBe(false);
     expect(comboStreamPayloadCommitsOutput({ type: "response.output_text.delta", delta: "x" })).toBe(true);
     expect(comboStreamPayloadCommitsOutput({ type: "response.output_item.added", item: { type: "function_call" } })).toBe(true);
     expect(comboStreamPayloadCommitsOutput({ type: "provider.future_event" })).toBe(true);
@@ -47,6 +48,72 @@ describe("combo stream preflight", () => {
       response: { usage: { input_tokens: 7, output_tokens: 0 } },
     });
     expect(JSON.stringify(body)).not.toContain("provider_trace_id");
+  });
+
+  test("converts zero-output transport incompletes into retryable HTTP failures", async () => {
+    const cases = [
+      ["adapter_eof", "Upstream stream ended unexpectedly without a terminal event"],
+      ["missing_terminal_event", "Upstream incomplete"],
+      ["upstream_stall_timeout", "Upstream stalled"],
+    ] as const;
+    for (const [reason, message] of cases) {
+      const result = await preflightComboStreamResponse(sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        {
+          type: "response.incomplete",
+          response: {
+            id: "r1",
+            status: "incomplete",
+            incomplete_details: { reason },
+            usage: { input_tokens: 11, output_tokens: 0, total_tokens: 11 },
+          },
+        },
+      ), { model: "m1", provider: "a" });
+
+      expect(result.kind).toBe("failed");
+      expect(result.response.status).toBe(502);
+      const body = await result.response.json();
+      expect(body.error).toMatchObject({ type: "upstream_error", code: "upstream_server_error" });
+      expect(body.error.message).toContain(message);
+      expect(body.response.usage).toMatchObject({ input_tokens: 11, output_tokens: 0 });
+    }
+  });
+
+  test("does not replay semantic incompletes that another provider cannot safely repair", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          incomplete_details: { reason: "max_output_tokens" },
+        },
+      },
+    );
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("does not replay transport incompletes after output commits the target", async () => {
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { type: "response.output_text.delta", delta: "visible" },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "r1",
+          status: "incomplete",
+          incomplete_details: { reason: "adapter_eof" },
+        },
+      },
+    );
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
   });
 
   test("replays buffered bytes unchanged after output commits the target", async () => {
