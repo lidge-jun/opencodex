@@ -104,8 +104,17 @@ retry `EPERM` on Windows, and re-enable the self-hosted `ocx-home` runner
 
 ## Devlog stack landing
 
-Branch `codex/260902-bug-pr-closeout-stack` (devlog-only) → PR PR_PLACEHOLDER.
+Branch `codex/260902-bug-pr-closeout-stack` (devlog-only) → PR #3218, opened during this
+cycle; merged in the final recount phase so it carries the i3217 record too.
 
-## Final bug-label count
+## Bug-label count at the end of this pass
 
-COUNT_PLACEHOLDER
+`gh issue list -l bug --state open` = 6, `gh pr list -l bug --state open` = 0. Five are the
+recorded blockers (#3152 needs-repro, #3141 needs-info, #2999 CAS-primitive, #1527 needs-info,
+#1419 needs-info). The sixth, **#3217**, was opened at 2026-09-01T20:39Z while this audit ran:
+Responses Lite `exec` returned with `namespace: "exec"` on the native forward route, so Codex
+loops on `execexec`. Reproduced locally (ocx 2.40.0, codex 0.150.1) and traced with a tap on a
+dev proxy: `stripSparkCompatibility` flattens the reserved `functions` namespace group in
+`additional_tools`; the ChatGPT backend then answers the flat `custom exec` with
+`namespace: "exec"`, which the proxy relays verbatim. It is implementable and becomes its own
+work-phase (`i3217`); c-7 is evaluated again in the final recount phase after it lands.
