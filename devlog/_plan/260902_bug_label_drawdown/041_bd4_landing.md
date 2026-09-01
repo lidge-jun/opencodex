@@ -51,3 +51,25 @@ right.
 **Open bug-labelled PRs: 0.** All 14 are closed — 4 merged directly, 10 rebase-carried.
 Bug-labelled items: **14 → 9**, entirely issues now.
 
+## What the PR half of this campaign actually cost
+
+Fourteen bug PRs. Four merged as they stood. **Ten needed a rebase and nothing else.**
+
+Of those ten, exactly **one** had a genuinely open review finding (#3003's prune ordering,
+fixed here with a red-green regression) and exactly **one** hid a real defect behind a
+trivial-looking conflict (#3148's connected-target launch path). The other eight were
+waiting on a mechanical operation.
+
+That ratio is the argument for the rebase service. A PR that reads `CONFLICTING` or
+`CHANGES_REQUESTED` on the board looks like it is blocked on its author. Most of the time
+it was blocked on a rebase, and the badge outlived the reason.
+
+The two that were not mechanical are also the argument for running the suite after the
+rebase rather than trusting a clean cherry-pick: neither would have shown up in the conflict
+markers.
+
+## Remaining: 9 bug issues
+
+#3155 #3152 #3150 #3141 #3136 #2999 #2813 #1527 #1419 — Batch E (needs-info triage) and
+Batch F (implementable). The target is 3 or fewer, so at least six of these must reach a
+terminal state.
