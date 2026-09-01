@@ -326,6 +326,10 @@ import {
   restoreImageGenCallsInJson,
 } from "../responses-image-gen-repair";
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
+import {
+  createSelfNamedToolCallNamespaceScrubRewrite,
+  scrubSelfNamedToolCallNamespaceInJson,
+} from "../responses-self-named-namespace-scrub";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
 import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
@@ -4641,6 +4645,8 @@ async function handleResponsesInner(
       // Compose opt-in payload rewrites into one parse/stringify pass (image-gen restore first).
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
+        // #3217: a call whose namespace repeats its own name is unroutable in codex-rs.
+        createSelfNamedToolCallNamespaceScrubRewrite(),
         routedNamespaceToolAliases.size > 0
           ? createRoutedNamespaceCallRestoreRewrite(routedNamespaceToolAliases)
           : undefined,
@@ -4873,7 +4879,7 @@ async function handleResponsesInner(
       inspectResponseLogJson(logCtx, text);
       const clientJson = (() => {
         const restoredNamespace = restoreRoutedNamespaceCallsInJson(
-          restoreImageGenCallsInJson(text, imageGenCallAliases),
+          scrubSelfNamedToolCallNamespaceInJson(restoreImageGenCallsInJson(text, imageGenCallAliases)),
           routedNamespaceToolAliases,
         );
         const restoredAuthorizedBareNamespace = restoreRoutedNamespaceCallsInJson(

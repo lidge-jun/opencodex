@@ -467,7 +467,12 @@ function normalizeConfiguredReasoningSummaryDelivery(
  * namespace, tool_search, web_search, custom) plus extensions (defer_loading,
  * parallel_tool_calls, tool_search_call/output items). Spark's serving path only
  * supports flat function tools and hosted web_search. This function:
- * - Flattens namespace tools → promotes inner functions to top level
+ * - Flattens MCP-style namespace tools → promotes inner functions to top level. The reserved
+ *   `functions` group is kept as a group (#3217): Codex 0.147+ sends every ordinary client tool
+ *   inside it on Responses Lite, the backend accepts the group as-is, and flattening it changes
+ *   what the backend answers with — a `custom_tool_call` carrying `namespace: "exec"`, which
+ *   codex-rs concatenates into the unroutable `execexec`. Traced on a live proxy: with the
+ *   group intact the same backend returns the bare `exec` call and the turn completes.
  * - Drops unsupported tool types (tool_search, custom)
  * - Strips defer_loading from function tools
  * - Strips namespace from input items
@@ -482,12 +487,39 @@ function stripSparkCompatibility(body: unknown): unknown {
   let changed = false;
 
   const SPARK_SAFE_TOOL_TYPES = new Set(["function", "web_search", "web_search_preview"]);
+  // Inside the reserved group Codex sends freeform `custom` tools (code-mode `exec`) and the
+  // backend accepts them there; the top-level "drop custom" rule stays for flattened groups.
+  const SPARK_SAFE_FUNCTIONS_GROUP_CHILD_TYPES = new Set(["function", "custom"]);
+  const filterSparkFunctionsGroup = (group: Record<string, unknown>): Record<string, unknown> | undefined => {
+    if (!Array.isArray(group.tools)) return undefined;
+    let groupChanged = false;
+    const children: unknown[] = [];
+    for (const child of group.tools) {
+      if (!isPlainObject(child) || typeof child.type !== "string" || !SPARK_SAFE_FUNCTIONS_GROUP_CHILD_TYPES.has(child.type)) {
+        groupChanged = true;
+        continue;
+      }
+      if (child.type === "function" && "defer_loading" in child) {
+        const { defer_loading: _, ...rest } = child;
+        groupChanged = true;
+        children.push(rest);
+        continue;
+      }
+      children.push(child);
+    }
+    if (children.length === 0) return undefined;
+    return groupChanged ? { ...group, tools: children } : group;
+  };
 
   let tools = body.tools;
   if (Array.isArray(tools)) {
     const flattened: unknown[] = [];
     for (const t of tools) {
-      if (isPlainObject(t) && t.type === "namespace") {
+      if (isPlainObject(t) && t.type === "namespace" && t.name === SPARK_RESERVED_FUNCTIONS_NAMESPACE) {
+        const kept = filterSparkFunctionsGroup(t);
+        if (kept !== t) changed = true;
+        if (kept) flattened.push(kept);
+      } else if (isPlainObject(t) && t.type === "namespace") {
         changed = true;
         if (Array.isArray(t.tools)) {
           for (const inner of t.tools) flattened.push(inner);
@@ -527,7 +559,11 @@ function stripSparkCompatibility(body: unknown): unknown {
         const innerTools = item.tools as unknown[];
         const filteredInner: unknown[] = [];
         for (const t of innerTools) {
-          if (isPlainObject(t) && t.type === "namespace") {
+          if (isPlainObject(t) && t.type === "namespace" && t.name === SPARK_RESERVED_FUNCTIONS_NAMESPACE) {
+            const kept = filterSparkFunctionsGroup(t);
+            if (kept !== t) changed = true;
+            if (kept) filteredInner.push(kept);
+          } else if (isPlainObject(t) && t.type === "namespace") {
             changed = true;
             if (Array.isArray(t.tools)) {
               for (const fn of t.tools) filteredInner.push(fn);
@@ -573,6 +609,9 @@ function stripSparkCompatibility(body: unknown): unknown {
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
+
+/** Codex's reserved client-tool group on Responses Lite; carries no wire prefix. */
+const SPARK_RESERVED_FUNCTIONS_NAMESPACE = "functions";
 
 /**
  * Apply the routed provider's real effort ladder to an existing Responses reasoning field.

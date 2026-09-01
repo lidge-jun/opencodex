@@ -1717,6 +1717,61 @@ describe("OpenAI Responses passthrough sanitization", () => {
     });
   });
 
+  test("keeps the reserved functions group intact for codex-spark, flattens MCP groups (#3217)", () => {
+    // Codex 0.147+ on Responses Lite ships every ordinary client tool inside the reserved
+    // `functions` namespace group, carried in an `additional_tools` input item. Flattening that
+    // group made the backend answer `custom_tool_call { name: "exec", namespace: "exec" }`,
+    // which codex-rs concatenates into the unroutable `execexec` and loops on.
+    const adapter = createResponsesPassthroughAdapter(provider);
+    const functionsGroup = {
+      type: "namespace",
+      name: "functions",
+      description: "client tools",
+      tools: [
+        { type: "custom", name: "exec", description: "shell" },
+        { type: "function", name: "wait", parameters: { type: "object", properties: {} }, defer_loading: true },
+        { type: "tool_search", name: "tool_search" },
+      ],
+    };
+    const mcpGroup = {
+      type: "namespace",
+      name: "mcp__docs",
+      tools: [{ type: "function", name: "search", parameters: { type: "object", properties: {} } }],
+    };
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.3-codex-spark",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: {
+        model: "gpt-5.3-codex-spark",
+        input: [
+          { type: "additional_tools", role: "developer", tools: [functionsGroup, mcpGroup] },
+          { type: "message", role: "user", content: [{ type: "input_text", text: "run pwd" }] },
+        ],
+        tools: [functionsGroup, mcpGroup],
+      },
+    }, { headers: new Headers({ authorization: "Bearer token" }) });
+    const body = JSON.parse(request.body) as {
+      tools: Array<Record<string, unknown>>;
+      input: Array<{ type: string; tools?: Array<Record<string, unknown>> }>;
+    };
+    const expectedGroup = {
+      type: "namespace",
+      name: "functions",
+      description: "client tools",
+      tools: [
+        { type: "custom", name: "exec", description: "shell" },
+        { type: "function", name: "wait", parameters: { type: "object", properties: {} } },
+      ],
+    };
+    // The reserved group survives as a group with its custom child; tool_search is still dropped
+    // and defer_loading still stripped inside it. The MCP group is still flattened.
+    expect(body.tools).toEqual([expectedGroup, { type: "function", name: "search", parameters: { type: "object", properties: {} } }]);
+    const additional = body.input.find(item => item.type === "additional_tools");
+    expect(additional?.tools).toEqual([expectedGroup, { type: "function", name: "search", parameters: { type: "object", properties: {} } }]);
+  });
+
   test("strips image_generation hosted tool for codex-spark passthrough", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const request = adapter.buildRequest({
