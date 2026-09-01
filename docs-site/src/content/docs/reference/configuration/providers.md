@@ -76,7 +76,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `promptCacheKey?` | `boolean` | Provider-wide `openai-chat` opt-in for forwarding a `prompt_cache_key`. The adapter forwards the key it is given and never invents one, but the key is not always the caller's: Claude Messages translation derives one from `metadata.user_id`, or from a model/system/tools cohort when no metadata is sent. Default off. Enable only when the upstream documents support, because strict gateways may reject the unknown field with HTTP 400. |
 | `preserveResponsesReasoningContent?` | `boolean` | Keep plaintext reasoning content on replayed Responses reasoning items instead of blanking it (blanking is the ChatGPT backend's rule). Enable for upstreams whose contract accepts reasoning replay, such as DeepSeek. Proxy-minted `ocxr1` envelopes are always stripped. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
-| `apiKey?` | `string` | API key, or an `${ENV_VAR}` / `$ENV_VAR` reference resolved at request time. |
+| `apiKey?` | `string` | API key, an `${ENV_VAR}` / `$ENV_VAR` reference, or a `keychain:<provider>` reference written by `ocx provider keychain <name> store`. References resolve at request time. See [Storing keys in the OS keychain](#storing-keys-in-the-os-keychain). |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key header style. Defaults to native `x-api-key`; valid only for key-auth `anthropic` providers. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
 | `defaultModel?` | `string` | Model used when this provider is selected without an explicit model. |
@@ -566,6 +566,33 @@ same mapping applies to a native `vercel/<model-id>` selector: use the encoded
 model key.
 
 ## Static model allowlists
+
+## Storing keys in the OS keychain
+
+By default a provider's `apiKey` and `apiKeyPool` sit in `config.json` (mode 0600, atomic writes).
+If you would rather keep the key material out of the file, move it into the OS credential store:
+
+```bash
+ocx provider keychain deepseek status    # store: file | env | keychain, and whether the keychain answers
+ocx provider keychain deepseek store     # move active key + pool into the OS keychain
+ocx provider keychain deepseek restore   # bring the plaintext back and delete the keychain items
+```
+
+The same operations are `GET`/`POST /api/providers/keychain`. After `store`, `config.json` holds
+`"apiKey": "keychain:deepseek"` (pool entries `keychain:deepseek/<id>`) and the secret lives under the
+`opencodex.provider-api-key.v1` service in macOS Keychain, Windows Credential Manager, or the Linux
+Secret Service. Backups of `config.json` therefore carry references only. Key rotation and failover
+keep working: pool entries compare by reference, so a rotation never writes plaintext back.
+
+Before touching the config, `store` writes and reads back every entry; if the keychain is unavailable
+or the read-back does not match, it refuses with 503 and leaves the file as it was. At request time
+a reference that cannot be read yields no credential and one warning per key — there is no plaintext
+fallback, by design.
+
+When not to opt in: a proxy running as a headless service (systemd, launchd, Task Scheduler) or in a
+container usually has no unlocked keychain session, so requests would fail closed. Use an
+`${ENV_VAR}` reference in the service environment there instead. Env references are left untouched
+by `store`.
 
 Set `liveModels: false` to expose only `models`. If `models` is empty or omitted, the provider exposes
 no routed models. Live discovery rejects more than 4 MiB or 2,000 raw model rows before caching;

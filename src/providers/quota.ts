@@ -9,7 +9,7 @@ import type { StoredAccountQuota } from "../codex/quota";
 import { isMainAccountIdentityGenerationLive } from "../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
 import { codexPlanKey } from "../codex/plan";
-import { resolveEnvValue } from "../config";
+import { resolveProviderApiKey } from "./key-store";
 import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
@@ -153,7 +153,7 @@ function cacheKey(config: OcxConfig): string {
   const providers = Object.entries(config.providers)
     .map(([name, provider]) => {
       const resolvedKey = typeof provider.apiKey === "string"
-        ? resolveEnvValue(provider.apiKey)?.trim()
+        ? resolveProviderApiKey(provider.apiKey)?.trim()
         : undefined;
       const activeKeyId = resolvedKey ? apiKeyPoolEntryId(resolvedKey) : "none";
       return `${name}:${provider.adapter}:${provider.authMode ?? "key"}:${providerCodexAccountMode(name, provider) ?? "none"}:${provider.disabled === true ? "off" : "on"}:${provider.baseUrl}:${activeKeyId}`;
@@ -370,7 +370,7 @@ function firstFinite(record: Record<string, unknown> | null, names: string[]): n
 async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   // Never send a configured API key to a lookalike host or through a redirect.
   if (!isCanonicalA6apiBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const headers = { Accept: "application/json", Authorization: `Bearer ${apiKey}` } as const;
   const [subscriptionResponse, tokenResponse] = await Promise.all([
@@ -464,7 +464,7 @@ function parseOpenCodeGoUsageWindow(value: unknown): { percent: number; resetAt?
 async function fetchOpenCodeGoQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   // Never send a configured API key when the provider destination is not the built-in Go endpoint.
   if (!isCanonicalOpenCodeGoBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const response = await fetch(OPENCODE_GO_USAGE_URL, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
@@ -510,7 +510,7 @@ async function fetchOpenCodeGoQuota(provider: string, config: OcxProviderConfig)
 async function fetchOpenRouterQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   // Never send a configured API key to a lookalike host or through a redirect.
   if (!isCanonicalOpenRouterBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const response = await fetch(`${OPENROUTER_BASE_URL}/key`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
@@ -557,7 +557,7 @@ async function fetchOpenRouterQuota(provider: string, config: OcxProviderConfig)
  */
 async function fetchDeepSeekQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalDeepSeekBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const response = await fetch(`${DEEPSEEK_BASE_URL}/user/balance`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
@@ -602,7 +602,7 @@ async function fetchDeepSeekQuota(provider: string, config: OcxProviderConfig): 
  */
 async function fetchClineQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalClineBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const response = await fetch(`${CLINE_BASE_URL}/api/v1/users/me/plan/usage-limits`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
@@ -750,7 +750,7 @@ function parseZaiQuotaLegacyFields(data: Record<string, unknown> | null): Provid
  */
 async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalZaiBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const normalized = normalizedBaseUrl(config.baseUrl);
   const monitorHost = normalized === ZAI_BASE_URL || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`
@@ -793,7 +793,7 @@ async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promi
  */
 async function fetchMinimaxQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalMinimaxBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const cnHost = normalizedBaseUrl(config.baseUrl)?.startsWith("https://api.minimaxi.com");
   const remainsUrl = cnHost ? "https://api.minimaxi.com/v1/token_plan/remains" : MINIMAX_REMAINS_URL;
@@ -837,7 +837,7 @@ async function fetchMinimaxQuota(provider: string, config: OcxProviderConfig): P
  */
 async function fetchMoonshotQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalMoonshotBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const host = normalizedBaseUrl(config.baseUrl)?.startsWith("https://api.moonshot.cn") ? "https://api.moonshot.cn/v1" : MOONSHOT_BASE_URL;
   const response = await fetch(`${host}/users/me/balance`, {
@@ -881,7 +881,7 @@ async function fetchMoonshotQuota(provider: string, config: OcxProviderConfig): 
  */
 async function fetchVeniceQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalVeniceBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const response = await fetch(`${VENICE_BASE_URL}/billing/balance`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
@@ -924,7 +924,7 @@ async function fetchVeniceQuota(provider: string, config: OcxProviderConfig): Pr
  */
 async function fetchSyntheticQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalSyntheticBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const response = await fetch(`${SYNTHETIC_BASE_URL}/quotas`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
@@ -972,7 +972,7 @@ async function fetchSyntheticQuota(provider: string, config: OcxProviderConfig):
  */
 async function fetchDeepInfraQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalDeepInfraBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const response = await fetch(`${DEEPINFRA_BASE_URL}/payment/checklist?compute_owed=true`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
@@ -1014,7 +1014,7 @@ async function fetchDeepInfraQuota(provider: string, config: OcxProviderConfig):
  */
 async function fetchNeuralwattQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
   if (!isCanonicalNeuralwattBaseUrl(config.baseUrl)) return null;
-  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
   if (!apiKey) return null;
   const response = await fetch(`${NEURALWATT_BASE_URL}/quota`, {
     headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
@@ -1810,7 +1810,7 @@ async function resolveKimiQuotaBearer(config: OcxProviderConfig): Promise<string
   // ACTIVE key only: silently walking apiKeyPool when the primary env reference is
   // unresolved would render a quota bar for a DIFFERENT account than the one routing
   // requests — a wrong meter is worse than no meter.
-  const primary = resolveEnvValue(config.apiKey)?.trim();
+  const primary = resolveProviderApiKey(config.apiKey)?.trim();
   return primary || null;
 }
 
@@ -1917,7 +1917,7 @@ async function resolveCommandCodeQuotaBearer(config: OcxProviderConfig): Promise
   }
   // ACTIVE key only: a quota bar for a different account than the one routing
   // requests is a wrong meter, not a helpful one.
-  return resolveEnvValue(config.apiKey)?.trim() || null;
+  return resolveProviderApiKey(config.apiKey)?.trim() || null;
 }
 
 /**

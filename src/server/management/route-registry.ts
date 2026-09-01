@@ -242,6 +242,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/oauth/providers", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/oauth/status", module: "server/management/oauth-account-routes", mutates: false },
   { method: "GET", path: "/api/providers/keys", module: "server/management/oauth-account-routes", mutates: false },
+  { method: "GET", path: "/api/providers/keychain", module: "server/management/oauth-account-routes", mutates: false },
+  { method: "POST", path: "/api/providers/keychain", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PATCH", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PATCH", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true },
   { method: "POST", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },

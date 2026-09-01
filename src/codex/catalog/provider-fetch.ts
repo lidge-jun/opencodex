@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { atomicWriteFile, expandUserPath, getConfigDir, resolveEnvValue, websocketsEnabled } from "../../config";
+import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from "../../config";
+import { resolveProviderApiKey } from "../../providers/key-store";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import {
   clearModelCache,
@@ -1269,7 +1270,7 @@ function observedModelsAuthResolver(
     resolve(name, provider) {
       if (provider.authMode === "forward") return { apiKey: undefined, observed: true };
       if (provider.authMode !== "oauth") {
-        return { apiKey: resolveEnvValue(provider.apiKey), observed: true };
+        return { apiKey: resolveProviderApiKey(provider.apiKey), observed: true };
       }
 
       const observation = observeActiveOAuthAccessToken(name, authStoreBuffer);

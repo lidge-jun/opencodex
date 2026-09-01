@@ -536,6 +536,35 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     clearKeyCooldowns(name); // manual key management resets 429 cooldown state
     return jsonResponse({ ok: true, id: result.id }, 201);
   }
+  // Opt-in OS keychain storage (#1221): move the active key and pool into the OS credential
+  // store (config keeps references), or restore plaintext. Store verifies the keychain before
+  // touching config so an unavailable store refuses instead of half-migrating.
+  if (url.pathname === "/api/providers/keychain" && req.method === "GET") {
+    const name = (url.searchParams.get("name") ?? "").trim();
+    if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
+    const { probeProviderKeychain, providerKeyStoreKind } = await import("../../providers/key-store");
+    const probe = probeProviderKeychain();
+    return jsonResponse({
+      name,
+      store: providerKeyStoreKind(config.providers[name]),
+      keychainAvailable: probe.available,
+      ...(probe.available ? {} : { keychainUnavailableReason: probe.reason }),
+    });
+  }
+  if (url.pathname === "/api/providers/keychain" && req.method === "POST") {
+    const body = await readManagementJsonBodyOr(req, {}) as { name?: unknown; action?: unknown };
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) return jsonResponse({ error: "unknown provider" }, 404);
+    if (body.action !== "store" && body.action !== "restore") return jsonResponse({ error: "action must be store or restore" }, 400);
+    const { storeProviderKeyInKeychain, restoreProviderKeyFromKeychain, providerKeyStoreKind } = await import("../../providers/key-store");
+    const result = body.action === "store"
+      ? storeProviderKeyInKeychain(config, name)
+      : restoreProviderKeyFromKeychain(config, name);
+    if (!result.ok) return jsonResponse({ error: result.error }, result.status);
+    const { clearProviderQuotaCache } = await import("../../providers/quota");
+    clearProviderQuotaCache();
+    return jsonResponse({ ...result, name, store: providerKeyStoreKind(config.providers[name]) });
+  }
   if (url.pathname === "/api/providers/keys/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; id?: string };
     const name = (body.name ?? "").trim();

@@ -329,6 +329,20 @@ describe("headless GUI parity CLI", () => {
     expect(clearRuntime.requests[0]?.body).toEqual({ headers: null });
   });
 
+  test("provider keychain status/store/restore drive /api/providers/keychain", async () => {
+    const status = fakeRuntime();
+    expect(await handleProviderRuntimeCommand("keychain", ["relay", "--json"], status.deps)).toBe(0);
+    expect(status.requests[0]).toMatchObject({ path: "/api/providers/keychain?name=relay" });
+
+    const store = fakeRuntime();
+    expect(await handleProviderRuntimeCommand("keychain", ["relay", "store", "--json"], store.deps)).toBe(0);
+    expect(store.requests[0]).toMatchObject({ path: "/api/providers/keychain", method: "POST", body: { name: "relay", action: "store" } });
+
+    const bad = fakeRuntime();
+    expect(await handleProviderRuntimeCommand("keychain", ["relay", "explode"], bad.deps)).toBe(2);
+    expect(bad.requests).toEqual([]);
+  });
+
   test("provider edit --retain-models sends the csv list and - clears it", async () => {
     const runtime = fakeRuntime();
     const code = await handleProviderRuntimeCommand("edit", [

@@ -24,7 +24,9 @@ function isEnvReference(value: string): boolean {
 }
 
 export function maskApiKey(value: string): string {
-  if (isEnvReference(value)) return value;
+  // Env and keychain references carry no secret material; show them verbatim so an operator
+  // can tell where the key lives.
+  if (isEnvReference(value) || value.startsWith("keychain:")) return value;
   if (value.length <= 8) return "****";
   return `${value.slice(0, 4)}****${value.slice(-4)}`;
 }

@@ -1,7 +1,8 @@
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
-import { ConfigMutationLockError, loadConfig, resolveEnvValue, saveConfig } from "../config";
+import { ConfigMutationLockError, loadConfig, saveConfig } from "../config";
+import { resolveProviderApiKey } from "../providers/key-store";
 import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
 import {
@@ -1043,7 +1044,7 @@ export async function resolveModelsAuthToken(name: string, prov: OcxProviderConf
       return undefined;
     }
   }
-  return resolveEnvValue(prov.apiKey);
+  return resolveProviderApiKey(prov.apiKey);
 }
 
 function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConfig): OcxProviderConfig {

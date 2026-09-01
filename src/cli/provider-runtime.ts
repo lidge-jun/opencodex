@@ -30,7 +30,8 @@ const USAGE = `Usage:
   ocx provider quota [--refresh] [--json]
   ocx provider presets [--json]
   ocx provider account-mode <pool|direct> [--json]
-  ocx provider selected <name> [--set <model,model...>] [--clear] [--json]`;
+  ocx provider selected <name> [--set <model,model...>] [--clear] [--json]
+  ocx provider keychain <name> [status|store|restore] [--json]`;
 
 function cleared(value: string | undefined): string | undefined {
   return value === "-" ? "" : value;
@@ -181,6 +182,28 @@ async function selected(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, [`${name}: ${models.length ? models.join(", ") : "all models"}`]);
 }
 
+async function keychain(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+  const args = [...argv];
+  const name = args.shift()?.trim();
+  const wantsJson = takeFlag(args, "--json");
+  const action = (args.shift() ?? "status").toLowerCase();
+  if (!name) throw new CliUsageError("provider name is required", USAGE);
+  if (!["status", "store", "restore"].includes(action)) throw new CliUsageError(`unknown keychain action ${action}`, USAGE);
+  rejectArgs(args, USAGE);
+  if (action === "status") {
+    const result = await runtimeRequest<Record<string, unknown>>(`/api/providers/keychain?name=${encodeURIComponent(name)}`, {}, deps);
+    printData(result, wantsJson, summaryLines(result));
+    return;
+  }
+  const result = await runtimeRequest<Record<string, unknown>>("/api/providers/keychain", {
+    method: "POST",
+    body: JSON.stringify({ name, action }),
+  }, deps);
+  printData(result, wantsJson, [action === "store"
+    ? `${name}: API key moved to the OS keychain; config.json now holds a keychain: reference.`
+    : `${name}: API key restored to config.json; keychain entries removed.`]);
+}
+
 export async function handleProviderRuntimeCommand(sub: string, argv: string[], deps: RuntimeApiDeps = {}): Promise<number | null> {
   const handlers: Record<string, (args: string[], deps: RuntimeApiDeps) => Promise<void>> = {
     edit,
@@ -190,6 +213,7 @@ export async function handleProviderRuntimeCommand(sub: string, argv: string[], 
     presets,
     "account-mode": accountMode,
     selected,
+    keychain,
   };
   const handler = handlers[sub];
   if (!handler) return null;

@@ -3,8 +3,8 @@ import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type Resp
 import {
   getConfigPath,
   multiAgentGuidanceEnabled,
-  resolveEnvValue,
 } from "../../config";
+import { resolveProviderApiKey } from "../../providers/key-store";
 import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
@@ -401,7 +401,7 @@ async function resolveAlternateCompactContext(args: {
       headers.set("authorization", `Bearer ${override.accessToken}`);
       headers.set("chatgpt-account-id", override.chatgptAccountId);
     }
-    if (provider.apiKey) headers.set("authorization", `Bearer ${resolveEnvValue(provider.apiKey)}`);
+    if (provider.apiKey) headers.set("authorization", `Bearer ${resolveProviderApiKey(provider.apiKey)}`);
     return { authCtx, provider, headers };
   } catch (err) {
     if (err instanceof CodexMainProfileDrainingError) {
@@ -640,7 +640,7 @@ export async function handleResponsesCompact(
       ? CODEX_FORWARD_BASE_URL
       : (compactProvider.baseUrl ?? "").replace(/\/+$/, "");
     if (compactProvider.authMode !== "forward" && compactProvider.apiKey) {
-      headers.set("authorization", `Bearer ${resolveEnvValue(compactProvider.apiKey)}`);
+      headers.set("authorization", `Bearer ${resolveProviderApiKey(compactProvider.apiKey)}`);
     }
     const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
     // The regular /v1/responses path applies sanitizeReasoningInputContent via the adapter's

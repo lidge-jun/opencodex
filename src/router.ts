@@ -9,7 +9,7 @@ import {
 } from "./combos";
 import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider } from "./config/provider-name";
-import { resolveEnvValue } from "./config";
+import { resolveProviderApiKey } from "./providers/key-store";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import {
@@ -285,7 +285,7 @@ export function resetCompactionFallbackWarningsForTests(): void {
 }
 
 function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
-  const resolved = resolveEnvValue(apiKey);
+  const resolved = resolveProviderApiKey(apiKey);
   return typeof resolved === "string" && resolved.trim().length > 0 ? resolved : undefined;
 }
 
