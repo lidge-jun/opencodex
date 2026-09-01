@@ -108,6 +108,29 @@ pinned account and the effective active account are different questions, and the
 both (`pinned` and `pinnedAccountId`). A surface that marks only the active account loses the pin from
 view exactly when it is doing the most work — suppressing every higher tier.
 
+A keyring-backed Codex request can carry its own forwardable ChatGPT bearer while the provider remains
+in Pool mode. When the effective manual pin is `__main__`, main is not paused, and its cached quota still
+has headroom, auth resolution validates the caller bearer's own gated-model roster and uses that
+request-owned credential before stored-Pool selection. The credential never enters Pool persistence,
+affinity, entitlement cache, or health state, and this decision never reads the physical main credential.
+If the caller lacks the requested model, a stored-account model detour may serve the request without
+clearing the healthy shared main pin. A paused or quota-drained main skips this exception and follows the
+ordinary Pool promotion path.
+
+[Decision Log]
+- 목적과 의도: Keep an explicit healthy main selection from being replaced by an exhausted stored
+  account merely because the client supplied main through a request-owned keyring bearer.
+- 기존 구현 및 제약 조건: Request-owned credentials are deliberately excluded from stored-account
+  entitlement discovery, but shared-state preservation interpreted that exclusion as a dead main login.
+- 검토한 주요 대안: Persist the caller credential, read the physical main token for identity, ignore
+  the manual pin, or validate the caller independently before stored-Pool selection.
+- 선택한 방식: Use only the effective pin, pause state, cached quota, and the caller credential's own
+  gated-model check; synthesize shared-state liveness only while main stays request-ineligible.
+- 다른 대안 대신 이 방식을 선택한 이유: It preserves credential isolation and explicit operator
+  intent without admitting an unentitled model or binding an ephemeral bearer into durable Pool state.
+- 장점, 단점 및 영향: Healthy main pins survive keyring requests and model-only detours; cached quota
+  remains the only proactive drain evidence available without crossing the physical credential boundary.
+
 ```text
 gpt-5.6-sol                         # openai; Pool or Direct follows the provider option
 main/gpt-daybreak-blue-latest       # openai; observed account-native Daybreak, Sol capability metadata
