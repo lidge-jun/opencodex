@@ -60,7 +60,33 @@ Recorded here as candidates; none blocks promotion and none carries the bug labe
 ## Exact-head CI (workflow_dispatch on the dev tip)
 
 Run 33552542958 on `5bc6939d8` (branch `codex/regaudit-ci-5bc6939d8` = `origin/dev`),
-Windows shards enabled. Result: RESULT_PLACEHOLDER
+Windows shards enabled. Result: **every non-Windows job green on the exact head** — test 1/4
+through 4/4 (Linux), macos, gates, storage policy, api usage, keyring ubuntu/macos/windows,
+npm-global ubuntu/macos/windows. That settles the two macOS failures seen during the train
+(`lab-live-pinned-timeouts` first-byte race, `codex-prompt-route` probe race) as flakes: the
+same tip passed the whole macOS suite.
+
+The four Windows shards failed (1/4, 2/4, 4/4 failure; 3/4 cancelled by the composed gate).
+The failure signatures are environmental, not assertion failures in campaign code:
+
+- shard 2/4: `ACL hardening failed (EICACLS) — icacls command error` thrown from
+  `hardenSecretDir(..., { required: true })` inside `saveConfig` (`src/config.ts:2674`) and
+  `ETIMEDOUT — transient icacls stall` 16×. Every test that calls `saveConfig` on that runner
+  fails identically. The ACL module (`src/lib/windows-secret-acl.ts`) and `atomic-write.ts`
+  are unchanged since `main` (only `e5d588669`, already on `main`, touches them).
+- shard 1/4 and 4/4: `EPERM: operation not permitted, rm 'tests\.tmp-codex-accounts-test'`
+  (49×) and `rm 'tests\.tmp-codex-auth-api-test'` (287×) — Windows file-handle contention on
+  the test temp dirs during `rmSync`, cascading into every case in those files. Plus one
+  "Bun runtime crash" retry.
+
+History: the last Windows-green dispatch was `33290817128` on `223a0a287` (on `main`); the
+dispatch on the same SHA from `dev` (`33291970929`) failed Windows 3/4, and the intervening
+Windows dispatches on feature branches (`33292931792`, `33290258063`, `33289201339`,
+`33288039685`) all failed. Windows shards have therefore not been a stable signal for any
+branch since 2026-08-30, before this campaign's first landing.
+
+Control: the same workflow dispatched on `origin/main` (`af6113a03`, branch
+`codex/regaudit-ci-main-af6113a03`, run 33555110133). Result: CONTROL_PLACEHOLDER
 
 ## Devlog stack landing
 
@@ -69,4 +95,3 @@ Branch `codex/260902-bug-pr-closeout-stack` (devlog-only) → PR PR_PLACEHOLDER.
 ## Final bug-label count
 
 COUNT_PLACEHOLDER
-
