@@ -3104,4 +3104,34 @@ describe("combo compact failover", () => {
     expect(bodies[0]!.stream).toBe(true);
     expect(JSON.stringify(bodies[0]!.input)).toContain("CONTEXT CHECKPOINT COMPACTION");
   });
+
+  test("native compact rejects an empty ciphertext item", async () => {
+    const { config } = canonicalPoolConfig([{ provider: "openai-apikey", model: "gpt-5.4" }]);
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === "object" && input !== null && "url" in input
+        ? String((input as Request).url)
+        : String(input);
+      if (!url.includes("api.openai.com/v1/responses")) {
+        return Response.json({ error: { message: "probe not under test" } }, { status: 403 });
+      }
+      const completed = {
+        type: "response.completed",
+        response: {
+          id: "resp_compact_empty",
+          status: "completed",
+          output: [{ type: "compaction", encrypted_content: "" }],
+        },
+      };
+      return new Response([
+        `event: ${completed.type}`,
+        `data: ${JSON.stringify(completed)}`,
+        "",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    const response = await postCompactLogged(config);
+    expect(response.status).toBe(502);
+    expect(await response.text()).toContain("empty summary");
+  });
 });

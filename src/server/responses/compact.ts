@@ -1087,6 +1087,7 @@ export async function handleResponsesCompact(
   // and should not decrypt it; preserve that item for /responses/compact callers. Synthetic
   // routed summaries are our `ocx1:` envelope and must be decoded into v1 history items.
   if (typeof compactionItems[0]!.encrypted_content === "string"
+    && compactionItems[0]!.encrypted_content.trim().length > 0
     && !compactionItems[0]!.encrypted_content.startsWith("ocx1:")) {
     const result = new Response(JSON.stringify({ output: compactionItems }), {
       headers: { "Content-Type": "application/json" },
