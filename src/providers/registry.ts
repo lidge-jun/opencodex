@@ -13,6 +13,7 @@ import {
   CURSOR_NO_VISION_MODELS,
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
+  cursorModelDisplayNames,
   cursorModelIds,
   cursorModelInputModalities,
   cursorModelReasoningEfforts,
@@ -270,6 +271,12 @@ export interface ProviderRegistryEntry {
   modelDiscovery?: ProviderModelDiscoverySpec;
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
+  /**
+   * Registry-supplied picker labels. Without these a routed row shows its raw slug,
+   * because `routedDisplayName` (codex/catalog/sync.ts) passes the slug through for every
+   * provider. An operator's `modelDisplayNames` still wins: derive only fills when absent.
+   */
+  modelDisplayNames?: Record<string, string>;
   modelInputModalities?: Record<string, string[]>;
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
@@ -325,6 +332,7 @@ export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
+  | "modelDisplayNames"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
@@ -1111,6 +1119,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     liveModels: true,
     defaultModel: "auto",
     modelContextWindows: cursorModelContextWindows(CURSOR_STATIC_MODELS),
+    modelDisplayNames: cursorModelDisplayNames(),
     modelInputModalities: cursorModelInputModalities(CURSOR_STATIC_MODELS),
     modelReasoningEfforts: cursorModelReasoningEfforts(CURSOR_STATIC_MODELS),
     // Kimi K3 documents `max` as its API default, and its Cursor ladder has no `medium`

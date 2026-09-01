@@ -417,3 +417,10 @@ them when the model declares `supportsServiceTier: true`. Both stay valid: the f
 providers that declare no capability, the second is the shape Cursor now joins. Check during
 B whether either fixture uses `provider: "cursor"`; if so, update it to assert the new
 per-base behavior rather than the blanket absence.
+
+**Both Grok call sites change atomically (audit B13).** `request-builder.ts:204` calls
+`cursorGrokFastSelection(id, reasoning)` with no third argument today. If only
+`resolveCursorSelection` learns the flag, a toggled Grok pick emits a flattened
+`grok-4.6-high-fast` instead of the required `{id:"fast",value:"true"}` parameters —
+violating this phase's own accept row. The helper signature, `normalizeCursorModelId`, and
+that call site are one edit, and the Grok accept-row test belongs to wp3, not wp4.

@@ -4,7 +4,14 @@ import {
   recordLiveCursorMaxModeModels,
   resolveCursorSelection,
 } from "../src/adapters/cursor/catalog";
-import { CURSOR_STATIC_MODELS, cursorModelReasoningEfforts } from "../src/adapters/cursor/discovery";
+import {
+  CURSOR_PRODUCT_MODELS,
+  CURSOR_REAL_ID_EXCEPTIONS,
+  CURSOR_ROUTER_MODEL_IDS,
+  CURSOR_STATIC_MODELS,
+  cursorModelDisplayNames,
+  cursorModelReasoningEfforts,
+} from "../src/adapters/cursor/discovery";
 import { createCursorRequest } from "../src/adapters/cursor/request-builder";
 import type { OcxParsedRequest } from "../src/types";
 
@@ -34,11 +41,33 @@ describe("cursor umbrella picker rows (devlog 260828_cursor_umbrella_catalog)", 
     expect(CURSOR_STATIC_MODELS.some(model => model.id === "claude-opus-5")).toBe(true);
   });
 
-  test("row count shrank from the 69-row legacy seed", () => {
-    // 4 router + 50 base rows. Legacy carried 69 (13 thinking + 5 fast
-    // duplicates + kimi-k3-1m folded away; quarantined opus-5 base returned).
-    // #3211 pre-seeded Claude Fable 5.1 under three spellings (+3).
-    expect(CURSOR_STATIC_MODELS.length).toBe(54);
+  test("the seed is composed of routers + umbrella bases + declared product ids", () => {
+    // 4 routers + 34 umbrella bases + 13 product ids + 3 real-id exceptions.
+    // Derived, not frozen: the hard-coded count drifted twice already (51 -> 54 when
+    // #3211 pre-seeded Claude Fable 5.1 under three spellings), so the expectation now
+    // comes from the same capability table the seed is built from.
+    expect(CURSOR_STATIC_MODELS.length).toBe(
+      CURSOR_ROUTER_MODEL_IDS.length
+      + cursorUmbrellaRows().length
+      + CURSOR_PRODUCT_MODELS.length
+      + CURSOR_REAL_ID_EXCEPTIONS.length,
+    );
+  });
+
+  test("every umbrella row is published, and no product id shadows a capability base", () => {
+    const ids = CURSOR_STATIC_MODELS.map(model => model.id);
+    for (const row of cursorUmbrellaRows()) expect(ids).toContain(row.id);
+    // normalizeCursorModels dedupes silently, so a collision would drop a row unnoticed.
+    expect(ids.length).toBe(new Set(ids).size);
+    const capabilityIds = new Set(cursorUmbrellaRows().map(row => row.id));
+    for (const product of [...CURSOR_PRODUCT_MODELS, ...CURSOR_REAL_ID_EXCEPTIONS]) {
+      expect(capabilityIds.has(product.id)).toBe(false);
+    }
+  });
+
+  test("seed windows are the capability windows, not a second opinion", () => {
+    const seeded = new Map(CURSOR_STATIC_MODELS.map(model => [model.id, model.contextWindow]));
+    for (const row of cursorUmbrellaRows()) expect(seeded.get(row.id)).toBe(row.window);
   });
 
   test("umbrella rows and seed efforts agree for every cataloged base", () => {

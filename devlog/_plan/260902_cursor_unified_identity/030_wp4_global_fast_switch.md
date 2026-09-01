@@ -43,18 +43,36 @@ rediscovery.
 +/**
 + * The listed id for a base when the global fast switch is on. Returns undefined when the
 + * base has no fast dimension, so a caller cannot invent an unroutable id.
++ *
++ * Composed from the base's defaultVariant, NOT a bare \`-fast\` suffix (audit B11): the
++ * umbrella row for a Claude base routes THINKING, so \`claude-opus-5-fast\` would parse back
++ * as the regular-fast sibling — a different wire from what the Codex toggle sends, and for
++ * claude-opus-5 a QUARANTINED one. The listed id must round-trip to the same variant
++ * \`upgradeToFast\` picks.
 + */
 +export function cursorFastIdFor(baseId: string): string | undefined {
-+  const variants = CURSOR_CAPABILITIES[baseId]?.variants;
-+  if (!variants?.fast && !variants?.thinkingFast) return undefined;
-+  return \`\${baseId}-fast\`;
++  const capability = CURSOR_CAPABILITIES[baseId];
++  if (!capability) return undefined;
++  const kind = upgradeToFast(baseId, capability.defaultVariant);
++  if (kind !== "fast" && kind !== "thinkingFast") return undefined;
++  return kind === "thinkingFast" ? \`\${baseId}-thinking-fast\` : \`\${baseId}-fast\`;
 +}
 ```
 
-`parseCursorVariantId("claude-opus-5-fast")` already resolves through the suffix grammar
-(`catalog.ts:360-371`), and for a thinking-default base the `-fast` suffix yields
-`kind:"fast"`; `upgradeToFast` from WP3 is not involved because the id is explicit. So the
-listed id routes with no inbound grammar change.
+Round-trip for the five fast-capable bases, to be re-measured at wp4 P:
+
+| base | defaultVariant | listed id | parses back to |
+|---|---|---|---|
+| `claude-opus-4-7` | thinking | `claude-opus-4-7-thinking-fast` | thinkingFast |
+| `claude-opus-4-8` | thinking | `claude-opus-4-8-thinking-fast` | thinkingFast |
+| `claude-opus-5` | thinking | `claude-opus-5-thinking-fast` | thinkingFast |
+| `grok-4.5` | regular | `grok-4.5-fast` | fast |
+| `grok-4.6` | regular | `grok-4.6-fast` | fast |
+
+`parseCursorVariantId` handles both spellings: the `-fast` strip runs before the thinking
+grammar (`catalog.ts:360-371`), so `claude-opus-5-thinking-fast` lands on `thinkingFast`.
+WP4's equivalence test asserts the listed id and the toggled umbrella id resolve to the SAME
+wire id for every base in that table — the guard that keeps the two surfaces from drifting.
 
 ## 2. Claude Code discovery
 

@@ -32,6 +32,12 @@ export interface CursorCapability {
   readonly variants: Partial<Record<CursorVariantKind, CursorVariantSpec>>;
   /** Which variant the umbrella picker row selects (thinking merges into the base). */
   readonly defaultVariant: CursorVariantKind;
+  /**
+   * Human picker label, in Cursor's own spelling. Codex would otherwise show the raw
+   * routed slug (`cursor/kimi-k3`), because `routedDisplayName` passes it through
+   * unchanged for every provider (codex/catalog/sync.ts).
+   */
+  readonly displayName: string;
   /** Context-window metadata (display/routing only — never implies maxMode). */
   readonly window: number;
   /** Max Mode proven on the wire for this base (static evidence; live maxModeModels unions in). */
@@ -46,6 +52,8 @@ const CONTEXT_256K = 256 * K;
 const CONTEXT_272K = 272 * K;
 const CONTEXT_500K = 500 * K;
 const CONTEXT_1M = 1_000 * K;
+/** Gemini publishes the exact power-of-two window, not a rounded 1M. */
+const CONTEXT_GEMINI = 1_048_576;
 
 const FULL = ["low", "medium", "high", "xhigh", "max"] as const;
 const T = "thinking-then-effort" as const;
@@ -59,6 +67,7 @@ const E = "effort-then-thinking" as const;
  */
 export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
   "claude-4.5-opus": {
+    displayName: "Claude Opus 4.5",
     window: CONTEXT_200K,
     defaultVariant: "thinking",
     variants: {
@@ -67,6 +76,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-4.6-opus": {
+    displayName: "Claude Opus 4.6",
     window: CONTEXT_1M,
     defaultVariant: "thinking",
     variants: {
@@ -75,6 +85,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-4.6-sonnet": {
+    displayName: "Claude Sonnet 4.6",
     window: CONTEXT_1M,
     defaultVariant: "thinking",
     variants: {
@@ -83,6 +94,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-4.5-sonnet": {
+    displayName: "Claude Sonnet 4.5",
     window: CONTEXT_200K,
     defaultVariant: "thinking",
     variants: {
@@ -91,6 +103,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-4-sonnet": {
+    displayName: "Claude Sonnet 4",
     window: CONTEXT_200K,
     defaultVariant: "thinking",
     variants: {
@@ -99,6 +112,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-fable-5": {
+    displayName: "Claude Fable 5",
     window: CONTEXT_1M,
     defaultVariant: "thinking",
     variants: {
@@ -113,6 +127,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
   // the live GetUsableModels filter drops whichever the roster does not expose. Collapse to
   // the one real spelling once it is observed.
   "claude-fable-5-1": {
+    displayName: "Claude Fable 5.1",
     window: CONTEXT_1M,
     defaultVariant: "thinking",
     variants: {
@@ -121,6 +136,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-fable-5.1": {
+    displayName: "Claude Fable 5.1",
     window: CONTEXT_1M,
     defaultVariant: "thinking",
     variants: {
@@ -129,6 +145,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-5.1-fable": {
+    displayName: "Claude Fable 5.1",
     window: CONTEXT_1M,
     defaultVariant: "thinking",
     variants: {
@@ -137,6 +154,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-sonnet-5": {
+    displayName: "Claude Sonnet 5",
     window: CONTEXT_1M,
     defaultVariant: "thinking",
     variants: {
@@ -145,6 +163,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-opus-4-7": {
+    displayName: "Claude Opus 4.7",
     window: CONTEXT_1M,
     defaultVariant: "thinking",
     variants: {
@@ -155,6 +174,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-opus-4-8": {
+    displayName: "Claude Opus 4.8",
     window: CONTEXT_1M,
     defaultVariant: "thinking",
     variants: {
@@ -165,6 +185,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "claude-opus-5": {
+    displayName: "Claude Opus 5",
     window: CONTEXT_1M,
     defaultVariant: "thinking",
     variants: {
@@ -177,32 +198,38 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "glm-5.2": {
+    displayName: "GLM 5.2",
     window: CONTEXT_1M,
     defaultVariant: "regular",
     variants: { regular: { levels: ["high", "max"] } },
   },
   "glm-5.3": {
+    displayName: "GLM 5.3",
     window: CONTEXT_1M,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "high", "max"] } },
   },
   "gemini-3.6-flash": {
-    window: CONTEXT_1M,
+    displayName: "Gemini 3.6 Flash",
+    window: CONTEXT_GEMINI,
     defaultVariant: "regular",
     variants: { regular: { levels: ["minimal", "low", "medium", "high"] } },
   },
   "gemini-3.7-flash": {
-    window: CONTEXT_1M,
+    displayName: "Gemini 3.7 Flash",
+    window: CONTEXT_GEMINI,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high"] } },
   },
   "kimi-k3": {
+    displayName: "Kimi K3",
     window: CONTEXT_1M,
     defaultVariant: "regular",
     maxModeVerified: true,
     variants: { regular: { levels: ["low", "high", "max"] } },
   },
   "grok-4.5": {
+    displayName: "Cursor Grok 4.5",
     window: CONTEXT_500K,
     defaultVariant: "regular",
     wirePrefix: "cursor-",
@@ -212,6 +239,7 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "grok-4.6": {
+    displayName: "Cursor Grok 4.6",
     window: CONTEXT_500K,
     defaultVariant: "regular",
     wirePrefix: "cursor-",
@@ -221,71 +249,88 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     },
   },
   "gpt-5.1": {
+    displayName: "GPT-5.1",
     window: CONTEXT_272K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "high"] } },
   },
   "gpt-5.1-codex-max": {
+    displayName: "GPT-5.1 Codex Max",
     window: CONTEXT_272K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high", "xhigh"] } },
   },
   "gpt-5.1-codex-mini": {
+    displayName: "GPT-5.1 Codex Mini",
     window: CONTEXT_272K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "high"] } },
   },
   "gpt-5.2": {
+    displayName: "GPT-5.2",
     window: CONTEXT_272K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "high", "xhigh"] } },
   },
   "gpt-5.2-codex": {
+    displayName: "GPT-5.2 Codex",
     window: CONTEXT_272K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "high", "xhigh"] } },
   },
   "gpt-5.3-codex": {
+    displayName: "Codex 5.3",
     window: CONTEXT_272K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "high", "xhigh"] } },
   },
   "gpt-5.4": {
+    displayName: "GPT-5.4",
     window: CONTEXT_272K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high", "xhigh"] } },
   },
   "gpt-5.4-mini": {
+    displayName: "GPT-5.4 Mini",
     window: CONTEXT_272K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high", "xhigh"] } },
   },
   "gpt-5.4-nano": {
+    displayName: "GPT-5.4 Nano",
     window: CONTEXT_272K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high", "xhigh"] } },
   },
   "gpt-5.5": {
+    displayName: "GPT-5.5",
     window: CONTEXT_272K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high"] } },
   },
   "gpt-5.5-extra": {
-    window: CONTEXT_272K,
+    displayName: "GPT-5.5 Extra",
+    // Live GetUsableModels reports 200K for this row, not the gpt-5 family's 272K
+    // (account-verified 260709). The seed carried the measured number; the capability
+    // table was approximating from the family.
+    window: CONTEXT_200K,
     defaultVariant: "regular",
     variants: { regular: { levels: ["high"] } },
   },
   "gpt-5.6-sol": {
+    displayName: "GPT-5.6 Sol",
     window: CONTEXT_1M,
     defaultVariant: "regular",
     variants: { regular: { levels: FULL } },
   },
   "gpt-5.6-terra": {
+    displayName: "GPT-5.6 Terra",
     window: CONTEXT_1M,
     defaultVariant: "regular",
     variants: { regular: { levels: FULL } },
   },
   "gpt-5.6-luna": {
+    displayName: "GPT-5.6 Luna",
     window: CONTEXT_1M,
     defaultVariant: "regular",
     variants: { regular: { levels: FULL } },
@@ -523,6 +568,7 @@ export function liveCursorMaxModeBasesForTests(): ReadonlySet<string> {
 
 export interface CursorUmbrellaRow {
   readonly id: string;
+  readonly displayName: string;
   readonly efforts: readonly string[];
   readonly window: number;
   /** Max Mode evidence present: the ultra rung maps to maxMode on the wire. */
@@ -562,6 +608,7 @@ export function cursorUmbrellaRows(): CursorUmbrellaRow[] {
     if (!spec || spec.quarantined) continue;
     rows.push({
       id: baseId,
+      displayName: capability.displayName,
       efforts: spec.levels,
       window: capability.window,
       maxModeVerified: capability.maxModeVerified === true,

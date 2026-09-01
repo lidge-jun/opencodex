@@ -172,3 +172,57 @@ Reviewer's normalized line: `VERDICT: GO-WITH-FIXES (blockers=2)`. Both folded a
 
 The broad round-1 lane (`Carver`) is still running; anything it returns that is not already
 folded appends as round 3.
+
+## Round 3 — broad reviewer lane (`Carver`), 10 blockers
+
+Returned after the round-2 lane. Six findings duplicate what round 1/2 already folded
+(B1 kind allowlist, B2 supportsServiceTier short-circuit, B4/B8 cost+log consumers,
+B5 base-URL guard, B9 fastwire-policy assertion, verifier honesty). Independent
+confirmation of the same diagnosis from a lane that read the tree separately.
+
+Four are NEW and two of those are real design defects:
+
+### B11 (High, NEW) — the listed `-fast` id is the WRONG dimension for thinking-default bases
+
+`cursorFastIdFor` returns `<base>-fast`, and `parseCursorVariantId("claude-opus-5-fast")`
+yields `kind: "fast"` — the REGULAR-fast sibling, not `thinkingFast`. Measured:
+
+```
+umbrella claude-opus-5      + high -> claude-opus-5-thinking-high
+listed   claude-opus-5-fast + max  -> claude-opus-5-high-fast      (regular-fast, clamped)
+thinkingFast               + max  -> claude-opus-5-thinking-max-fast
+```
+
+So WP3's Codex toggle (`thinking -> thinkingFast`) and WP4's listed id would send DIFFERENT
+wires for the same base and the same user intent. Worse, `claude-opus-5`'s regular variant is
+quarantined, so the listed id routes into the dead family.
+
+**Fold:** `cursorFastIdFor` composes from the base's `defaultVariant` — `thinking` yields
+`<base>-thinking-fast`, `regular` yields `<base>-fast` — so the listed id parses back to the
+same variant `upgradeToFast` picks. WP4 adds an equivalence test asserting the listed id and
+the toggled umbrella id resolve to the same wire for every fast-capable base.
+
+### B12 (High, NEW) — `options.fastMode` in 030 had no possible caller
+
+`CreateCursorRequestOptions` carries only `forceFreshConversation`
+(`request-builder.ts:369`) and `AdapterFactoryContext` has no `fastMode`
+(`adapters/registry.ts:18`). The fallback I had already dropped for being unreachable was
+also unimplementable. Confirms the round-1 B6 disposition. The reviewer additionally proved
+chat-completions is not native-chat for Cursor (`isNativeChatRouteEligible` requires
+`adapter === "openai-chat"`, `chat-native.ts:62`) and replays through `handleResponses`
+(`chat-completions.ts:130,254`), so BOTH non-Codex inbound paths populate `tierDecision`.
+
+### B13 (Medium, NEW) — Grok's two call sites must change atomically
+
+`request-builder.ts:204` calls `cursorGrokFastSelection(id, reasoning)` with no third
+argument. If only `resolveCursorSelection` learns the fast flag, a toggled Grok pick would
+emit a flattened `grok-4.6-high-fast` instead of the required
+`{id:"fast",value:"true"}` parameters — violating WP3's own accept row. Both helpers and
+that call site are one atomic edit, and the Grok accept-row test belongs to WP3.
+
+### B14 (Low, NEW) — no `040+` doc for residuals
+
+030 names a residual (effort ladders advertised on a listed fast id) with no home. Park it
+in `040_residuals.md` when WP4 lands rather than leaving it only in prose.
+
+Reviewer's normalized line: `VERDICT: GO-WITH-FIXES (blockers=10)`.
