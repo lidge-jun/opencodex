@@ -1,14 +1,11 @@
 /**
  * Claude auth-mode resolution.
  *
- * The resolver answers exactly ONE question: does the opencodex-owned dummy token
- * (`ANTHROPIC_AUTH_TOKEN=opencodex-proxy`) get injected? That is narrower than "how
- * will Claude authenticate" — native passthrough additionally needs an `sk-ant-`
- * credential on the incoming request — so the field is `markerMode`, not
- * `effectiveAuthMode` (devlog/_plan/260726_claude_auth_auto/002 R2-1).
- *
- * The admission-key axis is separate and untouched: when the proxy requires an
- * admission key, `buildClaudeEnv` injects it regardless of mode.
+ * The resolver answers which authentication mode the Claude launcher should honor.
+ * Native passthrough additionally needs an `sk-ant-` credential on the incoming request,
+ * so the field is `markerMode`, not `effectiveAuthMode` (devlog/_plan/260726_claude_auth_auto/002
+ * R2-1). The launchers use subscription mode to keep proxy-owned marker and admission
+ * credentials out of Claude's environment; proxy mode may inject them for gateway auth.
  */
 import type { OcxConfig } from "../types";
 import type { AuthDetectResult, AuthSourceId } from "./auth-detect";
@@ -18,7 +15,7 @@ export type MarkerMode = "proxy" | "subscription";
 export type AuthModeOrigin = "manual" | "auto-present" | "auto-absent" | "auto-unknown";
 
 export interface ResolvedAuthMode {
-  /** Does the owned dummy marker get injected. NOT a claim about native auth. */
+  /** Proxy-owned auth mode for launchers. NOT a claim about native auth. */
   markerMode: MarkerMode;
   origin: AuthModeOrigin;
   /** The detector source that proved presence (origin auto-present only). */

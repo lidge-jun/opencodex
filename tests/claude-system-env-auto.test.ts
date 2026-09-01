@@ -123,13 +123,24 @@ test("an explicit proxy still writes the marker", async () => {
   expect(shellEnvContents).toContain(`ANTHROPIC_AUTH_TOKEN='${PROXY_MARKER}'`);
 });
 
-// The admission key keeps its precedence: it is a separate axis from the marker.
-test("a configured admission key wins over the marker decision", async () => {
+// Proxy mode owns the Claude auth slot and may use the configured admission key.
+test("proxy mode writes the configured admission key instead of the marker", async () => {
   await injectSystemEnv(4567, {
     ...baseConfig,
+    claudeCode: { systemEnv: true, authMode: "proxy" },
     apiKeys: [{ key: "admission-key" }],
   } as unknown as OcxConfig);
   expect(shellEnvContents).toContain("ANTHROPIC_AUTH_TOKEN='admission-key'");
+  expect(shellEnvContents).not.toContain(PROXY_MARKER);
+});
+
+test("subscription mode omits the configured admission key", async () => {
+  await injectSystemEnv(4567, {
+    ...baseConfig,
+    claudeCode: { systemEnv: true, authMode: "subscription" },
+    apiKeys: [{ key: "admission-key" }],
+  } as unknown as OcxConfig);
+  expect(shellEnvContents).not.toContain("ANTHROPIC_AUTH_TOKEN='admission-key'");
   expect(shellEnvContents).not.toContain(PROXY_MARKER);
 });
 

@@ -19,7 +19,7 @@ function cfg(extra?: Partial<OcxConfig>): OcxConfig {
  */
 const AUTH_PRESENT = {
   authDetect: {
-    readClaudeJson: () => ({ oauthAccount: { emailAddress: "dev@example.com" } }),
+    readClaudeJson: () => ({ oauthAccount: { emailAddress: "dev-fixture" } }),
     credentialsFileExists: () => true,
     keychainProbe: () => "present" as const,
   },
@@ -107,8 +107,32 @@ describe("ocx claude env assembly", () => {
   test("configured API key becomes the auth token (admission required)", () => {
     const env = buildClaudeEnv(cfg({
       apiKeys: [{ id: "1", name: "main", key: "sk-ocx-123", createdAt: "2026-01-01" }],
+      claudeCode: { authMode: "proxy" },
     }), 10100, {});
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-ocx-123");
+  });
+
+  test("subscription mode keeps configured proxy keys out of Claude auth", () => {
+    const env = buildClaudeEnv(cfg({
+      apiKeys: [{ id: "1", name: "main", key: "sk-ocx-123", createdAt: "2026-01-01" }],
+      claudeCode: { authMode: "subscription" },
+    }), 10100, {}, {}, AUTH_PRESENT);
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+  });
+
+  test("subscription mode removes an inherited proxy admission token", () => {
+    const env = buildClaudeEnv(cfg({
+      apiKeys: [{ id: "1", name: "main", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01" }],
+      claudeCode: { authMode: "subscription" },
+    }), 10100, {
+      ANTHROPIC_AUTH_TOKEN: "ocx_data_this_proxy_key",
+    }, {}, {
+      ...AUTH_PRESENT,
+      preBunAnthropicSlots: ["ANTHROPIC_AUTH_TOKEN"],
+    });
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
   });
 
   // Host-managed routing guard (devlog 260720_claude_authmode_persist/020):
@@ -125,6 +149,7 @@ describe("ocx claude env assembly", () => {
 
     const admission = buildClaudeEnv(cfg({
       apiKeys: [{ id: "1", name: "main", key: "sk-ocx-123", createdAt: "2026-01-01" }],
+      claudeCode: { authMode: "proxy" },
     }), 10100, {});
     expect(admission.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
   });
@@ -316,7 +341,10 @@ describe("ocx claude env assembly", () => {
 
   test("a stale admission token is replaced by THIS proxy's key, never carried over", () => {
     const env = buildClaudeEnv(
-      cfg({ apiKeys: [{ id: "k1", name: "local", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01T00:00:00Z" }] }),
+      cfg({
+        claudeCode: { authMode: "proxy" },
+        apiKeys: [{ id: "k1", name: "local", key: "ocx_data_this_proxy_key", createdAt: "2026-01-01T00:00:00Z" }],
+      }),
       10100,
       {
         ANTHROPIC_BASE_URL: "http://127.0.0.1:19999",

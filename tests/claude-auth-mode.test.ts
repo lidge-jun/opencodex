@@ -22,7 +22,7 @@ function cfg(claudeCode?: OcxConfig["claudeCode"], apiKeys?: { key: string }[]):
 
 function detection(presence: AuthPresence, staleProxyMarker = false) {
   const deps: AuthDetectDeps = {
-    readClaudeJson: () => (presence === "present" ? { oauthAccount: { emailAddress: "user@example.com" } } : undefined),
+    readClaudeJson: () => (presence === "present" ? { oauthAccount: { emailAddress: "user-fixture" } } : undefined),
     credentialsFileExists: () => false,
     keychainProbe: () => (presence === "unknown" ? "unknown" : "absent"),
     env: () => (staleProxyMarker ? { ANTHROPIC_AUTH_TOKEN: PROXY_MARKER } : {}),
@@ -34,7 +34,7 @@ function detection(presence: AuthPresence, staleProxyMarker = false) {
 // still reads the real launch base (which is the point of the binding).
 function fileAuth(presence: AuthPresence): Omit<Partial<AuthDetectDeps>, "env"> {
   return {
-    readClaudeJson: () => (presence === "present" ? { oauthAccount: { emailAddress: "user@example.com" } } : undefined),
+    readClaudeJson: () => (presence === "present" ? { oauthAccount: { emailAddress: "user-fixture" } } : undefined),
     credentialsFileExists: () => false,
     keychainProbe: () => (presence === "unknown" ? "unknown" : "absent"),
   };
@@ -116,10 +116,11 @@ test("a stale marker is re-established when the mode still resolves proxy", () =
   expect(env.ANTHROPIC_AUTH_TOKEN).toBe(PROXY_MARKER);
 });
 
-// The ordering blocker: a stale marker must not suppress the configured admission key.
-test("a stale marker never suppresses the admission key", () => {
+// Proxy mode owns the Claude auth slot, so a stale marker must not suppress
+// the configured admission key.
+test("proxy mode replaces a stale marker with the admission key", () => {
   const env = buildClaudeEnv(
-    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    cfg({ authMode: "proxy" }, [{ key: "admission-key" }]), 10100,
     { ANTHROPIC_AUTH_TOKEN: PROXY_MARKER },
     {},
     { authDetect: fileAuth("present") },
@@ -132,6 +133,30 @@ test("a stale marker never suppresses the admission key", () => {
 test("auto-subscription emits no host-managed assertion (#253 class)", () => {
   const env = buildClaudeEnv(cfg(), 10100, {}, {}, { authDetect: fileAuth("present") });
   expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+});
+
+test("auto-subscription keeps configured admission keys out of Claude auth", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "admission-key" }]),
+    10100,
+    {},
+    {},
+    { authDetect: fileAuth("present") },
+  );
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+});
+
+test("auto-proxy uses a configured admission key when Claude auth is absent", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "admission-key" }]),
+    10100,
+    {},
+    {},
+    { authDetect: fileAuth("absent") },
+  );
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBe("admission-key");
+  expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
 });
 
 test("auto-absent emits both the marker and the host assertion", () => {
@@ -219,10 +244,10 @@ test("explicit subscription mode also drops a dotenv-only credential", () => {
   expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
 });
 
-// The admission key is opencodex's own gate, not user auth: it is injected after the strip.
+// The admission key is opencodex's own gate, not user auth: proxy mode injects it after the strip.
 test("the configured admission key survives the dotenv strip", () => {
   const env = buildClaudeEnv(
-    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    cfg({ authMode: "proxy" }, [{ key: "admission-key" }]), 10100,
     { ANTHROPIC_API_KEY: "sk-ant-dotenv" },
     {},
     { authDetect: fileAuth("present"), preBunAnthropicSlots: [] },
@@ -288,7 +313,7 @@ test("an HTTPS loopback URL is not treated as the local HTTP proxy", () => {
 
 test("a same-port IPv6 loopback URL receives the configured admission key", () => {
   const env = buildClaudeEnv(
-    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    cfg({ authMode: "proxy" }, [{ key: "admission-key" }]), 10100,
     { ANTHROPIC_BASE_URL: "http://[::1]:10100" },
     {},
     { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
@@ -299,7 +324,7 @@ test("a same-port IPv6 loopback URL receives the configured admission key", () =
 
 test("a stale IPv6 loopback URL is moved to the running proxy port", () => {
   const env = buildClaudeEnv(
-    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    cfg({ authMode: "proxy" }, [{ key: "admission-key" }]), 10100,
     { ANTHROPIC_BASE_URL: "http://[::1]:9999" },
     {},
     { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
@@ -310,7 +335,7 @@ test("a stale IPv6 loopback URL is moved to the running proxy port", () => {
 
 test("a default-port loopback URL is moved to the running proxy port", () => {
   const env = buildClaudeEnv(
-    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    cfg({ authMode: "proxy" }, [{ key: "admission-key" }]), 10100,
     { ANTHROPIC_BASE_URL: "http://localhost" },
     {},
     { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
@@ -323,8 +348,8 @@ test("a stale loopback warning omits URL credentials, paths, and queries", () =>
   const error = spyOn(console, "error").mockImplementation(() => {});
   try {
     const env = buildClaudeEnv(
-      cfg(undefined, [{ key: "admission-key" }]), 10100,
-      { ANTHROPIC_BASE_URL: "http://user:oauth-token@localhost:9999/private?token=query-secret" },
+      cfg({ authMode: "proxy" }, [{ key: "admission-key" }]), 10100,
+      { ANTHROPIC_BASE_URL: "http://localhost:9999/private?token=query-secret" },
       {},
       { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
     );
@@ -388,7 +413,7 @@ test("a proxy admission secret is never preserved in the API-key slot", () => {
   expect(external.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
 
   const local = buildClaudeEnv(
-    cfg(undefined, [{ key: "ocx_data_current" }]), 10100,
+    cfg({ authMode: "proxy" }, [{ key: "ocx_data_current" }]), 10100,
     { ANTHROPIC_API_KEY: "ocx_data_rotated" },
     {},
     { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_API_KEY"] },
@@ -533,7 +558,7 @@ test("a leftover settings.json env block cannot hijack an auto-resolved proxy la
 });
 
 test("an admission-key launch is defended the same way", () => {
-  const launch = buildClaudeEnv(cfg(undefined, [{ key: "admission-key" }]), 10100, {}, {}, { authDetect: fileAuth("present") });
+  const launch = buildClaudeEnv(cfg({ authMode: "proxy" }, [{ key: "admission-key" }]), 10100, {}, {}, { authDetect: fileAuth("present") });
   const merged = simulateClaudeCodeSettingsMerge(launch, CC_SWITCH_LEFTOVER);
   expect(merged.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
   expect(merged.ANTHROPIC_AUTH_TOKEN).toBe("admission-key");

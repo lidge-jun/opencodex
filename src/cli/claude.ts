@@ -179,9 +179,9 @@ export function buildClaudeEnv(
   }
   // Subscription-preserving default (teamclaude --no-mitm / Vercel gateway pattern):
   // setting ANTHROPIC_AUTH_TOKEN/API_KEY disables claude.ai connectors and overrides
-  // the user's Claude login. Only inject a token when the proxy actually requires an
-  // admission key; otherwise Claude Code keeps its own OAuth and sends it to us —
-  // native claude models then pass through verbatim (see server/claude-messages.ts).
+  // the user's Claude login. Resolve the mode before adding any proxy-owned credential:
+  // subscription launches must keep their OAuth, while proxy launches may use the
+  // admission key or dummy marker (see server/claude-messages.ts).
   const ownTokens = explicitTarget ? [explicitTarget.admissionToken] : ownAdmissionTokens(config);
   const targetsLocalProxy = explicitTarget
     ? targetsClaudeRoutingTarget(env.ANTHROPIC_BASE_URL, explicitTarget)
@@ -204,24 +204,25 @@ export function buildClaudeEnv(
   if (inheritedTokenIsOurs && (!targetsLocalProxy || hasUserApiKey)) {
     delete env.ANTHROPIC_AUTH_TOKEN;
   }
-  if (targetsLocalProxy && !hasUserApiKey && ownTokens.length > 0) {
-    setDefault("ANTHROPIC_AUTH_TOKEN", ownTokens[0]);
-  }
-  // Detection reads the SANITIZED launch env — the exact object spawned below — so the
-  // resolver and the spawned process cannot disagree. It deliberately does NOT read the
-  // raw base: the provenance strip above already removed dotenv-only credentials, and
-  // letting a value the child never receives decide the marker left an auto-mode user
-  // with neither the credential NOR the proxy marker (#701 audit round 2). Injected deps
-  // are spread FIRST and `env` bound LAST, and the injection type excludes `env`, so a
-  // test fake cannot break that. `ownTokens` is bound last for the same reason: it is
-  // config-derived, and a fake that replaced it could make our own admission key look
-  // like user auth.
+  // Detection reads the sanitized launch env before proxy-owned credentials are added.
+  // The provenance strip above removed dotenv-only credentials, and ownTokens keeps a
+  // configured admission key from being mistaken for user auth (#701 audit round 2).
   const resolved = resolveClaudeAuthMode(config, detectClaudeAuth({
     ...defaultAuthDetectDeps(env as NodeJS.ProcessEnv),
     ...(deps.authDetect ?? {}),
     env: () => env as NodeJS.ProcessEnv,
     ownTokens,
   }));
+  if (resolved.markerMode === "subscription") {
+    // A prior system-env snapshot may have left our admission key in the inherited
+    // environment. It belongs to the proxy data plane, not Claude subscription OAuth.
+    const token = env.ANTHROPIC_AUTH_TOKEN?.trim();
+    if (token && (token === PROXY_MARKER || isProxyAdmissionSecret(token, config))) {
+      delete env.ANTHROPIC_AUTH_TOKEN;
+    }
+  } else if (targetsLocalProxy && !hasUserApiKey && ownTokens.length > 0) {
+    setDefault("ANTHROPIC_AUTH_TOKEN", ownTokens[0]);
+  }
   if (!env.ANTHROPIC_AUTH_TOKEN && !hasUserApiKey && targetsLocalProxy && resolved.markerMode === "proxy") {
     env.ANTHROPIC_AUTH_TOKEN = PROXY_MARKER;
   }

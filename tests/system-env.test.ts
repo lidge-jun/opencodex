@@ -143,6 +143,7 @@ describe("system environment injection", () => {
   test("injectSystemEnv includes the first configured API key", async () => {
     const config: OcxConfig = {
       ...baseConfig,
+      claudeCode: { systemEnv: true, authMode: "proxy" },
       apiKeys: [{ id: "key-1", name: "Primary", key: "secret-token", createdAt: "2026-07-11T00:00:00.000Z" }],
     };
 
@@ -153,6 +154,7 @@ describe("system environment injection", () => {
   test("injectSystemEnv passes API keys with special characters as one argument", async () => {
     const config: OcxConfig = {
       ...baseConfig,
+      claudeCode: { systemEnv: true, authMode: "proxy" },
       apiKeys: [{ id: "key-1", name: "Primary", key: "secret token'quoted", createdAt: "2026-07-11T00:00:00.000Z" }],
     };
 
@@ -163,8 +165,21 @@ describe("system environment injection", () => {
     );
   });
 
+  test("subscription mode leaves configured proxy keys out of launch environments", async () => {
+    const config: OcxConfig = {
+      ...baseConfig,
+      claudeCode: { systemEnv: true, authMode: "subscription" },
+      apiKeys: [{ id: "key-1", name: "Primary", key: "secret-token", createdAt: "2026-07-11T00:00:00.000Z" }],
+    };
+
+    expect(await injectSystemEnv(4567, config)).toEqual({ injected: true });
+    expect(launchctlCommands()).not.toContain("launchctl setenv ANTHROPIC_AUTH_TOKEN secret-token");
+    const shellWrite = writeSpy.mock.calls.find(call => String(call[0]).includes("claude-env.sh"));
+    expect(String(shellWrite?.[1] ?? "")).not.toContain("ANTHROPIC_AUTH_TOKEN");
+  });
+
   // Subscription switch-back cleanup (devlog 260720_claude_authmode_persist, audit R1 #1):
-  // re-injecting without proxy mode must unset ONLY the opencodex-owned dummy token.
+  // re-injecting without proxy mode must unset an opencodex-owned auth token.
   function trackingWithToken(port = 4567, keys: string[] = ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "ANTHROPIC_AUTH_TOKEN"]): string {
     return JSON.stringify({ pid: 123, port, injectedAt: "2026-07-11T00:00:00.000Z", injectedKeys: keys });
   }
@@ -185,6 +200,21 @@ describe("system environment injection", () => {
       ...baseConfig,
       claudeCode: { systemEnv: true, authMode: "subscription" },
     } as unknown as OcxConfig;
+    expect(await injectSystemEnv(4567, subscription)).toEqual({ injected: true });
+    expect(execFileSpy).toHaveBeenCalledWith("/bin/launchctl", ["unsetenv", "ANTHROPIC_AUTH_TOKEN"]);
+    expect(JSON.parse(trackingFile!).injectedKeys).not.toContain("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  test("re-inject removes a tracked configured admission token in subscription mode", async () => {
+    trackingFile = trackingWithToken();
+    launchctlBaseUrl = "http://127.0.0.1:4567";
+    mockAuthTokenGetenv("secret-token");
+    const subscription = {
+      ...baseConfig,
+      claudeCode: { systemEnv: true, authMode: "subscription" },
+      apiKeys: [{ id: "key-1", name: "Primary", key: "secret-token", createdAt: "2026-07-11T00:00:00.000Z" }],
+    } as unknown as OcxConfig;
+
     expect(await injectSystemEnv(4567, subscription)).toEqual({ injected: true });
     expect(execFileSpy).toHaveBeenCalledWith("/bin/launchctl", ["unsetenv", "ANTHROPIC_AUTH_TOKEN"]);
     expect(JSON.parse(trackingFile!).injectedKeys).not.toContain("ANTHROPIC_AUTH_TOKEN");
