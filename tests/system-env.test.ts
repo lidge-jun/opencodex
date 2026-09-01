@@ -178,6 +178,68 @@ describe("system environment injection", () => {
     expect(String(shellWrite?.[1] ?? "")).not.toContain("ANTHROPIC_AUTH_TOKEN");
   });
 
+  test("dotenv-only Anthropic slots do not suppress the configured proxy key", async () => {
+    const previousApiKey = process.env.ANTHROPIC_API_KEY;
+    const previousAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    process.env.ANTHROPIC_API_KEY = "sk-ant-dotenv-test";
+    process.env.ANTHROPIC_AUTH_TOKEN = "dotenv-token-test";
+    const config: OcxConfig = {
+      ...baseConfig,
+      apiKeys: [{ id: "key-1", name: "Primary", key: "secret-token", createdAt: "2026-07-11T00:00:00.000Z" }],
+    };
+    const authAbsent = {
+      readClaudeJson: () => undefined,
+      credentialsFileExists: () => false,
+      keychainProbe: () => "absent" as const,
+    };
+
+    try {
+      expect(await injectSystemEnv(4567, config, {
+        // Simulates Bun values that came only from a project dotenv file.
+        preBunAnthropicSlots: [],
+        authDetect: authAbsent,
+      })).toEqual({ injected: true });
+      expect(launchctlCommands()).toContain("launchctl setenv ANTHROPIC_AUTH_TOKEN secret-token");
+      const shellWrite = writeSpy.mock.calls.find(call => String(call[0]).includes("claude-env.sh"));
+      expect(String(shellWrite?.[1] ?? "")).toContain("export ANTHROPIC_AUTH_TOKEN='secret-token'");
+    } finally {
+      if (previousApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousApiKey;
+      if (previousAuthToken === undefined) delete process.env.ANTHROPIC_AUTH_TOKEN;
+      else process.env.ANTHROPIC_AUTH_TOKEN = previousAuthToken;
+    }
+  });
+
+  test("proof-bound parent Anthropic key selects subscription and remains untouched", async () => {
+    const previousApiKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "sk-ant-parent-test";
+    const config: OcxConfig = {
+      ...baseConfig,
+      apiKeys: [{ id: "key-1", name: "Primary", key: "secret-token", createdAt: "2026-07-11T00:00:00.000Z" }],
+    };
+    const authAbsent = {
+      readClaudeJson: () => undefined,
+      credentialsFileExists: () => false,
+      keychainProbe: () => "absent" as const,
+    };
+
+    try {
+      expect(await injectSystemEnv(4567, config, {
+        // Simulates a genuine parent export captured by bin/ocx.mjs before Bun starts.
+        preBunAnthropicSlots: ["ANTHROPIC_API_KEY"],
+        authDetect: authAbsent,
+      })).toEqual({ injected: true });
+      expect(launchctlCommands()).not.toContain("launchctl setenv ANTHROPIC_AUTH_TOKEN secret-token");
+      expect(launchctlCommands()).not.toContain("launchctl unsetenv ANTHROPIC_AUTH_TOKEN");
+      const shellWrite = writeSpy.mock.calls.find(call => String(call[0]).includes("claude-env.sh"));
+      expect(String(shellWrite?.[1] ?? "")).not.toContain("ANTHROPIC_AUTH_TOKEN");
+      expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-parent-test");
+    } finally {
+      if (previousApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousApiKey;
+    }
+  });
+
   // Subscription switch-back cleanup (devlog 260720_claude_authmode_persist, audit R1 #1):
   // re-injecting without proxy mode must unset an opencodex-owned auth token.
   function trackingWithToken(port = 4567, keys: string[] = ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "ANTHROPIC_AUTH_TOKEN"]): string {
