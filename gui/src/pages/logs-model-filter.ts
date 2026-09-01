@@ -13,11 +13,15 @@ export interface LogModelFields {
   model?: string;
   resolvedModel?: string;
   provider?: string;
+  attempts?: Array<{
+    provider?: string;
+    model?: string;
+  }>;
 }
 
 /**
- * Case-insensitive substring over the three identifiers a reader can see in the table:
- * the requested model, the model actually routed to, and the provider.
+ * Case-insensitive substring over the requested model, resolved target, provider, and
+ * every failover attempt target.
  *
  * `resolvedModel` is matched as well as `model` on purpose. They differ precisely when
  * routing redirected the turn, which is the case this filter exists to expose — matching
@@ -30,7 +34,8 @@ export interface LogModelFields {
 export function logMatchesModelQuery(log: LogModelFields, query: string): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
-  return [log.model, log.resolvedModel, log.provider].some(
+  const attemptTargets = log.attempts?.flatMap(attempt => [attempt.provider, attempt.model]) ?? [];
+  return [log.model, log.resolvedModel, log.provider, ...attemptTargets].some(
     value => typeof value === "string" && value.toLowerCase().includes(needle),
   );
 }

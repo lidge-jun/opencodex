@@ -32,6 +32,19 @@ describe("logs model filter", () => {
     expect(logMatchesModelQuery(redirected, "combo")).toBe(true);
   });
 
+  test("matches the provider and model of a winning failover attempt", () => {
+    const failedOver = {
+      provider: "primary",
+      model: "combo/reliable",
+      attempts: [
+        { provider: "anthropic", model: "claude-sonnet-4.6" },
+        { provider: "xai", model: "grok-4.6" },
+      ],
+    };
+    expect(logMatchesModelQuery(failedOver, "XAI")).toBe(true);
+    expect(logMatchesModelQuery(failedOver, "GROK-4.6")).toBe(true);
+  });
+
   test("matches the provider", () => {
     expect(logMatchesModelQuery({ provider: "xai", model: "grok-4.6" }, "xai")).toBe(true);
     expect(logMatchesModelQuery({ provider: "xai", model: "grok-4.6" }, "anthropic")).toBe(false);
