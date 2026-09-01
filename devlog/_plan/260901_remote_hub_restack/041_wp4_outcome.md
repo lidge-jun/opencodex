@@ -55,3 +55,13 @@ wp3에서 소유 단계를 p2로 재배정했으므로 여기서는 회귀만 �
 
 T23(신뢰할 수 없는 `Content-Length`에 대한 응답 읽기 제한)과
 T24(connect 워크플로 문서화)는 wp8에서 처리한다.
+
+## 커밋
+
+원본 11커밋은 authorship과 메시지를 보존했고, T22 수정은
+`ad1ab25d8` 한 커밋으로 분리했다. 앞선 단계들과 같은 원칙이다.
+
+| 범위 | 내용 |
+| --- | --- |
+| `859bc17aa`..`232ad4e4b` | 원본 11커밋 재적용 |
+| `ad1ab25d8` | fix(connect): a process-owned journal is ours to unwind, not a conflict (신규) |
