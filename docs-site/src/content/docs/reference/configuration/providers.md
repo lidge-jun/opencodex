@@ -83,6 +83,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `models?` | `string[]` | Seed/fallback model list. With `liveModels: false`, these are the only discovered models. |
 | `liveModels?` | `boolean` | Fetch the live catalog on start/sync (default `true`). Custom providers use `${baseUrl}/models`; built-ins may use a registry URL and filter. |
 | `selectedModels?` | `string[]` | Catalog allowlist after discovery. Non-empty exposes only those ids; empty or omitted exposes all discovered models. |
+| `retainModels?` | `string[]` | Ids kept in the catalog even when live discovery omits them. They need not be repeated in `models`. Empty or omitted keeps today's behavior. |
 | `contextWindow?` | `number` | Provider-wide context fallback when upstream metadata is absent; otherwise a cap that retains smaller live metadata. The Models dashboard exposes this separately from `providerContextCaps`. |
 | `modelContextWindows?` | `Record<string, number>` | Per-model context fallbacks/caps. These override `contextWindow`: an unknown window uses the configured value, while smaller live metadata remains authoritative. |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model input hints such as `["text"]` or `["text", "image"]`. |
@@ -574,6 +575,14 @@ silently replaced or truncated.
 
 Use `selectedModels` when discovery should still run but only selected ids should appear in Codex and
 `/v1/models`. The dashboard retains the full discovered list for later allowlist changes.
+
+Use `retainModels` for the opposite problem: a provider whose `/models` endpoint omits an id that is
+still callable (a private deployment, a preview id, an OpenAI-compatible gateway with a partial
+listing). Listed ids are kept in the routed catalog with the same context and effort hints as
+`models`, and they survive `liveModels: false` too. `selectedModels` still narrows what is visible,
+so an id must be in both lists when an allowlist is active. Retaining an id does not make the
+upstream accept it; a wrong id fails at request time with the upstream error. From the CLI:
+`ocx provider edit <name> --retain-models gemini-3.7-flash,other-id` (`-` clears).
 
 Preview GPT-5.6 fallback entries use the same mechanism. The OpenAI API-key preset seeds base and Pro
 ids with context `922000` and max input `922000`; OpenRouter seeds `openai/gpt-5.6-sol`,

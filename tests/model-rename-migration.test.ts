@@ -34,6 +34,7 @@ function staleConfig(): OcxConfig {
         modelDefaultReasoningEfforts: { "qwen3.8-max-preview": "xhigh" },
         preserveReasoningContentModels: ["glm-5.2", "qwen3.8-max-preview", "qwen3.7-max"],
         thinkingBudgetModels: ["qwen3.8-max-preview", "qwen3.7-max"],
+        retainModels: ["qwen3.8-max-preview"],
       },
     },
     disabledModels: ["alibaba-token-plan-intl/qwen3.8-max-preview", "other/model"],
@@ -56,6 +57,7 @@ describe("registry model rename migration (#1610)", () => {
     expect(prov.modelDefaultReasoningEfforts?.["qwen3.8-max"]).toBe("xhigh");
     expect(prov.preserveReasoningContentModels).toEqual(["glm-5.2", "qwen3.8-max", "qwen3.7-max"]);
     expect(prov.thinkingBudgetModels).toEqual(["qwen3.8-max", "qwen3.7-max"]);
+    expect(prov.retainModels).toEqual(["qwen3.8-max"]);
     expect(warnings.some(w => w.includes("qwen3.8-max"))).toBe(true);
   });
 
@@ -82,6 +84,7 @@ describe("registry model rename migration (#1610)", () => {
     prov.modelDefaultReasoningEfforts = {};
     prov.preserveReasoningContentModels = ["qwen3.8-max"];
     prov.thinkingBudgetModels = ["qwen3.7-max"];
+    prov.retainModels = ["qwen3.8-max"];
     clean.disabledModels = ["other/model"];
 
     const { changed, warnings } = projectModelRenames(clean, [RENAME]);

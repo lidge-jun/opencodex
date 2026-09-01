@@ -396,6 +396,19 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "retainModels")) {
+    const value = rawBody.retainModels;
+    if (value === null) {
+      delete next.retainModels;
+    } else {
+      const error = nonBlankStringArrayConfigError(value, "retainModels");
+      if (error) return { error };
+      const models = normalizeNonBlankStringArray(value as string[]);
+      if (models.length > 0) next.retainModels = models;
+      else delete next.retainModels;
+    }
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "omitReasoningEffortWithToolsModels")) {
     const value = rawBody.omitReasoningEffortWithToolsModels;
     if (value === null) {
@@ -538,6 +551,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       modelAutoCompactTokenLimits: p.modelAutoCompactTokenLimits,
       modelSupportsServiceTier: p.modelSupportsServiceTier,
       noStructuredOutputModels: p.noStructuredOutputModels,
+      retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
       authMode: p.authMode,

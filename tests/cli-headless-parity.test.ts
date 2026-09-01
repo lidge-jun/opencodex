@@ -329,6 +329,24 @@ describe("headless GUI parity CLI", () => {
     expect(clearRuntime.requests[0]?.body).toEqual({ headers: null });
   });
 
+  test("provider edit --retain-models sends the csv list and - clears it", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleProviderRuntimeCommand("edit", [
+      "agw", "--retain-models", " gemini-3.7-flash, other-id ,gemini-3.7-flash", "--json",
+    ], runtime.deps);
+    expect(code).toBe(0);
+    expect(runtime.requests).toEqual([{
+      path: "/api/providers?name=agw",
+      method: "PATCH",
+      body: { retainModels: ["gemini-3.7-flash", "other-id"] },
+    }]);
+
+    const clearRuntime = fakeRuntime();
+    const clearCode = await handleProviderRuntimeCommand("edit", ["agw", "--retain-models", "-", "--json"], clearRuntime.deps);
+    expect(clearCode).toBe(0);
+    expect(clearRuntime.requests[0]?.body).toEqual({ retainModels: null });
+  });
+
   test("provider edit rejects malformed --headers JSON without a request", async () => {
     const runtime = fakeRuntime();
     const code = await handleProviderRuntimeCommand("edit", ["agw", "--headers", "{not json"], runtime.deps);

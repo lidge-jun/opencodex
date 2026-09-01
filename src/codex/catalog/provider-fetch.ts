@@ -571,6 +571,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     base: prov.baseUrl ?? "",
     adapter: prov.adapter ?? "",
     models: [...(prov.models ?? [])].sort(),
+    retain: [...(prov.retainModels ?? [])].sort(),
     selected: [...(prov.selectedModels ?? [])].sort(),
     defaultModel: prov.defaultModel ?? null,
     ctx: prov.contextWindow ?? null,
@@ -1304,7 +1305,14 @@ async function fetchProviderModelsWithAuth(
     && prov.googleMode === "vertex"
     && (prov.models?.length ?? 0) === 0
     && Boolean(prov.defaultModel);
-  const configuredIds = seedVertexDefault && prov.defaultModel ? [prov.defaultModel] : (prov.models ?? []);
+  // Ordered dedupe union: Vertex seed, then `models`, then `retainModels`. `configured` is the
+  // single seed for the static path, the degraded fallback, drop diagnostics, and provider hints,
+  // so a retain-only id must enter here or it never exists to be retained (#1690).
+  const configuredIds = [...new Set([
+    ...(seedVertexDefault && prov.defaultModel ? [prov.defaultModel] : []),
+    ...(prov.models ?? []),
+    ...(prov.retainModels ?? []),
+  ])];
   const configured: CatalogModel[] = configuredIds.map(id => ({
     id,
     provider: name,

@@ -694,6 +694,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     "noStructuredOutputModels",
   );
   if (structuredOutputOptOutError) return `provider ${name} ${structuredOutputOptOutError}`;
+  const retainModelsError = nonBlankStringArrayConfigError(raw.retainModels, "retainModels");
+  if (retainModelsError) return `provider ${name} ${retainModelsError}`;
   const toolReasoningOptOutError = nonBlankStringArrayConfigError(
     raw.omitReasoningEffortWithToolsModels,
     "omitReasoningEffortWithToolsModels",
@@ -792,6 +794,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "noTopPModels",
       "noPenaltyModels",
       "noStructuredOutputModels",
+      "retainModels",
       "omitReasoningEffortWithToolsModels",
       "upstreamHttpVersion",
       "autoToolChoiceOnlyModels",

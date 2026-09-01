@@ -330,6 +330,57 @@ describe("provider management validation", () => {
       .toEqual(["deepseek-v4-flash", "other-model"]);
   });
 
+  test("validates, exposes, and normalizes retainModels (#1690)", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1",
+      retainModels: ["gemini-3.7-flash"],
+    };
+    expect(providerManagementConfigError("relay", provider)).toBeNull();
+    for (const retainModels of ["gemini-3.7-flash", [""], ["   "], [42]]) {
+      expect(providerManagementConfigError("relay", { ...provider, retainModels }))
+        .toContain("retainModels");
+    }
+
+    const dto = safeConfigDTO({
+      port: 10100,
+      defaultProvider: "relay",
+      providers: { relay: provider },
+    } as OcxConfig) as { providers: Record<string, { retainModels?: string[] }> };
+    expect(dto.providers.relay?.retainModels).toEqual(["gemini-3.7-flash"]);
+
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify({
+      ...config("127.0.0.1"),
+      defaultProvider: "relay",
+      providers: {
+        relay: {
+          adapter: "openai-chat",
+          baseUrl: "https://relay.example/v1",
+          retainModels: [" gemini-3.7-flash ", "gemini-3.7-flash", " other-model "],
+        },
+      },
+    }));
+    expect(loadConfig().providers.relay?.retainModels).toEqual(["gemini-3.7-flash", "other-model"]);
+
+    writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify({
+      ...config("127.0.0.1"),
+      defaultProvider: "relay",
+      providers: { relay: { ...provider, retainModels: "gemini-3.7-flash" } },
+    }));
+    // Invalid config falls back to defaults (with a backup) rather than throwing; the relay
+    // provider must be gone, proving the schema rejected the string form with a path.
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(loadConfig().providers.relay).toBeUndefined();
+      expect(errorSpy.mock.calls.map(call => String(call[0])).join("\n")).toContain("providers.relay.retainModels");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   test("validates, exposes, and normalizes tool-bearing reasoning-effort opt-outs", () => {
     const provider = {
       adapter: "openai-chat",
@@ -2206,6 +2257,37 @@ describe("provider management validation", () => {
         providers: Record<string, { noStructuredOutputModels?: string[] }>;
       };
       expect(saved.providers["structured-output-toggle"].noStructuredOutputModels).toBeUndefined();
+
+      const retainInvalid = await fetch(new URL("/api/providers?name=structured-output-toggle", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ retainModels: "gemini-3.7-flash" }),
+      });
+      expect(retainInvalid.status).toBe(400);
+
+      const retainRes = await fetch(new URL("/api/providers?name=structured-output-toggle", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ retainModels: [" gemini-3.7-flash ", "gemini-3.7-flash"] }),
+      });
+      expect(retainRes.status).toBe(200);
+      const retainList = await fetch(new URL("/api/providers", server.url)).then(response => response.json()) as Array<{
+        name: string;
+        retainModels?: string[];
+      }>;
+      expect(retainList.find(provider => provider.name === "structured-output-toggle")?.retainModels)
+        .toEqual(["gemini-3.7-flash"]);
+
+      const retainClear = await fetch(new URL("/api/providers?name=structured-output-toggle", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ retainModels: null }),
+      });
+      expect(retainClear.status).toBe(200);
+      const retainSaved = await fetch(new URL("/api/config", server.url)).then(response => response.json()) as {
+        providers: Record<string, { retainModels?: string[] }>;
+      };
+      expect(retainSaved.providers["structured-output-toggle"].retainModels).toBeUndefined();
     } finally {
       await server.stop(true);
     }

@@ -24,6 +24,7 @@ const USAGE = `Usage:
       [--auth-mode <key|forward|oauth|local|->] [--note <text|->]
       [--api-key-transport <x-api-key|bearer|->]
       [--headers <json>] [--enabled <on|off>] [--live-models <on|off>]
+      [--retain-models <id,id|->]
       [--allow-private-network <on|off>] [--json]
   ocx provider test <name> [--json]
   ocx provider quota [--refresh] [--json]
@@ -48,6 +49,7 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const note = cleared(takeOption(args, "--note"));
   const apiKeyTransport = cleared(takeOption(args, "--api-key-transport"));
   const headers = takeOption(args, "--headers");
+  const retainModelsRaw = takeOption(args, "--retain-models");
   const enabled = takeBooleanOption(args, "--enabled");
   const liveModels = takeBooleanOption(args, "--live-models");
   const allowPrivateNetwork = takeBooleanOption(args, "--allow-private-network");
@@ -74,6 +76,10 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     }
   }
   if (enabled !== undefined) patch.disabled = !enabled;
+  if (retainModelsRaw !== undefined) {
+    // `-` clears, matching the other `edit` scalars; test before csv() or it becomes ["-"].
+    patch.retainModels = retainModelsRaw.trim() === "-" ? null : csv(retainModelsRaw);
+  }
   if (liveModels !== undefined) patch.liveModels = liveModels;
   if (allowPrivateNetwork !== undefined) patch.allowPrivateNetwork = allowPrivateNetwork;
   if (Object.keys(patch).length === 0) throw new CliUsageError("at least one edit option is required", USAGE);

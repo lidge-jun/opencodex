@@ -324,8 +324,9 @@ export interface OcxProviderConfig {
    * model id in this list is preserved in the routed catalog even if the live `/models`
    * endpoint omits it (ad-hoc / private providers whose live discovery drops callable ids).
    * Mirrors the built-in `kimi`/`xai` compatibility tables — opt-in for every other provider.
-   * Empty/undefined = no opt-in (default behavior). 404 on the upstream call still emits the
-   * existing one-line diagnostic; the retained row is kept regardless. See #1690.
+   * Ids listed here need not be repeated in `models`: discovery folds them into the configured
+   * seed, so they exist under `liveModels: false` too. `selectedModels` still narrows what is
+   * visible. Empty/undefined = no opt-in (default behavior). See #1690.
    */
   retainModels?: string[];
   /** Override for newly discovered models. Absent/"inherit" uses the install policy. */
