@@ -674,25 +674,20 @@ test("a drifted restore asks a second time instead of failing", async () => {
 });
 
 /**
- * #3059: focus had nowhere to go when the restore consumed the row that owned the
- * trigger. A consumed snapshot re-renders as an `expired` badge with no button, so
- * the remembered element is detached by the time the dialog closes — and calling
- * .focus() on a detached node succeeds silently while focus stays on <body>. A
- * keyboard user ends up at the top of the document with nothing announced.
- *
- * The reporter blamed a page unmount, which the tree does not do: refresh() keeps
- * stale data (client-resource.ts:339-341), so `if (!status)` is cold-load only. The
- * mechanism is wrong and the experience is real, which is why this is a fix rather
- * than a close.
+ * #3059: a successful restore starts an asynchronous history refresh before closing
+ * the dialog. That means normal focus restoration first finds the trigger still in
+ * the tree, and only later does the refresh consume its snapshot and remove the
+ * trigger. The region must receive focus on the successful close, before that later
+ * removal can send focus to <body>.
  */
-test("focus returns to a stable region when the restore removed its trigger", async () => {
+test("a successful restore keeps focus on the stable region after refresh removes its trigger", async () => {
   const [{ createRoot }, { LanguageProvider }, { default: RestoreDialog }] = await Promise.all([
     import("react-dom/client"),
     import("../src/i18n/provider"),
     import("../src/pages/integrations/RestoreDialog"),
   ]);
 
-  // The shape RollbackHistory renders: a region holding the row's trigger.
+  // The shape RollbackHistory renders: a stable region holding the row trigger.
   const region = testWindow.document.createElement("section");
   const trigger = testWindow.document.createElement("button");
   region.appendChild(trigger);
@@ -709,19 +704,43 @@ test("focus returns to a stable region when the restore removed its trigger", as
     snapshot: "stored" as const,
     undoable: false,
   };
+  let resolveRestore: ((response: Response) => void) | undefined;
+  const restoreFetch = ((input: RequestInfo | URL) => {
+    if (String(input).includes("/restore")) {
+      return new Promise<Response>(resolve => { resolveRestore = resolve; });
+    }
+    return Promise.resolve(json({ operations: [] }));
+  }) as typeof fetch;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: restoreFetch });
+  Object.defineProperty(testWindow, "fetch", { configurable: true, value: restoreFetch });
+
   await act(async () => {
     root = createRoot(container);
     root.render(
       <LanguageProvider>
-        <RestoreDialog apiBase={apiBase} row={row} onClose={() => {}} onRestored={() => {}} />
+        <RestoreDialog
+          apiBase={apiBase}
+          row={row}
+          onRestored={() => {}}
+          onClose={() => {
+            root!.unmount();
+            root = null;
+          }}
+        />
       </LanguageProvider>,
     );
   });
 
-  // The restore consumes the snapshot, so the row re-renders without its button.
-  trigger.remove();
-  await act(async () => { root!.unmount(); root = null; });
+  await act(async () => { buttonByText("Restore")!.click(); });
+  expect(resolveRestore).toBeDefined();
 
+  // Restore succeeds and closes while the trigger is still connected.
+  await act(async () => { resolveRestore!(json({ ok: true })); });
+  expect(trigger.isConnected).toBe(true);
+  expect(testWindow.document.activeElement).toBe(region);
+
+  // The asynchronous history refresh then consumes the snapshot and its trigger.
+  trigger.remove();
   expect(testWindow.document.activeElement).toBe(region);
   expect(testWindow.document.activeElement).not.toBe(testWindow.document.body);
   region.remove();
