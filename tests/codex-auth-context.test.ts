@@ -657,6 +657,25 @@ describe("Codex auth context", () => {
       .rejects.toThrow("Codex accounts that support this model are currently unavailable");
     await expect(resolve(["gpt-5.6-sol"]))
       .rejects.toThrow("No eligible Codex account supports this model");
+
+    const mainExcludedSnapshot: CodexModelEntitlementSnapshot = {
+      modelsByAccount: new Map(),
+      confirmedAccountIds: new Set(),
+      credentialIdentities: new Map(),
+    };
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      excludeAccountId: "pool-a",
+      modelId: "gpt-daybreak-blue-latest",
+      beginCodexAccountSelection: () => ({
+        mainProfileDraining: true,
+        claimMainProfile: () => false,
+        release: () => {},
+      }),
+      resolveCodexModelEntitlements: async (_config, options) => {
+        expect(options?.excludeAccountIds?.has(MAIN_CODEX_ACCOUNT_ID)).toBeTrue();
+        return mainExcludedSnapshot;
+      },
+    })).rejects.toThrow("Codex accounts that support this model are currently unavailable");
   });
 
   test("auth resolution preserves per-model detours without replacing ordinary affinity", async () => {
