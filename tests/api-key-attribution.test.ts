@@ -1,11 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync} from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { AUTH_MATRIX } from "../src/server/auth-cors";
-import { clearApiKeyUsageCacheForTests, rollupApiKeyUsage } from "../src/server/management/api-key-usage";
+import { clearApiKeyUsageCacheForTests, readApiKeyUsageRollup, rollupApiKeyUsage } from "../src/server/management/api-key-usage";
+import { resetUsageAggregateCacheForTests } from "../src/server/management/usage-aggregate-cache";
+import * as usageLedgerScannerModule from "../src/usage/ledger-scanner";
 import { normalizeUsageEntryForTest, usageLogPath, type PersistedUsageEntry } from "../src/usage/log";
 import type { OcxConfig } from "../src/types";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
@@ -52,9 +54,11 @@ beforeEach(() => {
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = ADMIN_TOKEN;
   clearApiKeyUsageCacheForTests();
+  resetUsageAggregateCacheForTests();
 });
 
 afterEach(() => {
+  resetUsageAggregateCacheForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -316,6 +320,67 @@ describe("attribution reaches usage.jsonl", () => {
     }
   });
 
+  test("/api/usage seeds a complete API-key rollup beyond the former byte limit", async () => {
+    const now = Date.now();
+    const config = remoteConfig();
+    config.managementUsageMaxReadBytes = 256;
+    saveConfig(config);
+    const rows = [
+      ...Array.from({ length: 20 }, (_, index) => ({
+        requestId: `key-one-${index}`,
+        timestamp: now - index,
+        provider: "test",
+        model: "gpt-test",
+        status: 200,
+        durationMs: 1,
+        usageStatus: "reported",
+        admissionKind: "configured",
+        apiKeyId: "key-one",
+        usage: { inputTokens: 1, outputTokens: 1 },
+        totalTokens: 2,
+      })),
+      {
+        requestId: "key-two-tail",
+        timestamp: now,
+        provider: "test",
+        model: "gpt-test",
+        status: 200,
+        durationMs: 1,
+        usageStatus: "reported",
+        admissionKind: "configured",
+        apiKeyId: "key-two",
+        usage: { inputTokens: 1, outputTokens: 1 },
+        totalTokens: 2,
+      },
+    ];
+    writeFileSync(usageLogPath(), `${rows.map(row => JSON.stringify(row)).join("\n")}\n`);
+
+    const originalScan = usageLedgerScannerModule.scanUsageLedgerCooperatively;
+    let scans = 0;
+    const scanSpy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively").mockImplementation(async options => {
+      scans += 1;
+      return originalScan(options);
+    });
+    const server = startServer(0);
+    try {
+      const usage = await fetch(new URL("/api/usage?range=all", server.url), {
+        headers: { "x-opencodex-api-key": ADMIN_TOKEN },
+      }).then(response => response.json()) as Record<string, unknown>;
+      expect(usage.historyTruncated).toBe(false);
+      expect(scans).toBe(1);
+
+      const payload = await keysGet(server);
+      const keys = payload.keys as Array<Record<string, unknown>>;
+      expect((keys.find(key => key.id === "key-one")!.usage as Record<string, number>).totalRequests).toBe(20);
+      expect((keys.find(key => key.id === "key-two")!.usage as Record<string, number>).totalRequests).toBe(1);
+      expect(payload.historyTruncated).toBeUndefined();
+      expect(scans).toBe(1);
+    } finally {
+      scanSpy.mockRestore();
+      await server.stop(true);
+    }
+  });
+
   test("an unreadable usage snapshot degrades to zeroes, not a failed route", async () => {
     saveConfig(remoteConfig());
     const server = startServer(0);
@@ -328,6 +393,45 @@ describe("attribution reaches usage.jsonl", () => {
       const rows = payload.keys as Array<Record<string, unknown>>;
       expect(rows).toHaveLength(2);
       expect((rows[0]!.usage as Record<string, number>).totalRequests).toBe(0);
+      expect(payload.attributionSince).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("an oversized usage row cannot seed a partial key rollup", async () => {
+    saveConfig(remoteConfig());
+    const now = Date.now();
+    const oversized = {
+      requestId: "oversized-key-one",
+      timestamp: now,
+      provider: "test",
+      model: "gpt-test",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "reported",
+      admissionKind: "configured",
+      apiKeyId: "key-one",
+      padding: "x".repeat(usageLedgerScannerModule.USAGE_LEDGER_MAX_LINE_BYTES),
+    };
+    const valid = {
+      requestId: "valid-key-two",
+      timestamp: now,
+      provider: "test",
+      model: "gpt-test",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "reported",
+      admissionKind: "configured",
+      apiKeyId: "key-two",
+    };
+    writeFileSync(usageLogPath(), `${JSON.stringify(oversized)}\n${JSON.stringify(valid)}\n`);
+    const server = startServer(0);
+    try {
+      const payload = await keysGet(server);
+      const keys = payload.keys as Array<Record<string, unknown>>;
+      expect((keys.find(key => key.id === "key-one")!.usage as Record<string, number>).totalRequests).toBe(0);
+      expect((keys.find(key => key.id === "key-two")!.usage as Record<string, number>).totalRequests).toBe(0);
       expect(payload.attributionSince).toBeUndefined();
     } finally {
       await server.stop(true);
@@ -454,6 +558,34 @@ describe("rollupApiKeyUsage", () => {
   test("no attributable row means no attributionSince at all", () => {
     const { attributionSince } = rollupApiKeyUsage([row({})], ["k"], now);
     expect(attributionSince).toBeUndefined();
+  });
+
+  test("concurrent cache misses singleflight only within the same configured-id key", async () => {
+    const persisted = row({ admissionKind: "configured", apiKeyId: "key-one" });
+    writeFileSync(usageLogPath(), `${JSON.stringify(persisted)}\n`);
+    const originalScan = usageLedgerScannerModule.scanUsageLedgerCooperatively;
+    let scans = 0;
+    const scanSpy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively").mockImplementation(async options => {
+      scans += 1;
+      return originalScan(options);
+    });
+    try {
+      await Promise.all([
+        readApiKeyUsageRollup(["key-one"], 256),
+        readApiKeyUsageRollup(["key-one"], 256),
+      ]);
+      expect(scans).toBe(1);
+
+      clearApiKeyUsageCacheForTests();
+      scans = 0;
+      await Promise.all([
+        readApiKeyUsageRollup(["key-one"], 256),
+        readApiKeyUsageRollup(["key-two"], 256),
+      ]);
+      expect(scans).toBe(2);
+    } finally {
+      scanSpy.mockRestore();
+    }
   });
 });
 

@@ -128,7 +128,7 @@ this document owns is which module holds which area and what invariant that area
 | Subagents | Read/write the featured `subagentModels` list capped at five ids. `GET/PUT /api/injection-model` manages the shared delegation model/effort selection, the independent OpenCodex guidance switch, and the default-off `syncCodexSubagentDefaults` opt-in for native Codex subagent defaults. When OpenCodex owns the active Codex routing, native `[agents]` defaults apply to newly created Codex tasks after sync/restart; external user-managed provider configs remain untouched. The defaults do not cause delegation and preserve existing user-owned defaults rather than overwriting them. PUT is partial-update: absent keys are unchanged, `null` clears, and non-object bodies are rejected with 400 before field validation. `syncCodexSubagentDefaults: true` requires a nonblank `model` and a supported Codex reasoning effort when effort is set; clearing `model` (null/empty) always clears effort and disables native-default sync even when the stored effort was invalid. |
 | V2 / Multi-agent mode | `GET/PUT /api/v2` — reports/sets the codex `multi_agent_v2` feature flag, the 3-state `multiAgentMode` override (`v1`/`default`/`v2`), the `keepNativeChatGptOnV1` hybrid pin, and the logical maximum thread count. Selecting `v2` normally enables the native flag; with the hybrid pin it disables that global override so native rows can resolve to v1 while routed rows resolve to v2. Selecting `v1` disables the flag; `default` leaves it unchanged. PUT rejects an explicit enabled flag that conflicts with the selected mode or hybrid pin. Every transition preserves the logical thread limit, is rollback-safe, and resyncs the catalog. |
 | Logs & Debug | One sidebar entry (`/#logs`) with two tabs. Logs tab: request/runtime logs for local diagnosis. Debug tab (`/#logs/debug`; legacy `/#debug` deep links redirect there): provider + usage toggles, refresh/follow log viewer. `GET/PUT /api/debug`; `GET /api/debug/logs` and `GET /api/debug/usage-logs` (monotonic `after` cursor, legacy `since` accepted). CLI: `ocx debug provider|usage …` (both streams via running proxy API). |
-| Usage | `GET /api/usage` aggregate read-only summary derived from `~/.opencodex/usage.jsonl`; measured / reported / unreported / unsupported / estimated counts, daily zero-filled grid, model and provider breakdowns. Never exposes prompts. |
+| Usage | `GET /api/usage` aggregate read-only summary derived from the complete `~/.opencodex/usage.jsonl`; the ledger is streamed in fixed 1 MiB chunks, so the former read-byte and parsed-row caps cannot omit its prefix. The response includes measured / reported / unreported / unsupported / estimated counts, a daily zero-filled grid, and model and provider breakdowns. Never exposes prompts. |
 | System | `POST /api/system/restart` restarts the proxy in place. Local CLI/tray callers first attest the exact runtime PID and port, then send a process-scoped HMAC capability bound to that method, path, PID, and port; the capability authorizes no other management route and is invalid after replacement. The caller observes one absolute deadline and accepts success only after a different runtime PID is healthy on the same port. `GET /api/system/health` is the authenticated scalar-only identity used by shared-plane Dashboard status and restart reconnect polling; it does not widen a Remote Hub management ingress to unauthenticated `/healthz`. `GET /api/system/memory` — service-process runtime/memory identity (pid, Bun version/revision, optional `bunRuntimeSource` provenance, platform, RSS/heap/external/ArrayBuffers scalars, observed memory = max(RSS, external, ArrayBuffers), `bun:jsc` heap context, streamMode + eager-relay gate decision, watchdog snapshot sliced to the last 60 samples) plus privacy-safe `appOwnedBytes` retained-store totals/counters under static store ids. Scalar-only payload; dashboard/admin callers use the standard management gate, while `ocx doctor` may use only the exact process-scoped local-read capability. It must never move to unauthenticated `/healthz`. |
 | Stop | `POST /api/stop` — restore native Codex, stop any installed service, and exit the proxy. |
 | Diagnostics/sync | `src/server/management/config-routes.ts` — `GET /api/diagnostics/project-config` reports project-level Codex config that bypasses managed routing; `POST /api/sync` re-runs catalog/config sync. The diagnostic reports the bypass; it does not rewrite the project file. |
@@ -339,6 +339,12 @@ An opt-in shadow-call rewrite persists the bounded, redacted original helper mod
 request content or inferring a helper subtype from timing.
 `src/usage/summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
 grid, model and provider breakdowns, and `measured / reported / unreported / unsupported / estimated` counts.
+The management route streams the complete ledger from its beginning in fixed 1 MiB chunks on a
+cold rebuild, then retains compact numeric aggregate state and resumes at the last verified LF for
+ordinary appends. It does not retain the full input or a normalized object for every request, and
+neither the old byte window nor the parsed-entry cap can discard an earlier prefix before range and
+surface filtering. `managementUsageMaxReadBytes` remains a recognized compatibility setting for
+bounded legacy readers, but it is not an accuracy limit or tuning knob for `GET /api/usage`.
 A Codex-surface response also includes an `accounts` breakdown keyed by the stable non-PII
 `accountLogLabel`; current cards join those rows to the management account DTO and show the 30-day
 token total, API-equivalent cost estimate, and measurement coverage. New main-pool rows use `main`,
@@ -350,20 +356,35 @@ estimated` split exists for, and why coverage is reported alongside totals. The 
 main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
 200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
 
-The management API caches only the compact summary for an exact file revision and query; it never
-retains normalized per-request rows after a response. The cache invalidates on any identity, size, or
-timestamp change and at the next range expiry or local-day boundary. Rebuilds parse in bounded
-batches and yield between them, so unrelated management requests remain serviceable even for a large
-existing log. The Dashboard polls its 30-day usage summary independently once per minute, so usage
-work cannot delay health/provider/settings state or run every five seconds.
+The management API retains the compact accumulator plus bounded query summaries; it never retains
+normalized per-request rows after a response. File identity changes, shrinkage, same-size metadata
+changes, pricing-overlay changes, and local-time-zone changes force a cold rebuild. Ordinary growth
+is treated as an append: the scanner verifies the previous LF and its trailing 64 KiB digest, then
+folds only the suffix into a cloned accumulator and publishes it after validation. Concurrent callers
+share that work. Cold rebuilds scan the whole ledger in fixed-size chunks and yield between bounded
+batches, so memory stays bounded and unrelated management requests remain serviceable even for a
+large existing log. The first read is proportional to ledger size; steady-state refresh work is
+proportional to newly appended bytes. The Dashboard polls its 30-day usage summary independently once
+per minute, so usage work cannot delay health/provider/settings state or run every five seconds.
+
+`usage.jsonl` is an append-only runtime ledger. A manual in-place edit earlier than the trailing
+64 KiB checkpoint followed by file growth is intentionally outside the incremental detector's
+contract: validating arbitrary historical rewrites on every refresh would require rereading the
+whole prefix. Replace or truncate the file, or restart the proxy, after manually changing historical
+rows so the next request performs a cold rebuild.
+
+The wire fields `historyTruncated`, `truncatedPrefixBytes`, `entriesTruncated`, and `entriesDropped`
+remain in the response for compatibility with older GUI and CLI clients. A successful whole-ledger
+scan reports `false`, `0`, `false`, and `0`; clients must not interpret those fields as evidence that
+`managementUsageMaxReadBytes` was raised or that a bounded tail was selected.
 
 [Decision Log]
 - 목적과 의도: Keep dashboard and management requests responsive as `usage.jsonl` grows.
-- 기존 구현 및 제약 조건: The JSONL file remains the durable source of truth and may be truncated, replaced, or hand-edited.
-- 검토한 주요 대안: Retain normalized rows, maintain a second database, or cache only revision-keyed summaries and cooperatively rebuild them.
-- 선택한 방식: Keep only bounded summary results, share full reads by exact file identity, yield during parsing, and poll usage separately at a slower cadence.
-- 다른 대안 대신 이 방식을 선택한 이유: It bounds resident heap and avoids a second persistence format while keeping unrelated endpoints responsive.
-- 장점, 단점 및 영향: Unchanged queries are cheap and memory stays bounded; a changed large log still consumes rebuild CPU, but cooperatively and at most once per observed revision/query.
+- 기존 구현 및 제약 조건: The append-only JSONL file remains the durable source of truth and may be truncated or replaced. A tail-only byte/row bound kept memory finite but made historical totals incomplete on busy installations; arbitrary in-place historical edits cannot be detected without rereading the prefix.
+- 검토한 주요 대안: Raise the byte/row caps, retain normalized rows, maintain a second database, or stream the complete ledger into compact accumulators and cache only revision-keyed summaries.
+- 선택한 방식: Stream the complete ledger in fixed 1 MiB chunks for a cold rebuild, retain only compact aggregate state plus an LF/digest checkpoint, fold verified append suffixes atomically, share concurrent work, yield during parsing, and poll usage separately at a slower cadence.
+- 다른 대안 대신 이 방식을 선택한 이유: It restores complete historical aggregation without making correctness depend on an operator-sized read limit, retaining every parsed row, or introducing a second persistence format.
+- 장점, 단점 및 영향: Unchanged queries are cheap, normal refreshes read only appended bytes, and memory stays bounded. Cold starts and explicit invalidations still consume file-size-proportional IO/CPU. A same-inode historical rewrite outside the trailing checkpoint requires replacement, truncation, or restart to force that cold rebuild.
 
 For diagnosing upstream-shape / usage-extraction issues run `ocx debug usage on` (or set
 `OPENCODEX_USAGE_DEBUG=1` before start). The proxy then writes a rolling debug record per finalized

@@ -1010,7 +1010,9 @@ const configSchema = z.object({
   // A malformed present client block must remain diagnosable from raw config and
   // fail closed through src/client/state.ts; unrelated provider state still loads.
   client: clientConnectionSchema.optional().catch(undefined),
-  managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024),
+  managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024).describe(
+    "Deprecated compatibility limit for bounded legacy usage readers; GET /api/usage always aggregates the complete ledger",
+  ),
   // Invalid hand edits disable only this opt-in circuit. Live writes remain strict.
   upstreamHostCircuitThreshold: z.number().int()
     .min(0)

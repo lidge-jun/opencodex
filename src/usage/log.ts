@@ -1190,7 +1190,7 @@ export async function readUsageEntriesForManagement(): Promise<PersistedUsageEnt
 }
 
 /** Keep legacy optional fields permissive, but reject rows that cannot be safely attributed. */
-function normalizePersistedUsageRow(value: unknown): PersistedUsageEntry | undefined {
+export function normalizePersistedUsageRow(value: unknown): PersistedUsageEntry | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
   if (typeof row.requestId !== "string" || typeof row.provider !== "string") return undefined;

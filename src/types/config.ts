@@ -348,7 +348,10 @@ export interface OcxConfig {
    * the guess is wrong.
    */
   oauthOpenBrowser?: boolean;
-  /** Maximum usage-log bytes read for one management snapshot. */
+  /**
+   * @deprecated Compatibility-only limit for bounded legacy usage readers.
+   * `GET /api/usage` always aggregates the complete ledger.
+   */
   managementUsageMaxReadBytes?: number;
   providers: Record<string, OcxProviderConfig>;
   defaultProvider: string;

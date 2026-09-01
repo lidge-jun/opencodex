@@ -19,6 +19,7 @@ import {
 } from "../src/lib/app-owned-memory";
 import { registerDefaultAppOwnedMemoryStores } from "../src/lib/app-owned-memory-stores";
 import { appendDebugLogLine, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
+import { resetUsageAggregateCacheForTests } from "../src/server/management/usage-aggregate-cache";
 
 function config(): OcxConfig {
   return {
@@ -39,6 +40,7 @@ afterEach(() => {
   getActiveMemoryWatchdog()?.stop();
   resetAppOwnedMemoryForTests();
   resetDebugLogBufferForTests();
+  resetUsageAggregateCacheForTests();
 });
 
 function sampleAt(at: number, rssMb: number, externalMb = 1, arrayBuffersMb = 1): MemorySampleBase {

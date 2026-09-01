@@ -53,7 +53,7 @@ test("Dashboard usage polling cannot delay core health and settings", async () =
   expect(hook).toContain("fetchDashboardUsage(apiBase, signal)");
   expect(hook).toContain("fetchDashboardSidecars");
   expect(hook).toContain("fetchDashboardOverview");
-  expect(hook).not.toMatch(/usageSummary30dResourceKey\(apiBase\)[\s\S]*pollMs: 60_000/);
+  expect(hook).toMatch(/usageSummary30dResourceKey\(apiBase\)[\s\S]*pollMs: 60_000/);
 });
 
 test("Dashboard interactive controls load independently of health/providers", async () => {

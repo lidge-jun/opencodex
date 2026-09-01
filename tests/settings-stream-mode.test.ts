@@ -29,6 +29,7 @@ import {
   setUsageSummaryCacheEntry,
   usageSummaryRetainedStoreSnapshot,
 } from "../src/server/management/usage-summary-cache";
+import { resetUsageAggregateCacheForTests } from "../src/server/management/usage-aggregate-cache";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 import { startupHealthFixture } from "./helpers/startup-health";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
@@ -80,6 +81,7 @@ function getSettings(config: OcxConfig): Promise<Response | null> {
 beforeEach(() => {
   resetAppOwnedMemoryForTests();
   resetUsageSummaryCacheForTests();
+  resetUsageAggregateCacheForTests();
   invalidateStartupHealthCache();
   TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-settings-stream-"));
   process.env.OPENCODEX_HOME = TEST_DIR;
@@ -88,6 +90,7 @@ beforeEach(() => {
 afterEach(() => {
   resetAppOwnedMemoryForTests();
   resetUsageSummaryCacheForTests();
+  resetUsageAggregateCacheForTests();
   invalidateStartupHealthCache();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -240,6 +243,7 @@ describe("usage summary retained-store accounting", () => {
       identityKey: "slow-read",
       maxReadBytes: 64 * 1024 * 1024,
       overlayVersion: 0,
+      timeZone: seed!.timeZone,
       expiresAt: Date.now() + 60_000,
       freshUntil: Date.now() + 60_000,
       lastSeenSize: 0,

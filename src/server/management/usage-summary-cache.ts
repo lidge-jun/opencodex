@@ -6,6 +6,8 @@ export type CachedUsageSummary = UsageSummary & {
   truncatedPrefixBytes: number;
   entriesTruncated: boolean;
   entriesDropped: number;
+  snapshotWindowStart: number | null;
+  snapshotWindowEnd: number | null;
 };
 
 export interface UsageSummaryCacheEntry {
@@ -15,6 +17,8 @@ export interface UsageSummaryCacheEntry {
   maxReadBytes: number;
   /** userCostOverlayVersion() when the summary was computed; overlay edits invalidate the entry. */
   overlayVersion: number;
+  /** Local calendar zone used to build day/range buckets. */
+  timeZone: string;
   expiresAt: number;
   /** Generation freshness: ignore size/mtime until this instant. */
   freshUntil: number;

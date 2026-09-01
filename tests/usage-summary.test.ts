@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   MAX_USAGE_MODEL_BREAKDOWN_ROWS,
+  MAX_USAGE_DAY_BUCKETS,
   USAGE_RANGES,
   USAGE_SURFACES,
+  createUsageSummaryAccumulator,
   parseRange,
   parseUsageSurface,
   rangeWindow,
@@ -890,6 +892,24 @@ describe("summarizeUsage", () => {
     expect(month.summary.totalTokens).toBe(4);
   });
 
+  test("range filtering compares numeric day boundaries for years before 1000", () => {
+    const ancient = Date.UTC(999, 0, 1, 12, 0, 0);
+    const entries: PersistedUsageEntry[] = [
+      entry({ ts: FIXED_NOW - 1, requestId: "current", usageStatus: "reported", usage: { inputTokens: 1, outputTokens: 1 }, totalTokens: 2 }),
+      entry({ ts: ancient, requestId: "ancient", usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 10 }, totalTokens: 20 }),
+    ];
+
+    const month = summarizeUsage(entries, "30d", FIXED_NOW);
+    expect(month.summary.requests).toBe(1);
+    expect(month.summary.totalTokens).toBe(2);
+    expect(month.models.every(model => model.totalTokens !== 20)).toBe(true);
+
+    const all = summarizeUsage(entries, "all", FIXED_NOW);
+    expect(all.summary.requests).toBe(2);
+    expect(all.summary.totalTokens).toBe(22);
+    expect(all.days).toHaveLength(MAX_USAGE_DAY_BUCKETS);
+  });
+
   test("coverageRatio stays in [0,1] and handles empty input", () => {
     expect(summarizeUsage([], "30d", FIXED_NOW).summary.coverageRatio).toBe(0);
     const onlyMissing = summarizeUsage([entry({ ts: FIXED_NOW - 1, usageStatus: "unreported" })], "30d", FIXED_NOW);
@@ -1521,4 +1541,295 @@ describe("summarizeUsage", () => {
     expect(dayUnpriced?.estimatedCostUsd).toBeUndefined();
   });
 
+});
+
+describe("UsageSummaryAccumulator modes", () => {
+  const at = Date.UTC(2026, 5, 28, 10, 0, 0);
+
+  test("exact mode preserves cross-partition request identity", () => {
+    const accumulator = createUsageSummaryAccumulator();
+    accumulator.add(entry({
+      ts: at - 3_600_000,
+      requestId: "duplicate-request",
+      accountLogLabel: "pabcdef",
+      usageStatus: "reported",
+      usage: { inputTokens: 10, outputTokens: 2 },
+    }));
+    accumulator.add(entry({
+      ts: at,
+      requestId: "duplicate-request",
+      surface: "claude",
+      accountLogLabel: "pabcdef",
+      usageStatus: "reported",
+      usage: { inputTokens: 20, outputTokens: 3 },
+    }));
+
+    const summary = accumulator.summarize("all", at);
+    expect(summary.summary.requests).toBe(2);
+    expect(summary.days.find(day => day.requests > 0)).toMatchObject({
+      requests: 2,
+      totalTokens: 35,
+      models: [{ requests: 1, attemptCount: 2, totalTokens: 35 }],
+    });
+    expect(summary.models[0]).toMatchObject({ requests: 1, attemptCount: 2, totalTokens: 35 });
+    expect(summary.providers[0]).toMatchObject({ requests: 1, attemptCount: 2, totalTokens: 35 });
+    expect(summary.accounts[0]).toMatchObject({ requests: 1, attemptCount: 2, totalTokens: 35 });
+  });
+
+  test("row-unique mode matches exact mode for unique ledger rows", () => {
+    const rows = [
+      entry({
+        ts: at - 86_400_000,
+        requestId: "unique-1",
+        accountLogLabel: "pabcdef",
+        usageStatus: "reported",
+        usage: { inputTokens: 100, outputTokens: 10 },
+      }),
+      entry({
+        ts: at,
+        requestId: "unique-2",
+        surface: "claude",
+        provider: "combo",
+        model: "combo/native",
+        usageStatus: "reported",
+        usage: { inputTokens: 70, outputTokens: 7 },
+        totalTokens: 77,
+        attempts: [
+          {
+            ordinal: 1,
+            provider: "openai",
+            model: "gpt-5.5",
+            adapter: "openai-responses",
+            status: 200,
+            durationMs: 10,
+            sendCount: 1,
+            recoveryKinds: [],
+            accountLogLabel: "pabcdef",
+            usageStatus: "reported",
+            usage: { inputTokens: 50, outputTokens: 5 },
+            totalTokens: 55,
+          },
+          {
+            ordinal: 2,
+            provider: "unpriced-provider",
+            model: "unpriced-model",
+            adapter: "openai-responses",
+            status: 200,
+            durationMs: 20,
+            sendCount: 1,
+            recoveryKinds: [],
+            accountLogLabel: "p123abc",
+            usageStatus: "estimated",
+            usage: { inputTokens: 20, outputTokens: 2 },
+            totalTokens: 22,
+          },
+        ],
+      }),
+    ];
+    const exact = createUsageSummaryAccumulator();
+    const compact = createUsageSummaryAccumulator({ mode: "row-unique" });
+    for (const row of rows) {
+      exact.add(row);
+      compact.add(row);
+    }
+
+    expect(compact.summarize("all", at)).toEqual(exact.summarize("all", at));
+  });
+
+  test("row-unique mode counts a same-model/provider/account retry once", () => {
+    const accumulator = createUsageSummaryAccumulator({ mode: "row-unique" });
+    accumulator.add(entry({
+      ts: at,
+      requestId: "same-dimension-retry",
+      provider: "combo",
+      model: "combo/native",
+      usageStatus: "reported",
+      usage: { inputTokens: 30, outputTokens: 3 },
+      totalTokens: 33,
+      attempts: [1, 2].map(ordinal => ({
+        ordinal,
+        provider: "openai",
+        model: "gpt-5.5",
+        adapter: "openai-responses",
+        status: 200,
+        durationMs: 10,
+        sendCount: 1,
+        recoveryKinds: [],
+        accountLogLabel: "pabcdef" as const,
+        usageStatus: "reported" as const,
+        usage: { inputTokens: 15, outputTokens: ordinal },
+      })),
+    }));
+
+    const summary = accumulator.summarize("30d", at);
+    expect(summary.models[0]).toMatchObject({ requests: 1, attemptCount: 2 });
+    expect(summary.providers[0]).toMatchObject({ requests: 1, attemptCount: 2 });
+    expect(summary.accounts[0]).toMatchObject({ requests: 1, attemptCount: 2 });
+  });
+
+  test("row-unique overflow folds a multi-model request only once", () => {
+    const rows = Array.from({ length: MAX_USAGE_MODEL_BREAKDOWN_ROWS - 1 }, (_, index) => entry({
+      ts: at + index,
+      requestId: `overflow-head-${index}`,
+      provider: "head-provider",
+      model: `head-model-${String(index).padStart(3, "0")}`,
+      usageStatus: "reported",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    }));
+    rows.push(entry({
+      ts: at + MAX_USAGE_MODEL_BREAKDOWN_ROWS,
+      requestId: "overflow-combo",
+      provider: "combo",
+      model: "combo/native",
+      usageStatus: "reported",
+      attempts: [
+        {
+          ordinal: 1,
+          provider: "openai",
+          model: "gpt-5.5",
+          adapter: "openai-responses",
+          status: 200,
+          durationMs: 10,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "reported",
+          usage: { inputTokens: 10, outputTokens: 1 },
+        },
+        {
+          ordinal: 2,
+          provider: "unpriced-provider",
+          model: "tail-unpriced",
+          adapter: "openai-responses",
+          status: 200,
+          durationMs: 10,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "unreported",
+        },
+      ],
+    }));
+    const exact = createUsageSummaryAccumulator();
+    const compact = createUsageSummaryAccumulator({ mode: "row-unique" });
+    for (const row of rows) {
+      exact.add(row);
+      compact.add(row);
+    }
+
+    const exactSummary = exact.summarize("30d", at + MAX_USAGE_MODEL_BREAKDOWN_ROWS);
+    const compactSummary = compact.summarize("30d", at + MAX_USAGE_MODEL_BREAKDOWN_ROWS);
+    expect(compactSummary).toEqual(exactSummary);
+    const other = compactSummary.models.find(model => model.model === "other");
+    expect(other).toMatchObject({
+      requests: 1,
+      attemptCount: 2,
+      measuredRequests: 0,
+      reportedRequests: 0,
+      pricedRequests: 1,
+      unpricedRequests: 1,
+    });
+    const dayOther = compactSummary.days.find(day => day.requests > 0)?.models
+      .find(model => model.model === "other");
+    expect(dayOther).toMatchObject({ requests: 1, attemptCount: 2 });
+  });
+
+  test("filtered compact overflow preserves projection compatibility", () => {
+    const accumulator = createUsageSummaryAccumulator({
+      mode: "row-unique",
+      filter: { provider: "rare-provider" },
+    });
+    const rows: PersistedUsageEntry[] = [];
+    for (let index = 0; index < MAX_USAGE_MODEL_BREAKDOWN_ROWS + 1; index++) {
+      const row = entry({
+        ts: at + index,
+        requestId: `filtered-overflow-${index}`,
+        provider: "rare-provider",
+        model: `rare-model-${index}`,
+        usageStatus: "reported",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      });
+      rows.push(row);
+      accumulator.add(row);
+    }
+
+    const summary = accumulator.summarize("30d", at + MAX_USAGE_MODEL_BREAKDOWN_ROWS);
+    expect(summary.models).toHaveLength(MAX_USAGE_MODEL_BREAKDOWN_ROWS - 1);
+    expect(summary.models.some(model => model.model === "other")).toBe(false);
+    expect(summary.days.find(day => day.requests > 0)?.models.some(model => model.model === "other")).toBe(false);
+
+    const base = summarizeUsage(rows, "30d", at + MAX_USAGE_MODEL_BREAKDOWN_ROWS);
+    expect(summary).toEqual(projectUsageSummary(base, { provider: "rare-provider" }, rows));
+  });
+
+  test("clone mutations do not affect the source", () => {
+    const source = createUsageSummaryAccumulator({ mode: "row-unique" });
+    source.add(entry({ ts: at, requestId: "clone-source" }));
+    const before = source.summarize("30d", at);
+    const cloned = source.clone();
+    cloned.add(entry({ ts: at + 1, requestId: "clone-only" }));
+
+    expect(source.summarize("30d", at)).toEqual(before);
+    expect(cloned.summarize("30d", at).summary.requests).toBe(2);
+    expect(cloned.estimatedBytes).toBeGreaterThanOrEqual(source.estimatedBytes);
+  });
+
+  test("estimatedBytes stays constant for ordinary compact rows in existing dimensions", () => {
+    const compact = createUsageSummaryAccumulator({ mode: "row-unique" });
+    const exact = createUsageSummaryAccumulator();
+    const first = entry({
+      ts: at,
+      requestId: "estimate-1",
+      accountLogLabel: "pabcdef",
+      usageStatus: "reported",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    });
+    const second = entry({ ...first, ts: at + 1, requestId: "estimate-2" });
+    compact.add(first);
+    exact.add(first);
+    const compactAfterFirst = compact.estimatedBytes;
+    compact.add(second);
+    exact.add(second);
+
+    expect(compact.estimatedBytes).toBe(compactAfterFirst);
+    expect(exact.estimatedBytes).toBeGreaterThan(compact.estimatedBytes);
+  });
+
+  test("estimatedBytes aggregates repeated multi-model overlap signatures", () => {
+    const compact = createUsageSummaryAccumulator({ mode: "row-unique" });
+    const combo = (index: number): PersistedUsageEntry => entry({
+      ts: at + index,
+      requestId: `repeated-overlap-${index}`,
+      provider: "combo",
+      model: "combo/native",
+      usageStatus: "reported",
+      attempts: [
+        {
+          ordinal: 1,
+          provider: "unpriced-a",
+          model: "model-a",
+          adapter: "openai-responses",
+          status: 200,
+          durationMs: 10,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "reported",
+        },
+        {
+          ordinal: 2,
+          provider: "unpriced-b",
+          model: "model-b",
+          adapter: "openai-responses",
+          status: 200,
+          durationMs: 10,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "reported",
+        },
+      ],
+    });
+    compact.add(combo(0));
+    const firstSignatureBytes = compact.estimatedBytes;
+    for (let index = 1; index <= 100; index++) compact.add(combo(index));
+
+    expect(compact.estimatedBytes).toBe(firstSignatureBytes);
+  });
 });

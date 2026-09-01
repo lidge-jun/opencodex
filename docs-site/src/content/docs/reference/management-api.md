@@ -124,7 +124,7 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `GET /api/debug/usage-logs` | Read bounded usage-debug entries | — |
 | `GET /api/debug/injection-logs` | Read bounded guidance-injection debug entries | — |
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
-| `GET /api/usage` | Summarize usage by range and client surface; Codex responses also include an `accounts` breakdown keyed by stable non-PII log labels | Returns an `error: "read_failed"` summary if storage cannot be read |
+| `GET /api/usage` | Stream the complete usage ledger into compact aggregates, then incrementally fold verified appends; summarize by range and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | Returns an `error: "read_failed"` summary if storage cannot be read |
 | `GET /api/storage` | Scan Codex storage usage by bucket | Returns an `error: "scan_failed"` payload on scan failure |
 | `POST /api/storage/cleanup/preview` | Preview archived-session cleanup and return a binding digest | 400 `invalid_json` or `invalid_percent` |
 | `POST /api/storage/cleanup` | Quarantine or permanently remove the previewed archived set | 400 invalid input; 409 stale/busy/referenced state; 500 filesystem/database failure |
@@ -134,6 +134,25 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `GET, PUT /api/storage/cleanup-policy` | Read or update scheduled cleanup policy and job state | 400 invalid policy |
 | `POST /api/storage/cleanup-policy/run` | Start a manual cleanup-policy run | 409 `already_running`; 500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | Test-only policy stream hook | 404 `not_found` when unavailable |
+
+`GET /api/usage` reads `~/.opencodex/usage.jsonl` from the beginning through the current ledger
+snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather
+than every normalized request row. Later refreshes validate the previous line boundary and fold only
+newly appended complete rows. Concurrent callers share the same refresh. Range and surface predicates
+are applied to the complete aggregate, so the former read-byte window and parsed-row cap cannot omit
+an earlier file prefix from 7-day, 30-day, or all-history totals. `managementUsageMaxReadBytes` remains
+accepted for compatibility with bounded legacy readers, but changing it no longer expands or reduces
+the history summarized by this endpoint.
+
+The runtime ledger is append-only. Replacing or truncating it, or changing local pricing/time-zone
+inputs, triggers a complete rebuild. If you manually edit an older row in place while the proxy is
+running, restart the proxy (or replace the file) before relying on the new total; incremental refreshes
+verify the append boundary, not every previously aggregated byte.
+
+The response still includes `historyTruncated`, `truncatedPrefixBytes`, `entriesTruncated`, and
+`entriesDropped` so older clients can consume the same wire shape. A successful whole-ledger scan
+reports `false`, `0`, `false`, and `0`, respectively. These are legacy compatibility fields, not a
+signal that the endpoint read only a configured-size tail.
 
 For `GET /api/usage?range=30d&surface=codex`, `accounts` contains one row per observed Codex
 pool label. Each row reports `accountLogLabel`, token totals, `usageCoverageRatio`, and an optional

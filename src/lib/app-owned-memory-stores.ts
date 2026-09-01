@@ -39,6 +39,10 @@ import {
   retainedUsageSnapshotStats,
 } from "../usage/log";
 import {
+  discardRetainedUsageAggregate,
+  usageAggregateRetainedStats,
+} from "../server/management/usage-aggregate-cache";
+import {
   cursorBlobRetainedStoreSnapshot,
   evictOldestCursorBlobForBudget,
 } from "../adapters/cursor/native-exec";
@@ -61,16 +65,31 @@ function ringSnapshot(metrics: { entries: number; bytes: number; oldestAt: numbe
   };
 }
 
-/** The retained usage tail is a single all-or-nothing entry: evicting it drops the whole tail. */
+/** Legacy parsed tail and streaming aggregate share one stable public store id. */
 function usageSnapshotRetainedStoreSnapshot(): RetainedStoreSnapshot {
-  const stats = retainedUsageSnapshotStats();
+  const legacy = retainedUsageSnapshotStats();
+  const aggregate = usageAggregateRetainedStats();
+  const oldest = [legacy.oldestAt, aggregate.oldestAt]
+    .filter((value): value is number => value !== null)
+    .sort((a, b) => a - b)[0] ?? null;
   return {
-    count: stats.count,
-    bytes: stats.bytes,
-    evictableBytes: stats.bytes,
-    pinnedBytes: 0,
-    oldestAt: stats.oldestAt,
+    count: legacy.count + aggregate.count,
+    bytes: legacy.bytes + aggregate.bytes,
+    evictableBytes: legacy.bytes + aggregate.evictableBytes,
+    pinnedBytes: aggregate.pinnedBytes,
+    oldestAt: oldest,
   };
+}
+
+function evictOldestUsageSnapshot(): number {
+  const legacy = retainedUsageSnapshotStats();
+  const aggregate = usageAggregateRetainedStats();
+  if (legacy.bytes > 0
+    && (aggregate.evictableBytes === 0
+      || (legacy.oldestAt ?? Number.POSITIVE_INFINITY) <= (aggregate.oldestAt ?? Number.POSITIVE_INFINITY))) {
+    return discardRetainedUsageSnapshot();
+  }
+  return discardRetainedUsageAggregate();
 }
 
 function providerDebugSnapshot(): RetainedStoreSnapshot {
@@ -154,7 +173,7 @@ export const APP_OWNED_RETAINED_STORE_REGISTRATIONS = [
     id: "usage_snapshot",
     category: "caches",
     snapshot: usageSnapshotRetainedStoreSnapshot,
-    evictOldest: discardRetainedUsageSnapshot,
+    evictOldest: evictOldestUsageSnapshot,
   },
   {
     id: "cursor_blobs",
