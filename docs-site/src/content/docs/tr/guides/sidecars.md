@@ -103,9 +103,16 @@ durma, toplam bir üretim zaman aşımı değildir. SSE başlamadan önceki arı
 
 ## Vizyon sidecar'ı
 
-Yönlendirilen model sağlayıcısının `noVisionModels` listesinde yer aldığında ve
-bir istek görsel taşıdığında, opencodex ana çağrıdan **önce** her görseli
-açıklar ve onu metinle değiştirir. `visionSidecar.model` olmadığında veya boş
+Yönlendirilen model sağlayıcısının `noVisionModels` listesinde yer aldığında ya da
+bu model için `modelInputModalities` ile salt metin olarak bildirildiğinde ve bir
+istek görsel taşıdığında, opencodex kullanılabilir bir vision sidecar planı varsa
+ana çağrıdan **önce** her görseli açıklar ve onu metinle değiştirir. Kullanılabilir
+bir plan yoksa ham görsel salt metin arka ucuna iletilmek yerine kaldırılır. Model
+kataloğu sidecar kapsamında olan her model için görsel girdisini bildirir. Kombolar,
+her üye görselleri yerel olarak veya bir sidecar üzerinden kabul ettiğinde ve kombonun
+`imageInput` ayarı devre dışı olmadığında görsel girdisini bildirir; böylece Codex
+uygulaması gibi istemciler, sidecar çalışmadan önce ekleri engellemek yerine kabul eder.
+`visionSidecar.model` olmadığında veya boş
 olduğunda, OpenAI yürütme yolu, Kontrol Paneli ve yönetim API'si `gpt-5.4-mini`
 geri dönüşünü kullanır. Başlangıç hala açıkça kalıcı hale getirilmiş eski bir
 `gpt-5.4-mini` değerini `gpt-5.6-luna`'ya geçirir; bu geçiş, bulunmayan bir
@@ -135,9 +142,8 @@ model alanına değil, saklanan bir değere uygulanır.
   görselleri proxy tarafından değil, OpenAI arka ucu tarafından getirilir.
 - `noVisionModels` eşleştirmesi Ollama tarzı bir `:size` sonekini yok sayar, bu
   nedenle bir `gpt-oss` girdisi `gpt-oss:120b`'yi de kapsar.
-- Açıklama başarısız olursa model kısa bir işleme hatası işaretçisi alır.
-  Kullanılabilir hiçbir sidecar planı yoksa ham görsel salt metin bir arka uca
-  iletilmek yerine kaldırılır.
+- Açıklama başarısız olursa model kısa bir işleme hatası işaretçisi alır. (Kullanılabilir bir
+  sidecar planı yoksa açıklama denenmez; ham görsel yukarıda belirtildiği gibi kaldırılır.)
 - `maxDescriptionsPerTurn` (varsayılan 8), ana model turu başına yeni
   açıklamaları sınırlar. Önbellek isabetleri ve aynı turdaki kopyalar bunu
   tüketmez. Başarılı `data:` görsel açıklamaları arka uç, model, ayrıntı, görsel
@@ -197,4 +203,3 @@ hedeflenen hesap ve iş yükü ile kapsamlı bir şekilde test edilmelidir.
 
 Her alan için [Yapılandırma referansı](/tr/reference/configuration/#sidecars)
 bölümüne bakın.
-

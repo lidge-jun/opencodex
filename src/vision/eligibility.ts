@@ -21,6 +21,7 @@
  *    explicit modalities.
  */
 import { modelInList, type OcxConfig, type OcxProviderConfig } from "../types";
+import { modelRecordValue } from "../reasoning-effort";
 import { getModelMetadataCaseInsensitive, resolveMetadataProvider } from "../generated/model-metadata";
 import { nativeInputModalities } from "../codex/catalog/metadata";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
@@ -68,6 +69,22 @@ export interface VisionModelOption {
 
 type EnrichedProviderCache = Map<string, OcxProviderConfig>;
 
+/**
+ * Whether the proxy must describe images for this model before dispatching its main request.
+ *
+ * `noVisionModels` is an explicit override. A modality declaration is only evidence for this
+ * path when it describes a text model that excludes image input: an audio-only declaration is
+ * not a text-only model and must not be widened to image through the vision sidecar.
+ */
+export function isModelVisionSidecarConsumer(
+  provider: Pick<OcxProviderConfig, "noVisionModels" | "modelInputModalities">,
+  modelId: string,
+): boolean {
+  if (modelInList(provider.noVisionModels, modelId)) return true;
+  const modalities = modelRecordValue(provider.modelInputModalities, modelId);
+  return Array.isArray(modalities) && modalities.includes("text") && !modalities.includes("image");
+}
+
 function advertisesImageInput(modalities: readonly string[] | undefined): boolean | undefined {
   if (!modalities || modalities.length === 0) return undefined;
   return modalities.includes("image");
@@ -105,7 +122,8 @@ function isVisionSidecarConsumerWithCache(
   modelId: string,
   cache: EnrichedProviderCache,
 ): boolean {
-  return modelInList(enrichedProviderForVision(config, providerName, cache)?.noVisionModels, modelId);
+  const provider = enrichedProviderForVision(config, providerName, cache);
+  return provider !== undefined && isModelVisionSidecarConsumer(provider, modelId);
 }
 
 /**

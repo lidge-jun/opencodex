@@ -72,6 +72,16 @@ describe("vision-sidecar catalog modalities", () => {
     expect(hinted.inputModalities).toEqual(["text", "image"]);
   });
 
+  test("audio-only modelInputModalities do not advertise image", () => {
+    const prov: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example/v1",
+      modelInputModalities: { "audio-model": ["audio"] },
+    };
+    const hinted = applyProviderConfigHints("audio-provider", prov, { id: "audio-model", provider: "audio-provider" });
+    expect(hinted.inputModalities).toEqual(["audio"]);
+  });
+
   test("discovery-derived text-only rows are NOT advertised image (the runtime would not convert them)", () => {
     // Only the two config sources the runtime predicate reads (noVisionModels,
     // modelInputModalities) may widen the catalog; a listing that merely reports
@@ -238,6 +248,36 @@ describe("vision-sidecar custom-model override (#349/#344)", () => {
     } finally {
       globalThis.fetch = originalFetch;
       clearModelCache("text-sidecar-provider");
+    }
+  });
+
+  test("a custom row whose modelId is declared audio-only does not advertise image", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => { throw new Error("fetch should not be called"); }) as typeof fetch;
+    try {
+      const models = await gatherRoutedModels({
+        port: 10100,
+        defaultProvider: "audio-sidecar-provider",
+        providers: {
+          "audio-sidecar-provider": {
+            baseUrl: "https://audio-sidecar.example/v1",
+            adapter: "openai-chat",
+            authMode: "key",
+            liveModels: false,
+            models: ["baseline-model"],
+            modelInputModalities: { "audio-model": ["audio"] },
+          },
+        },
+        customModels: [
+          { id: "cm-audio", provider: "audio-sidecar-provider", modelId: "audio-model", displayName: "Audio Model", addedAt: "2026-01-01T00:00:00.000Z" },
+        ],
+      });
+      const custom = models.find(m => m.provider === "audio-sidecar-provider" && m.id === "audio-model");
+      expect(custom).toBeDefined();
+      expect(custom?.inputModalities?.includes("image") ?? false).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearModelCache("audio-sidecar-provider");
     }
   });
 });

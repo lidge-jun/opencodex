@@ -64,8 +64,11 @@ OAuth 帳號時使用 `anthropic`，否則使用 `openai`。明確選擇 `anthro
 
 ## Vision sidecar
 
-當路由模型列在其 provider 的 `noVisionModels` 中，並且請求包含圖像時，opencodex 會在主呼叫
-**之前**描述每張圖像，並用文字替換圖像。Dashboard 和管理 API 目前顯示的預設值是
+當路由模型列在其 provider 的 `noVisionModels` 中，或該模型在 `modelInputModalities` 中被宣告為僅文字，
+且請求包含圖像時，只要有可用的 vision sidecar plan，opencodex 就會在主呼叫**之前**描述每張圖像並用文字替換圖像。
+若沒有可用 plan，原始圖像會被移除，不會繼續轉送給純文字後端。模型目錄會為每個由 sidecar 處理的模型宣告圖像輸入。
+只有當每個 combo 成員都能原生或透過 sidecar 接受圖像，且 combo 的 `imageInput` 設定未停用時，combo 才會宣告圖像輸入；
+如此 Codex 應用程式等用戶端會允許附件，而不會在 sidecar 執行前阻擋它們。Dashboard 和管理 API 目前顯示的預設值是
 `gpt-5.6-luna`，啟動時也會把明確儲存的舊 `gpt-5.4-mini` 值遷移到 Luna。只有在
 `visionSidecar.model` 欄位完全不存在時，vision 執行路徑才會使用程式碼中的 `gpt-5.4-mini` 回退值。
 
@@ -80,8 +83,8 @@ OAuth 帳號時使用 `anthropic`，否則使用 `openai`。明確選擇 `anthro
   而不是代理。
 - `noVisionModels` 匹配會忽略 Ollama 風格的 `:size` 字尾，因此一個 `gpt-oss` 條目也能覆蓋
   `gpt-oss:120b`。
-- 如果描述失敗，模型會收到簡短的處理錯誤提示。若根本無法建立 sidecar plan，原始圖像會被
-  移除，而不會繼續轉發給純文字後端。
+- 如果描述失敗，模型會收到簡短的處理錯誤提示。（如果沒有可用的 sidecar plan，就不會嘗試描述，
+  原始圖像會依上文所述被移除。）
 - `maxDescriptionsPerTurn`（預設 8）限制每個主模型 turn 的新增描述次數。快取命中和同一 turn
   的重複請求不會消耗配額。成功的 `data:` 圖像描述會按後端、模型、detail、圖像位元組和訊息上下文
   快取；內容可變的 `https:` 圖像不會快取。

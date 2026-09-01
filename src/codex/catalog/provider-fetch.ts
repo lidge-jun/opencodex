@@ -30,6 +30,7 @@ import {
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
+import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import {
@@ -670,15 +671,13 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
   const configuredAutoCompact = configuredAutoCompactTokenLimit(prov, model.id);
   let inputModalities = configuredInputModalities(prov, model.id);
-  // Vision-sidecar coverage mirrors isModelTextOnly (src/vision/index.ts): `noVisionModels` OR
-  // a `modelInputModalities` declaration excluding "image" both mean the PROXY describes images
-  // for this model at request time. The catalog must still advertise image input — the Codex app
+  // The shared vision-sidecar consumer predicate keeps catalog advertisement and request-time
+  // planning aligned. The catalog must still advertise image input — the Codex app
   // gates attachments client-side on input_modalities, and a text-only entry would block images
   // before the sidecar ever runs ("This model does not support image inputs"). Discovery-derived
   // text-only rows stay untouched: the runtime predicate only reads these two config sources, so
   // it would not convert those.
-  const sidecarCovered = modelInList(prov.noVisionModels, model.id)
-    || (Array.isArray(inputModalities) && inputModalities.length > 0 && !inputModalities.includes("image"));
+  const sidecarCovered = isModelVisionSidecarConsumer(prov, model.id);
   if (sidecarCovered) {
     const base = inputModalities ?? model.inputModalities ?? ["text"];
     inputModalities = base.includes("image") ? [...base] : [...base, "image"];
@@ -2146,15 +2145,8 @@ async function gatherRoutedModelsUncached(
       }
       : mergedWithHardBounds;
     const enrichedProvider = enrichedByName.get(cm.provider) ?? rawProvider;
-    // Same vision-sidecar coverage rule as applyProviderConfigHints (isModelTextOnly parity):
-    // noVisionModels OR a text-only modelInputModalities declaration means the sidecar converts
-    // images at request time, so the custom row must advertise image input.
-    const declaredModalities = enrichedProvider
-      ? modelRecordValue(enrichedProvider.modelInputModalities, mergedWithAutoCompact.id)
-      : undefined;
-    if (enrichedProvider
-      && (modelInList(enrichedProvider.noVisionModels, mergedWithAutoCompact.id)
-        || (Array.isArray(declaredModalities) && declaredModalities.length > 0 && !declaredModalities.includes("image")))) {
+    // Reuse the request-time consumer predicate so custom rows cannot drift from catalog hints.
+    if (enrichedProvider && isModelVisionSidecarConsumer(enrichedProvider, mergedWithAutoCompact.id)) {
       const current = mergedWithAutoCompact.inputModalities ?? ["text"];
       if (!current.includes("image")) {
         return { ...mergedWithAutoCompact, inputModalities: [...current, "image"] };

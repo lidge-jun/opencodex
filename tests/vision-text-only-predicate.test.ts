@@ -19,6 +19,10 @@ describe("isModelTextOnly (#1024)", () => {
     expect(isModelTextOnly(provider({ modelInputModalities: { "vision-model": ["text", "image"] } }), "vision-model")).toBe(false);
   });
 
+  test("returns false for audio-only modelInputModalities", () => {
+    expect(isModelTextOnly(provider({ modelInputModalities: { "audio-model": ["audio"] } }), "audio-model")).toBe(false);
+  });
+
   test("returns false for unknown models (no evidence)", () => {
     expect(isModelTextOnly(provider(), "unknown-model")).toBe(false);
   });

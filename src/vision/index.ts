@@ -1,12 +1,10 @@
 import { createHash } from "node:crypto";
 import type { OcxConfig, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent } from "../types";
-import { modelInList } from "../types";
-import { modelRecordValue } from "../reasoning-effort";
 import type { VisionReasoningEffort } from "../reasoning-effort";
 import { describeImage, type DescribeOutcome, type VisionSettings } from "./describe";
 import { describeImageAnthropic } from "./anthropic-describe";
 import { describeImageRouted } from "./routed-describe";
-import { modelAcceptsImageInput } from "./eligibility";
+import { isModelVisionSidecarConsumer as isModelTextOnly, modelAcceptsImageInput } from "./eligibility";
 import { normalizeVisionReasoningForModel } from "./reasoning";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { resolveSidecarAuth } from "../sidecar/auth";
@@ -22,24 +20,12 @@ import {
 
 export { describeImage } from "./describe";
 
-/**
- * True when the model is explicitly known to be text-only — either listed in
- * `noVisionModels` or declared with `modelInputModalities` that exclude "image".
- * Returns false for unknown models (no evidence either way) so they fall through
- * to native image passthrough, which is the safe default for an unclassified model.
- */
-export function isModelTextOnly(
-  provider: OcxProviderConfig,
-  modelId: string,
-): boolean {
-  if (modelInList(provider.noVisionModels, modelId)) return true;
-  const modalities = modelRecordValue(provider.modelInputModalities, modelId);
-  if (Array.isArray(modalities) && modalities.length > 0 && !modalities.includes("image")) return true;
-  return false;
-}
+/** Backward-compatible request-time name for the shared vision-sidecar consumer predicate. */
+export { isModelVisionSidecarConsumer as isModelTextOnly } from "./eligibility";
 export { describeImageAnthropic, parseAnthropicVisionSSE } from "./anthropic-describe";
 export {
   BASELINE_VISION_MODELS,
+  isModelVisionSidecarConsumer,
   isVisionEligibleModel,
   isVisionSidecarConsumer,
   modelAcceptsImageInput,

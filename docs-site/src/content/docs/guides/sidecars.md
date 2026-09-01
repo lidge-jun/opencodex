@@ -128,9 +128,9 @@ that model via `modelInputModalities` — and a request carries an image, openco
 image **before** the main call and replaces it with text, provided a vision sidecar plan is
 available. Without an available plan the raw image is stripped rather than forwarded to a
 text-only backend. The model catalog advertises image input for every sidecar-covered model.
-Combos advertise image input only when every member is sidecar-covered and the combo's
-`imageInput` setting is not disabled, so clients such as the Codex app allow attachments instead
-of blocking them before the sidecar runs. When
+Combos advertise image input only when every member accepts images, either natively or through a
+sidecar, and the combo's `imageInput` setting is not disabled, so clients such as the Codex app
+allow attachments instead of blocking them before the sidecar runs. When
 `visionSidecar.model` is absent or blank, the OpenAI execution path, Dashboard, and management API
 use the `gpt-5.4-mini` fallback. Startup still migrates an explicitly persisted legacy
 `gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not to an absent

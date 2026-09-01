@@ -4,6 +4,7 @@ import type { OcxConfig } from "../src/types";
 import {
   BASELINE_VISION_MODELS,
   isVisionEligibleModel,
+  isVisionSidecarConsumer,
   modelAcceptsImageInput,
   visionBackendForCandidate,
   visionEligibleModelOptions,
@@ -52,6 +53,24 @@ describe("vision eligibility core", () => {
     };
     expect(isVisionEligibleModel(config, candidate)).toBe(false);
     expect(modelAcceptsImageInput(config, candidate)).toBe(false);
+  });
+
+  test("2b. configured text-only rows are consumers, but audio-only rows are not", () => {
+    const config = configWithProviders({
+      test: {
+        adapter: "openai-chat",
+        baseUrl: "https://example.test/v1",
+        modelInputModalities: {
+          "text-only": ["text"],
+          "audio-only": ["audio"],
+          "text-and-image": ["text", "image"],
+        },
+      },
+    });
+
+    expect(isVisionSidecarConsumer(config, "test", "text-only")).toBe(true);
+    expect(isVisionSidecarConsumer(config, "test", "audio-only")).toBe(false);
+    expect(isVisionSidecarConsumer(config, "test", "text-and-image")).toBe(false);
   });
 
   test("3a. silent catalog rows fall back to generated metadata (live /api/models shape)", () => {
