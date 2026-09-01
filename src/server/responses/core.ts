@@ -3665,6 +3665,7 @@ async function handleResponsesInner(
     const selfNamedNamespaceScrubAuthorization = collectSelfNamedNamespaceScrubAuthorization(
       clientToolAuthorizationBody,
       toolBridgeMaps.bareCustomToolNames,
+      toolBridgeMaps.bareFunctionToolNames,
     );
     const clientExplicitWireToolCatalog = hasExplicitWireToolCatalog(clientToolAuthorizationBody);
     const clientDeclaredWireToolNames = collectDeclaredWireToolNames(clientToolAuthorizationBody);

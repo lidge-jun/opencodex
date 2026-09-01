@@ -123,6 +123,46 @@ test("a self-named namespace declared by the current turn is preserved", async (
   expect(text).toContain('\"name\":\"exec\",\"namespace\":\"exec\"');
 });
 
+test("the reserved functions namespace does not create a same-name collision", async () => {
+  const call = { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "functions", namespace: "functions", input: "pwd", status: "completed" };
+  globalThis.fetch = (async () => new Response(sseFrom([call]), {
+    status: 200, headers: { "content-type": "text/event-stream" },
+  })) as typeof fetch;
+  const body = {
+    ...requestBody,
+    input: [
+      {
+        type: "additional_tools",
+        role: "developer",
+        tools: [{
+          type: "namespace",
+          name: "functions",
+          tools: [{ type: "custom", name: "functions", description: "shell" }],
+        }],
+      },
+      requestBody.input[1],
+    ],
+  };
+
+  const res = await handleResponses(request(body), forwardConfig(), { model: "", provider: "" });
+  expect(res.status).toBe(200);
+  const text = await res.text();
+  expect(text).not.toContain('\"namespace\":\"functions\"');
+});
+
+test("a self-named namespace on a passthrough bare function_call is scrubbed", async () => {
+  const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "wait", namespace: "wait", arguments: "{}", status: "completed" };
+  globalThis.fetch = (async () => new Response(sseFrom([call]), {
+    status: 200, headers: { "content-type": "text/event-stream" },
+  })) as typeof fetch;
+
+  const res = await handleResponses(request(), forwardConfig(), { model: "", provider: "" });
+  expect(res.status).toBe(200);
+  const text = await res.text();
+  expect(text).toContain('\"type\":\"function_call\"');
+  expect(text).not.toContain('\"namespace\":\"wait\"');
+});
+
 test("tool_choice for a namespaced custom tool cannot authorize a colliding bare scrub", async () => {
   const call = { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "exec", namespace: "exec", input: "pwd", status: "completed" };
   globalThis.fetch = (async () => new Response(sseFrom([call]), {

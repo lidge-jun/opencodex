@@ -109,6 +109,7 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   toolParameterSchemas: Map<string, Record<string, unknown>>;
   freeformToolNames: Set<string>;
   bareCustomToolNames: Set<string>;
+  bareFunctionToolNames: Set<string>;
   toolSearchToolNames: Set<string>;
 } {
   const toolNsMap = new Map<string, { namespace: string; name: string; freeform?: true }>();
@@ -116,6 +117,7 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   const toolParameterSchemas = new Map<string, Record<string, unknown>>();
   const freeformToolNames = new Set<string>();
   const bareCustomToolNames = new Set<string>();
+  const bareFunctionToolNames = new Set<string>();
   const toolSearchToolNames = new Set<string>();
   const requestedTools = parsed.context.tools ?? [];
   const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, requestedTools);
@@ -139,6 +141,15 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
         budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
         bareCustomToolNames.add(t.name);
       }
+    } else if (
+      !t.toolSearch
+      && !t.webSearch
+      && !t.imageGeneration
+      && !t.videoGeneration
+      && (!t.namespace || t.namespace === "functions")
+    ) {
+      budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
+      bareFunctionToolNames.add(t.name);
     }
     if (t.toolSearch) {
       budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
@@ -174,6 +185,7 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
     toolParameterSchemas,
     freeformToolNames,
     bareCustomToolNames,
+    bareFunctionToolNames,
     toolSearchToolNames,
   };
 }
