@@ -56,3 +56,11 @@ No repository-wide local suite was run, per instruction. Each change was gated b
 `bun test` files plus red-green proof that the new regression genuinely fails without the
 fix, with CI trailing the train and judged at the end.
 
+## Final CI verdict
+
+Run `33533338305` on `dev` head `22a643a00b5974fa53b084a04491f60d56ec9ee2` —
+**completed success**, zero failed jobs across the full matrix (Linux shards 1-4, macOS,
+keyring, npm-global, gates, storage policy, api usage, hygiene).
+
+That head contains every landing in this train. The trailing-CI policy is therefore
+discharged: nothing merged here leaves `dev` red.
