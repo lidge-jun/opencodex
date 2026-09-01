@@ -173,3 +173,41 @@ test("a rejected persisted session is removed before the next prompt", async () 
   expect(promptCalls).toBe(1);
   expect(localStorage.getItem("opencodex-gui-session")).toBeNull();
 });
+
+test("clearing a rejected persistent session revokes it once and never reuses its token", async () => {
+  const session = {
+    token: "ocx_session_rejected",
+    csrfToken: "revoke-csrf",
+    origin: window.location.origin,
+    expiresAt: Date.now() + 60_000,
+  };
+  localStorage.setItem("opencodex-gui-session", JSON.stringify(session));
+  const calls: Array<{ path: string; key: string | null; origin: string | null; csrf: string | null }> = [];
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = pathnameOf(input);
+    const headers = headersOf(input, init);
+    calls.push({
+      path,
+      key: headers.get("X-OpenCodex-API-Key"),
+      origin: headers.get("X-OpenCodex-GUI-Origin"),
+      csrf: headers.get("X-OpenCodex-CSRF-Token"),
+    });
+    if (path === "/api/config") return new Response("unauthorized", { status: 401 });
+    if (path === "/opencodex-session") return new Response("missing", { status: 404 });
+    if (path === "/api/auth/session/revoke") return new Response(null, { status: 204 });
+    return new Response("unexpected", { status: 500 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  expect((await fetch("/api/config")).status).toBe(401);
+  expect(localStorage.getItem("opencodex-gui-session")).toBeNull();
+  expect(calls.filter((call) => call.path === "/api/auth/session/revoke")).toEqual([
+    {
+      path: "/api/auth/session/revoke",
+      key: session.token,
+      origin: session.origin,
+      csrf: session.csrfToken,
+    },
+  ]);
+  expect(calls.at(-1)?.key).toBeNull();
+});

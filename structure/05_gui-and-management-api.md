@@ -25,16 +25,19 @@ a fourth credential class. A management credential that equals any configured da
 does not enable management access. The data plane may continue to start, but `/api/*` remains closed.
 
 The persistent mint path stores only the opaque session token in the browser's
-origin-scoped `localStorage` (never the admin token); dashboard logout deletes it, and a
-proxy restart or expiry invalidates it server-side. The mint response is sent with
+origin-scoped `localStorage` (never the admin token). When the GUI clears a
+persistent session after rejection, it removes the local value immediately and
+attempts best-effort server revocation; a proxy restart or expiry also invalidates
+it server-side. The mint response is sent with
 `Cache-Control: no-store`. The session is bound to the exact validated dashboard origin —
 the browser `Origin` header when the mint request carried one, the request origin
 otherwise — so a TLS-terminating proxy with an allowlisted external `https://` origin
 binds sessions to that external origin. Session requests must carry
 `X-OpenCodex-GUI-Origin` on every method; unsafe methods additionally require the browser
-`Origin` and the per-session CSRF token. Loopback and allowlisted HTTPS origins mint by
-default; a non-loopback plain-HTTP dashboard origin additionally requires
-`server.allowRemoteDashboardSessions`.
+`Origin` and the per-session CSRF token. Loopback origins retain the existing
+short-lived injected-session behavior. Every non-loopback persistent mint requires
+`server.allowRemoteDashboardSessions: true`; the opted-in origin must also be HTTPS
+and management-allowlisted, or use the explicitly risky private/plain-HTTP path.
 CLI health collection follows the same boundary without transporting the reusable management
 credential. Its local-read HMAC capability is an additional single-use, route-scoped admission
 mechanism, not a reusable credential class. `ocx doctor` and OAuth health derive these capabilities

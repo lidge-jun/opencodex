@@ -53,8 +53,9 @@ is minted.
 
 `POST /api/auth/session` exchanges the raw admin token for an opaque 12-hour
 `ocx_session_*` credential. The browser stores only the session token (never the admin
-token) in origin-scoped `localStorage`; dashboard logout deletes it, and a proxy restart
-or expiry invalidates it server-side. The mint response is sent with
+token) in origin-scoped `localStorage`. When the GUI clears a persistent session after
+rejection, it removes the local value immediately and attempts best-effort server
+revocation; a proxy restart or expiry also invalidates it server-side. The mint response is sent with
 `Cache-Control: no-store`.
 
 The session is bound to the exact validated dashboard origin: the browser `Origin`
@@ -64,10 +65,10 @@ external `https://` origin rather than the internal `http://` origin the process
 observes. Every session request must send `X-OpenCodex-GUI-Origin`; unsafe methods
 additionally require the browser `Origin` and the session's CSRF token.
 
-Loopback and explicitly allowlisted HTTPS origins can mint sessions by default. A
-non-loopback plain-HTTP dashboard origin additionally requires
-`server.allowRemoteDashboardSessions: true`: plain HTTP carries the raw admin token on
-the first exchange, so remote sessions there stay off unless the operator opts in.
+Loopback uses the existing short-lived injected session. Every non-loopback persistent
+mint requires `server.allowRemoteDashboardSessions: true`; the opted-in origin must
+also satisfy the HTTPS/management-allowlist checks, or the explicitly risky
+private/plain-HTTP policy. Plain HTTP carries the raw admin token on the first exchange.
 
 ## Common errors
 

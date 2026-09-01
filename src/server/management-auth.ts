@@ -324,9 +324,10 @@ function guiSessionAdmitted(req: Request, session: GuiSessionRecord, config: Man
  * Mint a GUI session in exchange for the raw admin token (POST /api/auth/session).
  *
  * The first exchange carries the long-lived admin token, so the transport policy is
- * explicit: loopback origins mint by default, an explicitly allowlisted non-loopback
- * HTTPS origin mints because the `corsAllowOrigins` entry is itself the opt-in, and a
- * non-loopback plain-HTTP origin requires `server.allowRemoteDashboardSessions`.
+ * explicit: loopback origins use the existing short-lived path, while every
+ * non-loopback persistent mint requires `server.allowRemoteDashboardSessions`; the
+ * opted-in origin must then satisfy the HTTPS/CORS or explicitly risky plain-HTTP
+ * transport policy.
  */
 export function issueGuiSessionForAdmin(
   req: Request,
