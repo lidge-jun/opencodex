@@ -72,6 +72,7 @@ function normalizedCombo(
     strategy: "failover",
     stickyLimit: 1,
     defaultEffort: "medium",
+    reasoningEffortMode: "strict",
     imageInput: "auto",
     alias: null,
     nativeAlias: false,
@@ -263,6 +264,33 @@ describe("combo catalog capability intersection", () => {
     ]);
     expect(empty?.reasoningEfforts).toEqual([]);
     expect(empty).not.toHaveProperty("defaultReasoningEffort");
+  });
+
+  test("adaptive mode keeps the surviving ladder when a target advertises no effort control", () => {
+    // The strict case above is the baseline: memberB's explicit [] empties the picker for
+    // the whole combo. Adaptive is the opt-in that excludes it instead, so the effort
+    // control stays usable for the siblings that do support tuning.
+    const adaptive = deriveComboCatalogModel(
+      "adaptive",
+      normalizedCombo({ defaultEffort: "medium", reasoningEffortMode: "adaptive" }),
+      [memberA, { ...memberB, reasoningEfforts: [] }],
+    );
+    expect(adaptive?.reasoningEfforts).toEqual(["low", "medium", "high"]);
+    expect(adaptive?.defaultReasoningEffort).toBe("medium");
+
+    // Adaptive only drops EMPTY ladders; non-empty ones still intersect normally.
+    expect(deriveComboCatalogModel(
+      "adaptive-intersect",
+      normalizedCombo({ defaultEffort: "medium", reasoningEffortMode: "adaptive" }),
+      [memberA, { ...memberB, reasoningEfforts: ["medium", "high"] }],
+    )?.reasoningEfforts).toEqual(["medium", "high"]);
+
+    // Every target empty under adaptive still yields no ladder — there is nothing to keep.
+    expect(deriveComboCatalogModel(
+      "adaptive-all-empty",
+      normalizedCombo({ defaultEffort: "medium", reasoningEffortMode: "adaptive" }),
+      [{ ...memberA, reasoningEfforts: [] }, { ...memberB, reasoningEfforts: [] }],
+    )?.reasoningEfforts).toEqual([]);
   });
 
   test("fails closed for missing members, unknown context, duplicate targets, and empty modalities", () => {

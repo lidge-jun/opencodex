@@ -114,6 +114,7 @@ describe("combo-workspace-data", () => {
         stickyLimit: 1,
         defaultEffort: null,
         imageInput: "auto",
+        reasoningEffortMode: "strict",
         targets: [{ provider: "a", model: "m1", weight: 1, clientKey: expect.stringMatching(/^ct-\d+$/) }],
       },
       {
@@ -126,6 +127,7 @@ describe("combo-workspace-data", () => {
         stickyLimit: 4,
         defaultEffort: "high",
         imageInput: "auto",
+        reasoningEffortMode: "strict",
         targets: [
           { provider: "a", model: "m1", weight: 3, clientKey: expect.stringMatching(/^ct-\d+$/) },
           { provider: "b", model: "m2", weight: 1, clientKey: expect.stringMatching(/^ct-\d+$/) },
@@ -222,6 +224,49 @@ describe("combo-workspace-data", () => {
       [{ provider: "a", model: "m1" }, { provider: "b", model: "no-reasoning" }],
       map,
     )).toEqual([]);
+  });
+
+  test("intersectComboEfforts drops empty ladders in adaptive mode", () => {
+    const map = new Map<string, readonly string[] | undefined>([
+      ["a/m1", ["low", "medium"]],
+      ["b/no-reasoning", []],
+    ]);
+    const targets = [{ provider: "a", model: "m1" }, { provider: "b", model: "no-reasoning" }];
+    // The editor must agree with the served catalog: under adaptive the no-effort target
+    // stops emptying the picker, otherwise the dashboard shows a control the proxy does not.
+    expect(intersectComboEfforts(targets, map, "adaptive")).toEqual(["low", "medium"]);
+    // Explicit strict, and the default argument, both keep today's restrictive behavior.
+    expect(intersectComboEfforts(targets, map, "strict")).toEqual([]);
+    expect(intersectComboEfforts(targets, map)).toEqual([]);
+  });
+
+  test("reasoningEffortMode survives parse and serialize", () => {
+    // toPutBody is an allowlist and PUT replaces the whole combo, so a field missing here
+    // is silently destroyed the next time the user edits anything in the dashboard.
+    const [parsedItem] = parseComboList({
+      combos: [{
+        id: "mixed",
+        model: "combo/mixed",
+        strategy: "failover",
+        stickyLimit: 1,
+        defaultEffort: null,
+        reasoningEffortMode: "adaptive",
+        targets: [{ provider: "a", model: "m1" }],
+      }],
+    });
+    expect(parsedItem?.reasoningEffortMode).toBe("adaptive");
+    expect(toPutBody(parsedItem!).combo.reasoningEffortMode).toBe("adaptive");
+
+    // The default stays off the wire so a GET -> PUT round-trip never writes it back.
+    expect(toPutBody(combo()).combo).not.toHaveProperty("reasoningEffortMode");
+    expect(toPutBody(combo({ reasoningEffortMode: "strict" })).combo)
+      .not.toHaveProperty("reasoningEffortMode");
+  });
+
+  test("draftEquals treats a reasoningEffortMode change as dirty", () => {
+    // Without this the Save button stays disabled after toggling the switch.
+    expect(draftEquals(combo(), combo({ reasoningEffortMode: "adaptive" }))).toBe(false);
+    expect(draftEquals(combo({ reasoningEffortMode: "strict" }), combo())).toBe(true);
   });
 
   test("attention flags zero-target and one-target defensive rows", () => {

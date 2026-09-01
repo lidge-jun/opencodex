@@ -22,6 +22,82 @@ afterEach(() => {
 describe("AgentRouter openai-chat compatibility", () => {
   const preamble = "[Instruction: Process the user request below and respond in the appropriate language.]";
 
+  describe("omitReasoningEffortWithToolsModels", () => {
+    const toolBearing = (modelId: string): OcxParsedRequest => ({
+      modelId,
+      context: {
+        messages: [{ role: "user", content: "hi", timestamp: 0 }],
+        tools: [{
+          name: "read_file",
+          description: "Read a file",
+          parameters: { type: "object", properties: { path: { type: "string" } } },
+        }],
+      },
+      stream: false,
+      options: { reasoning: "high" },
+    });
+    const plain = (modelId: string): OcxParsedRequest => ({
+      modelId,
+      context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+      stream: false,
+      options: { reasoning: "high" },
+    });
+    const gated = provider({ omitReasoningEffortWithToolsModels: ["picky-model"] });
+
+    test("drops the wire effort only when tools are present", () => {
+      const withTools = JSON.parse(
+        createOpenAIChatAdapter(gated).buildRequest(toolBearing("picky-model")).body,
+      ) as Record<string, unknown>;
+      expect(withTools.reasoning_effort).toBeUndefined();
+      // The tools themselves must still be sent — this is an effort opt-out, not a tool opt-out.
+      expect(Array.isArray(withTools.tools)).toBe(true);
+
+      const withoutTools = JSON.parse(
+        createOpenAIChatAdapter(gated).buildRequest(plain("picky-model")).body,
+      ) as Record<string, unknown>;
+      expect(withoutTools.reasoning_effort).toBe("high");
+    });
+
+    test("leaves an unlisted sibling model untouched", () => {
+      const sibling = JSON.parse(
+        createOpenAIChatAdapter(gated).buildRequest(toolBearing("other-model")).body,
+      ) as Record<string, unknown>;
+      expect(sibling.reasoning_effort).toBe("high");
+    });
+
+    test("an unset provider list changes nothing", () => {
+      const body = JSON.parse(
+        createOpenAIChatAdapter(provider()).buildRequest(toolBearing("picky-model")).body,
+      ) as Record<string, unknown>;
+      expect(body.reasoning_effort).toBe("high");
+    });
+
+    test("suppresses the gateway-object reasoning block for tool-bearing requests", () => {
+      // The gateway-object branch writes its own reasoning field, so it needs the same
+      // guard; without it the wire effort returns through a second path.
+      const gatewayProvider = provider({
+        reasoningWireFormat: "gateway-object",
+        omitReasoningEffortWithToolsModels: ["picky-model"],
+      });
+      const none = (modelId: string): OcxParsedRequest => ({
+        ...toolBearing(modelId),
+        options: { reasoning: "none" },
+      });
+
+      const suppressed = JSON.parse(
+        createOpenAIChatAdapter(gatewayProvider).buildRequest(none("picky-model")).body,
+      ) as Record<string, unknown>;
+      expect(suppressed.reasoning).toBeUndefined();
+      expect(suppressed.reasoning_effort).toBeUndefined();
+
+      // An unlisted model still takes the gateway-object path.
+      const untouched = JSON.parse(
+        createOpenAIChatAdapter(gatewayProvider).buildRequest(none("other-model")).body,
+      ) as Record<string, unknown>;
+      expect(untouched.reasoning ?? untouched.reasoning_effort).toBeDefined();
+    });
+  });
+
   test("adds a stable Codex originator while preserving operator header precedence", () => {
     const automatic = createOpenAIChatAdapter(provider({ baseUrl: "https://agentrouter.org/v1" })).buildRequest(parsed());
     expect(automatic.headers.originator).toBe("codex_cli_rs");

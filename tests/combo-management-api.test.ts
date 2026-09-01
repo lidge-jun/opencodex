@@ -296,6 +296,67 @@ describe("combo management API", () => {
     });
   });
 
+  test("reasoningEffortMode survives a management round-trip and stays sparse when strict", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+
+      // Opting in must survive PUT -> disk -> GET. The dashboard replaces the whole combo
+      // on save, so a field that is not echoed here is a field the UI silently destroys.
+      const opted = await comboApi(config, "PUT", "/api/combos", {
+        id: "mixed",
+        combo: {
+          targets: [{ provider: "a", model: "m1" }],
+          reasoningEffortMode: "adaptive",
+        },
+      });
+      expect(opted?.status).toBe(200);
+      expect(await responseJson(opted)).toMatchObject({
+        combo: { reasoningEffortMode: "adaptive" },
+      });
+      expect(config.combos?.mixed).toMatchObject({ reasoningEffortMode: "adaptive" });
+      const listed = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      expect(listed.combos).toEqual([expect.objectContaining({
+        id: "mixed", reasoningEffortMode: "adaptive",
+      })]);
+
+      // The default is never materialized: neither on disk nor in the wire shape, so a
+      // client that round-trips GET into PUT cannot write it back into every config.
+      const plain = await comboApi(config, "PUT", "/api/combos", {
+        id: "plain",
+        combo: { targets: [{ provider: "a", model: "m1" }] },
+      });
+      expect((await responseJson(plain)).combo).not.toHaveProperty("reasoningEffortMode");
+      expect(config.combos?.plain).not.toHaveProperty("reasoningEffortMode");
+
+      // Explicitly turning it back off clears the stored field rather than pinning "strict".
+      await comboApi(config, "PUT", "/api/combos", {
+        id: "mixed",
+        combo: {
+          targets: [{ provider: "a", model: "m1" }],
+          reasoningEffortMode: "strict",
+        },
+      });
+      expect(config.combos?.mixed).not.toHaveProperty("reasoningEffortMode");
+    });
+  });
+
+  test("PUT rejects an unknown reasoningEffortMode", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "bad",
+        combo: {
+          targets: [{ provider: "a", model: "m1" }],
+          reasoningEffortMode: "aggressive",
+        },
+      });
+      expect(response?.status).toBe(400);
+      expect(config.combos?.bad).toBeUndefined();
+    });
+  });
+
   test("PUT stores aliases and GET exposes the public model", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });

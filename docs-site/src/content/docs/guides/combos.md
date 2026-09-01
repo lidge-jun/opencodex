@@ -240,6 +240,37 @@ default and leaves the target's own behavior unchanged. Supported values are `lo
 `high`, `xhigh`, `max`, and `ultra`; omit the field or set it to `null` to leave effort entirely to
 the caller and target.
 
+### Mixed-capability groups (`reasoningEffortMode`)
+
+The effort levels a combo advertises are the intersection of what its targets advertise. A target
+that explicitly advertises **no** effort control takes part in that intersection, so a single
+no-effort backup empties the effort picker for the whole combo — including for the targets that do
+support tuning.
+
+Set `reasoningEffortMode: "adaptive"` to exclude those empty ladders from the published
+intersection instead. The picker then shows the levels the remaining targets share, and the
+no-effort target stays eligible for routing. Targets whose ladder is simply *unknown* are treated
+as wildcards in both modes.
+
+```json
+{
+  "combos": {
+    "mixed": {
+      "targets": [
+        { "provider": "openai-apikey", "model": "gpt-5.6-luna" },
+        { "provider": "local", "model": "no-effort-model" }
+      ],
+      "reasoningEffortMode": "adaptive"
+    }
+  }
+}
+```
+
+The default is `"strict"`, which keeps the original behavior. This setting changes published
+catalog metadata only — it does not change target order, failover policy, or which effort a given
+target receives at dispatch. In the dashboard it is the **Adaptive reasoning ladder** switch in a
+combo's Capabilities section.
+
 ## Image / multimodal capability
 
 By default a combo publishes the **intersection** of its targets' input modalities (image is
@@ -346,6 +377,7 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `strategy` | No | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, or `"reset-window"`. |
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. Applies only to round-robin. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; applied only when the caller omits effort and the target advertises support. |
+| `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. Metadata only; dispatch is unchanged. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |

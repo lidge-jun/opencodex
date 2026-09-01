@@ -330,6 +330,50 @@ describe("provider management validation", () => {
       .toEqual(["deepseek-v4-flash", "other-model"]);
   });
 
+  test("validates, exposes, and normalizes tool-bearing reasoning-effort opt-outs", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1",
+      omitReasoningEffortWithToolsModels: ["picky-model"],
+    };
+    expect(providerManagementConfigError("relay", provider)).toBeNull();
+    for (const omitReasoningEffortWithToolsModels of [
+      "picky-model",
+      [""],
+      ["   "],
+      [42],
+    ]) {
+      expect(providerManagementConfigError("relay", {
+        ...provider,
+        omitReasoningEffortWithToolsModels,
+      })).toContain("omitReasoningEffortWithToolsModels");
+    }
+
+    const dto = safeConfigDTO({
+      port: 10100,
+      defaultProvider: "relay",
+      providers: { relay: provider },
+    } as OcxConfig) as { providers: Record<string, { omitReasoningEffortWithToolsModels?: string[] }> };
+    expect(dto.providers.relay?.omitReasoningEffortWithToolsModels).toEqual(["picky-model"]);
+
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify({
+      ...config("127.0.0.1"),
+      defaultProvider: "relay",
+      providers: {
+        relay: {
+          adapter: "openai-chat",
+          baseUrl: "https://relay.example/v1",
+          omitReasoningEffortWithToolsModels: [" picky-model ", "picky-model", " other-model "],
+        },
+      },
+    }));
+    expect(loadConfig().providers.relay?.omitReasoningEffortWithToolsModels)
+      .toEqual(["picky-model", "other-model"]);
+  });
+
   test("provider management validates annotateEmptyToolOutputs as boolean", () => {
     const provider = {
       adapter: "openai-chat",

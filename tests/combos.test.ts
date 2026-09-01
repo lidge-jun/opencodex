@@ -807,6 +807,7 @@ describe("combo validation and normalization", () => {
       strategy: "failover",
       stickyLimit: 1,
       defaultEffort: "high",
+      reasoningEffortMode: "strict",
       imageInput: "auto",
       alias: null,
       nativeAlias: false,
@@ -814,6 +815,17 @@ describe("combo validation and normalization", () => {
       targets: [{ provider: "a", model: "m1", weight: 2 }],
     });
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();
+    // Anything that is not the literal "adaptive" normalizes to today's behavior, so a
+    // malformed or absent value can never silently opt a user in.
+    expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).reasoningEffortMode).toBe("strict");
+    expect(normalizeComboConfig({
+      reasoningEffortMode: "adaptive",
+      targets: [{ provider: "a", model: "m1" }],
+    }).reasoningEffortMode).toBe("adaptive");
+    expect(comboConfigIssues("free", {
+      reasoningEffortMode: "aggressive",
+      targets: [{ provider: "a", model: "m1" }],
+    }, baseConfig().providers).some(issue => issue.path[0] === "reasoningEffortMode")).toBe(true);
     expect(comboDefaultEffort(baseConfig(), "free")).toBeNull();
     const aliased = baseConfig({
       combos: { free: { ...VALID_COMBO, alias: "  deepseek-v4-flash  " } },
