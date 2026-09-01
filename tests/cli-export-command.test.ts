@@ -42,10 +42,11 @@ const ROWS = [
     native: true,
     disabled: false,
     contextWindow: 272_000,
+    inputModalities: ["text", "image"],
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     defaultReasoningEffort: "high",
   },
-  { provider: "anthropic", id: "claude-opus-5", namespaced: "anthropic/claude-opus-5", disabled: false, contextWindow: 200_000, displayName: "Claude Opus 5" },
+  { provider: "anthropic", id: "claude-opus-5", namespaced: "anthropic/claude-opus-5", disabled: false, contextWindow: 200_000, displayName: "Claude Opus 5", inputModalities: ["text"] },
   { provider: "custom", id: "no-context", namespaced: "custom/no-context", disabled: false },
   { provider: "banned", id: "hidden", namespaced: "banned/hidden", disabled: true, contextWindow: 100_000 },
 ];
@@ -308,7 +309,13 @@ describe("ocx export argument validation (accept criterion 4)", () => {
     expect(yaml.code).toBe(0);
     const yamlText = readFileSync(yamlTarget, "utf8");
     expect(yamlText.startsWith("providers:")).toBe(true);
-    expect(Bun.YAML.parse(yamlText)).toHaveProperty("providers.opencodex");
+    const parsedYaml = Bun.YAML.parse(yamlText) as {
+      providers: { opencodex: { models: Record<string, { supports_vision?: boolean }> } };
+    };
+    expect(parsedYaml).toHaveProperty("providers.opencodex");
+    expect(parsedYaml.providers.opencodex.models["gpt-5.6-luna"]).toEqual({ supports_vision: true });
+    expect(parsedYaml.providers.opencodex.models["anthropic/claude-opus-5"]).toEqual({ supports_vision: false });
+    expect(parsedYaml.providers.opencodex.models["custom/no-context"]).toEqual({});
 
     const tomlTarget = join(tempDir(), "kimi-config.toml");
     const toml = await run(["--client", "kimi", "--out", tomlTarget], { baseUrl: proxy.baseUrl });

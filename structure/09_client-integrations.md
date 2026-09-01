@@ -36,6 +36,23 @@ Status and mutation must use the same classifier. A special case added only to a
 would be misleading because refresh or disable could still reject the same file; a special case
 added only to a writer would let a mutation bypass the state users saw.
 
+## Hermes Model Capabilities
+
+Hermes cannot infer custom-provider capabilities from its built-in registry. The OpenCodex
+provider therefore emits `models` as a mapping keyed by the canonical namespaced selector. An
+explicit catalog modality list containing `image` becomes `supports_vision: true`; an explicit,
+non-empty list without `image` becomes `false`; an absent or empty modality list keeps an empty
+model object so Hermes receives no guessed capability. OpenCodex does not emit `supports_video`
+because its authoritative input-modality vocabulary currently has no video value.
+
+[Decision Log]
+- 목적과 의도: Preserve catalog-backed image routing when Hermes uses OpenCodex as a custom provider.
+- 기존 구현 및 제약 조건: A string array preserved model selection but normalized to empty metadata in Hermes, while OpenCodex has authoritative text/image/audio facts but no video fact.
+- 검토한 주요 대안: Keep the array; mark every model vision-capable; infer video from model names; emit a per-model metadata map from declared modalities.
+- 선택한 방식: Emit a stable per-model map and include only the `supports_vision` boolean that the catalog can prove.
+- 다른 대안 대신 이 방식을 선택한 이유: The map is the Hermes-supported capability boundary, while guesses would misroute attachments or advertise unsupported video.
+- 장점, 단점 및 영향: Vision-capable custom models route correctly and text-only rows stay explicit; unknown rows remain unknown, and video routing waits for authoritative source metadata.
+
 ## Ownership Axes
 
 `fileFingerprint` records the exact whole-file result for restore and for serializers that may lose
