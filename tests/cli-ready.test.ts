@@ -850,12 +850,15 @@ describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
   const cliSource = readFileSync(join(import.meta.dir, "../src/cli/index.ts"), "utf8");
 
   test("an already-live proxy exits 0 in OCX_SERVICE context", () => {
-    expect(cliSource).toMatch(/process\.env\.OCX_SERVICE === "1"/);
-    expect(cliSource).toMatch(/process\.exit\(0\)/);
-    const guard = cliSource.match(/if\s*\(process\.env\.OCX_SERVICE === "1"\)\s*\{[\s\S]{0,400}?process\.exit\(0\)/);
-    expect(guard, "OCX_SERVICE guard must exit 0 when the port is already served").not.toBeNull();
-    const nonService = cliSource.match(/Proxy already running[\s\S]{0,200}?process\.exit\(1\)/);
-    expect(nonService, "non-service path keeps the exit 1 conflict error").not.toBeNull();
+    // The `OCX_SERVICE === "1"` comparison moved into `decideStartWithLiveOwner`
+    // (src/cli/dispatch.ts), where the sentinel semantics are asserted at runtime
+    // across the whole matrix (tests/cli-dispatch.test.ts). This oracle pins the
+    // exits that the decision routes to: stay-out exits 0, the conflict exits 1.
+    expect(cliSource).toMatch(/decideStartWithLiveOwner\(\{/);
+    const stayOut = cliSource.match(/decision === "service-stay-out"[\s\S]{0,800}?process\.exit\(0\)/);
+    expect(stayOut, "the service stay-out decision must exit 0 when the port is already served").not.toBeNull();
+    const nonService = cliSource.match(/Proxy already running[\s\S]{0,300}?process\.exit\(1\)/);
+    expect(nonService, "non-service refusal keeps the exit 1 conflict error").not.toBeNull();
   });
 
   test("service.ts teardown kills surviving wrapper processes on stop", () => {
