@@ -327,6 +327,7 @@ import {
 } from "../responses-image-gen-repair";
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
 import {
+  collectAuthorizedBareCustomToolNames,
   createSelfNamedToolCallNamespaceScrubRewrite,
   scrubSelfNamedToolCallNamespaceInJson,
 } from "../responses-self-named-namespace-scrub";
@@ -3661,6 +3662,10 @@ async function handleResponsesInner(
       parsed._rawBody,
       replayedInputPrefixLength,
     );
+    const selfNamedNamespaceScrubToolNames = collectAuthorizedBareCustomToolNames(
+      clientToolAuthorizationBody,
+      toolBridgeMaps.freeformToolNames,
+    );
     const clientExplicitWireToolCatalog = hasExplicitWireToolCatalog(clientToolAuthorizationBody);
     const clientDeclaredWireToolNames = collectDeclaredWireToolNames(clientToolAuthorizationBody);
     const clientDeclaredNamelessCallTypes = collectDeclaredNamelessClientCallTypes(
@@ -4646,7 +4651,7 @@ async function handleResponsesInner(
       const payloadRewrites = [
         createImageGenCallRestoreRewrite(imageGenCallAliases),
         // #3217: a call whose namespace repeats its own name is unroutable in codex-rs.
-        createSelfNamedToolCallNamespaceScrubRewrite(),
+        createSelfNamedToolCallNamespaceScrubRewrite(selfNamedNamespaceScrubToolNames),
         routedNamespaceToolAliases.size > 0
           ? createRoutedNamespaceCallRestoreRewrite(routedNamespaceToolAliases)
           : undefined,
@@ -4879,7 +4884,10 @@ async function handleResponsesInner(
       inspectResponseLogJson(logCtx, text);
       const clientJson = (() => {
         const restoredNamespace = restoreRoutedNamespaceCallsInJson(
-          scrubSelfNamedToolCallNamespaceInJson(restoreImageGenCallsInJson(text, imageGenCallAliases)),
+          scrubSelfNamedToolCallNamespaceInJson(
+            restoreImageGenCallsInJson(text, imageGenCallAliases),
+            selfNamedNamespaceScrubToolNames,
+          ),
           routedNamespaceToolAliases,
         );
         const restoredAuthorizedBareNamespace = restoreRoutedNamespaceCallsInJson(
