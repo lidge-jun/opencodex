@@ -119,6 +119,11 @@ export {
   type AtomicWriteIO,
 } from "./config/atomic-write";
 import { getConfigDir, getConfigPath, hardenConfigDir } from "./config/paths";
+import {
+  describeProxyForLog,
+  readWindowsSystemProxy,
+  type WindowsProxyRegistryReader,
+} from "./lib/windows-system-proxy";
 export { expandUserPath, getConfigDir, getConfigPath, hardenConfigDir } from "./config/paths";
 export {
   getPidPath,
@@ -3526,6 +3531,14 @@ function warnProxyConfigDiscardOnce(kind: "proxy" | "noProxy" | "noProxyElements
  * that makes outbound provider requests (server start, catalog sync).
  */
 export function applyProxyEnv(config: OcxConfig): void {
+  applyProxyEnvWith(config);
+}
+
+/** Test seam for `proxy: "auto"`: the registry reader and platform are injectable. */
+export function applyProxyEnvWith(
+  config: OcxConfig,
+  auto: { reader?: WindowsProxyRegistryReader; platform?: NodeJS.Platform } = {},
+): void {
   // `proxy` and `noProxy` are not declared in the top-level schema, which ends in
   // `.passthrough()`, so whatever is on disk arrives here verbatim. A non-string value
   // reached string-only methods and threw out of this function, and it runs once per
@@ -3533,13 +3546,40 @@ export function applyProxyEnv(config: OcxConfig): void {
   // malformed values with a privacy-safe warning instead: they cannot express a routing
   // intent, and refusing to start is a worse answer than starting without them.
   const rawProxy = config.proxy;
-  const proxy = typeof rawProxy === "string" ? resolveEnvValue(rawProxy) : undefined;
+  let proxy = typeof rawProxy === "string" ? resolveEnvValue(rawProxy) : undefined;
   if (!proxy) {
     if (rawProxy !== undefined) warnProxyConfigDiscardOnce("proxy");
     return;
   }
+  if (proxy.trim().toLowerCase() === "auto") {
+    // #1525 slice 1: one startup read of the Windows static proxy. Never copy the literal
+    // "auto" into HTTP_PROXY; every non-proxy outcome leaves outbound routing as it was.
+    if (process.env.HTTP_PROXY?.trim() || process.env.http_proxy?.trim()
+      || process.env.HTTPS_PROXY?.trim() || process.env.https_proxy?.trim()) {
+      console.log("[opencodex] proxy \"auto\": existing HTTP_PROXY/HTTPS_PROXY environment wins; system proxy not consulted");
+      proxy = undefined;
+    } else {
+      const found = readWindowsSystemProxy(auto.reader, auto.platform);
+      if (found.kind === "proxy") {
+        console.log(`[opencodex] proxy "auto": using Windows system proxy ${describeProxyForLog(found.url)}`);
+        proxy = found.url;
+      } else {
+        const reason = found.kind === "unsupported"
+          ? "only Windows system proxy discovery is supported; using direct egress on this OS"
+          : found.kind === "disabled"
+            ? "Windows system proxy is disabled; using direct egress"
+            : found.kind === "socks-only"
+              ? "Windows system proxy is SOCKS-only, which HTTP_PROXY cannot express; using direct egress"
+              : "Windows proxy settings could not be read; using direct egress";
+        console.log(`[opencodex] proxy "auto": ${reason}`);
+        proxy = undefined;
+      }
+    }
+  }
+  if (proxy) {
   if (!process.env.HTTP_PROXY?.trim() && !process.env.http_proxy?.trim()) process.env.HTTP_PROXY = proxy;
   if (!process.env.HTTPS_PROXY?.trim() && !process.env.https_proxy?.trim()) process.env.HTTPS_PROXY = proxy;
+  }
   const existing = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
   const entries = existing.split(",").map(s => s.trim()).filter(Boolean);
   const seen = new Set(entries.map(e => e.toLowerCase()));
