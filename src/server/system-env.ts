@@ -5,6 +5,7 @@ import { getConfigDir } from "../config";
 import { resolveAutoContext, type AutoContextMode } from "../claude/context-windows";
 import { PROXY_MARKER, defaultAuthDetectDeps, detectClaudeAuth, ownAdmissionTokens } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
+import { isProxyAdmissionSecret } from "./auth-cors";
 import type { OcxConfig } from "../types";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { providerContextCap } from "../providers/context-cap";
@@ -49,10 +50,12 @@ function writeShellEnvFile(port: number, config: OcxConfig, modelEnv: Record<str
   // exported in their shell wins even though launchctl knows nothing about it.
   const conditional = (name: string, value: string) =>
     `[ -z "\${${name}+x}" ] && export ${name}=${shellValue(value)}`;
-  if (config.apiKeys?.length) {
-    lines.push(`export ANTHROPIC_AUTH_TOKEN=${shellValue(config.apiKeys[0].key)}`);
-  } else if (systemEnvMarkerMode(config) === "proxy") {
-    lines.push(conditional("ANTHROPIC_AUTH_TOKEN", PROXY_MARKER));
+  if (systemEnvMarkerMode(config) === "proxy") {
+    if (config.apiKeys?.length) {
+      lines.push(`export ANTHROPIC_AUTH_TOKEN=${shellValue(config.apiKeys[0].key)}`);
+    } else {
+      lines.push(conditional("ANTHROPIC_AUTH_TOKEN", PROXY_MARKER));
+    }
   }
   // Model slots (default + tiers + legacy small-fast) with [1m] applied (devlog 260712 B2).
   if (modelEnv.ANTHROPIC_MODEL) {
@@ -351,21 +354,25 @@ export async function injectSystemEnv(port: number, config: OcxConfig): Promise<
   try {
     inject("ANTHROPIC_BASE_URL", ownedBaseUrl(port));
     inject("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
-    if (config.apiKeys?.length) {
-      inject("ANTHROPIC_AUTH_TOKEN", config.apiKeys[0].key);
-    } else if (systemEnvMarkerMode(config) === "proxy" && launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === undefined) {
-      inject("ANTHROPIC_AUTH_TOKEN", PROXY_MARKER);
-    } else if (systemEnvMarkerMode(config) !== "proxy"
-      && injectedKeys.includes("ANTHROPIC_AUTH_TOKEN")
-      && launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === PROXY_MARKER) {
-      // Subscription switch-back (devlog 260720_claude_authmode_persist): remove ONLY
-      // the opencodex-owned dummy token so a launchd-started Claude regains its own
-      // claude.ai OAuth. User-set tokens (not tracked in injectedKeys, or carrying a
-      // different value) are never touched.
-      unsetLaunchctlEnv("ANTHROPIC_AUTH_TOKEN");
-      const dummyIdx = injectedKeys.indexOf("ANTHROPIC_AUTH_TOKEN");
-      if (dummyIdx >= 0) injectedKeys.splice(dummyIdx, 1);
-      writeTracking(port, injectedKeys);
+    const markerMode = systemEnvMarkerMode(config);
+    if (markerMode === "proxy") {
+      if (config.apiKeys?.length) {
+        inject("ANTHROPIC_AUTH_TOKEN", config.apiKeys[0].key);
+      } else if (launchctlGetenv("ANTHROPIC_AUTH_TOKEN") === undefined) {
+        inject("ANTHROPIC_AUTH_TOKEN", PROXY_MARKER);
+      }
+    } else if (injectedKeys.includes("ANTHROPIC_AUTH_TOKEN")) {
+      const currentToken = launchctlGetenv("ANTHROPIC_AUTH_TOKEN");
+      if (currentToken
+        && (currentToken === PROXY_MARKER || isProxyAdmissionSecret(currentToken, config))) {
+        // Subscription switch-back (devlog 260720_claude_authmode_persist): remove
+        // opencodex-owned dummy or admission tokens so a launchd-started Claude regains
+        // its own claude.ai OAuth. User-set tokens are never touched.
+        unsetLaunchctlEnv("ANTHROPIC_AUTH_TOKEN");
+        const tokenIdx = injectedKeys.indexOf("ANTHROPIC_AUTH_TOKEN");
+        if (tokenIdx >= 0) injectedKeys.splice(tokenIdx, 1);
+        writeTracking(port, injectedKeys);
+      }
     }
     // Lever keys (devlog 136 B6): user-wins — skip any key the user already set in the
     // launchd domain, and track ONLY the keys we actually injected so revert cannot
