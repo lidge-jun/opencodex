@@ -17,14 +17,20 @@ import { CLI_COMMANDS } from "../src/cli/registry";
  */
 const SKILL_DIR = join(import.meta.dir, "..", "skills", "ocx");
 const SKILL = join(SKILL_DIR, "SKILL.md");
-const REFERENCES = ["01_management_surface.md", "02_json_shapes.md", "03_recipes.md", "04_failure_semantics.md"];
+const REFERENCES = [
+  "01_management_surface.md",
+  "02_json_shapes.md",
+  "03_recipes.md",
+  "04_failure_semantics.md",
+  "05_remote_hub.md",
+];
 
 function read(file: string): string {
   return readFileSync(join(SKILL_DIR, file), "utf8");
 }
 
 describe("skills/ocx structure", () => {
-  test("SKILL.md and all four references exist", () => {
+  test("SKILL.md and every reference exist", () => {
     expect(existsSync(SKILL)).toBe(true);
     for (const ref of REFERENCES) {
       expect(existsSync(join(SKILL_DIR, "references", ref)), ref).toBe(true);
