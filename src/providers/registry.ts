@@ -18,6 +18,7 @@ import {
   cursorModelReasoningEfforts,
 } from "../adapters/cursor/discovery";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "./command-code-efforts";
+import { museCodeUserAgent } from "../adapters/client-fingerprint";
 import { isCanonicalOpenRouterTarget } from "./openrouter-routing";
 
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
@@ -1299,6 +1300,16 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "oauth",
     featured: true,
     dashboardUrl: "https://dev.meta.ai",
+    staticHeaders: {
+      // Mirror the Muse Code CLI request fingerprint captured from 1.0.1: the minted
+      // subscription key travels with `x-client-id: tbh:exec` and a muse-build User-Agent,
+      // and an anonymous runtime UA is a credential/fingerprint mismatch (same rationale
+      // as the Antigravity UA in client-fingerprint.ts). Per-run session/trace headers
+      // (x-tbh-session-id, x-meta-ai-gateway-session-id, traceparent) are deliberately
+      // not sent: they must be fresh UUIDv7/trace ids per run, and auth does not need them.
+      "User-Agent": museCodeUserAgent(),
+      "x-client-id": "tbh:exec",
+    },
     defaultModel: "muse-spark-1.2",
     models: ["muse-spark-1.2", "muse-spark-1.1"],
     liveModels: true,

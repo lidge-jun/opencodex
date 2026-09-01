@@ -7,6 +7,7 @@ import {
   museCodeHttpError,
   refreshMuseCodeToken,
 } from "../src/oauth/muse-code";
+import { museCodeUserAgent } from "../src/adapters/client-fingerprint";
 
 const META_ACCESS = "fixture-meta-access-DO-NOT-LEAK";
 const MUSE_KEY = "LLM|123456789|fixture-muse-key-DO-NOT-LEAK";
@@ -77,6 +78,15 @@ describe("Meta Muse Code device login", () => {
     expect(new Headers(mint?.init?.headers).get("authorization")).toBe(`Bearer ${META_ACCESS}`);
     expect(new Headers(mint?.init?.headers).get("x-api-version")).toBe("1.0.0");
     expect(mint?.init?.redirect).toBe("error");
+    // Every OAuth call mirrors the official Muse Code client fingerprint, never a bare runtime UA.
+    expect(museCodeUserAgent()).toMatch(/^muse-build\/1\.0\.1 \(non-interactive; [\w-]+-[\w-]+; build [0-9a-f]{40}\)$/);
+    for (const call of calls) {
+      expect(new Headers(call.init?.headers).get("user-agent")).toBe(museCodeUserAgent());
+    }
+    // The captured Muse Code device/mint requests carry no Accept header; don't invent one.
+    for (const call of calls) {
+      expect(new Headers(call.init?.headers).get("accept")).toBeNull();
+    }
   });
 
   test("honors slow_down and rejects an account that still requires billing", async () => {

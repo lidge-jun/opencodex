@@ -63,3 +63,34 @@ export function antigravityUserAgent(version = ANTIGRAVITY_IDE_VERSION, authMeth
   const [osType, arch] = ANTIGRAVITY_IDE_PLATFORM.split("/");
   return `antigravity/ide/${version} (os_type=${osType}; arch=${arch}; ${ANTIGRAVITY_IDE_CLIENT_NAME}; auth_method=${authMethod})`;
 }
+
+// ── Muse Code (Meta) ──
+/** Pinned Muse Code CLI version whose fingerprint we mirror (observed 1.0.1-R2006.1). */
+const MUSE_CODE_CLI_VERSION = "1.0.1";
+/** Build sha from the captured 1.0.1 User-Agent; bump together with the version. */
+const MUSE_CODE_BUILD_SHA = "e27e408b666e693900118f778bd6c2880f88e432";
+
+/**
+ * Real Muse Code User-Agent, captured from the 1.0.1 binary:
+ * `muse-build/<version> (<interactive|non-interactive>; <os>-<arch>; build <sha>)`
+ *
+ * The subscription credential is minted through Muse Code's own device-flow client id, so
+ * runtime requests to api.meta.ai must carry the same client-family fingerprint the minting
+ * client used — a bare runtime UA is a credential/fingerprint mismatch of the kind upstreams
+ * score (same rationale as the Antigravity UA above). The proxy always speaks the
+ * non-interactive shape. Observed os-arch spellings: windows-x86_64, windows-aarch64,
+ * linux-x86_64, darwin-arm64.
+ *
+ * Per-run headers (`x-tbh-session-id`, `x-meta-ai-gateway-session-id`, `traceparent`) are
+ * intentionally NOT modeled: they are fresh UUIDv7/W3C trace ids per run, a static value
+ * would conflate every proxied session, and auth does not require them.
+ */
+export function museCodeUserAgent(): string {
+  const os = process.platform === "win32" ? "windows" : process.platform;
+  const arch = process.arch === "x64"
+    ? "x86_64"
+    : process.arch === "arm64"
+      ? (process.platform === "darwin" ? "arm64" : "aarch64")
+      : process.arch;
+  return `muse-build/${MUSE_CODE_CLI_VERSION} (non-interactive; ${os}-${arch}; build ${MUSE_CODE_BUILD_SHA})`;
+}

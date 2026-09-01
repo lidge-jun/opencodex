@@ -4,8 +4,10 @@ import {
   CLAUDE_CODE_HEADERS,
   antigravityUserAgent,
   claudeCodeSessionId,
+  museCodeUserAgent,
 } from "../src/adapters/client-fingerprint";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
+import { getProviderRegistryEntry } from "../src/providers/registry";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function parsed(): OcxParsedRequest {
@@ -72,6 +74,20 @@ describe("client fingerprint — helpers", () => {
     expect(CLAUDE_CODE_HEADERS["X-App"]).toBe("cli");
     expect(CLAUDE_CODE_HEADERS["X-Stainless-Runtime"]).toBe("node");
     expect(CLAUDE_CODE_HEADERS["X-Stainless-Lang"]).toBe("js");
+  });
+});
+
+describe("client fingerprint — Muse Code UA", () => {
+  test("mirrors the captured 1.0.1 muse-build shape", () => {
+    // Captured from Muse Code 1.0.1 (non-interactive) on windows-x86_64:
+    // muse-build/1.0.1 (non-interactive; windows-x86_64; build e27e408b666e693900118f778bd6c2880f88e432)
+    expect(museCodeUserAgent()).toMatch(/^muse-build\/1\.0\.1 \(non-interactive; [\w-]+-[\w-]+; build [0-9a-f]{40}\)$/);
+  });
+
+  test("registry static headers pair the UA with the Muse Code client id", () => {
+    const entry = getProviderRegistryEntry("muse-code");
+    expect(entry?.staticHeaders?.["x-client-id"]).toBe("tbh:exec");
+    expect(entry?.staticHeaders?.["User-Agent"]).toBe(museCodeUserAgent());
   });
 });
 
