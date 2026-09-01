@@ -38,3 +38,16 @@ promotion PR recorded "the tree is byte-identical to `dev`".
 A failing job on the promotion commit that is not the documented macOS launcher flake
 stops the train here. `main` is the release branch; a red `main` is worse than a late
 release, and `release.yml` would refuse the dispatch regardless.
+
+## Executed
+
+PR #3125, merged at `af6113a0381d6fff2e4dce587652825c7eeb6423`. The merge was clean
+with no version conflict and `git diff origin/dev HEAD` was empty — the promoted tree
+is byte-identical to `dev`, as predicted.
+
+Push-event Cross-platform CI: run `33463473330`, success on rerun. Service lifecycle:
+success. The first attempt failed on the Linux `test 3/4` shard, same
+`tests/server-auth.test.ts:2288` assertion the preview run hit on macOS — which is how
+we learned the flake is cross-platform rather than macOS-specific. The PR run for the
+identical tree had already passed `macos` and every shard, which is the contrast that
+made the flake diagnosis defensible rather than convenient.
