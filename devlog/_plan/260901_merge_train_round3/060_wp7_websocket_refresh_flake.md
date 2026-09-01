@@ -108,22 +108,59 @@ src/codex/quota.ts:457
 The fixture calls `updateAccountQuota("pool-a", 10, 5)` at `:2242`, **before**
 `Date.now` is faked — so `updatedAt` is stamped with the **real** clock, 2026-09-01.
 
-Now the two orderings diverge:
+Except that table was a prediction, and measuring it refuted the interesting half.
 
-| when the prime's `Date.now()` runs | value | `Date.now() - updatedAt` | verdict |
-| --- | --- | --- | --- |
-| before `:2251` installs the fake clock | real, 2026-09-01 | ~0 ms | fresh — no fetch |
-| after `:2251` | fake, 2027-01-15 | ~136 days | **stale — fetch fires** |
+## Correction: the prime is ALWAYS stale, before and after the fix
 
-So the failure needs the prime to land on the **late** side, not the early one. The stored
-credential is not near expiry under either clock; what varies is whether a quota fetch is
-triggered at all, and that fetch is what rotates the token before the first turn is served.
+```
+$ for i in 1..5: OPENCODEX_DEBUG_QUOTA=1 bun test ... -t "websocket passthrough refreshes pool auth"
+refreshed=1 before-fix run1 ... refreshed=1 before-fix run5
+refreshed=1 1 pass 0 fail run1 ... refreshed=1 1 pass 0 fail run5   (after fix)
+```
 
-The earlier reading — "60 s of margin against `REFRESH_SKEW_MS`, the read lands on the
-wrong side of the boundary" — was wrong in both quantity and direction. The margin is months,
-and the fake clock does not shorten it; it inflates a *cache age* past a five-minute TTL.
-Recording that here because the wrong version is already quoted in comments on #3109 and
-#3112, and in `260901_release_train_2390/070_outcome.md`.
+`refreshed=1` every single time, on both trees. So staleness never varied and the clock
+ordering is **not** the race. The predicted table is wrong.
+
+What actually varies is what the prime's quota fetch *hits*:
+
+```
+src/codex/auth-api.ts:1145-1158  (fetchFreshPoolAccountQuota)
+  const { accessToken, chatgptAccountId, generation } = await getValidCodexToken(accountId);
+  const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", { ... });
+```
+
+Two things happen there, and the fixture controls exactly one of them at `:2251`:
+
+1. `getValidCodexToken` may **rotate the credential** — that is the token the assertion
+   reads.
+2. `fetch` goes to a real host unless the stub is installed.
+
+The stub was installed **after** `startServer`, so for the width of two dynamic
+`import()` resolutions the prime could reach the real `fetch` and the unpinned clock. Which
+of the two turns' credentials it left behind depended on whether it resolved before or after
+the fixture finished setting itself up — module-cache warmth and machine load, exactly the
+shape of a CI-only failure.
+
+**So the fix is right for a reason one step over from the one first written down.** Moving
+the clock *and the fetch stub* above `startServer` does not stop the prime from running —
+`refreshed=1` still fires every run — it makes the prime run entirely inside the fixture's
+own controlled world, where its token refresh is served by the stub and its clock is the
+pinned one. The prime becomes deterministic instead of suppressed.
+
+That distinction matters for anyone reading this later: if a future change makes the prime
+stop firing, this test is no longer covering what it thinks it covers.
+
+Three explanations have now been written for this failure, and two of them were wrong:
+
+| version | claim | verdict |
+| --- | --- | --- |
+| `260901_release_train_2390/070_outcome.md` | 60 s of margin against `REFRESH_SKEW_MS`; the read lands on the wrong side | wrong — the margin is months |
+| this doc, first pass | the fake clock inflates cache age past the TTL, so staleness varies | wrong — `refreshed=1` on every run of both trees |
+| this doc, measured | the prime always fetches; what varied was whether it hit the stubbed or the real `fetch`/clock | holds under measurement |
+
+The first two were each plausible, each cited a real mechanism, and each would have justified
+the same fix. That is precisely why they were dangerous: a fix that works for the wrong reason
+teaches the wrong lesson to whoever touches it next.
 
 ## Why it will not reproduce locally
 
