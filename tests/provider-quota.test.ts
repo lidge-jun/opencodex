@@ -1859,13 +1859,16 @@ describe("fetchProviderQuotaReports", () => {
     expect(JSON.stringify(openai?.aggregation)).not.toMatch(/(?:total|consumed|remaining)Weight|projectedUsedPercent/i);
   });
 
-  // #3198 changed what "tolerate" means here: an uncalibrated plan — a name the weight map
-  // does not list, or a malformed non-string value like the `{ tier: "pro" }` below (both
-  // normalize to undefined via codexPlanKey) — is now counted at the baseline seat weight
-  // instead of being excluded from the aggregate. Exclusion silently overstated coverage;
-  // baseline counting is the visibly conservative estimate. The account still shows up in
-  // `unknownPlanAccounts` so the operator can see the estimate is conservative for that seat.
-  test("pool reports tolerate a malformed persisted plan through cache and aggregation", async () => {
+  // #3155 (PR #3198) changed what "tolerate" means here: an uncalibrated plan is counted at
+  // the baseline seat weight instead of being excluded (rationale on
+  // CODEX_DEFAULT_CAPACITY_WEIGHT in src/providers/codex-capacity.ts). Two distinct inputs
+  // converge on that weight by different routes: an unlisted plan NAME normalizes to a defined
+  // key that fails the weight-map lookup, while a malformed non-string like the
+  // `{ tier: "pro" }` below never reaches the aggregation at all — poolAccountDto strips it via
+  // codexPlanValue, so the aggregate sees an ABSENT plan. This test pins the second route end
+  // to end: baseline weight, `unknownPlanAccounts` flagged, and the malformed value kept out of
+  // the public report shape.
+  test("pool reports count a malformed persisted plan at baseline and keep it out of the public shape", async () => {
     saveCodexAccountCredential("added", {
       accessToken: "added-access",
       refreshToken: "added-refresh",
@@ -1886,6 +1889,9 @@ describe("fetchProviderQuotaReports", () => {
       calls += 1;
       const added = (init?.headers as Record<string, string> | undefined)?.["ChatGPT-Account-Id"] === "added-chatgpt-id";
       return new Response(JSON.stringify({
+        // Load-bearing: a fetched plan_type outranks the persisted plan (auth-api.ts freshPlan),
+        // so this mock must stay non-string too — a string here would recalibrate the weight and
+        // change every aggregate value asserted below.
         plan_type: added ? { tier: "pro" } : "plus",
         rate_limit: { secondary_window: { used_percent: added ? 77 : 11, reset_at: 1_999_000_000 } },
       }), { status: 200, headers: { "content-type": "application/json" } });
@@ -1893,21 +1899,31 @@ describe("fetchProviderQuotaReports", () => {
 
     const refreshed = await fetchProviderQuotaReports(config, true);
     const openai = refreshed.reports.find(row => row.provider === "openai");
-    // Both seats weigh the same (malformed -> baseline, "plus" -> calibrated baseline), so the
-    // blend of 77 and 11 lands at 44 — not the 11 the old exclusion contract produced.
+    // The blend leans on CODEX_DEFAULT_CAPACITY_WEIGHT equalling the calibrated "plus" weight
+    // (both 1 today), so 77 and 11 land at 44 — not the 11 the old exclusion contract produced.
     expect(openai?.quota.weeklyPercent).toBe(44);
     expect(openai?.aggregation).toMatchObject({
       includedAccounts: 2,
       excludedAccounts: 0,
       unknownPlanAccounts: 1,
       incomplete: false,
+      // The per-window flags are what the dashboard renders per bar; #3155 flipped them
+      // together with the top-level flag, so pin both.
+      weekly: { includedAccounts: 2, excludedAccounts: 0, incomplete: false },
       currentAccount: { quota: { weeklyPercent: 77 } },
     });
     expect(openai?.aggregation?.currentAccount).not.toHaveProperty("plan");
+    // The malformed value must not escape into the public report shape anywhere, and the
+    // internal weight fields must not either (same guard as the sibling test above).
+    expect(JSON.stringify(refreshed)).not.toContain("tier");
+    expect(JSON.stringify(openai?.aggregation)).not.toMatch(/(?:total|consumed|remaining)Weight|projectedUsedPercent/i);
     expect(calls).toBe(2);
 
+    // The unforced path returns the cached response BY IDENTITY (no clone, no recompute), so
+    // re-asserting its fields would only re-read the object checked above. Pin the identity
+    // contract itself plus the call count; content is covered once, honestly, up there.
     const cached = await fetchProviderQuotaReports(config);
-    expect(cached.reports[0]?.aggregation?.unknownPlanAccounts).toBe(1);
+    expect(cached.reports[0]?.aggregation).toBe(openai?.aggregation);
     expect(calls).toBe(2);
   });
 
