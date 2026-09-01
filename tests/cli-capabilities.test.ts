@@ -248,6 +248,7 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "GET /api/storage/codex-logs",
   "GET /api/subagent-model-fallback",
   "GET /api/subagent-models",
+  "GET /api/system/health",
   "GET /api/system/memory",
   "GET /api/system/windows-replace-retries",
   "GET /api/update/badge",

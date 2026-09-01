@@ -285,3 +285,5 @@ yeniden kullanır. Hedeflenen hesap ve iş yükünü kapsamlı bir şekilde test
 ## Remote Hub anahtarları ve varsayılanlar
 
 `runtimeRole` varsayılan olarak `standalone` değerindedir. Hub; `hub.managementPublicOrigin`, yalnız loopback `hub.managementIngress` (yokken `enabled:false`) ve tam `remoteGui.allowedTailscaleUsers` (yokken boş) kullanır. İstemci anahtarı `config.json` yerine `service-api-token` içinde kalır; döndürme sırasında `service-api-token.prev` geçici olarak bulunabilir. Kullanım kayıtları yansıtılmaz.
+
+`remoteGui.allowInsecureHttp`, yalnızca eski strict-schema yapılandırmalarının yüklenebilmesi için tutulan, kullanımdan kaldırılmış bir no-op'tur. Yapılandırmadan silin: pairing grant'leri yalnız loopback veya kimliği doğrulanmış HTTPS üzerinden kabul edilir ve `true` değeri düz HTTP pairing'i yeniden açmaz.

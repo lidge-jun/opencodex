@@ -299,7 +299,9 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
       inFlight = true;
       const bounded = createBoundedFetch(5_000);
       active = bounded;
-      void fetch(`${apiBase}/healthz`, { cache: "no-store", signal: bounded.signal })
+      // Restart is a shared-plane action, so reconnect through its authenticated management
+      // health route. Remote Hub intentionally does not expose /healthz on management ingress.
+      void fetch(`${apiBase}/api/system/health`, { cache: "no-store", signal: bounded.signal })
         .then(async (res) => {
           if (cancelled) return;
           if (!res.ok) {

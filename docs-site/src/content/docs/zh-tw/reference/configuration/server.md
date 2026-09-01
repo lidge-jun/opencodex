@@ -198,3 +198,5 @@ Anthropic OAuth sidecar 重用 opencodex 既有的 Claude Code OAuth 指紋。�
 ## Remote Hub 金鑰與預設值
 
 `runtimeRole` 預設為 `standalone`。Hub 使用 `hub.managementPublicOrigin`、僅限迴路的 `hub.managementIngress`（缺省為 `enabled:false`）與正確的 `remoteGui.allowedTailscaleUsers`（缺省為空）。用戶端金鑰保存在 `service-api-token` 而不是 `config.json`；輪替期間可能暫時存在 `service-api-token.prev`。用量不會鏡像。
+
+`remoteGui.allowInsecureHttp` 是已棄用的 no-op，只為讓舊的 strict-schema 設定繼續載入而保留。請從設定移除：pairing grant 僅接受 loopback 或已驗證的 HTTPS；設為 `true` 也不會重新開放明文 HTTP pairing。

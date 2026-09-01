@@ -79,7 +79,8 @@ test("Dashboard overview status widgets do not wait on injection-model", async (
   expect(overviewStart).toBeGreaterThan(-1);
   expect(multiStart).toBeGreaterThan(overviewStart);
   const overviewBody = core.slice(overviewStart, multiStart);
-  expect(overviewBody).toContain("/healthz");
+  expect(overviewBody).toContain("/api/system/health");
+  expect(overviewBody).not.toContain("/healthz");
   expect(overviewBody).toContain("/api/providers");
   expect(overviewBody).not.toContain("/api/injection-model");
   expect(overviewBody).not.toContain("/api/v2");

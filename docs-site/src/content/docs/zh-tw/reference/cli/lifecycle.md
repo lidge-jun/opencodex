@@ -121,7 +121,7 @@ ocx status --json
 
 ### `ocx ready [--json] [--wait [--timeout <seconds>]]`
 
-透過免認證的 `GET /readyz` 端點檢查同步後的就緒狀態。就緒時回傳 `200`，或 `pending` 與終端 `failed` 時回傳附帶 `Retry-After: 1` 的 `503`。其淨化的 HTTP 身分為 `{service, version, uptime, pid, port, status}`。沒有 `/readyz` 的舊代理會以 `unreachable` 方式 fail closed；`/healthz` 是分開的存活檢查，而非就緒檢查。此指令預設執行一次探測；`--wait` 輪詢直到就緒或逾時，但在觀察到終端 `failed` 狀態時立即退出。預設逾時為 45 秒；`--timeout <seconds>` 需要 `--wait`，接受 1–300 的正整數秒。CLI JSON 輸出 `{ready, status, pid, port}`，其中 `status` 為 `ready`、`pending`、`failed` 或 `unreachable`。離開碼為：就緒 0；未就緒、pending、failed、逾時或 unreachable 1；無效引數 64。
+透過免認證的 `GET /readyz` 端點檢查同步後的就緒狀態。就緒時回傳 `200`，或 `pending` 與終端 `failed` 時回傳附帶 `Retry-After: 1` 的 `503`。其淨化的 HTTP 身分為 `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}`。`protocol` 是 Hub 目前的遠端協定版本，`minimumClientProtocol` 是相容的最低用戶端協定版本，`managementUrl` 是瀏覽器可見的標準管理 origin。沒有 `/readyz` 的舊代理會以 `unreachable` 方式 fail closed；`/healthz` 是分開的存活檢查，而非就緒檢查。此指令預設執行一次探測；`--wait` 輪詢直到就緒或逾時，但在觀察到終端 `failed` 狀態時立即退出。預設逾時為 45 秒；`--timeout <seconds>` 需要 `--wait`，接受 1–300 的正整數秒。CLI JSON 輸出 `{ready, status, pid, port}`，其中 `status` 為 `ready`、`pending`、`failed` 或 `unreachable`。離開碼為：就緒 0；未就緒、pending、failed、逾時或 unreachable 1；無效引數 64。
 
 ### `ocx doctor`
 

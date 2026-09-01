@@ -177,7 +177,7 @@ takdirde 1 ile çıkar, bu da onu servis probları için uygun hale getirir.
 Kimliği doğrulanmamış `GET /readyz` uç noktası aracılığıyla senkronizasyon
 sonrası hazırlığı kontrol edin. Hazır olduğunda `200` veya `pending` ve terminal
 `failed` için `Retry-After: 1` ile `503` döndürür. Temizlenmiş HTTP kimliği
-`{service, version, uptime, pid, port, status}` şeklindedir. `/readyz` içermeyen
+`{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}` şeklindedir. `protocol` hub'ın güncel uzak protokolünü, `minimumClientProtocol` uyumlu en düşük istemci protokolünü ve `managementUrl` tarayıcıya görünen kanonik yönetim origin'ini belirtir. `/readyz` içermeyen
 eski proxy'ler `unreachable` olarak kapalı başarısız olur; `/healthz` hazırlık
 değil, ayrı bir canlılıktır. Komut varsayılan olarak bir prob gerçekleştirir;
 `--wait`, hazır olana veya zaman aşımına kadar yoklar, ancak terminal `failed`

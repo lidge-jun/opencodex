@@ -165,3 +165,5 @@ Anthropic OAuth 사이드카는 opencodex의 기존 Claude Code OAuth fingerprin
 ## Remote Hub 키와 기본값
 
 `runtimeRole` 기본값은 `standalone`입니다. 허브는 `hub.managementPublicOrigin`, 로컬에만 열리는 `hub.managementIngress`(없으면 `enabled:false`), 정확한 `remoteGui.allowedTailscaleUsers`(없으면 빈 목록)를 사용합니다. 클라이언트 데이터 키는 `config.json`이 아니라 `service-api-token`에 저장되며 교체 중에는 `service-api-token.prev`가 잠시 생길 수 있습니다. 사용량 기록은 서로 복제하지 않습니다.
+
+`remoteGui.allowInsecureHttp`는 이전 strict-schema 설정을 계속 읽기 위해서만 남겨 둔 폐기된 no-op입니다. 설정에서 제거하세요. 페어링 grant는 loopback 또는 인증된 HTTPS에서만 허용되며, 이 값을 `true`로 설정해도 평문 HTTP 페어링은 다시 활성화되지 않습니다.

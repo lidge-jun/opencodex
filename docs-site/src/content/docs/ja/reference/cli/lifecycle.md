@@ -123,7 +123,7 @@ ocx status --json
 
 認証不要の `GET /readyz` エンドポイントで同期後の準備状態を確認します。準備完了時は `200`、
 `pending` または終端状態の `failed` では `Retry-After: 1` とともに `503` を返します。HTTP の
-サニタイズ済み識別フィールドは `{service, version, uptime, pid, port, status}` です。`/readyz` がない
+サニタイズ済み識別フィールドは `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}` です。`protocol` は hub の現在の remote protocol、`minimumClientProtocol` は互換性のある最小 client protocol、`managementUrl` は browser から見える canonical management origin です。`/readyz` がない
 旧プロキシは `unreachable` として fail-closed し、`/healthz` は readiness ではなく別の liveness 確認です。
 デフォルトでは 1 回だけ probe します。`--wait` は準備完了または timeout まで polling しますが、
 終端 `failed` を確認すると即座に終了します。デフォルト timeout は 45 秒で、`--timeout <seconds>` には

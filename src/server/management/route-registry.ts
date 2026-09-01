@@ -291,6 +291,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/storage/codex-logs/repair", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/unprotect", module: "server/management/storage-log-guard-routes", mutates: true },
   // server/management/system-routes
+  { method: "GET", path: "/api/system/health", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/memory", module: "server/management/system-routes", mutates: false },
   { method: "GET", path: "/api/system/windows-replace-retries", module: "server/management/system-routes", mutates: false },
   { method: "POST", path: "/api/system/restart", module: "server/management/system-routes", mutates: true },

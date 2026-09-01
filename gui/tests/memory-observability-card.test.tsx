@@ -186,6 +186,47 @@ test("Drain & restart posts /api/system/restart after confirm", async () => {
   await act(async () => { root.unmount(); });
 });
 
+test("restart reconnect polls authenticated management health instead of denied /healthz", async () => {
+  let memoryReads = 0;
+  const { root, container, testWindow, calls } = await mountCard((url) => {
+    if (url.includes("/api/startup-health")) return Response.json({ protection: "service" });
+    if (url.includes("/api/system/restart")) {
+      return Response.json({ success: true, activeTurnCount: 2 }, { status: 202 });
+    }
+    if (url.includes("/api/system/memory")) {
+      memoryReads += 1;
+      return memoryReads === 1
+        ? Response.json(MEMORY_PAYLOAD)
+        : new Response("restarting", { status: 503 });
+    }
+    if (url.includes("/api/system/health")) {
+      return Response.json({ status: "ok", version: "test", uptime: 1, pid: 4243 });
+    }
+    return new Response(null, { status: 404 });
+  });
+
+  originalConfirm = window.confirm;
+  window.confirm = () => true;
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (el) => (el.textContent ?? "").includes("Drain & restart"),
+  );
+  expect(button).toBeTruthy();
+
+  await act(async () => {
+    button!.dispatchEvent(new testWindow.MouseEvent("click", { bubbles: true }));
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+      if (calls().some(call => call.includes("/api/system/health"))) break;
+    }
+  });
+
+  expect(calls().some(call => call.includes("/api/system/health"))).toBe(true);
+  expect(calls().some(call => /\/healthz(?:$|\?)/.test(call))).toBe(false);
+  expect(container.textContent ?? "").toContain("Drain & restart");
+
+  await act(async () => { root.unmount(); });
+});
+
 test("older memory payloads without activeTurnCount hide the restart action", async () => {
   const legacy = { ...MEMORY_PAYLOAD } as Record<string, unknown>;
   delete legacy.activeTurnCount;

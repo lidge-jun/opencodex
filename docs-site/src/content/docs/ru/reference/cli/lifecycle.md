@@ -166,7 +166,7 @@ Identity-check живого прокси. Текстовый вывод сооб
 
 Проверяет готовность после синхронизации через не требующий аутентификации `GET /readyz`. При
 готовности возвращается `200`; для `pending` и терминального `failed` возвращается `503` с
-`Retry-After: 1`. Санитизированные поля HTTP-ответа: `{service, version, uptime, pid, port, status}`.
+`Retry-After: 1`. Санитизированные поля HTTP-ответа: `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}`. `protocol` — текущая версия удалённого протокола hub, `minimumClientProtocol` — минимальная совместимая версия клиента, а `managementUrl` — канонический origin управления для браузера.
 Старые прокси без `/readyz` fail-closed как `unreachable`; `/healthz` — отдельная проверка liveness,
 а не готовности. По умолчанию команда выполняет одну пробу. `--wait` опрашивает до готовности или
 тайм-аута, но при терминальном `failed` завершается немедленно. Тайм-аут по умолчанию — 45 секунд;

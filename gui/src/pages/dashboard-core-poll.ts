@@ -254,7 +254,7 @@ export async function fetchDashboardOverview(
 ): Promise<DashboardOverviewPoll> {
   try {
     const [hRes, pRes] = await Promise.all([
-      fetch(`${apiBase}/healthz`, { signal }),
+      fetch(`${apiBase}/api/system/health`, { signal }),
       fetch(`${apiBase}/api/providers`, { signal }),
     ]);
     const health = await requireJson<HealthData>(hRes);

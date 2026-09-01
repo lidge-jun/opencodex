@@ -48,7 +48,19 @@ import { acceptSystemRestart } from "./system-restart";
 const ENDPOINT_SAMPLE_LIMIT = 60;
 
 export async function handleSystemRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config } = ctx;
+  const { req, url, config, version } = ctx;
+  if (url.pathname === "/api/system/health" && req.method === "GET") {
+    // Authenticated management counterpart to /healthz. Remote Hub deliberately keeps the
+    // unauthenticated liveness route off its management ingress, while the connected dashboard
+    // still needs bounded process identity and PID replacement evidence (#3158).
+    return jsonResponse({
+      status: "ok",
+      service: "opencodex",
+      version,
+      uptime: process.uptime(),
+      pid: process.pid,
+    });
+  }
   if (url.pathname === "/api/system/memory" && req.method === "GET") {
     const usage = process.memoryUsage();
     let jscHeap: { heapSize: number; heapCapacity: number; objectCount: number } | null = null;

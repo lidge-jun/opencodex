@@ -220,7 +220,7 @@ export async function handleManagementAPI(
       }
     } catch { /* best-effort */ }
   }
-  const ctx: ManagementContext = { req, url, config, deps, principal, sessionControl, convergeCodexCatalog, syncClaudeAgentDefsBestEffort };
+  const ctx: ManagementContext = { req, url, config, deps, version: VERSION, principal, sessionControl, convergeCodexCatalog, syncClaudeAgentDefsBestEffort };
   let routed: Response | null;
   try {
     routed = handleSessionRoutes(ctx)

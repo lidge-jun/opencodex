@@ -109,6 +109,8 @@ export interface ManagementContext {
   url: URL;
   config: OcxConfig;
   deps: ManagementApiDeps;
+  /** Installed package version projected through bounded system identity routes. */
+  version: string;
   /**
    * Which credential authorized this request, resolved by the auth gate before
    * dispatch. Routes that spend the USER's identity (not just the proxy's) must

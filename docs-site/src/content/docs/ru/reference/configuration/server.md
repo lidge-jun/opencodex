@@ -213,3 +213,5 @@ opencodex. Перед использованием прогоните soak-test 
 ## Ключи Remote Hub и значения по умолчанию
 
 `runtimeRole` по умолчанию равен `standalone`. Hub использует `hub.managementPublicOrigin`, loopback-only `hub.managementIngress` (`enabled:false`, если отсутствует) и точные `remoteGui.allowedTailscaleUsers` (пустой список, если отсутствует). Ключ клиента хранится в `service-api-token`, не в `config.json`; во время ротации может появиться `service-api-token.prev`. Статистика не зеркалируется.
+
+`remoteGui.allowInsecureHttp` — устаревший no-op, оставленный только для загрузки старых файлов со строгой схемой. Удалите его из конфигурации: pairing grants принимаются лишь через loopback или аутентифицированный HTTPS, а значение `true` не включает pairing по открытому HTTP.

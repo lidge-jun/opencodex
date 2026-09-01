@@ -255,3 +255,5 @@ compte et la charge de travail prévus.
 ## Clés Remote Hub et valeurs par défaut
 
 `runtimeRole` vaut `standalone` par défaut. Un hub utilise `hub.managementPublicOrigin`, `hub.managementIngress` limité au loopback (`enabled:false` si absent) et les identités exactes de `remoteGui.allowedTailscaleUsers` (liste vide si absente). La clé client reste dans `service-api-token`, jamais dans `config.json`; `service-api-token.prev` peut exister pendant une rotation. Les usages ne sont pas répliqués.
+
+`remoteGui.allowInsecureHttp` est un ancien no-op déprécié, conservé uniquement pour que les anciens fichiers passent encore le schéma strict. Supprimez-le de la configuration : les grants de pairing ne sont acceptés que sur loopback ou via HTTPS authentifié, et `true` ne réactive pas le pairing HTTP en clair.

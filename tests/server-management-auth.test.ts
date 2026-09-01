@@ -1003,15 +1003,34 @@ describe("management and data-plane credential separation", () => {
       const html = await issued.text();
       const token = /name="opencodex-session-token" content="([^"]+)"/.exec(html)?.[1];
       expect(token).toBeDefined();
+      const sessionHeaders = {
+        Host: "hub.example.test",
+        Origin: "https://hub.example.test",
+        "x-opencodex-api-key": token!,
+        "x-opencodex-gui-origin": "https://hub.example.test",
+      };
       const management = await fetch(`http://127.0.0.1:${managementPort}/api/config`, {
-        headers: {
-          Host: "hub.example.test",
-          Origin: "https://hub.example.test",
-          "x-opencodex-api-key": token!,
-          "x-opencodex-gui-origin": "https://hub.example.test",
-        },
+        headers: sessionHeaders,
       });
       expect(management.status).toBe(200);
+
+      // Connected GUI status/restart polling stays authenticated without widening the ingress:
+      // raw liveness remains absent, while its bounded management counterpart is available.
+      const rawHealth = await fetch(`http://127.0.0.1:${managementPort}/healthz`, {
+        headers: sessionHeaders,
+      });
+      expect(rawHealth.status).toBe(404);
+      const managementHealth = await fetch(`http://127.0.0.1:${managementPort}/api/system/health`, {
+        headers: sessionHeaders,
+      });
+      expect(managementHealth.status).toBe(200);
+      expect(await managementHealth.json()).toMatchObject({
+        status: "ok",
+        service: "opencodex",
+        version: expect.any(String),
+        uptime: expect.any(Number),
+        pid: process.pid,
+      });
 
       const adminConsent = await fetch(`http://127.0.0.1:${managementPort}/api/github/star`, {
         method: "POST",
