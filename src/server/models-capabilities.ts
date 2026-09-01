@@ -29,6 +29,9 @@ export interface ModelCapabilityFields {
   api_types: readonly string[];
   capabilities: {
     context_length?: number;
+    /** Cursor's extended-row filter REQUIRES this to contain "text"; every route emits text. */
+    output_modalities: string[];
+    input_modalities?: string[];
     supports_tool_use: true;
     supports_streaming: true;
     supports_reasoning: boolean;
@@ -44,12 +47,18 @@ function positiveInt(value: unknown): number | undefined {
 export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabilityFields {
   const efforts = (input.reasoningEfforts ?? []).filter(effort => typeof effort === "string" && effort.length > 0);
   const contextLength = positiveInt(input.contextWindow);
-  const modalities = input.inputModalities;
-  const supportsVision = Array.isArray(modalities) ? modalities.includes("image") : undefined;
+  const modalities = Array.isArray(input.inputModalities)
+    ? input.inputModalities.filter(modality => typeof modality === "string" && modality.length > 0)
+    : undefined;
+  const supportsVision = modalities !== undefined ? modalities.includes("image") : undefined;
   return {
     api_types: OPENCODEX_MODEL_API_TYPES,
     capabilities: {
       ...(contextLength !== undefined ? { context_length: contextLength } : {}),
+      // Once a gateway advertises api_types, Cursor keeps only rows whose output_modalities
+      // include "text"; omitting the key drops the row from the extended catalog.
+      output_modalities: ["text"],
+      ...(modalities !== undefined && modalities.length > 0 ? { input_modalities: [...modalities] } : {}),
       supports_tool_use: true,
       supports_streaming: true,
       supports_reasoning: efforts.length > 0,

@@ -75,11 +75,13 @@ describe("modelCapabilityFields", () => {
     const fields = modelCapabilityFields({});
     expect(fields.api_types).toEqual(OPENCODEX_MODEL_API_TYPES);
     expect(fields.capabilities).toEqual({
+      output_modalities: ["text"],
       supports_tool_use: true,
       supports_streaming: true,
       supports_reasoning: false,
     });
     expect("context_length" in fields.capabilities).toBe(false);
+    expect("input_modalities" in fields.capabilities).toBe(false);
     expect("supports_vision" in fields.capabilities).toBe(false);
     expect("reasoning_effort" in fields.capabilities).toBe(false);
   });
@@ -87,6 +89,7 @@ describe("modelCapabilityFields", () => {
   test("non-positive context and text-only modalities are reported honestly", () => {
     const fields = modelCapabilityFields({ contextWindow: 0, inputModalities: ["text"], reasoningEfforts: ["", "low"] });
     expect("context_length" in fields.capabilities).toBe(false);
+    expect(fields.capabilities.input_modalities).toEqual(["text"]);
     expect(fields.capabilities.supports_vision).toBe(false);
     expect(fields.capabilities.reasoning_effort).toEqual(["low"]);
     expect(fields.capabilities.supports_reasoning).toBe(true);
@@ -108,6 +111,8 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
       expect(k3!.api_types).toEqual(["chat_completions", "responses", "anthropic_messages"]);
       expect(k3!.capabilities).toEqual({
         context_length: 200000,
+        output_modalities: ["text"],
+        input_modalities: ["text", "image"],
         supports_tool_use: true,
         supports_streaming: true,
         supports_reasoning: true,
@@ -129,6 +134,7 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
       expect(sol).toBeDefined();
       expect(sol!.api_types).toEqual(["chat_completions", "responses", "anthropic_messages"]);
       const solCaps = sol!.capabilities as Record<string, unknown>;
+      expect(solCaps.output_modalities).toEqual(["text"]);
       expect(solCaps.reasoning_effort).toEqual(nativeReasoningEfforts("gpt-5.6-sol"));
       expect(typeof solCaps.context_length).toBe("number");
       expect(solCaps.context_length as number).toBeGreaterThan(0);
