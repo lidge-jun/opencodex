@@ -17,10 +17,24 @@
 least-privilege GET /v1/catalog for remote Codex clients (#2979)` 이다.
 #2979는 이 스택이 설계한 `/v1/catalog`를 별도 PR로 먼저 랜딩시킨 것이다.
 
-따라서 충돌 해소 원칙은 **dev를 이긴다**이다. p1의 카탈로그 델타 중 #2979가
-이미 제공하는 부분은 버리고, p1에만 있는 부분(프로토콜 메타데이터, 런타임 role,
-`x-opencodex-key-id` 처리)만 얹는다. 반대로 하면 랜딩된 최소권한 계약을
-되돌리게 된다.
+"dev wins"를 통째로 적용하면 안 된다(감사 A4). 두 구현은 의미가 갈린다:
+
+| 항목 | dev (#2979) | p1 | 채택 |
+|------|-------------|----|------|
+| 메서드 | GET + HEAD | GET only | **dev** — HEAD 제거는 랜딩된 기능 회귀 |
+| `x-api-key` | 허용 | 거부 | **판단 필요** — 아래 |
+| 크기 캡 | 라우트 한정 256 MiB | 32 MiB | **dev** — 랜딩된 지원 크기를 줄이지 않는다 |
+| 초과 시 | 507 | 503 | **dev** |
+| `x-opencodex-key-id` | 없음 | 있음 | **p1** — 고유 기여 |
+| 프로토콜 메타데이터 | 없음 | 있음 | **p1** — 고유 기여 |
+| 캐시 헤더 | — | ETag + private,no-cache | **둘 다 아님** — D2에 따라 `no-store`, validator 제거 |
+
+근거: dev 쪽 구현은 `src/server/index.ts:1073-1120`과
+`src/server/catalog-download.ts:18-29`에 있다.
+
+`x-api-key` 허용/거부는 의도적으로 판정한다. p1이 거부하는 것은 최소권한
+의도로 보이지만, dev가 이미 허용한 상태로 랜딩됐으므로 좁히는 것은 동작 회귀다.
+좁히려면 별도 근거와 함께 PR 설명에 명시하고 테스트를 함께 바꾼다. 기본은 dev 유지.
 
 해소 후 반드시 확인할 것: `/v1/catalog`의 최소권한 admission이 p1 델타에 의해
 느슨해지지 않았는가. `tests/api-catalog-route.test.ts`가 이 계약을 들고 있다.
@@ -35,9 +49,14 @@ key-id warn assertion` 이 해당 경로를 다룬다. 재스택 후 카탈로�
 
 ## release-version-line
 
-리뷰가 지목한 `tests/release-version-line.test.ts:108` 실패는 스택
-`package.json`이 `2.34.0`이고 릴리스 태그 라인이 `2.40.0`이라서 난다.
-재스택하면 dev 쪽 `2.40.0`으로 해소되어 자동 소멸한다. 테스트를 손대지 않는다.
+`:108`은 equality 분기다(000 참조). 리베이스로 해소되지만 자동 소멸을 가정하지
+않는다 — 이 단계 head에서 `bun test tests/release-version-line.test.ts`를
+명시적으로 돌려 확인한다. 테스트를 손대지 않는다.
+
+## 미해결 스레드
+
+T19 (#2772, P2): 확장된 readiness 응답을 `docs-site/src/content/docs/reference/cli/lifecycle.md`에
+문서화. `src/server/index.ts:1013`이 대상.
 
 ## privacy:scan
 

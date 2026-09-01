@@ -29,15 +29,39 @@ opt-in 플래그로 이 금지를 뚫을 수 없어야 한다. HTTP는 "여기 H
 그리고 loopback은 기존대로 허용되는 포지티브. `gui/tests/connect-pairing.test.ts`와
 서버 쪽 remote-session 테스트에 건다.
 
+## 이 단계가 소유하는 블로커 — 감사로 재배정됨
+
+### gui/tests/api-auth-memory.test.ts:23
+
+#2777(p3)에 보고됐지만 실측 결과 이 파일을 처음 건드리는 단계는 **p2**다
+(p3은 0건). 여기서 고친다. 재스택 후 실패를 재현해 어느 쪽 계약이 맞는지
+판정한다 — dev가 맞으면 스택 코드를 맞추고, 스택이 의도적으로 바꾼 것이면
+근거를 PR 설명에 적고 테스트를 함께 갱신한다. 테스트만 지우는 해소는 금지.
+
+### T20 (P1) — pairing 바디 무제한 버퍼링
+
+`src/server/index.ts:1684`. 미인증 호출자가 `Content-Length`를 생략하거나
+chunked를 쓰면 `declaredLength`가 0이 되어 바디가 제한 없이 버퍼링된다.
+미인증 DoS다. 선언 길이가 없을 때도 하드 캡을 적용하고 초과 시 거절한다.
+
+### T21 (P2) — 설정 문서화
+
+`hub.managementPublicOrigin`, `remoteGui.allowedTailscaleUsers`,
+`remoteGui.allowInsecure*`가 사용자 노출 설정인데 문서가 없다.
+D1이 `allowInsecure*`의 의미를 바꾸므로 문서도 새 계약으로 쓴다.
+
 ## draft 해제
 
-#2776은 draft이고 base가 `codex/remote-hub-p1`이다. `AGENTS.md`의 stacked child
-규정상 이 base는 정당하다 — `enforce-target`은 열린 부모 head를 타깃하는 자식의
-wrong-base 게이트를 건너뛴다. 재스택 + CI 그린 후 draft를 해제한다.
+#2776은 draft이고 base가 `codex/remote-hub-p1`이다. 이 base는 정당하다 —
+`AGENTS.md:278-281`과 `enforce-pr-target.yml:533-557`이 열린 부모 head를
+타깃하는 자식의 wrong-base 게이트를 면제한다. 재스택 + CI 그린 후 draft를
+해제한다. 다만 draft 해제는 자동화 게이트만 여는 것이고 리뷰어의
+CHANGES_REQUESTED는 그대로다(감사 A3).
 
 ## 검증
 
 - `git range-diff` 6커밋 보존.
-- `bun test tests/server-auth.test.ts tests/config.test.ts tests/cli-registry.test.ts`
-  + `cd gui && bun test tests/connect-pairing.test.ts`.
+- `bun test tests/server-auth.test.ts tests/config.test.ts tests/cli-registry.test.ts tests/release-version-line.test.ts`
+  + `cd gui && bun test tests/connect-pairing.test.ts tests/api-auth-memory.test.ts`.
+- **이 단계 head가 초록이어야 p3을 그 위에 쌓는다.**
 - exact-head CI.

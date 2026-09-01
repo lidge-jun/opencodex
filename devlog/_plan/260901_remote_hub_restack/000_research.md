@@ -58,30 +58,56 @@ clients (#2979)`가 마지막으로 건드렸다. 이건 우연이 아니다 —
 **(1) stale 아티팩트 — 재스택이 곧 해소**
 
 `tests/release-version-line.test.ts:108` 실패가 #2772/#2777/#2786에 공통으로
-걸려 있다. 원인은 확인됐다: 스택의 `package.json`이 `2.34.0`인데 현재 릴리스
-태그 라인은 `2.40.0`이다. 테스트는 "트리 버전이 최고 릴리스 태그보다 뒤면
-거절"을 주장한다. 스택이 오래된 것이 원인이고, 테스트는 정확히 설계대로
-동작했다. 재스택하면 `package.json`이 dev 쪽으로 해소되어 사라진다.
-**게이트를 건드리면 안 된다.**
+걸려 있다. 정확히 말하면 `:108`은 "뒤처짐" 분기가 아니라 **동일(equality)**
+분기다(`:99-108`): 트리 버전이 최고 릴리스 태그와 같은데 이 커밋이 그 태그가
+가리키는 커밋이 아니면 거절한다. 스택의 `package.json`은 `2.34.0`이고 당시
+최고 태그가 `v2.34.0`이었다.
 
-**(2) 구조적 보류 — 재스택 + draft 해제로 해소**
+현재 `origin/dev`는 `2.40.0`, 최고 태그는 `v2.39.0`이므로 지금 리베이스하면
+해소된다. p1은 `package.json`을 수정하지 않으므로 dev 값이 그대로 온다.
+**다만 자동 소멸을 가정하지 않는다** — `v2.40.0`이 dev 전진보다 먼저 태깅되면
+재발한다. 리베이스된 head마다 `bun test tests/release-version-line.test.ts`를
+포커스드로 돌려 확인한다. **게이트는 건드리지 않는다.**
 
-#2776/#2781/#2789는 "중간 스택 head라 최종 승인 불가"라는 보류다. 리뷰어는
-"stacked child가 부모 head를 타깃하는 것"을 정책 위반으로 읽었지만, 현행
-`AGENTS.md`는 열린 PR의 head를 타깃하는 stacked child를 의도된 리뷰
-워크플로로 명시하고 `enforce-target`의 wrong-base 게이트를 면제한다.
-따라서 이건 정책 위반이 아니라 **리뷰 순서 문제**다. 해소 경로는 재스택 후
-draft 해제 + exact-head CI 그린 + 스택 체인 정합 확인이다.
+**(2) 구조적 보류 — 자동화는 통과, 사람 리뷰는 별개**
+
+#2776/#2781/#2789는 "중간 스택 head라 최종 승인 불가"라는 보류다.
+`AGENTS.md:278-281`과 `.github/workflows/enforce-pr-target.yml:533-557`은
+열린 부모 head를 타깃하는 stacked child에 대해 wrong-base 게이트를 실제로
+면제한다. 저자가 `lidge-jun`(push 권한)이라 기여자 readiness 체크리스트
+(`enforce-pr-target.yml:740-746`)도 적용되지 않는다.
+
+**그러나 이건 자동화 게이트만 통과시킨다.** 리뷰어의 CHANGES_REQUESTED는
+draft 해제로도 CI 그린으로도 해제되지 않는다. `MAINTAINERS.md:57-61`은
+비저자 메인테이너 승인과 보안 리뷰를 요구하고, Ingwannu가 유일한 비저자
+메인테이너다. 우리가 도달할 수 있는 종료선은 **재리뷰 요청 가능 상태**이며,
+승인 자체는 외부 의존이다.
 
 **(3) 실질 결함 — 코드/문서 수정 필요**
 
 - #2771 문서 계약 4건 (아래 010).
-- #2777 `gui/tests/api-auth-memory.test.ts:23`.
-- #2786 `tests/cli-headless-parity.test.ts:287` 미선언 `/api/machine/*` 7개,
-  `tests/update-stop-first.test.ts:225`, `tests/loopback-listener-admission.test.ts:196`,
-  privacy 게이트.
+- `gui/tests/api-auth-memory.test.ts:23` — #2777에 보고됐지만 **소유 단계는 p2**다.
+- `tests/cli-headless-parity.test.ts:287` 미선언 `/api/machine/*` 7개 —
+  #2786에 보고됐지만 **소유 단계는 p4**다.
+- `tests/update-stop-first.test.ts:225`, `tests/loopback-listener-admission.test.ts:196`,
+  privacy 게이트 — p5.
+- 미해결 인라인 리뷰 스레드 **33건**(P1 6건 포함). 전수는 `003` 원장 참조.
 
-(3)만 실제 작업이다. (1)은 재스택의 부산물이고 (2)는 절차다.
+### 소유 단계 실측
+
+"어느 PR에서 실패가 보고됐는가"와 "어느 단계가 그 결함을 도입했는가"는 다르다.
+diff로 측정했다:
+
+- `/api/machine/` 추가 라인: p1~p3 = 0, **p4 = 49**, p5 = 0, p6 = 2.
+  라우트를 도입한 건 p4다.
+- `gui/tests/api-auth-memory.test.ts`를 건드리는 단계: **p2**와 p4. p3은 0.
+
+상류에서 고쳐야 한다. 하류에서 고치면 그 사이 단계들은 자기 head에서 빨간 채로
+남고, 그 위에 다음 단계를 쌓게 된다.
+
+**단계 초록 불변식:** 각 단계는 자기 head에서 초록이어야 다음 단계를 그 위에 쌓는다.
+
+(3)만 실제 작업이다. (1)은 재스택의 부산물이고 (2)는 절차 + 외부 의존이다.
 
 ## 제약
 
