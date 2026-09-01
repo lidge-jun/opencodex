@@ -14,18 +14,35 @@ name: Dev version bump
 # sign-off that a bot cannot supply. Until that merge the red persists. This converts a
 # forgotten chore into a queued, reviewable change - not into an automatic repair.
 #
-# A `release` event resolves this workflow file from the repository DEFAULT branch
-# (`main`), not from `dev` - the same trap documented in cleanup-closed-pr-branches.yml.
-# So merging this file to `dev` installs it but arms nothing; it first fires after an
-# ordinary dev -> main promotion carries it there.
+# WHY THIS IS CALLED, NOT TRIGGERED. It used to listen for `release: published`, and in
+# that form it ran ZERO times across v2.37.0, v2.38.0 and v2.39.0 - every one of those
+# bumps was still opened by hand (#3045, #3076, #3127). The workflow was not broken; the
+# event never existed. `release.yml` creates the GitHub release with
+# `GH_TOKEN: ${{ github.token }}`, and GitHub does not start workflow runs from events
+# raised by the default `GITHUB_TOKEN`. A `release: published` listener therefore cannot
+# observe a release this repository publishes itself, no matter which branch it sits on.
+#
+# The fix keeps the credential surface unchanged: no PAT, no app token, no
+# `contents: write` on the release job. `release.yml` CALLS this workflow directly after
+# a successful publish, so the run is a child of the release run instead of a reaction to
+# an event that is never delivered.
+#
+# A `workflow_call` body resolves from the CALLER's ref, and `release.yml` only ever runs
+# on `main` or `preview` (its own branch gate). So this file must be on `main` to take
+# effect - the same promotion requirement the old comment described, now for a different
+# reason.
 #
 # There is deliberately no `workflow_dispatch`: a branch-selected manual run executes
 # THAT branch body with `contents: write`. Re-drive a missed run by running
 # `bun scripts/bump-dev-version.ts <released> package.json` locally and opening the pull
 # request normally.
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      released-version:
+        description: "The tag that just published, e.g. v2.39.0"
+        required: true
+        type: string
 
 permissions: {}
 
@@ -69,7 +86,7 @@ jobs:
       - name: Decide the version dev should carry
         id: decide
         env:
-          RELEASED_VERSION: ${{ github.event.release.tag_name }}
+          RELEASED_VERSION: ${{ inputs.released-version }}
         run: |
           set -euo pipefail
           bun scripts/bump-dev-version.ts "${RELEASED_VERSION}" package.json
@@ -88,7 +105,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NEXT_VERSION: ${{ steps.decide.outputs.version }}
-          RELEASED_VERSION: ${{ github.event.release.tag_name }}
+          RELEASED_VERSION: ${{ inputs.released-version }}
         run: |
           set -euo pipefail
 

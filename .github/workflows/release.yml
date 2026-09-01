@@ -36,6 +36,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Move `dev` past the version that just published.
+  #
+  # This is a CALL, not a `release: published` listener. The release is created with
+  # `github.token`, and GitHub does not start workflow runs from events that token
+  # raises - so a listener cannot observe a release this repository publishes itself. In
+  # that form it ran ZERO times across v2.37.0, v2.38.0 and v2.39.0 while every one of
+  # those bumps was opened by hand (#3045, #3076, #3127).
+  #
+  # `needs: publish` means this is skipped unless the publish job succeeded, so a failed
+  # publish or a failed release creation never opens a bump pull request; the explicit
+  # condition only adds the dry-run case. The called workflow declares its own
+  # `contents: write` / `pull-requests: write` for its own job, so nothing here gains
+  # write access.
+  #
+  # Both channels call this, and the double-call is safe because `bump-dev-version.ts`
+  # compares against what `dev` already carries. In the usual train `dev` is already at
+  # the stable core when the preview publishes, so that call returns `changed=false`
+  # ("dev already carries 2.40.0, which is ahead of the published 2.40.0-preview.*") and
+  # every later step is gated on that output. The stable call returns `changed=true` and
+  # opens the one pull request. A preview publishing while `dev` is genuinely behind
+  # still bumps it, which is the point.
+  #
+  # It is declared FIRST in this file, ahead of the jobs it depends on, because
+  # tests/ci-workflows.test.ts splits the workflow on `- name:` and reads each `run:`
+  # block to the start of the next one when it checks that dispatch inputs never
+  # interpolate into shell source. A job declared between two steps lands inside that
+  # window and reads as shell. Job order in YAML carries no execution meaning - `needs`
+  # does - so declaring it before its own dependency costs nothing.
+  bump-dev-version:
+    needs: publish
+    if: ${{ inputs.dry-run != true }}
+    uses: ./.github/workflows/dev-version-bump.yml
+    with:
+      released-version: v${{ inputs.version }}
+
   validate-dispatch:
     runs-on: ubuntu-latest
     permissions:
