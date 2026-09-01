@@ -10,8 +10,14 @@ import {
   clearCodexQuotaPrimeSingleFlightForTests,
   clearMainAccountInfoCache,
   seedCodexAuthAdmissionForTests,
+  setCodexPoolQuotaTokenResolverForTests,
 } from "../src/codex/auth-api";
-import { readCodexAccountRecord, saveCodexAccountCredential } from "../src/codex/account-store";
+import {
+  CodexCredentialGenerationConflictError,
+  CodexCredentialRefreshLockTimeoutError,
+  readCodexAccountRecord,
+  saveCodexAccountCredential,
+} from "../src/codex/account-store";
 import { resetMainCodexAccountIdentityTrackingForTests } from "../src/codex/account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import {
@@ -438,6 +444,129 @@ describe("primeCodexPoolQuotas", () => {
     }
   });
 
+  test("a real failed pool quota probe becomes eligible after the TTL expires", async () => {
+    const originalNow = Date.now;
+    let now = 1_800_000_000_000;
+    Date.now = () => now;
+    const config = makeConfig();
+    seedPoolAccount(config, "p1");
+    saveCodexAccountCredential("p1", {
+      accessToken: "access-p1-long-lived",
+      refreshToken: "refresh-p1-long-lived",
+      expiresAt: now + 60 * 60_000,
+      chatgptAccountId: "acct-p1",
+    });
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    let upstreamHealthy = false;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        if (String(input).includes("/backend-api/wham/usage")) {
+          calls += 1;
+          return upstreamHealthy ? whamResponse(20) : new Response("upstream unavailable", { status: 503 });
+        }
+        return originalFetch(input);
+      };
+
+      await primeCodexPoolQuotas(config, "test");
+      expect(calls).toBe(1);
+
+      now += 5 * 60_000 - 1;
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "test");
+      expect(calls).toBe(1);
+
+      now += 1;
+      upstreamHealthy = true;
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "test");
+      expect(calls).toBe(2);
+      expect(getAccountQuota("p1")).toMatchObject({ weeklyPercent: 20 });
+    } finally {
+      globalThis.fetch = originalFetch;
+      Date.now = originalNow;
+    }
+  });
+
+  test("removing an account from the pool purges its failed-prime backoff", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, "p1");
+    const originalPool = [...(config.codexAccounts ?? [])];
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    let upstreamHealthy = false;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        if (String(input).includes("/backend-api/wham/usage")) {
+          calls += 1;
+          return upstreamHealthy ? whamResponse(20) : new Response("upstream unavailable", { status: 503 });
+        }
+        return originalFetch(input);
+      };
+
+      await primeCodexPoolQuotas(config, "test");
+      expect(calls).toBe(1);
+
+      config.codexAccounts = [];
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "removed");
+
+      config.codexAccounts = originalPool;
+      upstreamHealthy = true;
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "restored");
+      expect(calls).toBe(2);
+      expect(getAccountQuota("p1")).toMatchObject({ weeklyPercent: 20 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a late failed probe cannot restore backoff for an account removed in flight", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, "p1");
+    const originalPool = [...(config.codexAccounts ?? [])];
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    let upstreamHealthy = false;
+    let releaseFirst!: () => void;
+    const firstDispatched = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let finishFirst!: () => void;
+    const firstGate = new Promise<void>(resolve => { finishFirst = resolve; });
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        if (String(input).includes("/backend-api/wham/usage")) {
+          calls += 1;
+          if (calls === 1) {
+            releaseFirst();
+            await firstGate;
+            return new Response("upstream unavailable", { status: 503 });
+          }
+          return upstreamHealthy ? whamResponse(20) : new Response("upstream unavailable", { status: 503 });
+        }
+        return originalFetch(input);
+      };
+
+      const firstPrime = primeCodexPoolQuotas(config, "test");
+      await firstDispatched;
+      config.codexAccounts = [];
+      const removedPrime = primeCodexPoolQuotas(config, "removed");
+      finishFirst();
+      await Promise.all([firstPrime, removedPrime]);
+
+      config.codexAccounts = originalPool;
+      upstreamHealthy = true;
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "restored");
+
+      expect(calls).toBe(2);
+      expect(getAccountQuota("p1")).toMatchObject({ weeklyPercent: 20 });
+    } finally {
+      finishFirst();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("re-authenticating a failed account retries without waiting out the backoff", async () => {
     const config = makeConfig();
     seedPoolAccount(config, "p1");
@@ -509,6 +638,50 @@ describe("primeCodexPoolQuotas", () => {
     }
   });
 
+  test.each([
+    ["credential generation conflict", () => new CodexCredentialGenerationConflictError()],
+    ["refresh-lock timeout", () => new CodexCredentialRefreshLockTimeoutError()],
+  ] as const)("a %s before dispatch does not back off the next prime", async (_label, makeError) => {
+    const config = makeConfig();
+    seedPoolAccount(config, "p1");
+    const originalFetch = globalThis.fetch;
+    let tokenAttempts = 0;
+    let whamCalls = 0;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        if (String(input).includes("/backend-api/wham/usage")) {
+          whamCalls += 1;
+          return whamResponse(20);
+        }
+        return originalFetch(input);
+      };
+      const getValidPoolToken = async () => {
+        tokenAttempts += 1;
+        if (tokenAttempts === 1) throw makeError();
+        return {
+          accessToken: "access-p1",
+          chatgptAccountId: "acct-p1",
+          generation: readCodexAccountRecord("p1")!.generation,
+        };
+      };
+      const restoreTokenResolver = setCodexPoolQuotaTokenResolverForTests(getValidPoolToken);
+
+      try {
+        await primeCodexPoolQuotas(config, "test");
+        clearCodexQuotaPrimeSingleFlightForTests();
+        await primeCodexPoolQuotas(config, "test");
+      } finally {
+        restoreTokenResolver();
+      }
+
+      expect(tokenAttempts).toBe(2);
+      expect(whamCalls).toBe(1);
+      expect(getAccountQuota("p1")).toMatchObject({ weeklyPercent: 20 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("a refreshed credential keeps the backoff earned by its failed WHAM request", async () => {
     const config = makeConfig();
     seedPoolAccount(config, "p1");
@@ -551,6 +724,49 @@ describe("primeCodexPoolQuotas", () => {
 
       expect(oauthCalls).toBe(1);
       expect(whamCalls).toBe(1);
+      expect(getAccountQuota("p1")).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a failed 401 replay binds backoff to the replay credential generation", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, "p1");
+    const originalFetch = globalThis.fetch;
+    let oauthCalls = 0;
+    let whamCalls = 0;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/oauth/token")) {
+          oauthCalls += 1;
+          return Response.json({
+            access_token: "fresh-p1",
+            refresh_token: "fresh-refresh-p1",
+            expires_in: 3600,
+          });
+        }
+        if (url.includes("/backend-api/wham/usage")) {
+          whamCalls += 1;
+          if (whamCalls === 1) {
+            return Response.json({ error: { code: "transient_edge_rejection" } }, { status: 401 });
+          }
+          throw new Error("replay transport unavailable");
+        }
+        return originalFetch(input);
+      };
+
+      await primeCodexPoolQuotas(config, "test");
+      expect(oauthCalls).toBe(1);
+      expect(whamCalls).toBe(2);
+      expect(getAccountQuota("p1")).toBeNull();
+
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "test");
+
+      expect(oauthCalls).toBe(1);
+      expect(whamCalls).toBe(2);
       expect(getAccountQuota("p1")).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
