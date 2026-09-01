@@ -12,3 +12,6 @@ keyed off undocumented upstream behavior, no exact-head green, reviewer blockers
 smaller slice would not close the issue. Estimated honest merge path 8–12h with a maintainer-owned
 rebase and security pass; not this batch.
 
+## Executed
+PR #2496 closed 2026-09-02 with the rationale above; #2495 commented with reopen conditions
+(maintainer-owned rebase, exact-head green run, security pass on plaintext retention).
