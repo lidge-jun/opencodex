@@ -633,6 +633,31 @@ describe("Codex auth context", () => {
     });
   });
 
+  test("account-gated routing distinguishes an unavailable grant from no grant", async () => {
+    const cfg = config();
+    saveCodexAccountCredential("pool-a", {
+      accessToken: "pool-token",
+      refreshToken: "pool-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "pool-account",
+    });
+    const snapshot = (models: string[]): CodexModelEntitlementSnapshot => ({
+      modelsByAccount: new Map([["pool-a", new Set(models)]]),
+      confirmedAccountIds: new Set(["pool-a"]),
+      credentialIdentities: new Map(),
+    });
+    const resolve = (models: string[]) => resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      excludeAccountId: "pool-a",
+      modelId: "gpt-daybreak-blue-latest",
+      resolveCodexModelEntitlements: async () => snapshot(models),
+    });
+
+    await expect(resolve(["gpt-daybreak-blue-latest"]))
+      .rejects.toThrow("Codex accounts that support this model are currently unavailable");
+    await expect(resolve(["gpt-5.6-sol"]))
+      .rejects.toThrow("No eligible Codex account supports this model");
+  });
+
   test("auth resolution preserves per-model detours without replacing ordinary affinity", async () => {
     const cfg = config();
     cfg.accountPoolStrategy = "round-robin";
