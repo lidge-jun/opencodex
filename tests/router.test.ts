@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mapReasoningEffort } from "../src/reasoning-effort";
-import { NoEnabledOpenAiProviderError, routeModel } from "../src/router";
+import { NoEnabledOpenAiProviderError, routeCompactionModel, routeModel } from "../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 describe("routeModel registry effort defaults", () => {
@@ -697,5 +697,78 @@ describe("routeModel blocked model redirect", () => {
       reason: "blocked-model-redirect",
     });
     expect(routed.routeDecision?.requestedModel).toBe("side/gpt-5.6-terra");
+  });
+});
+
+describe("routeCompactionModel (#2901)", () => {
+  const ghcpOnly: OcxConfig = {
+    port: 10100,
+    defaultProvider: "github-copilot",
+    providers: {
+      "github-copilot": {
+        adapter: "openai-chat",
+        baseUrl: "https://api.githubcopilot.com",
+        authMode: "key",
+        apiKey: "ghu_test",
+        models: ["gpt-5.6-sol", "claude-opus-4-6"],
+      },
+    },
+    codexAccountNamespaces: { side: "side-account-id" },
+  };
+
+  test("falls back to the configured default provider only on the compaction surface", () => {
+    // Ordinary turns keep today's reservation: a bare native id without canonical openai is terminal.
+    expect(() => routeModel(ghcpOnly, "gpt-5.6-sol")).toThrow(NoEnabledOpenAiProviderError);
+    expect(routeCompactionModel(ghcpOnly, "gpt-5.6-sol")).toMatchObject({
+      providerName: "github-copilot",
+      modelId: "gpt-5.6-sol",
+      routeKind: "default-provider",
+      routeReason: "compaction-default-provider",
+    });
+    expect(routeCompactionModel(ghcpOnly, "gpt-5.6-sol").routeDecision?.selected).toMatchObject({
+      provider: "github-copilot",
+      model: "gpt-5.6-sol",
+      reason: "compaction-default-provider",
+    });
+  });
+
+  test("keeps exact account selectors and canonical-openai configs unchanged", () => {
+    // An account-qualified native selector names a credential; it must stay fail-closed.
+    expect(() => routeCompactionModel(ghcpOnly, "side/gpt-5.6-sol")).toThrow(NoEnabledOpenAiProviderError);
+    // With canonical openai enabled the compaction route is identical to the ordinary one.
+    const withOpenAi: OcxConfig = {
+      ...ghcpOnly,
+      providers: {
+        ...ghcpOnly.providers,
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+      },
+    };
+    expect(routeCompactionModel(withOpenAi, "gpt-5.6-sol")).toMatchObject({
+      providerName: "openai",
+      routeReason: "native-family",
+    });
+    // Same destination as the ordinary router; the decision trace carries a fresh id/timestamp.
+    const { routeDecision: _a, ...compactionRoute } = routeCompactionModel(withOpenAi, "gpt-5.6-sol");
+    const { routeDecision: _b, ...ordinaryRoute } = routeModel(withOpenAi, "gpt-5.6-sol");
+    expect(compactionRoute).toEqual(ordinaryRoute);
+  });
+
+  test("does not resurrect a disabled, missing, or legacy default provider", () => {
+    const disabledDefault: OcxConfig = {
+      ...ghcpOnly,
+      providers: { "github-copilot": { ...ghcpOnly.providers["github-copilot"]!, disabled: true } },
+    };
+    expect(() => routeCompactionModel(disabledDefault, "gpt-5.6-sol")).toThrow(NoEnabledOpenAiProviderError);
+    const missingDefault: OcxConfig = { ...ghcpOnly, defaultProvider: "nowhere" };
+    expect(() => routeCompactionModel(missingDefault, "gpt-5.6-sol")).toThrow(NoEnabledOpenAiProviderError);
+    const openAiDefaultDisabled: OcxConfig = {
+      ...ghcpOnly,
+      defaultProvider: "openai",
+      providers: {
+        ...ghcpOnly.providers,
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", disabled: true },
+      },
+    };
+    expect(() => routeCompactionModel(openAiDefaultDisabled, "gpt-5.6-sol")).toThrow(NoEnabledOpenAiProviderError);
   });
 });

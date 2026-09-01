@@ -9,7 +9,7 @@ import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
-import { NoEligiblePolicyCandidateError, routeModel } from "../../router";
+import { NoEligiblePolicyCandidateError, routeCompactionModel } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
 import {
   advanceComboAfterFailure,
@@ -509,7 +509,10 @@ export async function handleResponsesCompact(
     // Compact requests route through the same policy evaluation as normal
     // turns, so body-derived evidence (tools/image) must reach the first
     // evaluation too - not only the later handleResponses dispatch.
-    route = routeModel(config, raw.model, evidenceFromBody(raw));
+    // Codex selects a bare native model for compaction even when the operator
+    // routes ordinary turns elsewhere (#2901); the compaction-scoped router
+    // may land that on the configured default provider instead of 404.
+    route = routeCompactionModel(config, raw.model, evidenceFromBody(raw));
   } catch (err) {
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the

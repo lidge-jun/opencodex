@@ -285,6 +285,16 @@ conversation.
 | Canonical ChatGPT or official OpenAI route | Forwards the request to the native `/responses/compact` endpoint with the resolved account and model authentication |
 | Other routed model | Runs an internal, non-streaming, no-tools compaction turn with a `compaction_trigger`; requires exactly one synthetic `compaction` item whose `encrypted_content` is an `ocx1:` envelope; decodes that summary into v1 replacement history |
 
+Codex names a bare OpenAI-family model (for example `gpt-5.6-sol`) for its compaction turns
+regardless of which provider the operator routes ordinary turns to. Ordinary requests reserve
+such ids for the canonical `openai` provider. On the compaction surface only — `POST
+/v1/responses/compact` and a `POST /v1/responses` turn carrying a `compaction_trigger` — a bare
+native model with no enabled canonical `openai` provider falls back to the configured
+`defaultProvider` as the summarizer instead of returning 404. The fallback applies only when the
+default provider is enabled and is not itself an OpenAI-family entry; account-qualified selectors
+such as `side/gpt-5.6-sol` still fail closed. The proxy logs one notice per provider when this
+fallback engages. Configurations with an enabled canonical `openai` provider are unchanged.
+
 Native compact responses are buffered with a 32 MiB maximum, including responses whose declared
 `Content-Length` already exceeds the limit. The compact-specific failures include:
 

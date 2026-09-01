@@ -58,6 +58,7 @@ import {
 import {
   comboRouteDecisionTrace,
   NoEligiblePolicyCandidateError,
+  routeCompactionModel,
   routeConcreteModel,
   routeModel,
   type RouteResult,
@@ -2832,9 +2833,15 @@ async function handleResponsesInner(
 
   let route: RouteResult;
   try {
+    // A `compaction_trigger` turn may name a bare native model the operator has
+    // no canonical OpenAI route for (#2901). Only the initial compaction route
+    // may fall back to the configured default provider; combo attempts and the
+    // later fallback/recovery re-routes keep the ordinary reservation.
     const resolveRoute = (modelId: string) => options.comboAttempt
       ? routeConcreteModel(config, modelId)
-      : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
+      : parsed._compactionRequest === true
+        ? routeCompactionModel(config, modelId, evidenceFromBody(parsed._rawBody))
+        : routeModel(config, modelId, evidenceFromBody(parsed._rawBody));
     const _sci = config.shadowCallIntercept;
     let shadowRoute: RouteResult | undefined;
     if (_sci?.enabled && _sci.model && isShadowSourceModel(parsed.modelId, _sci.sourceModels)) {
