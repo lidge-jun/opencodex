@@ -38,8 +38,8 @@ function fakeKeychain(options: { unavailable?: boolean; readBackMismatch?: boole
 let testDir = "";
 let previousHome: string | undefined;
 let isolated: IsolatedCodexHome | null = null;
-const SECRET = "sk-plain-key-material-1234567890";
-const POOL_SECRET = "sk-second-key-material-0987654321";
+const SECRET = "plain-key-material-first-entry";
+const POOL_SECRET = "plain-key-material-second-entry";
 
 function baseConfig(): OcxConfig {
   return {
