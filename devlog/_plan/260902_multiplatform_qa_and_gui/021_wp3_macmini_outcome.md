@@ -9,7 +9,7 @@
 HEAD   = 0cc73411aec36699aa30e98156a685665d8d8e5b
 BRANCH = dev
 DIRTY  = 0
-LINK   = /Users/junny/opencodex/bin/ocx.mjs
+LINK   = ~/opencodex/bin/ocx.mjs
 SVC    = 80761  com.opencodex.proxy
 서빙 버전 = 2.39.0, /healthz 200
 ```
@@ -59,7 +59,7 @@ HEAD로 남은 것이다.
 BRANCH = dev            (사전과 일치)
 HEAD   = 0cc73411a...   (사전과 일치)
 DIRTY  = 0              (사전과 일치)
-LINK   = /Users/junny/opencodex/bin/ocx.mjs  (사전과 일치)
+LINK   = ~/opencodex/bin/ocx.mjs  (사전과 일치)
 SVC    = 64484 com.opencodex.proxy  (PID는 재기동으로 바뀜, 실행 상태 일치)
 버전   = 2.39.0         (사전과 일치)
 ```

@@ -5,7 +5,7 @@
 `2.21.0` → `2.39.0` 갱신 후 QA, 다시 `2.21.0`으로 복원했다.
 
 `ocx`가 PATH에 없어서 `npm root -g`로 실제 경로를 찾아 실행했다
-(`/home/lidgeai/.local/lib/node_modules/@bitkyc08/opencodex`). PATH 부재는
+(`~/.local/lib/node_modules/@bitkyc08/opencodex`). PATH 부재는
 설치 문제가 아니라 이 호스트의 셸 설정이고, 사용자 환경이므로 건드리지 않았다.
 
 CLI 계약이 macOS와 동일하다: 빈 입력 exit 0, 오플래그 exit 1, 미매칭 라우트
@@ -30,7 +30,7 @@ node, npm, bun 전부 없었다. 시스템에 런타임을 설치하는 것은 �
 
 ```
 Pointed Codex's built-in openai provider at the opencodex proxy (openai_base_url).
-  Codex model catalog: /Users/tig/.codex/opencodex-catalog.json
+  Codex model catalog: ~/.codex/opencodex-catalog.json
 WARNING: 4 Codex app-server process(es) still running ...
 ```
 

@@ -4,7 +4,7 @@
 
 ```
 npm 글로벌 = @bitkyc08/opencodex@2.32.1
-ocx        = /c/Users/user/AppData/Roaming/npm/ocx
+ocx        = ~/AppData/Roaming/npm/ocx
 ~/.opencodex = 존재
 node v24.19.0, bun 1.3.14
 프록시 PID 26208 가동 중 (uptime 638755s = 약 7.4일)

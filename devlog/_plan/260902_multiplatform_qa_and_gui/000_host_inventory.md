@@ -11,7 +11,7 @@
 | `macmini-cf` | macOS arm64 | **소스 체크아웃** | `~/opencodex` @ `0cc73411a` (dev), `~/.bun/bin/ocx` → `~/opencodex/bin/ocx.mjs` 심볼릭 링크, launchd `com.opencodex.proxy` PID 80761 **실행 중**, bun 1.3.14 |
 | `lidge` | Linux x86_64 | **npm 글로벌** | `@bitkyc08/opencodex@2.21.0`, node/npm `/usr/bin`, bun `/usr/local/bin`, `~/.opencodex` 존재, 서비스 없음 |
 | `intmb` | macOS | **미설치** | `ocx` 없음, `~/.opencodex` 없음, npm 글로벌 없음, bun 없음 |
-| `desktop-c795oh4` | Windows (MINGW64) | **npm 글로벌** | `@bitkyc08/opencodex@2.32.1`, `/c/Users/user/AppData/Roaming/npm/ocx`, `~/.opencodex` 존재, bun 1.3.14, node v24.19.0 |
+| `desktop-c795oh4` | Windows (MINGW64) | **npm 글로벌** | `@bitkyc08/opencodex@2.32.1`, `~/AppData/Roaming/npm/ocx`, `~/.opencodex` 존재, bun 1.3.14, node v24.19.0 |
 
 Tailscale 이름 해석: 사용자가 말한 "macbook"과 "desktop"은 SSH 별칭으로 각각
 `intmb`와 `desktop-c795oh4`다. `macbook`/`desktop`은 해석되지 않는다.
