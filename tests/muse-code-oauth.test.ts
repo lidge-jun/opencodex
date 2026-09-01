@@ -56,7 +56,7 @@ describe("Meta Muse Code device login", () => {
             api_key: MUSE_KEY,
             base_url: "https://api.meta.ai/v1",
             require_payment: false,
-            user_email: "private-address-not-retained@example.invalid",
+            user_email: "not-an-email-fixture",
           });
         }
         return response({}, 404);
