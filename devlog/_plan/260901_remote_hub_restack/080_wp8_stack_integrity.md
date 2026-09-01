@@ -7,7 +7,7 @@
 각 PR의 base가 직전 단계 head 브랜치를 정확히 가리켜야 한다.
 
 | PR | base여야 하는 것 |
-|----|------------------|
+| --- | --- |
 | #2771 | dev |
 | #2772 | codex/remote-hub-design |
 | #2776 | codex/remote-hub-p1 |
@@ -24,7 +24,7 @@
 `origin/dev`가 조상인지만 보면 부족하다(감사 A9): 부모를 건너뛰고 dev 위로
 직접 리베이스된 자식도 그 검사를 통과한다. 각 **엣지**를 확인한다:
 
-```
+```sh
 git merge-base --is-ancestor origin/<parent> origin/<child>
 ```
 
@@ -33,7 +33,7 @@ git merge-base --is-ancestor origin/<parent> origin/<child>
 
 ## draft 해제
 
-#2776 / #2781 / #2789. CI 그린 확인 후에만.
+`#2776` / #2781 / #2789. CI 그린 확인 후에만.
 
 ## PR 설명 갱신
 

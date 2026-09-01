@@ -15,12 +15,12 @@
 
 세 파일의 dev 쪽 마지막 변경은 전부 `f6367639c feat(server): add
 least-privilege GET /v1/catalog for remote Codex clients (#2979)` 이다.
-#2979는 이 스택이 설계한 `/v1/catalog`를 별도 PR로 먼저 랜딩시킨 것이다.
+`#2979`는 이 스택이 설계한 `/v1/catalog`를 별도 PR로 먼저 랜딩시킨 것이다.
 
 "dev wins"를 통째로 적용하면 안 된다(감사 A4). 두 구현은 의미가 갈린다:
 
 | 항목 | dev (#2979) | p1 | 채택 |
-|------|-------------|----|------|
+| --- | --- | --- | --- |
 | 메서드 | GET + HEAD | GET only | **dev** — HEAD 제거는 랜딩된 기능 회귀 |
 | `x-api-key` | 허용 | 거부 | **판단 필요** — 아래 |
 | 크기 캡 | 라우트 한정 256 MiB | 32 MiB | **dev** — 랜딩된 지원 크기를 줄이지 않는다 |

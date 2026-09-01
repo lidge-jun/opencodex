@@ -36,7 +36,7 @@ Last-Modified를 제거한다. p6에서 적대적 커버리지를 덧붙인다.
 
 ## /api/machine/* 라우트 선언 — 여기가 소유 단계다
 
-#2786(p5)에 보고됐지만 실측하면 `/api/machine/` 추가 라인이 p4에 **49건**,
+`#2786`(p5)에 보고됐지만 실측하면 `/api/machine/` 추가 라인이 p4에 **49건**,
 p5에는 0건이다. 라우트를 도입한 건 p4다(감사 A5).
 
 `tests/cli-headless-parity.test.ts:287`은 "서버가 여는 라우트와 CLI가 선언한

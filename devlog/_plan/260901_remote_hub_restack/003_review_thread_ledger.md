@@ -9,7 +9,7 @@
 문서 계약 지적이다. 실질 건만 추린다.
 
 | # | 위치 | 등급 | 요지 | 배정 |
-|---|------|------|------|------|
+| --- | --- | --- | --- | --- |
 | T1 | 000_research.md:22 | **P1** | 미공개 보안 분석이 추적되는 공개 devlog에 있다 | wp1 |
 | T2 | 060_phase4_two_plane.md:348 | P2 | 연결된 GUI에 인증된 models 경로 필요(`/v1/models`가 데이터플레인으로 감) | wp5 |
 | T3 | 070_phase5_deploy.md:164 | P2 | 관리 ingress에서 GUI health 엔드포인트 보존 | wp6 |
@@ -31,13 +31,13 @@
 ## #2772 p1 — 1건
 
 | # | 위치 | 등급 | 요지 | 배정 |
-|---|------|------|------|------|
+| --- | --- | --- | --- | --- |
 | T19 | src/server/index.ts:1013 | P2 | 확장된 readiness 응답을 `docs-site/.../cli/lifecycle.md`에 문서화 | wp2 |
 
 ## #2776 p2 — 2건
 
 | # | 위치 | 등급 | 요지 | 배정 |
-|---|------|------|------|------|
+| --- | --- | --- | --- | --- |
 | T20 | src/server/index.ts:1684 | **P1** | pairing 바디를 버퍼링 전에 제한. `Content-Length` 없거나 chunked면 `declaredLength`가 0이 되어 미인증 호출자가 무제한 버퍼링 유발 | wp3 |
 | T21 | src/types/config.ts:251 | P2 | `hub.managementPublicOrigin`, `remoteGui.allowedTailscaleUsers`, `remoteGui.allowInsecure*` 문서화 | wp3 |
 
@@ -46,7 +46,7 @@ T20은 미인증 DoS다. D1과 같은 층에 있으므로 wp3에서 함께 닫�
 ## #2777 p3 — 3건
 
 | # | 위치 | 등급 | 요지 | 배정 |
-|---|------|------|------|------|
+| --- | --- | --- | --- | --- |
 | T22 | src/client/connect.ts:229 | **P1** | 연결 전 기존 Codex journal 재소유 필요. `ocx start` 후 정상 상태에서 `injectCodexConfig`가 소유권을 잃는다 | wp4 |
 | T23 | src/client/hub-client.ts:85 | P2 | 신뢰할 수 없는 `Content-Length`에 대해 응답 읽기 제한 | wp4 |
 | T24 | src/cli/help.ts:35 | P2 | connect/disconnect 워크플로 문서화 | wp4 |
@@ -54,7 +54,7 @@ T20은 미인증 DoS다. D1과 같은 층에 있으므로 wp3에서 함께 닫�
 ## #2781 p4 — 4건
 
 | # | 위치 | 등급 | 요지 | 배정 |
-|---|------|------|------|------|
+| --- | --- | --- | --- | --- |
 | T25 | src/client/machine-listener.ts:79 | **P1** | `--management-transport relay` 선택 시 `connectClient`가 여전히 throw — 문서화된 옵션이 동작하지 않음 | wp5 |
 | T26 | src/client/runtime.ts:27 | **P1** | systemd/WinSW로 뜬 런타임이 disconnect 후 재시작되지 않음(`OCX_SERVICE=1`이 분기를 건너뜀) | wp5 |
 | T27 | gui/src/App.tsx:222 | P2 | disconnect 202 성공 시 targets 갱신 누락 | wp5 |
@@ -63,14 +63,14 @@ T20은 미인증 DoS다. D1과 같은 층에 있으므로 wp3에서 함께 닫�
 ## #2786 p5 — 2건
 
 | # | 위치 | 등급 | 요지 | 배정 |
-|---|------|------|------|------|
+| --- | --- | --- | --- | --- |
 | T29 | src/client/state.ts:46 | P2 | hub role을 disconnected client state에서 배제 | wp6 |
 | T30 | src/client/state.ts:85 | P2 | missing-config 부트스트랩 조건화(락 획득 전 반환으로 경쟁) | wp6 |
 
 ## #2789 p6 — 3건
 
 | # | 위치 | 등급 | 요지 | 배정 |
-|---|------|------|------|------|
+| --- | --- | --- | --- | --- |
 | T31 | src/client/connect.ts:304 | **P1** | abort 실패 시 토큰 identity 보존. 새 토큰 설치 후 abort가 일시 실패하면 복원이 잘못된 세대를 남긴다 | wp7 |
 | T32 | src/client/state.ts:95 | P2 | `ocx connect status`가 진행 중인 로테이션 백업을 삭제 | wp7 |
 | T33 | src/client/hub-relay.ts:282 | P2 | 릴레이 오류를 과대 응답 노출 전에 반환 | wp7 |
