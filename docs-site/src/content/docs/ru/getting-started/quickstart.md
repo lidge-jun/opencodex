@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` проведёт вас по следующим шагам:
 
-1. **Выбор провайдера** — выберите один из 79 встроенных пресетов реестра или `custom`, чтобы
+1. **Выбор провайдера** — выберите один из 80 встроенных пресетов реестра или `custom`, чтобы
    ввести базовый URL и адаптер вручную.
 2. **API-ключ** — вставьте ключ или сошлитесь на переменную окружения вида `${ANTHROPIC_API_KEY}`.
 3. **Модель по умолчанию** — для провайдеров с ключом, локальных и `custom` примите значение из
@@ -90,7 +90,7 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 Некоторые провайдеры поддерживают полноценный вход в аккаунт (OAuth с автообновлением):
 
 ```bash
-ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor
+ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor, muse-code
 ocx logout xai
 ```
 

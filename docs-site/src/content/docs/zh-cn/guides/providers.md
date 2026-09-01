@@ -75,7 +75,7 @@ ChatGPT 透传目录也会加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 
 ## 2. 账号登录（OAuth）
 
-有八个提供商预设使用 OAuth 登录，另加通过实验性非官方设备流桥接的 GitHub Copilot。
+共有十个提供商预设支持账号登录，其中 GitHub Copilot 和 Meta Muse Code 使用实验性设备流桥接。
 opencodex 会把凭据存入 `~/.opencodex/auth.json` 并自动刷新。登录 CLI 也接受 `chatgpt`：
 它会获取一份 ChatGPT 凭据，并创建一个 `forward` 模式的提供商条目。
 
@@ -88,6 +88,7 @@ ocx login kiro         # 导入 kiro-cli 凭据（支持令牌回退）
 ocx login google-antigravity
 ocx login cursor       # 独立的 Cursor PKCE 登录
 ocx login command-code # Command Code 浏览器 OAuth（或导入 ~/.commandcode/auth.json）
+ocx login muse-code    # Meta 设备流 → Muse Code 订阅密钥
 ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot Pro/Business）
 ocx login chatgpt      # 独立的 ChatGPT OAuth 登录
 ocx logout <provider>
@@ -102,9 +103,14 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、带可选 HTTP/1.1 兼容路径的 HTTP/2 传输，以及按账号筛选的模型发现。 |
+| `muse-code` | `openai-responses` | `https://api.meta.ai/v1` | 实验性 Meta 设备流并签发 Muse Code 密钥。通过 `/v1/models` 实时发现模型；回退默认模型为 `muse-spark-1.2`。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性。GitHub 设备流 + `copilot_internal` 交换（VS Code OAuth 客户端）。需要有效的 Copilot 订阅；不是官方第三方 API。 |
 
 Nous refresh 发生终止性失败后，请运行 `ocx login nous` 重新认证。
+
+> **Muse Code 订阅限制：**Meta 明确说明，初始化时自动关联的密钥仅供 Muse Code 使用。
+> 因此 `muse-code` 属于高风险实验性桥接，登录前必须确认。官方第三方接入方式是另建
+> Model API 密钥，并配置 `https://api.meta.ai/v1` 与 `openai-responses`。
 
 对于规范的 Kimi Coding Plan 预设（`kimi` 账号登录和 `kimi-code` API key），opencodex
 只会把调用方提供的稳定 `prompt_cache_key` 转发到 Chat Completions 请求，绝不自行生成。Kimi
@@ -150,7 +156,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 79 个预设：67 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 80 个预设：67 个密钥预设、9 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 

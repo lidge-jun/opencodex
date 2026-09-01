@@ -89,8 +89,8 @@ The ChatGPT passthrough catalog also layers in the bare GPT-5.6 Sol/Terra/Luna s
 
 ## 2. Account login (OAuth)
 
-Eight provider presets use OAuth login — plus GitHub Copilot via an experimental unofficial
-device-flow bridge. opencodex stores their credentials in
+Ten provider presets use account login, including GitHub Copilot and Meta Muse Code through
+experimental device-flow bridges. opencodex stores their credentials in
 `~/.opencodex/auth.json` and refreshes them automatically. `chatgpt` is also accepted by the login
 CLI; it acquires a ChatGPT credential while creating a `forward`-mode provider entry.
 
@@ -103,6 +103,7 @@ ocx login kiro         # import kiro-cli credentials (or token fallback)
 ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
+ocx login muse-code    # Meta device flow → Muse Code subscription key
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
 ocx login chatgpt      # standalone ChatGPT OAuth login
 ocx logout <provider>
@@ -117,9 +118,20 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | Initial login imports the installed, signed-in `kiro-cli` session (on Unix, install with `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; then run `kiro-cli login`). **Add account** logs `kiro-cli` out, starts a fresh browser login that switches the account used by `kiro-cli`, and stores account-scoped profile metadata. Existing OpenCodex accounts are preserved, and cancellation or failure restores the previous `kiro-cli` session. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
+| `muse-code` | `openai-responses` | `https://api.meta.ai/v1` | Experimental Meta device flow followed by Muse Code key minting. Live `/v1/models` discovery; `muse-spark-1.2` is the fallback default. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
 After a terminal Nous refresh failure, run `ocx login nous` to reauthenticate.
+
+> **Muse Code subscription restriction:** Meta documents the API key automatically connected by
+> Muse Code onboarding as usable with Muse Code only. OpenCodex therefore marks `muse-code` as a
+> high-risk experimental bridge and requires an acknowledgement before login. Meta separately
+> documents ordinary Model API keys for third-party coding agents, including Codex. For that
+> supported route, create a separate key in the [Meta Model API dashboard](https://dev.meta.ai),
+> choose **Custom provider**, and use `https://api.meta.ai/v1` with the `openai-responses` adapter.
+> Separate keys use Model API billing rather than Muse Code subscription quota. See Meta's
+> [subscription documentation](https://dev.meta.ai/docs/muse-code/subscriptions/) and
+> [agent-framework guide](https://dev.meta.ai/docs/agent-frameworks/).
 
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
 opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request;
@@ -303,7 +315,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 79 built-in presets: 67 key-based, eight OAuth, three local, and one default
+opencodex ships 80 built-in presets: 67 key-based, nine OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -567,6 +579,11 @@ is not supported directly.
 device-flow login for a short-lived Copilot API token — not a pasted API key. **GitLab Duo** remains
 a key/subscription-token gateway on its OpenAI-compatible endpoint. **Cloudflare AI
 Gateway** needs your account + gateway ids filled into the URL.
+
+**Meta Muse Code** (`ocx login muse-code`) uses Meta's device flow and exchanges the approved
+account session for a Muse Code subscription key. The proxy stores only that minted key, not the
+temporary Meta account token. This path is experimental because Meta restricts the subscription
+credential to Muse Code. A separately created Model API key is the documented third-party route.
 
 Copilot fronts a mixed-wire catalog: its GPT-5 family (`gpt-5.3-codex`, `gpt-5.4`,
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) rejects

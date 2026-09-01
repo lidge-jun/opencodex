@@ -84,8 +84,8 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 
 ## 2. アカウントログイン(OAuth)
 
-OAuth ログインを使うプロバイダープリセットは 8 つで、これに実験的な非公式デバイスフロー
-ブリッジ経由の GitHub Copilot が加わります。認証情報は `~/.opencodex/auth.json` に保存され、
+アカウントログイン対応のプロバイダープリセットは 10 個です。GitHub Copilot と Meta Muse Code は
+実験的なデバイスフローブリッジを使います。認証情報は `~/.opencodex/auth.json` に保存され、
 自動更新されます。ログイン CLI は `chatgpt` も受け付けます。このコマンドは ChatGPT 認証情報を
 発行し `forward` モードのプロバイダーエントリを作成します。
 
@@ -98,6 +98,7 @@ ocx login kiro         # kiro-cli 認証情報の取り込み(トークンフォ
 ocx login google-antigravity
 ocx login cursor       # Cursor 専用 PKCE ログイン
 ocx login command-code # Command Code のブラウザ OAuth (または ~/.commandcode/auth.json を取り込み)
+ocx login muse-code    # Meta デバイスフロー → Muse Code サブスクリプションキー
 ocx login github-copilot  # GitHub デバイスフロー → Copilot トークン (Copilot Pro/Business)
 ocx login chatgpt      # 別途 ChatGPT OAuth ログイン
 ocx logout <provider>
@@ -112,9 +113,15 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。ライブ探索は認証済みの CCA `v1internal:fetchAvailableModels` エンドポイントを使用し、ログイン中のアカウントで利用可能な agent モデルのみを公開します。管理されたカタログはフォールバックとして残ります。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
+| `muse-code` | `openai-responses` | `https://api.meta.ai/v1` | 実験的な Meta デバイスフローで Muse Code キーを発行。`/v1/models` でライブ探索し、フォールバック既定値は `muse-spark-1.2`。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 実験的。GitHub デバイスフロー + `copilot_internal` 交換（VS Code OAuth クライアント）。有効な Copilot サブスクリプションが必要で、公式のサードパーティ API ではありません。 |
 
 Nous の refresh が終端失敗した場合は、再認証に `ocx login nous` を実行してください。
+
+> **Muse Code サブスクリプションの制限:** Meta はオンボーディングで自動発行するキーを Muse Code
+> 専用としています。このため `muse-code` は高リスクの実験的ブリッジで、ログイン前に確認が必要です。
+> 公式の外部ハーネス連携には別の Model API キーを作り、`https://api.meta.ai/v1` と
+> `openai-responses` を設定してください。
 
 正規の Kimi Coding Plan プリセット（`kimi` アカウントログインと `kimi-code` API key）では、
 opencodex は呼び出し元が指定した安定した `prompt_cache_key` だけを Chat Completions リクエストへ
@@ -161,7 +168,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 79 個含まれています。キー方式 67、OAuth 8、ローカル 3、
+opencodex には組み込みプリセットが 80 個含まれています。キー方式 67、OAuth 9、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 

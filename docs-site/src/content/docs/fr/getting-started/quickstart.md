@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` vous accompagne dans les étapes suivantes :
 
-1. **Choix d’un fournisseur** — sélectionnez l’un des 79 préréglages intégrés au registre, ou `custom` pour saisir une
+1. **Choix d’un fournisseur** — sélectionnez l’un des 80 préréglages intégrés au registre, ou `custom` pour saisir une
    URL de base et un adaptateur.
 2. **Clé API** — collez une clé ou référencez une variable d’environnement telle que `${ANTHROPIC_API_KEY}`.
 3. **Modèle par défaut** — pour les fournisseurs clés, locaux et personnalisés, acceptez le préréglage ou saisissez un identifiant de modèle.
@@ -84,7 +84,7 @@ pour choisir v1, base ou v2 et comprendre quand s’appliquent les instructions,
 Certains fournisseurs prennent en charge la connexion à un compte réel (OAuth, actualisation automatique) :
 
 ```bash
-ocx login xai          # ou : anthropic, kimi, kiro, google-antigravity, cursor
+ocx login xai          # ou : anthropic, kimi, kiro, google-antigravity, cursor, muse-code
 ocx logout xai
 ```
 

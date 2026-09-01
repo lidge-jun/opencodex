@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` では次の手順を説明します。
 
-1. **プロバイダーを選択してください** — 79 個の組み込みレジストリプリセットのいずれか、または `custom` を選択してベース URL とアダプターを入力します。
+1. **プロバイダーを選択してください** — 80 個の組み込みレジストリプリセットのいずれか、または `custom` を選択してベース URL とアダプターを入力します。
 2. **API キー** — キーを貼り付けるか、`${ANTHROPIC_API_KEY}` のような環境変数を参照します。
 3. **デフォルト モデル** — キー、ローカル、カスタム プロバイダーの場合は、プリセットを受け入れるか、モデル ID を入力します。
 4. **プロキシ ポート** — デフォルトは `10100` です。
@@ -74,7 +74,7 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 一部のプロバイダーはリアル アカウント ログイン (OAuth、自動更新) をサポートしています。
 
 ```bash
-ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor
+ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor, muse-code
 ocx logout xai
 ```
 

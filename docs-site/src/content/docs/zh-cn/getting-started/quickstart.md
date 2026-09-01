@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` 会引导你完成：
 
-1. **选择 provider** — 从内置 registry 的 79 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
+1. **选择 provider** — 从内置 registry 的 80 个预设中选择一个，或选择 `custom` 手动输入 base URL 和 adapter。
 2. **API key** — 粘贴一个 key，或引用一个环境变量，例如 `${ANTHROPIC_API_KEY}`。
 3. **默认模型** — 对于 key、本地和 custom provider，接受预设值或输入模型 id。
 4. **代理端口** — 默认为 `10100`。
@@ -72,7 +72,7 @@ codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 部分 provider 支持真正的账号登录（OAuth，自动刷新）：
 
 ```bash
-ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor
+ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor, muse-code
 ocx logout xai
 ```
 

@@ -94,8 +94,8 @@ Le catalogue du transfert ChatGPT ajoute également les identifiants non qualifi
 
 ## 2. Connexion au compte (OAuth)
 
-Huit préréglages de fournisseurs utilisent une connexion OAuth. GitHub Copilot s'y ajoute au moyen d'un pont
-expérimental et non officiel reposant sur un flux d'autorisation d'appareil. opencodex enregistre leurs identifiants dans
+Dix préréglages prennent en charge la connexion par compte, dont GitHub Copilot et Meta Muse Code au moyen de ponts
+expérimentaux reposant sur un flux d'autorisation d'appareil. opencodex enregistre leurs identifiants dans
 `~/.opencodex/auth.json` et les actualise automatiquement. La CLI de connexion accepte également `chatgpt` ;
 elle obtient un identifiant ChatGPT tout en créant une entrée de fournisseur en mode `forward`.
 
@@ -108,6 +108,7 @@ ocx login kiro         # import kiro-cli credentials (or token fallback)
 ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
+ocx login muse-code    # Flux d'appareil Meta → clé d'abonnement Muse Code
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
 ocx login chatgpt      # standalone ChatGPT OAuth login
 ocx logout <provider>
@@ -122,9 +123,15 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | La connexion initiale importe la session de l'installation locale de `kiro-cli`, déjà authentifiée (sous Unix, installez avec `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; puis exécutez `kiro-cli login`). **Ajouter un compte** déconnecte `kiro-cli`, lance une nouvelle connexion dans le navigateur qui change le compte utilisé par `kiro-cli`, puis enregistre les métadonnées propres au profil. Les comptes OpenCodex existants sont préservés ; une annulation ou un échec restaure la session `kiro-cli` précédente. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth avec le protocole Cloud Code Assist. La découverte en direct utilise le point de terminaison CCA authentifié `v1internal:fetchAvailableModels` et publie les modèles d'agent accessibles au compte connecté ; le catalogue maintenu reste la solution de repli. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Connexion PKCE expérimentale, transport HTTP/2 en direct et découverte de modèles filtrés par compte. |
+| `muse-code` | `openai-responses` | `https://api.meta.ai/v1` | Flux d'appareil Meta expérimental suivi de la création d'une clé Muse Code. Découverte en direct via `/v1/models` ; `muse-spark-1.2` est le modèle de repli. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Expérimental. Flux d'appareil GitHub et échange `copilot_internal` (client OAuth de VS Code). Nécessite un abonnement Copilot actif ; il ne s'agit pas d'une API tierce officielle. |
 
 Après un échec définitif d'actualisation de Nous, exécutez `ocx login nous` pour vous réauthentifier.
+
+> **Restriction de l'abonnement Muse Code :** Meta réserve à Muse Code la clé créée automatiquement
+> pendant son intégration. OpenCodex classe donc `muse-code` comme pont expérimental à haut risque et
+> demande une confirmation avant la connexion. Pour l'intégration tierce officiellement documentée,
+> créez une clé Model API distincte et configurez `https://api.meta.ai/v1` avec `openai-responses`.
 
 Pour les préréglages canoniques du forfait Kimi Coding (`kimi` pour la connexion au compte et `kimi-code`
 pour la clé API), opencodex ne transmet à la requête Chat Completions qu'un `prompt_cache_key` stable fourni
@@ -255,7 +262,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 79 préréglages intégrés : 67 à clé, huit OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 80 préréglages intégrés : 67 à clé, neuf OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 

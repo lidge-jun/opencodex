@@ -107,8 +107,8 @@ GPT-5.6 Sol/Terra/Luna slug'larını (`gpt-5.6-sol`, `gpt-5.6-terra`,
 
 ## 2. Hesap girişi (OAuth)
 
-Sekiz sağlayıcı önayarı OAuth girişini kullanır — artı deneysel resmi olmayan
-bir cihaz akışı köprüsü aracılığıyla GitHub Copilot. opencodex bunların kimlik
+On sağlayıcı önayarı hesap girişini destekler. GitHub Copilot ve Meta Muse Code
+deneysel cihaz akışı köprülerini kullanır. opencodex bunların kimlik
 bilgilerini `~/.opencodex/auth.json` içinde saklar ve otomatik olarak yeniler.
 `chatgpt` ayrıca oturum açma CLI'sı tarafından kabul edilir; bir `forward` modu
 sağlayıcı girdisi oluştururken bir ChatGPT kimlik bilgisi alır.
@@ -122,6 +122,7 @@ ocx login kiro         # kiro-cli kimlik bilgilerini içe aktarın (veya belirte
 ocx login google-antigravity
 ocx login cursor       # bağımsız Cursor PKCE girişi
 ocx login command-code # Command Code tarayıcı OAuth (veya ~/.commandcode/auth.json içe aktarma)
+ocx login muse-code    # Meta cihaz akışı → Muse Code abonelik anahtarı
 ocx login github-copilot  # GitHub cihaz akışı → Copilot belirteci (Copilot Pro/Business)
 ocx login chatgpt      # bağımsız ChatGPT OAuth girişi
 ocx logout <saglayici>
@@ -136,10 +137,16 @@ ocx logout <saglayici>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | İlk oturum açma, kurulu ve oturum açılmış `kiro-cli` oturumunu içe aktarır (Unix'te `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` ile kurun; Windows PowerShell'de `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` kullanın; ardından `kiro-cli login` çalıştırın). **Hesap ekle**, `kiro-cli` oturumunu kapatır, `kiro-cli` tarafından kullanılan hesabı değiştiren yeni bir tarayıcı girişi başlatır ve hesap kapsamlı profil meta verilerini saklar. Mevcut OpenCodex hesapları korunur ve iptal veya başarısızlık önceki `kiro-cli` oturumunu geri yükler. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Cloud Code Assist hattı üzerinden Google OAuth. Canlı keşif CCA'nın kimlik doğrulamalı `v1internal:fetchAvailableModels` uç noktasını kullanır ve oturum açmış hesap için kullanılabilir olan ajan modellerini yayınlar; sürdürülen katalog geri dönüş olarak kalır. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Deneysel PKCE girişi, canlı HTTP/2 aktarımı ve hesap filtreli model keşfi. |
+| `muse-code` | `openai-responses` | `https://api.meta.ai/v1` | Muse Code anahtarı oluşturan deneysel Meta cihaz akışı. `/v1/models` üzerinden canlı keşif; geri dönüş varsayılanı `muse-spark-1.2`. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Deneysel. GitHub cihaz akışı + `copilot_internal` değişimi (VS Code OAuth istemcisi). Aktif bir Copilot aboneliği gerektirir; resmi bir üçüncü taraf API değildir. |
 
 Uç bir Nous yenileme hatasından sonra yeniden kimlik doğrulamak için `ocx login
 nous` çalıştırın.
+
+> **Muse Code abonelik kısıtlaması:** Meta, ilk kurulumda otomatik bağlanan anahtarı yalnızca Muse
+> Code kullanımı için belgeler. Bu nedenle `muse-code`, girişten önce onay isteyen yüksek riskli
+> deneysel bir köprüdür. Resmi üçüncü taraf yolu, ayrı bir Model API anahtarını
+> `https://api.meta.ai/v1` ve `openai-responses` ile kullanır.
 
 Kurallı Kimi Coding Plan önayarları için (`kimi` hesap girişi ve `kimi-code` API
 anahtarı), opencodex Chat Completions isteğine yalnızca arayan tarafından
@@ -292,7 +299,7 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 79 yerleşik önayar ile birlikte gelir: 67 anahtar tabanlı, sekiz
+opencodex 80 yerleşik önayar ile birlikte gelir: 67 anahtar tabanlı, dokuz
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer

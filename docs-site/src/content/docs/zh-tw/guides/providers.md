@@ -83,7 +83,7 @@ ChatGPT passthrough catalog 也會加入 GPT-5.6 Sol/Terra/Luna 的裸 slug：`g
 
 ## 2. 帳號登入（OAuth）
 
-有八個 provider preset 使用 OAuth 登入，另加透過實驗性非官方 device-flow bridge 的 GitHub Copilot。
+共有十個 provider preset 支援帳號登入，其中 GitHub Copilot 與 Meta Muse Code 使用實驗性 device-flow bridge。
 opencodex 會把 credential 存在 `~/.opencodex/auth.json` 並自動 refresh。登入 CLI 也接受 `chatgpt`；
 它會取得 ChatGPT credential，同時建立 `forward` 模式的 provider 條目。
 
@@ -96,6 +96,7 @@ ocx login kiro         # 匯入 kiro-cli credential（或 token fallback）
 ocx login google-antigravity
 ocx login cursor       # 獨立 Cursor PKCE 登入
 ocx login command-code # Command Code browser OAuth（或匯入 ~/.commandcode/auth.json）
+ocx login muse-code    # Meta device flow → Muse Code 訂閱 key
 ocx login github-copilot  # GitHub device flow → Copilot token（Copilot Pro/Business）
 ocx login chatgpt      # 獨立 ChatGPT OAuth 登入
 ocx logout <provider>
@@ -110,9 +111,14 @@ ocx logout <provider>
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初次登入會匯入已安裝且已登入的 `kiro-cli` session。Unix 可用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` 安裝；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`，再執行 `kiro-cli login`。**Add account** 會先登出 `kiro-cli`、啟動新的 browser login，切換 `kiro-cli` 所使用的帳號並保存 account-scoped profile metadata。既有 OpenCodex 帳號會保留；取消或失敗時會恢復先前的 `kiro-cli` session。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、即時 HTTP/2 transport 與按帳號篩選的模型探索。 |
+| `muse-code` | `openai-responses` | `https://api.meta.ai/v1` | 實驗性 Meta device flow 並簽發 Muse Code key。透過 `/v1/models` 即時探索；fallback 預設模型為 `muse-spark-1.2`。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 實驗性。GitHub device flow + `copilot_internal` exchange（VS Code OAuth client）。需要有效 Copilot 訂閱；不是官方第三方 API。 |
 
 終端 Nous refresh 失敗後，執行 `ocx login nous` 重新認證。
+
+> **Muse Code 訂閱限制：**Meta 明確說明，onboarding 自動連結的 key 僅供 Muse Code 使用。
+> 因此 `muse-code` 是高風險實驗性 bridge，登入前必須確認。官方第三方接入方式是另建
+> Model API key，並設定 `https://api.meta.ai/v1` 與 `openai-responses`。
 
 對 canonical Kimi Coding Plan preset（`kimi` 帳號登入與 `kimi-code` API key），opencodex 只會把 caller
 提供且穩定的 `prompt_cache_key` 轉送到 Chat Completions 請求，絕不自行產生。Kimi 文件指出，穩定的
@@ -218,7 +224,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 79 個 preset：67 個 key-based、8 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 80 個 preset：67 個 key-based、9 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
