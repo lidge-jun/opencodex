@@ -291,7 +291,16 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     rememberReasoningForCall("call_1", REASONING, missResult.replayScope);
     const hit = toolCallAssistant(minimaxWire([userMessage(), functionCallOutputItem()]).wire.messages);
     expect(hit).toBeDefined();
-    expect(hit!["reasoning_content"]).toBe(REASONING);
+    expect(hit!["reasoning_content"]).toBeUndefined();
+    expect(hit!["reasoning_details"]).toEqual([
+      {
+        type: "reasoning.text",
+        id: "reasoning-text-1",
+        format: "MiniMax-response-v1",
+        index: 0,
+        text: REASONING,
+      },
+    ]);
   });
 
   test("P2 guard: a requires-only custom model never gets a placeholder on the orphan path", () => {

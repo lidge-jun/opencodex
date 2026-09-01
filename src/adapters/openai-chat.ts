@@ -1439,12 +1439,14 @@ function canSerializeOpenAIChatServiceTier(
 }
 
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
+  let lastRequestedModelId: string | undefined;
   return {
     name: "openai-chat",
 
     formatErrorBody: formatOpenAIChatErrorBody,
 
     buildRequest(parsed: OcxParsedRequest) {
+      lastRequestedModelId = parsed.modelId;
       const { url, headers, hasCredential } = openAIChatTransport(provider);
       const messages = frameAgentRouterMessages(provider.baseUrl, messagesToChatFormat(parsed, provider));
       const tools = toolsToChatFormatForProvider(parsed, provider);
@@ -1717,7 +1719,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // A piece that does not extend the previous snapshot is appended whole, which
       // keeps incremental senders parseable on the same path.
       const reasoningDetailSnapshots = new Map<string, string>();
-      const reasoningDetailsOptIn = (provider.reasoningDetailsModels?.length ?? 0) > 0;
+      // Gate on the routed model, not list length: a mixed openai-chat provider
+      // can list MiniMax ids without putting every sibling on MiniMax semantics.
+      const reasoningDetailsOptIn = modelInList(provider.reasoningDetailsModels, lastRequestedModelId ?? "");
 
       const handleDataLine = function* (line: string): Generator<AdapterEvent, "continue" | "terminate"> {
         const rawPayload = sseFieldValue(line, "data");
@@ -2083,7 +2087,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
         const msg = rawMessage as Record<string, unknown>;
         let reasoningText = reasoningTextFrom(msg);
-        if (reasoningText === undefined && (provider.reasoningDetailsModels?.length ?? 0) > 0) {
+        if (reasoningText === undefined && modelInList(provider.reasoningDetailsModels, lastRequestedModelId ?? "")) {
           // MiniMax split-reasoning responses carry the same thinking in both
           // reasoning_content and reasoning_details; the array is the fallback
           // when only the structured form arrives.

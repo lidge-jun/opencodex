@@ -21,6 +21,12 @@ function body(provider: OcxProviderConfig, modelId: string, reasoning?: Reasonin
   return JSON.parse(request.body as string) as Record<string, unknown>;
 }
 
+function adapterFor(provider: OcxProviderConfig, modelId: string) {
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest(parsed(modelId));
+  return adapter;
+}
+
 function minimaxRoute(modelId = "MiniMax-M3", provider: Partial<OcxProviderConfig> = {}) {
   const config: OcxConfig = {
     port: 10100,
@@ -160,8 +166,7 @@ describe("MiniMax split reasoning", () => {
       usage: { total_tokens: 10 },
     }));
 
-    const events = await createOpenAIChatAdapter(route.provider).parseResponse(response, createTranslatorBudget());
-
+    const events = await adapterFor(route.provider, route.modelId).parseResponse(response, createTranslatorBudget());
     expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "full thinking" });
     expect(events).toContainEqual({ type: "text_delta", text: "final answer" });
   });
@@ -185,7 +190,7 @@ describe("MiniMax split reasoning", () => {
     });
 
     const events: Array<{ type: string; text?: string }> = [];
-    for await (const event of createOpenAIChatAdapter(route.provider).parseStream(new Response(stream), createTranslatorBudget())) {
+    for await (const event of adapterFor(route.provider, route.modelId).parseStream(new Response(stream), createTranslatorBudget())) {
       events.push(event);
     }
 
@@ -219,6 +224,33 @@ describe("MiniMax split reasoning", () => {
     }));
 
     const events = await createOpenAIChatAdapter(provider).parseResponse(response, createTranslatorBudget());
+
+    expect(events.some(e => e.type === "reasoning_raw_delta")).toBe(false);
+  });
+
+  test("a non-matching model on an opted-in provider ignores reasoning_details", async () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://example.test/v1",
+      reasoningDetailsModels: ["MiniMax-M3"],
+    };
+    const response = new Response(JSON.stringify({
+      id: "resp-1",
+      object: "chat.completion",
+      created: 0,
+      model: "other-model",
+      choices: [{
+        index: 0,
+        finish_reason: "stop",
+        message: {
+          role: "assistant",
+          content: "answer",
+          reasoning_details: [{ type: "reasoning.text", id: "reasoning-text-1", format: "MiniMax-response-v1", index: 0, text: "thinking" }],
+        },
+      }],
+    }));
+
+    const events = await adapterFor(provider, "other-model").parseResponse(response, createTranslatorBudget());
 
     expect(events.some(e => e.type === "reasoning_raw_delta")).toBe(false);
   });
