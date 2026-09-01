@@ -118,6 +118,41 @@ test("a self-named namespace declared by the current turn is preserved", async (
   expect(text).toContain('\"name\":\"exec\",\"namespace\":\"exec\"');
 });
 
+test("a namespaced function wins over a colliding bare custom tool", async () => {
+  const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "exec", namespace: "exec", arguments: "{}", status: "completed" };
+  globalThis.fetch = (async () => new Response(sseFrom([call]), {
+    status: 200, headers: { "content-type": "text/event-stream" },
+  })) as typeof fetch;
+  const body = {
+    ...requestBody,
+    input: [
+      {
+        type: "additional_tools",
+        role: "developer",
+        tools: [
+          {
+            type: "namespace",
+            name: "functions",
+            tools: [{ type: "custom", name: "exec", description: "shell" }],
+          },
+          {
+            type: "namespace",
+            name: "exec",
+            tools: [{ type: "function", name: "exec", parameters: { type: "object", properties: {} } }],
+          },
+        ],
+      },
+      requestBody.input[1],
+    ],
+  };
+
+  const res = await handleResponses(request(body), forwardConfig(), { model: "", provider: "" });
+  expect(res.status).toBe(200);
+  const text = await res.text();
+  expect(text).toContain('\"type\":\"function_call\"');
+  expect(text).toContain('\"name\":\"exec\",\"namespace\":\"exec\"');
+});
+
 test("a genuine MCP namespace on a passthrough call is left alone", async () => {
   const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "search", namespace: "mcp__docs", arguments: "{}", status: "completed" };
   globalThis.fetch = (async () => new Response(sseFrom([call]), {

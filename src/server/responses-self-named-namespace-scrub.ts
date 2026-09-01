@@ -15,16 +15,23 @@ function collectBareCustomToolSpecs(
     if (spec.type === "namespace" && Array.isArray(spec.tools)) {
       const namespace = typeof spec.name === "string" ? spec.name : undefined;
       for (const inner of spec.tools) {
-        if (!isPlainObject(inner) || inner.type !== "custom" || typeof inner.name !== "string") continue;
-        if (namespace === "functions") bareNames.add(inner.name);
-        else if (namespace === inner.name) sameNameNamespacedNames.add(inner.name);
+        if (!isPlainObject(inner) || typeof inner.name !== "string") continue;
+        if (
+          (inner.type === "custom" || inner.type === "function")
+          && namespace === inner.name
+        ) sameNameNamespacedNames.add(inner.name);
+        if (inner.type === "custom" && namespace === "functions") bareNames.add(inner.name);
       }
       continue;
     }
-    if (spec.type !== "custom" || typeof spec.name !== "string") continue;
+    if (typeof spec.name !== "string") continue;
     const namespace = typeof spec.namespace === "string" ? spec.namespace : undefined;
+    if (
+      (spec.type === "custom" || spec.type === "function")
+      && namespace === spec.name
+    ) sameNameNamespacedNames.add(spec.name);
+    if (spec.type !== "custom") continue;
     if (!namespace || namespace === "functions") bareNames.add(spec.name);
-    else if (namespace === spec.name) sameNameNamespacedNames.add(spec.name);
   }
 }
 
@@ -45,10 +52,12 @@ export function collectAuthorizedBareCustomToolNames(
       ) collectBareCustomToolSpecs(bareNames, sameNameNamespacedNames, item.tools);
     }
   }
-  for (const name of bareNames) {
-    if (!authorizedFreeformToolNames.has(name) || sameNameNamespacedNames.has(name)) bareNames.delete(name);
-  }
-  return bareNames;
+  return new Set(
+    [...bareNames].filter(name => (
+      authorizedFreeformToolNames.has(name)
+      && !sameNameNamespacedNames.has(name)
+    )),
+  );
 }
 
 /**
