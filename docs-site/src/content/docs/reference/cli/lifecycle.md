@@ -161,11 +161,18 @@ command exits 0 only when healthy and 1 otherwise, making it suitable for servic
 
 Check post-sync readiness through the unauthenticated `GET /readyz` endpoint. It returns `200` when
 ready, or `503` with `Retry-After: 1` for `pending` and terminal `failed`. Its sanitized HTTP identity
-is `{service, version, uptime, pid, port, status}`. Old proxies without `/readyz` fail closed as
-`unreachable`; `/healthz` is separate liveness, not readiness. The command performs one probe by
+is `{service, version, uptime, pid, port, status}` plus the remote-hub protocol fields
+`{protocol, minimumClientProtocol, managementUrl}`. `protocol` is the hub protocol this proxy
+speaks and `minimumClientProtocol` the oldest client it still accepts, so a client can refuse an
+incompatible pairing before sending anything else. `managementUrl` is the origin a client should
+use for the management plane: the configured `hub.managementPublicOrigin` when `runtimeRole` is
+`hub`, and otherwise the origin the request itself arrived on. A readiness request with no
+HTTP(S) origin is rejected rather than answered with a guess. Old proxies without `/readyz` fail
+closed as `unreachable`; `/healthz` is separate liveness, not readiness. The command performs one probe by
 default; `--wait` polls until ready or timeout, but exits immediately when it observes the terminal `failed` state. The
 default timeout is 45 seconds; `--timeout <seconds>` requires `--wait` and accepts positive integer seconds from 1–300.
-CLI JSON emits `{ready, status, pid, port}`, where `status` is `ready`, `pending`, `failed`, or
+The CLI's own `--json` output is deliberately narrower than the HTTP body: it emits
+`{ready, status, pid, port}`, where `status` is `ready`, `pending`, `failed`, or
 `unreachable`. Exit codes are 0 for ready; 1 for not-ready, pending, failed, timeout, or
 unreachable; and 64 for invalid arguments.
 
