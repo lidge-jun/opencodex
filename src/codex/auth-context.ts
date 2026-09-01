@@ -670,7 +670,7 @@ export async function resolveCodexAuthContext(
     } catch (cause) {
       if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
       else if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
-      if (shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
+      if (!options.signal?.aborted && shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
         markAccountNeedsReauth(accountId, writerGeneration);
       }
       throw new CodexAuthContextError(accountId, cause);
@@ -715,7 +715,7 @@ export async function resolveCodexAuthContext(
   } catch (cause) {
     if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
     else if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
-    if (shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
+    if (!options.signal?.aborted && shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
       markAccountNeedsReauth(accountId, writerGeneration);
     }
     throw new CodexAuthContextError(accountId, cause);

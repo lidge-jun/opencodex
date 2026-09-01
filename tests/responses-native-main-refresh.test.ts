@@ -254,7 +254,7 @@ describe("native main 401 refresh and replay", () => {
   }
 
   test.each(["/v1/responses", "/v1/responses/compact"] as const)(
-    "%s keeps an outer native-main claim cancellation as 499 without quarantining main",
+    "%s keeps the WebSocket string-abort claim cancellation as 499 without quarantining main",
     async path => {
       writeFileSync(join(home, "auth.json"), JSON.stringify({
         tokens: { refresh_token: "refresh-grant", account_id: "account-main" },
@@ -287,7 +287,7 @@ describe("native main 401 refresh and replay", () => {
             request(path, controller.signal),
             config(),
             { model: "", provider: "" } as RequestLogContext,
-            { abortSignal: controller.signal },
+            { abortSignal: controller.signal, inboundTransport: "websocket" },
           )
           : handleResponsesCompact(
             request(path, controller.signal),
@@ -295,7 +295,7 @@ describe("native main 401 refresh and replay", () => {
             { model: "", provider: "" } as RequestLogContext,
           );
         while (!claimWaitListener?.mock.calls.some(([type]) => type === "abort")) await Promise.resolve();
-        controller.abort();
+        controller.abort("websocket turn superseded or closed");
 
         const response = await pending;
         expect(response.status).toBe(499);
