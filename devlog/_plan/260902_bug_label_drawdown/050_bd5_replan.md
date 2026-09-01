@@ -31,6 +31,14 @@ bundled are now i3141, i3136, i3150, i3155, and i1419.
 
 Nothing was closed under the bundled Batch E, so no disposition is lost.
 
+## bd6 disposition
+
+Identical treatment. Batch F bundled #3152, #3170, #2999, #2813, and #1527; those are now
+i3152, i2999, i2813, and i1527 — four rather than five, because **#3170 already closed** in
+bd1 via #3177 (`0d6424f8`).
+
+Both bundles are retired. Every remaining issue owns exactly one work-phase.
+
 ## Evidence already gathered for i3141, carried forward
 
 The first per-issue cycle does not start cold. Reading #3141 against HEAD before the replan
