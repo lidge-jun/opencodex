@@ -780,8 +780,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
    * Routes the unauthenticated loopback listener will serve. Everything else 404s.
    *
    * This is an allowlist rather than a filter applied to the public handler, because a filter
-   * inverts the failure mode: a route added later would be reachable here by default. The four
-   * entries are exactly what a directly-spawned `codex app-server` needs.
+   * inverts the failure mode: a route added later would be reachable here by default. The
+   * entries below are exactly what a directly-spawned `codex app-server` needs.
+   *
+   * `POST /v1/alpha/search` is the native Codex web-search relay. Codex issues it against the
+   * same base URL as `/v1/responses`, so leaving it off the list turned every native web search
+   * on the direct-spawn host into a 404 (#3192). The handler still runs its own admission, so a
+   * loopback caller without a ChatGPT credential is refused inside it rather than by this gate.
    *
    * `GET /v1/models` is on the list for a reason that is easy to miss. When catalog
    * materialization fails or finds no source, `syncCodex` warns and injects with
@@ -795,6 +800,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       return req.method === "POST" || req.headers.get("upgrade")?.toLowerCase() === "websocket";
     }
     if (path === "/v1/responses/compact") return req.method === "POST";
+    if (path === "/v1/alpha/search") return req.method === "POST";
     if (path === "/v1/models") return req.method === "GET";
     // Standalone realtime voice sessions (codex-rs thread/realtime/start, WebSocket
     // transport) — a directly-spawned `codex app-server` needs these for desktop
