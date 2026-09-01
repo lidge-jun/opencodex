@@ -2383,4 +2383,10 @@ export const ko: Record<TKey, string> = {
   "usage.scope.machine": "이 머신",
   "usage.scope.hub": "허브 전체",
   "usage.hubOffline": "허브 사용량을 불러올 수 없습니다. 로컬 사용량으로 대체하지 않았습니다.",
+  "sub.fallbackLabel": "하위 에이전트 폴백 체인",
+  "sub.fallbackHint": "하위 에이전트 모델을 사용할 수 없거나 실패할 때 이 순서로 시도합니다.",
+  "sub.fallbackAdd": "폴백 모델 추가…",
+  "sub.fallbackPoll": "가용성 확인 간격",
+  "sub.fallbackSaved": "하위 에이전트 폴백 설정을 저장했습니다.",
+  "sub.fallbackSaveFailed": "폴백 설정을 저장하지 못했습니다",
 };

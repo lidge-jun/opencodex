@@ -2346,4 +2346,10 @@ export const zhTW: Record<TKey, string> = {
   "usage.scope.machine": "此機器",
   "usage.scope.hub": "整個 Hub",
   "usage.hubOffline": "Hub 使用量無法使用，未以本機使用量替代。",
+  "sub.fallbackLabel": "子代理備援鏈",
+  "sub.fallbackHint": "子代理模型無法使用或失敗時，會依此順序嘗試模型。",
+  "sub.fallbackAdd": "新增備援模型…",
+  "sub.fallbackPoll": "可用性檢查間隔",
+  "sub.fallbackSaved": "子代理備援設定已儲存。",
+  "sub.fallbackSaveFailed": "無法儲存備援設定",
 };

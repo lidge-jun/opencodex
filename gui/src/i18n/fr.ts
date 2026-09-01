@@ -2348,4 +2348,10 @@ export const fr: Record<TKey, string> = {
   "usage.scope.machine": "Cette machine",
   "usage.scope.hub": "Tout le hub",
   "usage.hubOffline": "L'utilisation du hub est indisponible. Les données locales n'ont pas été substituées.",
+  "sub.fallbackLabel": "Chaîne de secours des sous-agents",
+  "sub.fallbackHint": "Modèles essayés dans cet ordre lorsqu’un modèle de sous-agent est indisponible ou échoue.",
+  "sub.fallbackAdd": "Ajouter un modèle de secours…",
+  "sub.fallbackPoll": "Intervalle de vérification de disponibilité",
+  "sub.fallbackSaved": "Paramètres de secours des sous-agents enregistrés.",
+  "sub.fallbackSaveFailed": "Échec de l’enregistrement des paramètres de secours",
 };

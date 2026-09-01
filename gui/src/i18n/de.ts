@@ -2361,4 +2361,10 @@ export const de: Record<TKey, string> = {
   "usage.scope.machine": "This machine",
   "usage.scope.hub": "Hub-wide",
   "usage.hubOffline": "Hub usage is unavailable. Local usage was not substituted.",
+  "sub.fallbackLabel": "Fallback-Kette für Sub-Agenten",
+  "sub.fallbackHint": "Modelle in dieser Reihenfolge versuchen, wenn ein Sub-Agent-Modell nicht verfügbar ist oder fehlschlägt.",
+  "sub.fallbackAdd": "Fallback-Modell hinzufügen…",
+  "sub.fallbackPoll": "Intervall der Verfügbarkeitsprüfung",
+  "sub.fallbackSaved": "Fallback-Einstellungen für Sub-Agenten gespeichert.",
+  "sub.fallbackSaveFailed": "Fallback-Einstellungen konnten nicht gespeichert werden",
 };

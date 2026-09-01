@@ -2384,4 +2384,10 @@ export const ru: Record<TKey, string> = {
   "usage.scope.machine": "This machine",
   "usage.scope.hub": "Hub-wide",
   "usage.hubOffline": "Hub usage is unavailable. Local usage was not substituted.",
+  "sub.fallbackLabel": "Цепочка резервных моделей подагентов",
+  "sub.fallbackHint": "Модели, которые пробуются по порядку, если модель подагента недоступна или завершилась ошибкой.",
+  "sub.fallbackAdd": "Добавить резервную модель…",
+  "sub.fallbackPoll": "Интервал проверки доступности",
+  "sub.fallbackSaved": "Настройки резервных моделей подагентов сохранены.",
+  "sub.fallbackSaveFailed": "Не удалось сохранить настройки резервных моделей",
 };

@@ -2384,4 +2384,10 @@ export const tr: Record<TKey, string> = {
   "usage.scope.machine": "This machine",
   "usage.scope.hub": "Hub-wide",
   "usage.hubOffline": "Hub usage is unavailable. Local usage was not substituted.",
+  "sub.fallbackLabel": "Alt ajan geri dönüş zinciri",
+  "sub.fallbackHint": "Alt ajan modeli kullanılamadığında veya başarısız olduğunda sırayla denenecek modeller.",
+  "sub.fallbackAdd": "Geri dönüş modeli ekle…",
+  "sub.fallbackPoll": "Kullanılabilirlik denetimi aralığı",
+  "sub.fallbackSaved": "Alt ajan geri dönüş ayarları kaydedildi.",
+  "sub.fallbackSaveFailed": "Geri dönüş ayarları kaydedilemedi",
 };

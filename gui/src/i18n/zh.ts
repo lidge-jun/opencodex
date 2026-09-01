@@ -2382,4 +2382,10 @@ export const zh: Record<TKey, string> = {
   "usage.scope.machine": "This machine",
   "usage.scope.hub": "Hub-wide",
   "usage.hubOffline": "Hub usage is unavailable. Local usage was not substituted.",
+  "sub.fallbackLabel": "子代理回退链",
+  "sub.fallbackHint": "子代理模型不可用或失败时按此顺序尝试的模型。",
+  "sub.fallbackAdd": "添加回退模型…",
+  "sub.fallbackPoll": "可用性检查间隔",
+  "sub.fallbackSaved": "子代理回退设置已保存。",
+  "sub.fallbackSaveFailed": "保存回退设置失败",
 };

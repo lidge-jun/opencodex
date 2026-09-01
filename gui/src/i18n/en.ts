@@ -2395,6 +2395,12 @@ export const en = {
   "usage.scope.machine": "This machine",
   "usage.scope.hub": "Hub-wide",
   "usage.hubOffline": "Hub usage is unavailable. Local usage was not substituted.",
+  "sub.fallbackLabel": "Sub-agent fallback chain",
+  "sub.fallbackHint": "Ordered models tried when a sub-agent model is unavailable or fails.",
+  "sub.fallbackAdd": "Add fallback model…",
+  "sub.fallbackPoll": "Availability check interval",
+  "sub.fallbackSaved": "Sub-agent fallback settings saved.",
+  "sub.fallbackSaveFailed": "Failed to save fallback settings",
 } as const;
 
 export type TKey = keyof typeof en;

@@ -2382,4 +2382,10 @@ export const ja: Record<TKey, string> = {
   "usage.scope.machine": "This machine",
   "usage.scope.hub": "Hub-wide",
   "usage.hubOffline": "Hub usage is unavailable. Local usage was not substituted.",
+  "sub.fallbackLabel": "サブエージェントのフォールバックチェーン",
+  "sub.fallbackHint": "サブエージェントモデルが利用できない、または失敗した場合に試すモデルの順序です。",
+  "sub.fallbackAdd": "フォールバックモデルを追加…",
+  "sub.fallbackPoll": "可用性確認間隔",
+  "sub.fallbackSaved": "サブエージェントのフォールバック設定を保存しました。",
+  "sub.fallbackSaveFailed": "フォールバック設定を保存できませんでした",
 };
