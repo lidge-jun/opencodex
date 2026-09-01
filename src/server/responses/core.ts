@@ -1198,7 +1198,13 @@ async function retryCodexPoolOnAlternateAccount(
 
   await firstResponse.body?.cancel().catch(() => undefined);
   const bodyRefusal = args.refuseOversizedOutboundBody?.(request, retryAuthCtx);
-  if (bodyRefusal) return { kind: "failed", response: bodyRefusal };
+  if (bodyRefusal) {
+    // A deferred first outcome is never recorded once the request ends locally, and recording
+    // is what would have surrendered the first account's probe lease. Release it directly —
+    // idempotent by lease id — instead of inventing an outcome for a send that never happened.
+    if (deferFirstOutcome) releaseCodexAuthContextProbeLease(firstAuthCtx);
+    return { kind: "failed", response: bodyRefusal };
+  }
   options.onCodexAuthContextResolved?.(retryAuthCtx);
   route.provider = retryProvider;
   logCtx.provider = formatCodexProviderForLog(

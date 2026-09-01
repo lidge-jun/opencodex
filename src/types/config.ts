@@ -615,8 +615,8 @@ export interface OcxConfig {
    * Default 0 (disabled); range 0..20. The circuit never counts timeouts or HTTP responses.
    */
   upstreamHostCircuitThreshold?: number;
-  /** Refuse an outbound provider request whose serialized body exceeds this many bytes.
-   * Default 15728640 (15 MiB). 0 = disabled. */
+  /** Refuse a native Responses passthrough request whose serialized body exceeds this many
+   * bytes; translated adapter paths are not covered. Default 15728640 (15 MiB). 0 = disabled. */
   maxUpstreamBodyBytes?: number;
   /**
    * Opt-in Anthropic OAuth account pool (#294). Default OFF.

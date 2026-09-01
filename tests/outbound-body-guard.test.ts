@@ -97,7 +97,7 @@ test("describeOutboundBodyRefusal is actionable without token-limit wording or b
     limit: 15 * 1024 * 1024,
     imageCount: 11,
     imageBytes: 15 * 1024 * 1024,
-  }, "context window / too many tokens");
+  });
 
   expect(message).toContain("16.0 MB");
   expect(message).toContain("15.0 MB");
