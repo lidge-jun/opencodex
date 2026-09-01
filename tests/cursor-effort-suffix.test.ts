@@ -244,6 +244,10 @@ describe("#2569 Cursor explicit-thinking variants", () => {
     ["claude-opus-4-8-thinking-fast", "xhigh", "claude-opus-4-8-thinking-xhigh-fast"],
     ["claude-sonnet-5-thinking", "medium", "claude-sonnet-5-thinking-medium"],
     ["claude-fable-5-thinking", "xhigh", "claude-fable-5-thinking-xhigh"],
+    ["claude-fable-5-1-thinking", "xhigh", "claude-fable-5-1-thinking-xhigh"],
+    ["claude-fable-5.1-thinking", "xhigh", "claude-fable-5.1-thinking-xhigh"],
+    // Version-first spelling follows the 4.x families: marker at the END.
+    ["claude-5.1-fable-thinking", "max", "claude-5.1-fable-max-thinking"],
     // The marker moves to the END for these families.
     ["claude-4.6-opus-thinking", "max", "claude-4.6-opus-max-thinking"],
     ["claude-4.5-opus-thinking", "high", "claude-4.5-opus-high-thinking"],

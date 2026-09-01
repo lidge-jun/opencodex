@@ -57,6 +57,14 @@ describe("Cursor discovery metadata", () => {
     expect(ids).toContain("glm-5.2");
     expect(ids).toContain("kimi-k2.7-code");
     expect(ids).toContain("kimi-k3");
+    // 260902 preemptive seed: Fable 5.1 registered ahead of Cursor's lineup update, at 1M,
+    // under the three spellings Cursor has used for Claude ids.
+    for (const spelling of ["claude-fable-5-1", "claude-fable-5.1", "claude-5.1-fable"]) {
+      expect(ids).toContain(spelling);
+      expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)[spelling]).toBe(1_000_000);
+    }
+    // Any live Fable spelling the seed does not carry still infers a 1M window.
+    expect(inferCursorContextWindow("claude-fable-6")).toBe(1_000_000);
     // Umbrella merge (devlog 260828): fast duplicate rows folded into bases.
     expect(ids).not.toContain("claude-opus-4-7-fast");
     // 260709 refresh: stale ids dropped from the static seed (cursor.com docs); gpt-5.5-extra

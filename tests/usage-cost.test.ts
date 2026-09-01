@@ -195,6 +195,11 @@ describe("resolveMatchedPrice", () => {
       expect(price?.sourceRef).toContain("0.025x");
     }
     expect(resolveMatchedPrice("anthropic-pb51d9b", "claude-fable-5-1")?.cost4).toEqual(COST4);
+    // Cursor seeds the id preemptively under three spellings and jawcode has no row, so
+    // each carries its own (derived) overlay rather than falling through to null.
+    for (const spelling of ["claude-fable-5-1", "claude-fable-5.1", "claude-5.1-fable"]) {
+      expect(resolveMatchedPrice("cursor", spelling), spelling).toMatchObject({ cost4: COST4, source: "expected", status: "verified-derived" });
+    }
     // The cheaper cache-hit rate must not leak onto Fable 5, which stays at 0.1x.
     expect(resolveMatchedPrice("anthropic", "claude-fable-5")?.cost4.cacheRead).toBe(1);
   });
@@ -292,13 +297,16 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 58 keys, including Fable 5.1, Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(58);
+  test("16. shipped overlay membership: 61 keys, including Fable 5.1, Opus 5 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(61);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
       "anthropic/claude-fable-5-1",
       "anthropic-apikey/claude-fable-5-1",
+      "cursor/claude-fable-5-1",
+      "cursor/claude-fable-5.1",
+      "cursor/claude-5.1-fable",
       "anthropic/claude-opus-5",
       "cursor/claude-opus-5",
       "kiro/claude-opus-5",

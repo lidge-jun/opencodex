@@ -23,6 +23,11 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // max is always the top tier (canonical order: low < medium < high < xhigh < max), confirmed
   // against Anthropic's effort ladder docs and Cursor's live model lineup.
   "claude-fable-5": ["low", "medium", "high", "xhigh", "max"],
+  // 260902 preemptive: Fable 5.1 seeded ahead of Cursor's lineup update (mirrors fable-5) under
+  // the three spellings Cursor has used for Claude ids.
+  "claude-fable-5-1": ["low", "medium", "high", "xhigh", "max"],
+  "claude-fable-5.1": ["low", "medium", "high", "xhigh", "max"],
+  "claude-5.1-fable": ["low", "medium", "high", "xhigh", "max"],
   "claude-opus-4-7": ["low", "medium", "high", "xhigh", "max"],
   // Opus Fast tiers from the 260822 GetUsableModels dump (devlog .../300): the wire
   // exposes {base-without-fast}-{effort}-fast only; suffix derivation at the bottom of
@@ -49,6 +54,9 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   "claude-opus-4-7-thinking-fast": ["low", "medium", "high", "xhigh", "max"],
   "claude-sonnet-5-thinking": ["low", "medium", "high", "xhigh", "max"],
   "claude-fable-5-thinking": ["low", "medium", "high", "xhigh", "max"],
+  "claude-fable-5-1-thinking": ["low", "medium", "high", "xhigh", "max"],
+  "claude-fable-5.1-thinking": ["low", "medium", "high", "xhigh", "max"],
+  "claude-5.1-fable-thinking": ["low", "medium", "high", "xhigh", "max"],
   "claude-4.6-opus-thinking": ["high", "max"],
   "claude-4.5-opus-thinking": ["high"],
   "claude-4.6-sonnet-thinking": ["medium"],
@@ -113,6 +121,9 @@ const CURSOR_THINKING_FAMILIES: Readonly<Record<string, { source: string; order:
   "claude-opus-4-7-thinking-fast": { source: "claude-opus-4-7-fast", order: "thinking-then-effort" },
   "claude-sonnet-5-thinking": { source: "claude-sonnet-5", order: "thinking-then-effort" },
   "claude-fable-5-thinking": { source: "claude-fable-5", order: "thinking-then-effort" },
+  "claude-fable-5-1-thinking": { source: "claude-fable-5-1", order: "thinking-then-effort" },
+  "claude-fable-5.1-thinking": { source: "claude-fable-5.1", order: "thinking-then-effort" },
+  "claude-5.1-fable-thinking": { source: "claude-5.1-fable", order: "effort-then-thinking" },
   "claude-4.6-opus-thinking": { source: "claude-4.6-opus", order: "effort-then-thinking" },
   "claude-4.5-opus-thinking": { source: "claude-4.5-opus", order: "effort-then-thinking" },
   "claude-4.6-sonnet-thinking": { source: "claude-4.6-sonnet", order: "effort-then-thinking" },

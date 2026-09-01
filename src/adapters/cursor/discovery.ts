@@ -30,6 +30,8 @@ export function inferCursorContextWindow(modelId: string): number {
   if (id.includes("1m")) return CONTEXT_1M;
   if (id.startsWith("gemini-")) return CONTEXT_1M;
   if (id === "glm-5.3" || id === "glm-5.2") return CONTEXT_1M;
+  // 260902: every Fable is a 1M model; catch live spellings the seed does not carry.
+  if (id.includes("fable")) return CONTEXT_1M;
   if (id.startsWith("gpt-5.6-")) return CONTEXT_1M;
   if (id.startsWith("gpt-5") || id === "gpt-5-codex") return CONTEXT_272K;
   if (id.startsWith("grok-4.5") || id.startsWith("grok-4.6")) return 500_000;
@@ -291,6 +293,11 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   // quarantined regular wire id for the bare slug).
   { id: "claude-opus-5", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
   { id: "claude-fable-5", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+  // 260902 preemptive: Fable 5.1 seeded ahead of Cursor's lineup update (mirrors fable-5) under
+  // the three spellings Cursor has used for Claude ids; see CURSOR_CAPABILITIES.
+  { id: "claude-fable-5-1", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+  { id: "claude-fable-5.1", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+  { id: "claude-5.1-fable", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
 
   { id: "composer-1", contextWindow: CONTEXT_200K },
   { id: "composer-2.5", contextWindow: CONTEXT_200K },

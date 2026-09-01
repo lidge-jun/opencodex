@@ -106,6 +106,36 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
       thinking: { levels: FULL, order: T },
     },
   },
+  // 260902 preemptive: Claude Fable 5.1 seeded ahead of Cursor's lineup update, mirroring
+  // claude-fable-5 (same 1M window and full effort ladder). Cursor has spelled Claude ids
+  // both Anthropic-style (`claude-opus-4-7`, thinking-then-effort) and version-first
+  // (`claude-4.6-opus`, effort-then-thinking), so all three plausible spellings are seeded;
+  // the live GetUsableModels filter drops whichever the roster does not expose. Collapse to
+  // the one real spelling once it is observed.
+  "claude-fable-5-1": {
+    window: CONTEXT_1M,
+    defaultVariant: "thinking",
+    variants: {
+      regular: { levels: FULL },
+      thinking: { levels: FULL, order: T },
+    },
+  },
+  "claude-fable-5.1": {
+    window: CONTEXT_1M,
+    defaultVariant: "thinking",
+    variants: {
+      regular: { levels: FULL },
+      thinking: { levels: FULL, order: T },
+    },
+  },
+  "claude-5.1-fable": {
+    window: CONTEXT_1M,
+    defaultVariant: "thinking",
+    variants: {
+      regular: { levels: FULL },
+      thinking: { levels: FULL, order: E },
+    },
+  },
   "claude-sonnet-5": {
     window: CONTEXT_1M,
     defaultVariant: "thinking",

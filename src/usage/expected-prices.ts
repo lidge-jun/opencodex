@@ -100,6 +100,13 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // bundle collapses anthropic-apikey onto anthropic).
   { provider: "anthropic", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
   { provider: "anthropic-apikey", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
+  // Cursor seeds Fable 5.1 preemptively under three spellings (adapters/cursor/catalog.ts);
+  // the model-level vendor fallback only searches jawcode metadata, which has no Fable 5.1
+  // row yet, so each Cursor spelling needs its own overlay. Vendor list price, like the
+  // cursor/claude-opus-5 row.
+  { provider: "cursor", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input; vendor list price applied to the Cursor surface`, verifiedAt: "2026-09-02", status: "verified-derived" },
+  { provider: "cursor", modelId: "claude-fable-5.1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input; vendor list price applied to the Cursor surface`, verifiedAt: "2026-09-02", status: "verified-derived" },
+  { provider: "cursor", modelId: "claude-5.1-fable", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input; vendor list price applied to the Cursor surface`, verifiedAt: "2026-09-02", status: "verified-derived" },
   // claude-opus-5 is exposed by three providers but absent from the jawcode bundle, so
   // cost resolution returned null and the Logs `~$` column rendered an em dash. The
   // model-level vendor fallback only searches jawcode metadata, never overlays, so one
