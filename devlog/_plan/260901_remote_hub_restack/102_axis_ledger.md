@@ -42,3 +42,14 @@
 | 서버 라우트 | `bun test tests/cli-headless-parity.test.ts tests/management-route-registry.test.ts` |
 | 롤백 | `bun test tests/client-connect.test.ts tests/codex-journal.test.ts` |
 | 체인 | `git merge-base --is-ancestor`를 6개 엣지에 대해 |
+
+## 서버 축 판정 근거 (수정 없음)
+
+`src/client/machine-listener.ts:49-51`이 `/api/machine/*` 라우트를 정의하고,
+`src/client/runtime.ts:70`의 `startMachineListener`가 연결된 클라이언트
+상태에서만 그것을 띄운다. standalone 프록시(`src/server/index.ts`)를 grep하면
+해당 경로가 나오지 않는다 — 라우트가 없으므로 인증된 요청도 일반 관리 디스패처를
+거쳐 404가 된다.
+
+즉 standalone 사용자의 프로세스는 이 표면을 열지 않는다. 고칠 것이 없어서
+이 축은 확인만으로 닫혔다.
