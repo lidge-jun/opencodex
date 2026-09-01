@@ -28,6 +28,11 @@ import {
   awaitThoughtSignatureDurability,
 } from "./responses/thought-signature-replay";
 import { resolveStallTimeoutSec } from "./stall-timeout";
+import {
+  createCitationMarkerFilter,
+  stripCitationMarkers,
+  type CitationMarkerFilter,
+} from "./responses/citation-markers";
 import { normalizeDeclaredToolName } from "./types";
 import { usageDisplayTotalTokens } from "./usage/totals";
 import { appendSafeWebSearchSource, safeWebSearchSources } from "./web-search/sources";
@@ -435,7 +440,14 @@ export function bridgeToResponsesSSE(
       const stallSec = resolveStallTimeoutSec(options?.stallTimeoutSec);
       const maxStallTicks = Math.ceil((stallSec * 1000) / heartbeatMs);
 
-      let currentMsg: { itemId: string; outputIndex: number; text: string; textBytes: number; phase?: OcxMessagePhase } | null = null;
+      let currentMsg: {
+        itemId: string;
+        outputIndex: number;
+        text: string;
+        textBytes: number;
+        citationFilter: CitationMarkerFilter;
+        phase?: OcxMessagePhase;
+      } | null = null;
       let currentReasoning: { itemId: string; outputIndex: number; text: string; textBytes: number } | null = null;
       let currentRawReasoning: { itemId: string; outputIndex: number; text: string; textBytes: number } | null = null;
       // Anthropic extended-thinking round-trip state: the signature signs the CURRENT thinking
@@ -565,6 +577,17 @@ export function bridgeToResponsesSSE(
 
       const closeCurrentMessage = (inferredPhase?: OcxMessagePhase) => {
         if (!currentMsg) return;
+        // Release anything the citation filter was holding for this message, then strip the
+        // accumulated text: closeCurrentMessage re-sends it in output_text.done and
+        // output_item.done, so filtering only the deltas would leave the markers in both.
+        const trailing = currentMsg.citationFilter.flush();
+        if (trailing) {
+          emit("response.output_text.delta", {
+            item_id: currentMsg.itemId, output_index: currentMsg.outputIndex,
+            content_index: 0, delta: trailing,
+          });
+        }
+        const messageText = stripCitationMarkers(currentMsg.text);
         // Chat Completions has no message-phase field. Keep its live item provisional, then
         // classify it only when the next adapter event proves whether this text led into more
         // work or completed the turn. Explicit adapter phases always outrank this inference.
@@ -574,15 +597,15 @@ export function bridgeToResponsesSSE(
         // Finalize the text part (Responses protocol). Without these .done events Codex never
         // commits the content part and renders the message as truncated / cut off.
         emit("response.output_text.done", {
-          item_id: currentMsg.itemId, output_index: currentMsg.outputIndex, content_index: 0, text: currentMsg.text,
+          item_id: currentMsg.itemId, output_index: currentMsg.outputIndex, content_index: 0, text: messageText,
         });
         emit("response.content_part.done", {
           item_id: currentMsg.itemId, output_index: currentMsg.outputIndex, content_index: 0,
-          part: { type: "output_text", text: currentMsg.text, annotations },
+          part: { type: "output_text", text: messageText, annotations },
         });
         const item = {
           type: "message", id: currentMsg.itemId, status: "completed", role: "assistant",
-          content: [{ type: "output_text", text: currentMsg.text, annotations }],
+          content: [{ type: "output_text", text: messageText, annotations }],
           ...(phase ? { phase } : {}),
         };
         emit("response.output_item.done", { output_index: currentMsg.outputIndex, item });
@@ -936,7 +959,11 @@ export function bridgeToResponsesSSE(
                   item_id: itemId, output_index: outputIndex, content_index: 0,
                   part: { type: "output_text", text: "", annotations: [] },
                 });
-                currentMsg = { itemId, outputIndex, text: "", textBytes: 0, ...(event.phase ? { phase: event.phase } : {}) };
+                currentMsg = {
+                  itemId, outputIndex, text: "", textBytes: 0,
+                  citationFilter: createCitationMarkerFilter(),
+                  ...(event.phase ? { phase: event.phase } : {}),
+                };
               }
               ({ value: currentMsg.text, bytes: currentMsg.textBytes } = appendString(
                 currentMsg.text,
@@ -944,10 +971,16 @@ export function bridgeToResponsesSSE(
                 event.text,
                 "retained_collectors",
               ));
-              emit("response.output_text.delta", {
-                item_id: currentMsg.itemId, output_index: currentMsg.outputIndex,
-                content_index: 0, delta: event.text,
-              });
+              // A citation span can straddle a delta boundary, so the filter withholds an
+              // unterminated tail and releases it at close (#3150). The accumulator above
+              // keeps the raw text; it is stripped once in closeCurrentMessage.
+              const visible = currentMsg.citationFilter.push(event.text);
+              if (visible) {
+                emit("response.output_text.delta", {
+                  item_id: currentMsg.itemId, output_index: currentMsg.outputIndex,
+                  content_index: 0, delta: visible,
+                });
+              }
               break;
             }
             case "thinking_delta": {
@@ -1621,6 +1654,10 @@ function buildResponseJSONWithBudget(
   const flushText = (inferredPhase?: OcxMessagePhase) => {
     if (!currentText) return;
     const phase = currentTextPhase ?? inferredPhase;
+    // ChatGPT-backend citation markers arrive as literal private-use characters that the
+    // Codex TUI prints verbatim (#3150). Strip them here rather than at the accumulator so
+    // the retained byte accounting above still describes what the upstream actually sent.
+    const text = stripCitationMarkers(currentText);
     const sourceBytes = pendingWebSources.reduce((sum, source) => sum + bytesOf(JSON.stringify(source)), 0);
     const annotations = pendingWebSources.map(s => ({
       type: "url_citation", url: s.url, ...(s.title ? { title: s.title } : {}), start_index: 0, end_index: 0,
@@ -1628,7 +1665,7 @@ function buildResponseJSONWithBudget(
     pendingWebSources = [];
     const item = {
       type: "message", id: `msg_${uuid()}`, role: "assistant", status: "completed",
-      content: [{ type: "output_text", text: currentText, annotations }],
+      content: [{ type: "output_text", text, annotations }],
       ...(phase ? { phase } : {}),
     } as OutputItem;
     pushOutput(item, currentTextBytes);

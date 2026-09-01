@@ -1253,6 +1253,59 @@ describe("Responses bridge web_search_call native item", () => {
   });
 });
 
+describe("citation markers never reach the client (#3150)", () => {
+  const S = "\uE200";
+  const P = "\uE202";
+  const E = "\uE201";
+
+  test("a span split across text deltas is absent from every emitted event", async () => {
+    // End-to-end through the real bridge, not just the filter. closeCurrentMessage re-sends
+    // the accumulated text in output_text.done, content_part.done and output_item.done, so
+    // filtering only the deltas would still leak the markers into the saved transcript.
+    const events = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: `The setting is supported. ${S}cite${P}` },
+      { type: "text_delta", text: `turn1view0${P}turn1view1${E}` },
+      { type: "text_delta", text: " Next sentence." },
+      { type: "done" },
+    ]), "routed/model"));
+
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain(S);
+    expect(serialized).not.toContain(P);
+    expect(serialized).not.toContain(E);
+    expect(serialized).not.toContain("turn1view0");
+
+    const streamed = events
+      .filter(e => e.event === "response.output_text.delta")
+      .map(e => e.data.delta as string)
+      .join("");
+    expect(streamed).toBe("The setting is supported.  Next sentence.");
+
+    const done = events.find(e => e.event === "response.output_text.done");
+    expect(done?.data.text).toBe("The setting is supported.  Next sentence.");
+  });
+
+  test("a stream ending inside a span still delivers the held text", async () => {
+    // Withhold, not drop: an unterminated marker is malformed input, and swallowing it
+    // would delete words the model actually produced.
+    const events = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: `partial ${S}cite${P}turn1` },
+      { type: "done" },
+    ]), "routed/model"));
+    const done = events.find(e => e.event === "response.output_text.done");
+    expect(done?.data.text).toContain("partial ");
+  });
+
+  test("ordinary text is untouched", async () => {
+    const events = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "plain answer" },
+      { type: "done" },
+    ]), "routed/model"));
+    const done = events.find(e => e.event === "response.output_text.done");
+    expect(done?.data.text).toBe("plain answer");
+  });
+});
+
 describe("Responses bridge stopReason threading (issue #246)", () => {
   test("done with stopReason max_tokens emits response.incomplete", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
