@@ -2129,11 +2129,13 @@ describe("server local API auth", () => {
     // Pin the clock BEFORE startServer, not after. `startServer` returns synchronously but
     // arms an async pool-quota prime (src/server/index.ts:2054-2064) that outlives its
     // return, and that prime decides staleness with `Date.now() - quota.updatedAt >=
-    // POOL_CACHE_TTL` (src/codex/auth-api.ts:1334-1337). `updateAccountQuota` above stamped
-    // `updatedAt` with the REAL clock, so a prime that lands after a 2027 fake clock is
-    // installed sees months of cache age, fetches, and rotates the credential out from under
-    // the assertions. Installing the clock first closes the window entirely.
+    // POOL_CACHE_TTL` (src/codex/auth-api.ts:1334-1337), where a MISSING entry is stale too.
+    // Seeding the quota after the pin is what actually keeps the prime quiet: a seed written
+    // before the pin stamps `updatedAt` with the real clock, which reads as months of cache
+    // age against this 2027 `now` and sends the prime off to fetch and rotate the credential
+    // out from under the assertions.
     Date.now = () => now;
+    updateAccountQuota("pool-a", 10, 5);
     const server = startServer(0);
     try {
       for (const threadId of ["expired-http", "expired-compact", "expired-ws"]) {
