@@ -739,14 +739,15 @@ async function reportServiceServing(
   verb: "installed" | "started" | "repaired",
   deps: Parameters<typeof confirmServiceServing>[0] = {},
 ): Promise<void> {
-  const serving = await confirmServiceServing(deps);
+  const healthBudgetMs = deps.timeoutMs ?? serviceInstallHealthMs();
+  const serving = await confirmServiceServing({ ...deps, timeoutMs: healthBudgetMs });
   if (serving.ok) {
     console.log(`✅ opencodex service ${verb} and serving on port ${serving.port}.`);
     return;
   }
   console.error(
     `⚠️  Service ${verb}, but no proxy answered on port ${serving.port} within `
-    + `${Math.trunc(SERVICE_INSTALL_HEALTH_MS / 1000)}s.\n`
+    + `${Math.trunc(healthBudgetMs / 1000)}s.\n`
     + `   The manager registered the job; that is not the same as serving.\n`
     + `   Log:       ${serviceLogPath()}\n`
     + `   Meanwhile: ocx start   (serves in the foreground)`,
@@ -1832,7 +1833,7 @@ export function buildWindowsTaskXml(
   script = windowsServiceScriptPath(),
   launcher = windowsLauncherVbsPath(),
   attemptNonce?: string,
-  sessionTriggerUserId = cachedCurrentWindowsIdentity()?.name,
+  sessionTriggerUserId = cachedCurrentWindowsIdentity()?.sid,
 ): string {
   const escapedWscript = taskXmlString(windowsWscript());
   // Escape the launcher path independently for the <Arguments> element; quoting it
@@ -2086,14 +2087,12 @@ function windowsTaskTriggerScopeAcceptable(element: string, expectedUserId: stri
   if (userIdCount === 0) return true;
   if (userIdCount !== 1) return false;
   if (expectedUserId === undefined) return false;
-  // Same tolerance as Command and Arguments, and for the same reason:
-  // buildWindowsTaskXml writes the live account name here, so an account named
-  // outside the console code page comes back mangled and an exact comparison
-  // rejects a task that is in fact correctly scoped (#3064). The literal-ASCII
-  // requirement is what keeps this safe -- a DOMAIN\\User scope keeps its backslash
-  // verified, so a substitution run can never swallow the domain and let another
-  // domain's account match.
-  return taskXmlDecodedLossyValueEquals(element, "UserId", expectedUserId);
+  // Scope is an identity boundary, unlike the launcher path. Newly generated tasks
+  // use the locale-independent SID from cachedCurrentWindowsIdentity(), so there is
+  // no reason to forgive code-page substitutions here. A lossy account-name compare
+  // lets two non-ASCII users collapse to the same `???` value and can make repair
+  // start another account's fixed-name task.
+  return taskXmlDecodedValueEquals(element, "UserId", expectedUserId);
 }
 
 /** Validate the stable OpenCodex action, principal, settings, and logon trigger. */
@@ -2139,7 +2138,7 @@ export function windowsTaskRegistrationHealthy(
   xml: string,
   wscript = windowsWscript(),
   launcher = windowsLauncherVbsPath(),
-  expectedUserId: string | null = cachedCurrentWindowsIdentity()?.name ?? null,
+  expectedUserId: string | null = cachedCurrentWindowsIdentity()?.sid ?? null,
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
@@ -2178,7 +2177,7 @@ export function readWindowsSchedulerXmlState(
   xml: string,
   wscript?: string,
   launcher?: string,
-  expectedUserId: string | null = cachedCurrentWindowsIdentity()?.name ?? null,
+  expectedUserId: string | null = cachedCurrentWindowsIdentity()?.sid ?? null,
 ): WindowsSchedulerXmlState {
   const installed = xml.length > 0;
   if (!installed) return { installed: false, enabled: false, registrationHealthy: false };
@@ -3955,7 +3954,7 @@ export function serviceStartableFromTray(service: ServiceDiagnostic): boolean {
 }
 
 export interface WindowsTaskDiagnosticIdentityDeps {
-  currentIdentity?: () => Readonly<{ name: string }> | null;
+  currentIdentity?: () => Readonly<{ sid: string; name: string }> | null;
   resolvePrincipal?: (timeoutMs: number) => string;
 }
 
@@ -3970,7 +3969,7 @@ export function resolveWindowsTaskDiagnosticUserId(
 ): string | null {
   const currentIdentity = deps.currentIdentity ?? cachedCurrentWindowsIdentity;
   const cached = currentIdentity();
-  if (cached) return cached.name;
+  if (cached) return cached.sid;
 
   const scrubbed = taskXmlWithoutCommentsAndCdata(schedulerXml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
@@ -3981,7 +3980,7 @@ export function resolveWindowsTaskDiagnosticUserId(
   } catch {
     return null;
   }
-  return currentIdentity()?.name ?? null;
+  return currentIdentity()?.sid ?? null;
 }
 
 export interface WindowsServiceDiagnosticInputs {
@@ -4005,7 +4004,7 @@ export interface WindowsServiceDiagnosticInputs {
 
 export function deriveWindowsServiceDiagnostic(inputs: WindowsServiceDiagnosticInputs): ServiceDiagnostic {
   const expectedUserId = inputs.schedulerExpectedUserId === undefined
-    ? cachedCurrentWindowsIdentity()?.name ?? null
+    ? cachedCurrentWindowsIdentity()?.sid ?? null
     : inputs.schedulerExpectedUserId;
   const schedulerState = readWindowsSchedulerXmlState(
     inputs.schedulerXml,

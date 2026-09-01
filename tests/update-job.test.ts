@@ -755,6 +755,7 @@ describe("GUI update execution decisions", () => {
   // runService is then never called and this goes red.
   test("a non-elevated Windows update worker repairs the service instead of skipping it", async () => {
     const ranService: string[][] = [];
+    const serviceTimeouts: number[] = [];
     const spawned: Array<{ port: number }> = [];
     const job: UpdateJobState = {
       id: "svc-win-repair",
@@ -779,8 +780,9 @@ describe("GUI update execution decisions", () => {
         serviceViableFn: () => true,
         waitForPort: async () => true,
         probeProxy: async () => true,
-        runService: (_j, _bin, args) => {
+        runService: (_j, _bin, args, timeoutMs) => {
           ranService.push(args);
+          serviceTimeouts.push(timeoutMs);
           return { status: 0 };
         },
         spawnStart: (_job, _installer, port) => {
@@ -791,6 +793,7 @@ describe("GUI update execution decisions", () => {
       expect(ranService.length).toBe(1);
       expect(ranService[0]).toContain("repair");
       expect(ranService[0]).not.toContain("install");
+      expect(serviceTimeouts).toEqual([150_000]);
     } finally {
       if (prevService === undefined) delete process.env.OCX_SERVICE;
       else process.env.OCX_SERVICE = prevService;

@@ -51,6 +51,11 @@ const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/lates
 const UPDATE_JOB_FILENAME = "update-job.json";
 const UPDATE_TIMEOUT_MS = 180_000;
 const RESTART_TIMEOUT_MS = 60_000;
+// A Windows `service repair` can spend up to 45s in its own serving probe after
+// Task Scheduler/ACL work. The generic 60s child ceiling can kill that valid repair
+// and launch a competing foreground proxy. Keep this below the update worker's 180s
+// ceiling while covering the measured probe plus bounded Windows setup work.
+const WINDOWS_SERVICE_REPAIR_TIMEOUT_MS = 150_000;
 const RESTART_HEALTH_TIMEOUT_MS = 30_000;
 const RESTART_STABILITY_WINDOW_MS = 15_000;
 /** Legacy active records did not persist a worker PID, so age is their only safe recovery signal. */
@@ -987,6 +992,7 @@ export interface RestartIo {
     job: UpdateJobState,
     bin: string,
     args: string[],
+    timeoutMs: number,
   ) => { status: number | null; signal?: NodeJS.Signals | null };
   /** Override the explicit restart path (used by finishGuiUpdateRestart tests). */
   restartAfterUpdateFn?: (
@@ -1155,8 +1161,11 @@ async function restartAfterUpdate(
       process.env.OCX_BAKE_PORT = String(Math.trunc(port));
       let serviceOk = false;
       try {
-        const run = io.runService ?? ((j, bin, args) => runLoggedCommand(j, bin, args, RESTART_TIMEOUT_MS));
-        const result = run(job, cmd.bin, cmd.args);
+        const repairTimeoutMs = (io.platform ?? process.platform) === "win32"
+          ? WINDOWS_SERVICE_REPAIR_TIMEOUT_MS
+          : RESTART_TIMEOUT_MS;
+        const run = io.runService ?? ((j, bin, args, timeoutMs) => runLoggedCommand(j, bin, args, timeoutMs));
+        const result = run(job, cmd.bin, cmd.args, repairTimeoutMs);
         serviceOk = result.status === 0;
         if (!serviceOk) {
           // The refresh that just failed was `ocx service repair` (serviceReinstallArgs).

@@ -588,6 +588,18 @@ describe("Windows service task", () => {
     expect(windowsTaskRegistrationHealthy(unscoped, wscript, launcher, null)).toBe(true);
   });
 
+  test("never code-page-folds an explicit session identity", () => {
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const launcher = "C:\\Users\\Test\\.opencodex\\service-launcher.vbs";
+    const expected = "MACHINE\\김병준";
+    const scoped = buildWindowsTaskXml("ignored.cmd", launcher, undefined, expected)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
+    const mangled = scoped.replaceAll(expected, "MACHINE\\???");
+
+    expect(windowsTaskRegistrationHealthy(scoped, wscript, launcher, expected)).toBe(true);
+    expect(windowsTaskRegistrationHealthy(mangled, wscript, launcher, expected)).toBe(false);
+  });
+
   test("validates the registered scheduler action, trigger, principal, and settings", () => {
     // Guard first: a prefixed <t:UserId> is a real scope the unprefixed element counter cannot
     // see. Treating it as ABSENT would accept a task bound to somebody else's session as
@@ -2176,10 +2188,11 @@ describe("service diagnostics", () => {
   const installedDisabled = { schedulerXml: disabledTaskXml() };
 
   test("resolves an explicit scheduler scope once at the Windows diagnostic boundary", () => {
-    const scoped = buildWindowsTaskXml(undefined, undefined, undefined, "MACHINE\\installer");
-    const foreign = scoped.replaceAll("MACHINE\\installer", "OTHER\\account");
+    const sid = "S-1-5-21-111-222-333-1001";
+    const scoped = buildWindowsTaskXml(undefined, undefined, undefined, sid);
+    const foreign = scoped.replaceAll(sid, "S-1-5-21-999-888-777-1002");
     const unscoped = buildWindowsTaskXml(undefined, undefined, undefined, "");
-    let identity: Readonly<{ name: string }> | null = null;
+    let identity: Readonly<{ sid: string; name: string }> | null = null;
     let resolutions = 0;
     const timeouts: number[] = [];
     const deps = {
@@ -2187,7 +2200,7 @@ describe("service diagnostics", () => {
       resolvePrincipal: (timeoutMs: number) => {
         timeouts.push(timeoutMs);
         resolutions += 1;
-        identity = { name: "MACHINE\\installer" };
+        identity = { sid, name: "MACHINE\\installer" };
         return "*S-1-5-21-111-222-333-1001";
       },
     };
@@ -2197,7 +2210,7 @@ describe("service diagnostics", () => {
       schedulerXml: scoped,
       recordedBackend: "scheduler",
     }, deps);
-    expect(identity).toEqual({ name: "MACHINE\\installer" });
+    expect(identity).toEqual({ sid, name: "MACHINE\\installer" });
     expect(resolutions).toBe(1);
     expect(matching).toMatchObject({ viable: true, stale: false });
     expect(deriveWindowsServiceDiagnosticForCurrentUser({
