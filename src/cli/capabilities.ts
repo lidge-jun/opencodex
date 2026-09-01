@@ -154,6 +154,21 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["Reads local config; drives no management API route."],
   },
   {
+    command: ["provider", "keychain"],
+    summary: "Move a provider's API key into the OS keychain, restore it, or report where it lives.",
+    routes: [
+      { method: "GET", path: "/api/providers/keychain" },
+      { method: "POST", path: "/api/providers/keychain" },
+    ],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the keychain status or result as JSON." }],
+    mutates: true,
+    json: "payload",
+    details: [
+      "`store` verifies every keychain write by read-back before config.json is rewritten with keychain: references; an unavailable keychain refuses with 503 and leaves the file untouched.",
+      "Headless services usually have no unlocked keychain session; prefer ${ENV_VAR} references there.",
+    ],
+  },
+  {
     command: ["account", "list"],
     summary: "Codex OAuth accounts with pool priority and pause state.",
     routes: [{ method: "GET", path: "/api/codex-auth/accounts" }],

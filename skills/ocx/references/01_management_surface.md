@@ -358,6 +358,24 @@ JSON mode: `payload`.
 - Requires transient authority on stdin; the credential is never persisted or echoed.
 - A rotation left pending by a crash is resumed here — startup and status stop rather than guess which key generation is live.
 
+### `ocx provider keychain`
+
+Move a provider's API key into the OS keychain, restore it, or report where it lives.
+
+| Method | Route |
+|---|---|
+| GET | `/api/providers/keychain` |
+| POST | `/api/providers/keychain` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the keychain status or result as JSON. |
+
+JSON mode: `payload`.
+
+- `store` verifies every keychain write by read-back before config.json is rewritten with keychain: references; an unavailable keychain refuses with 503 and leaves the file untouched.
+- Headless services usually have no unlocked keychain session; prefer ${ENV_VAR} references there.
+
 ### `ocx account pause`
 
 Stop routing new requests to one account in the Codex pool.
@@ -568,6 +586,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 31
-- of those, state-changing: 12
+- declared capabilities: 32
+- of those, state-changing: 13
 - head-resolved invocations: 2
