@@ -2269,6 +2269,18 @@ button.prov-account-row.active { cursor: default; }
     -webkit-backdrop-filter: var(--glass-blur);
   }
   .mobile-topbar .brand { flex: 1 1 auto; min-width: 0; padding: 4px; }
+  /* A flex item only shrinks past its content when it carries `min-width: 0` itself.
+     The brand had it; its children did not, so `.name` held its intrinsic width and
+     `.ver` was pushed under the action orbs. Giving `.name` the shrink is necessary
+     but not sufficient: at 320px the row budget is 44 (menu) + 26 (logo) + 56 (badge)
+     + 94 (actions) + gaps, which leaves the product name about 38px — "op…". The
+     badge is the thing to drop instead. It is duplicated in the drawer brand, and a
+     truncated product name is worse than a version the user can still read one tap
+     away. */
+  .mobile-topbar .brand .name {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .mobile-topbar .brand .ver { flex-shrink: 0; }
   .mobile-topbar .stop-toggle { width: auto; min-width: 44px; min-height: 44px; justify-content: center; padding: 8px; }
   /* Both orbs keep the 44x44 touch target the single stop button had; a bare 28px
      .sidebar-orb would be a regression on the surface where it matters most. */
@@ -2353,6 +2365,13 @@ button.prov-account-row.active { cursor: default; }
 }
 
 @media (max-width: 360px) {
+  /* The topbar row budget at this width is 44 (menu) + 26 (logo) + 56 (badge) +
+     94 (actions) plus gaps, which leaves the product name about 38px — it rendered
+     as "op…". The badge is the thing to drop: the same brand node is mounted again
+     in the drawer head, so the version stays one tap away, and the live value is
+     also on the dashboard Version stat. Folded into the existing tiny-phone
+     breakpoint rather than inventing a 400px one for an unmeasured 375-399 band. */
+  .mobile-topbar .brand .ver { display: none; }
   .usage-filters { width: 100%; flex-direction: column; align-items: stretch; }
   .usage-segmented { width: 100%; }
   .usage-segmented-btn { flex: 1 1 0; }

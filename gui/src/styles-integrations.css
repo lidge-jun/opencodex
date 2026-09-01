@@ -17,7 +17,12 @@
    the CONTENT height, because a two-line config path pushed the action row
    down while a one-line one did not. Reserving the detail line's height keeps
    the switches on one baseline across the row. */
-.integration-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; list-style: none; padding: 0; margin: 14px 0; }
+/* `minmax(260px, …)` is a floor the track cannot go under, so on a 320px viewport
+   the card stayed 260px wide inside a content box narrower than that and its action
+   row spilled out — measured at left=326, right=409 against a 320px page. Wrapping
+   the floor in `min()` keeps the two-column intent on wide screens while letting a
+   narrow one fall back to the width it actually has. */
+.integration-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 12px; list-style: none; padding: 0; margin: 14px 0; }
 /*
   One full-width row, not a wide card: no grid cell, no hover border, no
   stretched title. `flex-wrap` is what keeps long German/Russian action copy
@@ -40,7 +45,9 @@
 .integration-card-link:focus-visible { outline: none; }
 .integration-card-link:focus-visible::after { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
 .integration-card:hover { border-color: var(--accent-ring); }
-.integration-card-actions { position: relative; z-index: 1; display: flex; align-items: center; gap: 10px; margin-top: auto; }
+/* The row that carried the overflow outward: a long action label used to push the
+   whole row past the card edge instead of moving to a second line. */
+.integration-card-actions { position: relative; z-index: 1; display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 10px; margin-top: auto; }
 .integration-card-actions .btn { margin-left: auto; }
 
 .integration-empty { padding: 20px; border: 1px dashed var(--border); border-radius: var(--radius); text-align: center; color: var(--muted); }
