@@ -13,6 +13,7 @@ import { resolveProviderApiKey } from "./key-store";
 import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
+import { providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../lib/provider-outbound";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
 import { getProviderRegistryEntry, providerCodexAccountMode, registryEntryForProviderDestination } from "./registry";
@@ -1474,7 +1475,7 @@ export interface ProviderAccountQuota {
 
 /** Providers whose per-account quota can be probed. Extend as other OAuth APIs are covered. */
 export function supportsPerAccountQuota(provider: string): boolean {
-  return provider === "anthropic" || provider === "kiro";
+  return provider === "anthropic" || provider === "kiro" || provider === "google-antigravity";
 }
 
 function accountCacheKey(provider: string, accountId: string): string {
@@ -1617,7 +1618,16 @@ async function fetchAccountQuota(
         quota = kiroSnapshot?.quota ?? null;
       } else {
         const token = await getTokenForAccountQuotaProbe(provider, accountId);
-        quota = await fetchAnthropicUsageQuota(token);
+        if (provider === "google-antigravity") {
+          // Per-account Gem/Cla windows (#1082). The project id is part of the stored
+          // credential; without it the probe cannot be made, and that is "unavailable",
+          // never 0%.
+          const projectId = getAccountCredential(provider, accountId)?.projectId;
+          if (!projectId) throw new Error("antigravity account has no project id");
+          quota = await fetchAntigravityUsageQuota(token, projectId);
+        } else {
+          quota = await fetchAnthropicUsageQuota(token);
+        }
       }
       if (!quota) {
         // Preserve last-good bars and mark unavailable; advance TTL so failures
@@ -2179,31 +2189,10 @@ function antigravityUsedPercent(quotaInfo: Record<string, unknown>): number | un
   return normalizePercent(100 - remaining);
 }
 
-async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
-  const credential = getCredential("google-antigravity");
-  if (!credential?.projectId) return null;
-  let accessToken: string;
-  try {
-    accessToken = await getValidAccessToken("google-antigravity");
-  } catch {
-    return null;
-  }
-  const baseUrl = (config.baseUrl || "https://daily-cloudcode-pa.googleapis.com").replace(/\/+$/, "");
-  const response = await fetch(`${baseUrl}/v1internal:fetchAvailableModels`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "User-Agent": antigravityUserAgent(),
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ project: credential.projectId }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) return null;
-  const body = asRecord(await readQuotaJson(response));
+/** Gem/Cla windows from a `fetchAvailableModels` body; shared by the provider and account probes. */
+function antigravityWindowsFromModels(body: Record<string, unknown> | null): ProviderQuotaWindow[] {
   const models = asRecord(body?.models);
-  if (!models) return null;
+  if (!models) return [];
 
   const windows = new Map<string, ProviderQuotaWindow>();
   for (const [modelId, rawModelInfo] of Object.entries(models)) {
@@ -2226,6 +2215,66 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     const window = windows.get(label);
     return window ? [window] : [];
   });
+  return customWindows;
+}
+
+const ANTIGRAVITY_ACCOUNT_QUOTA_BASE = "https://daily-cloudcode-pa.googleapis.com";
+let antigravityOutboundDependencies: ProviderOutboundDependencies = {};
+
+/** Test seam: inject resolver/pinned transport for the per-account Antigravity probe. */
+export function setAntigravityAccountQuotaTransportForTests(dependencies: ProviderOutboundDependencies | null): void {
+  antigravityOutboundDependencies = dependencies ?? {};
+}
+
+/**
+ * Per-account Antigravity quota (#1082). Always probes Google's own Cloud Code Assist host
+ * through the pinned provider-outbound transport: a configured `baseUrl` is a routing choice
+ * for requests, not a second source of Google's accounting for a stored credential, and fixing
+ * the destination keeps the `provider\0accountId` cache identity exact across config changes.
+ * A redirect or non-2xx yields null (unavailable), never a partial row.
+ */
+export async function fetchAntigravityUsageQuota(accessToken: string, projectId: string): Promise<ProviderQuota | null> {
+  const url = `${ANTIGRAVITY_ACCOUNT_QUOTA_BASE}/v1internal:fetchAvailableModels`;
+  const response = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "User-Agent": antigravityUserAgent(),
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ project: projectId }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  }, antigravityOutboundDependencies);
+  if (await providerRedirectError(response, url)) return null;
+  if (!response.ok) return null;
+  const customWindows = antigravityWindowsFromModels(asRecord(await readQuotaJson(response)));
+  if (customWindows.length === 0) return null;
+  return { customWindows, updatedAt: Date.now() };
+}
+
+async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
+  const credential = getCredential("google-antigravity");
+  if (!credential?.projectId) return null;
+  let accessToken: string;
+  try {
+    accessToken = await getValidAccessToken("google-antigravity");
+  } catch {
+    return null;
+  }
+  const baseUrl = (config.baseUrl || ANTIGRAVITY_ACCOUNT_QUOTA_BASE).replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/v1internal:fetchAvailableModels`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "User-Agent": antigravityUserAgent(),
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ project: credential.projectId }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) return null;
+  const customWindows = antigravityWindowsFromModels(asRecord(await readQuotaJson(response)));
   if (customWindows.length === 0) return null;
   return report(provider, "google-antigravity:fetchAvailableModels", {
     customWindows,
