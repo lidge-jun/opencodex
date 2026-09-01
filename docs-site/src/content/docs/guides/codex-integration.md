@@ -192,6 +192,48 @@ provider advertises `supports_websockets = true` only when `"websockets": true`;
 built-in provider may try WebSocket first, and a disabled proxy returns `426` so Codex falls back to
 HTTP/SSE.
 
+### Authless Codex Desktop (opt-in)
+
+Codex Desktop shows its ChatGPT login screen whenever the active provider requires OpenAI auth. If
+your OpenCodex setup never uses ChatGPT credentials (routed providers only, or a blocked
+`chatgpt.com`), you can opt out of that gate:
+
+```bash
+ocx system settings --desktop-authless on    # or "codexDesktopAuthless": true in config.json
+ocx sync                                     # rewrites ~/.codex/config.toml; restart Desktop
+```
+
+With the switch on, a loopback bind injects the dedicated provider form instead of the root
+`openai_base_url` override:
+
+```toml
+model_provider = "opencodex"
+
+[model_providers.opencodex]
+name = "OpenCodex Proxy"
+base_url = "http://127.0.0.1:10100/v1"
+wire_api = "responses"
+requires_openai_auth = false
+```
+
+Desktop then starts without a login and routes every turn through the proxy. The setting survives
+`ocx start`, restart, `ocx sync`, and `ocx ensure`; turning it off (`--desktop-authless off`) makes the
+next sync restore the default loopback form, and `ocx restore` strips it like any other injected
+routing. What to expect while it is on:
+
+- ChatGPT-gated Desktop chrome (account, usage, Fast mode) stays dark: Codex derives those surfaces
+  from the provider's auth requirement.
+- New threads are tagged with the `opencodex` provider, as on a non-loopback bind, and history is
+  handled the same way.
+- Desktop releases that filter the model picker against a native-only allowlist may show an empty
+  or `Custom` picker in this mode as well; requests still use the configured model. Set
+  `model = "<provider>/<id>"` in `config.toml` as described in
+  [Desktop remote servers](/guides/codex-app-models/#desktop-remote-servers).
+
+This only changes the Desktop login gate. Non-loopback binds keep `requires_openai_auth = true` and
+the `env_key` admission credential regardless of the switch; it never exposes an OpenCodex listener
+without authentication.
+
 ## Thread identity and history
 
 The default loopback form keeps new threads tagged with Codex's native `openai` provider, so normal

@@ -701,6 +701,59 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
   });
 
+  test("authless Desktop opt-in (#1107): loopback injects the table with requires_openai_auth = false, idempotently", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true }));
+    expect(r.status).toBe(0);
+    const payload = JSON.parse(r.stdout);
+    expect(payload.success).toBe(true);
+    expect(String(payload.message)).toContain("authless Desktop mode");
+
+    const first = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(first).toContain('model_provider = "opencodex"');
+    expect(first).toContain("[model_providers.opencodex]");
+    expect(first).toContain('base_url = "http://127.0.0.1:10100/v1"');
+    expect(first).toContain("requires_openai_auth = false");
+    expect(first).not.toContain("env_key");
+    expect(first).not.toContain("openai_base_url");
+
+    expect(runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true })).status).toBe(0);
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(first);
+    expect(readFileSync(join(codexHome, "opencodex.config.toml"), "utf8")).toContain("requires_openai_auth = false");
+  });
+
+  test("authless Desktop opt-in: turning it off restores Design B on the next inject, and restore strips it", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+
+    expect(runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true })).status).toBe(0);
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toContain("requires_openai_auth = false");
+
+    expect(runInject(codexHome, ocxHome).status).toBe(0);
+    const back = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(back).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
+    expect(back).not.toContain("[model_providers.opencodex]");
+    expect(back).not.toContain('model_provider = "opencodex"');
+    expect(back.match(/Auto-injected by opencodex/g)?.length).toBe(1);
+
+    expect(runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true })).status).toBe(0);
+    expect(runRestore(codexHome, ocxHome).status).toBe(0);
+    const restored = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(restored).not.toContain("opencodex");
+    expect(restored).toContain('model = "gpt-5.5"');
+  });
+
+  test("authless Desktop opt-in never weakens non-loopback admission", () => {
+    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+
+    const r = runInject(codexHome, ocxHome, JSON.stringify({ hostname: "192.168.1.20", codexDesktopAuthless: true }));
+    expect(r.status).toBe(0);
+    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+    expect(config).toContain("requires_openai_auth = true");
+    expect(config).toContain('env_key = "OPENCODEX_API_AUTH_TOKEN"');
+    expect(config).not.toContain("requires_openai_auth = false");
+  });
+
   test("non-loopback hostname still uses the legacy provider-table injection", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 

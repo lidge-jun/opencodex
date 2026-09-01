@@ -28,6 +28,46 @@ describe("Codex config injection", () => {
     );
   });
 
+  describe("authless Codex Desktop opt-in (#1107)", () => {
+    test("default target on loopback stays Design B and byte-identical", () => {
+      const target = standaloneCodexRoutingTarget(10100, {});
+      expect(target.desktopAuthless).toBeUndefined();
+      expect(buildProfileFile(target, null)).toBe(buildProfileFile(10100, null));
+      expect(buildProviderTableBlock(target)).toContain("requires_openai_auth = true");
+    });
+
+    test("loopback opt-in emits the provider table with requires_openai_auth = false and no env_key", () => {
+      const target = standaloneCodexRoutingTarget(10100, { codexDesktopAuthless: true });
+      expect(target).toMatchObject({ requiresAdmissionToken: false, desktopAuthless: true });
+      const block = buildProviderTableBlock(target);
+      expect(block).toContain("[model_providers.opencodex]");
+      expect(block).toContain('base_url = "http://127.0.0.1:10100/v1"');
+      expect(block).toContain("requires_openai_auth = false");
+      expect(block).not.toContain("env_key");
+      const profile = buildProfileFile(target, "/tmp/opencodex-catalog.json");
+      expect(profile).toContain('model_provider = "opencodex"');
+      expect(profile).toContain("requires_openai_auth = false");
+      expect(profile).not.toContain("openai_base_url");
+    });
+
+    test("non-loopback binds ignore the opt-in: admission env_key and requires_openai_auth = true stay", () => {
+      const target = standaloneCodexRoutingTarget(10100, { hostname: "192.168.1.20", codexDesktopAuthless: true });
+      expect(target.desktopAuthless).toBeUndefined();
+      expect(target.requiresAdmissionToken).toBe(true);
+      const block = buildProviderTableBlock(target);
+      expect(block).toContain("requires_openai_auth = true");
+      expect(block).toContain('env_key = "OPENCODEX_API_AUTH_TOKEN"');
+    });
+
+    test("the unauthenticated loopback listener still honors the opt-in", () => {
+      const target = standaloneCodexRoutingTarget(10100, {
+        codexDesktopAuthless: true,
+        unauthenticatedLoopbackListener: { enabled: true, port: 10199 },
+      });
+      expect(target).toMatchObject({ baseUrl: "http://127.0.0.1:10199/v1", desktopAuthless: true });
+    });
+  });
+
   test("explicit HTTPS target emits exact provider destination and admission env", () => {
     const target = {
       baseUrl: "https://hub.example.test/v1",

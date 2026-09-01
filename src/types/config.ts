@@ -631,6 +631,13 @@ export interface OcxConfig {
   /** Restore an installed shim after a stable external Codex update replaces it. Default true. */
   codexShimAutoRestore?: boolean;
   /**
+   * Opt-in authless Codex Desktop routing (#1107). On a loopback bind, inject the dedicated
+   * `[model_providers.opencodex]` table with `requires_openai_auth = false` instead of the root
+   * `openai_base_url` override, so Desktop opens without a ChatGPT login. Default off; ignored on
+   * non-loopback binds, whose admission token contract is unchanged.
+   */
+  codexDesktopAuthless?: boolean;
+  /**
    * Compatibility mode: temporarily rewrite Codex resume-history metadata while the proxy is active
    * so Codex App can show old OpenAI chats and opencodex-created exec chats under its default
    * interactive-source/provider filters. Default true; originals are backed up and restored by

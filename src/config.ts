@@ -1053,6 +1053,7 @@ const configSchema = z.object({
     z.array(z.string().trim().min(1)).min(1),
   ).optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
+  codexDesktopAuthless: z.boolean().optional().catch(undefined),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),
   // Selection order is a preference, not a safety control like pause: a malformed
