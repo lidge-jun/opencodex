@@ -306,6 +306,7 @@ export interface ProviderRegistryEntry {
   preserveReasoningContentModels?: string[];
   requiresReasoningPlaceholderModels?: string[];
   reasoningSplitModels?: string[];
+  reasoningDetailsModels?: string[];
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
@@ -327,7 +328,7 @@ export type ProviderConfigSeed = Pick<
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance"
   | "googleMode" | "project" | "location" | "headers"
 >;
 
@@ -2642,6 +2643,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // never a fabricated placeholder (chatgpt-codex-connector P2 on #1205).
     requiresReasoningPlaceholderModels: [],
     reasoningSplitModels: MINIMAX_MODELS,
+    // With reasoning_split the upstream returns thinking as a structured
+    // reasoning_details array (cumulative text snapshots per stream chunk) and
+    // requires that array back verbatim on the next turn — a reasoning_content
+    // string replay is the native-format pass-back the docs say is unsupported.
+    // Evidence: platform.minimax.io/docs/guides/text-m3-function-call and
+    // /docs/api-reference/text-openai-api (verified 2026-09-01).
+    reasoningDetailsModels: MINIMAX_MODELS,
     thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "Subscription Key or API Key",
   },
@@ -2655,6 +2663,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveReasoningContentModels: MINIMAX_MODELS,
     requiresReasoningPlaceholderModels: [],
     reasoningSplitModels: MINIMAX_MODELS,
+    reasoningDetailsModels: MINIMAX_MODELS,
     thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "中国区 Subscription Key",
   },

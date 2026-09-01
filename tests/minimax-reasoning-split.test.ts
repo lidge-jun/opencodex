@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
 import { enrichProviderFromRegistry } from "../src/providers/derive";
 import { routeModel } from "../src/router";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
@@ -84,7 +85,19 @@ describe("MiniMax split reasoning", () => {
     };
 
     expect(requestBody.reasoning_split).toBe(true);
-    expect(requestBody.messages[1]?.reasoning_content).toBe("prior reasoning");
+    // MiniMax's interleaved-thinking contract requires the structured
+    // reasoning_details array back; a reasoning_content string replay is the
+    // unsupported native-format pass-back.
+    expect(requestBody.messages[1]?.reasoning_content).toBeUndefined();
+    expect(requestBody.messages[1]?.reasoning_details).toEqual([
+      {
+        type: "reasoning.text",
+        id: "reasoning-text-1",
+        format: "MiniMax-response-v1",
+        index: 0,
+        text: "prior reasoning",
+      },
+    ]);
   });
 
   test("routing merges registry capabilities while explicit user effort mappings win", () => {
@@ -94,6 +107,7 @@ describe("MiniMax split reasoning", () => {
     });
 
     expect(route.provider.reasoningSplitModels).toEqual(expect.arrayContaining(["MiniMax-M3", "user-split-model"]));
+    expect(route.provider.reasoningDetailsModels).toEqual(expect.arrayContaining(["MiniMax-M3"]));
     expect(route.provider.modelReasoningEffortMap?.["MiniMax-M3"]).toMatchObject({
       medium: "disabled",
       high: "adaptive",
@@ -105,12 +119,14 @@ describe("MiniMax split reasoning", () => {
       adapter: "openai-chat",
       baseUrl: "https://api.minimax.io/v1",
       reasoningSplitModels: ["only-user-model"],
+      reasoningDetailsModels: ["only-user-model"],
       modelReasoningEffortMap: { "MiniMax-M3": { medium: "disabled" } },
     };
 
     enrichProviderFromRegistry("minimax", provider);
 
     expect(provider.reasoningSplitModels).toEqual(["only-user-model"]);
+    expect(provider.reasoningDetailsModels).toEqual(["only-user-model"]);
     expect(provider.modelReasoningEffortMap).toEqual({ "MiniMax-M3": { medium: "disabled" } });
   });
 
@@ -121,5 +137,89 @@ describe("MiniMax split reasoning", () => {
     };
 
     expect(body(provider, "example-model", "high")).not.toHaveProperty("reasoning_split");
+  });
+
+  test("non-streaming responses read reasoning_details when reasoning_content is absent", async () => {
+    const route = minimaxRoute("MiniMax-M3");
+    const response = new Response(JSON.stringify({
+      id: "resp-1",
+      object: "chat.completion",
+      created: 0,
+      model: "MiniMax-M3",
+      choices: [{
+        index: 0,
+        finish_reason: "stop",
+        message: {
+          role: "assistant",
+          content: "final answer",
+          reasoning_details: [
+            { type: "reasoning.text", id: "reasoning-text-1", format: "MiniMax-response-v1", index: 0, text: "full thinking" },
+          ],
+        },
+      }],
+      usage: { total_tokens: 10 },
+    }));
+
+    const events = await createOpenAIChatAdapter(route.provider).parseResponse(response, createTranslatorBudget());
+
+    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "full thinking" });
+    expect(events).toContainEqual({ type: "text_delta", text: "final answer" });
+  });
+
+  test("streaming cumulative reasoning_details snapshots are prefix-diffed, not appended", async () => {
+    const route = minimaxRoute("MiniMax-M3");
+    const chunks = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_details: [{ type: "reasoning.text", id: "reasoning-text-1", format: "MiniMax-response-v1", index: 0, text: "The user" }] } }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ type: "reasoning.text", id: "reasoning-text-1", format: "MiniMax-response-v1", index: 0, text: "The user is asking" }] } }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ type: "reasoning.text", id: "reasoning-text-1", format: "MiniMax-response-v1", index: 0, text: "The user is asking" }] } }] },
+      { choices: [{ index: 0, delta: { content: "answer" } }] },
+      { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (const chunk of chunks) controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+
+    const events: Array<{ type: string; text?: string }> = [];
+    for await (const event of createOpenAIChatAdapter(route.provider).parseStream(new Response(stream), createTranslatorBudget())) {
+      events.push(event);
+    }
+
+    const reasoningEvents = events.filter(e => e.type === "reasoning_raw_delta");
+    expect(reasoningEvents).toEqual([
+      { type: "reasoning_raw_delta", text: "The user" },
+      { type: "reasoning_raw_delta", text: " is asking" },
+    ]);
+    expect(events).toContainEqual({ type: "text_delta", text: "answer" });
+  });
+
+  test("providers without reasoning_details opt-in keep ignoring the array", async () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://example.test/v1",
+    };
+    const response = new Response(JSON.stringify({
+      id: "resp-1",
+      object: "chat.completion",
+      created: 0,
+      model: "example-model",
+      choices: [{
+        index: 0,
+        finish_reason: "stop",
+        message: {
+          role: "assistant",
+          content: "answer",
+          reasoning_details: [{ type: "reasoning.text", id: "reasoning-text-1", format: "MiniMax-response-v1", index: 0, text: "thinking" }],
+        },
+      }],
+    }));
+
+    const events = await createOpenAIChatAdapter(provider).parseResponse(response, createTranslatorBudget());
+
+    expect(events.some(e => e.type === "reasoning_raw_delta")).toBe(false);
   });
 });

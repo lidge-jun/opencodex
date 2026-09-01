@@ -323,6 +323,39 @@ function reasoningTextFrom(record: Record<string, unknown>): string | undefined 
       : undefined;
 }
 
+interface ReasoningDetailSegment {
+  key: string;
+  text: string;
+}
+
+/**
+ * Structured `reasoning_details` array (MiniMax M-series with `reasoning_split`).
+ * Each segment's key scopes cumulative-snapshot tracking: upstream repeats the
+ * full text-so-far under a stable `id`/`index` instead of sending increments.
+ */
+function reasoningDetailSegmentsFrom(record: Record<string, unknown>): ReasoningDetailSegment[] {
+  const raw = record.reasoning_details;
+  if (!Array.isArray(raw)) return [];
+  const segments: ReasoningDetailSegment[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const item: unknown = raw[i];
+    if (!isRecord(item)) continue;
+    if (typeof item.text !== "string" || item.text.length === 0) continue;
+    const key = typeof item.id === "string" && item.id.length > 0
+      ? `id:${item.id}`
+      : typeof item.index === "number"
+        ? `i:${item.index}`
+        : `n:${i}`;
+    segments.push({ key, text: item.text });
+  }
+  return segments;
+}
+
+/** Single-segment `reasoning_details` entry for replaying preserved reasoning (MiniMax wire shape). */
+function reasoningDetailSegmentForWire(text: string): Record<string, unknown> {
+  return { type: "reasoning.text", id: "reasoning-text-1", format: "MiniMax-response-v1", index: 0, text };
+}
+
 function invalidChoicesEvent(usage?: OcxUsage): Extract<AdapterEvent, { type: "error" }> {
   return {
     type: "error",
@@ -766,9 +799,17 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           }
         }
         if (reasoningContent.length > 0 && modelInList(provider.preserveReasoningContentModels, parsed.modelId)) {
-          chatMsg.reasoning_content = reasoningContent;
+          // MiniMax's interleaved-thinking contract requires the structured
+          // reasoning_details array back on the next turn; a reasoning_content
+          // string is the native-format pass-back the docs mark unsupported.
+          if (modelInList(provider.reasoningDetailsModels, parsed.modelId)) {
+            chatMsg.reasoning_details = [reasoningDetailSegmentForWire(reasoningContent)];
+          } else {
+            chatMsg.reasoning_content = reasoningContent;
+          }
         }
-        if (chatMsg.content === undefined && toolCalls.length === 0 && chatMsg.reasoning_content === undefined) break;
+        const hasReplayedReasoning = chatMsg.reasoning_content !== undefined || chatMsg.reasoning_details !== undefined;
+        if (chatMsg.content === undefined && toolCalls.length === 0 && !hasReplayedReasoning) break;
         flushPendingToolCalls();
         const wireToolCalls = toolCalls.map(tc => {
           let id = tc.id;
@@ -784,7 +825,7 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           }));
           if (!chatMsg.content) chatMsg.content = emptyAssistantContent(provider);
         }
-        if (chatMsg.reasoning_content !== undefined && chatMsg.content === undefined && chatMsg.tool_calls === undefined) {
+        if (hasReplayedReasoning && chatMsg.content === undefined && chatMsg.tool_calls === undefined) {
           chatMsg.content = emptyAssistantContent(provider);
         }
         out.push(chatMsg);
@@ -829,10 +870,15 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
               && modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId)
               ? " "
               : undefined);
+          const orphanReasoningFields: Record<string, unknown> = !orphanReasoning
+            ? {}
+            : modelInList(provider.reasoningDetailsModels, parsed.modelId)
+              ? { reasoning_details: [reasoningDetailSegmentForWire(orphanReasoning)] }
+              : { reasoning_content: orphanReasoning };
           out.push({
             role: "assistant",
             content: emptyAssistantContent(provider),
-            ...(orphanReasoning ? { reasoning_content: orphanReasoning } : {}),
+            ...orphanReasoningFields,
             tool_calls: [{
               id: toolCallId,
               type: "function",
@@ -1666,6 +1712,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       let pendingUsage: OcxUsage | undefined;
       let finishReason: string | undefined;
       let sawUserFacingOutput = false;
+      // MiniMax-style structured reasoning: each stream chunk repeats a detail's
+      // full text-so-far, so deltas are derived by prefix-diffing per segment key.
+      // A piece that does not extend the previous snapshot is appended whole, which
+      // keeps incremental senders parseable on the same path.
+      const reasoningDetailSnapshots = new Map<string, string>();
+      const reasoningDetailsOptIn = (provider.reasoningDetailsModels?.length ?? 0) > 0;
 
       const handleDataLine = function* (line: string): Generator<AdapterEvent, "continue" | "terminate"> {
         const rawPayload = sseFieldValue(line, "data");
@@ -1722,8 +1774,23 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (typeof choice.finish_reason === "string" && choice.finish_reason) finishReason = choice.finish_reason;
         const delta = choice.delta;
         if (delta) {
-          const reasoningText = reasoningTextFrom(delta);
-          if (reasoningText !== undefined) yield { type: "reasoning_raw_delta", text: reasoningText };
+          const detailSegments = reasoningDetailsOptIn ? reasoningDetailSegmentsFrom(delta) : [];
+          if (detailSegments.length > 0) {
+            for (const segment of detailSegments) {
+              const prev = reasoningDetailSnapshots.get(segment.key) ?? "";
+              if (segment.text === prev) continue;
+              if (segment.text.startsWith(prev)) {
+                reasoningDetailSnapshots.set(segment.key, segment.text);
+                yield { type: "reasoning_raw_delta", text: segment.text.slice(prev.length) };
+              } else {
+                reasoningDetailSnapshots.set(segment.key, prev + segment.text);
+                yield { type: "reasoning_raw_delta", text: segment.text };
+              }
+            }
+          } else {
+            const reasoningText = reasoningTextFrom(delta);
+            if (reasoningText !== undefined) yield { type: "reasoning_raw_delta", text: reasoningText };
+          }
           if (typeof delta.content === "string" && delta.content.length > 0) {
             sawUserFacingOutput = true;
             yield { type: "text_delta", text: delta.content };
@@ -2015,7 +2082,14 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
 
         const msg = rawMessage as Record<string, unknown>;
-        const reasoningText = reasoningTextFrom(msg);
+        let reasoningText = reasoningTextFrom(msg);
+        if (reasoningText === undefined && (provider.reasoningDetailsModels?.length ?? 0) > 0) {
+          // MiniMax split-reasoning responses carry the same thinking in both
+          // reasoning_content and reasoning_details; the array is the fallback
+          // when only the structured form arrives.
+          const segments = reasoningDetailSegmentsFrom(msg);
+          if (segments.length > 0) reasoningText = segments.map(s => s.text).join("");
+        }
         if (reasoningText !== undefined) events.push({ type: "reasoning_raw_delta", text: reasoningText });
         if (typeof msg.content === "string") events.push({ type: "text_delta", text: msg.content });
         const rawToolCalls = msg.tool_calls;

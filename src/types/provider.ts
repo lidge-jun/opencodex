@@ -597,6 +597,14 @@ export interface OcxProviderConfig {
    */
   reasoningSplitModels?: string[];
   /**
+   * Model ids whose chat endpoint carries thinking as a structured `reasoning_details` array
+   * (MiniMax M-series with `reasoning_split`): stream deltas repeat each detail's `text` as a
+   * cumulative snapshot, so the adapter prefix-diffs instead of appending, and preserved
+   * reasoning replays as a `reasoning_details` array rather than a `reasoning_content` string
+   * (upstream requires the array back verbatim to keep interleaved thinking intact).
+   */
+  reasoningDetailsModels?: string[];
+  /**
    * Model ids whose reasoning is a vendor `thinking: {type}` toggle on the
    * chat-completions wire (MiMo v2.x, GLM 5/5.1 style), NOT an OpenAI `reasoning_effort` ladder.
    * The openai-chat adapter translates the mapped effort into the thinking toggle for these.

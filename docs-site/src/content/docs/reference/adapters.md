@@ -40,7 +40,9 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local), and mor
   `xhigh` and `max` remain distinct labels unless a provider explicitly configures an alias. The
   adapter **omits it entirely** for ids in `provider.noReasoningModels`.
 - Streams `delta.content` (text), `delta.reasoning_content` (thinking), and `delta.tool_calls[]`;
-  collects `usage`.
+  collects `usage`. Providers listed in `reasoningDetailsModels` (MiniMax M-series) instead read
+  structured `delta.reasoning_details` segments, whose `text` arrives as cumulative snapshots and
+  is prefix-diffed, and replay preserved reasoning as a `reasoning_details` array.
 - ClinePass uses the live-verified gateway format `reasoning: { enabled: true, effort }` (or
   `{ enabled: false }` when reasoning is disabled); its public API docs do not currently specify
   this request shape. The adapter preserves requested `low`, `medium`, `high`, `xhigh`, and `max`
