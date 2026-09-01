@@ -2205,7 +2205,13 @@ describe("server combo failover 030 activation matrix", () => {
     expect(response.status).toBe(200);
     expect(JSON.stringify(bodies[0]!.body)).not.toContain("data:image/png");
     expect(JSON.stringify(bodies[1]!.body)).toContain("data:image/png");
-    expect(bodies[0]!.body.reasoning_effort).toBeUndefined();
+    // #3108: the combo default is resolved against each target's ladder rather than
+    // dropped on an exact-membership miss. This combo's advertised default IS "low" —
+    // the catalog intersects member ladders (a: ["low"], b: ["low","high"]) to ["low"]
+    // and effectiveComboDefault("high", ["low"]) yields "low" — so sending "low" to the
+    // first target is what the served catalog promised. Previously nothing was sent and
+    // the provider default silently applied.
+    expect(bodies[0]!.body.reasoning_effort).toBe("low");
     expect(bodies[1]!.body.reasoning_effort).toBe("high");
 
     clearComboSelectionState();
