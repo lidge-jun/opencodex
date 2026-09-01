@@ -614,17 +614,6 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     // validation and then rejected by the seed comparison, so canonical OpenAI could never
     // set OR clear it — the value was admitted and then refused in the same request.
     delete canonicalCandidate.annotateEmptyToolOutputs;
-    // Alias fields are user-owned display/routing overlays written by the alias management
-    // API (PUT /api/providers/{name}/alias, /model-aliases, /api/default-aliases) and read at
-    // runtime (provider.defaultAliases ?? config.defaultModelAliases; provider.alias in
-    // router.ts; modelAliases via effectiveModelAliases). None of them alter the canonical
-    // transport identity (adapter/baseUrl/authMode/apiKeyTransport), and without these
-    // exclusions the same admitted-then-refused failure hit any canonical OpenAI provider
-    // that had ever set an alias: the seed comparison rejected the very next full-object
-    // write with "must equal the canonical built-in provider seed".
-    delete canonicalCandidate.alias;
-    delete canonicalCandidate.modelAliases;
-    delete canonicalCandidate.defaultAliases;
     const canonical = seed && sameCanonicalProviderSeed(canonicalCandidate, seed);
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;

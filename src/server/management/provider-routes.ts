@@ -105,6 +105,63 @@ type ProviderPatchApplication =
       headersTouched: boolean;
     };
 
+const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases"] as const;
+type ProviderAliasOverlayField = typeof PROVIDER_ALIAS_OVERLAY_FIELDS[number];
+
+/**
+ * Alias overlays are owned by the dedicated alias management routes. A full provider POST
+ * may round-trip an already-persisted value, but it must not create, clear, or change one.
+ * PATCH is field-masked and rejects these keys outright below.
+ */
+function providerAliasOverlayOwnershipError(
+  submitted: Record<string, unknown>,
+  existing: OcxProviderConfig | undefined,
+): string | null {
+  for (const field of PROVIDER_ALIAS_OVERLAY_FIELDS) {
+    if (!Object.hasOwn(submitted, field)) continue;
+    if (!existing || !Object.hasOwn(existing, field)) {
+      return `${field} is managed by the dedicated alias API`;
+    }
+    const incoming = submitted[field];
+    const persisted = existing[field];
+    if (field === "modelAliases") {
+      if (!isPlainRecord(incoming) || !isPlainRecord(persisted)) {
+        return "modelAliases is managed by the dedicated alias API";
+      }
+      const incomingEntries = Object.entries(incoming);
+      const persistedEntries = Object.entries(persisted);
+      if (
+        incomingEntries.length !== persistedEntries.length
+        || incomingEntries.some(([model, alias]) => typeof alias !== "string" || persisted[model] !== alias)
+      ) {
+        return "modelAliases is managed by the dedicated alias API";
+      }
+      continue;
+    }
+    if (incoming !== persisted) return `${field} is managed by the dedicated alias API`;
+  }
+  return null;
+}
+
+/** Remove only alias overlays whose ownership has already been established by the caller. */
+function providerTransportValidationCandidate(provider: Record<string, unknown>): Record<string, unknown> {
+  const candidate = { ...provider };
+  for (const field of PROVIDER_ALIAS_OVERLAY_FIELDS) delete candidate[field];
+  return candidate;
+}
+
+/** Preserve the authoritative alias values from the stored provider during a full edit. */
+function restorePersistedAliasOverlays(target: OcxProviderConfig, existing: OcxProviderConfig | undefined): void {
+  for (const field of PROVIDER_ALIAS_OVERLAY_FIELDS) {
+    delete (target as Record<ProviderAliasOverlayField, unknown>)[field];
+    if (!existing || !Object.hasOwn(existing, field)) continue;
+    const value = existing[field];
+    (target as Record<ProviderAliasOverlayField, unknown>)[field] = field === "modelAliases"
+      ? structuredClone(value)
+      : value;
+  }
+}
+
 /**
  * Apply the recognized PATCH field mask onto a provider copy. The caller runs this once
  * for validation and again inside the config mutation lock against the newest provider,
@@ -501,7 +558,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ error: "provider reload target unavailable" }, 404);
     }
     const provider = diskConfig.providers[name]!;
-    const providerError = providerManagementConfigError(name, provider)
+    const providerError = providerManagementConfigError(
+      name,
+      providerTransportValidationCandidate(provider as unknown as Record<string, unknown>),
+    )
       ?? providerEmptyToolOutputConfigError(name, provider);
     if (providerError) return jsonResponse({ error: "provider reload target invalid" }, 409);
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(
@@ -561,12 +621,17 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     let body: { name?: unknown; provider?: unknown; setDefault?: boolean };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const name = typeof body.name === "string" ? body.name.trim() : "";
-    const providerError = providerManagementConfigError(name, body.provider)
-      ?? providerEmptyToolOutputConfigError(name, body.provider);
+    if (!isPlainRecord(body.provider)) return jsonResponse({ error: "provider must be a plain object" }, 400);
+    const existing = config.providers[name];
+    const aliasOwnershipError = providerAliasOverlayOwnershipError(body.provider, existing);
+    if (aliasOwnershipError) return jsonResponse({ error: aliasOwnershipError }, 400);
+    const transportCandidate = providerTransportValidationCandidate(body.provider);
+    const providerError = providerManagementConfigError(name, transportCandidate)
+      ?? providerEmptyToolOutputConfigError(name, transportCandidate);
     if (providerError) return jsonResponse({ error: providerError }, 400);
-    const serviceTierError = providerServiceTierConfigError(name, body.provider);
+    const serviceTierError = providerServiceTierConfigError(name, transportCandidate);
     if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
-    const prov = body.provider ? stripCodexRuntimeProviderFields(body.provider as OcxProviderConfig) : undefined;
+    const prov = stripCodexRuntimeProviderFields(transportCandidate as unknown as OcxProviderConfig);
     // PATCH already clears on null; POST persisted the body as submitted, so a `null` here
     // reached disk and the next loadConfig() refused it. Canonicalize to absent, which is what
     // "clear" means everywhere else.
@@ -630,7 +695,6 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // has no member for either field, so the add/edit form structurally cannot send them:
     // absence in the request means "not carried", never "the user deleted it". Deletion goes
     // through PATCH with an explicit null (#1409).
-    const existing = config.providers[name];
     if (!submittedRequestPacing && existing?.requestPacing) {
       prov.requestPacing = structuredClone(existing.requestPacing);
     }
@@ -656,6 +720,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         ? { ...existing.modelAutoCompactTokenLimits, ...(prov.modelAutoCompactTokenLimits ?? {}) }
         : { ...existing.modelAutoCompactTokenLimits };
     }
+    // DNS validation above awaits. Re-read the live row so a dedicated alias write that
+    // completed during that wait remains authoritative instead of being overwritten by the
+    // older ownership snapshot used to admit this POST.
+    restorePersistedAliasOverlays(prov, config.providers[name]);
     config.providers[name] = stripRegistryOnlyStaticHeaders(name, prov);
     if (body.setDefault === true) config.defaultProvider = name;
     save(config);
@@ -677,6 +745,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     try { rawBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(rawBody)) return jsonResponse({ error: "provider patch body must be a plain object" }, 400);
     const keys = Object.keys(rawBody);
+    const aliasField = PROVIDER_ALIAS_OVERLAY_FIELDS.find(field => Object.hasOwn(rawBody, field));
+    if (aliasField) return jsonResponse({ error: `${aliasField} is managed by the dedicated alias API` }, 400);
     const hasMode = Object.hasOwn(rawBody, "codexAccountMode");
     const hasSetDefault = Object.hasOwn(rawBody, "setDefault");
     const canonicalBudgetOnly = name === "openai"
@@ -746,7 +816,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (applied.editorTouched && !pacingOnly) {
       const providerError = canonicalBudgetOnly
         ? canonicalOpenAiBudgetPatchError(next, rawBody, keys, config)
-        : providerManagementConfigError(name, next)
+        : providerManagementConfigError(
+            name,
+            providerTransportValidationCandidate(next as unknown as Record<string, unknown>),
+          )
           ?? providerEmptyToolOutputConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
       if (!canonicalBudgetOnly) {
@@ -786,7 +859,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (replay.editorTouched && !pacingOnly) {
         const syncError = canonicalBudgetOnly
           ? canonicalOpenAiBudgetPatchError(replay.next, rawBody, keys, config)
-          : providerManagementConfigError(name, replay.next)
+          : providerManagementConfigError(
+              name,
+              providerTransportValidationCandidate(replay.next as unknown as Record<string, unknown>),
+            )
             ?? providerEmptyToolOutputConfigError(name, replay.next);
         if (syncError) {
           replayError = syncError;

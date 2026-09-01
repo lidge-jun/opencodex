@@ -914,56 +914,233 @@ describe("provider management validation", () => {
     }
   });
 
-  // Regression: the alias overlays (defaultAliases, alias, modelAliases) are user-owned
-  // display/routing preferences written by the alias management API (PUT /api/default-aliases,
-  // /api/providers/{name}/alias, /api/providers/{name}/model-aliases) and read at runtime
-  // (defaultAliasesEnabled, router.ts alias lookup, effectiveModelAliases). They never alter
-  // the canonical transport identity, so the seed comparison must ignore them exactly like
-  // requestPacing and modelCosts already do. Before the fix, a canonical OpenAI provider that
-  // had ever set any alias was permanently locked out of full-object writes (POST/PATCH/PUT)
-  // with "must equal the canonical built-in provider seed".
-  test("canonical seed comparison ignores user-owned alias overlays", () => {
-    expect(providerManagementConfigError("openai", { ...canonicalDirect, defaultAliases: true })).toBeNull();
-    expect(providerManagementConfigError("openai", { ...canonicalDirect, defaultAliases: false })).toBeNull();
-    expect(providerManagementConfigError("openai", {
-      ...canonicalDirect,
-      alias: "my-openai",
+  test("full provider edit preserves aliases owned by the dedicated APIs", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const overlays = {
+      alias: "codex-native",
       modelAliases: { "gpt-5.6-luna": "luna" },
-    })).toBeNull();
-    expect(providerManagementConfigError("openai", {
-      ...canonicalDirect,
-      defaultAliases: true,
-      alias: "my-openai",
-      modelAliases: { "gpt-5.6-luna": "luna" },
-    })).toBeNull();
+      defaultAliases: false,
+    } as const;
+    saveConfig({
+      port: 0,
+      openaiProviderTierVersion: 2,
+      defaultProvider: "openai",
+      providers: { openai: { ...canonicalDirect, ...overlays } },
+    } as OcxConfig);
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    const server = startServer(0);
+    try {
+      // The dashboard's full editor omits alias-owned fields. The stored values must survive.
+      const omitted = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "openai", provider: canonicalDirect }),
+      });
+      expect(omitted.status).toBe(200);
+      expect(loadConfig().providers.openai).toMatchObject(overlays);
+
+      // A full-object client may round-trip the exact stored values, but still does not own them.
+      const roundTrip = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "openai", provider: { ...canonicalDirect, ...overlays } }),
+      });
+      expect(roundTrip.status).toBe(200);
+      expect(loadConfig().providers.openai).toMatchObject(overlays);
+    } finally {
+      resolvedError.mockRestore();
+      await server.stop(true);
+    }
   });
 
-  test("canonical seed guard still rejects transport tampering alongside alias overlays", () => {
-    // The alias exclusions must not weaken the canonical guard: mutating the transport
-    // identity (baseUrl / adapter / authMode) is still rejected even when alias overlays
-    // are present on the same payload.
-    expect(providerManagementConfigError("openai", {
-      ...canonicalDirect,
+  test("general provider writes cannot introduce a provider alias collision", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      openaiProviderTierVersion: 2,
+      defaultProvider: "openai",
+      providers: {
+        openai: { ...canonicalDirect },
+        deepseek: { adapter: "openai-chat", baseUrl: "https://api.deepseek.com/v1" },
+      },
+    } as OcxConfig);
+    const server = startServer(0);
+    try {
+      const before = readFileSync(join(TEST_DIR, "config.json"));
+      const post = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "openai", provider: { ...canonicalDirect, alias: "deepseek" } }),
+      });
+      expect(post.status).toBe(400);
+
+      const patch = await fetch(new URL("/api/providers?name=openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ alias: "deepseek" }),
+      });
+      expect(patch.status).toBe(400);
+      expect(readFileSync(join(TEST_DIR, "config.json"))).toEqual(before);
+      expect(loadConfig().providers.openai?.alias).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("general provider writes reject reserved duplicate and invalid model aliases", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      openaiProviderTierVersion: 2,
+      defaultProvider: "openai",
+      providers: { openai: { ...canonicalDirect } },
+    } as OcxConfig);
+    const server = startServer(0);
+    try {
+      const before = readFileSync(join(TEST_DIR, "config.json"));
+      for (const modelAliases of [
+        { "gpt-5.6-luna": "gpt-5.6-sol" },
+        { "gpt-5.6-sol": "same", "gpt-5.6-luna": "SAME" },
+        { "gpt-5.6-luna": "not an alias" },
+      ]) {
+        const response = await fetch(new URL("/api/providers", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "openai", provider: { ...canonicalDirect, modelAliases } }),
+        });
+        expect(response.status).toBe(400);
+      }
+      const patch = await fetch(new URL("/api/providers?name=openai", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ modelAliases: { "gpt-5.6-luna": "luna" } }),
+      });
+      expect(patch.status).toBe(400);
+      expect(readFileSync(join(TEST_DIR, "config.json"))).toEqual(before);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("malformed alias overlays return bounded 4xx without config persistence", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      openaiProviderTierVersion: 2,
+      defaultProvider: "openai",
+      providers: { openai: { ...canonicalDirect } },
+    } as OcxConfig);
+    const server = startServer(0);
+    try {
+      const before = readFileSync(join(TEST_DIR, "config.json"));
+      for (const overlay of [
+        { defaultAliases: "yes" },
+        { modelAliases: null },
+        { modelAliases: [] },
+        { modelAliases: { "gpt-5.6-luna": 42 } },
+      ]) {
+        const post = await fetch(new URL("/api/providers", server.url), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "openai", provider: { ...canonicalDirect, ...overlay } }),
+        });
+        expect(post.status).toBeGreaterThanOrEqual(400);
+        expect(post.status).toBeLessThan(500);
+
+        const patch = await fetch(new URL("/api/providers?name=openai", server.url), {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(overlay),
+        });
+        expect(patch.status).toBeGreaterThanOrEqual(400);
+        expect(patch.status).toBeLessThan(500);
+      }
+      expect(readFileSync(join(TEST_DIR, "config.json"))).toEqual(before);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("canonical transport tampering stays rejected with persisted alias overlays", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const overlays = {
+      alias: "codex-native",
+      modelAliases: { "gpt-5.6-luna": "luna" },
       defaultAliases: true,
-      baseUrl: "https://attacker.example/backend-api/codex",
-    })).toContain("canonical built-in provider seed");
-    expect(providerManagementConfigError("openai", {
-      ...canonicalDirect,
-      defaultAliases: true,
-      adapter: "openai-chat",
-    })).toContain("canonical built-in provider seed");
-    expect(providerManagementConfigError("openai", {
-      ...canonicalDirect,
-      defaultAliases: true,
-      authMode: "key",
-    })).toContain("canonical built-in provider seed");
-    // Non-openai providers keep their existing behavior: no canonical seed comparison.
-    expect(providerManagementConfigError("deepseek", {
-      adapter: "openai-chat",
-      baseUrl: "https://api.deepseek.com/v1",
-      apiKey: "sk-test",
-      defaultAliases: true,
-    })).toBeNull();
+    } as const;
+    saveConfig({
+      port: 0,
+      openaiProviderTierVersion: 2,
+      defaultProvider: "openai",
+      providers: { openai: { ...canonicalDirect, ...overlays } },
+    } as OcxConfig);
+    const server = startServer(0);
+    try {
+      for (const tampering of [
+        { baseUrl: "https://attacker.example/backend-api/codex" },
+        { adapter: "openai-chat" },
+        { authMode: "key" },
+      ]) {
+        const response = await fetch(new URL("/api/providers?name=openai", server.url), {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(tampering),
+        });
+        expect(response.status).toBe(400);
+      }
+      expect(loadConfig().providers.openai).toMatchObject({ ...canonicalDirect, ...overlays });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("unrelated non-openai provider edits preserve persisted alias overlays", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      openaiProviderTierVersion: 2,
+      defaultProvider: "deepseek",
+      providers: {
+        deepseek: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.deepseek.com/v1",
+          alias: "ds",
+          modelAliases: { "deepseek-v4": "ds4-custom" },
+          defaultAliases: false,
+        },
+      },
+    } as OcxConfig);
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers?name=deepseek", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ contextWindow: 128000 }),
+      });
+      expect(response.status).toBe(200);
+      expect(loadConfig().providers.deepseek).toMatchObject({
+        alias: "ds",
+        modelAliases: { "deepseek-v4": "ds4-custom" },
+        defaultAliases: false,
+        contextWindow: 128000,
+      });
+    } finally {
+      resolvedError.mockRestore();
+      await server.stop(true);
+    }
   });
 
   test("canonical OpenAI with defaultAliases can still PATCH modelContextWindows", async () => {
