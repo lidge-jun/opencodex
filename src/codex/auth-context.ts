@@ -547,7 +547,15 @@ export async function resolveCodexAuthContext(
     if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
     const selected = resolution.status === "selected" ? resolution.accountId : null;
     if (!selected) {
-      if (requestScopedMainCredential && fixedAccountId === undefined && !options.excludeAccountId) {
+      // A retry that excluded a failed Pool account may still use the validated caller-owned
+      // main credential. Treating every exclusion as if main itself had failed strands a healthy
+      // native bearer after the first Pool attempt. Preserve the exactly-once boundary by refusing
+      // this fallback only when the excluded credential is main.
+      if (
+        requestScopedMainCredential
+        && fixedAccountId === undefined
+        && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
+      ) {
         return await resolveCallerOwnedMainContext();
       }
       if (fixedAccountId !== undefined) {

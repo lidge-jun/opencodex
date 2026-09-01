@@ -1218,6 +1218,45 @@ describe("Codex auth context", () => {
     expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
   });
 
+  test("a failed Pool account may fall back once to the validated caller-owned main credential", async () => {
+    const cfg = config();
+    cfg.codexAccounts = [
+      { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "pool-account" },
+    ];
+    const inbound = new Headers({
+      authorization: "Bearer caller-keyring-token",
+      "chatgpt-account-id": "caller-keyring-account",
+    });
+    const emptyEntitlements: CodexModelEntitlementSnapshot = {
+      modelsByAccount: new Map(),
+      confirmedAccountIds: new Set(),
+      credentialIdentities: new Map(),
+    };
+    let directEntitlementChecks = 0;
+    const options = {
+      requestScopedMainCredential: true,
+      modelId: "gpt-daybreak-blue-latest",
+      resolveCodexModelEntitlements: async () => emptyEntitlements,
+      isDirectCallerEntitledToCodexModel: async () => {
+        directEntitlementChecks += 1;
+        return true;
+      },
+    };
+
+    await expect(resolveCodexAuthContext(inbound, cfg, "pool", {
+      ...options,
+      excludeAccountId: "pool-a",
+    })).resolves.toMatchObject({ kind: "main", accountId: null });
+    expect(directEntitlementChecks).toBe(1);
+
+    // If main itself was the failed credential, the retry must not loop back to it.
+    await expect(resolveCodexAuthContext(inbound, { ...cfg, codexAccounts: [] }, "pool", {
+      ...options,
+      excludeAccountId: MAIN_CODEX_ACCOUNT_ID,
+    })).rejects.toThrow("Codex accounts that support this model are currently unavailable");
+    expect(directEntitlementChecks).toBe(1);
+  });
+
   test("selects pool auth independently of the routed provider", async () => {
     saveCodexAccountCredential("pool-a", {
       accessToken: "pool_token",

@@ -3078,6 +3078,121 @@ describe("server local API auth", () => {
     }
   });
 
+  test.each([429, 402] as const)(
+    "a pre-stream %i from the only Pool account retries once with the validated caller main",
+    async rejection => {
+      setDebugSettings({ debug: true });
+      const model = "gpt-daybreak-blue-latest";
+      const observed: Array<{ authorization: string | null; accountId: string | null }> = [];
+      const harness = await startPoolRetryHarness((_accountId, request) => {
+        observed.push({
+          authorization: request.headers.get("authorization"),
+          accountId: request.headers.get("chatgpt-account-id"),
+        });
+        if (observed.length === 1) {
+          return new Response(JSON.stringify({ error: { message: "pool account unavailable" } }), {
+            status: rejection,
+            headers: { "content-type": "application/json", "retry-after": "60" },
+          });
+        }
+        return Response.json({ id: "caller-main-success", status: "completed", output: [] });
+      }, {
+        secondAccount: false,
+        modelRosterByAccount: {
+          "acct-pool-a": [model],
+          "acct-caller-main": [model],
+        },
+      });
+      try {
+        const response = await harness.request({
+          model,
+          headers: { "chatgpt-account-id": "acct-caller-main" },
+        });
+        expect(response.status).toBe(200);
+        expect((await response.json() as { id: string }).id).toBe("caller-main-success");
+        expect(observed).toEqual([
+          { authorization: "Bearer pool-a-token", accountId: "acct-pool-a" },
+          { authorization: "Bearer inbound-token", accountId: "acct-caller-main" },
+        ]);
+        expect(harness.dispatches).toEqual(["acct-pool-a", "acct-caller-main"]);
+        expect(loadConfig().activeCodexAccountId).toBe("pool-a");
+        const affinity = getDebugLogEntries()
+          .map(entry => entry.line)
+          .filter(line => line.startsWith("[ocx:codex:affinity] "))
+          .map(line => JSON.parse(line.slice("[ocx:codex:affinity] ".length)) as {
+            status: number;
+            authKind: string;
+            credentialSubstituted: boolean;
+          });
+        expect(affinity.slice(-2)).toEqual([
+          expect.objectContaining({ status: rejection, authKind: "pool", credentialSubstituted: true }),
+          expect.objectContaining({ status: 200, authKind: "main", credentialSubstituted: false }),
+        ]);
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    },
+    { timeout: SERVER_BUDGET_MS },
+  );
+
+  test.each([429, 402] as const)(
+    "compact %i from the only Pool account retries once with the validated caller main",
+    async rejection => {
+      const model = "gpt-daybreak-blue-latest";
+      const observed: Array<{ authorization: string | null; accountId: string | null }> = [];
+      const harness = await startPoolRetryHarness((_accountId, request) => {
+        observed.push({
+          authorization: request.headers.get("authorization"),
+          accountId: request.headers.get("chatgpt-account-id"),
+        });
+        if (observed.length === 1) {
+          return new Response(JSON.stringify({ error: { message: "pool account unavailable" } }), {
+            status: rejection,
+            headers: { "content-type": "application/json", "retry-after": "60" },
+          });
+        }
+        return new Response([
+          "event: response.output_item.done",
+          'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"compaction","encrypted_content":"gAAAAAB-caller-main"}}',
+          "",
+          "event: response.completed",
+          'data: {"type":"response.completed","response":{"status":"completed","output":[]}}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }, {
+        secondAccount: false,
+        modelRosterByAccount: {
+          "acct-pool-a": [model],
+          "acct-caller-main": [model],
+        },
+      });
+      try {
+        const response = await harness.request({
+          model,
+          path: "/v1/responses/compact",
+          headers: { "chatgpt-account-id": "acct-caller-main" },
+        });
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({
+          output: [{ type: "compaction", encrypted_content: "gAAAAAB-caller-main" }],
+        });
+        expect(observed).toEqual([
+          { authorization: "Bearer pool-a-token", accountId: "acct-pool-a" },
+          { authorization: "Bearer inbound-token", accountId: "acct-caller-main" },
+        ]);
+        expect(harness.dispatches).toEqual(["acct-pool-a", "acct-caller-main"]);
+        expect(loadConfig().activeCodexAccountId).toBe("pool-a");
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    },
+    { timeout: SERVER_BUDGET_MS },
+  );
+
   test("#584: Retry-After cools the first account even when its account retry fails", async () => {
     const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
       ? new Response(JSON.stringify({ error: { message: "rate limited" } }), {

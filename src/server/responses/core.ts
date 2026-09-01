@@ -982,7 +982,7 @@ interface CodexPoolAccountRetryArgs {
   stream: boolean;
   onResponse?: (
     response: Response,
-    authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>,
+    authCtx: CodexAuthContext,
     request: Awaited<ReturnType<ReturnType<typeof resolveAdapter>["buildRequest"]>>,
   ) => void;
 }
@@ -990,7 +990,7 @@ interface CodexPoolAccountRetryArgs {
 type CodexPoolAccountRetryResult =
   | {
     kind: "retried";
-    authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
+    authCtx: CodexAuthContext;
     request: Awaited<ReturnType<ReturnType<typeof resolveAdapter>["buildRequest"]>>;
     upstreamResponse: Response;
     selectedForwardHeaders: Headers;
@@ -999,7 +999,7 @@ type CodexPoolAccountRetryResult =
   | {
     kind: "transport";
     error: unknown;
-    authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
+    authCtx: CodexAuthContext;
   };
 
 /** Keep retry-stage entitlement snapshots inside the native-main selection fence. */
@@ -1166,7 +1166,14 @@ async function retryCodexPoolOnAlternateAccount(
       throw error;
     }
   }
-  if (retryAuthCtx?.kind !== "pool" && retryAuthCtx?.kind !== "main-pool") {
+  // A validated request-owned main bearer is a real alternate when the failed credential was a
+  // stored Pool account. It has no Pool account id to promote or cool, but it can own this one
+  // bounded replay. The resolver already refuses it when main itself is the excluded credential.
+  if (
+    retryAuthCtx?.kind !== "pool"
+    && retryAuthCtx?.kind !== "main-pool"
+    && retryAuthCtx?.kind !== "main"
+  ) {
     // A body-confirmed quota response may arrive under HTTP 5xx. Without an alternate,
     // the ordinary terminal recorder sees only that wire status and would misclassify it
     // as transient, leaving the exhausted account immediately selectable next turn.
@@ -1293,6 +1300,9 @@ async function retryCodexPoolOnAlternateAccount(
       retrySendCount += 1;
       args.onResponse?.(upstreamResponse, retryAuthCtx, request);
       if (!retrySameConfirmedAccount || retrySendCount >= maxRetrySends) break;
+      // Caller-owned main is an alternate-account replay and can never enter the bounded
+      // same-stored-account 400 loop above. Keep that invariant explicit for the account-id reads.
+      if (retryAuthCtx.kind === "main") break;
       if (!await shouldRetryCodexPoolAccountModel400(
         upstreamResponse,
         route.modelId,
@@ -4358,7 +4368,12 @@ async function handleResponsesInner(
           passthroughEstimate,
           stream: parsed.stream,
           onResponse: (response, retryAuthCtx, retryRequest) => {
-            captureAffinityResponse(response, retryAuthCtx, retryRequest, true);
+            captureAffinityResponse(
+              response,
+              retryAuthCtx,
+              retryRequest,
+              retryAuthCtx.kind !== "main",
+            );
           },
         });
         if (retry.kind === "transport") {
