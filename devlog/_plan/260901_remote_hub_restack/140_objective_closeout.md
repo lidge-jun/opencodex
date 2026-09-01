@@ -26,3 +26,9 @@
 P2 4건 — T2 인증된 models 경로, T3 관리 ingress의 GUI health, T19 readiness
 응답 문서화, T21 신규 config 키 문서화. 그리고 `shutdown-launcher`의
 SIGINT 워치독 플레이크. 전부 이 유닛의 잔업이 아니라 다음 유닛의 입력이다.
+
+## 이 문서의 랜딩 경로
+
+`131_worktree_state.md`와 이 문서는 `codex/remote-hub-closeout`에서 작성해
+PR로 `dev`에 올린다. 스쿼시 머지 이후 워크트리를 `origin/dev`에서 다시 시작한
+브랜치라, 여기 커밋은 `dev`와 선형 관계를 갖는다.
