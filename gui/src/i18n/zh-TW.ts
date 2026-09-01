@@ -1648,6 +1648,8 @@ export const zhTW: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "所有已選目標都支援圖片輸入後才可使用。",
   "cws.capability.imageInputHint": "所有目標都支援圖片時預設開啟；關閉後僅接受文字。",
   "cws.capability.imageInput": "圖片 / 多模態",
+  "cws.capability.adaptiveEffort": "自適應推理層級",
+  "cws.capability.adaptiveEffortHint": "關閉：只要有一個目標不支援推理層級，整個組合的選擇器都會消失。開啟：這些目標仍可使用，選擇器保留其餘目標共有的層級。",
   "cws.capabilities": "功能",
   "cws.field.defaultEffortUnsupported": "此 effort 不在目標的共同階梯中 — 請求時會被忽略或就近對應。",
   "cws.field.defaultEffortUnsupportedOption": "不在交集中",

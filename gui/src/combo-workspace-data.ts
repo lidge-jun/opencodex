@@ -54,6 +54,7 @@ const COMBO_STRATEGY_SET = new Set<string>(COMBO_STRATEGIES);
 export function intersectComboEfforts(
   targets: readonly ComboTarget[],
   modelEfforts: ReadonlyMap<string, readonly string[] | undefined>,
+  reasoningEffortMode: "strict" | "adaptive" = "strict",
 ): ComboEffort[] {
   const complete = targets.filter((t) => t.provider.trim() && t.model.trim());
   if (complete.length === 0) return [...COMBO_EFFORTS];
@@ -63,6 +64,9 @@ export function intersectComboEfforts(
     const key = `${target.provider.trim()}/${target.model.trim()}`;
     const listed = modelEfforts.get(key);
     if (listed === undefined) continue;
+    // Adaptive mirrors the served catalog: a target advertising no effort control is
+    // excluded from the intersection rather than collapsing it for every sibling.
+    if (reasoningEffortMode === "adaptive" && listed.length === 0) continue;
     const member = listed.filter((effort) => effortSet.has(effort));
     if (common === null) {
       common = member;
@@ -106,6 +110,10 @@ function normalizeImageInput(value: unknown): "auto" | "disabled" {
   return value === "disabled" ? "disabled" : "auto";
 }
 
+function normalizeReasoningEffortMode(value: unknown): "strict" | "adaptive" {
+  return value === "adaptive" ? "adaptive" : "strict";
+}
+
 export interface ComboItem {
   id: string;
   /** Wire id shown to clients, e.g. combo/free */
@@ -120,6 +128,11 @@ export interface ComboItem {
   stickyLimit: number;
   defaultEffort: ComboEffort | null;
   imageInput?: "auto" | "disabled";
+  /**
+   * Picker-ladder policy. `adaptive` lets targets that advertise no effort control drop
+   * out of the intersection instead of emptying it for the whole group.
+   */
+  reasoningEffortMode?: "strict" | "adaptive";
   targets: ComboTarget[];
 }
 
@@ -228,6 +241,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
       stickyLimit: normalizeStickyLimit(r.stickyLimit),
       defaultEffort: normalizeDefaultEffort(r.defaultEffort),
       imageInput: normalizeImageInput(r.imageInput),
+      reasoningEffortMode: normalizeReasoningEffortMode(r.reasoningEffortMode),
       targets,
     });
   }
@@ -485,6 +499,7 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
     || a.stickyLimit !== b.stickyLimit
     || a.defaultEffort !== b.defaultEffort
     || (a.imageInput ?? "auto") !== (b.imageInput ?? "auto")
+    || (a.reasoningEffortMode ?? "strict") !== (b.reasoningEffortMode ?? "strict")
   ) return false;
   if (a.targets.length !== b.targets.length) return false;
   return a.targets.every((t, i) => {
@@ -502,6 +517,7 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     stickyLimit?: number;
     defaultEffort: ComboEffort | null;
     imageInput?: "disabled";
+    reasoningEffortMode?: "adaptive";
     alias?: string;
     nativeAlias?: true;
     displayName?: string;
@@ -518,6 +534,7 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
       strategy: item.strategy,
       defaultEffort: item.defaultEffort,
       ...(item.imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
+      ...(item.reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
       ...(item.strategy === "round-robin" ? { stickyLimit: item.stickyLimit } : {}),
       ...(item.alias && item.alias.trim() ? { alias: item.alias.trim() } : {}),
       ...(item.nativeAlias ? { nativeAlias: true } : {}),
@@ -627,6 +644,7 @@ export function emptyDraft(id = ""): ComboItem {
     stickyLimit: 1,
     defaultEffort: null,
     imageInput: "auto",
+    reasoningEffortMode: "strict",
     targets: [newComboTarget()],
   };
 }

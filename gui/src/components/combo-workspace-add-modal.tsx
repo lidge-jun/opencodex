@@ -48,8 +48,8 @@ export function AddComboModal({
     return map;
   }, [models]);
   const allowedEfforts = useMemo(
-    () => intersectComboEfforts(draft.targets, effortMap),
-    [draft.targets, effortMap],
+    () => intersectComboEfforts(draft.targets, effortMap, draft.reasoningEffortMode ?? "strict"),
+    [draft.targets, effortMap, draft.reasoningEffortMode],
   );
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
 
@@ -220,6 +220,7 @@ export function AddComboModal({
             targets={draft.targets}
             models={models}
             imageInput={draft.imageInput ?? "auto"}
+            reasoningEffortMode={draft.reasoningEffortMode ?? "strict"}
             disabled={busy}
             onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
           />

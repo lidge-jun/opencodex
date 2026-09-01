@@ -2077,6 +2077,8 @@ export const fr: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "Indisponible tant que toutes les cibles sélectionnées ne prennent pas en charge les images.",
   "cws.capability.imageInputHint": "Activé par défaut lorsque toutes les cibles prennent en charge les images. Désactivez cette option pour n’accepter que du texte.",
   "cws.capability.imageInput": "Images / multimodal",
+  "cws.capability.adaptiveEffort": "Échelle de raisonnement adaptative",
+  "cws.capability.adaptiveEffortHint": "Désactivé : une cible sans réglage de raisonnement masque le sélecteur pour toute la combinaison. Activé : ces cibles restent utilisables et le sélecteur conserve les niveaux communs aux autres cibles.",
   "cws.capabilities": "Capacités",
   "cws.allCombos": "Toutes les combinaisons",
   "cws.copyModel": "Copier l’identifiant",

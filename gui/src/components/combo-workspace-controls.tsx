@@ -101,14 +101,16 @@ export function ComboCapabilities({
   targets,
   models,
   imageInput,
+  reasoningEffortMode,
   disabled,
   onChange,
 }: {
   targets: ComboTarget[];
   models: ModelOption[];
   imageInput: "auto" | "disabled";
+  reasoningEffortMode: "strict" | "adaptive";
   disabled?: boolean;
-  onChange: (patch: { imageInput?: "auto" | "disabled" }) => void;
+  onChange: (patch: { imageInput?: "auto" | "disabled"; reasoningEffortMode?: "strict" | "adaptive" }) => void;
 }) {
   const t = useT();
   const imagesSupported = comboImagesSupported(targets, models);
@@ -133,6 +135,20 @@ export function ComboCapabilities({
           }}
           disabled={disabled || !imagesSupported}
           label={t("cws.capability.imageInput")}
+        />
+      </div>
+      <div className="cwi-capability-row">
+        <div>
+          <span className="cwi-capability-label">{t("cws.capability.adaptiveEffort")}</span>
+          <p className="muted cwi-capability-hint">{t("cws.capability.adaptiveEffortHint")}</p>
+        </div>
+        <Switch
+          on={reasoningEffortMode === "adaptive"}
+          onClick={() => {
+            onChange({ reasoningEffortMode: reasoningEffortMode === "adaptive" ? "strict" : "adaptive" });
+          }}
+          disabled={disabled}
+          label={t("cws.capability.adaptiveEffort")}
         />
       </div>
     </section>

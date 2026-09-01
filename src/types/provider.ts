@@ -505,6 +505,14 @@ export interface OcxProviderConfig {
    */
   noStructuredOutputModels?: string[];
   /**
+   * Model ids that accept a reasoning-effort field on an ordinary turn but reject it
+   * once function tools are present. The model keeps its advertised effort ladder;
+   * OpenCodex omits the wire field for tool-bearing requests only and lets the
+   * upstream default apply. Narrower than `noReasoningModels`, which strips reasoning
+   * from every request and costs the model its picker entirely.
+   */
+  omitReasoningEffortWithToolsModels?: string[];
+  /**
    * Allow multiple tool calls per completion. DEFAULT-ON for openai-chat providers (the
    * buffered stream parser assembles interleaved/fragmented multi-call turns safely);
    * set `false` to force `parallel_tool_calls:false` upstream and drop the catalog's

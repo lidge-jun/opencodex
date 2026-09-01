@@ -2110,6 +2110,8 @@ export const de: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "Erst verfügbar, wenn jedes gewählte Ziel Bildeingabe unterstützt.",
   "cws.capability.imageInputHint": "Standardmäßig aktiv, wenn jedes Ziel Bilder unterstützt. Ausschalten für nur Text.",
   "cws.capability.imageInput": "Bild / multimodal",
+  "cws.capability.adaptiveEffort": "Adaptive Denkstufen",
+  "cws.capability.adaptiveEffortHint": "Aus: Ziele ohne Denkstufen-Regelung blenden die Auswahl für die gesamte Kombination aus. An: Solche Ziele bleiben nutzbar, und die Auswahl zeigt weiterhin die Stufen der übrigen Ziele.",
   "cws.capabilities": "Fähigkeiten",
   "cws.field.defaultEffortUnsupported": "Dieser Aufwand liegt nicht in der gemeinsamen Leiter der Ziele — er wird zur Anfragezeit ignoriert oder angepasst.",
   "cws.field.defaultEffortUnsupportedOption": "nicht in der Schnittmenge",

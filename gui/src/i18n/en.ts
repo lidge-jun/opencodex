@@ -2153,6 +2153,8 @@ export const en = {
   "cws.capability.imageInputUnavailable": "Unavailable until every selected target supports image input.",
   "cws.capability.imageInputHint": "On by default when every target supports images. Turn off to accept text only.",
   "cws.capability.imageInput": "Image / multimodal",
+  "cws.capability.adaptiveEffort": "Adaptive reasoning ladder",
+  "cws.capability.adaptiveEffortHint": "Off: a target with no reasoning control hides the effort picker for the whole combo. On: those targets stay usable and the picker keeps the levels the remaining targets share.",
   "cws.capabilities": "Capabilities",
   "cws.field.defaultEffortUnsupported": "This effort is not in the targets' common ladder — it will be ignored or snapped at request time.",
   "cws.field.defaultEffortUnsupportedOption": "not in intersection",

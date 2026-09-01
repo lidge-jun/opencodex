@@ -2137,6 +2137,8 @@ export const ko: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "선택한 모든 대상이 이미지 입력을 지원해야 사용할 수 있습니다.",
   "cws.capability.imageInputHint": "모든 대상이 이미지를 지원하면 기본으로 켜집니다. 끄면 텍스트만 허용합니다.",
   "cws.capability.imageInput": "이미지 / 멀티모달",
+  "cws.capability.adaptiveEffort": "적응형 추론 단계",
+  "cws.capability.adaptiveEffortHint": "끔: 추론 단계를 조절할 수 없는 대상이 하나라도 있으면 콤보 전체의 선택기가 사라집니다. 켬: 그런 대상도 그대로 쓰면서, 선택기에는 나머지 대상이 공통으로 지원하는 단계가 남습니다.",
   "cws.capabilities": "기능",
   "cws.field.defaultEffortUnsupported": "이 수준은 대상의 공통 사다리에 없습니다 — 요청 시 무시되거나 스냅됩니다.",
   "cws.field.defaultEffortUnsupportedOption": "교집합에 없음",

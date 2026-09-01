@@ -72,6 +72,7 @@ export type {
   OcxAccountPoolQuotaWindow,
   OcxComboStrategy,
   OcxComboDefaultEffort,
+  OcxComboReasoningEffortMode,
   OcxComboTarget,
   OcxComboConfig,
   OcxRoutingUnknownEvidenceMode,

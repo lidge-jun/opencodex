@@ -87,7 +87,7 @@ export function DetailPanel({
   const [copied, setCopied] = useState(false);
   const dirty = !draftEquals(draft, baseline);
   const allTargetsExhausted = comboQuotaState(draft.targets, providerQuotaStates, providerMap) === "exhausted";
-  const baselineSyncKey = `${baseline.id}:${baseline.alias ?? ""}:${baseline.nativeAlias}:${baseline.displayName ?? ""}:${baseline.strategy}:${baseline.stickyLimit}:${baseline.defaultEffort}:${baseline.imageInput ?? "auto"}:${baseline.targets.map((t) => `${t.provider}/${t.model}:${t.weight ?? 1}`).join(",")}`;
+  const baselineSyncKey = `${baseline.id}:${baseline.alias ?? ""}:${baseline.nativeAlias}:${baseline.displayName ?? ""}:${baseline.strategy}:${baseline.stickyLimit}:${baseline.defaultEffort}:${baseline.imageInput ?? "auto"}:${baseline.reasoningEffortMode ?? "strict"}:${baseline.targets.map((t) => `${t.provider}/${t.model}:${t.weight ?? 1}`).join(",")}`;
   const effortMap = useMemo(() => {
     const map = new Map<string, string[] | undefined>();
     for (const model of models) {
@@ -96,8 +96,8 @@ export function DetailPanel({
     return map;
   }, [models]);
   const allowedEfforts = useMemo(
-    () => intersectComboEfforts(draft.targets, effortMap),
-    [draft.targets, effortMap],
+    () => intersectComboEfforts(draft.targets, effortMap, draft.reasoningEffortMode ?? "strict"),
+    [draft.targets, effortMap, draft.reasoningEffortMode],
   );
 
   const updateDraft = useCallback((updater: (prev: ComboItem) => ComboItem) => {
@@ -371,6 +371,7 @@ export function DetailPanel({
               targets={draft.targets}
               models={models}
               imageInput={draft.imageInput ?? "auto"}
+              reasoningEffortMode={draft.reasoningEffortMode ?? "strict"}
               disabled={busy}
               onChange={(patch) => updateDraft((d) => ({ ...d, ...patch }))}
             />

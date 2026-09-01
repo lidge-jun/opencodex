@@ -2130,6 +2130,8 @@ export const zh: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "所有已选目标均支持图片输入后才可用。",
   "cws.capability.imageInputHint": "所有目标均支持图片时默认开启；关闭后仅接受文本。",
   "cws.capability.imageInput": "图片 / 多模态",
+  "cws.capability.adaptiveEffort": "自适应推理档位",
+  "cws.capability.adaptiveEffortHint": "关闭：只要有一个目标不支持推理档位，整个组合的选择器都会消失。开启：这些目标仍可使用，选择器保留其余目标共有的档位。",
   "cws.capabilities": "能力",
   "cws.field.defaultEffortUnsupported": "该级别不在目标的公共阶梯中 — 请求时会被忽略或就近映射。",
   "cws.field.defaultEffortUnsupportedOption": "不在交集中",

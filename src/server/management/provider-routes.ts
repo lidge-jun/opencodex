@@ -396,6 +396,19 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "omitReasoningEffortWithToolsModels")) {
+    const value = rawBody.omitReasoningEffortWithToolsModels;
+    if (value === null) {
+      delete next.omitReasoningEffortWithToolsModels;
+    } else {
+      const error = nonBlankStringArrayConfigError(value, "omitReasoningEffortWithToolsModels");
+      if (error) return { error };
+      const models = normalizeNonBlankStringArray(value as string[]);
+      if (models.length > 0) next.omitReasoningEffortWithToolsModels = models;
+      else delete next.omitReasoningEffortWithToolsModels;
+    }
+    touched = true;
+  }
 
   // headers is the one object-valued field in the mask. PATCH semantics merge it
   // shallowly into the existing block so a single fingerprint header can be added
@@ -525,6 +538,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       modelAutoCompactTokenLimits: p.modelAutoCompactTokenLimits,
       modelSupportsServiceTier: p.modelSupportsServiceTier,
       noStructuredOutputModels: p.noStructuredOutputModels,
+      omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,

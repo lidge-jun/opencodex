@@ -2220,6 +2220,8 @@ export const ru: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "Доступно, когда все выбранные цели поддерживают ввод изображений.",
   "cws.capability.imageInputHint": "Включено по умолчанию, если все цели поддерживают изображения. Выключите, чтобы принимать только текст.",
   "cws.capability.imageInput": "Изображения / мультимодальность",
+  "cws.capability.adaptiveEffort": "Адаптивная шкала рассуждений",
+  "cws.capability.adaptiveEffortHint": "Выкл.: цель без настройки рассуждений скрывает выбор уровня для всей комбинации. Вкл.: такие цели остаются доступными, а в выборе сохраняются уровни, общие для остальных целей.",
   "cws.capabilities": "Возможности",
   "cws.field.defaultEffortUnsupported": "Этот уровень не входит в общую лестницу целей — при запросе он будет проигнорирован или снижен.",
   "cws.field.defaultEffortUnsupportedOption": "нет в пересечении",

@@ -1492,10 +1492,18 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       if (parsed.options.stopSequences !== undefined) body.stop = parsed.options.stopSequences;
       const reasoningDisabled = modelInList(provider.noReasoningModels, parsed.modelId);
-      const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+      // Some gateways accept a reasoning-effort field on a plain turn but reject the
+      // effort + tools combination. `noReasoningModels` would fix that only by
+      // stripping reasoning everywhere, costing the model its whole picker. This keeps
+      // the ladder advertised and drops the wire field for tool-bearing requests only.
+      const omitReasoningEffortWithTools = !!tools
+        && modelInList(provider.omitReasoningEffortWithToolsModels, parsed.modelId);
+      const reasoningEffort = omitReasoningEffortWithTools
+        ? undefined
+        : mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
       const nativeOpenAI = isNativeOpenAIChatTarget(provider);
       let reasoningLog: AdapterRequest["reasoningLog"];
-      if (!reasoningDisabled && provider.reasoningWireFormat === "gateway-object" && parsed.options.reasoning === "none") {
+      if (!reasoningDisabled && !omitReasoningEffortWithTools && provider.reasoningWireFormat === "gateway-object" && parsed.options.reasoning === "none") {
         if (nativeOpenAI) {
           body.reasoning_effort = "none";
           reasoningLog = {

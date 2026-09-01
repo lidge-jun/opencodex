@@ -68,12 +68,24 @@ import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { shadowCallTargetError } from "./shadow-call-validation";
 
 
-/** Management wire shape: omit default imageInput "auto" (persist/response sparse). */
-function sparseComboConfig<T extends { imageInput?: "auto" | "disabled" }>(combo: T): Omit<T, "imageInput"> & { imageInput?: "disabled" } {
-  const { imageInput, ...rest } = combo;
+/**
+ * Management wire shape: omit fields whose value is the default, so GET responses and
+ * persisted config stay sparse. A default echoed here would be written straight back by
+ * any client that round-trips GET into PUT, which is how an unset option ends up
+ * materialized in every user's config.json.
+ */
+function sparseComboConfig<T extends {
+  imageInput?: "auto" | "disabled";
+  reasoningEffortMode?: "strict" | "adaptive";
+}>(combo: T): Omit<T, "imageInput" | "reasoningEffortMode"> & {
+  imageInput?: "disabled";
+  reasoningEffortMode?: "adaptive";
+} {
+  const { imageInput, reasoningEffortMode, ...rest } = combo;
   return {
     ...rest,
     ...(imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
+    ...(reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
   };
 }
 
@@ -137,19 +149,19 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     if (error) return jsonResponse({ error }, 400);
     const normalized = normalizeComboConfig(body.combo as import("../../types").OcxComboConfig);
     // Persist only non-default identity/capability fields so config stays sparse.
+    // Capability defaults (`imageInput`, `reasoningEffortMode`) go through the same
+    // helper the GET/PUT responses use, so the wire shape and the stored shape cannot drift.
     const {
       alias: normalizedAlias,
       nativeAlias: normalizedNativeAlias,
       displayName: normalizedDisplayName,
-      imageInput: normalizedImageInput,
       ...normalizedBase
-    } = normalized;
+    } = sparseComboConfig(normalized);
     const stored: import("../../types").OcxComboConfig = {
       ...normalizedBase,
       ...(normalizedAlias ? { alias: normalizedAlias } : {}),
       ...(normalizedNativeAlias ? { nativeAlias: true } : {}),
       ...(normalizedDisplayName ? { displayName: normalizedDisplayName } : {}),
-      ...(normalizedImageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
     };
     const sourceId = renameFrom ?? id;
     const previous = config.combos?.[sourceId];

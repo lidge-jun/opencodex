@@ -2140,6 +2140,8 @@ export const tr: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "Seçilen tüm hedefler görsel girişini destekleyene kadar kullanılamaz.",
   "cws.capability.imageInputHint": "Tüm hedefler görselleri desteklediğinde varsayılan olarak açıktır. Yalnızca metin kabul etmek için kapatın.",
   "cws.capability.imageInput": "Görsel / çok modlu",
+  "cws.capability.adaptiveEffort": "Uyarlanabilir akıl yürütme düzeyi",
+  "cws.capability.adaptiveEffortHint": "Kapalı: akıl yürütme denetimi olmayan bir hedef, tüm kombinasyonun seçicisini gizler. Açık: bu hedefler kullanılabilir kalır ve seçici, kalan hedeflerin ortak düzeylerini gösterir.",
   "cws.capabilities": "Yetenekler",
   "cws.field.defaultEffortUnsupported": "Bu çaba hedeflerin ortak merdiveninde yok — istek anında yok sayılacak veya uydurulacaktır.",
   "cws.field.defaultEffortUnsupportedOption": "kesişimde değil",

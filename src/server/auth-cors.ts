@@ -694,6 +694,11 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     "noStructuredOutputModels",
   );
   if (structuredOutputOptOutError) return `provider ${name} ${structuredOutputOptOutError}`;
+  const toolReasoningOptOutError = nonBlankStringArrayConfigError(
+    raw.omitReasoningEffortWithToolsModels,
+    "omitReasoningEffortWithToolsModels",
+  );
+  if (toolReasoningOptOutError) return `provider ${name} ${toolReasoningOptOutError}`;
   const openRouterError = openRouterRoutingConfigError(typed);
   if (openRouterError) return `provider ${name} ${openRouterError}`;
   const vercelError = vercelGatewayRoutingConfigError(typed);
@@ -787,6 +792,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "noTopPModels",
       "noPenaltyModels",
       "noStructuredOutputModels",
+      "omitReasoningEffortWithToolsModels",
       "upstreamHttpVersion",
       "autoToolChoiceOnlyModels",
       "preserveReasoningContentModels",

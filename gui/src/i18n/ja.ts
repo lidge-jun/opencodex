@@ -2169,6 +2169,8 @@ export const ja: Record<TKey, string> = {
   "cws.capability.imageInputUnavailable": "選択した全ターゲットが画像入力に対応すると有効になります。",
   "cws.capability.imageInputHint": "全ターゲットが画像対応なら既定でオン。オフにするとテキストのみ。",
   "cws.capability.imageInput": "画像 / マルチモーダル",
+  "cws.capability.adaptiveEffort": "適応的な推論レベル",
+  "cws.capability.adaptiveEffortHint": "オフ: 推論レベルを持たない対象があると、コンボ全体のセレクターが消えます。オン: その対象はそのまま使え、セレクターには残りの対象で共通するレベルが表示されます。",
   "cws.capabilities": "能力",
   "cws.field.defaultEffortUnsupported": "この負荷はターゲット共通の階段にありません — リクエスト時に無視またはスナップされます。",
   "cws.field.defaultEffortUnsupportedOption": "交差に含まれない",

@@ -756,6 +756,18 @@ export type OcxAccountPoolQuotaWindow = "five-hour" | "weekly" | "max-utilizatio
 export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
+/**
+ * How a combo derives the reasoning ladder it publishes to the picker.
+ *
+ * `strict` (default) intersects every advertised ladder, so a target that explicitly
+ * advertises no effort control (`reasoningEfforts: []`) empties the combo's picker.
+ * `adaptive` excludes those empty ladders from the published intersection, keeping the
+ * control usable for a mixed-capability group. Unknown (`undefined`) ladders stay
+ * wildcards in both modes. Dispatch is unchanged: each concrete target still resolves
+ * its own effort at request time.
+ */
+export type OcxComboReasoningEffortMode = "strict" | "adaptive";
+
 export interface OcxComboTarget {
   provider: string;
   model: string;
@@ -771,6 +783,11 @@ export interface OcxComboConfig {
   stickyLimit?: number;
   /** Used when the client omits reasoning.effort. null/omitted leaves the target default unchanged. */
   defaultEffort?: OcxComboDefaultEffort | null;
+  /**
+   * Picker-ladder derivation policy. Omitted / `"strict"` keeps the legacy rule where an
+   * explicitly empty target ladder suppresses the whole combo's effort control.
+   */
+  reasoningEffortMode?: OcxComboReasoningEffortMode;
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when
