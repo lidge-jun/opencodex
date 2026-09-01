@@ -692,7 +692,12 @@ export function startUpdateJob(
  * and a bounded, structured summary — enough to tell a user which step failed and how, with no
  * free-form vendor text passing through the boundary. Detailed output stays ephemeral.
  */
-function runLoggedCommand(job: UpdateJobState, bin: string, args: string[], timeout: number): { status: number | null; signal: NodeJS.Signals | null } {
+function runLoggedCommand(
+  job: UpdateJobState,
+  bin: string,
+  args: string[],
+  timeout: number,
+): { status: number | null; signal: NodeJS.Signals | null; timedOut: boolean } {
   job = updateJob(job, {}, `$ ${formatCommand(bin, args)}`);
   const result = spawnSync(bin, args, {
     encoding: "utf8",
@@ -703,7 +708,11 @@ function runLoggedCommand(job: UpdateJobState, bin: string, args: string[], time
   const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
   const summary = summarizeCommandOutput(stdout, stderr, result.status, result.signal);
   if (summary) updateJob(job, {}, summary);
-  return { status: result.status, signal: result.signal };
+  return {
+    status: result.status,
+    signal: result.signal,
+    timedOut: (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT",
+  };
 }
 
 /**
@@ -993,7 +1002,7 @@ export interface RestartIo {
     bin: string,
     args: string[],
     timeoutMs: number,
-  ) => { status: number | null; signal?: NodeJS.Signals | null };
+  ) => { status: number | null; signal?: NodeJS.Signals | null; timedOut?: boolean };
   /** Override the explicit restart path (used by finishGuiUpdateRestart tests). */
   restartAfterUpdateFn?: (
     job: UpdateJobState,
@@ -1181,6 +1190,15 @@ async function restartAfterUpdate(
             `Service refresh failed (exit ${result.status ?? "?"}); falling back to a direct proxy start.`
             + " Run 'ocx service repair' by hand to see the reason, then 'ocx service status'.",
           );
+          if (result.timedOut) {
+            // UAC and scheduler mutation can outlive a fixed child deadline. Once the
+            // worker kills that child, ownership is ambiguous: launching a foreground
+            // proxy here can race a registration that completes moments later.
+            throw new Error(
+              "Service repair timed out with Task Scheduler state unknown; refusing a competing direct start. "
+              + "Run 'ocx service status', then 'ocx service repair' by hand.",
+            );
+          }
         }
       } finally {
         if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;

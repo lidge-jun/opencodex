@@ -735,7 +735,7 @@ export async function confirmServiceServing(
  * fall back to a direct proxy start rather than reporting a successful update over a
  * dead port.
  */
-async function reportServiceServing(
+export async function reportServiceServing(
   verb: "installed" | "started" | "repaired",
   deps: Parameters<typeof confirmServiceServing>[0] = {},
 ): Promise<void> {
@@ -1840,11 +1840,9 @@ export function buildWindowsTaskXml(
   // keeps spaces intact, and /b (batch mode) suppresses script error popups.
   const escapedLauncherArgs = taskXmlString(`/b /nologo "${launcher}"`);
   // `UserId` is optional in the schema, and omitting it makes a SessionStateChangeTrigger
-  // fire for ANY account's session change. Scope it to the installing account when that
-  // account is already known. The lookup is never forced here: this builder is synchronous
-  // and its output is validated before registration, so a failed or unavailable lookup must
-  // degrade to the unscoped trigger rather than leave the task with no recovery at all.
-  // `LogonTrigger` above is unscoped for the same reason and predates this change.
+  // fire for ANY account's session change. Production registration resolves and passes the
+  // installing account SID explicitly; the optional parameter remains only for deterministic
+  // builders/tests, and the live validator rejects an unscoped recovery trigger.
   const sessionUserIdElement = sessionTriggerUserId
     ? `\n      <UserId>${taskXmlString(sessionTriggerUserId)}</UserId>`
     : "";
@@ -1893,6 +1891,24 @@ export function buildWindowsTaskXml(
   </Actions>
 </Task>
 `;
+}
+
+type ExpectedWindowsTaskUserId = string | readonly string[];
+
+function cachedWindowsTaskUserIds(): readonly string[] | null {
+  const identity = cachedCurrentWindowsIdentity();
+  return identity ? [identity.sid, identity.name] : null;
+}
+
+function resolvedWindowsTaskSid(): string {
+  let identity = cachedCurrentWindowsIdentity();
+  if (!identity) {
+    const principal = resolveCurrentWindowsPrincipal(WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS);
+    identity = cachedCurrentWindowsIdentity();
+    if (!identity && /^\*S-1-(?:\d+-)+\d+$/i.test(principal)) return principal.slice(1).toUpperCase();
+  }
+  if (!identity) throw new Error("Windows Task Scheduler identity could not be resolved.");
+  return identity.sid;
 }
 
 function taskXmlSection(xml: string, tag: string): string {
@@ -2058,7 +2074,10 @@ export function windowsTaskRegistrationOwnedByAttempt(xml: string, attemptNonce:
  * carrying one disabled trigger plus a different enabled one must not pass because the two
  * halves were found in unrelated elements.
  */
-function windowsTaskHasSessionRecoveryTriggers(triggers: string, expectedUserId: string | undefined): boolean {
+function windowsTaskHasSessionRecoveryTriggers(
+  triggers: string,
+  expectedUserId: ExpectedWindowsTaskUserId | undefined,
+): boolean {
   const scoped = triggers.match(/<SessionStateChangeTrigger(?:\s[^>]*)?>[\s\S]*?<\/SessionStateChangeTrigger>/gi) ?? [];
   return WINDOWS_SESSION_RECOVERY_STATE_CHANGES.every(stateChange =>
     scoped.some(element =>
@@ -2068,23 +2087,25 @@ function windowsTaskHasSessionRecoveryTriggers(triggers: string, expectedUserId:
 }
 
 /**
- * A trigger's scope is acceptable when it is unscoped, or names the expected account.
+ * A trigger's scope is acceptable only when it names the expected account exactly.
  *
- * An unscoped trigger is accepted rather than rejected: the schema makes `UserId` optional,
- * the pre-existing `LogonTrigger` is unscoped for the same reason, and rejecting it would
- * mean an installation whose account lookup is unavailable loses session recovery entirely.
- * An explicitly scoped trigger is accepted only when the current account is known and matches.
+ * An unscoped recovery trigger is not identity proof. Production registration resolves a SID
+ * before writing XML; a missing scope therefore means the fixed-name task is legacy or foreign
+ * and must be refreshed from an exact legacy snapshot or preserved for manual review.
  * Treating an unknown expected identity as a wildcard would let a fresh status process accept a
  * task bound to another user's session and suppress the repair that should replace it.
  */
-function windowsTaskTriggerScopeAcceptable(element: string, expectedUserId: string | undefined): boolean {
+function windowsTaskTriggerScopeAcceptable(
+  element: string,
+  expectedUserId: ExpectedWindowsTaskUserId | undefined,
+): boolean {
   // A prefixed `<t:UserId>` is a real scope this validator cannot read: taskXmlElementCount()
   // counts only unprefixed tags, so without this the element below would look ABSENT and the
   // trigger would be accepted as unscoped even though it is bound to some other account.
   // Reject it outright rather than guess, and do so before the optional-field check.
   if (taskXmlHasPrefixedTag(element, "UserId")) return false;
   const userIdCount = taskXmlElementCount(element, "UserId");
-  if (userIdCount === 0) return true;
+  if (userIdCount === 0) return false;
   if (userIdCount !== 1) return false;
   if (expectedUserId === undefined) return false;
   // Scope is an identity boundary, unlike the launcher path. Newly generated tasks
@@ -2092,7 +2113,8 @@ function windowsTaskTriggerScopeAcceptable(element: string, expectedUserId: stri
   // no reason to forgive code-page substitutions here. A lossy account-name compare
   // lets two non-ASCII users collapse to the same `???` value and can make repair
   // start another account's fixed-name task.
-  return taskXmlDecodedValueEquals(element, "UserId", expectedUserId);
+  const expectedValues = typeof expectedUserId === "string" ? [expectedUserId] : expectedUserId;
+  return expectedValues.some(value => taskXmlDecodedValueEquals(element, "UserId", value));
 }
 
 /** Validate the stable OpenCodex action, principal, settings, and logon trigger. */
@@ -2100,6 +2122,7 @@ function windowsTaskRegistrationBaseHealthy(
   xml: string,
   wscript = windowsWscript(),
   launcher = windowsLauncherVbsPath(),
+  allowLossyPaths = true,
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   // taskXmlSection() takes the FIRST match and the schema allows arbitrary XML under
@@ -2129,8 +2152,11 @@ function windowsTaskRegistrationBaseHealthy(
     // cannot carry when the profile is named outside the code page (#3064). Only
     // unrepresentable characters are forgiven; every ASCII segment and every
     // separator is still matched literally.
-    && taskXmlDecodedLossyValueEquals(action, "Command", wscript)
-    && taskXmlDecodedLossyValueEquals(action, "Arguments", `/b /nologo "${launcher}"`);
+    && (allowLossyPaths
+      ? taskXmlDecodedLossyValueEquals(action, "Command", wscript)
+        && taskXmlDecodedLossyValueEquals(action, "Arguments", `/b /nologo "${launcher}"`)
+      : taskXmlDecodedValueEquals(action, "Command", wscript)
+        && taskXmlDecodedValueEquals(action, "Arguments", `/b /nologo "${launcher}"`));
 }
 
 /** Validate the security/lifecycle-critical fields of the registered scheduler task. */
@@ -2138,7 +2164,7 @@ export function windowsTaskRegistrationHealthy(
   xml: string,
   wscript = windowsWscript(),
   launcher = windowsLauncherVbsPath(),
-  expectedUserId: string | null = cachedCurrentWindowsIdentity()?.sid ?? null,
+  expectedUserId: ExpectedWindowsTaskUserId | null = cachedWindowsTaskUserIds(),
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
@@ -2151,13 +2177,13 @@ export function windowsTaskRegistrationHealthy(
 
 /**
  * The only stale definition repair may replace automatically: the previous OpenCodex task
- * shape whose action/principal/settings are still exact and which has no session triggers yet.
+ * shape whose action/principal/settings are byte-exact and which has no session triggers yet.
  * Arbitrary unhealthy or partially modified fixed-name tasks are preserved for manual review.
  */
 function windowsTaskRegistrationRefreshableLegacy(xml: string): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
-  return windowsTaskRegistrationBaseHealthy(xml)
+  return windowsTaskRegistrationBaseHealthy(xml, undefined, undefined, false)
     && taskXmlElementCount(triggers, "SessionStateChangeTrigger") === 0
     && !taskXmlHasPrefixedTag(triggers, "SessionStateChangeTrigger");
 }
@@ -2177,7 +2203,7 @@ export function readWindowsSchedulerXmlState(
   xml: string,
   wscript?: string,
   launcher?: string,
-  expectedUserId: string | null = cachedCurrentWindowsIdentity()?.sid ?? null,
+  expectedUserId: ExpectedWindowsTaskUserId | null = cachedWindowsTaskUserIds(),
 ): WindowsSchedulerXmlState {
   const installed = xml.length > 0;
   if (!installed) return { installed: false, enabled: false, registrationHealthy: false };
@@ -2341,7 +2367,11 @@ function writeWindowsSchedulerAssets(): void {
   // UTF-16LE + BOM: a BOM-less UTF-8 VBS mis-decodes non-ASCII (e.g. Korean) profile
   // paths on some WSH/codepage combinations — same contract as the task XML below.
   writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le");
-  writeServiceAssetWithRetry(windowsTaskXmlPath(), `\uFEFF${buildWindowsTaskXml(script)}`, "utf16le");
+  writeServiceAssetWithRetry(
+    windowsTaskXmlPath(),
+    `\uFEFF${buildWindowsTaskXml(script, windowsLauncherVbsPath(), undefined, resolvedWindowsTaskSid())}`,
+    "utf16le",
+  );
 }
 
 const WINDOWS_SCHEDULER_STAGE_PREFIX = "opencodex-service-stage-";
@@ -2414,7 +2444,12 @@ export function stageWindowsSchedulerRegistrationXml(
     // document while UAC is pending; the file harden independently proves its identity.
     writeXml(
       xmlPath,
-      `\uFEFF${buildWindowsTaskXml(windowsServiceScriptPath(), windowsLauncherVbsPath(), attemptNonce)}`,
+      `\uFEFF${buildWindowsTaskXml(
+        windowsServiceScriptPath(),
+        windowsLauncherVbsPath(),
+        attemptNonce,
+        resolvedWindowsTaskSid(),
+      )}`,
     );
     hardenPath(xmlPath);
     ownedWindowsSchedulerStages.add(xmlPath);
@@ -2754,7 +2789,7 @@ export interface RepairServiceDeps {
   /** Publishes the captured registration only when the fixed task name remains absent. */
   restoreSchedulerIfAbsent?: (registeredXml: string) => Promise<void>;
   /** Resolves the account the registered triggers must match; null when it cannot be resolved. */
-  resolveExpectedUserId?: (registeredXml: string) => string | null;
+  resolveExpectedUserId?: (registeredXml: string) => ExpectedWindowsTaskUserId | null;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
 }
@@ -2859,7 +2894,18 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
       undefined,
       expectedUserId,
     );
-    if (!registrationHealthy && !windowsTaskRegistrationRefreshableLegacy(registeredXml)) {
+    const expectedValues = expectedUserId === null
+      ? []
+      : typeof expectedUserId === "string" ? [expectedUserId] : expectedUserId;
+    const preferredSid = expectedValues[0];
+    const triggers = taskXmlSection(taskXmlWithoutCommentsAndCdata(registeredXml), "Triggers");
+    // An exact legacy account name is safe to recognize, but rewrite it to the
+    // locale-independent SID while repair already owns the mutation boundary.
+    const identityUpgradeNeeded = registrationHealthy
+      && preferredSid !== undefined
+      && !windowsTaskHasSessionRecoveryTriggers(triggers, preferredSid);
+    const refreshableLegacy = windowsTaskRegistrationRefreshableLegacy(registeredXml);
+    if (!registrationHealthy && !refreshableLegacy) {
       const scopedButUnresolved = expectedUserId === null
         && taskXmlElementCount(
           taskXmlSection(taskXmlWithoutCommentsAndCdata(registeredXml), "Triggers"),
@@ -2880,7 +2926,7 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     // Re-register only when the registered XML is actually stale, so the ordinary repair
     // stays free of `schtasks /create` and its UAC prompt.
     let startExpectedXml = registeredXml;
-    if (!registrationHealthy) {
+    if (!registrationHealthy || identityUpgradeNeeded) {
       // The task was stopped above, so a failed replacement must not exit here: `/create /f`
       // can be rejected, elevation can be cancelled, and staging or verification can fail.
       // Any of those would leave a previously runnable proxy stopped and the user worse off
@@ -3966,10 +4012,10 @@ export interface WindowsTaskDiagnosticIdentityDeps {
 export function resolveWindowsTaskDiagnosticUserId(
   schedulerXml: string,
   deps: WindowsTaskDiagnosticIdentityDeps = {},
-): string | null {
+): readonly string[] | null {
   const currentIdentity = deps.currentIdentity ?? cachedCurrentWindowsIdentity;
   const cached = currentIdentity();
-  if (cached) return cached.sid;
+  if (cached) return [cached.sid, cached.name];
 
   const scrubbed = taskXmlWithoutCommentsAndCdata(schedulerXml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
@@ -3980,7 +4026,8 @@ export function resolveWindowsTaskDiagnosticUserId(
   } catch {
     return null;
   }
-  return currentIdentity()?.sid ?? null;
+  const resolved = currentIdentity();
+  return resolved ? [resolved.sid, resolved.name] : null;
 }
 
 export interface WindowsServiceDiagnosticInputs {
@@ -3992,7 +4039,7 @@ export interface WindowsServiceDiagnosticInputs {
    */
   schedulerXml: string;
   /** Resolved effective account for explicit scheduler trigger scopes; null means unknown. */
-  schedulerExpectedUserId?: string | null;
+  schedulerExpectedUserId?: ExpectedWindowsTaskUserId | null;
   /** Whether the on-disk service assets exist. A filesystem concern, not an XML one. */
   schedulerAssetsPresent: boolean;
   nativeStatus: "started" | "stopped" | "nonexistent" | "unknown";
@@ -4004,7 +4051,7 @@ export interface WindowsServiceDiagnosticInputs {
 
 export function deriveWindowsServiceDiagnostic(inputs: WindowsServiceDiagnosticInputs): ServiceDiagnostic {
   const expectedUserId = inputs.schedulerExpectedUserId === undefined
-    ? cachedCurrentWindowsIdentity()?.sid ?? null
+    ? cachedWindowsTaskUserIds()
     : inputs.schedulerExpectedUserId;
   const schedulerState = readWindowsSchedulerXmlState(
     inputs.schedulerXml,

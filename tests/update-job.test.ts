@@ -800,6 +800,36 @@ describe("GUI update execution decisions", () => {
     }
   });
 
+  test("a timed-out Windows repair never starts a competing foreground proxy", async () => {
+    const spawned: number[] = [];
+    const job: UpdateJobState = {
+      id: "svc-win-timeout",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.42",
+      latestVersion: "2.7.43",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+      releaseNotesUrl: "",
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+
+    await expect(restartAfterUpdateForTests(job, { port: 19010, hostname: "127.0.0.1" }, {
+      platform: "win32",
+      serviceInstalledFn: () => true,
+      serviceViableFn: () => true,
+      waitForPort: async () => true,
+      runService: () => ({ status: null, signal: "SIGTERM", timedOut: true }),
+      spawnStart: (_job, _installer, port) => { spawned.push(port ?? 0); },
+      probeProxy: async () => false,
+    })).rejects.toThrow(/state unknown.*refusing a competing direct start/i);
+    expect(spawned).toEqual([]);
+  });
+
   test("service reinstall exit 0 with non-viable assets falls back to direct start", async () => {
     const spawned: Array<{ port: number }> = [];
     const job: UpdateJobState = {
