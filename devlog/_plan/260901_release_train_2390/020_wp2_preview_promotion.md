@@ -49,3 +49,15 @@ and escalates to a new work phase rather than being re-run until green.
 - `gh api actions/runs?head_sha=<sha>` showing `Cross-platform CI: success` (push) and
   `Service lifecycle: success`
 - the `package.json`-only diff proof from step 3
+
+## Executed
+
+PR #3123, merged at `75f3895c14965205be694e8ebb8e93f472630539`. The merge produced
+exactly the one predicted conflict (`package.json`), resolved to
+`2.39.0-preview.20260901`; `git diff origin/dev HEAD -- . ':!package.json'` was empty.
+`bun test tests/release-version-line.test.ts` passed 3/3 on the branch before push —
+the same file that refused v2.38.0's preview.
+
+Push-event Cross-platform CI: run `33462203719`, success on rerun. Service lifecycle:
+success. The first attempt failed on `tests/server-auth.test.ts:2288`, analyzed in
+`070_outcome.md` and not a regression in this delta.
