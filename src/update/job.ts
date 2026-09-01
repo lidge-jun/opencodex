@@ -1177,6 +1177,16 @@ async function restartAfterUpdate(
         const result = run(job, cmd.bin, cmd.args, repairTimeoutMs);
         serviceOk = result.status === 0;
         if (!serviceOk) {
+          if (result.timedOut) {
+            // UAC and scheduler mutation can outlive a fixed child deadline. Once the
+            // worker kills that child, ownership is ambiguous: launching a foreground
+            // proxy here can race a registration that completes moments later.
+            updateJob(job, {}, "Service repair timed out with Task Scheduler state unknown; refusing a competing direct start.");
+            throw new Error(
+              "Service repair timed out with Task Scheduler state unknown; refusing a competing direct start. "
+              + "Run 'ocx service status', then 'ocx service repair' by hand.",
+            );
+          }
           // The refresh that just failed was `ocx service repair` (serviceReinstallArgs).
           // It normally reuses a healthy registration, but a stale definition may have tried
           // guarded re-registration/elevation. Advising `install` here would unconditionally
@@ -1190,15 +1200,6 @@ async function restartAfterUpdate(
             `Service refresh failed (exit ${result.status ?? "?"}); falling back to a direct proxy start.`
             + " Run 'ocx service repair' by hand to see the reason, then 'ocx service status'.",
           );
-          if (result.timedOut) {
-            // UAC and scheduler mutation can outlive a fixed child deadline. Once the
-            // worker kills that child, ownership is ambiguous: launching a foreground
-            // proxy here can race a registration that completes moments later.
-            throw new Error(
-              "Service repair timed out with Task Scheduler state unknown; refusing a competing direct start. "
-              + "Run 'ocx service status', then 'ocx service repair' by hand.",
-            );
-          }
         }
       } finally {
         if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;

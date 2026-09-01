@@ -828,6 +828,9 @@ describe("GUI update execution decisions", () => {
       probeProxy: async () => false,
     })).rejects.toThrow(/state unknown.*refusing a competing direct start/i);
     expect(spawned).toEqual([]);
+    const log = readUpdateJob(job.id)?.log.join("\n") ?? "";
+    expect(log).toContain("refusing a competing direct start");
+    expect(log).not.toContain("falling back to a direct proxy start");
   });
 
   test("service reinstall exit 0 with non-viable assets falls back to direct start", async () => {

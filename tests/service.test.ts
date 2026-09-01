@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import * as serviceModule from "../src/service";
 import { saveConfig } from "../src/config";
 import { windowsEnvIndirectBatchValue } from "../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml as buildWindowsTaskXmlProduction, deriveWindowsServiceDiagnostic, deriveWindowsServiceDiagnosticForCurrentUser, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, reportServiceServing, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy as windowsTaskRegistrationHealthyProduction } from "../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml as buildWindowsTaskXmlProduction, buildWindowsTaskXmlDocument, deriveWindowsServiceDiagnostic, deriveWindowsServiceDiagnosticForCurrentUser, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, reportServiceServing, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy as windowsTaskRegistrationHealthyProduction } from "../src/service";
 import type { ServiceDiagnostic } from "../src/service";
 import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../src/service";
 import { buildWinswXml } from "../src/lib/winsw";
@@ -862,10 +862,10 @@ describe("Windows service task", () => {
     expect(service).toContain("if (existsSync(windowsLauncherVbsPath())) unlinkSync(windowsLauncherVbsPath());");
   });
 
-  test("writes Task Scheduler XML with a UTF-16 BOM for schtasks", async () => {
-    const service = await Bun.file(new URL("../src/service.ts", import.meta.url)).text();
-
-    expect(service).toContain('resolvedWindowsTaskSid()');
+  test("writes Task Scheduler XML with an exact SID and UTF-16 BOM", () => {
+    const document = buildWindowsTaskXmlDocument("service.cmd", "launcher.vbs", undefined, TEST_WINDOWS_TASK_SID);
+    expect(document.charCodeAt(0)).toBe(0xFEFF);
+    expect(document).toContain(`<UserId>${TEST_WINDOWS_TASK_SID}</UserId>`);
   });
 
   test("escapes environment values that would break out of set quotes", () => {
@@ -2527,6 +2527,29 @@ describe("service repair", () => {
     });
 
     expect(calls).toEqual(["stop", "assets", "reregister", "start", "state"]);
+  });
+
+  test("repair preserves a mangled legacy path instead of adopting it", async () => {
+    const calls: string[] = [];
+    const wscript = "C:\\Windows\\System32\\wscript.exe";
+    const expectedLauncher = "C:\\Users\\김병준\\.opencodex\\service-launcher.vbs";
+    const reportedLauncher = "C:\\Users\\???\\.opencodex\\service-launcher.vbs";
+    const legacy = buildWindowsTaskXml("ignored.cmd", reportedLauncher, undefined, TEST_WINDOWS_TASK_SID)
+      .replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
+
+    await expect(repairService({
+      platform: "win32",
+      diagnose: () => baseDiag,
+      assertEnv: () => {},
+      assertAuth: () => {},
+      schedulerWscript: wscript,
+      schedulerLauncher: expectedLauncher,
+      resolveExpectedUserId: () => TEST_WINDOWS_TASK_SID,
+      readSchedulerXml: () => legacy,
+      stopScheduler: () => { calls.push("stop"); },
+      reregisterScheduler: async () => { calls.push("reregister"); },
+    })).rejects.toThrow(/preserved for manual review/i);
+    expect(calls).toEqual([]);
   });
 
   test("repair leaves a healthy registration alone", async () => {

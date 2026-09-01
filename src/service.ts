@@ -1911,6 +1911,16 @@ function resolvedWindowsTaskSid(): string {
   return identity.sid;
 }
 
+/** Render the exact UTF-16 task document published by production registration paths. */
+export function buildWindowsTaskXmlDocument(
+  script = windowsServiceScriptPath(),
+  launcher = windowsLauncherVbsPath(),
+  attemptNonce?: string,
+  sessionTriggerUserId = resolvedWindowsTaskSid(),
+): string {
+  return `\uFEFF${buildWindowsTaskXml(script, launcher, attemptNonce, sessionTriggerUserId)}`;
+}
+
 function taskXmlSection(xml: string, tag: string): string {
   return new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i").exec(xml)?.[1] ?? "";
 }
@@ -2180,10 +2190,14 @@ export function windowsTaskRegistrationHealthy(
  * shape whose action/principal/settings are byte-exact and which has no session triggers yet.
  * Arbitrary unhealthy or partially modified fixed-name tasks are preserved for manual review.
  */
-function windowsTaskRegistrationRefreshableLegacy(xml: string): boolean {
+function windowsTaskRegistrationRefreshableLegacy(
+  xml: string,
+  wscript = windowsWscript(),
+  launcher = windowsLauncherVbsPath(),
+): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
-  return windowsTaskRegistrationBaseHealthy(xml, undefined, undefined, false)
+  return windowsTaskRegistrationBaseHealthy(xml, wscript, launcher, false)
     && taskXmlElementCount(triggers, "SessionStateChangeTrigger") === 0
     && !taskXmlHasPrefixedTag(triggers, "SessionStateChangeTrigger");
 }
@@ -2369,7 +2383,7 @@ function writeWindowsSchedulerAssets(): void {
   writeServiceAssetWithRetry(windowsLauncherVbsPath(), `\uFEFF${buildWindowsLauncherVbs(script)}`, "utf16le");
   writeServiceAssetWithRetry(
     windowsTaskXmlPath(),
-    `\uFEFF${buildWindowsTaskXml(script, windowsLauncherVbsPath(), undefined, resolvedWindowsTaskSid())}`,
+    buildWindowsTaskXmlDocument(script, windowsLauncherVbsPath()),
     "utf16le",
   );
 }
@@ -2444,12 +2458,12 @@ export function stageWindowsSchedulerRegistrationXml(
     // document while UAC is pending; the file harden independently proves its identity.
     writeXml(
       xmlPath,
-      `\uFEFF${buildWindowsTaskXml(
+      buildWindowsTaskXmlDocument(
         windowsServiceScriptPath(),
         windowsLauncherVbsPath(),
         attemptNonce,
         resolvedWindowsTaskSid(),
-      )}`,
+      ),
     );
     hardenPath(xmlPath);
     ownedWindowsSchedulerStages.add(xmlPath);
@@ -2790,6 +2804,9 @@ export interface RepairServiceDeps {
   restoreSchedulerIfAbsent?: (registeredXml: string) => Promise<void>;
   /** Resolves the account the registered triggers must match; null when it cannot be resolved. */
   resolveExpectedUserId?: (registeredXml: string) => ExpectedWindowsTaskUserId | null;
+  /** Exact scheduler action values used by validation; defaults to the installed paths. */
+  schedulerWscript?: string;
+  schedulerLauncher?: string;
   /** Test seam — defaults to process.platform so Linux CI cannot hit real installSystemd. */
   platform?: NodeJS.Platform;
 }
@@ -2890,8 +2907,8 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     const expectedUserId = (deps.resolveExpectedUserId ?? resolveWindowsTaskDiagnosticUserId)(registeredXml);
     const registrationHealthy = windowsTaskRegistrationHealthy(
       registeredXml,
-      undefined,
-      undefined,
+      deps.schedulerWscript,
+      deps.schedulerLauncher,
       expectedUserId,
     );
     const expectedValues = expectedUserId === null
@@ -2904,7 +2921,11 @@ export async function repairService(deps: RepairServiceDeps = {}): Promise<void>
     const identityUpgradeNeeded = registrationHealthy
       && preferredSid !== undefined
       && !windowsTaskHasSessionRecoveryTriggers(triggers, preferredSid);
-    const refreshableLegacy = windowsTaskRegistrationRefreshableLegacy(registeredXml);
+    const refreshableLegacy = windowsTaskRegistrationRefreshableLegacy(
+      registeredXml,
+      deps.schedulerWscript,
+      deps.schedulerLauncher,
+    );
     if (!registrationHealthy && !refreshableLegacy) {
       const scopedButUnresolved = expectedUserId === null
         && taskXmlElementCount(
