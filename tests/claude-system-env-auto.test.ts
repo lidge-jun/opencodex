@@ -144,13 +144,16 @@ test("subscription mode omits the configured admission key", async () => {
   expect(shellEnvContents).not.toContain(PROXY_MARKER);
 });
 
-// Detection is env-aware: an exported user key means auth is present, so auto resolves
-// subscription and the marker stays out of the file.
-test("auto with an exported user API key writes no marker", async () => {
+// Detection is env-aware: a proof-bound parent export means auth is present, so auto
+// resolves subscription and the marker stays out of the file. An unproven Bun dotenv
+// value is deliberately ignored by system-env (covered in system-env.test.ts).
+test("auto with a proof-bound user API key writes no marker", async () => {
   const previous = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "sk-ant-user";
   try {
-    await injectSystemEnv(4567, baseConfig);
+    await injectSystemEnv(4567, baseConfig, {
+      preBunAnthropicSlots: ["ANTHROPIC_API_KEY"],
+    });
     expect(shellEnvContents).not.toContain(PROXY_MARKER);
   } finally {
     if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
