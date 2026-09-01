@@ -5,6 +5,7 @@ import {
   type ExportContext,
   type ExportModel,
   type GajaeGeneratedConfig,
+  type HermesGeneratedConfig,
   type PiGeneratedConfig,
 } from "../src/clients/config-export";
 import type { OcxConfig } from "../src/types";
@@ -46,6 +47,11 @@ function gajaeModels(models: ExportModel[]) {
     .providers[OPENCODE_PROVIDER_ID].models;
 }
 
+function hermesModels(models: ExportModel[]) {
+  return (buildClientConfig("hermes", ctx(models)) as HermesGeneratedConfig)
+    .providers[OPENCODE_PROVIDER_ID].models;
+}
+
 /** The live failure, by its real id and real modality list. */
 const MIXED: ExportModel = {
   namespaced: "zenmux/meta-muse-spark-1.1",
@@ -68,6 +74,17 @@ const AUDIO_ONLY: ExportModel = {
 };
 
 describe("exported modalities stay inside the enum each client accepts", () => {
+  test("Hermes receives only catalog-backed vision booleans", () => {
+    const bare: ExportModel = { namespaced: "p/bare", provider: "p", id: "bare" };
+    const empty: ExportModel = { ...bare, namespaced: "p/empty", id: "empty", inputModalities: [] };
+    expect(hermesModels([MIXED, AUDIO_ONLY, bare, empty])).toEqual({
+      "zenmux/meta-muse-spark-1.1": { supports_vision: true },
+      "p/audio-only": { supports_vision: false },
+      "p/bare": {},
+      "p/empty": {},
+    });
+  });
+
   test("audio is dropped from a mixed Gajae entry rather than written through", () => {
     expect(gajaeModels([MIXED])[0]?.input).toEqual(["text", "image"]);
   });

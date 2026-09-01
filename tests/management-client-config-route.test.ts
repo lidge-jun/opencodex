@@ -18,6 +18,7 @@ import {
   opencodeGlobalConfigPath,
   type DshGeneratedConfig,
   type ExportModel,
+  type HermesGeneratedConfig,
   type McodeGeneratedConfig,
   type OpencodeGeneratedConfig,
   type PiGeneratedConfig,
@@ -102,6 +103,7 @@ function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
         liveModels: false,
         models: ["m1", "m2"],
         modelContextWindows: { m1: 128_000 },
+        modelInputModalities: { m1: ["text", "image"], m2: ["text"] },
         modelReasoningEfforts: { m1: ["none", "minimal", "low", "high"] },
       },
       b: {
@@ -249,6 +251,20 @@ describe("GET /api/client-config", () => {
       xhigh: "xhigh",
       max: "max",
     });
+  }, 15_000);
+
+  test("Hermes response projects catalog vision metadata through YAML", async () => {
+    const response = await clientConfigApi(baseConfig(), "?client=hermes");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope;
+    const models = (body.config as HermesGeneratedConfig).providers[OPENCODE_PROVIDER_ID]!.models;
+
+    expect(Bun.YAML.parse(body.text)).toEqual(body.config as Record<string, unknown>);
+    expect(models["a/m1"]).toEqual({ supports_vision: true });
+    // Effective catalog hints may widen ordinary text rows to image-capable.
+    expect(models["a/m2"]).toEqual({ supports_vision: true });
+    expect(models["b/no-context"]).toEqual({});
+    expect(body.modelCount).toBe(Object.keys(models).length);
   }, 15_000);
 
   test("an expired management roster is refreshed once before client-config is projected", async () => {

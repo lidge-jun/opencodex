@@ -24,8 +24,8 @@ import type { OcxConfig } from "../src/types";
  * (devlog/_fin/260802_client_toggle_api/010 §2.4, 011 §3).
  */
 const MODELS: ExportModel[] = [
-  { namespaced: "anthropic/claude-opus-4-8", provider: "anthropic", id: "claude-opus-4-8", contextWindow: 200_000, displayName: "Claude Opus 4.8" },
-  { namespaced: "gpt-5.5", provider: "openai", id: "gpt-5.5", native: true, contextWindow: 400_000 },
+  { namespaced: "anthropic/claude-opus-4-8", provider: "anthropic", id: "claude-opus-4-8", contextWindow: 200_000, displayName: "Claude Opus 4.8", inputModalities: ["text", "image"] },
+  { namespaced: "gpt-5.5", provider: "openai", id: "gpt-5.5", native: true, contextWindow: 400_000, inputModalities: ["text"] },
   // No authoritative context window: the "never guess metadata" case.
   { namespaced: "mystery/model", provider: "mystery", id: "model" },
 ];
@@ -76,7 +76,11 @@ describe("hermes", () => {
     expect(provider.api_key).toBe(HERMES_API_KEY_ENV_REF);
     expect(provider.api_mode).toBe("chat_completions");
     expect(provider.discover_models).toBe(false);
-    expect(provider.models).toEqual(["anthropic/claude-opus-4-8", "gpt-5.5", "mystery/model"]);
+    expect(provider.models).toEqual({
+      "anthropic/claude-opus-4-8": { supports_vision: true },
+      "gpt-5.5": { supports_vision: false },
+      "mystery/model": {},
+    });
   });
 
   test("adds the admission header only on a non-loopback bind", () => {

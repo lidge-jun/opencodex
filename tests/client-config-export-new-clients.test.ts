@@ -47,8 +47,8 @@ const LOOPBACK: OcxConfig = {
 const REMOTE: OcxConfig = { ...LOOPBACK, hostname: "0.0.0.0" } as OcxConfig;
 
 const MODELS: ExportModel[] = [
-  { namespaced: "anthropic/claude-opus-4-8", provider: "anthropic", id: "claude-opus-4-8", contextWindow: 200_000, displayName: "Claude Opus 4.8" },
-  { namespaced: "gpt-5.5", provider: "openai", id: "gpt-5.5", native: true, contextWindow: 400_000 },
+  { namespaced: "anthropic/claude-opus-4-8", provider: "anthropic", id: "claude-opus-4-8", contextWindow: 200_000, displayName: "Claude Opus 4.8", inputModalities: ["text", "image"] },
+  { namespaced: "gpt-5.5", provider: "openai", id: "gpt-5.5", native: true, contextWindow: 400_000, inputModalities: ["text"] },
   { namespaced: "local/no-window", provider: "local", id: "no-window" },
 ];
 
@@ -97,8 +97,20 @@ describe("hermes", () => {
     expect(block.api_key).toBe(HERMES_API_KEY_ENV_REF);
     expect(block.api_mode).toBe("chat_completions");
     expect(block.discover_models).toBe(false);
-    expect(block.models).toEqual(["anthropic/claude-opus-4-8", "gpt-5.5", "local/no-window"]);
+    expect(block.models).toEqual({
+      "anthropic/claude-opus-4-8": { supports_vision: true },
+      "gpt-5.5": { supports_vision: false },
+      "local/no-window": {},
+    });
     expect(doc).not.toHaveProperty("model");
+  });
+
+  test("capability metadata survives the generated YAML round-trip", () => {
+    const built = buildClientConfigText("hermes", ctx());
+    const parsed = Bun.YAML.parse(built.text) as HermesGeneratedConfig;
+    expect(parsed.providers[OPENCODE_PROVIDER_ID]!.models).toEqual(
+      (built.document as HermesGeneratedConfig).providers[OPENCODE_PROVIDER_ID]!.models,
+    );
   });
 
   test("a non-loopback bind adds the admission header, loopback does not", () => {
