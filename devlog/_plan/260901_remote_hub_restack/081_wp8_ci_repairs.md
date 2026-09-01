@@ -68,3 +68,45 @@ dev에 들어가 있는데도 그렇다. #2772는 동일 head를 재실행하니
 
 6개 엣지 전부 부모가 자식의 조상이고, PR base ref도 같은 부모를 가리킨다.
 오염 커밋 0건, 변경 범위는 devlog/docs-site/gui/src/structure/tests뿐이다.
+
+## 추가로 드러난 두 건
+
+### 6. `test 1/4` — 미선언 관리 라우트 4개 (p6 소유)
+
+`tests/management-route-registry.test.ts`가 선언 레지스트리를 소스와 대조해
+이 단계가 서빙하면서 등록하지 않은 라우트 4개를 찾았다:
+`/api/keys/rotate`의 POST/POST commit/DELETE와 `POST /api/session/logout`.
+
+rotate 3개는 평범한 관리 뮤테이션이라 그대로 선언했다.
+`/api/session/logout`은 session-only 예외로 이유와 함께 등록했다 — 현재
+gui-session을 끝내며 그 세션 자신의 Origin과 CSRF를 요구하므로 CLI verb가
+작용할 대상이 없다. CLI는 admin 토큰을 들고 있고, 이 라우트는 바로 그
+admin 토큰을 거부한다. 자기가 만들지 않은 동의 세션을 끝내지 못하게 하려는
+설계다.
+
+### 7. dev의 websocket flake 근본 원인 — PR #3147로 분리
+
+`server-auth`의 websocket refresh 단언이 macOS와 Linux 양쪽에서 실패했고,
+dev HEAD도 같은 실패를 낸다. 원인을 찾았다.
+
+`updateAccountQuota`가 `updatedAt: Date.now()`를 찍는데, 시드가 시계 고정
+**전에** 실행된다. 그래서 그 타임스탬프만 실제 벽시계이고 이후 모든 것은
+고정된 2027 값을 읽는다. 격차가 약 136일인데 신선도 창은 6시간이다
+(`QUOTA_DISK_MAX_AGE_MS`, `src/codex/quota.ts:491`). 러너가 아무리 빨라도
+시드는 stale로 읽히고, 시작 시 pool-quota 프라임이 첫 턴 전에 자격증명을
+갱신해 `seenAuth[0]`이 이미 새 토큰이 된다. 실패 diff가 항상 첫 원소였던
+이유다.
+
+#3139는 `startServer` 앞에 시계와 fetch를 고정해 프라임 자신의 읽기 창을
+닫았다. 하지만 그 둘이 놓이기 **전에** 쓰인 타임스탬프의 창은 닫을 수 없다.
+시드를 고정 뒤로 옮기면 닫힌다.
+
+이건 dev 소유라 스택에 섞지 않고 **PR #3147**로 분리해 `dev`를 타깃하게 했다.
+로컬에서는 수정 전후 모두 재현되지 않으므로 증거는 red-to-green이 아니라
+메커니즘이다 — 6시간 창에 136일 격차는 경쟁이 아니라 산술이다.
+
+## 남은 것 — 사람이 해야 하는 항목
+
+`enforce-target`이 #2776/#2781/#2789에 대해 UI 스크린샷을 요구한다.
+세 PR 모두 실제 GUI 변경(각각 3/34/15 파일)을 담고 있으므로 요구가 정당하다.
+스크린샷은 사람이 캡처해 PR 설명에 붙여야 한다.
