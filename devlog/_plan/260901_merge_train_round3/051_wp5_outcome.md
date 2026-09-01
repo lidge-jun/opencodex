@@ -53,5 +53,11 @@ teaches the next reviewer to dismiss a red that might be real.
 
 `git merge-base --is-ancestor 33d32b6a3 <carry head>` returns true, and the assertion still
 fired on #3133's first run. #3128 pinned the account namespace in three lines; the race is
-the clock, at `tests/server-auth.test.ts:2247-2251` against `REFRESH_SKEW_MS`
-(`src/codex/account-store.ts:22,717`).
+elsewhere.
+
+**The explanation those comments carry is itself now superseded.** They describe a 60 s
+margin against `REFRESH_SKEW_MS`. wp7 later proved that wrong in both direction and
+quantity: the credential's margin is months, and what actually varies is the *quota cache
+age* the startup prime measures. See `060_wp7_websocket_refresh_flake.md`. The operational
+advice in those comments — rerun rather than read a single red as a regression — still holds,
+which is why they were not amended a second time.
