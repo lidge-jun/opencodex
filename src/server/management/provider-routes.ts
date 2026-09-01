@@ -299,6 +299,11 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "upstreamWebsocket")) {
+    if (typeof rawBody.upstreamWebsocket !== "boolean") return { error: "upstreamWebsocket must be a boolean" };
+    next.upstreamWebsocket = rawBody.upstreamWebsocket;
+    touched = true;
+  }
   // The Models page edits the catalog hints in place; keep them on the existing
   // provider mutation path so validation, cache invalidation, and convergence stay unified (#1073).
   if (Object.hasOwn(rawBody, "contextWindow")) {
@@ -555,6 +560,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
+      upstreamWebsocket: p.upstreamWebsocket === true,
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
@@ -658,6 +664,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const providerError = providerManagementConfigError(name, transportCandidate)
       ?? providerEmptyToolOutputConfigError(name, transportCandidate);
     if (providerError) return jsonResponse({ error: providerError }, 400);
+    const rawProvider = body.provider as Record<string, unknown>;
+    if (rawProvider.upstreamWebsocket !== undefined && typeof rawProvider.upstreamWebsocket !== "boolean") {
+      return jsonResponse({ error: "upstreamWebsocket must be a boolean" }, 400);
+    }
     const serviceTierError = providerServiceTierConfigError(name, transportCandidate);
     if (serviceTierError) return jsonResponse({ error: serviceTierError }, 400);
     const prov = stripCodexRuntimeProviderFields(transportCandidate as unknown as OcxProviderConfig);
@@ -701,6 +711,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const submittedModelAutoCompactTokenLimits = Object.hasOwn(prov, "modelAutoCompactTokenLimits");
     const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
+    const submittedUpstreamWebsocket = Object.hasOwn(prov, "upstreamWebsocket");
     // Same trap, one more field: DeepSeek carries a registry default of `true` for
     // annotateEmptyToolOutputs, so enrichment cannot distinguish "the client omitted it"
     // from "the registry supplied it" either. Without this sample, an unrelated edit that
@@ -740,6 +751,12 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // an explicit `false` must survive, and `false` is falsy.
     if (!submittedAnnotateEmptyToolOutputs && existing?.annotateEmptyToolOutputs !== undefined) {
       prov.annotateEmptyToolOutputs = existing.annotateEmptyToolOutputs;
+    }
+    // The provider add/edit form may omit this transport option. Preserve the stored value
+    // during a full overwrite; PATCH remains the explicit mutation path, and `!== undefined`
+    // keeps an operator's explicit false from being treated as absent.
+    if (!submittedUpstreamWebsocket && existing?.upstreamWebsocket !== undefined) {
+      prov.upstreamWebsocket = existing.upstreamWebsocket;
     }
     if (existing?.modelContextWindows) {
       // When the client did send a map, its keys win and the user's other keys survive. When

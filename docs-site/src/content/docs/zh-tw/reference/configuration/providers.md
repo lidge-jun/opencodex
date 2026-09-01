@@ -42,6 +42,7 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 | `baseUrl` | `string` | 上游 API base URL。多數內建固定端點忽略不符；碰撞安全的金鑰預設保留較舊的同名自訂目的地。 |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | 選用的用戶端出站請求啟動節流，與上游用量、計費及限流指標彼此獨立。供應商限制適用於所有模型，`models` 依上游模型精確 ID 比對且只能增加延遲。排隊等待不計入回應標頭逾時。涵蓋 HTTP、Responses WebSocket 及明確的適配器 `fetchResponse`/`runTurn` 呼叫。 |
 | `responsesPath?` | `string` | Key-auth `openai-responses` 請求的相對資源路徑。必須以 `/` 開頭且不含 scheme、query 或 fragment。 |
+| `upstreamWebsocket?` | `boolean` | 為 `openai-responses` 請求選用上游 Responses WebSocket 傳輸（預設 `false`）。當上游支援此協定時，串流 POST 請求會使用設定的 Responses 路徑（預設 `/v1/responses`），透過 HTTPS 基礎 URL 以 WSS 連線，再重新編碼為一般流程使用的 SSE。forward 供應商使用 `{baseUrl}/responses`；key-auth 供應商使用 `responsesPath`，未設定時回退到傳統的 `/v1/responses`。一般 HTTP 仍使用 SSE；非 Responses 路徑與 `openai-chat` 請求仍使用 HTTP。 |
 | `disabled?` | `boolean` | 將供應商保留在磁碟上但排除於路由與模型／目錄清單。 |
 | `apiKey?` | `string` | API 金鑰，或在請求時解析的 `${ENV_VAR}` / `$ENV_VAR` 參考。 |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic 金鑰標頭風格。預設為原生 `x-api-key`；僅對 key-auth `anthropic` 供應商有效。 |

@@ -544,6 +544,10 @@ const providerConfigSchema = z.object({
   upstreamHttpVersion: z.enum(UPSTREAM_HTTP_VERSION_VALUES)
     .nullish()
     .transform(value => value ?? undefined),
+  // Opt-in upstream Responses WebSocket for OpenAI-compatible providers (e.g.
+  // aggregators whose WebSocket ingress is measurably faster than SSE). The
+  // canonical ChatGPT backend WS selection is independent of this flag.
+  upstreamWebsocket: z.boolean().optional(),
   directGeminiWireRenames: z.boolean().optional(),
   noStructuredOutputModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)

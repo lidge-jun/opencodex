@@ -58,6 +58,7 @@ selector，而不是分配一个新名称。
 | `baseUrl` | `string` | 上游 API 基础 URL。大多数内置固定端点会忽略不匹配的值；具备冲突安全键的预设会保留一个更早、同名的自定义目标。 |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | 可选的客户端出站请求启动节流，与上游用量、计费和限流指标相互独立。提供商限制适用于所有模型，`models` 按上游模型精确 ID 匹配且只能增加延迟。排队等待不计入响应头超时。覆盖 HTTP、Responses WebSocket 以及显式适配器 `fetchResponse`/`runTurn` 调用。 |
 | `responsesPath?` | `string` | 用于 key-auth `openai-responses` 请求的相对资源路径。必须以 `/` 开头，且不能包含 scheme、query 或 fragment。 |
+| `upstreamWebsocket?` | `boolean` | 为 `openai-responses` 请求选择性启用上游 Responses WebSocket 传输（默认 `false`）。当上游支持该协议时，流式 POST 请求会使用配置的 Responses 路径（默认 `/v1/responses`），通过 HTTPS 基础 URL 以 WSS 连接，并重新编码为常规流程使用的 SSE。forward 提供者使用 `{baseUrl}/responses`；key-auth 提供者使用 `responsesPath`，未设置时回退到传统的 `/v1/responses`。普通 HTTP 仍使用 SSE；非 Responses 路径和 `openai-chat` 请求仍使用 HTTP。 |
 | `supportsServiceTier?` | `boolean` | `service_tier` 能力的三态。`true`：fast 模式可以注入，调用方提供的值也会被保留。`false`：剥离该字段且绝不注入（已明确不支持的上游不会收到它）。未设置：未分类——调用方提供的值原样保留，fast 模式绝不注入。注册表已对官方 OpenAI（`true`）、DeepSeek 和 Volcengine Ark（`false`）分类；仅对真正支持分层的自定义网关显式设置。 |
 | `preserveResponsesReasoningContent?` | `boolean` | 在重放的 Responses reasoning 项中保留明文 reasoning 内容，而不是清空（清空是 ChatGPT 后端的规则）。对接受 reasoning 重放的上游（如 DeepSeek）启用。代理生成的 `ocxr1` 信封始终会被剥离。 |
 | `disabled?` | `boolean` | 将提供者保留在磁盘上，但从路由和模型/目录列表中排除。 |

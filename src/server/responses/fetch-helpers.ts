@@ -76,7 +76,8 @@ export function providerFetch(
   // transport (measured ~3s faster TTFT than the SSE POST queue); everything
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
   const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-    if (typeof input === "string" && init && shouldUseCodexWsUpstream(input, init, runtime)) {
+    const upstreamWebsocket = provider.upstreamWebsocket === true;
+    if (typeof input === "string" && init && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
       // The fallback has to be the same HTTP fetch the non-WS branch would have
       // used, protocol pin included: a WS turn that falls back is serving the
       // request over HTTP, and dropping the provider's `upstreamHttpVersion`
