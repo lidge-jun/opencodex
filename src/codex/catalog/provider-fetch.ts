@@ -2117,9 +2117,10 @@ async function gatherRoutedModelsUncached(
       ...(base.codexToolMode === undefined && replaced.codexToolMode !== undefined ? { codexToolMode: replaced.codexToolMode } : {}),
       ...(base.capabilities === undefined && replaced.capabilities !== undefined ? { capabilities: replaced.capabilities } : {}),
     } : base;
-    // Vision-sidecar coverage ONLY: if the custom model is in the enriched provider's
-    // noVisionModels, advertise image input so the Codex app lets images reach the sidecar
-    // (#349/#344). Deliberately NOT the full applyProviderConfigHints pass — custom rows are a
+    // Vision-sidecar coverage only: when the enriched provider's shared predicate matches
+    // noVisionModels or text-without-image modelInputModalities, advertise image input so the
+    // Codex app lets images reach the sidecar (#349/#344). Deliberately NOT the full
+    // applyProviderConfigHints pass — custom rows are a
     // user override, so their explicit contextWindow / inputModalities / reasoning fields must be
     // preserved verbatim (the hint pass would cap context and overwrite modalities from registry).
     const mergedContext = typeof merged.contextWindow === "number" && merged.contextWindow > 0

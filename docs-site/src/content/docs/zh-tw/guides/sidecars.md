@@ -70,7 +70,7 @@ OAuth 帳號時使用 `anthropic`，否則使用 `openai`。明確選擇 `anthro
 只有當每個 combo 成員都能原生或透過 sidecar 接受圖像，且 combo 的 `imageInput` 設定未停用時，combo 才會宣告圖像輸入；
 如此 Codex 應用程式等用戶端會允許附件，而不會在 sidecar 執行前阻擋它們。Dashboard 和管理 API 目前顯示的預設值是
 `gpt-5.6-luna`，啟動時也會把明確儲存的舊 `gpt-5.4-mini` 值遷移到 Luna。只有在
-`visionSidecar.model` 欄位完全不存在時，vision 執行路徑才會使用程式碼中的 `gpt-5.4-mini` 回退值。
+`visionSidecar.model` 欄位不存在或為空字串時，vision 執行路徑才會使用程式碼中的 `gpt-5.4-mini` 回退值。
 
 - 圖像可以來自 user、developer 和 tool-result message，也包括 Codex 的 `view_image` 結果。
 - 每張圖像會以 `reasoning.effort: "low"` 傳送給設定的原生 vision 模型，描述結果會就地替換
