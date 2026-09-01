@@ -45,6 +45,16 @@ describe("logs model filter", () => {
     expect(logMatchesModelQuery(failedOver, "GROK-4.6")).toBe(true);
   });
 
+  test("ignores malformed attempt containers and entries", () => {
+    expect(logMatchesModelQuery({
+      model: "primary",
+      attempts: "not-an-array" as unknown as Array<{ provider?: string; model?: string }>,
+    }, "xai")).toBe(false);
+    expect(logMatchesModelQuery({
+      attempts: [null as unknown as { provider?: string; model?: string }, { provider: "xai" }],
+    }, "xai")).toBe(true);
+  });
+
   test("matches the provider", () => {
     expect(logMatchesModelQuery({ provider: "xai", model: "grok-4.6" }, "xai")).toBe(true);
     expect(logMatchesModelQuery({ provider: "xai", model: "grok-4.6" }, "anthropic")).toBe(false);

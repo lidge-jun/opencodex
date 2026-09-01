@@ -34,7 +34,11 @@ export interface LogModelFields {
 export function logMatchesModelQuery(log: LogModelFields, query: string): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
-  const attemptTargets = log.attempts?.flatMap(attempt => [attempt.provider, attempt.model]) ?? [];
+  const attemptTargets = Array.isArray(log.attempts)
+    ? log.attempts.flatMap(attempt => (
+      attempt && typeof attempt === "object" ? [attempt.provider, attempt.model] : []
+    ))
+    : [];
   return [log.model, log.resolvedModel, log.provider, ...attemptTargets].some(
     value => typeof value === "string" && value.toLowerCase().includes(needle),
   );
