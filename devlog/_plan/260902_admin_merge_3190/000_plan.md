@@ -74,10 +74,12 @@ Stack decision (`DEV-STACK-01`): do **not** stack wp1 under #3190. wp1 is a one-
 
 ## Verifier commands that actually exist
 
-- `bun run privacy:scan` -> `scripts/privacy-scan.ts` (reads the git index).
-- `gh pr view <n> --json number,headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup`
-- `gh pr checks <n>`
-- `git fetch origin && git merge-base --is-ancestor <sha> origin/dev`
+- `bun run privacy:scan` -> `scripts/privacy-scan.ts` (reads `git ls-files`, including 091). Live run on HEAD `befefeb20` **exit 1**. Hits 091 line 13, two remote macOS homes. This is the wp1 red proof. After wp1 the same command must be exit 0 and name no 091 line.
+- `gh pr view 3190 --json number,headRefOid,mergeable` live at freeze: `{"head":"5f8cd24ddf01082f35079c695a810324c33f4b3e","mergeable":"MERGEABLE","n":3190,"state":"OPEN"}` exit 0. Reads GitHub PR 3190, not the local 091 file.
+- `gh pr checks 3190` live: `gates` fail (Privacy scan, job 99959406196, run 33538646261). Reads the exact-head check rollup for `5f8cd24dd`.
+- `git merge-base --is-ancestor e40245e4c origin/codex/adaptive-reasoning-effort-2731` is true (merge-base of 3190). After merge, the command becomes `git fetch origin && git merge-base --is-ancestor <merge> origin/dev` and must exit 0.
+
+Deferred non-draft freeze (same `gh pr list --state open` pass): #3142 CONFLICTING+CHANGES_REQUESTED, #3061 MERGEABLE+CHANGES_REQUESTED with macos/ci red, #2986 carry of #2083 CHANGES_REQUESTED, #2877 CHANGES_REQUESTED, #2805/#2783/#2527 CONFLICTING, #2366 CHANGES_REQUESTED, #2083 APPROVED original of the carry, #2734 draft CONFLICTING.
 
 No `bun run test`. Focused tests only if wp2's rebase conflict touches `src/` or `tests/` unexpectedly.
 
