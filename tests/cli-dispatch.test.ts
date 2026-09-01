@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { CLI_COMMANDS } from "../src/cli/registry";
-import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCommand } from "../src/cli/dispatch";
+import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCommand, decideStartWithLiveOwner } from "../src/cli/dispatch";
 import type { CliDispatchDeps } from "../src/cli/dispatch";
 import { runGuiCommand } from "../src/cli/gui";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -220,15 +220,36 @@ describe("start probes the configured port before shadowing it (source-level)", 
    * `--port` that differs from the live proxy's port. That is not the shadow the guard
    * targets (a bare `start` landing on an ephemeral port); it broke starting a second
    * instance on another port, and every spawned-launcher test on a machine running a
-   * real proxy timed out its startup wait. Source-level for the same reason as above.
+   * real proxy timed out its startup wait. The decision is a pure function so the whole
+   * matrix runs at runtime here; the source oracle below only pins that handleStart
+   * actually routes through it.
    */
-  test("an explicit different --port takes the sibling path instead of the refusal", () => {
-    expect(cliSource).toContain("requestedPort !== owner.live.port");
-    // The service wrapper always passes the configured port and must keep its exact
-    // stay-out-of-the-way semantics, so the sibling path is gated off for it.
-    const sibling = cliSource.slice(cliSource.indexOf("const explicitSiblingPort"));
-    expect(sibling.slice(0, 400)).toContain('process.env.OCX_SERVICE !== "1"');
-    expect(sibling.slice(0, 400)).toContain("requestedPort !== undefined");
+  test("the live-owner decision matrix", () => {
+    // Bare start: the #3106 shadow — still refused.
+    expect(decideStartWithLiveOwner({ livePort: 10100, requestedPort: undefined, ocxService: undefined }))
+      .toBe("refuse");
+    // Explicit port equal to the live proxy's: same conflict — still refused.
+    expect(decideStartWithLiveOwner({ livePort: 10100, requestedPort: 10100, ocxService: undefined }))
+      .toBe("refuse");
+    // Explicit DIFFERENT port, interactive: the sibling request this fix restores.
+    expect(decideStartWithLiveOwner({ livePort: 10100, requestedPort: 65301, ocxService: undefined }))
+      .toBe("sibling");
+    // Service wrapper keeps its exact stay-out semantics on both port shapes.
+    expect(decideStartWithLiveOwner({ livePort: 10100, requestedPort: 10100, ocxService: "1" }))
+      .toBe("service-stay-out");
+    expect(decideStartWithLiveOwner({ livePort: 10100, requestedPort: 8080, ocxService: "1" }))
+      .toBe("service-stay-out");
+    // Only the exact "1" sentinel is service context — "0"/"false" cannot reach stay-out.
+    expect(decideStartWithLiveOwner({ livePort: 10100, requestedPort: 8080, ocxService: "0" }))
+      .toBe("sibling");
+    expect(decideStartWithLiveOwner({ livePort: 10100, requestedPort: undefined, ocxService: "false" }))
+      .toBe("refuse");
+  });
+
+  test("handleStart routes its live-owner branch through the shared decision", () => {
+    expect(cliSource).toContain("decideStartWithLiveOwner({");
+    // No leftover inline refusal that could bypass the tested decision.
+    expect(cliSource).not.toContain("explicitSiblingPort");
   });
 
   test("the probe option still gates on an explicit true", () => {

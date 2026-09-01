@@ -836,6 +836,34 @@ export const DISPATCH_ALIASES: ReadonlyMap<string, string> = aliasTargets;
 
 /** Resolve the runner key for a command, following registry aliases to the
  * canonical runner. Returns undefined when the command is unknown. */
+/** What `handleStart` does about a live proxy it found before binding. */
+export type StartOwnerDecision = "refuse" | "service-stay-out" | "sibling";
+
+/**
+ * Pure decision for `handleStart` when the pre-bind probe found a live proxy.
+ *
+ * The #3106 guard exists so a bare `start` cannot shadow a healthy configured-port
+ * proxy with an ephemeral-port copy. An interactive `--port X` naming a DIFFERENT
+ * port than the live proxy's is an explicit sibling request, not that shadow — and
+ * refusing it also broke every spawned-launcher test on a machine running a real
+ * proxy, because the probe reaches the machine-global port across sandbox homes.
+ * The service wrapper always passes the configured port and keeps its exact
+ * stay-out-of-the-way semantics: it never takes the sibling path.
+ */
+export function decideStartWithLiveOwner(input: {
+  livePort: number;
+  requestedPort: number | undefined;
+  ocxService: string | undefined;
+}): StartOwnerDecision {
+  const sibling = input.requestedPort !== undefined
+    && input.requestedPort !== input.livePort
+    // Only the exact "1" sentinel is service context — the same check syncCleanup
+    // uses — so an env value like "0" or "false" cannot reach the stay-out path.
+    && input.ocxService !== "1";
+  if (sibling) return "sibling";
+  return input.ocxService === "1" ? "service-stay-out" : "refuse";
+}
+
 export function resolveDispatchCommand(command: string | undefined): string | undefined {
   if (command === undefined) return undefined;
   if (Object.prototype.hasOwnProperty.call(commandRunners, command)) return command;

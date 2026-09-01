@@ -49,7 +49,7 @@ import {
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
-import { dispatchCommand } from "./dispatch";
+import { dispatchCommand , decideStartWithLiveOwner } from "./dispatch";
 import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
@@ -253,36 +253,33 @@ async function handleStart(options: { block?: boolean } = {}) {
   // shutdown then left no runtime record for discovery at all. `handleEnsure`
   // already passes this; `handleStart` is the path that did not.
   const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
-  // An interactive `ocx start --port X` where X is NOT the live proxy's port is an explicit
-  // sibling request, not the #3106 shadow: that fix targets a bare `start` (or the service
-  // wrapper, which always passes the configured port) silently landing on an ephemeral port.
-  // The blanket refusal here also broke real workflows — with any proxy on the configured
-  // port, no second instance could be started on a different port, and every spawned-launcher
-  // test on a machine running a real proxy failed its startup wait. The service branch keeps
-  // its exact semantics: OCX_SERVICE requests never take the sibling path.
-  const explicitSiblingPort = owner.live !== null
-    && requestedPort !== undefined
-    && requestedPort !== owner.live.port
-    && process.env.OCX_SERVICE !== "1";
-  if (owner.live && !explicitSiblingPort) {
-    // Service-wrapper context (opencodex-service.cmd `:loop`): a healthy proxy from
-    // ANY source means the requested port is already served. Exit 0 so the wrapper's
-    // `if %ERRORLEVEL% NEQ 0` retry loop terminates instead of respawning every 5s
-    // against a listener it can never claim (observed as an endless
-    // "Proxy already running" service.log loop).
-    // Only the exact "1" sentinel takes this path — the same check syncCleanup
-    // uses — so an env value like "0" or "false" cannot bypass the conflict error.
-    if (process.env.OCX_SERVICE === "1") {
+  if (owner.live) {
+    // Rationale and the full decision table live on `decideStartWithLiveOwner`.
+    const decision = decideStartWithLiveOwner({
+      livePort: owner.live.port,
+      requestedPort,
+      ocxService: process.env.OCX_SERVICE,
+    });
+    if (decision === "service-stay-out") {
+      // Service-wrapper context (opencodex-service.cmd `:loop`): a healthy proxy from
+      // ANY source means the requested port is already served. Exit 0 so the wrapper's
+      // `if %ERRORLEVEL% NEQ 0` retry loop terminates instead of respawning every 5s
+      // against a listener it can never claim (observed as an endless
+      // "Proxy already running" service.log loop).
       console.log(`Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}); service wrapper staying out of the way.`);
       process.exit(0);
     }
-    console.error(`⚠️  Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}). Use 'ocx stop' first.`);
-    process.exit(1);
-  }
-  if (owner.live && explicitSiblingPort) {
-    // Honest about the one side effect the sibling shares with any start: this home's Codex
-    // config is re-pointed at the new port when injection applies.
-    console.warn(`Proxy already running on port ${owner.live.port}; starting a second instance on requested port ${requestedPort}.`);
+    if (decision === "refuse") {
+      console.error(`⚠️  Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}). Use 'ocx stop' first.`);
+      process.exit(1);
+    }
+    // Sibling path. Honest about the side effects it shares with any start in this home:
+    // the new instance takes over this home's ocx.pid / runtime-port.json while it runs,
+    // and re-points this home's Codex config at the new port when injection applies.
+    console.warn(
+      `Proxy already running on port ${owner.live.port}; starting a second instance on requested port ${requestedPort}. `
+      + `The new instance takes over this home's pid/runtime records and Codex config while it runs.`,
+    );
   }
 
   const clientState = readClientConnectionState();
