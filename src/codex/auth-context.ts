@@ -566,7 +566,11 @@ export async function resolveCodexAuthContext(
         throw new CodexMainProfileDrainingError();
       }
       throw new CodexPoolAuthenticationError(
-        modelEligibleAccountIds ? "No eligible Codex account supports this model" : undefined,
+        modelEligibleAccountIds?.size === 0
+          ? "No eligible Codex account supports this model"
+          : modelEligibleAccountIds
+            ? "Codex accounts that support this model are currently unavailable"
+            : undefined,
       );
     }
     accountId = selected;
