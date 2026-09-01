@@ -77,16 +77,62 @@ clock depends on module-cache warmth and machine load — which is exactly the s
 failure that is rare locally, common on a loaded CI runner, and indifferent to which account
 the turn names.
 
-## What has been established, and what has not
+## The mechanism, now with firing evidence
 
-**Established:** #3128 is not the fix; the account pin is orthogonal. The fixture's clock is
-in the future, not near a boundary. A real async window exists after `startServer` returns,
-it is armed by this fixture's own config, and it touches pool credentials.
+`LOOP-MECHANISM-PROOF-01` says a plausible chain is not activation proof. So here is the
+chain firing, from the runtime's own counter:
 
-**Not established:** that `primeCodexPoolQuotas` is the specific caller that rotates the
-token. That needs the firing evidence, not a plausible chain —
-`LOOP-MECHANISM-PROOF-01` applies, and the honest label until then is that the mechanism is
-identified but unproven.
+```
+$ OPENCODEX_DEBUG_QUOTA=1 bun test tests/server-auth.test.ts -t "websocket passthrough refreshes pool auth"
+[codex-quota] prime done (reason=startup, pool=1, refreshed=1)
+(pass) ... [1325.02ms]
+```
+
+`pool=1, refreshed=1`: the startup prime runs during this test and treats `pool-a` as
+**stale**, so it calls `fetchPoolAccountQuota("pool-a", ...)` — which reaches the credential.
+
+Why it is judged stale is the whole race, and it runs **opposite** to the direction the
+earlier diagnosis assumed:
+
+```
+src/codex/auth-api.ts:1334-1337
+  const stale = pool.filter(a => {
+    const q = getAccountQuota(a.id);
+    return !q || Date.now() - q.updatedAt >= POOL_CACHE_TTL;   // 5 * 60_000
+  });
+
+src/codex/quota.ts:457
+  updatedAt: Date.now(),
+```
+
+The fixture calls `updateAccountQuota("pool-a", 10, 5)` at `:2242`, **before**
+`Date.now` is faked — so `updatedAt` is stamped with the **real** clock, 2026-09-01.
+
+Now the two orderings diverge:
+
+| when the prime's `Date.now()` runs | value | `Date.now() - updatedAt` | verdict |
+| --- | --- | --- | --- |
+| before `:2251` installs the fake clock | real, 2026-09-01 | ~0 ms | fresh — no fetch |
+| after `:2251` | fake, 2027-01-15 | ~136 days | **stale — fetch fires** |
+
+So the failure needs the prime to land on the **late** side, not the early one. The stored
+credential is not near expiry under either clock; what varies is whether a quota fetch is
+triggered at all, and that fetch is what rotates the token before the first turn is served.
+
+The earlier reading — "60 s of margin against `REFRESH_SKEW_MS`, the read lands on the
+wrong side of the boundary" — was wrong in both quantity and direction. The margin is months,
+and the fake clock does not shorten it; it inflates a *cache age* past a five-minute TTL.
+Recording that here because the wrong version is already quoted in comments on #3109 and
+#3112, and in `260901_release_train_2390/070_outcome.md`.
+
+## Why it will not reproduce locally
+
+Six consecutive single-test runs pass. Six more under deliberate load (six concurrent
+suites) pass, at 1320 ms instead of 330 ms. The window is two dynamic `import()`
+resolutions wide, and on a warm module cache those microtasks land before `:2251`. A cold
+CI runner resolving them from disk under four parallel Bun pools is the environment where
+they land after — which is why this is a CI-only failure that no amount of local rerunning
+will surface.
 
 ## Why this is not fixed in this train
 
