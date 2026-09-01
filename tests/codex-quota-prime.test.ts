@@ -522,6 +522,52 @@ describe("primeCodexPoolQuotas", () => {
     }
   });
 
+  test("removal purges the backoff even while the provider is disabled", async () => {
+    // The prune used to sit AFTER the provider-eligibility early return, so a removal
+    // that happened while the provider was disabled (or out of pool mode) left the
+    // stale failure marker in place. Restoring the same account id within
+    // POOL_CACHE_TTL then read that old failure as current and skipped the retry the
+    // restored credential is entitled to.
+    const config = makeConfig();
+    seedPoolAccount(config, "p1");
+    const originalPool = [...(config.codexAccounts ?? [])];
+    const originalFetch = globalThis.fetch;
+    let calls = 0;
+    let upstreamHealthy = false;
+    try {
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        if (String(input).includes("/backend-api/wham/usage")) {
+          calls += 1;
+          return upstreamHealthy ? whamResponse(20) : new Response("upstream unavailable", { status: 503 });
+        }
+        return originalFetch(input);
+      };
+
+      // One failed prime records the backoff marker.
+      await primeCodexPoolQuotas(config, "test");
+      expect(calls).toBe(1);
+
+      // The account is removed while the provider is disabled: the prime returns early,
+      // but the marker must still be pruned.
+      config.codexAccounts = [];
+      config.providers.openai!.disabled = true;
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "removed-while-disabled");
+      expect(calls).toBe(1);
+
+      // Restored and re-enabled inside the TTL window: the prime must dispatch now.
+      config.codexAccounts = originalPool;
+      config.providers.openai!.disabled = false;
+      upstreamHealthy = true;
+      clearCodexQuotaPrimeSingleFlightForTests();
+      await primeCodexPoolQuotas(config, "restored");
+      expect(calls).toBe(2);
+      expect(getAccountQuota("p1")).toMatchObject({ weeklyPercent: 20 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("a late failed probe cannot restore backoff for an account removed in flight", async () => {
     const config = makeConfig();
     seedPoolAccount(config, "p1");

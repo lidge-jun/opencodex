@@ -1380,17 +1380,22 @@ export async function primeCodexPoolQuotas(
   options: PrimeCodexPoolQuotasOptions = {},
 ): Promise<void> {
   const openai = config.providers[OPENAI_CODEX_PROVIDER_ID];
+  // Prune attempt markers for accounts that no longer exist BEFORE the eligibility
+  // return. A removal that happens while the provider is disabled or out of pool mode
+  // would otherwise leave a stale failure marker behind; restoring the same account id
+  // within POOL_CACHE_TTL would then read that old failure as current and skip the
+  // retry the restored credential is entitled to.
+  const runtimeConfig = getRuntimeConfig(config);
+  const configuredPoolIds = new Set((runtimeConfig.codexAccounts ?? []).map(account => account.id));
+  for (const accountId of poolQuotaPrimeAttemptedAt.keys()) {
+    if (!configuredPoolIds.has(accountId)) poolQuotaPrimeAttemptedAt.delete(accountId);
+  }
   if (
     !openai
     || openai.disabled === true
     || !isCanonicalOpenAiForwardProvider(openai)
     || providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
   ) return;
-  const runtimeConfig = getRuntimeConfig(config);
-  const configuredPoolIds = new Set((runtimeConfig.codexAccounts ?? []).map(account => account.id));
-  for (const accountId of poolQuotaPrimeAttemptedAt.keys()) {
-    if (!configuredPoolIds.has(accountId)) poolQuotaPrimeAttemptedAt.delete(accountId);
-  }
   if (primeInFlight) return primeInFlight;
   primeInFlight = (async () => {
     const pool = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
