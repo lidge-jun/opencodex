@@ -1,10 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearAccountNeedsReauth } from "../src/codex/auth-api";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
-import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import { isAccountNeedsReauth } from "../src/codex/account-runtime-state";
+import { getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import { withNativeMainSharedClaim } from "../src/codex/native-main-claim";
+import type { NativeProfileContext } from "../src/codex/native-profile-store";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/routing";
 import { handleResponses, handleResponsesCompact } from "../src/server/responses";
 import type { RequestLogContext } from "../src/server/request-log";
@@ -34,13 +37,14 @@ function config(options: { secondAccount?: boolean } = {}): OcxConfig {
   } as OcxConfig;
 }
 
-function request(path: "/v1/responses" | "/v1/responses/compact"): Request {
+function request(path: "/v1/responses" | "/v1/responses/compact", signal?: AbortSignal): Request {
   return new Request(`http://localhost${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(path.endsWith("compact")
       ? { model: "gpt-5.5", input: [] }
       : { model: "gpt-5.5", input: "hello", stream: false }),
+    signal,
   });
 }
 
@@ -137,6 +141,42 @@ describe("native main 401 refresh and replay", () => {
     expect(sends).toEqual(["Bearer refreshed-access"]);
   });
 
+  test("converts an outer native-main claim timeout into a transient refresh failure", async () => {
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      tokens: { refresh_token: "refresh-grant", account_id: "account-main" },
+    }));
+    let releaseHolder!: () => void;
+    const holderRelease = new Promise<void>(resolve => { releaseHolder = resolve; });
+    let holderEntered!: () => void;
+    const holderReady = new Promise<void>(resolve => { holderEntered = resolve; });
+    const holder = withNativeMainSharedClaim(
+      { codexHome: home } as NativeProfileContext,
+      async () => {
+        holderEntered();
+        await holderRelease;
+      },
+      { hardenPath: async () => {} },
+    );
+    await holderReady;
+
+    const timeout = new AbortController();
+    const addListener = spyOn(timeout.signal, "addEventListener");
+    const timeoutSpy = spyOn(AbortSignal, "timeout").mockReturnValue(timeout.signal);
+    try {
+      const pending = getValidMainAccountToken();
+      while (!addListener.mock.calls.some(([type]) => type === "abort")) await Promise.resolve();
+      timeout.abort(new DOMException("claim timed out", "TimeoutError"));
+      await expect(pending).rejects.toMatchObject({
+        name: "MainAccountTokenRefreshError",
+        reason: "transient",
+      });
+    } finally {
+      timeoutSpy.mockRestore();
+      releaseHolder();
+      await holder;
+    }
+  });
+
   test("Responses refreshes and performs exactly one physical replay", async () => {
     const harness = install401ThenRefreshHarness();
     const response = await handleResponses(
@@ -212,4 +252,59 @@ describe("native main 401 refresh and replay", () => {
       expect(refreshes).toEqual(["refresh-grant"]);
     });
   }
+
+  test.each(["/v1/responses", "/v1/responses/compact"] as const)(
+    "%s keeps an outer native-main claim cancellation as 499 without quarantining main",
+    async path => {
+      writeFileSync(join(home, "auth.json"), JSON.stringify({
+        tokens: { refresh_token: "refresh-grant", account_id: "account-main" },
+      }));
+      let releaseHolder!: () => void;
+      const holderRelease = new Promise<void>(resolve => { releaseHolder = resolve; });
+      let holderEntered!: () => void;
+      const holderReady = new Promise<void>(resolve => { holderEntered = resolve; });
+      const holder = withNativeMainSharedClaim(
+        { codexHome: home } as NativeProfileContext,
+        async () => {
+          holderEntered();
+          await holderRelease;
+        },
+        { hardenPath: async () => {} },
+      );
+      await holderReady;
+
+      const controller = new AbortController();
+      const originalAny = AbortSignal.any;
+      let claimWaitListener: ReturnType<typeof spyOn> | undefined;
+      const anySpy = spyOn(AbortSignal, "any").mockImplementation(signals => {
+        const combined = originalAny.call(AbortSignal, signals);
+        claimWaitListener = spyOn(combined, "addEventListener");
+        return combined;
+      });
+      try {
+        const pending = path === "/v1/responses"
+          ? handleResponses(
+            request(path, controller.signal),
+            config(),
+            { model: "", provider: "" } as RequestLogContext,
+            { abortSignal: controller.signal },
+          )
+          : handleResponsesCompact(
+            request(path, controller.signal),
+            config(),
+            { model: "", provider: "" } as RequestLogContext,
+          );
+        while (!claimWaitListener?.mock.calls.some(([type]) => type === "abort")) await Promise.resolve();
+        controller.abort();
+
+        const response = await pending;
+        expect(response.status).toBe(499);
+        expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
+      } finally {
+        anySpy.mockRestore();
+        releaseHolder();
+        await holder;
+      }
+    },
+  );
 });

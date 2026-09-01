@@ -15,6 +15,7 @@ import {
   MainAccountTokenRefreshError,
   MainAuthJsonChangedDuringRefreshError,
 } from "../../codex/main-account";
+import { NativeProfileError } from "../../codex/native-profile-types";
 
 export interface CodexAuthContextErrorResponseOptions {
   accountSelector?: string;
@@ -26,7 +27,8 @@ export function nativeMainRefreshFailureResponse(error: unknown): Response {
     return formatErrorResponse(401, "authentication_error", "Codex main account needs reauthentication");
   }
   if (error instanceof MainAccountTokenRefreshError
-    || error instanceof MainAuthJsonChangedDuringRefreshError) {
+    || error instanceof MainAuthJsonChangedDuringRefreshError
+    || (error instanceof NativeProfileError && error.retryable)) {
     const response = formatErrorResponse(
       503,
       "server_busy",

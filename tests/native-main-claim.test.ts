@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,11 +35,12 @@ describe("native-main shared and exclusive claims", () => {
     const context = fixture();
     const entered = deferred();
     const release = deferred();
+    let firstSettled = false;
     const first = withNativeMainSharedClaim(context, async () => {
       entered.resolve();
       await release.promise;
       return "first";
-    }, { hardenPath: noHardening });
+    }, { hardenPath: noHardening }).finally(() => { firstSettled = true; });
     await entered.promise;
 
     await expect(withNativeMainSharedClaim(
@@ -47,14 +48,60 @@ describe("native-main shared and exclusive claims", () => {
       async () => "second",
       { hardenPath: noHardening },
     )).resolves.toBe("second");
+    let contenderRuns = 0;
     await expect(withNativeMainExclusiveClaim(
       context,
-      async () => "must-not-run",
+      async () => {
+        contenderRuns += 1;
+        return "must-not-run";
+      },
       { waitMs: 0, hardenPath: noHardening },
     )).rejects.toMatchObject({ code: "NATIVE_MAIN_CLAIM_BUSY", retryable: true });
+    expect(contenderRuns).toBe(0);
+    expect(firstSettled).toBe(false);
 
     release.resolve();
     await expect(first).resolves.toBe("first");
+    await expect(withNativeMainExclusiveClaim(
+      context,
+      async () => "exclusive-after-release",
+      { waitMs: 0, hardenPath: noHardening },
+    )).resolves.toBe("exclusive-after-release");
+  });
+
+  test("a cancelled exclusive claimant removes its retry listener without releasing the holder", async () => {
+    const context = fixture();
+    const entered = deferred();
+    const release = deferred();
+    const holder = withNativeMainSharedClaim(context, async () => {
+      entered.resolve();
+      await release.promise;
+    }, { hardenPath: noHardening });
+    await entered.promise;
+
+    const controller = new AbortController();
+    const addListener = spyOn(controller.signal, "addEventListener");
+    const removeListener = spyOn(controller.signal, "removeEventListener");
+    const cancellation = new Error("client cancelled claim wait");
+    const contender = withNativeMainExclusiveClaim(
+      context,
+      async () => "must-not-run",
+      { waitMs: 2_000, pollMs: 10, signal: controller.signal, hardenPath: noHardening },
+    );
+    while (!addListener.mock.calls.some(([type]) => type === "abort")) await Promise.resolve();
+    expect(addListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+
+    controller.abort(cancellation);
+    await expect(contender).rejects.toBe(cancellation);
+    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
+
+    await expect(withNativeMainExclusiveClaim(
+      context,
+      async () => "still-locked",
+      { waitMs: 0, hardenPath: noHardening },
+    )).rejects.toMatchObject({ code: "NATIVE_MAIN_CLAIM_BUSY" });
+    release.resolve();
+    await holder;
   });
 
   test("closing a sibling reader cannot let another process bypass a retained shared claim", async () => {

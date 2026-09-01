@@ -1817,6 +1817,9 @@ async function resolveResponsesCodexAuth(
       substituteMainCredential,
     };
   } catch (err) {
+    if (options.abortSignal?.aborted || req.signal.aborted) {
+      return { ok: false, response: clientCancelledResponse() };
+    }
     if (err instanceof CodexAuthContextError) {
       const safeAccountLabel = route.codexAccountNamespace
         ? `${route.providerName}-${route.codexAccountNamespace}`
@@ -1962,6 +1965,9 @@ async function refreshNativeMainForwardAuth(args: {
     });
     return { ok: true, authCtx: refreshedAuthCtx, provider, headers };
   } catch (error) {
+    if (options.abortSignal?.aborted || req.signal.aborted) {
+      return { ok: false, response: clientCancelledResponse() };
+    }
     return { ok: false, response: nativeMainRefreshFailureResponse(error) };
   }
 }

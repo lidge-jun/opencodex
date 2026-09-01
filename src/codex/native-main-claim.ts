@@ -132,6 +132,7 @@ function waitForClaimRetry(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
       reject(signal.reason);
     };
     signal.addEventListener("abort", onAbort, { once: true });

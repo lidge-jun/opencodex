@@ -19,7 +19,8 @@ import {
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
 import { clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
-import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import { MAIN_CODEX_ACCOUNT_ID, MainAccountTokenRefreshError } from "../src/codex/main-account";
+import { NativeProfileError } from "../src/codex/native-profile-types";
 import { fallbackCodexAccountLogLabel } from "../src/codex/account-label";
 import * as authContextModule from "../src/codex/auth-context";
 import {
@@ -209,6 +210,31 @@ describe("Codex auth-context error parity (#2392)", () => {
         new Error("private refresh detail"),
       ),
       status: 401,
+      regularLog: true,
+    },
+    {
+      label: "native-main claim contention",
+      createError: () => new authContextModule.CodexAuthContextError(
+        MAIN_CODEX_ACCOUNT_ID,
+        new NativeProfileError(
+          "NATIVE_MAIN_CLAIM_BUSY",
+          "Native-main credentials are in use.",
+          503,
+          true,
+        ),
+      ),
+      status: 503,
+      retryAfter: "1",
+      regularLog: true,
+    },
+    {
+      label: "native-main claim timeout",
+      createError: () => new authContextModule.CodexAuthContextError(
+        MAIN_CODEX_ACCOUNT_ID,
+        new MainAccountTokenRefreshError("transient"),
+      ),
+      status: 503,
+      retryAfter: "1",
       regularLog: true,
     },
     {
