@@ -536,6 +536,7 @@ const providerConfigSchema = z.object({
   // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be
   // accepted, persisted, and then silently resolved to the `code_mode_only` default — the
   // operator asked for shell mode, got code mode, and was told nothing (#2106).
+  // `code_mode` is registry-derived. Persisted config cannot claim that provider capability.
   codexToolMode: z.enum(["code_mode_only", "shell"]).optional(),
   responsesItemIdRepair: z.object({
     message: z.array(z.string().min(1)).optional(),

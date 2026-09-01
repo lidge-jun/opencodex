@@ -108,22 +108,37 @@ describe("registry per-model wire defaults", () => {
   });
 
   test("keeps xAI key auth and translated callers on their existing Chat wire", () => {
-    expect(resolveWireProtocolOverride("xai", "grok-4.6", xai("key"), "responses").adapter)
-      .toBe("openai-chat");
-    expect(resolveWireProtocolOverride("xai", "grok-4.6", xai("oauth"), "chat").adapter)
-      .toBe("openai-chat");
-    expect(resolveWireProtocolOverride("xai", "grok-4.6", xai("oauth"), "anthropic").adapter)
-      .toBe("openai-chat");
-    expect(resolveWireProtocolOverride("xai", "grok-4.3", xai("oauth"), "responses").adapter)
-      .toBe("openai-chat");
+    const cases = [
+      [xai("key"), "responses"], [xai("oauth"), "chat"],
+      [xai("oauth"), "anthropic"], [xai("oauth"), "responses"],
+    ] as const;
+    for (const [provider, inbound] of cases) {
+      const model = inbound === "responses" && provider.authMode === "oauth" ? "grok-4.3" : "grok-4.6";
+      const resolved = resolveWireProtocolOverride("xai", model, provider, inbound);
+      expect(resolved.adapter).toBe("openai-chat");
+      expect(resolved.customToolTransport).toBeUndefined();
+    }
   });
 
   test("an explicit xAI Responses override opts into the native wire", () => {
     for (const model of ["grok-4.6", "grok-4.5"]) {
       const provider = xai("oauth", { modelAdapters: { [model]: "openai-responses" } });
-      expect(resolveWireProtocolOverride("xai", model, provider, "responses").adapter)
-        .toBe("openai-responses");
+      const resolved = resolveWireProtocolOverride("xai", model, provider, "responses");
+      expect(resolved.adapter).toBe("openai-responses");
+      expect(resolved.customToolTransport).toBe("function-json");
     }
+  });
+
+  test("clears a stale function-json capability when a second resolve no longer qualifies", () => {
+    const provider = xai("oauth", { modelAdapters: { "grok-4.6": "openai-responses" } });
+    const resolved = resolveWireProtocolOverride("xai", "grok-4.6", provider, "responses");
+    expect(resolved.customToolTransport).toBe("function-json");
+    const optedOut = resolveWireProtocolOverride("xai", "grok-4.6", {
+      ...resolved,
+      modelAdapters: { "grok-4.6": "openai-chat" },
+    }, "responses");
+    expect(optedOut.adapter).toBe("openai-chat");
+    expect(optedOut.customToolTransport).toBeUndefined();
   });
 
   function deepseek(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {

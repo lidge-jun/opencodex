@@ -2,7 +2,7 @@ import { createRegisteredAdapter } from "../adapters/registry";
 import type { OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
-import { type InboundWire, providerModelWireDefault } from "../providers/registry";
+import { type InboundWire, providerModelCustomToolTransport, providerModelWireDefault } from "../providers/registry";
 
 /**
  * Resolve the wire a single model should use: a hard pin first, then a configured
@@ -23,28 +23,40 @@ export function resolveWireProtocolOverride(
   providerConfig: OcxProviderConfig,
   inbound: InboundWire = "responses",
 ): OcxProviderConfig {
+  const { customToolTransport: _staleCustomToolTransport, ...providerWithoutTransient } = providerConfig;
+  const baseProvider = providerWithoutTransient as OcxProviderConfig;
   const pinned = pinnedWireAdapter(providerName, modelId);
-  if (pinned && providerConfig.adapter !== pinned) {
-    return { ...providerConfig, adapter: pinned };
+  if (pinned && baseProvider.adapter !== pinned) {
+    return { ...baseProvider, adapter: pinned };
   }
   // Re-check the allow-list here, not just in the config validator: the file may have
   // been hand-edited, or written by a build that allowed more values.
-  const configured = providerConfig.modelAdapters?.[modelId];
+  const configured = baseProvider.modelAdapters?.[modelId];
   // An explicit allowed override wins, including one naming the provider-wide adapter (the
   // opt-out from a registry default). Invalid hand-edited values fall through to the default.
   const requested = configured && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configured)
     ? configured
-    : providerModelWireDefault(providerName, providerConfig, modelId, MODEL_ADAPTER_OVERRIDE_ALLOWED, inbound);
+    : providerModelWireDefault(providerName, baseProvider, modelId, MODEL_ADAPTER_OVERRIDE_ALLOWED, inbound);
+  const registryCustomToolTransport = providerModelCustomToolTransport(providerName, baseProvider, modelId, inbound);
   if (requested
     && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requested)
-    && requested !== providerConfig.adapter
+    && requested !== baseProvider.adapter
     && !isWirePinnedModel(providerName, modelId)
     // A forward provider hands the caller's own credential upstream; the chat adapter
     // only ever sends provider.apiKey, so switching wires here would drop the auth.
-    && !isCanonicalOpenAiForwardProvider(providerConfig)) {
-    return { ...providerConfig, adapter: requested };
+    && !isCanonicalOpenAiForwardProvider(baseProvider)) {
+    return {
+      ...baseProvider,
+      adapter: requested,
+      ...(requested === "openai-responses" && registryCustomToolTransport
+        ? { customToolTransport: registryCustomToolTransport }
+        : {}),
+    };
   }
-  return providerConfig;
+  const customToolTransport = baseProvider.adapter === "openai-responses"
+    ? registryCustomToolTransport
+    : undefined;
+  return customToolTransport ? { ...baseProvider, customToolTransport } : baseProvider;
 }
 
 /** Build the provider adapter for a resolved provider config. */
