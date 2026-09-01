@@ -418,6 +418,32 @@ Use `ocx service` for an always-on background proxy (recommended). Use `ocx code
 lightweight, on-demand startup without a daemon — the proxy starts only when `codex` is launched.
 :::
 
+#### Token injection without the shim
+
+On a non-loopback bind the injected provider carries `env_key = "OPENCODEX_API_AUTH_TOKEN"`. That
+line tells Codex which variable to read; it does not create it. Codex refuses to start a request
+when the variable is missing (`Missing environment variable: OPENCODEX_API_AUTH_TOKEN`), and the
+proxy is never reached. The value lives in `$OPENCODEX_HOME/service-api-token`; only a process that
+exports it into Codex's environment closes the gap.
+
+What does carry the token into a Codex process:
+
+- the shim installed by `ocx codex-shim install` (reads the token file at launch; the supported path
+  for Codex started from shells, Desktop, cron, or another service);
+- exporting `OPENCODEX_API_AUTH_TOKEN` yourself in the process that starts Codex — a shell profile,
+  the cron line, or an `Environment=`/`EnvironmentFile=` on the systemd unit that launches
+  **Codex** (not the proxy). Point it at the existing token file; do not copy the value into
+  `config.toml`.
+
+What does not: an `EnvironmentFile=` or `OCX_API_TOKEN_FILE` on `opencodex-proxy.service`. Those
+configure the proxy process only and never flow into an independently launched `codex exec`.
+
+A Codex upgrade that replaces the launcher removes the shim; the next ordinary `ocx` command restores
+it (see above), but a `codex exec` that runs before that fails. `ocx doctor` reports this exact
+state under "Codex env_key launch readiness" (env_key configured, variable unset, shim missing or
+unhealthy, token file present) with the repair command, and never prints the token. Reading the token
+file directly from Codex is not something Codex supports, so there is no OpenCodex directive for it.
+
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
 Install and control the Windows status tray icon. It starts at Windows login and provides one-click
