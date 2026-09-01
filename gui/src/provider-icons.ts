@@ -31,6 +31,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   minimax: "minimax.svg",
   "minimax-cn": "minimax.svg",
   moonshot: "moonshot-color.svg",
+  "muse-code": "meta-color.svg",
   nvidia: "nvidia-color.svg",
   ollama: "ollama-color.svg",
   "ollama-cloud": "ollama-color.svg",

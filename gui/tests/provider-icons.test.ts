@@ -74,3 +74,7 @@ test("the MiniMax and Xiaomi MiMo provider ids resolve to their brand's mark", (
   // The precedent that makes the two above consistent rather than novel.
   expect(providerIconSrc("mimo-free")).toBe("/provider-icons/xiaomi-color.svg");
 });
+
+test("the Muse Code account provider resolves to Meta's mark", () => {
+  expect(providerIconSrc("muse-code")).toBe("/provider-icons/meta-color.svg");
+});

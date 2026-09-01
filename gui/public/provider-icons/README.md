@@ -150,6 +150,11 @@ entry below was fetched from the vendor's own domain, taken from the registry's
 Published as SVG and committed with only comments, `<title>`/`<desc>` and
 `data-name` attributes stripped:
 
+- `meta-color.svg` — Meta company mark from Simple Icons 16.28.0 `meta.svg`,
+  whose source metadata points to `https://about.meta.com/brand/resources/meta/company-brand/`
+  and Meta's company-brand guidelines. The path is unchanged; the documented
+  brand color `#0467DF` is applied as the fill. Used by the Meta Muse Code
+  account provider because Meta publishes no separate Muse Code product mark.
 - `digitalocean.svg` — `digitalocean.com` favicon, 32x32.
 - `featherless.svg` — `featherless.ai/favicon.svg`, 256x256.
 - `kilo.svg` — `kilo.ai/favicon/favicon.svg`, 32x32. Keeps its `oklch()` plate.

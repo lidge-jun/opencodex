@@ -459,6 +459,7 @@ describe("provider-icons", () => {
     expect(isCatalogProviderId("muse-code")).toBe(true);
     expect(providerIconSrc("command-code")).toBe("/provider-icons/commandcode-color.svg");
     expect(providerIconSrc("commandcode")).toBe("/provider-icons/commandcode-color.svg");
+    expect(providerIconSrc("muse-code")).toBe("/provider-icons/meta-color.svg");
   });
 
   test("Muse Code account login uses the public Meta label", () => {
