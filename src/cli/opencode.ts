@@ -94,6 +94,7 @@ export interface OpencodeProxyModelRow {
   native?: boolean;
   disabled?: boolean;
   displayName?: string;
+  displayNameSource?: "operator" | "provider" | "fallback";
   contextWindow?: number;
   /** Declared effort ladder from `/api/models`; carried into opencode model variants. */
   reasoningEfforts?: string[];
@@ -387,7 +388,7 @@ export function opencodeCatalogFromProxyRows(
       provider: row.provider,
       id: row.id,
       contextWindow: row.contextWindow,
-      displayName: row.displayName,
+      displayName: row.displayNameSource === "fallback" ? undefined : row.displayName,
       ...(Array.isArray(row.reasoningEfforts) && row.reasoningEfforts.length > 0
         ? { reasoningEfforts: [...row.reasoningEfforts] }
         : {}),

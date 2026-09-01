@@ -9,6 +9,7 @@ import {
   codexAutoStartEnabled,
   hasOwnProvider,
   isValidProviderName,
+  modelDisplayNamesConfigError,
   multiAgentGuidanceEnabled,
   nonBlankStringArrayConfigError,
   normalizeNonBlankStringArray,
@@ -667,6 +668,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (!name || !prov?.adapter || !prov?.baseUrl) {
       return jsonResponse({ error: "name, provider.adapter and provider.baseUrl are required" }, 400);
     }
+    const displayNamesError = modelDisplayNamesConfigError(prov.modelDisplayNames);
+    if (displayNamesError) return jsonResponse({ error: displayNamesError }, 400);
     if (!isValidProviderName(name)) {
       return jsonResponse({ error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key" }, 400);
     }
@@ -696,6 +699,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
     const submittedModelAutoCompactTokenLimits = Object.hasOwn(prov, "modelAutoCompactTokenLimits");
+    const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
     // Same trap, one more field: DeepSeek carries a registry default of `true` for
     // annotateEmptyToolOutputs, so enrichment cannot distinguish "the client omitted it"
@@ -723,6 +727,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // has no member for either field, so the add/edit form structurally cannot send them:
     // absence in the request means "not carried", never "the user deleted it". Deletion goes
     // through PATCH with an explicit null (#1409).
+    if (!submittedModelDisplayNames && existing?.modelDisplayNames) {
+      prov.modelDisplayNames = { ...existing.modelDisplayNames };
+    }
     if (!submittedRequestPacing && existing?.requestPacing) {
       prov.requestPacing = structuredClone(existing.requestPacing);
     }

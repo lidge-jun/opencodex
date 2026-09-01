@@ -291,16 +291,21 @@ describe("ocx opencode proxy model catalog", () => {
       );
       const rows = await modelsRes!.json() as Array<{
         namespaced?: string;
+        displayName?: string;
+        displayNameSource?: "operator" | "provider" | "fallback";
         contextWindow?: number;
       }>;
       expect(requestedAuth).toBe(`Bearer ${RESOLVED}`);
 
       const liveRow = rows.find(r => r.namespaced === `${PROVIDER}/live-via-proxy-env`);
       expect(liveRow).toBeTruthy();
+      expect(liveRow?.displayNameSource).toBe("fallback");
       expect(liveRow?.contextWindow).toBe(128_000);
 
       const catalog = opencodeCatalogFromProxyRows(rows, config);
-      expect(catalog.map(m => m.namespaced)).toContain(`${PROVIDER}/live-via-proxy-env`);
+      const liveCatalogRow = catalog.find(m => m.namespaced === `${PROVIDER}/live-via-proxy-env`);
+      expect(liveCatalogRow).toBeTruthy();
+      expect(liveCatalogRow?.displayName).toBeUndefined();
 
       const block = buildOpencodeProviderBlockFromCatalog(10100, catalog, undefined, config);
       expect(block.models[`${PROVIDER}/live-via-proxy-env`]?.limit?.context).toBe(128_000);

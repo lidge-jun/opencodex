@@ -1,5 +1,9 @@
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { redactSecretString } from "../lib/redact";
+import {
+  isValidModelDiscoveryModelId,
+  MODEL_DISCOVERY_MAX_MODELS,
+} from "../providers/model-discovery-limits";
 import { modelRecordValue } from "../reasoning-effort";
 import {
   isWirePinnedModel,
@@ -20,6 +24,8 @@ const SENSITIVE_PROVIDER_HEADERS = new Set([
   "x-amz-security-token",
 ]);
 const REASONING_SUMMARY_DELIVERY_SET = new Set<string>(REASONING_SUMMARY_DELIVERY_VALUES);
+const DISPLAY_NAME_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
+const MAX_MODEL_DISPLAY_NAME_LENGTH = 128;
 
 /** Validate a provider destination without coupling DTO callers to config persistence. */
 export function providerBaseUrlConfigError(baseUrl: string): string | null {
@@ -120,6 +126,40 @@ export function booleanRecordConfigError(value: unknown, field: string): string 
   for (const [key, entry] of Object.entries(value)) {
     if (!key.trim()) return `${field} keys must be nonblank model ids`;
     if (typeof entry !== "boolean") return `${field}.${key} must be a boolean`;
+  }
+  return null;
+}
+
+/** Validate display-only labels without changing the provider's model identity. */
+export function modelDisplayNamesConfigError(
+  value: unknown,
+  field = "modelDisplayNames",
+): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return `${field} must be a plain object with own properties`;
+  }
+  const entries = Object.entries(value);
+  // One discovered model can own one label, so both maps share the same safe cap.
+  if (entries.length > MODEL_DISCOVERY_MAX_MODELS) {
+    return `${field} must contain at most ${MODEL_DISCOVERY_MAX_MODELS} entries`;
+  }
+  for (const [modelId, displayName] of entries) {
+    if (!isValidModelDiscoveryModelId(modelId)) return `${field} keys must be valid model ids`;
+    const safeModelId = JSON.stringify(redactSecretString(modelId));
+    if (typeof displayName !== "string") return `${field}.${safeModelId} must be a string`;
+    const trimmed = displayName.trim();
+    if (!trimmed) return `${field}.${safeModelId} must be nonblank`;
+    if (displayName !== trimmed) return `${field}.${safeModelId} must be trimmed`;
+    if (displayName.length > MAX_MODEL_DISPLAY_NAME_LENGTH) {
+      return `${field}.${safeModelId} must be at most ${MAX_MODEL_DISPLAY_NAME_LENGTH} characters`;
+    }
+    if (displayName.includes("/")) return `${field}.${safeModelId} must not contain /`;
+    if (DISPLAY_NAME_CONTROL_CHARS.test(displayName)) {
+      return `${field}.${safeModelId} must not contain control characters`;
+    }
   }
   return null;
 }

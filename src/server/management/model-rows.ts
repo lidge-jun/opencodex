@@ -41,7 +41,27 @@ export type ManagementModelRow = Partial<CatalogModel> & {
   native?: boolean;
   custom?: boolean;
   customId?: string;
+  displayNameOverride?: string;
+  displayNameSource?: "operator" | "provider" | "fallback";
 };
+
+/** Resolve the exact text and source shown for one routed discovered model. */
+export function effectiveManagementDisplayName(
+  config: Pick<OcxConfig, "providers">,
+  model: CatalogModel,
+): Pick<ManagementModelRow, "displayName" | "displayNameOverride" | "displayNameSource"> {
+  const provider = config.providers[model.provider];
+  const configured = provider?.modelDisplayNames;
+  if (configured && Object.hasOwn(configured, model.id)) {
+    const displayName = configured[model.id]?.trim();
+    if (displayName) {
+      return { displayName, displayNameOverride: displayName, displayNameSource: "operator" };
+    }
+  }
+  const providerDisplayName = model.displayName?.trim();
+  if (providerDisplayName) return { displayName: providerDisplayName, displayNameSource: "provider" };
+  return { displayName: catalogModelSlug(model), displayNameSource: "fallback" };
+}
 
 /**
  * The exact row list `/api/models` returns. Extracted so `/api/client-config` exports the
@@ -133,8 +153,10 @@ export async function listManagementModelRows(
     if (m.provider !== "combo" && customNamespaced.has(namespaced)) return null;
     const contextCap = providerContextCap(config, m.provider);
     const nativeAlias = m.provider === "combo" && m.nativeAlias === true;
+    const displayName = effectiveManagementDisplayName(config, m);
     return {
       ...m,
+      ...displayName,
       namespaced,
       disabled: [...disabled].some(stored => (
         (!nativeAlias && stored === namespaced) || slugEquals(stored, m.provider, m.id)
@@ -152,7 +174,7 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
     provider: row.provider,
     id: row.id,
     ...(row.native ? { native: true } : {}),
-    ...(row.displayName ? { displayName: row.displayName } : {}),
+    ...(row.displayName && row.displayNameSource !== "fallback" ? { displayName: row.displayName } : {}),
     ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
     ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
     ...(row.reasoningEfforts ? { reasoningEfforts: row.reasoningEfforts } : {}),

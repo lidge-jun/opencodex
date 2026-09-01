@@ -8,6 +8,7 @@ import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
+  modelDisplayNamesConfigError,
   nonBlankStringArrayConfigError,
   normalizeNonBlankStringArray,
   positiveIntegerConfigError,
@@ -61,6 +62,7 @@ import { providerDestinationConfigError } from "./lib/destination-policy";
 import { redactSecretString } from "./lib/redact";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import { MODEL_ALIAS_PATTERN } from "./providers/default-aliases";
+import { MODEL_DISCOVERY_MAX_MODELS } from "./providers/model-discovery-limits";
 import { vercelGatewayRoutingConfigError } from "./providers/vercel-gateway-routing";
 import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
@@ -499,6 +501,17 @@ const fastWireSchema = z.object({
   if (error) ctx.addIssue({ code: "custom", message: error });
 }).transform(fastWire => fastWire as FastWire);
 
+const modelDisplayNamesSchema = z.unknown().superRefine((value, ctx) => {
+  const error = modelDisplayNamesConfigError(value);
+  if (error) ctx.addIssue({ code: "custom", message: error });
+}).transform(value => {
+  const labels = Object.create(null) as Record<string, string>;
+  for (const [modelId, displayName] of Object.entries(value as Record<string, string>)) {
+    labels[modelId] = displayName;
+  }
+  return labels;
+});
+
 /**
  * Zod schema for one provider entry: known fields are validated strictly while unknown
  * fields pass through (preserved for runtime extensions).
@@ -508,6 +521,7 @@ const providerConfigSchema = z.object({
   baseUrl: z.string().min(1),
   alias: z.string().optional(),
   modelAliases: z.record(z.string(), z.string()).optional(),
+  modelDisplayNames: modelDisplayNamesSchema.optional(),
   defaultAliases: z.boolean().optional(),
   requestPacing: requestPacingSchema.optional().catch(undefined),
   mcpMaxTools: z.number().int().positive().optional(),
@@ -563,6 +577,7 @@ export {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
+  modelDisplayNamesConfigError,
   nonBlankStringArrayConfigError,
   normalizeNonBlankStringArray,
   positiveIntegerConfigError,
@@ -1242,6 +1257,16 @@ const configSchema = z.object({
         // before schemaDiagnosticsError serializes the path (ocx config validate/import).
         path: ["providers", redactSecretString(name), "modelCosts"],
         message: modelCostsError,
+      });
+    }
+    const modelDisplayNamesError = modelDisplayNamesConfigError(
+      (provider as { modelDisplayNames?: unknown }).modelDisplayNames,
+    );
+    if (modelDisplayNamesError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelDisplayNames"],
+        message: modelDisplayNamesError,
       });
     }
     const apiKeyTransportError = apiKeyTransportConfigError(provider as OcxProviderConfig);
@@ -2042,6 +2067,7 @@ export function loadConfig(): OcxConfig {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     sanitizeAliasesForLoad(parsed);
+    sanitizeModelDisplayNamesForLoad(parsed);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
@@ -2153,6 +2179,38 @@ function sanitizeAliasesForLoad(raw: unknown): void {
         delete aliases[id];
       } else claimed.add(lower);
     }
+  }
+}
+
+/** Hand-edited display-name mistakes disable only the bad label. */
+function sanitizeModelDisplayNamesForLoad(raw: unknown): void {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
+  const root = raw as Record<string, unknown>;
+  if (!root.providers || typeof root.providers !== "object" || Array.isArray(root.providers)) return;
+  for (const [providerName, providerValue] of Object.entries(root.providers as Record<string, unknown>)) {
+    if (!providerValue || typeof providerValue !== "object" || Array.isArray(providerValue)) continue;
+    const provider = providerValue as Record<string, unknown>;
+    const value = provider.modelDisplayNames;
+    if (value === undefined) continue;
+    const providerLabel = JSON.stringify(redactSecretString(providerName));
+    if (!value || typeof value !== "object" || Array.isArray(value)
+      || Object.entries(value).length > MODEL_DISCOVERY_MAX_MODELS) {
+      console.warn(`Ignoring invalid modelDisplayNames map for provider ${providerLabel} in config.json`);
+      delete provider.modelDisplayNames;
+      continue;
+    }
+    const labels = value as Record<string, unknown>;
+    for (const [modelId, rawDisplayName] of Object.entries(labels)) {
+      const displayName = typeof rawDisplayName === "string" ? rawDisplayName.trim() : rawDisplayName;
+      if (modelDisplayNamesConfigError({ [modelId]: displayName })) {
+        const safeModelId = JSON.stringify(redactSecretString(modelId));
+        console.warn(`Ignoring invalid modelDisplayNames entry ${safeModelId} for provider ${providerLabel} in config.json`);
+        delete labels[modelId];
+      } else {
+        labels[modelId] = displayName;
+      }
+    }
+    if (Object.keys(labels).length === 0) delete provider.modelDisplayNames;
   }
 }
 
@@ -2537,6 +2595,7 @@ function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
     // Same degradation as loadConfig: a hand-edited invalid retryOn429 must not trip the
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
+    sanitizeModelDisplayNamesForLoad(parsed);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);

@@ -78,6 +78,7 @@ interface ModelRow {
   disabled: boolean;
   native?: boolean;
   displayName?: string;
+  displayNameSource?: "operator" | "provider" | "fallback";
   contextWindow?: number;
   inputModalities?: string[];
   reasoningEfforts?: string[];
@@ -147,7 +148,7 @@ function toExportModel(row: ModelRow): ExportModel {
     provider: row.provider,
     id: row.id,
     ...(row.native ? { native: true } : {}),
-    ...(row.displayName ? { displayName: row.displayName } : {}),
+    ...(row.displayName && row.displayNameSource !== "fallback" ? { displayName: row.displayName } : {}),
     ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
     ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
     ...(row.reasoningEfforts ? { reasoningEfforts: row.reasoningEfforts } : {}),

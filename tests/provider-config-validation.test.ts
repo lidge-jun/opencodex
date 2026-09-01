@@ -3,6 +3,7 @@ import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
+  modelDisplayNamesConfigError,
   nonBlankStringArrayConfigError,
   normalizeNonBlankStringArray,
   positiveIntegerConfigError,
@@ -83,5 +84,35 @@ describe("provider config validation leaf", () => {
       "openai",
       { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
     )).toContain("canonical ChatGPT forward provider");
+  });
+
+  test("accepts safe display names for exact provider model ids", () => {
+    expect(modelDisplayNamesConfigError(undefined)).toBeNull();
+    expect(modelDisplayNamesConfigError({})).toBeNull();
+    expect(modelDisplayNamesConfigError({ "models/grok-4.6": "Grok 4.6" })).toBeNull();
+    expect(modelDisplayNamesConfigError({ "grok-4.6": "A".repeat(128) })).toBeNull();
+  });
+
+  test("rejects unsafe discovered model display name maps", () => {
+    expect(modelDisplayNamesConfigError([])).toContain("plain object");
+    expect(modelDisplayNamesConfigError(Object.create({ inherited: "Unsafe" }))).toContain("own properties");
+    expect(modelDisplayNamesConfigError(Object.fromEntries(
+      Array.from({ length: 2_001 }, (_, index) => [`model-${index}`, `Model ${index}`]),
+    ))).toContain("at most 2000 entries");
+    expect(modelDisplayNamesConfigError({ " ": "Blank key" })).toContain("valid model ids");
+    expect(modelDisplayNamesConfigError({ ["m".repeat(1_025)]: "Long key" })).toContain("valid model ids");
+    expect(modelDisplayNamesConfigError({ model: 7 })).toContain("must be a string");
+    expect(modelDisplayNamesConfigError({ model: "   " })).toContain("nonblank");
+    expect(modelDisplayNamesConfigError({ model: "  Grok 4.6  " })).toContain("must be trimmed");
+    expect(modelDisplayNamesConfigError({ model: "A".repeat(129) })).toContain("at most 128 characters");
+    expect(modelDisplayNamesConfigError({ model: "Grok/4.6" })).toContain("must not contain /");
+    expect(modelDisplayNamesConfigError({ model: "Grok\n4.6" })).toContain("control characters");
+  });
+
+  test("does not echo a secret shaped model id in display name errors", () => {
+    const secretModelId = ["sk", "secret", "model", "id", "123456"].join("-");
+    const error = modelDisplayNamesConfigError({ [secretModelId]: "Bad/Name" });
+    expect(error).not.toContain(secretModelId);
+    expect(error).toContain("[REDACTED]");
   });
 });
