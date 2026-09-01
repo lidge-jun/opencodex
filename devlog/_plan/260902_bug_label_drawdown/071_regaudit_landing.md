@@ -85,8 +85,22 @@ Windows dispatches on feature branches (`33292931792`, `33290258063`, `332892013
 `33288039685`) all failed. Windows shards have therefore not been a stable signal for any
 branch since 2026-08-30, before this campaign's first landing.
 
-Control: the same workflow dispatched on `origin/main` (`af6113a03`, branch
-`codex/regaudit-ci-main-af6113a03`, run 33555110133). Result: CONTROL_PLACEHOLDER
+Control: the same workflow dispatched on `origin/main` (`af6113a03` = released v2.39.0,
+branch `codex/regaudit-ci-main-af6113a03`, run 33555110133). **Windows shards fail on `main`
+with the identical signatures**: shard 3/4 `EPERM: operation not permitted, rm
+'tests\.tmp-codex-accounts-test'` 49× plus `.tmp-oauth-status-privacy-test` 7×, icacls
+`ETIMEDOUT`, "Bun runtime crash"; shard 4/4 icacls `ETIMEDOUT` 13× and the same
+`Responses state admission boundary` / `previous_response_id` cases. The released tip and the
+audited `dev` tip fail the same way on `windows-latest`, so the Windows result is a runner
+environment defect (NTFS ACL/icacls stalls and temp-dir handle contention on the hosted image)
+that predates this campaign. It is not evidence of a regression in `main..dev`.
+
+Verdict for the range: no regression found by four independent reviewers; exact-head CI green
+on Linux ×4, macOS, gates, storage, api-usage, keyring ×3, npm-global ×3; Windows blocked by
+the runner environment on both ends of the range. Follow-up candidate (no bug label, not this
+campaign): make `tests/codex-account-store.test.ts` / `codex-auth-api` temp-dir teardown
+retry `EPERM` on Windows, and re-enable the self-hosted `ocx-home` runner
+(`OCX_SELF_HOSTED_WINDOWS`) for a trustworthy Windows signal.
 
 ## Devlog stack landing
 
