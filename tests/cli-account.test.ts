@@ -792,7 +792,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     const missingProvider = await run(["auto-switch"]);
 
     expect(wrongProvider.code).toBe(1);
-    expect(wrongProvider.stderr).toContain("auto-switch only applies to the openai Codex account pool");
+    expect(wrongProvider.stderr).toContain("auto-switch only applies to the openai Codex account pool or a generic OAuth provider pool");
     expect(invalidThreshold.code).toBe(1);
     expect(invalidThreshold.stderr).toContain("integer 0-100");
     expect(missingProvider.code).toBe(1);

@@ -347,9 +347,12 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
   const action = args.shift();
   if (!name || !action) return usage();
   const classified = configAndType(deps, name);
-  if ("error" in classified || classified.type !== "codex") {
-    return usage("Error: auto-switch only applies to the openai Codex account pool");
+  // Anthropic keeps its threshold on its own pool contract; generic OAuth providers (#695)
+  // and the Codex pool are accepted here.
+  if ("error" in classified || classified.type === "api-key" || name === "anthropic") {
+    return usage("Error: auto-switch only applies to the openai Codex account pool or a generic OAuth provider pool");
   }
+  const genericPool = classified.type === "oauth";
   let threshold: number | undefined;
   if (action === "on" && args.length === 0) threshold = 80;
   else if (action === "off" && args.length === 0) threshold = 0;
@@ -361,14 +364,19 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
   if (action === "status") {
-    const response = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
+    const response = await apiJson(
+      deps, baseUrl, "GET",
+      genericPool ? `/api/oauth/accounts/pool?provider=${encodeURIComponent(name)}` : "/api/codex-auth/active",
+    );
     if (response.status === 0) return proxyUnreachable(response.transportError);
-    if (response.status !== 200 || typeof response.json.autoSwitchThreshold !== "number") {
+    if (response.status !== 200 || (!genericPool && typeof response.json.autoSwitchThreshold !== "number")) {
       return apiError(response.json, "failed to read auto-switch status", response.status);
     }
-    threshold = response.json.autoSwitchThreshold;
+    threshold = typeof response.json.autoSwitchThreshold === "number" ? response.json.autoSwitchThreshold : 0;
   } else {
-    const response = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/auto-switch", { threshold });
+    const response = genericPool
+      ? await apiJson(deps, baseUrl, "PUT", "/api/oauth/accounts/pool", { provider: name, autoSwitchThreshold: threshold })
+      : await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/auto-switch", { threshold });
     if (response.status === 0) return proxyUnreachable(response.transportError);
     if (response.status !== 200) return apiError(response.json, "failed to update auto-switch", response.status);
   }
@@ -846,16 +854,17 @@ function anthropicPoolTransport(provider: string): PoolTransport {
 }
 
 /**
- * The pool-config route supports `anthropic` only and says so with a 400. Any other OAuth
- * provider is refused here with the same wording rather than spending a round-trip to learn it.
+ * Codex and Anthropic keep their own pool transports; every other OAuth provider speaks the
+ * generic pool-settings contract on the same `/api/oauth/accounts/pool` route (#695).
+ * API-key providers have no pool and are refused here without a round-trip.
  */
 function poolTransportFor(
   classified: { type: "codex" | "oauth" | "api-key" },
   name: string,
 ): PoolTransport | string {
   if (classified.type === "codex") return CODEX_POOL_TRANSPORT;
-  if (classified.type === "oauth" && name === "anthropic") return anthropicPoolTransport(name);
-  return `pool settings apply to the openai Codex pool and the anthropic pool, not "${name}"`;
+  if (classified.type === "oauth") return anthropicPoolTransport(name);
+  return `pool settings apply to OAuth account pools, not the API-key provider "${name}"`;
 }
 
 /**

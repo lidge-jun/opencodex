@@ -353,6 +353,8 @@ behaves exactly as before.
 | --- | --- | --- | --- |
 | `oauthAccountFailover.enabled?` | `boolean` | presence-driven | Global override. `false` forces single-account behaviour everywhere; `true` forces rotation on. |
 | `providers.<name>.oauthAccountFailover.enabled?` | `boolean` | inherits | Per-provider override; beats the global setting and beats account presence. |
+| `providers.<name>.oauthAccountFailover.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | — | Declared pool strategy for a generic OAuth provider (#695). Persisted through `ocx account strategy <provider> <name>` or `PUT /api/oauth/accounts/pool`; the generic selector does not act on it yet, so omitted and set behave the same today. |
+| `providers.<name>.oauthAccountFailover.autoSwitchThreshold?` | `number` | — | Declared 0–100 usage percent for a proactive switch on a generic OAuth provider (#695). Set with `ocx account auto-switch <provider> threshold <n>`; inert until the selector consumes it. |
 
 To keep strict single-account behaviour for one provider whose terms you would rather not test:
 
@@ -367,6 +369,14 @@ To keep strict single-account behaviour for one provider whose terms you would r
 ```
 
 That setting survives logging in, adding an account, and reauthenticating.
+
+Generic OAuth providers (Google Antigravity, xAI, Cursor, Kimi, GitHub Copilot, Nous, and any
+other OAuth provider outside the Codex and Anthropic pools) also accept `strategy` and
+`autoSwitchThreshold` on the same key, through `GET`/`PUT /api/oauth/accounts/pool?provider=<name>`
+and the `ocx account strategy` / `ocx account auto-switch` verbs. The response carries
+`"inert": true` while the generic selector ignores those two fields; `stickyLimit` and
+`quotaWindow` are not part of the generic contract. Codex (`/api/codex-auth`) and Anthropic
+(`anthropicAccountPool`) keep their own contracts unchanged.
 
 Deliberately narrower than `anthropicAccountPool`: no session affinity, no quota-ranked
 selection, no probe leases. It answers one question — the account that just returned 429 is

@@ -291,7 +291,7 @@ describe("ocx account strategy / sticky on the anthropic pool", () => {
     expect(JSON.parse(out.lines.join("\n"))).toMatchObject({ provider: "openai", strategy: "quota", stickyLimit: 1 });
   });
 
-  test("an OAuth provider without a pool config is refused WITHOUT a round-trip", async () => {
+  test("a provider without an OAuth pool is refused WITHOUT a round-trip", async () => {
     const calls: Captured[] = [];
     const out = capture();
     let code: number;
@@ -308,6 +308,60 @@ describe("ocx account strategy / sticky on the anthropic pool", () => {
     expect(code).not.toBe(0);
     // The route would answer 400; spending the request to learn that is the thing avoided.
     expect(calls).toHaveLength(0);
-    expect(out.errors.join("\n")).toContain("anthropic");
+    expect(out.errors.join("\n")).toContain("pool settings apply to OAuth account pools");
+  });
+});
+
+describe("generic OAuth pool-settings contract (#695)", () => {
+  const { cmdAutoSwitch } = require("../src/cli/account-extended") as typeof import("../src/cli/account-extended");
+  function genericDeps(
+    respond: (captured: Captured) => { status?: number; json: unknown },
+    calls: Captured[],
+    providers: Record<string, unknown> = { "google-antigravity": { authMode: "oauth" } },
+  ): AccountDeps {
+    return {
+      baseUrl: "http://127.0.0.1:10100",
+      loadConfigImpl: () => ({ providers }) as never,
+      fetchImpl: (async (url: string | URL | Request, init?: RequestInit) => {
+        const parsed = new URL(String(url));
+        const captured: Captured = {
+          method: init?.method ?? "GET",
+          path: parsed.pathname + parsed.search,
+          body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        };
+        calls.push(captured);
+        const { status = 200, json } = respond(captured);
+        return new Response(JSON.stringify(json), { status });
+      }) as unknown as typeof fetch,
+    };
+  }
+
+  test("strategy on google-antigravity goes to the shared pool route with the provider key", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      await cmdStrategy(["google-antigravity", "round-robin"], genericDeps(() => ({ json: { ok: true, strategy: "round-robin", stickyLimit: null } }), calls));
+    } finally { out.restore(); }
+    expect(calls[0]).toMatchObject({ method: "PUT", path: "/api/oauth/accounts/pool", body: { provider: "google-antigravity", strategy: "round-robin" } });
+  });
+
+  test("auto-switch on a generic provider writes autoSwitchThreshold through the pool route", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdAutoSwitch(["google-antigravity", "threshold", "90"], genericDeps(() => ({ json: { ok: true, autoSwitchThreshold: 90 } }), calls))).toBe(0);
+    } finally { out.restore(); }
+    expect(calls[0]).toMatchObject({ method: "PUT", path: "/api/oauth/accounts/pool", body: { provider: "google-antigravity", autoSwitchThreshold: 90 } });
+    expect(out.lines.join("\n")).toContain("threshold 90%");
+  });
+
+  test("api-key providers are still refused before any request", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdStrategy(["deepseek", "quota"], genericDeps(() => ({ json: {} }), calls, { deepseek: { apiKey: "x" } }))).not.toBe(0);
+    } finally { out.restore(); }
+    expect(calls).toHaveLength(0);
+    expect(out.errors.join("\n")).toContain("API-key provider");
   });
 });

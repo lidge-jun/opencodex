@@ -325,7 +325,16 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // Opt-in Anthropic OAuth account pool (#294): enable/threshold/strategy + clear cooldown.
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
-    if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
+    if (provider !== "anthropic") {
+      // Generic OAuth pool-settings contract (#695 slice 1): persisted per provider, inert until
+      // the selector consumes it. Codex keeps /api/codex-auth; api-key providers have no pool.
+      const { poolSettingsCapability, genericPoolSettingsDto } = await import("../../oauth/pool-settings-capability");
+      const prov = config.providers[provider];
+      if (!provider || !prov || poolSettingsCapability(provider, prov) !== "generic") {
+        return jsonResponse({ error: "pool config is only supported for anthropic and generic OAuth providers" }, 400);
+      }
+      return jsonResponse(genericPoolSettingsDto(provider, prov));
+    }
     const pool = config.anthropicAccountPool ?? {};
     return jsonResponse({
       provider,
@@ -351,7 +360,43 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       quotaWindow?: unknown;
     };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
-    if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
+    if (provider !== "anthropic") {
+      const {
+        poolSettingsCapability, genericPoolSettingsDto, parseGenericPoolStrategy, parseGenericAutoSwitchThreshold,
+      } = await import("../../oauth/pool-settings-capability");
+      const prov = config.providers[provider];
+      if (!provider || !prov || poolSettingsCapability(provider, prov) !== "generic") {
+        return jsonResponse({ error: "pool config is only supported for anthropic and generic OAuth providers" }, 400);
+      }
+      if (body.stickyLimit !== undefined || body.quotaWindow !== undefined) {
+        return jsonResponse({ error: "stickyLimit and quotaWindow are not part of the generic pool contract yet" }, 400);
+      }
+      const next = { ...(prov.oauthAccountFailover ?? {}) };
+      if (body.enabled !== undefined) {
+        if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+        next.enabled = body.enabled;
+      }
+      if (body.strategy !== undefined) {
+        if (body.strategy === null) delete next.strategy;
+        else {
+          const parsed = parseGenericPoolStrategy(body.strategy);
+          if (parsed === null) return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
+          next.strategy = parsed;
+        }
+      }
+      if (body.autoSwitchThreshold !== undefined) {
+        if (body.autoSwitchThreshold === null) delete next.autoSwitchThreshold;
+        else {
+          const parsed = parseGenericAutoSwitchThreshold(body.autoSwitchThreshold);
+          if (parsed === null) return jsonResponse({ error: "autoSwitchThreshold must be an integer 0-100" }, 400);
+          next.autoSwitchThreshold = parsed;
+        }
+      }
+      if (Object.keys(next).length > 0) prov.oauthAccountFailover = next;
+      else delete prov.oauthAccountFailover;
+      saveConfigPreservingClaudeCode(config);
+      return jsonResponse({ ok: true, ...genericPoolSettingsDto(provider, prov) });
+    }
     let enabled = config.anthropicAccountPool?.enabled === true;
     if (body.enabled !== undefined) {
       if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);

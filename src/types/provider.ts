@@ -414,6 +414,13 @@ export interface OcxProviderConfig {
    */
   oauthAccountFailover?: {
     enabled?: boolean;
+    /**
+     * Generic OAuth pool selection strategy (#695). Persisted through the pool-settings
+     * contract; the selector does not consume it yet, so omitted keeps today's behavior.
+     */
+    strategy?: "quota" | "round-robin" | "fill-first";
+    /** 0-100 usage percent at which a proactive switch may be considered (#695); inert today. */
+    autoSwitchThreshold?: number;
   };
   /** Allow an explicitly key/oauth provider to run without a credential (for keyless local proxies). */
   keyOptional?: boolean;
