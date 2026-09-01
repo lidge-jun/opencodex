@@ -253,7 +253,18 @@ async function handleStart(options: { block?: boolean } = {}) {
   // shutdown then left no runtime record for discovery at all. `handleEnsure`
   // already passes this; `handleStart` is the path that did not.
   const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
-  if (owner.live) {
+  // An interactive `ocx start --port X` where X is NOT the live proxy's port is an explicit
+  // sibling request, not the #3106 shadow: that fix targets a bare `start` (or the service
+  // wrapper, which always passes the configured port) silently landing on an ephemeral port.
+  // The blanket refusal here also broke real workflows — with any proxy on the configured
+  // port, no second instance could be started on a different port, and every spawned-launcher
+  // test on a machine running a real proxy failed its startup wait. The service branch keeps
+  // its exact semantics: OCX_SERVICE requests never take the sibling path.
+  const explicitSiblingPort = owner.live !== null
+    && requestedPort !== undefined
+    && requestedPort !== owner.live.port
+    && process.env.OCX_SERVICE !== "1";
+  if (owner.live && !explicitSiblingPort) {
     // Service-wrapper context (opencodex-service.cmd `:loop`): a healthy proxy from
     // ANY source means the requested port is already served. Exit 0 so the wrapper's
     // `if %ERRORLEVEL% NEQ 0` retry loop terminates instead of respawning every 5s
@@ -267,6 +278,11 @@ async function handleStart(options: { block?: boolean } = {}) {
     }
     console.error(`⚠️  Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}). Use 'ocx stop' first.`);
     process.exit(1);
+  }
+  if (owner.live && explicitSiblingPort) {
+    // Honest about the one side effect the sibling shares with any start: this home's Codex
+    // config is re-pointed at the new port when injection applies.
+    console.warn(`Proxy already running on port ${owner.live.port}; starting a second instance on requested port ${requestedPort}.`);
   }
 
   const clientState = readClientConnectionState();
