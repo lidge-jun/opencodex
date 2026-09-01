@@ -137,10 +137,12 @@ ocx access test anthropic/claude-sonnet-5 --protocol responses
 ```
 
 Both paths route correctly **once the request reaches the proxy** — that part is covered by
-tests. What is not established is whether the app still sends the configured model while reserve
-mode is active; if the client rewrites or refuses it before the request leaves, no proxy-side
-setting changes that. Treat the explicit-selection route as worth trying rather than a confirmed
-workaround.
+tests. The Codex desktop app, however, does not send the configured model while reserve mode is
+active: it decides reserve from its own `wham/usage` poll (`luna_reserve` upsell plus an allowed
+`gpt-reserve` additional limit) and forces the model setting to `gpt-reserve` before the request
+leaves, so the `config.toml` route is overridden in the app. Use `ocx access test`, Claude Code
+through the proxy (`ocx claude`), or any direct `/v1` client until the window resets. See
+[Routed models during Codex reserve mode](/guides/codex-integration/#routed-models-during-codex-reserve-mode).
 
 ## Why routed models show up
 

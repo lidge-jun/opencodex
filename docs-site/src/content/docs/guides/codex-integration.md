@@ -414,6 +414,36 @@ ocx service install    # persistent: auto-starts on login and respawns on crash
 `ocx status` shows whether the proxy is running and prints the same restart hint when
 it is not; `ocx doctor` reports restart safety (service/shim coverage).
 
+## Routed models during Codex reserve mode
+
+When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback model
+(`gpt-reserve` / Luna Reserve). While that state is active, the Codex model picker can make
+**every other entry unselectable — including opencodex routed models**, even though those
+run on independent providers and credentials and consume none of the exhausted quota.
+
+**This is a Codex client behavior and the proxy cannot change it.** The reserve state
+arrives from the ChatGPT backend on the client's own authenticated connection, not through
+the proxy. The desktop app polls `backend-api/wham/usage` and treats reserve as active when
+the response carries `rate_limit_upsell.banner_type = "luna_reserve"`, the primary
+`rate_limit.allowed` is `false`, and `additional_rate_limits[]` contains an entry with
+`limit_name = "gpt-reserve"` that is still allowed. While that holds, the app forces the
+conversation's model setting to `gpt-reserve` and rewrites any other pick back to it — the
+picker is collapsed to the reserve entry by the client, and a `model =` value in
+`config.toml` is overridden the same way. None of this consults the model catalog, so no
+representation on our side participates in the decision. opencodex has no reserve concept to
+adjust, and the alternative — misreporting your own quota back to your own client — would be
+a worse bug than the one it papered over.
+
+**Workaround:** the models themselves stay fully usable; only the Codex app's model
+selection is gated. Reach them from a client that does not consult the ChatGPT usage
+snapshot:
+
+- Claude Code through the proxy (`ocx claude`).
+- Any HTTP client against the local `/v1` endpoint.
+- The dashboard's own request paths.
+
+Normal picker behavior returns when the 5-hour window resets.
+
 ## The subagent picker
 
 Catalog sync makes the selected sub-agent models available to Codex; see [Codex App model picker](/guides/codex-app-models/#subagent-selection) for picker ordering and [Sub-agent Surface](/guides/sub-agent-surface/) for v1/base/v2 delegation and fallback behavior.

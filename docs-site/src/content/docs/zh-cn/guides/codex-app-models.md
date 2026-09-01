@@ -149,7 +149,7 @@ model = "anthropic/claude-sonnet-5"
 ocx access test anthropic/claude-sonnet-5 --protocol responses
 ```
 
-**请求到达代理之后**，两条路径都能正确路由，这一点有测试覆盖。尚未确认的是：预备模式生效时，应用是否仍会发送已配置的模型。如果客户端在发出之前重写或拒绝它，代理端的任何设置都改变不了。请把显式选择当作值得一试的做法，而不是已确认的规避方案。
+**请求到达代理之后**，两条路径都能正确路由，这一点有测试覆盖。但预备模式生效时，Codex 桌面应用不会发送已配置的模型：它根据自己的 `wham/usage` 轮询（`luna_reserve` 升级提示加上仍被允许的 `gpt-reserve` 附加限额）判定预备状态，并在请求发出前把模型设置强制改为 `gpt-reserve`，所以 `config.toml` 这条路会在应用内被覆盖。在窗口重置之前，请使用 `ocx access test`、经代理的 Claude Code（`ocx claude`）或任意直连 `/v1` 的客户端。参见[Codex 预备模式下的路由模型](/guides/codex-integration/#routed-models-during-codex-reserve-mode)。
 
 
 如果选择器里仍然显示旧条目，请刷新目录并重启目标 Codex 界面：

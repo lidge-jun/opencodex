@@ -262,7 +262,7 @@ ou envoyez-le directement :
 ocx access test anthropic/claude-sonnet-5 --protocol responses
 ```
 
-Les deux chemins routent correctement **dès que la requête atteint le proxy** — c'est couvert par des tests. Ce qui n'est pas établi, c'est si l'application envoie encore le modèle configuré pendant le mode réserve ; si le client le réécrit ou le refuse avant l'envoi, aucun réglage côté proxy n'y change quoi que ce soit. Considérez la sélection explicite comme une piste à essayer plutôt qu'un contournement confirmé.
+Les deux chemins routent correctement **dès que la requête atteint le proxy** — c'est couvert par des tests. En revanche, l'application de bureau Codex n'envoie pas le modèle configuré pendant le mode réserve : elle détermine l'état de réserve à partir de son propre sondage `wham/usage` (upsell `luna_reserve` plus une limite additionnelle `gpt-reserve` encore autorisée) et force le réglage de modèle sur `gpt-reserve` avant l'envoi, de sorte que la voie `config.toml` est écrasée dans l'application. Jusqu'à la réinitialisation de la fenêtre, utilisez `ocx access test`, Claude Code via le proxy (`ocx claude`) ou tout client `/v1` direct. Voir [Modèles routés pendant le mode réserve de Codex](/guides/codex-integration/#routed-models-during-codex-reserve-mode).
 
 
 Si le sélecteur affiche encore des entrées obsolètes, actualisez le catalogue et redémarrez l'interface Codex concernée :

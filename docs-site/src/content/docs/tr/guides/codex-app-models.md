@@ -301,7 +301,7 @@ ya da doğrudan gönderin:
 ocx access test anthropic/claude-sonnet-5 --protocol responses
 ```
 
-Her iki yol da **istek proxy'ye ulaştıktan sonra** doğru yönlendirilir; bu testlerle kapsanıyor. Kanıtlanmayan nokta, rezerv modu etkinken uygulamanın yapılandırılan modeli hâlâ gönderip göndermediğidir; istemci onu göndermeden önce değiştirir ya da reddederse proxy tarafındaki hiçbir ayar bunu değiştirmez. Açık seçimi doğrulanmış bir geçici çözüm değil, denemeye değer bir yol olarak görün.
+Her iki yol da **istek proxy'ye ulaştıktan sonra** doğru yönlendirilir; bu testlerle kapsanıyor. Ancak Codex masaüstü uygulaması rezerv modu etkinken yapılandırılan modeli göndermez: rezerv durumunu kendi `wham/usage` sorgusundan (`luna_reserve` upsell'i ve hâlâ izinli bir `gpt-reserve` ek limiti) belirler ve istek çıkmadan önce model ayarını `gpt-reserve` olarak zorlar; bu yüzden `config.toml` yolu uygulama içinde ezilir. Pencere sıfırlanana kadar `ocx access test`, proxy üzerinden Claude Code (`ocx claude`) ya da doğrudan bir `/v1` istemcisi kullanın. Bkz. [Codex rezerv modunda yönlendirilmiş modeller](/guides/codex-integration/#routed-models-during-codex-reserve-mode).
 
 
 Seçici hala eski girdileri gösteriyorsa kataloğu yenileyin ve hedef Codex
