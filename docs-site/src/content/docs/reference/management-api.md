@@ -49,6 +49,26 @@ Session issuance is disabled whenever data-plane authentication is required, whi
 binds. A remote operator must authenticate with the raw admin token; no loopback-style GUI session
 is minted.
 
+### Persistent dashboard sessions
+
+`POST /api/auth/session` exchanges the raw admin token for an opaque 12-hour
+`ocx_session_*` credential. The browser stores only the session token (never the admin
+token) in origin-scoped `localStorage`; dashboard logout deletes it, and a proxy restart
+or expiry invalidates it server-side. The mint response is sent with
+`Cache-Control: no-store`.
+
+The session is bound to the exact validated dashboard origin: the browser `Origin`
+header when the mint request carried one, the request origin otherwise. A deployment
+behind a TLS-terminating reverse proxy therefore binds the session to the allowlisted
+external `https://` origin rather than the internal `http://` origin the process
+observes. Every session request must send `X-OpenCodex-GUI-Origin`; unsafe methods
+additionally require the browser `Origin` and the session's CSRF token.
+
+Loopback and explicitly allowlisted HTTPS origins can mint sessions by default. A
+non-loopback plain-HTTP dashboard origin additionally requires
+`server.allowRemoteDashboardSessions: true`: plain HTTP carries the raw admin token on
+the first exchange, so remote sessions there stay off unless the operator opts in.
+
 ## Common errors
 
 All endpoint rows below inherit these boundary errors. The “Notable errors” column lists additional

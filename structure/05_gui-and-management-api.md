@@ -18,11 +18,23 @@ OpenCodex uses three mutually exclusive reusable admission credential classes:
 | --- | --- | --- |
 | Data plane | `OPENCODEX_API_AUTH_TOKEN`, the `service-api-token` file loaded through `OCX_API_TOKEN_FILE`, and `config.apiKeys` | `/v1/*` HTTP endpoints and new data-plane WebSocket handshakes only |
 | Management plane | `OPENCODEX_ADMIN_AUTH_TOKEN` or the independent protected `admin-api-token` file | `/api/*` only |
-| GUI session | A short-lived token issued only with a legitimate same-origin local dashboard page | `/api/*` only, bound to the issuing origin |
+| GUI session | A short-lived token issued only with a legitimate same-origin local dashboard page, or a 12-hour token minted by `POST /api/auth/session` in exchange for the admin token | `/api/*` only, bound to the issuing origin |
 
 The service token file remains a delivery mechanism for the data-plane environment token; it is not
 a fourth credential class. A management credential that equals any configured data-plane credential
 does not enable management access. The data plane may continue to start, but `/api/*` remains closed.
+
+The persistent mint path stores only the opaque session token in the browser's
+origin-scoped `localStorage` (never the admin token); dashboard logout deletes it, and a
+proxy restart or expiry invalidates it server-side. The mint response is sent with
+`Cache-Control: no-store`. The session is bound to the exact validated dashboard origin —
+the browser `Origin` header when the mint request carried one, the request origin
+otherwise — so a TLS-terminating proxy with an allowlisted external `https://` origin
+binds sessions to that external origin. Session requests must carry
+`X-OpenCodex-GUI-Origin` on every method; unsafe methods additionally require the browser
+`Origin` and the per-session CSRF token. Loopback and allowlisted HTTPS origins mint by
+default; a non-loopback plain-HTTP dashboard origin additionally requires
+`server.allowRemoteDashboardSessions`.
 CLI health collection follows the same boundary without transporting the reusable management
 credential. Its local-read HMAC capability is an additional single-use, route-scoped admission
 mechanism, not a reusable credential class. `ocx doctor` and OAuth health derive these capabilities

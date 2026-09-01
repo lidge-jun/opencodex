@@ -34,6 +34,8 @@ import { xaiResponsesOptInState } from "../providers/xai-responses-opt-in";
 
 let _corsOrigin = "http://localhost:10100";
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
+/** The config slice management-origin decisions read. Full configs and per-listener policy views are both assignable. */
+export type ManagementPolicyView = Pick<OcxConfig, "hostname" | "corsAllowOrigins" | "allowRemoteDashboardSessions">;
 /** The proxy's own listening port. No admission check uses it: both loopback predicates key on hostname alone. */
 export function configuredPort(): string {
   try { return new URL(_corsOrigin).port; } catch { return "10100"; }
@@ -117,7 +119,7 @@ function comparableOrigin(value: string): string | null {
   }
 }
 
-export function managementRequestOrigin(req: Request, config: OcxConfig): string | null {
+export function managementRequestOrigin(req: Request, config: Pick<OcxConfig, "hostname" | "corsAllowOrigins">): string | null {
   const host = req.headers.get("Host");
   const parsedHost = parseHttpHost(host);
   if (!host || !parsedHost) return null;
@@ -131,7 +133,10 @@ export function managementRequestOrigin(req: Request, config: OcxConfig): string
   }
 }
 
-export function isAllowedManagementOrigin(req: Request, config: OcxConfig): boolean {
+// The config parameter is a policy view: the dashboard listener passes its own bind
+// hostname so management origin checks reflect the listener that received the request,
+// exactly like requestPolicyView does for data-plane admission (#1102 pattern).
+export function isAllowedManagementOrigin(req: Request, config: Pick<OcxConfig, "hostname" | "corsAllowOrigins">): boolean {
   const requestOrigin = managementRequestOrigin(req, config);
   if (!requestOrigin) return false;
   const origin = req.headers.get("Origin");
@@ -198,7 +203,7 @@ export function corsHeaders(req?: Request, config?: RequestPolicyView): Record<s
   };
 }
 
-export function managementCorsHeaders(req?: Request, config?: OcxConfig): Record<string, string> {
+export function managementCorsHeaders(req?: Request, config?: Pick<OcxConfig, "hostname" | "corsAllowOrigins">): Record<string, string> {
   const headers = corsHeaders();
   const origin = req?.headers.get("Origin");
   if (origin && req && config && isAllowedManagementOrigin(req, config)) {
@@ -219,7 +224,7 @@ export function withCors(response: Response, req: Request, config: RequestPolicy
   });
 }
 
-export function withManagementCors(response: Response, req: Request, config: OcxConfig): Response {
+export function withManagementCors(response: Response, req: Request, config: Pick<OcxConfig, "hostname" | "corsAllowOrigins">): Response {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(managementCorsHeaders(req, config))) {
     headers.set(name, value);

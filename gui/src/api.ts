@@ -25,6 +25,9 @@ let requestAdminToken: AdminTokenPrompt = promptForAdminToken;
 const SESSION_REBOOTSTRAP_PATH = "/opencodex-session";
 /** Safe authenticated read used to validate a raw admin token before closing the sign-in form. */
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/settings";
+/** Remote-dashboard session endpoint: POST mints an opaque session from an admin token. */
+const AUTH_SESSION_PATH = "/api/auth/session";
+const AUTH_SESSION_REVOKE_PATH = "/api/auth/session/revoke";
 
 /**
  * The silent re-bootstrap must fail fast: every /api/* request queues behind the
@@ -63,11 +66,14 @@ function needsApiAuth(input: RequestInfo | URL): boolean {
 
 /** Legacy sessionStorage key from pre-memory auth — wiped once on install, never read. */
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
+/** Persistent remote session: origin-scoped and opaque; never contains the raw admin token. */
+const PERSISTENT_GUI_SESSION_KEY = "opencodex-gui-session";
 
-/** In-memory only — never write tokens to web storage (XSS can read sessionStorage/localStorage). */
+/** The raw admin token stays memory-only. Remote GUI sessions are opaque and process-local. */
 let memoryToken: string | null = null;
 let memoryCsrfToken: string | null = null;
 let memorySessionOrigin: string | null = null;
+let memorySessionPersistent = false;
 
 function readToken(): string | null {
   return memoryToken;
@@ -75,12 +81,37 @@ function readToken(): string | null {
 
 function storeToken(token: string): void {
   memoryToken = token;
+  memoryCsrfToken = null;
+  memorySessionOrigin = null;
+  memorySessionPersistent = false;
 }
 
 function clearToken(): void {
+  if (memorySessionPersistent && memoryToken) void revokePersistentGuiSession(memoryToken);
+  if (memorySessionPersistent) clearPersistentGuiSession();
   memoryToken = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
+  memorySessionPersistent = false;
+}
+
+/** Best-effort server revocation; local cleanup must not wait on network state. */
+async function revokePersistentGuiSession(token: string): Promise<void> {
+  if (!rawFetch || !memorySessionOrigin || !memoryCsrfToken) return;
+  try {
+    await rawFetch(AUTH_SESSION_REVOKE_PATH, {
+      method: "POST",
+      cache: "no-store",
+      headers: {
+        "X-OpenCodex-API-Key": token,
+        "X-OpenCodex-GUI-Origin": memorySessionOrigin,
+        Origin: memorySessionOrigin,
+        "X-OpenCodex-CSRF-Token": memoryCsrfToken,
+      },
+    });
+  } catch {
+    /* local logout remains authoritative when the server is unavailable */
+  }
 }
 
 function takeMetaContent(name: string): string | null {
@@ -108,7 +139,79 @@ function storeSession(token: string | null, csrfToken: string | null, origin: st
   memoryToken = token;
   memoryCsrfToken = csrfToken;
   memorySessionOrigin = origin;
+  memorySessionPersistent = false;
   return true;
+}
+
+function clearPersistentGuiSession(): void {
+  try {
+    localStorage.removeItem(PERSISTENT_GUI_SESSION_KEY);
+  } catch {
+    /* browser storage may be disabled */
+  }
+}
+
+function loadPersistentGuiSession(): void {
+  try {
+    const raw = localStorage.getItem(PERSISTENT_GUI_SESSION_KEY);
+    if (!raw) return;
+    const session = JSON.parse(raw) as { token?: unknown; csrfToken?: unknown; origin?: unknown; expiresAt?: unknown };
+    if (typeof session.expiresAt !== "number"
+      || !Number.isFinite(session.expiresAt)
+      || session.expiresAt <= Date.now()
+      || !storeSession(
+        typeof session.token === "string" ? session.token : null,
+        typeof session.csrfToken === "string" ? session.csrfToken : null,
+        typeof session.origin === "string" ? session.origin : null,
+      )) {
+      clearPersistentGuiSession();
+      return;
+    }
+    memorySessionPersistent = true;
+  } catch {
+    clearPersistentGuiSession();
+  }
+}
+
+function persistGuiSession(token: string, csrfToken: string, origin: string, expiresAt: number): void {
+  try {
+    localStorage.setItem(PERSISTENT_GUI_SESSION_KEY, JSON.stringify({ token, csrfToken, origin, expiresAt }));
+    memorySessionPersistent = true;
+  } catch {
+    /* storage is an enhancement; keep the current page session alive */
+  }
+}
+
+/** Mint an opaque session alongside a manually entered admin token for future page loads. */
+async function mintPersistentGuiSession(token: string): Promise<string | null> {
+  if (!rawFetch) return null;
+  const bounded = createBoundedFetch(rebootstrapTimeoutMs);
+  try {
+    const response = await rawFetch(AUTH_SESSION_PATH, {
+      method: "POST",
+      cache: "no-store",
+      signal: bounded.signal,
+      headers: { "X-OpenCodex-API-Key": token },
+    });
+    if (!response.ok) return null;
+    const session = await response.json().catch(() => null) as {
+      token?: unknown; csrfToken?: unknown; origin?: unknown; expiresAt?: unknown;
+    } | null;
+    if (!session
+      || typeof session.token !== "string"
+      || typeof session.csrfToken !== "string"
+      || typeof session.origin !== "string"
+      || typeof session.expiresAt !== "number"
+      || !Number.isFinite(session.expiresAt)
+      || session.expiresAt <= Date.now()
+      || !storeSession(session.token, session.csrfToken, session.origin)) return null;
+    persistGuiSession(session.token, session.csrfToken, session.origin, session.expiresAt);
+    return session.token;
+  } catch {
+    return null;
+  } finally {
+    bounded.clear();
+  }
 }
 
 /** Read one named meta tag out of a served HTML document (attribute order varies). */
@@ -185,10 +288,14 @@ function clearLegacySessionToken(): void {
   }
 }
 
-function withToken(input: RequestInfo | URL, init: RequestInit | undefined, token: string): [RequestInfo | URL, RequestInit | undefined] {
+function withToken(input: RequestInfo | URL, init: RequestInit | undefined, token: string | null): [RequestInfo | URL, RequestInit | undefined] {
+  // Nothing to attach (no credential or opaque session) — pass through untouched.
+  if (!token && !(memorySessionOrigin && memoryCsrfToken)) return [input, init];
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-  headers.set("X-OpenCodex-API-Key", token);
-  if (memorySessionOrigin && memoryCsrfToken && token.startsWith("ocx_session_")) {
+  if (token) headers.set("X-OpenCodex-API-Key", token);
+  // Opaque sessions carry the GUI binding headers; the server ignores them on the
+  // raw-admin-token header path.
+  if (memorySessionOrigin && memoryCsrfToken) {
     headers.set("X-OpenCodex-GUI-Origin", memorySessionOrigin);
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     if (method !== "GET" && method !== "HEAD") {
@@ -234,7 +341,9 @@ async function resolveTokenAfter401(failedToken: string | null, callerSignal?: A
       const prompted = await requestAdminToken(verifyAdminToken);
       if (prompted) {
         storeToken(prompted);
-        return prompted;
+        // Bounded and fast; awaiting keeps the retry wave ordered after the mint.
+        // The raw token remains a current-page fallback if the remote session mint fails.
+        return await mintPersistentGuiSession(prompted) ?? prompted;
       }
       promptCancelled = true;
       return null;
@@ -270,12 +379,14 @@ export function installApiAuthFetch(): void {
   loadInjectedSession();
   const originalFetch = window.fetch.bind(window);
   rawFetch = originalFetch;
+  // Remote dashboards restore only an opaque session scoped to this exact browser origin.
+  if (readToken() === null) loadPersistentGuiSession();
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!needsApiAuth(input)) return originalFetch(input, init);
 
     const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
     const token = readToken();
-    const [firstInput, firstInit] = token ? withToken(input, init, token) : [input, init];
+    const [firstInput, firstInit] = withToken(input, init, token);
     const response = await originalFetch(firstInput, firstInit);
     if (response.status !== 401) return response;
 
@@ -306,6 +417,7 @@ export function resetApiAuthFetchForTests(adminTokenPrompt: AdminTokenPrompt = p
   memoryToken = null;
   memoryCsrfToken = null;
   memorySessionOrigin = null;
+  memorySessionPersistent = false;
   resolutionInFlight = null;
   rawFetch = null;
   promptCancelled = false;
