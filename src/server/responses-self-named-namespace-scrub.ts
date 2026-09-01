@@ -9,8 +9,9 @@ export interface SelfNamedNamespaceScrubAuthorization {
   functionCallNames: ReadonlySet<string>;
 }
 
-function collectBareCustomToolSpecs(
-  bareNames: Set<string>,
+function collectBareToolSpecs(
+  bareCustomNames: Set<string>,
+  bareFunctionNames: Set<string>,
   sameNameNamespacedCustomNames: Set<string>,
   sameNameNamespacedFunctionNames: Set<string>,
   specs: unknown,
@@ -22,21 +23,27 @@ function collectBareCustomToolSpecs(
       const namespace = typeof spec.name === "string" ? spec.name : undefined;
       for (const inner of spec.tools) {
         if (!isPlainObject(inner) || typeof inner.name !== "string") continue;
-        if (namespace === inner.name) {
+        if (namespace !== "functions" && namespace === inner.name) {
           if (inner.type === "custom") sameNameNamespacedCustomNames.add(inner.name);
           else if (inner.type === "function") sameNameNamespacedFunctionNames.add(inner.name);
         }
-        if (inner.type === "custom" && namespace === "functions") bareNames.add(inner.name);
+        if (namespace === "functions") {
+          if (inner.type === "custom") bareCustomNames.add(inner.name);
+          else if (inner.type === "function") bareFunctionNames.add(inner.name);
+        }
       }
       continue;
     }
     if (typeof spec.name !== "string") continue;
     const namespace = typeof spec.namespace === "string" ? spec.namespace : undefined;
-    if (namespace === spec.name) {
+    if (namespace !== "functions" && namespace === spec.name) {
       if (spec.type === "custom") sameNameNamespacedCustomNames.add(spec.name);
       else if (spec.type === "function") sameNameNamespacedFunctionNames.add(spec.name);
     }
-    if (spec.type === "custom" && (!namespace || namespace === "functions")) bareNames.add(spec.name);
+    if (!namespace || namespace === "functions") {
+      if (spec.type === "custom") bareCustomNames.add(spec.name);
+      else if (spec.type === "function") bareFunctionNames.add(spec.name);
+    }
   }
 }
 
@@ -44,13 +51,16 @@ function collectBareCustomToolSpecs(
 export function collectSelfNamedNamespaceScrubAuthorization(
   body: unknown,
   authorizedBareCustomToolNames: ReadonlySet<string>,
+  authorizedBareFunctionToolNames: ReadonlySet<string>,
 ): SelfNamedNamespaceScrubAuthorization {
-  const bareNames = new Set<string>();
+  const bareCustomNames = new Set<string>();
+  const bareFunctionNames = new Set<string>();
   const sameNameNamespacedCustomNames = new Set<string>();
   const sameNameNamespacedFunctionNames = new Set<string>();
   if (isPlainObject(body)) {
-    collectBareCustomToolSpecs(
-      bareNames,
+    collectBareToolSpecs(
+      bareCustomNames,
+      bareFunctionNames,
       sameNameNamespacedCustomNames,
       sameNameNamespacedFunctionNames,
       body.tools,
@@ -61,8 +71,9 @@ export function collectSelfNamedNamespaceScrubAuthorization(
           isPlainObject(item)
           && (item.type === "additional_tools" || item.type === "tool_search_output")
         ) {
-          collectBareCustomToolSpecs(
-            bareNames,
+          collectBareToolSpecs(
+            bareCustomNames,
+            bareFunctionNames,
             sameNameNamespacedCustomNames,
             sameNameNamespacedFunctionNames,
             item.tools,
@@ -71,13 +82,18 @@ export function collectSelfNamedNamespaceScrubAuthorization(
       }
     }
   }
-  const authorizedNames = [...bareNames].filter(name => authorizedBareCustomToolNames.has(name));
+  const authorizedCustomNames = [...bareCustomNames]
+    .filter(name => authorizedBareCustomToolNames.has(name));
+  const authorizedFunctionNames = new Set([
+    ...authorizedCustomNames,
+    ...[...bareFunctionNames].filter(name => authorizedBareFunctionToolNames.has(name)),
+  ]);
   return {
     customToolCallNames: new Set(
-      authorizedNames.filter(name => !sameNameNamespacedCustomNames.has(name)),
+      authorizedCustomNames.filter(name => !sameNameNamespacedCustomNames.has(name)),
     ),
     functionCallNames: new Set(
-      authorizedNames.filter(name => !sameNameNamespacedFunctionNames.has(name)),
+      [...authorizedFunctionNames].filter(name => !sameNameNamespacedFunctionNames.has(name)),
     ),
   };
 }
