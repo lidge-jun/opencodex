@@ -7,6 +7,10 @@ import {
   backfillResponsesFieldsJson,
 } from "./responses-field-backfill";
 import { checkInputAdmission } from "./input-admission";
+import {
+  checkOutboundBodySize,
+  describeOutboundBodyRefusal,
+} from "./outbound-body-guard";
 import { nativeContextLimits } from "../../codex/catalog";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import {
@@ -3903,6 +3907,48 @@ async function handleResponsesInner(
     linkAbortSignal(upstream, options.abortSignal);
     const connectMs = config.connectTimeoutMs ?? 200_000;
     let upstreamResponse: Response;
+    /**
+     * Refuse a built body that exceeds the operator's configured ceiling, before it is sent.
+     *
+     * Unconfigured this measures nothing and returns undefined, so an unset proxy behaves
+     * exactly as it does today. Runs at every point a body is built or rebuilt, because a
+     * rebuild can produce a payload the initial check never saw.
+     */
+    const refuseOversizedOutboundBody = (
+      builtRequest: AdapterRequest,
+      refusalAuthCtx: CodexAuthContext = authCtx,
+    ): Response | undefined => {
+      const result = checkOutboundBodySize(builtRequest.body, config.maxUpstreamBodyBytes);
+      if (result.admitted) return undefined;
+
+      // This returns before the surrounding fetch/finally owns the observation, so release
+      // it here or one refused body holds translator budget for the process lifetime.
+      builtRequest.releaseBodyObservation?.();
+      upstream.abort();
+      releaseUpstreamHostAdmission(hostAdmissionLease);
+      hostAdmissionLease = null;
+      releaseCodexAuthContextProbeLease(refusalAuthCtx);
+      logCtx.errorCode = "outbound_body_too_large";
+      console.warn(
+        `[responses] refused an oversized outbound body: bytes=${result.bytes} limit=${result.limit} `
+        + `input_images=${result.imageCount} image_bytes=${result.imageBytes} `
+        + `model=${JSON.stringify(parsed.modelId)}`,
+      );
+      // A streaming client treats HTTP 413 as a retryable transport error and resends the same
+      // oversized body — the reconnect loop #3177 exists to stop. Terminal overflow is the
+      // honest shape, and it is what the upstream-413 path already returns.
+      if (clientRequestedStream) {
+        return streamingContextOverflowResponse(
+          parsed._responseModelId ?? parsed.modelId,
+          translatorBudget,
+        );
+      }
+      return formatErrorResponse(
+        413,
+        "outbound_body_too_large",
+        describeOutboundBodyRefusal(result),
+      );
+    };
     const transportFailureResponse = (err: unknown): Response => {
       upstream.abort();
       if (options.abortSignal?.aborted) {
@@ -3945,6 +3991,8 @@ async function handleResponsesInner(
         : describeUpstreamConnectFailure(err, connectMs);
       return formatErrorResponse(502, "upstream_error", msg);
     };
+    const initialBodyRefusal = refuseOversizedOutboundBody(request);
+    if (initialBodyRefusal) return initialBodyRefusal;
     try {
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
@@ -4019,6 +4067,8 @@ async function handleResponsesInner(
         retryAdapter.name,
         logCtx.accountLogLabel,
       );
+      const rebuiltBodyRefusal = refuseOversizedOutboundBody(request);
+      if (rebuiltBodyRefusal) return { failed: rebuiltBodyRefusal };
       try {
         return await fetchWithTransientRetry(
           innerRecovery => {
@@ -4111,6 +4161,10 @@ async function handleResponsesInner(
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
         refreshUndeclaredToolGuard(request);
+        // The 401 replay rebuilds the body before sending, so it needs the same ceiling as
+        // every other build site; a replay is exactly when a grown payload reappears.
+        const replayBodyRefusal = refuseOversizedOutboundBody(request);
+        if (replayBodyRefusal) return replayBodyRefusal;
         noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, "oauth-401");
         upstreamResponse = await fetchWithHeaderTimeout(
           request.url,
@@ -4220,6 +4274,8 @@ async function handleResponsesInner(
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
       }
       refreshUndeclaredToolGuard(request);
+      const refreshedBodyRefusal = refuseOversizedOutboundBody(request);
+      if (refreshedBodyRefusal) return refreshedBodyRefusal;
       try {
         upstreamResponse = await fetchWithTransientRetry(
           recovery => {

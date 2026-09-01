@@ -990,6 +990,12 @@ const configSchema = z.object({
     .max(UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD)
     .optional()
     .catch(undefined),
+  // Opt-in outbound body ceiling. An invalid hand edit disables only this guard, matching the
+  // circuit threshold above: a malformed number must not make the proxy refuse traffic.
+  maxUpstreamBodyBytes: z.number().int()
+    .min(0)
+    .optional()
+    .catch(undefined),
   appOwnedMemoryBudgetMb: z.number().int()
     .min(MIN_APP_OWNED_MEMORY_BUDGET_MB)
     .max(MAX_APP_OWNED_MEMORY_BUDGET_MB)

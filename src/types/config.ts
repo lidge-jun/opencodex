@@ -703,6 +703,17 @@ export interface OcxConfig {
    */
   upstreamHostCircuitThreshold?: number;
   /**
+   * Opt-in ceiling, in bytes, for a serialized native Responses **passthrough** body. When the
+   * built body exceeds it OpenCodex refuses locally instead of sending, naming the size and any
+   * embedded image payload. Translated adapter paths are not covered.
+   *
+   * Omitted or 0 = disabled, which is the default: no implicit ceiling is inferred for any
+   * destination. The only measured limit in this codebase is the WebSocket create-frame size,
+   * and the same body still succeeds over HTTP SSE, so a default here would refuse requests
+   * that work today — on Azure and custom Responses gateways as well, whose limits are unknown.
+   */
+  maxUpstreamBodyBytes?: number;
+  /**
    * Opt-in Anthropic OAuth account pool (#294). Default OFF.
    * Failover on 429 + sticky affinity; new sessions may pick lowest known 5h usage.
    * Experimental — see docs and GUI warning before enabling.

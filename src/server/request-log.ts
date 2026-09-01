@@ -125,6 +125,12 @@ export interface RequestLogContext {
   terminalHttpStatus?: number;
   /** Recognized structured terminal code whose exact identity must survive status mapping. */
   terminalErrorCode?: typeof CYBER_POLICY_ERROR_CODE;
+  /**
+   * Proxy-owned error code for a request OpenCodex terminated locally, before or instead of an
+   * upstream send. Status-derived classification cannot name these: there is no upstream
+   * message to classify, and the status alone would read as a provider failure.
+   */
+  errorCode?: string;
   /** Structured reason from `response.incomplete`; internal-only input to log classification. */
   terminalIncompleteReason?: string;
   affinity?: "reused" | "new_bind" | "rebound" | "cleared";
@@ -925,7 +931,9 @@ export function addFinalRequestLog(
   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
     ? 499
     : status;
-  const errorCode = requestLogErrorCode(
+  // A locally assigned code wins: it names a refusal this proxy made itself, which no
+  // status-plus-upstream-message classification can reconstruct.
+  const errorCode = logCtx.errorCode ?? requestLogErrorCode(
     effectiveStatus,
     logCtx.upstreamError,
     logCtx.terminalErrorCode,

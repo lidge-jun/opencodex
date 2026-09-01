@@ -18,24 +18,47 @@ let httpCalls = 0;
 let parsedAttempts: OcxParsedRequest[] = [];
 let builtBodies: string[] = [];
 let customRunTurn: ProviderAdapter["runTurn"] | undefined;
+let passthroughFetchCalls = 0;
+let bodyObservationReleaseCalls = 0;
 
 function attemptAt(index: number): AdapterEvent[] {
   return attemptEvents[index] ?? [{ type: "error", message: `missing fixture attempt ${index}` }];
 }
 
-function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter {
+function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter & { passthrough?: true } {
   const runTurn = provider.adapter === "test-run-turn";
+  const passthrough = provider.adapter === "test-passthrough";
   return {
-    name: runTurn ? "test-run-turn" : "openai-chat",
-    buildRequest(parsed) {
+    name: runTurn ? "test-run-turn" : passthrough ? "test-passthrough" : "openai-chat",
+    ...(passthrough ? { passthrough: true as const } : {}),
+    buildRequest(parsed, incoming) {
       const rawBody = parsed._rawBody as { service_tier?: unknown } | undefined;
-      const body = JSON.stringify({
-        model: parsed.modelId,
-        messages: parsed.context.messages,
-        ...(rawBody?.service_tier !== undefined ? { service_tier: rawBody.service_tier } : {}),
-      });
+      const body = passthrough
+        ? JSON.stringify(parsed._rawBody)
+        : JSON.stringify({
+            model: parsed.modelId,
+            messages: parsed.context.messages,
+            ...(rawBody?.service_tier !== undefined ? { service_tier: rawBody.service_tier } : {}),
+          });
       builtBodies.push(body);
-      return { url: provider.baseUrl, method: "POST", headers: {}, body };
+      const release = passthrough
+        ? incoming.translatorBudget.observeExternallyCapped(
+            "passthrough_serialization",
+            Buffer.byteLength(body, "utf8"),
+          )
+        : undefined;
+      return {
+        url: provider.baseUrl,
+        method: "POST",
+        headers: {},
+        body,
+        ...(release ? {
+          releaseBodyObservation: () => {
+            bodyObservationReleaseCalls += 1;
+            release();
+          },
+        } : {}),
+      };
     },
     async fetchResponse() {
       const index = httpCalls;
@@ -68,7 +91,11 @@ function fixtureAdapter(provider: OcxProviderConfig): ProviderAdapter {
 mock.module("../src/server/adapter-resolve", () => ({
   ...actualResolver,
   resolveAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
-    if (provider.adapter === "test-run-turn" || provider.adapter === "test-http") {
+    if (
+      provider.adapter === "test-run-turn"
+      || provider.adapter === "test-http"
+      || provider.adapter === "test-passthrough"
+    ) {
       return fixtureAdapter(provider);
     }
     return actualResolveAdapter(provider, cacheRetention);
@@ -77,8 +104,11 @@ mock.module("../src/server/adapter-resolve", () => ({
 
 const { handleResponses } = await import("../src/server/responses");
 
-function config(adapter: "test-run-turn" | "test-http", extra: Partial<OcxConfig> = {}): OcxConfig {
-  return {
+function config(
+  adapter: "test-run-turn" | "test-http" | "test-passthrough",
+  extra: Partial<OcxConfig> = {},
+): OcxConfig {
+  const result = {
     port: 0,
     defaultProvider: "fixture",
     emptyCompletionRetry: true,
@@ -93,6 +123,18 @@ function config(adapter: "test-run-turn" | "test-http", extra: Partial<OcxConfig
     },
     ...extra,
   } as OcxConfig;
+  if (adapter === "test-passthrough") {
+    (result.providers.fixture as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch = async () => {
+      passthroughFetchCalls += 1;
+      return Response.json({
+        id: "resp_fixture",
+        object: "response",
+        status: "completed",
+        output: [],
+      });
+    };
+  }
+  return result;
 }
 
 function request(
@@ -114,6 +156,8 @@ beforeEach(() => {
   parsedAttempts = [];
   builtBodies = [];
   customRunTurn = undefined;
+  passthroughFetchCalls = 0;
+  bodyObservationReleaseCalls = 0;
 });
 
 afterEach(() => {
@@ -122,6 +166,78 @@ afterEach(() => {
 });
 
 describe("empty-completion core integration", () => {
+  test("an unconfigured limit sends an oversized passthrough body upstream", async () => {
+    // The regression guard for this whole feature. A default ceiling here would refuse turns
+    // that succeed today: the one measured limit in this codebase is the WS create-frame size,
+    // and that transport already falls back to HTTP SSE for exactly these bodies (#2473), with
+    // an 18.2 MB HTTP 200 observed in #2426. Unset must mean "send it", not "guess a ceiling".
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(
+      request(false, "x".repeat(20 * 1024 * 1024)),
+      config("test-passthrough"),
+      logCtx,
+    );
+
+    expect(response.status).toBe(200);
+    expect(passthroughFetchCalls).toBe(1);
+    expect(logCtx.errorCode).toBeUndefined();
+  });
+
+  test("an oversized passthrough body is refused locally and releases its observation", async () => {
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(
+      request(false, "x".repeat(512)),
+      config("test-passthrough", { maxUpstreamBodyBytes: 128 }),
+      logCtx,
+    );
+    const body = await response.json() as { error?: { code?: string } };
+
+    expect(response.status).toBe(413);
+    expect(body.error?.code).toBe("outbound_body_too_large");
+    expect(logCtx.errorCode).toBe("outbound_body_too_large");
+    expect(passthroughFetchCalls).toBe(0);
+    expect(bodyObservationReleaseCalls).toBe(1);
+  });
+
+  test("a streaming refusal is terminal overflow, not a retryable 413", async () => {
+    // Codex resends on an HTTP 413, so the shape that stops the loop is response.failed with
+    // context_length_exceeded — the same contract the upstream-413 path already returns (#3177).
+    const response = await handleResponses(
+      request(true, "x".repeat(512)),
+      config("test-passthrough", { maxUpstreamBodyBytes: 128 }),
+      { model: "", provider: "" },
+    );
+
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain("response.failed");
+    expect(text).toContain("context_length_exceeded");
+    expect(passthroughFetchCalls).toBe(0);
+  });
+
+  test("a normal-sized passthrough body still reaches upstream", async () => {
+    const response = await handleResponses(
+      request(false),
+      config("test-passthrough", { maxUpstreamBodyBytes: 4_096 }),
+      { model: "", provider: "" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(passthroughFetchCalls).toBe(1);
+    expect(bodyObservationReleaseCalls).toBe(1);
+  });
+
+  test("an explicit zero limit lets an oversized turn reach upstream", async () => {
+    const response = await handleResponses(
+      request(false, "x".repeat(512)),
+      config("test-passthrough", { maxUpstreamBodyBytes: 0 }),
+      { model: "", provider: "" },
+    );
+
+    expect(response.status).toBe(200);
+    expect(passthroughFetchCalls).toBe(1);
+  });
+
   test("streaming runTurn returns the local 429 contract when initial pacing admission is rejected", async () => {
     setProviderRequestPacingLimitsForTest({ maxQueueDepth: 0 });
     const overloaded = config("test-run-turn");
