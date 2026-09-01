@@ -70,3 +70,9 @@ dev이기 때문이다.
 
 사용자 요청은 "머지 가능한 정도까지 세팅"이었다. 자동화 게이트 기준으로는
 도달했다. 승인은 우리 손 밖이다.
+
+## 분리한 PR
+
+**#3147** `test(auth): seed the pool quota and credential after the clock is pinned`
+— `dev` 타깃, 테스트 파일 한 개. 이 스택의 브랜치가 아니라 dev가 소유하는
+flake라서 섞지 않았다. 스택 7건과 독립적으로 리뷰·머지된다.
