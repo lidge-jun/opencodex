@@ -17,6 +17,7 @@ export const NATIVE_MAIN_CLAIM_DB = ".opencodex-native-main.claim.sqlite";
 export interface NativeMainClaimOptions {
   waitMs?: number;
   pollMs?: number;
+  signal?: AbortSignal;
   hardenPath?: (path: string) => Promise<void>;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
@@ -121,6 +122,22 @@ function releaseClaim(database: Database | undefined, file: StableLockFile | und
   try { file?.close(); } catch { /* operation already completed */ }
 }
 
+function waitForClaimRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return Bun.sleep(ms);
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function withNativeMainSharedClaim<T>(
   context: NativeProfileContext,
   operation: () => Promise<T>,
@@ -151,9 +168,11 @@ export async function withNativeMainExclusiveClaim<T>(
   operation: () => Promise<T>,
   options: NativeMainClaimOptions = {},
 ): Promise<T> {
+  const signal = options.signal;
   const deadline = Date.now() + Math.max(0, options.waitMs ?? 0);
   const pollMs = Math.max(1, options.pollMs ?? 50);
   for (;;) {
+    if (signal?.aborted) throw signal.reason;
     let database: Database | undefined;
     let file: StableLockFile | undefined;
     try {
@@ -162,14 +181,16 @@ export async function withNativeMainExclusiveClaim<T>(
       assertStableLockFile(nativeMainClaimPath(context), file);
     } catch (error) {
       releaseClaim(database, file);
+      if (signal?.aborted) throw signal.reason;
       const mapped = mapClaimSetupError(error, "Native-main credentials are in use.");
       if (mapped.code === "NATIVE_MAIN_CLAIM_BUSY" && Date.now() < deadline) {
-        await Bun.sleep(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+        await waitForClaimRetry(Math.min(pollMs, Math.max(1, deadline - Date.now())), signal);
         continue;
       }
       throw mapped;
     }
     try {
+      if (signal?.aborted) throw signal.reason;
       return await operation();
     } finally {
       releaseClaim(database, file);

@@ -206,39 +206,41 @@ async function resolveMainAccountToken(
   // primitive and no FFI. Order is claim (machine-wide) then fingerprint lock
   // (per-grant), never the reverse: two processes holding different fingerprint
   // locks and then reaching for the same claim would deadlock.
-  return withNativeMainExclusiveClaim(resolveNativeProfileContext(), () =>
-    withCodexRefreshFileLock(lockKey, signal, async () => {
-    const locked = readMainAuthJsonCredential();
-    if (!locked) throw new MainAuthJsonChangedDuringRefreshError();
-    if (!locked.refreshToken
-      || refreshGrantFingerprintForToken(locked.refreshToken) !== lockKey) {
+  return withNativeMainExclusiveClaim(
+    resolveNativeProfileContext(),
+    () => withCodexRefreshFileLock(lockKey, signal, async () => {
+      const locked = readMainAuthJsonCredential();
+      if (!locked) throw new MainAuthJsonChangedDuringRefreshError();
+      if (!locked.refreshToken
+        || refreshGrantFingerprintForToken(locked.refreshToken) !== lockKey) {
+        if (locked.accessToken !== rejectedAccessToken
+          && mainAccessTokenFresh(locked.accessToken, Date.now(), 0)) {
+          return { accessToken: locked.accessToken!, chatgptAccountId: locked.chatgptAccountId };
+        }
+        throw new MainAuthJsonChangedDuringRefreshError();
+      }
       if (locked.accessToken !== rejectedAccessToken
-        && mainAccessTokenFresh(locked.accessToken, Date.now(), 0)) {
+        && mainAccessTokenFresh(locked.accessToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
         return { accessToken: locked.accessToken!, chatgptAccountId: locked.chatgptAccountId };
       }
-      throw new MainAuthJsonChangedDuringRefreshError();
-    }
-    if (locked.accessToken !== rejectedAccessToken
-      && mainAccessTokenFresh(locked.accessToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
-      return { accessToken: locked.accessToken!, chatgptAccountId: locked.chatgptAccountId };
-    }
-    const refresh = dependencies.refreshToken
-      ?? ((refreshToken: string, options: { signal: AbortSignal }) => refreshChatGPTToken(refreshToken, options));
-    let refreshed: OAuthCredentials;
-    try {
-      refreshed = await refresh(locked.refreshToken, { signal });
-    } catch (cause) {
-      const message = cause instanceof Error ? cause.message.toLowerCase() : "";
-      const reason = /invalid_grant|invalidated|revoked|expired/.test(message)
-        ? "reauth" as const
-        : "transient" as const;
-      throw new MainAccountTokenRefreshError(reason, { cause });
-    }
-    const result = persistRefreshedMainAuthJson(locked, refreshed);
-    clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
-    return result;
+      const refresh = dependencies.refreshToken
+        ?? ((refreshToken: string, options: { signal: AbortSignal }) => refreshChatGPTToken(refreshToken, options));
+      let refreshed: OAuthCredentials;
+      try {
+        refreshed = await refresh(locked.refreshToken, { signal });
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message.toLowerCase() : "";
+        const reason = /invalid_grant|invalidated|revoked|expired/.test(message)
+          ? "reauth" as const
+          : "transient" as const;
+        throw new MainAccountTokenRefreshError(reason, { cause });
+      }
+      const result = persistRefreshedMainAuthJson(locked, refreshed);
+      clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+      return result;
     }),
-  { waitMs: 30_000 });
+    { waitMs: 30_000, signal },
+  );
 }
 
 /** Refresh the CLI-owned native credential before upstream I/O and publish it atomically. */

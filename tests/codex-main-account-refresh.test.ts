@@ -145,9 +145,9 @@ describe("native main token refresh", () => {
     const homeA = mkdtempSync(join(tmpdir(), "ocx-home-a-"));
     const homeB = mkdtempSync(join(tmpdir(), "ocx-home-b-"));
     const previousOcxHome = process.env.OPENCODEX_HOME;
-    // Overlap is observed, not assumed: each refresh records when it entered and
-    // left, so a serialized pair reads enter/leave/enter and a concurrent one
-    // reads enter/enter.
+    // The first refresh records its entry and exit. A concurrent second refresh would
+    // add enter:b before the first release; the serialized follower instead rereads
+    // fresh credentials and does not refresh the now-rotated grant itself.
     const order: string[] = [];
     let release: (() => void) | undefined;
     const firstEntered = Promise.withResolvers<void>();
@@ -160,8 +160,8 @@ describe("native main token refresh", () => {
       }
       order.push(`leave:${label}`);
       return {
-        accessToken: `fresh-${label}`,
-        refreshToken: `rotated-${label}`,
+        access: `fresh-${label}`,
+        refresh: `rotated-${label}`,
         expires: Date.now() + 3_600_000,
         accountId: "account-main",
       };
@@ -176,15 +176,70 @@ describe("native main token refresh", () => {
       // this entered immediately; now it waits on the shared claim.
       process.env.OPENCODEX_HOME = homeB;
       const second = getValidMainAccountToken({ refreshToken: refreshFor("b", false) });
-      await Bun.sleep(50);
       expect(order).toEqual(["enter:a"]);
 
       release?.();
       await first;
-      await second.catch(() => null);
-      expect(order.slice(0, 3)).toEqual(["enter:a", "leave:a", "enter:b"]);
+      await second;
+      expect(order).toEqual(["enter:a", "leave:a"]);
     } finally {
       release?.();
+      if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOcxHome;
+      rmSync(homeA, { recursive: true, force: true });
+      rmSync(homeB, { recursive: true, force: true });
+    }
+  });
+
+  test("aborts a contended native-main refresh before it retries", async () => {
+    const authPath = join(home, "auth.json");
+    writeFileSync(authPath, JSON.stringify({
+      tokens: { access_token: expiredJwt(), refresh_token: "old-refresh", account_id: "account-main" },
+    }));
+
+    const homeA = mkdtempSync(join(tmpdir(), "ocx-home-a-"));
+    const homeB = mkdtempSync(join(tmpdir(), "ocx-home-b-"));
+    const previousOcxHome = process.env.OPENCODEX_HOME;
+    const firstEntered = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const abort = new AbortController();
+    const abortReason = new Error("refresh cancelled while native-main claim was busy");
+    let secondRefreshStarted = false;
+
+    try {
+      process.env.OPENCODEX_HOME = homeA;
+      const first = getValidMainAccountToken({
+        refreshToken: async () => {
+          firstEntered.resolve();
+          await releaseFirst.promise;
+          return {
+            access: "fresh-a",
+            refresh: "rotated-a",
+            expires: Date.now() + 3_600_000,
+            accountId: "account-main",
+          };
+        },
+      });
+      await firstEntered.promise;
+
+      // The first refresh holds the CODEX_HOME claim. Cancellation must release the
+      // second caller from that wait instead of letting it refresh after the holder exits.
+      process.env.OPENCODEX_HOME = homeB;
+      const second = getValidMainAccountToken({
+        signal: abort.signal,
+        refreshToken: async () => {
+          secondRefreshStarted = true;
+          throw new Error("must not refresh after cancellation");
+        },
+      });
+      abort.abort(abortReason);
+      releaseFirst.resolve();
+
+      await expect(second).rejects.toBe(abortReason);
+      await expect(first).resolves.toEqual({ accessToken: "fresh-a", chatgptAccountId: "account-main" });
+      expect(secondRefreshStarted).toBe(false);
+    } finally {
+      releaseFirst.resolve();
       if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOcxHome;
       rmSync(homeA, { recursive: true, force: true });
