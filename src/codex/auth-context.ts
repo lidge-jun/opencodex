@@ -455,6 +455,7 @@ export async function resolveCodexAuthContext(
     const excludeAccountIds = nativeMainReadsForbidden
       ? new Set([MAIN_CODEX_ACCOUNT_ID])
       : undefined;
+    const mainModelGrantUnobserved = excludeAccountIds?.has(MAIN_CODEX_ACCOUNT_ID) === true;
     const entitlementSnapshot = options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
       ? await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config, {
         excludeAccountIds,
@@ -527,11 +528,11 @@ export async function resolveCodexAuthContext(
         throw new CodexMainProfileDrainingError();
       }
       throw new CodexPoolAuthenticationError(
-        modelEligibleAccountIds?.size === 0
+        modelEligibleAccountIds === undefined
+          ? undefined
+          : entitledAccountIds?.size === 0 && !mainModelGrantUnobserved
           ? "No eligible Codex account supports this model"
-          : modelEligibleAccountIds
-            ? "Codex accounts that support this model are currently unavailable"
-            : undefined,
+          : "Codex accounts that support this model are currently unavailable",
       );
     }
     accountId = selected;
