@@ -863,7 +863,7 @@ describe("Windows service task", () => {
   });
 
   test("writes Task Scheduler XML with an exact SID and UTF-16 BOM", () => {
-    const document = buildWindowsTaskXmlDocument("service.cmd", "launcher.vbs", undefined, TEST_WINDOWS_TASK_SID);
+    const document = buildWindowsTaskXmlDocument("service.cmd", "launcher.vbs");
     expect(document.charCodeAt(0)).toBe(0xFEFF);
     expect(document).toContain(`<UserId>${TEST_WINDOWS_TASK_SID}</UserId>`);
   });
@@ -2535,6 +2535,7 @@ describe("service repair", () => {
     const expectedLauncher = "C:\\Users\\김병준\\.opencodex\\service-launcher.vbs";
     const reportedLauncher = "C:\\Users\\???\\.opencodex\\service-launcher.vbs";
     const legacy = buildWindowsTaskXml("ignored.cmd", reportedLauncher, undefined, TEST_WINDOWS_TASK_SID)
+      .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`)
       .replace(/<SessionStateChangeTrigger>[\s\S]*?<\/SessionStateChangeTrigger>\s*/gi, "");
 
     await expect(repairService({
