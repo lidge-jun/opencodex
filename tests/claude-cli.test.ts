@@ -37,6 +37,19 @@ describe("ocx claude env assembly", () => {
     expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
   });
 
+  test("a connected target keeps its admission token even when the local env reads as subscription", () => {
+    // #3148 resolves the auth mode before adding proxy-owned credentials, which is right for
+    // an ordinary launch. A connected launch is different: the caller already named a hub and
+    // supplied the client admission token for it, so a machine whose own environment looks
+    // like a Claude subscription must not strip the credential the launch was built with.
+    const env = buildClaudeEnv(cfg(), {
+      baseUrl: "https://hub.example.test",
+      admissionToken: "ocx_data_connected",
+    }, {}, {}, { mode: "subscription", origin: "explicit" });
+    expect(env.ANTHROPIC_BASE_URL).toBe("https://hub.example.test");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("ocx_data_connected");
+  });
+
   test("user-owned connected destination wins and cannot receive the hub token", () => {
     const env = buildClaudeEnv(cfg(), {
       baseUrl: "https://hub.example.test",

@@ -213,7 +213,12 @@ export function buildClaudeEnv(
     env: () => env as NodeJS.ProcessEnv,
     ownTokens,
   }));
-  if (resolved.markerMode === "subscription") {
+  // An explicit connected target is not a subscription launch. The caller named a hub and
+  // handed us the client admission token for it, so auth-mode detection - which reads the
+  // local environment - has no bearing on whether that token belongs in the child env.
+  // Without this, a machine whose environment reads as subscription strips the very
+  // credential the connected launch was constructed with (#3148 carry).
+  if (resolved.markerMode === "subscription" && !explicitTarget) {
     // A prior system-env snapshot may have left our admission key in the inherited
     // environment. It belongs to the proxy data plane, not Claude subscription OAuth.
     const token = env.ANTHROPIC_AUTH_TOKEN?.trim();
