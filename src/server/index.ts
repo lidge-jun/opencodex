@@ -278,7 +278,7 @@ async function readBoundedRequestText(req: Request, limit: number): Promise<stri
  *
  * Scoped to configured keys on purpose: an environment token or a loopback bind has no key
  * to name, and emitting one anyway would invent an attribution that does not exist. 200 only
- * — this route emits no validator and therefore never answers 304.
+ * ??this route emits no validator and therefore never answers 304.
  *
  * An id that fails the header-safe pattern is omitted rather than sanitized, with one warning
  * that does NOT repeat the id: logging the offending value is how a malformed id becomes a
@@ -533,7 +533,7 @@ function withRequestLogId(response: Response, requestId: string): Response {
   headers.set(REQUEST_LOG_ID_RESPONSE_HEADER, requestId);
   // A custom `x-` header is not CORS-safelisted, so cross-origin JavaScript gets null from
   // `response.headers.get()` even though the header is on the wire. Naming it here is what
-  // makes the id readable by a browser client — the only caller that needs a correlation id
+  // makes the id readable by a browser client ??the only caller that needs a correlation id
   // it did not send itself.
   //
   // Appending to whatever `withCors` already set, rather than overwriting, keeps this
@@ -612,7 +612,7 @@ function inspectStartupOwnership(
  * CLI start path owns the single decision.
  *
  * A caller that starts a server without `handleStart` (tests, embedded use)
- * deliberately gets no warning — lifecycle diagnostics belong to whoever owns
+ * deliberately gets no warning ??lifecycle diagnostics belong to whoever owns
  * the lifecycle.
  */
 let startupCacheInvalidationWrote = false;
@@ -628,7 +628,7 @@ export function warnAgentTaskRecoveryStartup(config: {
   agentTaskRecovery?: { enabled?: boolean };
 }): void {
   if (config.agentTaskRecovery?.enabled !== true) return;
-  console.warn("⚠️  Experimental encrypted V2 task recovery is enabled.");
+  console.warn("?��?  Experimental encrypted V2 task recovery is enabled.");
   console.warn("   A scoped cache miss may send an additional authenticated request to ChatGPT and may consume quota or add latency; concurrent misses can share one request.");
   console.warn("   Recovered plaintext assignment data is retained only in a bounded, process-local in-memory cache; exact fidelity is not guaranteed and the path depends on undocumented backend behavior.");
 }
@@ -646,10 +646,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // Arm synchronously before listen. A pending journal therefore makes __main__ unusable
   // before any request can resolve its physical credential, while health/management/Pool stay live.
   // Refresh OAuth provider presets (models/noReasoningModels) from the registry so a proxy update
-  // adding/dropping models reaches existing configs on start — not just fresh installs.
+  // adding/dropping models reaches existing configs on start ??not just fresh installs.
   reconcileOAuthProviders(config);
   reconcileLiveStateStores();
-  // Seed default featured subagent models on first run only (UNSET → defaults). A user-set list,
+  // Seed default featured subagent models on first run only (UNSET ??defaults). A user-set list,
   // even [], is left alone so GUI removals persist.
   if (config.subagentModels === undefined) {
     config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
@@ -662,7 +662,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   if (runClaudeAuthModeMigration(config)) saveConfig(config);
   // Sidecar model migration (KST 2026-07-10 06:00 = UTC 2026-07-09 21:00): auto-migrate the old
   // gpt-5.4-mini default to gpt-5.6-luna for both search and vision sidecars. Only touches configs
-  // still on the old default — explicit user choices are preserved.
+  // still on the old default ??explicit user choices are preserved.
   {
     const SIDECAR_MIGRATION_CUTOFF = Date.UTC(2026, 6, 9, 21, 0); // July 9 21:00 UTC = KST July 10 06:00
     if (Date.now() >= SIDECAR_MIGRATION_CUTOFF) {
@@ -719,7 +719,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     } catch { /* no readable Codex home: nothing to invalidate */ }
   }
   // Arm the `claudeCode` hand-edit guard (devlog 260726_claude_auth_auto/040 H1) BEFORE
-  // the server can serve a request, and AFTER the startup migrations above — those run
+  // the server can serve a request, and AFTER the startup migrations above ??those run
   // against a config nobody else holds and are the documented exception to the save
   // boundary, so the baseline should reflect what they wrote. Arming is eager on
   // purpose: a lazy "arm on first save" loses exactly the hand edit made before that
@@ -746,7 +746,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   setCorsOrigin(listenPort);
 
   // Canonicalize an explicit "localhost" bind to IPv4 so it matches the injected base_url (which
-  // resolves localhost→127.0.0.1): on Windows `localhost` resolves ::1-first, but the injected URL
+  // resolves localhost??27.0.0.1): on Windows `localhost` resolves ::1-first, but the injected URL
   // is 127.0.0.1, so binding literal "localhost" would reintroduce the F4 refusal. Wildcards
   // (0.0.0.0/::) and specific hosts are left untouched so intentional exposure is preserved.
   const configuredHost = config.hostname?.trim();
@@ -766,7 +766,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
    *
    * The public listener passes the shared config through untouched, so its behaviour is
    * byte-identical to before. The loopback listener substitutes 127.0.0.1, which is what makes
-   * `isApiAuthRequired` return false for it — the same code path a plain loopback bind has
+   * `isApiAuthRequired` return false for it ??the same code path a plain loopback bind has
    * always taken, including the Host-header check inside `isAllowedRequestOrigin`.
    *
    * Built per request rather than once per listener so a management-API config change is
@@ -787,17 +787,18 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
    * materialization fails or finds no source, `syncCodex` warns and injects with
    * `catalogPath: null`; Codex then builds an ONLINE model manager and `model/list` refreshes
    * through `GET {base_url}/models`. Returning 404 there would leave the picker on its bundled
-   * fallback — fixing the direct-spawn host while breaking its model list.
+   * fallback ??fixing the direct-spawn host while breaking its model list.
    */
   function loopbackRouteAllowed(url: URL, req: Request): boolean {
     const path = url.pathname;
     if (path === "/v1/responses") {
       return req.method === "POST" || req.headers.get("upgrade")?.toLowerCase() === "websocket";
     }
+    if (path === "/v1/alpha/search") return req.method === "POST";
     if (path === "/v1/responses/compact") return req.method === "POST";
     if (path === "/v1/models") return req.method === "GET";
     // Standalone realtime voice sessions (codex-rs thread/realtime/start, WebSocket
-    // transport) — a directly-spawned `codex app-server` needs these for desktop
+    // transport) ??a directly-spawned `codex app-server` needs these for desktop
     // voice the same way it needs /v1/responses. WebSocket upgrades only; plain
     // HTTP on these paths stays rejected.
     if (path === "/v1/realtime" || path === "/v1/live") {
@@ -837,7 +838,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // the server_is_overloaded code so clients can back off, but always return a JSON envelope.
   // These two run BEFORE the auth/origin checks, so they need the receiving listener's policy
   // explicitly (#1102). Reaching for the shared `config` here would attach public-policy CORS
-  // headers to a 503 on the loopback listener — no model runs and no credential is spent, but
+  // headers to a 503 on the loopback listener ??no model runs and no credential is spent, but
   // it is the one error path that would answer a rebinding origin with its own origin echoed
   // back.
   function drainingResponse(req: Request, policy: RequestPolicyView): Response {
@@ -974,7 +975,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           // #2108: an `unknown` verdict means the probe could not answer, not that this host
           // is unownable. Hand the fence a way to re-ask so a host that becomes answerable
           // after boot reopens on its own instead of needing `ocx restart`. A `foreign`
-          // verdict ignores this by design — that one is a fact, not a question.
+          // verdict ignores this by design ??that one is a fact, not a question.
           ownershipRetryOptions,
         )
     : {
@@ -1027,7 +1028,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       // Auth and CORS decisions below read `policy`, not `config`. For the public listener the
       // two are the same object, so its behaviour is unchanged; for the loopback listener the
       // view substitutes 127.0.0.1 as the bind address, which is what routes it through the
-      // same code path a plain loopback bind has always taken — Host-header check included.
+      // same code path a plain loopback bind has always taken ??Host-header check included.
       // Routing, provider selection and response bodies keep using `config`.
       const policy: RequestPolicyView = ingress === "unauthenticated-loopback" ? loopbackPolicy() : config;
       const url = new URL(req.url);
@@ -1043,7 +1044,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       try {
         const decoded = decodeURIComponent(url.pathname);
         if (decoded === "/readyz" || decoded === "/readyz/") readyzPath = decoded;
-      } catch { /* malformed encoding — not a readiness path */ }
+      } catch { /* malformed encoding ??not a readiness path */ }
 
       const packageTreeStatus = packageTreeIntegrity.status();
       if (!packageTreeStatus.ok && (
@@ -1103,7 +1104,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         }
         // WS transport gate: Codex's built-in `openai` provider hardcodes supports_websockets=true,
         // so under Design B it always tries the WS transport first. When the feature is off, reject
-        // the upgrade with 426 — codex-rs maps a connect-time UPGRADE_REQUIRED to a clean
+        // the upgrade with 426 ??codex-rs maps a connect-time UPGRADE_REQUIRED to a clean
         // session-scoped HTTP fallback (client.rs WebsocketStreamOutcome::FallbackToHttp) instead of
         // surfacing broken-pipe errors from sockets a "disabled" feature would otherwise accept.
         if (!websocketsEnabled(config)) {
@@ -1227,13 +1228,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
 
       if (url.pathname === "/v1/catalog" && (req.method === "GET" || req.method === "HEAD")) {
         // #809: remote Codex clients need the model catalog, and the only prior source was
-        // GET /api/catalog behind management auth — so operators had to hand out an admin
+        // GET /api/catalog behind management auth ??so operators had to hand out an admin
         // token to read a list of models. This route fixes that on the data plane instead of
         // widening /api/*, which stays exactly as restricted as before.
         //
         // resolveApiAuth (not resolveResponsesApiAuth) for the same reason /v1/models uses
         // it: nothing here forwards a caller credential upstream, so accepting the dedicated
-        // header, a recognized bearer, or x-api-key is safe — and rejecting x-api-key would
+        // header, a recognized bearer, or x-api-key is safe ??and rejecting x-api-key would
         // 401 Anthropic-SDK clients holding a perfectly valid data credential.
         const admission = resolveApiAuth(req, policy);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
@@ -1245,8 +1246,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         if (serialized.body === null) {
           // Built directly rather than through formatErrorResponse: that helper derives
           // `code` from the status and message via classifyError, and these two need stable,
-          // specific codes. `catalog_not_found` in particular is what lets a caller — and
-          // tests/api-key-attribution.test.ts — tell "this route exists and has no catalog"
+          // specific codes. `catalog_not_found` in particular is what lets a caller ??and
+          // tests/api-key-attribution.test.ts ??tell "this route exists and has no catalog"
           // apart from "this route is gone", which is the difference between admission proof
           // and a vacuous pass.
           return withCors(
@@ -1278,7 +1279,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           "content-type": "application/json",
           // Identity-varying content behind a credential: never let a shared cache keep it,
           // and never hand out a validator it could revalidate with. `no-cache` alone does
-          // not prevent storage — it forces revalidation, and the revalidation is exactly
+          // not prevent storage ??it forces revalidation, and the revalidation is exactly
           // what would cross identities here, because this body varies by key type and key
           // id while the ETag would be derived from bytes alone. A store keyed on URL plus
           // validator could then serve one credential's representation to another. Proving
@@ -1395,7 +1396,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         const goOrdered = orderForSubagents(goEnabled, config.subagentModels);
         // Claude Code / Claude Desktop gateway model discovery (GET /v1/models with
         // Anthropic-style headers; 003 G1-G8 + devlog 131). Entries use the official
-        // ModelInfo shape incl. capabilities (effort ladder / thinking) — Desktop 3P can
+        // ModelInfo shape incl. capabilities (effort ladder / thinking) ??Desktop 3P can
         // only learn capabilities through discovery, and Claude Code 2.1.207 strips the
         // extra fields (backward-safe). Ids are the claude-opus-4-8-{code} Desktop
         // aliases; legacy claude-ocx-* ids keep decoding via resolveAlias. Detection:
@@ -1428,7 +1429,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           return jsonResponse({ data }, 200, req, policy);
         }
         if (url.searchParams.has("client_version")) {
-          // Codex client → Codex catalog shape: native gpt + namespaced routed models,
+          // Codex client ??Codex catalog shape: native gpt + namespaced routed models,
           // cloned from a native template so required fields (base_instructions, etc.) are present.
           // Pass the subagent picks so featured models lead by priority (matches the on-disk file).
           // Disabled natives stay in the catalog shape with visibility "hide" (mirrors the
@@ -1469,11 +1470,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           }, 200, req, policy);
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
-        // (pure availability list — disabled natives are omitted entirely).
+        // (pure availability list ??disabled natives are omitted entirely).
         // Grok Build discovers models through this endpoint too, and its model picker only
         // enables /effort for entries that advertise the reasoning ladder in the Grok model
         // catalog shape (supports_reasoning_effort + reasoning_efforts[]). The Codex catalog
-        // branch above already carries the same ladders, so mirror them here — native rows
+        // branch above already carries the same ladders, so mirror them here ??native rows
         // from the upstream snapshot, routed rows from the configured provider tiers. The
         // default uses the same canonical fallback as the Codex catalog resolver
         // (configured default, then medium, then high, then the first tier). Extra fields
@@ -1553,7 +1554,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         return jsonResponse({ object: "list", data }, 200, req, policy);
       }
 
-      // Remote compaction v1 (codex-rs with Feature::RemoteCompactionV2 off — the default).
+      // Remote compaction v1 (codex-rs with Feature::RemoteCompactionV2 off ??the default).
       // Must be matched BEFORE the /v1/responses POST branch never sees it (distinct path) and
       // before the /v1/* 404 guard below.
       if (url.pathname === "/v1/responses/compact" && req.method === "POST") {
@@ -1721,7 +1722,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
 
       // Anthropic Messages inbound (Claude Code). count_tokens FIRST (longer path).
-      // Claude Code posts `/v1/messages?beta=true` — pathname match ignores the query (003 G9).
+      // Claude Code posts `/v1/messages?beta=true` ??pathname match ignores the query (003 G9).
       if (url.pathname === "/v1/messages/count_tokens" && req.method === "POST") {
         if (isDraining()) {
           return drainingResponse(req, policy);
@@ -1761,7 +1762,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           inboundProtocol: "messages",
         };
         // Logging is finalized inside handleClaudeMessages (Responses-vocab tap on the
-        // pre-translation stream + native passthrough callbacks) — do not re-wrap the
+        // pre-translation stream + native passthrough callbacks) ??do not re-wrap the
         // translated Anthropic stream here.
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
           await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }, policy),
@@ -1797,7 +1798,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         ));
       }
 
-      // ChatGPT / Codex App voice (GPT‑Live / Frameless Bidi) + OpenAI Realtime call-create.
+      // ChatGPT / Codex App voice (GPT?�Live / Frameless Bidi) + OpenAI Realtime call-create.
       // Clients hit either /v1/live (Frameless App) or /v1/realtime/calls (codex RealtimeCallClient /
       // public Realtime API). Sideband WS joins are handled just below.
       if (
@@ -1835,7 +1836,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
 
       // Voice / Realtime WebSocket relay. Sideband joins: Frameless /v1/live/{callId};
       // Realtime v1 /v1/realtime?call_id= (or /v1/realtime/calls/{callId}). Standalone
-      // sessions (codex-rs thread/realtime/start, WebSocket transport — the desktop voice
+      // sessions (codex-rs thread/realtime/start, WebSocket transport ??the desktop voice
       // path): /v1/realtime?intent=quicksilver&model= and /v1/live?model=.
       // Transparent bidirectional relay.
       const liveSidebandTarget = req.headers.get("upgrade")?.toLowerCase() === "websocket"
@@ -1889,7 +1890,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
 
       // Data-plane guard: unknown /v1/* paths must fail with JSON 404, never fall through to the
       // GUI static handler (extensionless paths would get index.html with HTTP 200 and codex-rs
-      // endpoint clients — memories/*, realtime/* — would surface confusing
+      // endpoint clients ??memories/*, realtime/* ??would surface confusing
       // serde decode errors instead of a clean not-found).
       if (url.pathname.startsWith("/v1/")) {
         return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, policy);
@@ -1905,8 +1906,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             : withManagementCors(new Response(null, { status: 401, headers: { "Cache-Control": "no-store" } }), req, config);
         }
         if (req.method === "POST") {
-          // This endpoint is reachable WITHOUT a credential — that is the point of a pairing
-          // exchange — so the body limit has to hold against a caller who controls the
+          // This endpoint is reachable WITHOUT a credential ??that is the point of a pairing
+          // exchange ??so the body limit has to hold against a caller who controls the
           // framing. A declared Content-Length is a claim, not a bound: omit the header and
           // `Number(null ?? "0")` is 0, send `Transfer-Encoding: chunked` and there is no
           // header at all. Both used to pass the pre-check and land in `req.text()`, which
@@ -1977,7 +1978,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       maxPayloadLength: MAX_WS_FRAME_BYTES,
       idleTimeout: WEBSOCKET_IDLE_TIMEOUT_SECONDS,
       // Responses WebSocket data plane (phase 120.2). Re-frames the same SSE pipeline onto the
-      // socket: parse response.create → run handleResponses unchanged → pump its SSE body as WS
+      // socket: parse response.create ??run handleResponses unchanged ??pump its SSE body as WS
       // Text frames. response.processed is a no-op ack. close() aborts the upstream (RC2 parity).
       // Live sideband sockets (kind=live-sideband) are a transparent bidirectional relay instead.
       open(ws: ServerWebSocket<WsData>) {
@@ -2044,7 +2045,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         } catch {
           return; // text-only contract; ignore unparseable frames
         }
-        if (frame.type === "response.processed") return; // ack — no-op
+        if (frame.type === "response.processed") return; // ack ??no-op
         if (frame.type !== "response.create") return;
         markActivity("ws response.create");
 
@@ -2089,7 +2090,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         void (async () => {
           const start = Date.now();
           const requestId = nextRequestLogId(start);
-          // Resolved once at the handshake — a frame has no request headers left
+          // Resolved once at the handshake ??a frame has no request headers left
           // to re-resolve from. Optional on WsData like every other member, so
           // narrow rather than assume: an unattributed frame is preferable to a
           // fabricated attribution.
@@ -2204,7 +2205,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         try {
           // startServer is synchronous, so this rollback cannot await. Bun begins closing the
           // listen socket on the call itself; the caller sees the original bind error either
-          // way, and the alternative — leaving the public listener up — is the failure this
+          // way, and the alternative ??leaving the public listener up ??is the failure this
           // rollback exists to prevent.
           void server.stop(true);
         } catch {
@@ -2244,8 +2245,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   Object.defineProperty(server, "stop", {
     configurable: true,
     value: async (closeActiveConnections?: boolean): Promise<void> => {
-      // The orchestration lives in `runListenerShutdown` so its two competing properties —
-      // cleanup completes, failure propagates — are testable without a live socket.
+      // The orchestration lives in `runListenerShutdown` so its two competing properties ??      // cleanup completes, failure propagates ??are testable without a live socket.
       await runListenerShutdown(
         [
           () => nativeStop(closeActiveConnections),
@@ -2271,27 +2271,27 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   boundPort = actualPort;
   setCorsOrigin(actualPort);
 
-  console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
-  console.log(`   POST /v1/responses → provider translation`);
-  console.log(`   POST /v1/chat/completions → OpenAI-compatible clients`);
-  console.log(`   GET  /healthz      → health check`);
-  console.log(`   GET  /api/*        → management API`);
-  console.log(`   GET  /             → GUI dashboard`);
+  console.log(`?? opencodex proxy running on http://localhost:${actualPort}`);
+  console.log(`   POST /v1/responses ??provider translation`);
+  console.log(`   POST /v1/chat/completions ??OpenAI-compatible clients`);
+  console.log(`   GET  /healthz      ??health check`);
+  console.log(`   GET  /api/*        ??management API`);
+  console.log(`   GET  /             ??GUI dashboard`);
 
   if (loopbackServer) {
     // Loud on every start, not once at enable time. An operator who inherits a config, or
     // who forgot, has to be able to see that an unauthenticated surface is live without
     // reading the file.
     const loopbackPort = loopbackServer.port ?? loopbackListenerPort;
-    console.warn(`⚠️  Unauthenticated loopback listener active on http://127.0.0.1:${loopbackPort}`);
-    console.warn(`   Any local process can use it without a credential — it spends account`);
+    console.warn(`?��?  Unauthenticated loopback listener active on http://127.0.0.1:${loopbackPort}`);
+    console.warn(`   Any local process can use it without a credential ??it spends account`);
     console.warn(`   quota and paid provider credentials, and can starve authenticated`);
     console.warn(`   remote clients. Not for shared or multi-tenant hosts.`);
   }
 
   if (managementIngressServer) {
     const managementPort = managementIngressServer.port ?? managementIngressPort;
-    console.log(`🔒 Hub management ingress active on http://127.0.0.1:${managementPort}`);
+    console.log(`?? Hub management ingress active on http://127.0.0.1:${managementPort}`);
     console.log(`   GUI and /api/* only; data, health, readiness, and WebSockets are disabled.`);
   }
 

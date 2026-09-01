@@ -276,7 +276,7 @@ describe("unauthenticated loopback listener", () => {
     try {
       // Each entry uses the METHOD its handler actually accepts. Probing a POST route with GET
       // would 404 on method mismatch inside the handler, so the assertion would hold even if
-      // the allowlist were widened to admit that route — the test would be watching nothing.
+      // the allowlist were widened to admit that route ??the test would be watching nothing.
       const denied: Array<{ method: string; path: string; body?: string }> = [
         { method: "GET", path: "/api/config" },
         { method: "GET", path: "/" },
@@ -285,7 +285,6 @@ describe("unauthenticated loopback listener", () => {
         { method: "POST", path: "/v1/chat/completions", body: '{"model":"x","messages":[]}' },
         { method: "POST", path: "/v1/messages", body: '{"model":"x","messages":[]}' },
         { method: "POST", path: "/v1/images/generations", body: '{"prompt":"x"}' },
-        { method: "POST", path: "/v1/alpha/search", body: '{"query":"x"}' },
         { method: "GET", path: "/v1/opencodex/artifacts/x" },
         { method: "POST", path: "/v1/live", body: "{}" },
         { method: "POST", path: "/v1/realtime/calls", body: "{}" },
@@ -350,7 +349,7 @@ describe("unauthenticated loopback listener", () => {
       //
       // The request is deliberately malformed, so it fails INSIDE the handler rather than at
       // admission. Any status other than 401 proves admission let it through, which is the
-      // only thing under test here — no upstream is involved.
+      // only thing under test here ??no upstream is involved.
       for (const path of ["/v1/responses", "/v1/responses/compact"]) {
         const viaPublic = await fetch(`${publicBase}${path}`, {
           method: "POST",
@@ -374,8 +373,36 @@ describe("unauthenticated loopback listener", () => {
       await server.stop(true);
     }
   });
+    test("admits POST /v1/alpha/search without a credential, failing inside handler", async () => {
+      const loopbackPort = await freePort();
+      saveConfig(baseConfig(loopbackPort));
+      const server = startServer(0);
+      const base = `http://127.0.0.1:${loopbackPort}`;
+      const publicBase = `http://127.0.0.1:${server.port}`;
+      try {
+        const viaPublic = await fetch(`${publicBase}/v1/alpha/search`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}"
+        });
+        expect(viaPublic.status).toBe(401);
+        const publicData = await viaPublic.json();
+        expect(publicData.error.message).toBe("opencodex API key required");
 
-  test("upgrades a Responses WebSocket on the listener that received it", async () => {
+        const viaLoopback = await fetch(`${base}/v1/alpha/search`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}"
+        });
+        expect(viaLoopback.status).toBe(401);
+        const loopbackData = await viaLoopback.json();
+        expect(loopbackData.error.message).not.toBe("opencodex API key required");
+        expect(loopbackData.error.message).not.toBe("opencodex API key required");
+      } finally {
+        await server.stop(true);
+      }
+    });
+    test("upgrades a Responses WebSocket on the listener that received it", async () => {
     const loopbackPort = await freePort();
     saveConfig({ ...baseConfig(loopbackPort), websockets: true } as unknown as OcxConfig);
     const server = startServer(0);
@@ -384,7 +411,7 @@ describe("unauthenticated loopback listener", () => {
       // without a credential, and the public one does not.
       //
       // What it does NOT prove: that the upgrade goes through `requestServer` rather than the
-      // captured `server`. That ablation was run and stayed green — this Bun version accepts
+      // captured `server`. That ablation was run and stayed green ??this Bun version accepts
       // an upgrade issued from a sibling Bun.serve in the same process. `requestServer` is
       // still correct (it is the server that received the request, and nothing documents the
       // cross-listener behaviour as supported), but the assertion below cannot defend it.
@@ -542,7 +569,7 @@ describe("unauthenticated loopback listener", () => {
 
   test("a loopback bind failure rolls back the public listener rather than stranding it", async () => {
     const loopbackPort = await freePort();
-    // A FIXED public port, not 0. Throwing is not the property under test — a startup that
+    // A FIXED public port, not 0. Throwing is not the property under test ??a startup that
     // throws while leaving the public listener bound is exactly the failure the rollback
     // exists to prevent, and only a rebind attempt can tell the two apart.
     // Reserve the loopback port during this draw: two back-to-back freePort() calls can hand
@@ -571,8 +598,7 @@ describe("unauthenticated loopback listener", () => {
 
   // Not covered here: composite stop's failure PROPAGATION when one listener's stop rejects.
   // The composite captures the underlying stop at construction, so a test cannot inject a
-  // rejection from outside without a seam that does not exist yet. Its sibling property —
-  // cleanup completing across both listeners — is covered by the test above. Writing a case
+  // rejection from outside without a seam that does not exist yet. Its sibling property ??  // cleanup completing across both listeners ??is covered by the test above. Writing a case
   // that asserts something weaker and calls it propagation coverage would be worse than the
   // gap, because the next reader would believe the branch was defended.
 });
@@ -632,7 +658,7 @@ describe("composite listener shutdown", () => {
 describe("seams the runtime cannot defend", () => {
   // Two properties have no runtime oracle on this Bun version, and both would regress
   // silently. A source assertion is a weak instrument, but a weak instrument aimed at a known
-  // blind spot beats none — the alternative is a comment nobody runs.
+  // blind spot beats none ??the alternative is a comment nobody runs.
   const serverSource = readFileSync(join(process.cwd(), "src", "server", "index.ts"), "utf-8");
 
   test("the WebSocket upgrade uses the receiving server, never the captured binding", () => {
@@ -645,7 +671,7 @@ describe("seams the runtime cannot defend", () => {
 
   test("the loopback listener binds 127.0.0.1 explicitly", () => {
     // The connection-refused test above is the real oracle, but it degrades to a warning on a
-    // host with no external IPv4 — and on that host the 0.0.0.0 ablation would pass. This
+    // host with no external IPv4 ??and on that host the 0.0.0.0 ablation would pass. This
     // holds everywhere.
     expect(serverSource).toMatch(/port: loopbackListenerPort,\s*\n\s*hostname: "127\.0\.0\.1",/);
   });
