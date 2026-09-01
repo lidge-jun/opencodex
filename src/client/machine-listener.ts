@@ -118,7 +118,14 @@ export function startMachineListener(
         ? issueGuiSession(req, config, managementAuth, { trustedTailscaleIngress: false })
         : null;
       if (url.pathname === "/opencodex-session" && session) return serveSessionBootstrap(session);
-      const gui = serveGuiFile(url.pathname, undefined, session ?? undefined);
+      // State the role, exactly as the standalone/hub server does (src/server/index.ts).
+      // The GUI decides whether a machine plane exists from this tag alone
+      // (gui/src/api-targets.ts `isConnectedRuntime`): without it `discoverApiTargets`
+      // returns standalone targets and never queries /api/machine/status, so a connected
+      // client renders as a plain install — no hub usage scope, no "this machine" panel,
+      // no connected-client list. This listener only ever serves a connected client, so
+      // the role is a constant here rather than a config read.
+      const gui = serveGuiFile(url.pathname, undefined, session ?? undefined, "client");
       if (gui) return gui;
       if (url.pathname === "/") {
         return Response.json({

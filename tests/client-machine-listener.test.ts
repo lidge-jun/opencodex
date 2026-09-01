@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
 import { startMachineListener } from "../src/client/machine-listener";
+import { serveGuiFile } from "../src/server/gui-static";
 import type { OcxClientConnectionConfig } from "../src/types";
 import type { ManagementAuthState } from "../src/server/management-auth";
 
@@ -153,5 +154,43 @@ describe("client machine listener", () => {
 
   test("refuses startup without matching durable connected state", () => {
     expect(() => startMachineListener(0, { managementAuthState: authState() })).toThrow(/requires connected client state/);
+  });
+});
+
+describe("the served document states the client role", () => {
+  // The GUI decides whether a machine plane exists from this tag alone
+  // (gui/src/api-targets.ts `isConnectedRuntime` / `discoverApiTargets`). A missing tag is
+  // not cosmetic: discovery returns standalone targets immediately and never queries
+  // /api/machine/status, so a connected client renders as a plain install — no hub usage
+  // scope, no "this machine" panel, no connected-client list.
+  //
+  // Asserted against `serveGuiFile` directly rather than over HTTP, because the listener
+  // falls through to a JSON payload when `gui/dist` is absent, and a checkout without a
+  // GUI build would make an HTTP-level assertion pass vacuously.
+  test("the client dashboard document carries the role tag", () => {
+    const dist = mkdtempSync(join(tmpdir(), "ocx-gui-dist-"));
+    try {
+      writeFileSync(join(dist, "index.html"), "<!doctype html><html><head></head><body></body></html>");
+      const response = serveGuiFile("/", dist, undefined, "client");
+      expect(response).not.toBeNull();
+      return response!.text().then(html => {
+        expect(meta(html, "opencodex-runtime-role")).toBe("client");
+      });
+    } finally {
+      rmSync(dist, { recursive: true, force: true });
+    }
+  });
+
+  test("the listener asks for the client role rather than leaving it undefined", () => {
+    // Source-level, deliberately: the call is what carries the role, and the HTTP path
+    // cannot show it in a checkout with no GUI build. Reading the file keeps the
+    // assertion honest in both cases.
+    const source = readFileSync(
+      join(import.meta.dir, "..", "src", "client", "machine-listener.ts"),
+      "utf8",
+    );
+    const call = /serveGuiFile\(([^)]*)\)/.exec(source);
+    expect(call, "machine-listener no longer calls serveGuiFile").not.toBeNull();
+    expect(call![1]).toContain('"client"');
   });
 });
