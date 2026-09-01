@@ -69,3 +69,12 @@ release train — it cost three reruns and roughly 45 minutes here.
 
 PR #3073's intermittent macOS `tests/shutdown-launcher.test.ts` failure did not appear
 on this train and remains open.
+
+## Follow-up owed
+
+One item, and it is not this unit's to close: split `926a8d8c4` out of PR #3109 onto
+its own PR against `dev`. The commit is a two-line test change that pins the account
+namespace so both WebSocket turns route through `ws-refresh/gpt-test`; it has no
+relationship to combo compact failover and should not wait on that review. Until it
+lands, every release train pays the same three-rerun tax on a test that is not testing
+the thing that breaks.
