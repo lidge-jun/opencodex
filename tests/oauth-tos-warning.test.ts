@@ -9,6 +9,7 @@ describe("oauth ToS risk map", () => {
   test("flags high-risk subscription OAuth providers", () => {
     expect(oauthTosRisk("anthropic")).toBe("high");
     expect(oauthTosRisk("google-antigravity")).toBe("high");
+    expect(oauthTosRisk("muse-code")).toBe("high");
     expect(oauthTosRisk("Anthropic")).toBe("high");
     expect(oauthTosRisk("  anthropic  ")).toBe("high");
   });
@@ -46,6 +47,7 @@ describe("oauth ToS warning UI seam", () => {
     const providersSeam = page + modals;
     expect(risk).toContain('"anthropic"');
     expect(risk).toContain('"google-antigravity"');
+    expect(risk).toContain('"muse-code"');
     expect(risk).toContain('"github-copilot"');
     expect(providersSeam).toContain("OAuthTosWarningModal");
     expect(providersSeam).toContain("requestLoginOAuth");
@@ -56,6 +58,7 @@ describe("oauth ToS warning UI seam", () => {
     expect(modal).toContain("if (oauthBusy) return");
     expect(modal).toContain("!oauthTosPending");
     expect(warn).toContain("oauthTos.acknowledge");
+    expect(warn).toContain('normalizedProviderId === "muse-code"');
     expect(warn).toContain("disabled={!acknowledged || submitted}");
     expect(warn).toContain("showModal()");
     expect(warn).toContain("onCancel={handleCancel}");

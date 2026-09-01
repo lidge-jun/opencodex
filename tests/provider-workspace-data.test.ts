@@ -37,6 +37,7 @@ import {
   type CatalogPreset,
 } from "../gui/src/components/provider-catalog/provider-presets";
 import { isLocalProvider, providerKind } from "../gui/src/provider-workspace/kind";
+import { oauthLabel } from "../gui/src/pages/providers-shared";
 
 const englishT: TFn = (key, vars) => interpolate(en[key], vars);
 
@@ -452,10 +453,16 @@ describe("provider-icons", () => {
   test("Command Code account and API-key presets use distinct display names", () => {
     expect(formatProviderDisplayName("command-code", englishT)).toBe("Command Code - Auth");
     expect(formatProviderDisplayName("commandcode", englishT)).toBe("Command Code - API");
+    expect(formatProviderDisplayName("muse-code", englishT)).toBe("Meta (Muse Code)");
     expect(isCatalogProviderId("command-code")).toBe(true);
     expect(isCatalogProviderId("commandcode")).toBe(true);
+    expect(isCatalogProviderId("muse-code")).toBe(true);
     expect(providerIconSrc("command-code")).toBe("/provider-icons/commandcode-color.svg");
     expect(providerIconSrc("commandcode")).toBe("/provider-icons/commandcode-color.svg");
+  });
+
+  test("Muse Code account login uses the public Meta label", () => {
+    expect(oauthLabel("muse-code")).toBe("Meta (Muse Code)");
   });
 
   test("namespaced model ids rewrite the Command Code provider prefix to a distinguishable slug", () => {

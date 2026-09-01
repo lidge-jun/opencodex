@@ -127,6 +127,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   kimi: "Kimi",
   "kimi-code": "Kimi",
   moonshot: "Moonshot",
+  "muse-code": "Meta (Muse Code)",
   google: "Google",
   "google-vertex": "Google Vertex",
   "lm-studio": "LM Studio",

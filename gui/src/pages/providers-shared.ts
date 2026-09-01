@@ -51,6 +51,7 @@ const OAUTH_LABELS: Record<string, string> = {
   kimi: "Kimi (Moonshot)",
   "google-antigravity": "Google Antigravity",
   "github-copilot": "GitHub Copilot",
+  "muse-code": "Meta (Muse Code)",
   cursor: "Cursor",
 };
 

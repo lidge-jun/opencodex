@@ -52,7 +52,8 @@ export default function OAuthTosWarningModal({
     : oauthTosRiskBodyKey(level);
   const showApiKeySaferPath =
     normalizedProviderId === "anthropic"
-    || normalizedProviderId === "google-antigravity";
+    || normalizedProviderId === "google-antigravity"
+    || normalizedProviderId === "muse-code";
 
   const handleContinue = () => {
     if (!acknowledged || submittedRef.current) return;
