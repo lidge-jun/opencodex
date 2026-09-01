@@ -59,6 +59,11 @@ One caveat specific to Aside: the running app rewrites `models.json` itself, so
 fully quit and reopen Aside after applying, the same way Claude Desktop needs a
 restart. Aside's block is loopback-only and never carries a real credential.
 
+Cursor is not on this list. Regular Cursor calls custom endpoints from its own backend, so a
+loopback proxy is unreachable without a public tunnel, and Cursor's separate local-agent build
+is configured inside Cursor rather than from this tab. See
+[Cursor Private Inference](/guides/cursor-private-inference/).
+
 Paths honor each client's own environment override where it has one. For OMP,
 `OMP_PROFILE` wins over `PI_PROFILE` by presence, even when explicitly empty. A named profile
 uses `PI_CONFIG_DIR` as a directory name relative to the user's home and ignores `PI_CODING_AGENT_DIR`; without a named profile,
