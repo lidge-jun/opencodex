@@ -12,6 +12,7 @@ import {
   modelRecordValue,
 } from "../reasoning-effort";
 import { encodedModelIdCollides, resolveSlugSelection, routedSlug } from "../providers/slug-codec";
+import { isModelsRuntimeSubcommand } from "./models-runtime-subcommands";
 import { knownModelIdsForProvider } from "../router";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { modelInList, type OcxConfig, type OcxCustomModel } from "../types";
@@ -445,7 +446,7 @@ export async function handleModels(args: string[]): Promise<void> {
     handleCustomList(rest);
     return;
   }
-  if (["live", "edit", "enable", "disable", "provider", "selected", "preset", "context", "shadow"].includes(subcommand ?? "")) {
+  if (isModelsRuntimeSubcommand(subcommand)) {
     const { handleModelsRuntimeCommand } = await import("./models-runtime");
     const code = await handleModelsRuntimeCommand(subcommand!, rest);
     if (code !== null) process.exitCode = code;

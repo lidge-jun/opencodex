@@ -12,6 +12,7 @@ import {
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import { isModelsRuntimeSubcommand } from "./models-runtime-subcommands";
 
 const USAGE = `Usage:
   ocx models live [--provider <name>] [--json]
@@ -321,6 +322,9 @@ async function shadow(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 }
 
 export async function handleModelsRuntimeCommand(sub: string, argv: string[], deps: RuntimeApiDeps = {}): Promise<number | null> {
+  // The dispatch below and MODELS_RUNTIME_SUBCOMMANDS must name the same set;
+  // tests/cli-models-runtime-dispatch.test.ts fails if they drift (#3094).
+  if (!isModelsRuntimeSubcommand(sub)) return null;
   let action: (() => Promise<void>) | undefined;
   if (sub === "live") action = () => live(argv, deps);
   else if (sub === "edit") action = () => edit(argv, deps);
