@@ -13,6 +13,8 @@ import {
   windowsTaskRegistrationHealthy,
 } from "../src/service";
 
+const TEST_WINDOWS_TASK_SID = "S-1-5-21-111-222-333-1001";
+
 afterEach(() => {
   setQuerySchtasksForTests(null);
 });
@@ -27,6 +29,8 @@ describe("decodeSchtasksOutput", () => {
     const xml = buildWindowsTaskXml(
       "C:\\Users\\x\\.opencodex\\opencodex-service.cmd",
       "C:\\Users\\x\\.opencodex\\opencodex-service-launcher.vbs",
+      undefined,
+      TEST_WINDOWS_TASK_SID,
     ).replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
     const utf16 = Buffer.from(`\uFEFF${xml}`, "utf16le");
     const decoded = decodeSchtasksOutput(utf16);
@@ -35,6 +39,7 @@ describe("decodeSchtasksOutput", () => {
       decoded,
       wscript,
       "C:\\Users\\x\\.opencodex\\opencodex-service-launcher.vbs",
+      TEST_WINDOWS_TASK_SID,
     )).toBe(true);
     // Sanity: the historical utf8 mis-decode is unhealthy.
     expect(windowsTaskRegistrationHealthy(utf16.toString("utf8"))).toBe(false);
@@ -167,11 +172,11 @@ describe("formatWindowsSchedulerServiceStatus", () => {
 describe("evaluateWindowsSchedulerInstallVerification", () => {
   const wscript = "C:\\Windows\\System32\\wscript.exe";
   const launcher = "C:\\Users\\Test\\.opencodex\\opencodex-service-launcher.vbs";
-  const healthyXml = buildWindowsTaskXml("ignored.cmd", launcher)
+  const healthyXml = buildWindowsTaskXml("ignored.cmd", launcher, undefined, TEST_WINDOWS_TASK_SID)
     .replace(/<Command>.*?<\/Command>/, `<Command>${wscript}</Command>`);
 
   test("succeeds when task, registration, assets, and absent WinSW all hold", () => {
-    expect(windowsTaskRegistrationHealthy(healthyXml, wscript, launcher)).toBe(true);
+    expect(windowsTaskRegistrationHealthy(healthyXml, wscript, launcher, TEST_WINDOWS_TASK_SID)).toBe(true);
     const result = evaluateWindowsSchedulerInstallVerification({
       taskInstalled: true,
       xml: healthyXml,
@@ -179,6 +184,7 @@ describe("evaluateWindowsSchedulerInstallVerification", () => {
       nativeStatus: "nonexistent",
       wscript,
       launcher,
+      expectedUserId: TEST_WINDOWS_TASK_SID,
     });
     expect(result).toMatchObject({
       ok: true,
@@ -198,6 +204,7 @@ describe("evaluateWindowsSchedulerInstallVerification", () => {
       nativeStatus: "stopped",
       wscript,
       launcher,
+      expectedUserId: TEST_WINDOWS_TASK_SID,
     });
     expect(result.ok).toBe(false);
     expect(result.conflict).toBe(true);
@@ -213,6 +220,7 @@ describe("evaluateWindowsSchedulerInstallVerification", () => {
       nativeStatus: "started",
       wscript,
       launcher,
+      expectedUserId: TEST_WINDOWS_TASK_SID,
     });
     expect(result.ok).toBe(false);
     expect(result.conflict).toBe(true);
@@ -226,6 +234,7 @@ describe("evaluateWindowsSchedulerInstallVerification", () => {
       nativeStatus: "unknown",
       wscript,
       launcher,
+      expectedUserId: TEST_WINDOWS_TASK_SID,
     });
     expect(result.ok).toBe(false);
     expect(result.conflict).toBe(false);
@@ -244,6 +253,7 @@ describe("evaluateWindowsSchedulerInstallVerification", () => {
       nativeStatus: "nonexistent",
       wscript,
       launcher,
+      expectedUserId: TEST_WINDOWS_TASK_SID,
     });
     expect(result.ok).toBe(false);
     expect(result.registrationHealthy).toBe(false);
@@ -259,6 +269,7 @@ describe("evaluateWindowsSchedulerInstallVerification", () => {
       nativeStatus: "nonexistent",
       wscript,
       launcher,
+      expectedUserId: TEST_WINDOWS_TASK_SID,
     });
     expect(invalid.registrationHealthy).toBe(false);
     expect(invalid.registrationInvalid).toBe(true);
@@ -286,6 +297,7 @@ describe("evaluateWindowsSchedulerInstallVerification", () => {
       nativeStatus: "nonexistent",
       wscript,
       launcher,
+      expectedUserId: TEST_WINDOWS_TASK_SID,
     });
     expect(withData.registrationInvalid).toBe(true);
     expect(schedulerVerificationMaySettle(withData)).toBe(false);
@@ -299,6 +311,7 @@ describe("evaluateWindowsSchedulerInstallVerification", () => {
       nativeStatus: "nonexistent",
       wscript,
       launcher,
+      expectedUserId: TEST_WINDOWS_TASK_SID,
     });
     expect(result.ok).toBe(false);
     expect(result.assetsHealthy).toBe(false);

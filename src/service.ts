@@ -1116,9 +1116,10 @@ export function evaluateWindowsSchedulerInstallVerification(inputs: {
   nativeStatus: "started" | "stopped" | "nonexistent" | "unknown";
   wscript?: string;
   launcher?: string;
+  expectedUserId?: ExpectedWindowsTaskUserId | null;
 }): WindowsSchedulerInstallVerification {
   const registrationHealthy = inputs.xml.length > 0
-    && windowsTaskRegistrationHealthy(inputs.xml, inputs.wscript, inputs.launcher);
+    && windowsTaskRegistrationHealthy(inputs.xml, inputs.wscript, inputs.launcher, inputs.expectedUserId);
   // Permanent invalidity: the XML IS published but violates the registration
   // contract — no amount of settling changes it. Empty/unreadable XML stays
   // transient (publication lag).
