@@ -5366,6 +5366,49 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.context_window).toBe(64_000);
   });
 
+  test("GitHub Copilot capabilities preserve the live context window (#3156)", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      data: [{
+        id: "copilot-wide-model",
+        capabilities: {
+          limits: { max_context_window_tokens: 1_000_000 },
+        },
+      }, {
+        id: "copilot-existing-metadata",
+        metadata: { limits: { max_context_length: 256_000 } },
+        capabilities: {
+          limits: { max_context_window_tokens: 1_000_000 },
+        },
+      }, {
+        id: "copilot-invalid-window",
+        capabilities: {
+          limits: { max_context_window_tokens: -1 },
+        },
+      }],
+    }))) as typeof fetch;
+
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "github-copilot",
+      providers: {
+        "github-copilot": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.githubcopilot.com",
+          apiKey: "sk-test",
+        },
+      },
+    });
+    const routed = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(entry => entry.slug === "github-copilot/copilot-wide-model");
+
+    expect(models.find(model => model.id === "copilot-wide-model")?.contextWindow).toBe(1_000_000);
+    expect(routed?.context_window).toBe(1_000_000);
+    expect(routed?.max_context_window).toBe(1_000_000);
+    expect(routed?.auto_compact_token_limit).toBe(900_000);
+    expect(models.find(model => model.id === "copilot-existing-metadata")?.contextWindow).toBe(256_000);
+    expect(models.find(model => model.id === "copilot-invalid-window")?.contextWindow).toBeUndefined();
+  });
+
   test("liveModels false preserves configured catalog metadata without live fetch", async () => {
     let fetchCalls = 0;
     globalThis.fetch = (() => {

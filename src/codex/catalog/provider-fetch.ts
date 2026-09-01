@@ -1195,9 +1195,15 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
   const metadata = plainRecord(item.metadata);
   const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
   const limits = plainRecord(metadata?.limits);
+  const capabilityLimits = plainRecord(plainRecord(item.capabilities)?.limits);
   const contextWindow =
     positiveSafeInteger(
       limits?.max_context_length,
+      // GitHub Copilot reports the live context window here instead of in the metadata or
+      // top-level fields used by other OpenAI-compatible catalogs (#3156). Keep the existing
+      // metadata field authoritative when both are present: adding this provider-specific
+      // fallback must not change previously recognized providers.
+      capabilityLimits?.max_context_window_tokens,
       metadata?.context_length,
       item.context_length,
       item.context_size,
