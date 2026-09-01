@@ -4,6 +4,24 @@ export interface OcxErrorPayload {
   code: string | null;
 }
 
+/** Canonical human-readable message paths used by Responses upstream failures. */
+export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const json = payload as {
+    error?: { message?: unknown };
+    last_error?: { message?: unknown };
+    response?: {
+      error?: { message?: unknown };
+      incomplete_details?: { message?: unknown };
+    };
+  };
+  const message = json.error?.message
+    ?? json.last_error?.message
+    ?? json.response?.error?.message
+    ?? json.response?.incomplete_details?.message;
+  return typeof message === "string" ? message : undefined;
+}
+
 /** OpenAI / Codex hard block for high-risk cybersecurity activity (HTTP 400 or mid-stream). */
 export const CYBER_POLICY_ERROR_CODE = "cyber_policy";
 export const CYBER_POLICY_FALLBACK_MESSAGE = "Request blocked by the upstream cybersecurity policy.";

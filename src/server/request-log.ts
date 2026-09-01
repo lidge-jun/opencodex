@@ -8,6 +8,7 @@ import {
   isClientClosedMessage,
   isCyberPolicyCode,
   isCyberPolicyMessage,
+  upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
@@ -794,10 +795,7 @@ function captureUpstreamErrorParsed(
       logCtx.terminalIncompleteReason = reason.trim();
     }
     if (logCtx.upstreamError) return;
-    const message = json?.error?.message
-      ?? json?.last_error?.message
-      ?? json?.response?.error?.message
-      ?? json?.response?.incomplete_details?.message;
+    const message = upstreamErrorMessageFromPayload(parsed);
     if (typeof message === "string" && message.trim()) {
       logCtx.upstreamError = redactSecretString(message).slice(0, 500);
       return;

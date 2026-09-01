@@ -71,8 +71,76 @@ describe("Codex pre-stream quota rejection classification", () => {
     [429, true],
     [400, false],
     [503, false],
-  ])("selects pool-account retries synchronously for HTTP %i", (status, expected) => {
-    expect(shouldRetryCodexPoolAccountQuota(new Response(null, { status }))).toBe(expected);
+  ])("selects pool-account retries by HTTP %i", async (status, expected) => {
+    await expect(shouldRetryCodexPoolAccountQuota(new Response(null, { status }))).resolves.toBe(expected);
+  });
+
+  test("recognizes a quota message wrapped in HTTP 5xx without consuming the response", async () => {
+    const body = JSON.stringify({ error: { message: "The usage limit has been reached" } });
+    const response = new Response(body, { status: 502 });
+
+    await expect(shouldRetryCodexPoolAccountQuota(response)).resolves.toBe(true);
+    expect(await response.text()).toBe(body);
+  });
+
+  test("does not match quota wording echoed outside JSON error.message", async () => {
+    const response = Response.json({
+      error: { message: "upstream server error" },
+      request: { input: "Explain the usage limit" },
+    }, { status: 502 });
+    await expect(shouldRetryCodexPoolAccountQuota(response)).resolves.toBe(false);
+  });
+
+  test.each([
+    ["error.message", { error: { message: "The usage limit has been reached" } }],
+    ["last_error.message", { last_error: { message: "The usage limit has been reached" } }],
+    ["response.error.message", { response: { error: { message: "The usage limit has been reached" } } }],
+    ["response.incomplete_details.message", {
+      response: { incomplete_details: { message: "The usage limit has been reached" } },
+    }],
+  ])("recognizes the canonical %s upstream message path", async (_path, payload) => {
+    await expect(shouldRetryCodexPoolAccountQuota(
+      Response.json(payload, { status: 502 }),
+    )).resolves.toBe(true);
+  });
+
+  test.each([
+    ["JSON string", JSON.stringify("The usage limit has been reached")],
+    ["top-level message", JSON.stringify({ message: "The usage limit has been reached" })],
+    ["string error", JSON.stringify({ error: "The usage limit has been reached" })],
+  ])("recognizes the valid %s fallback shape", async (_shape, body) => {
+    await expect(shouldRetryCodexPoolAccountQuota(
+      new Response(body, { status: 502 }),
+    )).resolves.toBe(true);
+  });
+
+  test("recognizes a plain-text quota failure", async () => {
+    const response = new Response("The usage limit has been reached", { status: 502 });
+    await expect(shouldRetryCodexPoolAccountQuota(response)).resolves.toBe(true);
+  });
+
+  test.each([
+    [502, JSON.stringify({ error: { message: "upstream server error" } })],
+    [503, JSON.stringify({ error: { message: "servers overloaded" } })],
+    [502, "x".repeat(BOUNDED_BODY_MAX_BYTES + 1)],
+  ])("keeps unrelated or oversized HTTP %i failures transient", async (status, body) => {
+    await expect(shouldRetryCodexPoolAccountQuota(new Response(body, { status }))).resolves.toBe(false);
+  });
+
+  test("fails closed for malformed UTF-8 and an already-aborted read", async () => {
+    const malformed = new Uint8Array([
+      0x54, 0x68, 0x65, 0x20, 0xff, 0x20, 0x75, 0x73, 0x61, 0x67, 0x65, 0x20, 0x6c, 0x69, 0x6d, 0x69, 0x74,
+    ]);
+    await expect(shouldRetryCodexPoolAccountQuota(
+      new Response(malformed, { status: 502 }),
+    )).resolves.toBe(false);
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(shouldRetryCodexPoolAccountQuota(
+      new Response("The usage limit has been reached", { status: 502 }),
+      controller.signal,
+    )).resolves.toBe(false);
   });
 
   test.each([

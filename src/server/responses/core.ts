@@ -241,6 +241,10 @@ import {
 } from "../lifecycle";
 import { redactSecretString, sanitizeLogMetadataString } from "../../lib/redact";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import {
+  isRateLimitOrQuotaFailureMessage,
+  upstreamErrorMessageFromPayload,
+} from "../../lib/errors";
 import type { AdmissionLease } from "../../lib/admission";
 import { supportedLadderFor } from "../effort-policy";
 import { isThreadSpawnRequest } from "../effort-policy";
@@ -904,8 +908,40 @@ async function shouldRetryCodexPoolAccountModel400(
 }
 
 /** Pre-stream quota/billing rejections that warrant one alternate-account attempt (#584). */
-export function shouldRetryCodexPoolAccountQuota(response: Response): boolean {
-  return response.status === 402 || response.status === 429;
+function codexQuotaFailureMessage(body: string): string | undefined {
+  try {
+    const payload = JSON.parse(body) as unknown;
+    const canonical = upstreamErrorMessageFromPayload(payload);
+    if (canonical !== undefined) return canonical;
+    if (typeof payload === "string") return payload;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+    const record = payload as Record<string, unknown>;
+    if (typeof record.message === "string") return record.message;
+    return typeof record.error === "string" ? record.error : undefined;
+  } catch {
+    // Plain-text gateways remain supported. Valid JSON is inspected only at recognized
+    // message fields so echoed request content elsewhere cannot trigger account cooldown.
+    return body;
+  }
+}
+
+export async function shouldRetryCodexPoolAccountQuota(
+  response: Response,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (response.status === 402 || response.status === 429) return true;
+  if (response.status < 500 || response.status >= 600) return false;
+  try {
+    // Reject malformed UTF-8 instead of matching quota words around replacement characters.
+    const body = await readBoundedResponseBody(response.clone(), { signal, fatalUtf8: true });
+    const message = body.displaySafe && !body.truncated
+      ? codexQuotaFailureMessage(body.text)
+      : undefined;
+    return message !== undefined
+      && isRateLimitOrQuotaFailureMessage(message);
+  } catch {
+    return false;
+  }
 }
 
 interface CodexPoolAccountRetryArgs {
@@ -1130,6 +1166,19 @@ async function retryCodexPoolOnAlternateAccount(
     }
   }
   if (retryAuthCtx?.kind !== "pool" && retryAuthCtx?.kind !== "main-pool") {
+    // A body-confirmed quota response may arrive under HTTP 5xx. Without an alternate,
+    // the ordinary terminal recorder sees only that wire status and would misclassify it
+    // as transient, leaving the exhausted account immediately selectable next turn.
+    if (outcomeStatus !== firstResponse.status && (outcomeStatus === 429 || outcomeStatus === 402)) {
+      recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
+        ...codexQuotaOutcomeMeta(firstResponse),
+        threadId: firstAuthCtx.affinityKey,
+        modelId: route.modelId,
+        probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+        probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+        writerGeneration: firstAuthCtx.writerGeneration,
+      });
+    }
     return { kind: "no-alternate" };
   }
 
@@ -4255,9 +4304,14 @@ async function handleResponsesInner(
         options.abortSignal,
       )) {
         poolRetryOutcome = 400;
-      } else if (!authCtx.fixedAccount && shouldRetryCodexPoolAccountQuota(upstreamResponse)) {
+      } else if (!authCtx.fixedAccount && await shouldRetryCodexPoolAccountQuota(
+        upstreamResponse,
+        options.abortSignal,
+      )) {
         // Pre-stream only: once SSE has begun, mid-stream quota stays terminal.
-        poolRetryOutcome = upstreamResponse.status;
+        // ChatGPT sometimes wraps quota exhaustion in a generic 5xx. Normalize only
+        // body-confirmed cases to quota evidence so cooldown and rotation both apply.
+        poolRetryOutcome = upstreamResponse.status >= 500 ? 429 : upstreamResponse.status;
       }
 
       if (poolRetryOutcome !== undefined) {
