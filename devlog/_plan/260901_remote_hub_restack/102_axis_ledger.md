@@ -29,3 +29,16 @@
 `/healthz`·`/readyz`·관리 CORS의 프로토콜 메타데이터(롤 게이팅이 프로토콜
 협상을 깨뜨릴 수 있음), disconnect의 비트랜잭션성(복구 상태 기계 신설이 필요).
 둘 다 `101`에 이유와 함께 적혀 있다.
+
+## 축별 검증 커맨드
+
+각 축을 닫을 때 실제로 돌린 것. 기록해 두면 다음 사람이 같은 주장을 다시
+확인할 때 무엇을 실행해야 하는지 찾을 필요가 없다.
+
+| 축 | 커맨드 |
+| --- | --- |
+| 부팅 요청 | `cd gui && bun test tests/api-targets.test.ts` |
+| standalone UI | `cd gui && bun test tests/usage-layout.test.ts tests/apikeys-actions.test.tsx tests/connect-pairing.test.ts` |
+| 서버 라우트 | `bun test tests/cli-headless-parity.test.ts tests/management-route-registry.test.ts` |
+| 롤백 | `bun test tests/client-connect.test.ts tests/codex-journal.test.ts` |
+| 체인 | `git merge-base --is-ancestor`를 6개 엣지에 대해 |
