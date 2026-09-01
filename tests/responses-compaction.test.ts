@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
 import { CODEX_FORWARD_BASE_URL } from "../src/providers/openai-tiers";
 import { parseRequest } from "../src/responses/parser";
 import {
@@ -162,6 +163,70 @@ describe("buildResponseJSON compaction mode", () => {
     ], "m", { compaction: true }) as { output: unknown[]; status: string };
     expect(json.status).toBe("failed");
     expect(json.output).toHaveLength(0);
+  });
+});
+
+describe("native Responses compaction passthrough", () => {
+  const provider = {
+    adapter: "openai-responses",
+    baseUrl: "https://responses.example/v1",
+    authMode: "key" as const,
+    apiKey: "test-key",
+  };
+
+  test("buffered ciphertext-only completion yields done without a text delta", async () => {
+    const adapter = createResponsesPassthroughAdapterProduction(provider);
+    const encryptedContent = "gAAAAABm-native-buffered-ciphertext";
+    const budget = createTranslatorBudget();
+    try {
+      const events = await adapter.parseResponse!(Response.json({
+        status: "completed",
+        output: [{ type: "compaction", encrypted_content: encryptedContent }],
+      }), budget);
+
+      expect(events).toEqual([{ type: "done", compactionEncryptedContent: encryptedContent }]);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("streaming ciphertext is charged before the compaction item takes ownership", async () => {
+    const adapter = createResponsesPassthroughAdapterProduction(provider);
+    const encryptedContent = "gAAAAABm-native-streaming-ciphertext";
+    const budget = createTranslatorBudget();
+    try {
+      const events: AdapterEvent[] = [];
+      const stream = [
+        "event: response.completed",
+        `data: ${JSON.stringify({
+          type: "response.completed",
+          response: {
+            status: "completed",
+            output: [{ type: "compaction", encrypted_content: encryptedContent }],
+          },
+        })}`,
+        "",
+        "",
+      ].join("\n");
+      for await (const event of adapter.parseStream(new Response(stream, {
+        headers: { "content-type": "text/event-stream" },
+      }), budget)) events.push(event);
+
+      expect(events).toEqual([{ type: "done", compactionEncryptedContent: encryptedContent }]);
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(encryptedContent));
+
+      const json = buildResponseJSON(events, "test/model", {
+        compaction: true,
+        translatorBudget: budget,
+      }) as { output: Array<{ type: string; encrypted_content?: string }> };
+      expect(json.output).toEqual([expect.objectContaining({
+        type: "compaction",
+        encrypted_content: encryptedContent,
+      })]);
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(JSON.stringify(json.output[0])));
+    } finally {
+      budget.dispose();
+    }
   });
 });
 

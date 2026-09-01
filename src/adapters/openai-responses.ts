@@ -2325,7 +2325,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
               const output = Array.isArray(responsePayload?.output) ? responsePayload.output : [];
               const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
               if (isPlainObject(compaction) && typeof compaction.encrypted_content === "string") {
-                compactionEncryptedContent = compaction.encrypted_content;
+                const nextEncryptedContent = compaction.encrypted_content;
+                const previousBytes = budgetEncoder.encode(compactionEncryptedContent ?? "").byteLength;
+                const reservation = budget.reserveTransient(budgetEncoder.encode(nextEncryptedContent).byteLength, { kind: "retained_collectors" });
+                compactionEncryptedContent = nextEncryptedContent;
+                reservation.commitRetained();
+                budget.releaseRetained(previousBytes, { kind: "retained_collectors" });
               }
               const next = responsesPayloadText(payload.response);
               const previousBytes = budgetEncoder.encode(snapshot).byteLength;
@@ -2365,19 +2370,19 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (payload.status === "incomplete") {
         return [{ type: "incomplete", reason: responsesErrorMessage(payload) }];
       }
-      const text = responsesPayloadText(payload);
-      if (!text) {
-        // A completed turn with no usable text cannot become a summary; saying so is
-        // better than installing an empty compaction as replacement history.
-        return [{ type: "error", message: "upstream compaction returned no summary text" }];
-      }
       const usage = usageFromResponsesPayload(payload);
       const output = Array.isArray(payload.output) ? payload.output : [];
       const compaction = output.find(item => isPlainObject(item) && item.type === "compaction");
       const compactionEncryptedContent = isPlainObject(compaction) && typeof compaction.encrypted_content === "string"
         ? compaction.encrypted_content
         : undefined;
-      return [{ type: "text_delta", text }, {
+      const text = responsesPayloadText(payload);
+      if (!text && !compactionEncryptedContent) {
+        // A completed turn with neither text nor a native compaction blob cannot become a
+        // replacement-history item. A ciphertext-only native completion is valid, though.
+        return [{ type: "error", message: "upstream compaction returned no summary text" }];
+      }
+      return [...(text ? [{ type: "text_delta" as const, text }] : []), {
         type: "done",
         ...(usage ? { usage } : {}),
         ...(compactionEncryptedContent ? { compactionEncryptedContent } : {}),

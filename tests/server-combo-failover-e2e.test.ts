@@ -3032,6 +3032,27 @@ describe("combo compact failover", () => {
     expect(attempts[1]).toMatchObject({ provider: "backup", adapter: "openai-chat", status: 200 });
   });
 
+  test("account-gated first target failover decodes the backup ocx1 compaction", async () => {
+    const b = serve(() => chatStream("mixed combo backup summary"));
+    const { config } = canonicalPoolConfig([
+      { provider: "openai-apikey", model: "gpt-daybreak-blue-latest" },
+      { provider: "backup", model: "m1" },
+    ], baseUrl(b));
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === "object" && input !== null && "url" in input ? String((input as Request).url) : String(input);
+      if (url.includes("api.openai.com")) {
+        return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+      }
+      return originalFetch(input as RequestInfo, init);
+    }) as typeof fetch;
+
+    const response = await postCompactLogged(config);
+    expect(response.status).toBe(200);
+    const json = await response.json() as { output?: unknown[] };
+    expect(JSON.stringify(json.output)).toContain("mixed combo backup summary");
+    expect(JSON.stringify(json.output)).not.toContain("ocx1:");
+  });
+
   test("combo compact runs the synthetic turn as SSE so a canonical child can serve it", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     const { config } = canonicalPoolConfig([{ provider: "openai-apikey", model: "gpt-5.4" }]);
