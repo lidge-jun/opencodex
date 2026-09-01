@@ -319,7 +319,8 @@ function resolveModelLevelPrice(provider: string, modelId: string): MatchedPrice
   // dots where the catalog uses dashes (kiro "claude-opus-4.6" vs anthropic
   // "claude-opus-4-6"). No fuzzy matching beyond this one normalization.
   const found = findVendorCostByModelId(modelId)
-    ?? (modelId.includes(".") ? findVendorCostByModelId(modelId.replaceAll(".", "-")) : undefined);
+    ?? (modelId.includes(".") ? findVendorCostByModelId(modelId.replaceAll(".", "-")) : undefined)
+    ?? vendorPrefixedCost(modelId);
   if (!found) return null;
   return {
     provider,
@@ -329,6 +330,36 @@ function resolveModelLevelPrice(provider: string, modelId: string): MatchedPrice
     source: "jawcode",
     status: "verified-derived",
   };
+}
+
+/**
+ * Aggregators spell a model as `<vendor>/<model>` — CommandCode serves
+ * `deepseek/deepseek-v4-flash`, and OpenRouter-shaped presets do the same. The cost
+ * catalog stores the bare id, so the exact lookup above misses a price that is present and
+ * every request through such a provider reports no cost at all (#3136).
+ *
+ * Retrying on the tail is only safe while the prefix AGREES with the vendor the matched row
+ * belongs to. `findVendorCostByModelId` returns whichever vendor `COST_VENDOR_PRIORITY`
+ * reaches first, so an unchecked strip would happily price `openai/claude-opus-4-6` from
+ * Anthropic's row — a number that looks authoritative and is wrong. Requiring agreement
+ * keeps the failure closed for a genuinely mismatched id.
+ *
+ * Comparison is normalized because the same vendor is spelled differently across catalogs:
+ * `x-ai/grok-4.6` resolves to vendor `xai`. Dashes and case are the only variance seen;
+ * anything beyond that stays a miss.
+ */
+function vendorPrefixedCost(modelId: string): ReturnType<typeof findVendorCostByModelId> {
+  const slash = modelId.indexOf("/");
+  if (slash <= 0 || slash === modelId.length - 1) return undefined;
+  const claimedVendor = modelId.slice(0, slash);
+  const tail = modelId.slice(slash + 1);
+  // A tail that is itself slashed is not a vendor prefix we understand; leave it alone.
+  if (tail.includes("/")) return undefined;
+  const found = findVendorCostByModelId(tail)
+    ?? (tail.includes(".") ? findVendorCostByModelId(tail.replaceAll(".", "-")) : undefined);
+  if (!found) return undefined;
+  const normalize = (value: string): string => value.toLowerCase().replaceAll("-", "");
+  return normalize(found.provider) === normalize(claimedVendor) ? found : undefined;
 }
 
 function isEstimated(usage: OcxUsage, usageStatus: UsageStatus, priceStatus: ExpectedPriceStatus | "verified"): boolean {

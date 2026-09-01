@@ -1199,3 +1199,47 @@ describe("provider cost overlay (user-configured)", () => {
     refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
   });
 });
+
+describe("aggregator vendor-prefixed model ids (#3136)", () => {
+  // CommandCode serves "deepseek/deepseek-v4-flash"; the cost catalog stores the bare id.
+  // The exact lookup missed a price that is present, so every request through such a
+  // provider reported no cost at all.
+  test("a vendor-prefixed id resolves to the same price as its bare id", () => {
+    const bare = resolveMatchedPrice("deepseek", "deepseek-v4-flash");
+    const prefixed = resolveMatchedPrice("commandcode-api", "deepseek/deepseek-v4-flash");
+    expect(bare?.cost4).toBeDefined();
+    expect(prefixed?.cost4).toEqual(bare!.cost4);
+    // Derived, not claimed as an exact catalog row for that provider.
+    expect(prefixed?.status).toBe("verified-derived");
+    expect(prefixed?.jawcodeProvider).toBe("deepseek");
+  });
+
+  test("the vendor prefix is compared after normalization, so x-ai matches xai", () => {
+    // The same vendor is spelled differently across catalogs. Dashes and case are the
+    // only variance this normalizes; anything further stays a miss.
+    expect(resolveMatchedPrice("openrouter", "x-ai/grok-4.6")?.cost4).toBeDefined();
+  });
+
+  test("a prefix that disagrees with the matched vendor stays unpriced", () => {
+    // This is the assertion that keeps the fix from becoming a mispricing.
+    // findVendorCostByModelId returns whichever vendor COST_VENDOR_PRIORITY reaches
+    // first, so an unchecked strip would price a Claude model from Anthropic's row while
+    // the caller named OpenAI - a number that looks authoritative and is wrong.
+    expect(resolveMatchedPrice("openrouter", "openai/claude-opus-4-6")).toBeNull();
+  });
+
+  test("an unknown tail is still unpriced rather than guessed", () => {
+    expect(resolveMatchedPrice("openrouter", "google/gemini-3.6-pro")).toBeNull();
+  });
+
+  test("unprefixed ids are unchanged", () => {
+    expect(resolveMatchedPrice("deepseek", "deepseek-v4-flash")?.cost4).toBeDefined();
+    expect(resolveMatchedPrice("deepseek", "not-a-real-model-xyz")).toBeNull();
+  });
+
+  test("a doubly-slashed id is not treated as a vendor prefix", () => {
+    // Only one prefix segment is understood; deeper paths are left alone rather than
+    // being peeled until something matches.
+    expect(resolveMatchedPrice("openrouter", "a/deepseek/deepseek-v4-flash")).toBeNull();
+  });
+});
