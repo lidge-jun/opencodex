@@ -80,3 +80,13 @@ fresh ETag"로 **실패**했다. D2로 서버가 validator를 안 주게 됐으�
 
 T27/T28(GUI disconnect 타깃 갱신, pairing 전 페이지 게이팅), T2(연결된 GUI의
 인증된 models 경로), D5(릴레이 응답 no-store)는 wp8 또는 후속 단계에서.
+
+## 커밋
+
+| 범위 | 내용 |
+| --- | --- |
+| `67c6387a5`..`da6f97a39` | 원본 8커밋 재적용 |
+| `95787b9bc` | fix(two-plane): declare the machine plane, enable relay, and finish the D1/D2 client side (신규) |
+
+앞선 단계들과 같은 원칙: 원본 커밋의 authorship과 메시지를 보존하고,
+계약 변경은 마지막 조정 커밋 하나로 모은다.
