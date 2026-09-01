@@ -44,3 +44,23 @@ retroactively. That ordering is the process correction from the A-gate finding.
 
 Bug-labelled items: **19 → 16** (7 PRs + 9 issues).
 
+## Why the rebase service is worth the maintainer time
+
+Three PRs had been sitting `CONFLICTING`, which reads on the board as "waiting on the
+contributor". None of them actually needed contributor judgment. What they needed was
+someone to run the rebase against a `dev` that had moved 100+ commits, and two of the three
+conflicts were in documentation both sides had written independently.
+
+The cost was three cherry-picks and four conflict resolutions. The return was three bug
+fixes landing that would otherwise have aged until they were stale enough to close.
+
+The #3148 case is the one to remember: the *conflict* was one comment, but the *interaction*
+underneath it broke the connected-runtime launch path, and only running the suite against
+current `dev` surfaced it. A contributor resolving that conflict on their own stale branch
+would have resolved the comment correctly and shipped the defect.
+
+## Remaining after Batch B
+
+7 bug PRs: #3164 #3144 #3138 #3121 #3112 #3109 #3003 — all `CHANGES_REQUESTED`, which is
+Batch C (maintainer-owned) and Batch D (contributor-owned).
+9 bug issues: #3155 #3152 #3150 #3141 #3136 #2999 #2813 #1527 #1419 — Batches E and F.
