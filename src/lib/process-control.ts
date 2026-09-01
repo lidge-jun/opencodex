@@ -132,8 +132,8 @@ function drainDeadlineMs(): number {
 }
 
 /** Graceful-first stop: management-API drain, then the platform kill ladder. */
-export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<void> {
-  if (!isProcessAlive(pid)) return;
+export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<boolean> {
+  if (!isProcessAlive(pid)) return false;
   const runtime = io.runtimeEndpoint ?? readRuntimePort(pid);
   const graceful = await stopProxyGracefully(pid, io);
   if (graceful === "refused") {
@@ -146,10 +146,11 @@ export async function stopProxy(pid: number, io: GracefulStopIo = {}): Promise<v
   }
   if (graceful) {
     await waitForStoppedPort(runtime, pid);
-    return;
+    return true;
   }
   killProxy(pid);
   await waitForStoppedPort(runtime, pid);
+  return false;
 }
 
 /** After stop/kill, wait for the former listen port to become bindable (Windows drain). */
