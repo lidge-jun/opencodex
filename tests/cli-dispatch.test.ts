@@ -185,6 +185,22 @@ describe("start probes the configured port before shadowing it (source-level)", 
     }
   });
 
+  /**
+   * The #3106 guard refused start whenever ANY live proxy existed, ignoring an explicit
+   * `--port` that differs from the live proxy's port. That is not the shadow the guard
+   * targets (a bare `start` landing on an ephemeral port); it broke starting a second
+   * instance on another port, and every spawned-launcher test on a machine running a
+   * real proxy timed out its startup wait. Source-level for the same reason as above.
+   */
+  test("an explicit different --port takes the sibling path instead of the refusal", () => {
+    expect(cliSource).toContain("requestedPort !== owner.live.port");
+    // The service wrapper always passes the configured port and must keep its exact
+    // stay-out-of-the-way semantics, so the sibling path is gated off for it.
+    const sibling = cliSource.slice(cliSource.indexOf("const explicitSiblingPort"));
+    expect(sibling.slice(0, 400)).toContain('process.env.OCX_SERVICE !== "1"');
+    expect(sibling.slice(0, 400)).toContain("requestedPort !== undefined");
+  });
+
   test("the probe option still gates on an explicit true", () => {
     // A truthy-but-not-true default would silently probe for callers that pass
     // nothing, which is a different behavior than the one asserted above.
