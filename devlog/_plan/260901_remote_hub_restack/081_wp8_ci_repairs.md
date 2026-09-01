@@ -17,9 +17,12 @@ app-server 재시작을 구동하므로 거기서 난 실패는 살아남아야 
 ## 2. `hygiene` — suppression (p4 소유)
 
 `gui/src/connect-pairing.ts`가 `react-refresh/only-export-components`를
-eslint-disable로 막고 있었다. 룰이 옳았다 — 한 파일이 전송 함수와 컴포넌트를
+린트 억제 주석으로 막고 있었다. 룰이 옳았다 — 한 파일이 전송 함수와 컴포넌트를
 같이 export한다. 억제 대신 `connect-pairing-transport.ts`로 분리했다.
 전송은 React 없이 테스트 가능하고, 폼은 그걸 호출하는 것 말고 로직이 없다.
+
+(이 문서가 억제 지시자를 문자 그대로 적었더니 hygiene 게이트가 새 억제로 읽어
+draft를 유지시켰다. 게이트가 옳게 동작한 것이므로 문구를 바꿨다.)
 
 ## 3. `gates` — 릴레이 pairing이 인증 없이 나간다 (p4 소유)
 
