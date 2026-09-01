@@ -35,9 +35,10 @@ describe("cursor umbrella picker rows (devlog 260828_cursor_umbrella_catalog)", 
   });
 
   test("row count shrank from the 69-row legacy seed", () => {
-    // 4 router + 47 base rows. Legacy carried 69 (13 thinking + 5 fast
+    // 4 router + 50 base rows. Legacy carried 69 (13 thinking + 5 fast
     // duplicates + kimi-k3-1m folded away; quarantined opus-5 base returned).
-    expect(CURSOR_STATIC_MODELS.length).toBe(51);
+    // #3211 pre-seeded Claude Fable 5.1 under three spellings (+3).
+    expect(CURSOR_STATIC_MODELS.length).toBe(54);
   });
 
   test("umbrella rows and seed efforts agree for every cataloged base", () => {
