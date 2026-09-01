@@ -50,3 +50,21 @@ tree was published, and is a stop-everything condition.
 preview CI failed (unit `000`). Publishing `2.39.0-preview.20260901` moves the tag
 forward and closes that gap; 2.38.0-preview is skipped rather than backfilled, which
 matches how the previous-tag baseline in `release.yml` already computes its range.
+
+## Executed
+
+Preview dispatch: run `33464064409`, success, `expected-sha=75f3895c1…`.
+Stable dispatch: run `33464579658`, success, `expected-sha=af6113a03…`.
+
+```
+npm view @bitkyc08/opencodex dist-tags --json
+{ "latest": "2.39.0", "preview": "2.39.0-preview.20260901" }
+```
+
+`gitHead` for `2.39.0` is `af6113a0381d6fff2e4dce587652825c7eeb6423`; for
+`2.39.0-preview.20260901` it is `75f3895c14965205be694e8ebb8e93f472630539`. Both match
+their promotion SHAs exactly, which is the check that distinguishes a published package
+from a merged branch. GitHub releases `v2.39.0` and `v2.39.0-preview.20260901` exist.
+
+The stale preview channel is closed: it moved from `2.36.0-preview.20260830` to
+`2.39.0-preview.20260901` in one step.
