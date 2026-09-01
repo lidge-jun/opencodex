@@ -62,3 +62,18 @@ p1이 자기 구현에 맞춰 쓴 단언들을 dev+D2 계약으로 다시 썼다
 
 T19(확장된 readiness 응답을 `docs-site/.../cli/lifecycle.md`에 문서화)는
 아직 열려 있다. wp8에서 처리한다.
+
+## 커밋
+
+| 커밋 | 내용 |
+| --- | --- |
+| `733d0e62b` | feat(remote): add protocol metadata and runtime role (원본 보존) |
+| `f65484844` | feat(remote): serve authenticated catalog snapshots (원본 보존) |
+| `b24a15a22` | fix(remote): derive management origin from request host (원본 보존) |
+| `0d81baffa` | test(remote): cover phase one protocol and catalog contract (원본 보존) |
+| `58ab13df0` | fix(remote): type catalog bytes over ArrayBuffer (원본 보존) |
+| `07d7f1006` | fix(remote): reconcile the phase-one catalog contract with the landed /v1/catalog (신규) |
+
+원본 5커밋은 authorship과 메시지가 보존됐다. 충돌 해소로 내용이 바뀐 부분은
+커밋을 다시 쓰지 않고 마지막에 조정 커밋 하나로 모았다 — 원저자의 커밋을
+내가 편집한 것처럼 보이게 만들지 않기 위해서다.
