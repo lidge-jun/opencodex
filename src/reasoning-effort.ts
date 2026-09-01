@@ -80,6 +80,38 @@ export function codexEffortRank(effort: string): number {
   return CODEX_REASONING_ORDER.indexOf(effort);
 }
 
+/**
+ * Resolve a requested effort against the rungs a target actually supports, never
+ * raising above the request.
+ *
+ * Returns the request itself when supported, otherwise the highest supported rung
+ * at or below it, otherwise the lowest supported rung, and `undefined` when the
+ * supported set contains no rankable rung at all (including the empty ladder, which
+ * is how a no-reasoning model is expressed).
+ *
+ * This lives here rather than beside its first caller because two very different
+ * planes need the same answer: the catalog advertises a combo's default effort, and
+ * the request path injects one. When they disagreed, the catalog promised `max` and
+ * the runtime silently sent nothing, so the provider default applied instead (#3108).
+ * `reasoning-effort.ts` is a leaf — its only import is `./types` — so the request
+ * path can share this without pulling the catalog plane along.
+ */
+export function resolveEffortAtOrBelow(
+  requested: string | null | undefined,
+  supported: readonly string[],
+): string | undefined {
+  if (!requested) return undefined;
+  if (supported.includes(requested)) return requested;
+  const requestedRank = codexEffortRank(requested);
+  const ranked = supported
+    .map(effort => ({ effort, rank: codexEffortRank(effort) }))
+    .filter(item => item.rank >= 0)
+    .sort((a, b) => a.rank - b.rank);
+  if (ranked.length === 0) return undefined;
+  const atOrBelow = ranked.filter(item => item.rank <= requestedRank);
+  return atOrBelow.at(-1)?.effort ?? ranked[0]!.effort;
+}
+
 export function modelRecordValue<T>(record: Record<string, T> | undefined, modelId: string): T | undefined {
   if (!record) return undefined;
   if (Object.prototype.hasOwnProperty.call(record, modelId)) return record[modelId];

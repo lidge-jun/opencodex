@@ -8,7 +8,7 @@ import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCa
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
-import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
+import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, resolveEffortAtOrBelow, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { getProviderRegistryEntry } from "../../providers/registry";
@@ -77,20 +77,16 @@ export function intersectStrings(values: readonly string[][]): string[] {
   return [...new Set(values[0])].filter(value => rest.every(set => set.has(value)));
 }
 
+/**
+ * The catalog's view of a combo's default effort. Delegates to the shared leaf
+ * resolver so the request path (src/combos/request.ts) cannot drift from what the
+ * catalog advertised (#3108).
+ */
 export function effectiveComboDefault(
   configured: string | null | undefined,
   common: readonly string[],
 ): string | undefined {
-  if (!configured) return undefined;
-  if (configured && common.includes(configured)) return configured;
-  const requestedRank = codexEffortRank(configured);
-  const ranked = common
-    .map(effort => ({ effort, rank: codexEffortRank(effort) }))
-    .filter(item => item.rank >= 0)
-    .sort((a, b) => a.rank - b.rank);
-  if (ranked.length === 0) return undefined;
-  const atOrBelow = ranked.filter(item => item.rank <= requestedRank);
-  return atOrBelow.at(-1)?.effort ?? ranked[0]!.effort;
+  return resolveEffortAtOrBelow(configured, common);
 }
 
 /**

@@ -293,11 +293,40 @@ describe("combo request cloning", () => {
     ).reasoning).toEqual({ summary: "concise", effort: "high" });
   });
 
-  test("omits combo defaults for unset, unsupported, and unknown target capabilities", () => {
+  test("omits combo defaults for unset, no-reasoning, and unknown target capabilities", () => {
     expect(concreteComboRequestBody({ model: "combo/x" }, target, null, ["high"]).reasoning).toBeUndefined();
+    // An explicitly empty ladder is how a no-reasoning model is expressed.
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", []).reasoning).toBeUndefined();
+    // An unknown ladder stays fail-closed: the picker treats it as a wildcard, runtime injection does not.
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", undefined).reasoning).toBeUndefined();
-    expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", ["low", "medium"]).reasoning).toBeUndefined();
+  });
+
+  /**
+   * #3108: a combo configured for `max` routed to a target whose ladder tops out lower
+   * sent NO effort at all, so the provider default applied and the turn ran at `none` —
+   * while the catalog advertised `max` for that same combo, because
+   * effectiveComboDefault downgrades to the nearest supported rung instead of dropping.
+   * The request path now resolves the same way the catalog did.
+   */
+  test("a combo default above the target ladder is downgraded, not dropped (#3108)", () => {
+    expect(concreteComboRequestBody({ model: "combo/x" }, target, "max", ["low", "medium", "high"]).reasoning)
+      .toEqual({ effort: "high" });
+    expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", ["low", "medium"]).reasoning)
+      .toEqual({ effort: "medium" });
+    // Exact support is still passed through untouched.
+    expect(concreteComboRequestBody({ model: "combo/x" }, target, "max", ["high", "max"]).reasoning)
+      .toEqual({ effort: "max" });
+    // Never raises: a request below everything supported takes the lowest rung, not a higher one.
+    expect(concreteComboRequestBody({ model: "combo/x" }, target, "low", ["high", "max"]).reasoning)
+      .toEqual({ effort: "high" });
+    // A caller-supplied effort still wins over the combo default.
+    expect(concreteComboRequestBody(
+      { model: "combo/x", reasoning: { effort: "low" } }, target, "max", ["low", "medium", "high"],
+    ).reasoning).toEqual({ effort: "low" });
+    // The resolved rung merges into a partial reasoning object rather than replacing it.
+    expect(concreteComboRequestBody(
+      { model: "combo/x", reasoning: { summary: "concise" } }, target, "max", ["low", "high"],
+    ).reasoning).toEqual({ summary: "concise", effort: "high" });
   });
 
   test("debug-warns once per unsupported or unknown combo default", () => {

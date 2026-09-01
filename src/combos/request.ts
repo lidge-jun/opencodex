@@ -1,4 +1,5 @@
 import type { OcxComboDefaultEffort, OcxComboTarget, OcxConfig } from "../types";
+import { resolveEffortAtOrBelow } from "../reasoning-effort";
 import { resolveComboId } from "./types";
 
 const warnedUnsupportedDefaults = new Set<string>();
@@ -72,7 +73,18 @@ export function concreteComboRequestBody(
   if (!needsDefault) return clone;
   // Picker availability treats an unknown ladder as a wildcard, but runtime
   // injection stays fail-closed until this concrete target advertises support.
-  if (!targetReasoningEfforts?.includes(defaultEffort)) {
+  //
+  // Support is not literal membership. The catalog advertises the combo's default
+  // through effectiveComboDefault, which keeps the highest supported rung at or
+  // below the request rather than dropping it. Testing membership here meant a
+  // combo configured for `max` against a target topping out at `high` sent no
+  // effort at all, so the provider default applied and the turn ran at `none`
+  // while the catalog still advertised `max` (#3108). Resolve the same way the
+  // catalog did.
+  const resolvedEffort = targetReasoningEfforts === undefined
+    ? undefined
+    : resolveEffortAtOrBelow(defaultEffort, targetReasoningEfforts);
+  if (!resolvedEffort) {
     const key = `${target.provider}/${target.model}:${defaultEffort}`;
     if (!warnedUnsupportedDefaults.has(key)) {
       warnedUnsupportedDefaults.add(key);
@@ -86,9 +98,9 @@ export function concreteComboRequestBody(
     return clone;
   }
   if (reasoning === undefined) {
-    clone.reasoning = { effort: defaultEffort };
+    clone.reasoning = { effort: resolvedEffort };
   } else {
-    clone.reasoning = { ...(reasoning as Record<string, unknown>), effort: defaultEffort };
+    clone.reasoning = { ...(reasoning as Record<string, unknown>), effort: resolvedEffort };
   }
   return clone;
 }
