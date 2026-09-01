@@ -46,10 +46,29 @@ then inject `resolved` rather than `defaultEffort`.
   (`ranked.length === 0`), so a no-reasoning model is never given an effort.
 - a caller-supplied `reasoning.effort` is still untouched; that check runs first.
 
-Import boundary: `effectiveComboDefault` lives in `src/codex/catalog/aggregation.ts`. Check
-that importing it into `src/combos/request.ts` does not pull catalog-fetch or Lab weight onto
-the request path — `tests/core-lab-boundary.test.ts` is the guard. If it does, lift the
-ranking helper into a leaf module both sides import.
+## Import boundary — RESOLVED AT AUDIT, the direct import is forbidden
+
+A-gate audit (independent explorer, grok-4.6) plus direct tracing settled this:
+`src/codex/catalog/aggregation.ts` does NOT reach `src/lab/`, so `tests/core-lab-boundary.test.ts`
+would stay green — but the import is still wrong for two harder reasons:
+
+1. **It is a cycle.** `aggregation.ts:22-29` already imports `../../combos`. Adding
+   `src/combos/request.ts` -> `aggregation.ts` closes the loop.
+2. **It drags the catalog plane onto the request path.** `aggregation.ts:1-31` pulls
+   `node:child_process`, `../../oauth`, `../model-cache`, and
+   `../../adapters/cursor/live-models`. `src/server/responses/core.ts` imports `src/combos/`,
+   so every routed request would carry live-discovery and OAuth weight it never uses.
+
+**Therefore the fallback is the plan, not a contingency.** Lift the ranking helper into
+`src/reasoning-effort.ts` — a genuine leaf whose only import is `./types`, and which already
+owns `codexEffortRank` (`reasoning-effort.ts:79-81`), the exact primitive the helper needs.
+
+**MOVE**: `effectiveComboDefault` from `src/codex/catalog/aggregation.ts:80-94` to
+`src/reasoning-effort.ts`, renamed `resolveEffortAtOrBelow(configured, supported)` to say what
+it does independent of combos. `aggregation.ts` imports it from there (it already imports
+`codexEffortRank` out of the same module at line 11) and keeps a local
+`effectiveComboDefault` alias only if the existing call site reads better that way.
+`src/combos/request.ts` imports the same leaf function. No cycle, no catalog weight.
 
 ## TESTS
 
@@ -65,4 +84,3 @@ ranking helper into a leaf module both sides import.
 
 - `bun test tests/combos.test.ts` focused.
 - CI judged at the end of the train.
-
