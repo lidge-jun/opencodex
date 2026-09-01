@@ -52,3 +52,10 @@ hub-management 리스너 절을 각각 추가했다. 두 행 모두 양쪽 내�
 
 T29/T30(hub role을 disconnected client state에서 배제, missing-config
 부트스트랩 경쟁)과 T3/T11은 wp8에서.
+
+## 커밋
+
+| 범위 | 내용 |
+| --- | --- |
+| `149b7215a`..`f2bf97d4f` | 원본 8커밋 재적용 |
+| `8bcfcaa8e` | test(deploy): assert the ingress role rule where the message is actually reachable (신규) |
