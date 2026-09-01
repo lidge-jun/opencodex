@@ -224,6 +224,7 @@ import {
 } from "../lib/package-tree-integrity";
 import { detectInstall } from "../update/index";
 import { readyProtocolMetadata } from "../remote/protocol";
+import { modelCapabilityFields } from "./models-capabilities";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -1345,7 +1346,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           }
           throw error;
         }
-        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
         const { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } = await import("../codex/catalog/native-models");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
@@ -1499,6 +1500,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             reasoning_efforts: efforts.map(effort => grokEffortOption(effort, effort === defaultEffort)),
           };
         };
+        // Cursor's local-agent runtime (Private Inference build) reads api_types + capabilities
+        // to enable its effort control; every other consumer ignores them. See
+        // src/server/models-capabilities.ts.
+        const nativeLimits = nativeContextLimits(config);
         const nativeModelRow = (id: string, metadataId = id) => ({
             id,
             object: "model",
@@ -1508,6 +1513,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               nativeReasoningEfforts(metadataId),
               nativeDefaultReasoningEffort(metadataId),
             ),
+            ...modelCapabilityFields({
+              reasoningEfforts: nativeReasoningEfforts(metadataId),
+              contextWindow: nativeOpenAiContextWindow(metadataId, nativeLimits),
+              inputModalities: nativeInputModalities(metadataId),
+            }),
           });
         // Selector-active discovery follows the same complete supported set as the Codex catalog
         // for both bare and qualified rows. Without selectors, the live catalog continues to own
@@ -1554,6 +1564,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               ...(isCombo ? { is_combo: true } : {}),
               ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
               ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
+              ...modelCapabilityFields({
+                reasoningEfforts: m.reasoningEfforts,
+                contextWindow: m.contextCap ?? m.contextWindow,
+                inputModalities: m.inputModalities,
+              }),
             };
           })),
         ];

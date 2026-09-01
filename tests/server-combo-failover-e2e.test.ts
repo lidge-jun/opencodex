@@ -863,28 +863,32 @@ describe("server combo failover 030 activation matrix", () => {
         body: JSON.stringify({ id: "free", combo: { ...combo, alias } }),
       });
 
-      expect((await publicRows()).filter(model => model.id === selector)).toEqual([
-        { id: selector, object: "model", created: 0, owned_by: "openai", is_combo: true },
-      ]);
+      // Rows also carry api_types/capabilities for Cursor local-agent discovery; match the
+      // combo-relevant shape and keep is_combo presence/absence explicit.
+      const initialRows = (await publicRows()).filter(model => model.id === selector);
+      expect(initialRows).toHaveLength(1);
+      expect(initialRows[0]).toMatchObject({ id: selector, object: "model", created: 0, owned_by: "openai", is_combo: true });
 
       const renamed = await updateAlias("fast-chat");
       expect(renamed.status).toBe(200);
       const renamedRows = await publicRows();
-      expect(renamedRows.filter(model => model.id === selector)).toEqual([
-        { id: selector, object: "model", created: 0, owned_by: "deepseek" },
-      ]);
-      expect(renamedRows.filter(model => model.id === "fast-chat")).toEqual([
-        { id: "fast-chat", object: "model", created: 0, owned_by: "openai", is_combo: true },
-      ]);
+      const renamedSelectorRows = renamedRows.filter(model => model.id === selector);
+      expect(renamedSelectorRows).toHaveLength(1);
+      expect(renamedSelectorRows[0]).toMatchObject({ id: selector, object: "model", created: 0, owned_by: "deepseek" });
+      expect(renamedSelectorRows[0].is_combo).toBeUndefined();
+      const renamedAliasRows = renamedRows.filter(model => model.id === "fast-chat");
+      expect(renamedAliasRows).toHaveLength(1);
+      expect(renamedAliasRows[0]).toMatchObject({ id: "fast-chat", object: "model", created: 0, owned_by: "openai", is_combo: true });
 
       const restored = await updateAlias(selector);
       expect(restored.status).toBe(200);
       const deleted = await fetch(new URL("/api/combos?id=free", server.url), { method: "DELETE" });
       expect(deleted.status).toBe(200);
       const deletedRows = await publicRows();
-      expect(deletedRows.filter(model => model.id === selector)).toEqual([
-        { id: selector, object: "model", created: 0, owned_by: "deepseek" },
-      ]);
+      const deletedSelectorRows = deletedRows.filter(model => model.id === selector);
+      expect(deletedSelectorRows).toHaveLength(1);
+      expect(deletedSelectorRows[0]).toMatchObject({ id: selector, object: "model", created: 0, owned_by: "deepseek" });
+      expect(deletedSelectorRows[0].is_combo).toBeUndefined();
       expect(deletedRows.some(model => model.is_combo === true)).toBe(false);
     } finally {
       await server.stop(true);
@@ -907,10 +911,11 @@ describe("server combo failover 030 activation matrix", () => {
       const payload = await response.json() as {
         data: Array<{ id: string; owned_by: string; is_combo?: boolean }>;
       };
-      expect(payload.data.filter(model => model.id.startsWith("a/vendor")).sort((a, b) => a.id.localeCompare(b.id))).toEqual([
-        { id: "a/vendor-model", object: "model", created: 0, owned_by: "openai", is_combo: true },
-        { id: "a/vendor/model", object: "model", created: 0, owned_by: "a" },
-      ]);
+      const vendorRows = payload.data.filter(model => model.id.startsWith("a/vendor")).sort((a, b) => a.id.localeCompare(b.id));
+      expect(vendorRows).toHaveLength(2);
+      expect(vendorRows[0]).toMatchObject({ id: "a/vendor-model", object: "model", created: 0, owned_by: "openai", is_combo: true });
+      expect(vendorRows[1]).toMatchObject({ id: "a/vendor/model", object: "model", created: 0, owned_by: "a" });
+      expect(vendorRows[1].is_combo).toBeUndefined();
     } finally {
       await server.stop(true);
     }
