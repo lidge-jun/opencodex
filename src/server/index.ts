@@ -587,6 +587,8 @@ export interface StartServerDeps {
   readinessGate?: ReadinessGate;
   /** Test-only package-tree observation; production captures package.json identity at boot. */
   packageTreeIntegrity?: PackageTreeIntegrityGuard;
+  /** Test-only seam for observing quota-worker registration ownership. */
+  registerCodexQuotaAutoRefreshWorker?: typeof registerCodexQuotaAutoRefreshWorker;
 }
 
 function inspectStartupOwnership(
@@ -1016,7 +1018,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   let unregisterQuotaAutoRefresh: (() => void) | null = null;
   try {
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
-    unregisterQuotaAutoRefresh = registerCodexQuotaAutoRefreshWorker(config);
+    unregisterQuotaAutoRefresh = (deps.registerCodexQuotaAutoRefreshWorker
+      ?? registerCodexQuotaAutoRefreshWorker)(config);
     // External `ocx config set` / direct config.json edits run in other
     // processes; poll the file so Logs/Usage display prices follow them live.
     // Started inside the guarded startup transaction so the catch below can

@@ -18,6 +18,8 @@ let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let originalConfirm: typeof window.confirm;
+let legacyApiPayload: unknown = null;
+let priorityWrites: { id: string; priority: number | null }[] = [];
 
 type LegacyCodexAccountEntry = Omit<CodexAccountEntry, "quotaAutoRefresh">;
 const legacyAccount: LegacyCodexAccountEntry = {
@@ -42,7 +44,21 @@ const account: CodexAccountEntry = {
 function makeController(overrides: Partial<CodexAccountPoolController> = {}): CodexAccountPoolController {
   return {
     accounts: [
-      { id: "main", email: "main@example.test", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null },
+      {
+        id: "main",
+        email: "main@example.test",
+        isMain: true,
+        paused: false,
+        priority: 0,
+        hasCredential: true,
+        quota: null,
+        quotaAutoRefresh: {
+          fiveHourAvailable: false,
+          weeklyAvailable: false,
+          fiveHourEnabled: false,
+          weeklyEnabled: false,
+        },
+      },
       account,
     ],
     activeId: null,
@@ -53,6 +69,8 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     pausingExhausted: false,
     activeNeedsReauth: false,
     activePinnedId: null,
+    refreshing: false,
+    initialLoading: false,
     load: async () => true,
     switchAccount: async () => ({ ok: true, activeId: null }),
     setAccountPaused: async () => ({ ok: true }),
@@ -65,11 +83,14 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     resumeRefresh: () => {},
     subscribeLoadObserver: () => () => {},
     readLastThreshold: () => undefined,
+    readLastActive: () => undefined,
     ...overrides,
   };
 }
 
 beforeEach(() => {
+  legacyApiPayload = null;
+  priorityWrites = [];
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
   win = new Window({ url: "http://localhost/" });
   Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
@@ -94,6 +115,17 @@ beforeEach(() => {
       }
       if (url.pathname === "/api/codex-auth/reset-credits/consume" && (init?.method ?? "GET") === "POST") {
         return Response.json({ code: "already_redeemed", remaining: 2 });
+      }
+      if (url.pathname === "/api/codex-auth/accounts" && legacyApiPayload !== null) {
+        return Response.json(legacyApiPayload);
+      }
+      if (url.pathname === "/api/codex-auth/active") {
+        return Response.json({ activeCodexAccountId: null, pinnedAccountId: null });
+      }
+      if (url.pathname === "/api/codex-auth/accounts/priority") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { id?: string; priority?: number | null };
+        priorityWrites.push({ id: body.id ?? "", priority: body.priority ?? null });
+        return Response.json({ priority: 2 });
       }
       if (url.pathname.startsWith("/api/codex-auth/")) {
         return Response.json({ accounts: [], activeCodexAccountId: null, autoSwitchThreshold: 80 });
@@ -121,13 +153,13 @@ afterEach(async () => {
   await win.happyDOM?.close?.();
 });
 
-async function mountPool(controller: CodexAccountPoolController) {
+async function mountPool(controller?: CodexAccountPoolController) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
     root.render(
       <LanguageProvider>
-        <CodexAccountPool apiBase="" controller={controller} />
+        <CodexAccountPool apiBase="" {...(controller ? { controller } : {})} />
       </LanguageProvider>,
     );
   });
@@ -152,18 +184,13 @@ async function chooseOrder(selectId: string, value: string): Promise<void> {
 }
 
 test("a legacy account without quota activation data keeps selection order usable", async () => {
-  const saved: { id: string; priority: number | null }[] = [];
-  expect(legacyAccount.quotaAutoRefresh).toBeUndefined();
-  await mountPool(makeController({
-    setAccountPriority: async (id, priority) => {
-      saved.push({ id, priority });
-      return { ok: true };
-    },
-  }));
+  expect("quotaAutoRefresh" in legacyAccount).toBe(false);
+  legacyApiPayload = { accounts: [legacyAccount] };
+  await mountPool();
 
   await chooseOrder("codex-account-priority-pool-1", "2");
 
-  expect(saved).toEqual([{ id: "pool-1", priority: 2 }]);
+  expect(priorityWrites).toEqual([{ id: "pool-1", priority: 2 }]);
   expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")?.textContent).toContain("pool@example.test");
   expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
 });

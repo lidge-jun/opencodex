@@ -6,6 +6,7 @@ import {
   captureConfigGeneration,
   reconcileStateGeneration,
   registerStateStore,
+  registerStateSweepAfterTick,
   resetStateStoreSweeperForTests,
   setGenerationContextBuilder,
   startStateStoreSweeper,
@@ -94,6 +95,33 @@ afterEach(() => {
 });
 
 describe("state-store sweeper", () => {
+  test("restores the live displaced after-tick owner after replacement cleanup", () => {
+    const calls: string[] = [];
+    const unregisterOlder = registerStateSweepAfterTick({
+      name: "owner",
+      afterTick: () => { calls.push("older"); },
+    });
+    const unregisterNewer = registerStateSweepAfterTick({
+      name: "owner",
+      afterTick: () => { calls.push("newer"); },
+    });
+
+    unregisterNewer();
+    const timerCallbacks: Array<() => void> = [];
+    const setSpy = spyOn(globalThis, "setInterval").mockImplementation(((callback: () => void) => {
+      timerCallbacks.push(callback);
+      return { unref() {} };
+    }) as typeof setInterval);
+    const clearSpy = spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+    startStateStoreSweeper({ intervalMs: 10 });
+    timerCallbacks[0]!();
+    expect(calls).toEqual(["older"]);
+    unregisterOlder();
+    stopStateStoreSweeper();
+    setSpy.mockRestore();
+    clearSpy.mockRestore();
+  });
+
   test("production registrations cover the hand-maintained owner inventory", () => {
     expect(STATE_STORE_REGISTRATIONS.map(registration => registration.name)).toEqual([
       "subagent-model-health",
