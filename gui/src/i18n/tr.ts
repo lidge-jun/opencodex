@@ -694,6 +694,12 @@ export const tr: Record<TKey, string> = {
   "sub.ultraModeLoadFail": "Ultra modu ayarları yüklenemedi — proxy çalışıyor mu?",
   "sub.ultraModeSaveFail": "Ultra modu ayarları kaydedilemedi",
   "sub.ultraModeSaved": "Ultra modu kaydedildi. Yeni Codex oturumlarına uygulanır.",
+  "sub.fallbackLabel": "Alt ajan yedek zinciri",
+  "sub.fallbackHint": "Alt ajan modeli kullanılamadığında veya başarısız olduğunda sırayla denenecek modeller.",
+  "sub.fallbackAdd": "Yedek model ekle…",
+  "sub.fallbackPoll": "Kullanılabilirlik kontrol aralığı",
+  "sub.fallbackSaved": "Alt ajan yedek ayarları kaydedildi.",
+  "sub.fallbackSaveFailed": "Yedek ayarlar kaydedilemedi",
 
   // logs
   "logs.title": "İstek Günlükleri",

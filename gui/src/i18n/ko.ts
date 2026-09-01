@@ -689,6 +689,12 @@ export const ko: Record<TKey, string> = {
   "sub.ultraModeLoadFail": "울트라 모드 설정을 불러오지 못했습니다 — 프록시가 실행 중인가요?",
   "sub.ultraModeSaveFail": "울트라 모드 설정 저장에 실패했습니다",
   "sub.ultraModeSaved": "울트라 모드가 저장되었습니다. 새 Codex 세션부터 적용됩니다.",
+  "sub.fallbackLabel": "서브에이전트 폴백 체인",
+  "sub.fallbackHint": "서브에이전트 모델을 사용할 수 없거나 실패할 때 순서대로 시도할 모델입니다.",
+  "sub.fallbackAdd": "폴백 모델 추가…",
+  "sub.fallbackPoll": "가용성 확인 간격",
+  "sub.fallbackSaved": "서브에이전트 폴백 설정을 저장했습니다.",
+  "sub.fallbackSaveFailed": "폴백 설정을 저장하지 못했습니다",
 
   // logs
   "logs.title": "요청 로그",

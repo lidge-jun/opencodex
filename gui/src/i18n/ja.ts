@@ -632,6 +632,12 @@ export const ja: Record<TKey, string> = {
   "sub.ultraModeLoadFail": "ウルトラモード設定を読み込めませんでした — プロキシは実行中ですか？",
   "sub.ultraModeSaveFail": "ウルトラモード設定の保存に失敗しました",
   "sub.ultraModeSaved": "ウルトラモードを保存しました。新しい Codex セッションから適用されます。",
+  "sub.fallbackLabel": "サブエージェントのフォールバックチェーン",
+  "sub.fallbackHint": "サブエージェントモデルが利用できないか失敗した場合に順番に試すモデルです。",
+  "sub.fallbackAdd": "フォールバックモデルを追加…",
+  "sub.fallbackPoll": "利用可能性チェック間隔",
+  "sub.fallbackSaved": "サブエージェントのフォールバック設定を保存しました。",
+  "sub.fallbackSaveFailed": "フォールバック設定の保存に失敗しました",
 
   // logs
   "logs.title": "リクエストログ",
