@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -245,5 +245,86 @@ describe("native main token refresh", () => {
       rmSync(homeA, { recursive: true, force: true });
       rmSync(homeB, { recursive: true, force: true });
     }
+  });
+});
+
+describe("publication never overwrites an external Codex writer (#2999)", () => {
+  const refreshOk = async () => ({
+    access: "ocx-staged-access",
+    refresh: "ocx-staged-refresh",
+    expires: Date.now() + 3_600_000,
+    accountId: "account-main",
+  });
+
+  function seedExpired(authPath: string): void {
+    writeFileSync(authPath, JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: expiredJwt(), refresh_token: "old-refresh", account_id: "account-main" },
+    }));
+  }
+
+  test("a writer landing at the rename boundary is preserved byte-for-byte", async () => {
+    // Issue reproduction step 5: replace auth.json from a simulated Codex writer at the
+    // final pre-rename hook, then let the publisher resume. Before this guard the staged
+    // credential won and the user's own `codex login` result was silently replaced.
+    const authPath = join(home, "auth.json");
+    seedExpired(authPath);
+    const external = JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: { access_token: "codex-cli-wrote-this", refresh_token: "codex-refresh", account_id: "account-main" },
+    });
+    setMainAuthJsonBeforeRenameHookForTests(() => { writeFileSync(authPath, external); });
+
+    // Refusal surfaces as MainAuthJsonChangedDuringRefreshError, the existing signal for
+    // "the file moved under us" - the caller retries against the new state rather than
+    // proceeding with a credential it no longer owns.
+    await expect(getValidMainAccountToken({ refreshToken: refreshOk })).rejects.toThrow();
+
+    expect(readFileSync(authPath, "utf8")).toBe(external);
+    expect(readFileSync(authPath, "utf8")).not.toContain("ocx-staged-access");
+  });
+
+  test("a same-bytes replacement with a new inode is still refused", async () => {
+    // The case a content hash cannot see. rename(2) replaces unconditionally, so the
+    // question that matters at the boundary is "is this the same FILE", not "does it hash
+    // the same" - an external writer that rewrote identical bytes still owns the target.
+    const authPath = join(home, "auth.json");
+    seedExpired(authPath);
+    const identical = readFileSync(authPath, "utf8");
+    setMainAuthJsonBeforeRenameHookForTests(() => {
+      // Replace via a distinct file so the inode changes while the bytes do not.
+      const swap = join(home, "swap.json");
+      writeFileSync(swap, identical);
+      renameSync(swap, authPath);
+    });
+
+    await expect(getValidMainAccountToken({ refreshToken: refreshOk })).rejects.toThrow();
+
+    expect(readFileSync(authPath, "utf8")).toBe(identical);
+    expect(readFileSync(authPath, "utf8")).not.toContain("ocx-staged-access");
+  });
+
+  test("the canonical target survives a refused publication", async () => {
+    // A refusal must never leave the credential missing: losing auth.json is worse than
+    // losing the refresh, because Codex CLI then has nothing to authenticate with.
+    const authPath = join(home, "auth.json");
+    seedExpired(authPath);
+    setMainAuthJsonBeforeRenameHookForTests(() => {
+      writeFileSync(authPath, JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "other" } }));
+    });
+
+    await expect(getValidMainAccountToken({ refreshToken: refreshOk })).rejects.toThrow();
+
+    expect(existsSync(authPath)).toBe(true);
+    expect(readdirSync(home).filter(name => name.startsWith("auth.json.")).length).toBe(0);
+  });
+
+  test("an uncontested publication still succeeds", async () => {
+    // The guard must not make the ordinary path fail closed.
+    const authPath = join(home, "auth.json");
+    seedExpired(authPath);
+    const token = await getValidMainAccountToken({ refreshToken: refreshOk });
+    expect(token?.accessToken).toBe("ocx-staged-access");
+    expect(readFileSync(authPath, "utf8")).toContain("ocx-staged-access");
   });
 });

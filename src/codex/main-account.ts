@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readCodexTokens } from "./auth-collision";
 import {
@@ -37,6 +37,16 @@ let beforeMainAuthJsonRenameForTests: (() => void) | null = null;
 type MainAuthJsonCredential = {
   path: string;
   rawSha256: string;
+  /**
+   * Filesystem identity of the file the hash was taken from (#2999).
+   *
+   * A content hash cannot tell "unchanged" from "replaced with a file that happens to
+   * hash the same", and more importantly it is read at a different instant than the
+   * rename. Carrying dev+ino lets the pre-rename guard ask the sharper question: is this
+   * still the same file, not merely one with the same bytes. `null` when the target could
+   * not be stat'ed, which is treated as "cannot prove identity" rather than "matches".
+   */
+  identity: { dev: number; ino: number } | null;
   root: Record<string, unknown>;
   tokens: Record<string, unknown>;
   accessToken?: string;
@@ -73,6 +83,22 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+/**
+ * Filesystem identity of a path, or null when it cannot be read.
+ *
+ * Null is deliberately NOT "matches anything": a caller that cannot prove identity must
+ * fail closed, because the whole point here is refusing to overwrite a file we can no
+ * longer vouch for.
+ */
+function statIdentity(path: string): { dev: number; ino: number } | null {
+  try {
+    const stat = statSync(path);
+    return { dev: Number(stat.dev), ino: Number(stat.ino) };
+  } catch {
+    return null;
+  }
+}
+
 function readMainAuthJsonCredential(): MainAuthJsonCredential | null {
   const path = resolveWriteTarget(join(resolveCodexHomeDir(), "auth.json"));
   let raw: string;
@@ -98,6 +124,7 @@ function readMainAuthJsonCredential(): MainAuthJsonCredential | null {
     return {
       path,
       rawSha256: sha256(raw),
+      identity: statIdentity(path),
       root,
       tokens,
       ...(accessToken ? { accessToken } : {}),
@@ -131,6 +158,21 @@ function assertMainAuthJsonSnapshotUnchanged(expected: MainAuthJsonCredential): 
   if (!current || current.path !== expected.path || current.rawSha256 !== expected.rawSha256) {
     throw new MainAuthJsonChangedDuringRefreshError();
   }
+  // Identity, not just content (#2999). A writer can land between this check and the
+  // rename, and rename(2) replaces unconditionally - so the narrower the question asked
+  // here, the smaller the window where a Codex login gets silently overwritten. An
+  // unreadable identity on either side fails closed: unprovable is not the same as equal.
+  assertMainAuthJsonIdentityUnchanged(expected);
+}
+
+function assertMainAuthJsonIdentityUnchanged(expected: MainAuthJsonCredential): void {
+  const identity = statIdentity(expected.path);
+  if (!identity
+    || !expected.identity
+    || identity.dev !== expected.identity.dev
+    || identity.ino !== expected.identity.ino) {
+    throw new MainAuthJsonChangedDuringRefreshError();
+  }
 }
 
 function persistRefreshedMainAuthJson(
@@ -160,6 +202,9 @@ function persistRefreshedMainAuthJson(
         beforeMainAuthJsonRenameForTests = null;
         hook?.();
       },
+      // Runs immediately before rename(2), after the test hook has had its chance to
+      // simulate an external writer. Full snapshot check (content AND identity): this is
+      // the last look we get, so it asks everything it can rather than the cheap question.
       validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
     },
   );
