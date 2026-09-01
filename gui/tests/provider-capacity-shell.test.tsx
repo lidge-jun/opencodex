@@ -211,7 +211,10 @@ test("provider quota fetch preserves aggregate capacity through shell state and 
   expect(text).toContain("31% used");
   expect(text).toContain("Current effective account · pro");
   expect(text).toContain("8%");
-  expect(text).toContain("Incomplete coverage: 1 account(s) excluded, including 1 unknown plan(s)");
+  // #3155 split these: an uncalibrated plan is COUNTED at baseline, so it is no longer
+  // reported as excluded. The exclusion line now says only what it can prove.
+  expect(text).toContain("Incomplete coverage: 1 account(s) excluded");
+  expect(text).toContain("1 account(s) on an uncalibrated plan are counted at the baseline seat weight");
   expect(text).toContain("Next capacity recovery");
   expect(text).toContain("+19.2% pool capacity");
   const expectedRecoveryAt = new Intl.DateTimeFormat("en", {
@@ -350,7 +353,8 @@ test("coverage-only API report remains visible in the rate-limit overview", asyn
 
   const text = host.textContent ?? "";
   expect(text).toContain("OpenAI (Codex login)");
-  expect(text).toContain("Incomplete coverage: 3 account(s) excluded, including 1 unknown plan(s)");
+  expect(text).toContain("Incomplete coverage: 3 account(s) excluded");
+  expect(text).toContain("1 account(s) on an uncalibrated plan are counted at the baseline seat weight");
   expect(text).not.toContain("No rate-limit data yet");
   expect(text).not.toMatch(/\d+(?:\.\d+)?% used/);
 });

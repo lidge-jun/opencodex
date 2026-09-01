@@ -131,8 +131,18 @@ export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuo
             <div className="pws-capacity-incomplete">
               {t("pws.capacity.incomplete", {
                 excluded: aggregation.excludedAccounts,
-                unknown: aggregation.unknownPlanAccounts,
               })}
+            </div>
+          )}
+          {/*
+            Separate from the exclusion notice on purpose (#3155). An uncalibrated plan is
+            COUNTED, at the baseline seat weight, so folding it into "excluded" told an
+            operator their Premium seat was missing from a report that in fact included it.
+            What is true is narrower: the estimate is conservative for that seat.
+          */}
+          {aggregation && aggregation.unknownPlanAccounts > 0 && (
+            <div className="pws-capacity-incomplete">
+              {t("pws.capacity.uncalibratedPlan", { count: aggregation.unknownPlanAccounts })}
             </div>
           )}
           {aggregation && aggregation.partialWindowAccounts > 0 && (
