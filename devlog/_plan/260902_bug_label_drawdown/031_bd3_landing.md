@@ -42,3 +42,22 @@ green (22/0).
 
 Bug-labelled items: **16 → 14** (5 PRs + 9 issues).
 
+## Scope discipline on #2999
+
+030_phase3.md originally said #3112 "closes bug issue #2999. Two items for one merge."
+The A-gate audit disproved that and the correction held through execution: #2999 describes
+**two** races, and #3112 is explicitly only the lock-scope half — serializing two
+`OPENCODEX_HOME`s against one `CODEX_HOME`. The publication/overwrite race is still carried
+by the existing refuse-rather-than-overwrite check.
+
+So #3112's carry PR states that boundary in its own body and #2999 stays open. Closing it
+by association would have been the cheap way to make the count drop by one; it would also
+have buried a live race behind a green checkmark.
+
+The publication half is now Batch F work with its scope already written down.
+
+## Remaining after Batch C
+
+5 bug PRs, all contributor-owned (Batch D): #3164 #3144 #3138 #3121, plus whatever the
+recount shows.
+9 bug issues (Batches E and F): #3155 #3152 #3150 #3141 #3136 #2999 #2813 #1527 #1419.
