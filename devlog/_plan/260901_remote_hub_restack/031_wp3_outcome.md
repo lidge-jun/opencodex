@@ -61,3 +61,19 @@ chunked를 쓰면 헤더 자체가 없다. 둘 다 사전 검사를 통과해 `r
 T21(`hub.managementPublicOrigin`, `remoteGui.allowedTailscaleUsers`,
 retired `allowInsecureHttp` 문서화)은 wp8에서 처리한다.
 draft 해제도 wp8에서 CI 그린 확인 후.
+
+## 커밋
+
+| 커밋 | 내용 |
+| --- | --- |
+| `1e3f7d2b7`→재적용 | feat(remote-gui): add remote session issuance and pairing |
+| `129a64184`→재적용 | fix(remote-gui): harden identity and capability replay checks |
+| `53986b612`→재적용 | test(remote-gui): cover remote session consent boundaries |
+| `6c8dd333e`→재적용 | fix(remote-gui): enforce exact bootstrap destination |
+| `0c6670e88`→재적용 | test(remote-gui): lock replay and expiry negatives |
+| `2d1262bc5` | fix(remote-gui): preserve renewal and mutation origin checks |
+| `b7282858b` | fix(remote-gui): drop plaintext pairing and bound the unauthenticated exchange body (신규) |
+
+원본 6커밋은 authorship과 메시지를 보존했고, 계약 변경은 마지막 조정 커밋
+하나로 모았다. wp2와 같은 이유다 — 원저자의 커밋을 내가 편집한 것처럼
+보이게 만들지 않는다.
