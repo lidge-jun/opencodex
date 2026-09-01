@@ -225,6 +225,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.keyOptional !== undefined ? { keyOptional: entry.keyOptional } : {}),
     ...(entry.freeTier !== undefined ? { freeTier: entry.freeTier } : {}),
     ...(entry.modelSuffixBracketStrip !== undefined ? { modelSuffixBracketStrip: entry.modelSuffixBracketStrip } : {}),
+    ...(entry.modelMap ? { modelMap: { ...entry.modelMap } } : {}),
     ...(entry.staticHeaders ? { headers: { ...entry.staticHeaders } } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),
     ...(entry.models ? { models: [...entry.models] } : {}),

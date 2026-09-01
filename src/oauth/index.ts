@@ -1,3 +1,4 @@
+import { loginQoderCn, refreshQoderCnToken } from "./qodercn";
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
@@ -268,6 +269,12 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("github-copilot"),
     // Unofficial Copilot bridge — keep proactive traffic lazy-only (no background guardian spam).
     defaultRefreshPolicy: "lazy-only",
+  },
+  qodercn: {
+    login: (ctrl) => loginQoderCn(ctrl),
+    refresh: (rt, signal) => refreshQoderCnToken(rt, signal),
+    providerConfig: oauthConfig("qodercn"),
+    defaultModel: oauthDefaultModel("qodercn"),
   },
   chatgpt: {
     login: loginChatGPT,

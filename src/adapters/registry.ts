@@ -1,3 +1,4 @@
+import { createQoderCnAdapter } from "./qodercn";
 import { createAnthropicAdapter } from "./anthropic";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
@@ -27,7 +28,8 @@ export type AdapterWire =
   | "openai-responses"
   | "google"
   | "kiro"
-  | "cursor";
+  | "cursor"
+  | "qodercn";
 
 export type AdapterMutationContract =
   | "codex-owned"
@@ -98,6 +100,11 @@ export const ADAPTER_REGISTRY = {
   "azure-openai": {
     contractParent: "openai-responses",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createAzureAdapter(provider),
+  },
+  qodercn: {
+    wire: "qodercn",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createQoderCnAdapter(provider),
   },
   cursor: {
     wire: "cursor",

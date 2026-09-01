@@ -1338,7 +1338,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           }
           throw error;
         }
-        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeInputModalities, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
         const { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } = await import("../codex/catalog/native-models");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
@@ -1492,8 +1492,88 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             reasoning_efforts: efforts.map(effort => grokEffortOption(effort, effort === defaultEffort)),
           };
         };
+        const buildModelCapabilities = (modalities: string[]) => {
+          const supportsVision = modalities.includes("image");
+          return {
+            capabilities: {
+              object: "model_capabilities",
+              type: "chat",
+              limits: {
+                max_context_window_tokens: 1000000,
+                max_output_tokens: 64000,
+                max_prompt_tokens: 950000,
+                ...(supportsVision ? {
+                  vision: {
+                    max_prompt_image_size: 31457280,
+                    max_prompt_images: 10,
+                    supported_media_types: [
+                      "image/jpeg",
+                      "image/png",
+                      "image/webp",
+                      "image/gif",
+                      "application/pdf",
+                    ],
+                  },
+                } : {}),
+              },
+              supports: {
+                vision: supportsVision,
+                tool_calls: true,
+                streaming: true,
+                structured_outputs: true,
+                parallel_tool_calls: true,
+              },
+            },
+            input_modalities: modalities,
+            modalities,
+            supports_vision: supportsVision,
+          };
+        };
+
+        const formatModelDisplayName = (provider: string, modelId: string, customDisplayName?: string) => {
+          if (customDisplayName) return customDisplayName.replace(/-/g, " ").replace(/\s+/g, " ").trim();
+          const base = modelId.includes("/") ? modelId.split("/").pop()! : modelId;
+          const map: Record<string, string> = {
+            "gemini-3.7-flash": "Gemini 3.7 Flash",
+            "gemini-3.1-pro": "Gemini 3.1 Pro",
+            "gemini-3.1-flash-image": "Gemini 3.1 Flash Image",
+            "claude-sonnet-4-6": "Claude Sonnet 4.6",
+            "claude-opus-4-6-thinking": "Claude Opus 4.6 Thinking",
+            "gpt-5.6-luna": "GPT 5.6 Luna",
+            "gpt-5.6-sol": "GPT 5.6 Sol",
+            "gpt-5.6-terra": "GPT 5.6 Terra",
+            "GLM-5.3-Flash": "GLM 5.3 Flash",
+            "glm-5.3-flash": "GLM 5.3 Flash",
+            "GLM-5.3": "GLM 5.3",
+            "glm-5.3": "GLM 5.3",
+            "GLM-5.2": "GLM 5.2",
+            "glm-5.2": "GLM 5.2",
+            "Qwen3.8-Flash": "Qwen 3.8 Flash",
+            "qwen3.8-flash": "Qwen 3.8 Flash",
+            "Qwen3.8-Max": "Qwen 3.8 Max",
+            "qwen3.8-max": "Qwen 3.8 Max",
+            "DeepSeek-V4-Flash": "DeepSeek V4 Flash",
+            "deepseek-v4-flash": "DeepSeek V4 Flash",
+            "DeepSeek-V4-Pro": "DeepSeek V4 Pro",
+            "deepseek-v4-pro": "DeepSeek V4 Pro",
+            "Kimi-K3": "Kimi K3",
+            "kimi-k3": "Kimi K3",
+            "Kimi-K2.7-Code": "Kimi K2.7 Code",
+            "kimi-k2.7-code": "Kimi K2.7 Code",
+            "MiniMax-M3": "MiniMax M3",
+            "mimo-v2.5": "MiMo v2.5",
+            "mimo-v2.5-pro": "MiMo v2.5 Pro",
+          };
+          const friendly = map[base] || base.replace(/-/g, " ").replace(/\s+/g, " ").trim();
+          if (provider === "combo") return friendly + " Combo";
+          return friendly;
+        };
+
         const nativeModelRow = (id: string, metadataId = id) => ({
+            ...buildModelCapabilities(nativeInputModalities(metadataId)),
             id,
+            name: formatModelDisplayName("openai", metadataId),
+            display_name: formatModelDisplayName("openai", metadataId),
             object: "model",
             created: 0,
             owned_by: "openai",
@@ -1528,6 +1608,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ...await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered).map(async m => {
             const publicId = m.alias ?? `${m.provider}/${m.id}`;
             const isCombo = m.provider === "combo" && exactComboSlugs.has(publicId);
+            const modalities = (Array.isArray(m.inputModalities) && m.inputModalities.length > 0) ? m.inputModalities : ["text", "image"];
+            const displayName = formatModelDisplayName(m.provider, m.id, m.displayName);
             const provider = config.providers[m.provider];
             const effective = provider
               ? (await import("../providers/default-aliases")).effectiveModelAliases(
@@ -1538,12 +1620,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               : undefined;
             return {
               id: publicId,
+              name: displayName,
+              display_name: displayName,
               object: "model",
               created: 0,
               // This endpoint is an OpenAI-compatible inbound contract. Some clients use
               // owned_by as an adapter selector, so a virtual combo must name that wire
               // adapter rather than the internal catalog authority marker.
               owned_by: isCombo ? "openai" : (m.owned_by ?? m.provider),
+              ...buildModelCapabilities(modalities),
               ...(isCombo ? { is_combo: true } : {}),
               ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
               ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),

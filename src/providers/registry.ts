@@ -156,6 +156,7 @@ export interface ProviderRegistryEntry {
   /** Static headers merged into every upstream request for this provider. */
   staticHeaders?: Record<string, string>;
   modelSuffixBracketStrip?: boolean;
+  modelMap?: Record<string, string>;
   featured?: boolean;
   dashboardPreset?: boolean;
   note?: string;
@@ -1308,6 +1309,46 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     liveModels: true,
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
     defaultModel: "claude-sonnet-5",
+  },
+  {
+    id: "qodercn",
+    label: "Qoder CN",
+    adapter: "qodercn",
+    baseUrl: "https://gateway.qoder.com.cn",
+    authKind: "oauth",
+    oauthId: "qodercn",
+    featured: false,
+    liveModels: false,
+    note: "Log in with your Qoder CN account",
+    defaultModel: "GLM-5.3-Flash",
+    models: ["GLM-5.3-Flash", "GLM-5.3", "GLM-5.2", "Qwen3.8-Flash", "Qwen3.8-Max", "Qwen3.7-Max", "Qwen3.7-Plus", "Qwen3.5-Plus", "DeepSeek-V4-Flash", "DeepSeek-V4-Pro", "Kimi-K3", "Kimi-K2.7-Code", "MiniMax-M3", "Cantus", "Auto"],
+    modelMap: {
+      "GLM-5.3-Flash": "gfmodel", "GLM-5.3": "gmodel", "GLM-5.2": "gm51model",
+      "Qwen3.8-Flash": "qfmodel", "Qwen3.8-Max": "qmodel_38max", "Qwen3.7-Max": "qmodel_latest", "Qwen3.7-Plus": "qmodel", "Qwen3.5-Plus": "q35model",
+      "DeepSeek-V4-Flash": "dfmodel", "DeepSeek-V4-Pro": "dmodel",
+      "Kimi-K3": "kmodel_latest", "Kimi-K2.7-Code": "kmodel",
+      "MiniMax-M3": "mmodel", "Cantus": "cmodel", "Auto": "auto"
+    },
+    modelContextWindows: { "GLM-5.3-Flash": 1000000, "GLM-5.3": 1000000, "GLM-5.2": 1000000, "Qwen3.8-Flash": 1000000, "Qwen3.8-Max": 1000000, "Qwen3.7-Max": 1000000, "Qwen3.7-Plus": 1000000, "Qwen3.5-Plus": 1000000, "DeepSeek-V4-Flash": 1000000, "DeepSeek-V4-Pro": 1000000, "Kimi-K3": 262144, "Kimi-K2.7-Code": 262144, "MiniMax-M3": 262144, "Cantus": 128000, "Auto": 1000000 },
+    modelInputModalities: {
+      "GLM-5.3-Flash": ["text", "image"],
+      "GLM-5.3": ["text", "image"],
+      "GLM-5.2": ["text", "image"],
+      "Qwen3.8-Flash": ["text", "image"],
+      "Qwen3.8-Max": ["text", "image"],
+      "Qwen3.7-Max": ["text", "image"],
+      "Qwen3.7-Plus": ["text", "image"],
+      "Qwen3.5-Plus": ["text", "image"],
+      "DeepSeek-V4-Flash": ["text", "image"],
+      "DeepSeek-V4-Pro": ["text", "image"],
+      "Kimi-K3": ["text", "image"],
+      "Kimi-K2.7-Code": ["text", "image"],
+      "MiniMax-M3": ["text", "image"],
+      "Auto": ["text", "image"],
+    },
+    preserveReasoningContentModels: ["GLM-5.3-Flash", "GLM-5.3", "GLM-5.2", "Qwen3.8-Flash", "Qwen3.8-Max", "Qwen3.7-Max", "Qwen3.7-Plus", "DeepSeek-V4-Flash", "DeepSeek-V4-Pro", "Kimi-K3"],
+    modelReasoningEfforts: { "GLM-5.3-Flash": ["low", "high", "max"], "GLM-5.3": ["low", "high", "max"], "GLM-5.2": ["low", "medium", "high", "xhigh", "max"], "Qwen3.8-Flash": ["low", "medium", "high", "xhigh", "max"], "Qwen3.8-Max": ["low", "medium", "xhigh"], "Qwen3.7-Max": ["low", "medium", "high", "xhigh", "max"], "Qwen3.7-Plus": ["low", "medium", "high", "xhigh", "max"], "DeepSeek-V4-Flash": ["low", "high", "max"], "DeepSeek-V4-Pro": ["low", "high", "max"], "Kimi-K3": ["low", "high", "max"] },
+    defaultMaxOutputTokens: 64000
   },
   {
     id: "kimi",

@@ -503,6 +503,7 @@ const providerConfigSchema = z.object({
   baseUrl: z.string().min(1),
   alias: z.string().optional(),
   modelAliases: z.record(z.string(), z.string()).optional(),
+  modelMap: z.record(z.string(), z.string()).optional(),
   defaultAliases: z.boolean().optional(),
   requestPacing: requestPacingSchema.optional().catch(undefined),
   mcpMaxTools: z.number().int().positive().optional(),

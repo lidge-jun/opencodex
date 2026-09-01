@@ -168,6 +168,8 @@ export interface OcxProviderConfig {
   alias?: string;
   /** Native model id -> short, slash-free request alias. */
   modelAliases?: Record<string, string>;
+  /** Native model id -> upstream wire model id mapping. */
+  modelMap?: Record<string, string>;
   /** Override the global built-in model-alias switch for this provider. */
   defaultAliases?: boolean;
   adapter: string;
