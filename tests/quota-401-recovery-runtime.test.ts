@@ -235,10 +235,116 @@ test("a transient refresh failure does not quarantine the account", async () => 
   expect(quotaRecoveryRecordForTests("slow-grant")).toMatchObject({ state: "backoff" });
 });
 
+test("an already-aborted caller starts no refresh at all", async () => {
+  const { forceRefreshCodexPoolToken } = await import("../src/codex/account-store");
+  const { claimQuotaRecovery, quotaRecoveryRecordForTests, releaseQuotaRecovery, settleQuotaRecovery } =
+    await import("../src/codex/quota-401-recovery");
+  const generation = await seedAccount("pre-aborted");
+
+  let fetches = 0;
+  globalThis.fetch = (async () => {
+    fetches += 1;
+    return Response.json({ access_token: ROTATED, refresh_token: "grant2", expires_in: 3600 });
+  }) as typeof fetch;
+
+  const claim = claimQuotaRecovery("pre-aborted", generation);
+  if (!claim.granted) throw new Error("expected a claim");
+  const reason = new Error("caller already gone");
+  const controller = new AbortController();
+  controller.abort(reason);
+
+  let failures = 0;
+  let rejected: unknown;
+  await forceRefreshCodexPoolToken("pre-aborted", {
+    rejectedGeneration: generation,
+    rejectedAccessToken: REJECTED,
+    signal: controller.signal,
+    onSettled: outcome => {
+      if (outcome.kind === "failed") { failures += 1; releaseQuotaRecovery("pre-aborted", claim.claimId, 60_000); }
+      else settleQuotaRecovery("pre-aborted", claim.claimId, outcome);
+    },
+  }).catch(error => { rejected = error; });
+
+  // Settlement runs on an uncancelled completion, which bypasses resolveCodexToken's own
+  // pre-abort guard — so without an explicit check here a caller that is already gone
+  // would rotate a credential nobody is waiting for.
+  expect(fetches).toBe(0);
+  expect(rejected).toBe(reason);
+  expect(failures).toBe(1);
+  // And the claim is not left held: it was released, not abandoned to its lease.
+  expect(quotaRecoveryRecordForTests("pre-aborted")).toMatchObject({ state: "backoff" });
+});
+
+test("structured terminal evidence on the FIRST 401 needs no refresh and is generation-scoped", async () => {
+  const { listCodexAuthAccounts, isAccountNeedsReauth } = await import("../src/codex/auth-api");
+  const { loadConfig } = await import("../src/config");
+  const generation = await seedListedAccount("structured-first");
+
+  let tokenCalls = 0;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    if (String(input).includes("/wham/usage")) {
+      return new Response(JSON.stringify({ detail: { code: "invalid_refresh_token" } }), { status: 401 });
+    }
+    tokenCalls += 1;
+    return Response.json({ access_token: ROTATED, refresh_token: "grant2", expires_in: 3600 });
+  }) as typeof fetch;
+
+  const rows = await listCodexAuthAccounts(loadConfig(), true);
+  expect(rows.find(row => row.id === "structured-first")?.needsReauth).toBe(true);
+  // A body that says the grant is dead needs no refresh to prove it.
+  expect(tokenCalls).toBe(0);
+  expect(isAccountNeedsReauth("structured-first")).toBe(true);
+
+  // The evidence is about THAT credential. A replacement must not inherit the quarantine.
+  const { saveCodexAccountCredential } = await import("../src/codex/account-store");
+  saveCodexAccountCredential("structured-first", {
+    accessToken: "fresh-login",
+    refreshToken: "fresh-grant",
+    expiresAt: Date.now() + 3600_000,
+    chatgptAccountId: "acc",
+  });
+  expect(isAccountNeedsReauth("structured-first")).toBe(false);
+  void generation;
+});
+
+test("structured terminal evidence on the REPLAY is scoped to the refreshed credential", async () => {
+  const { listCodexAuthAccounts, isAccountNeedsReauth } = await import("../src/codex/auth-api");
+  const { loadConfig } = await import("../src/config");
+  await seedListedAccount("structured-replay");
+
+  let whamCalls = 0;
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    if (String(input).includes("/wham/usage")) {
+      whamCalls += 1;
+      // Bare first, structured-terminal on the replay: only the second answer proves death.
+      return whamCalls === 1
+        ? new Response("{}", { status: 401 })
+        : new Response(JSON.stringify({ detail: { code: "invalid_refresh_token" } }), { status: 401 });
+    }
+    return Response.json({ access_token: ROTATED, refresh_token: "grant2", expires_in: 3600 });
+  }) as typeof fetch;
+
+  const rows = await listCodexAuthAccounts(loadConfig(), true);
+  expect(whamCalls).toBe(2);
+  expect(rows.find(row => row.id === "structured-replay")?.needsReauth).toBe(true);
+  expect(isAccountNeedsReauth("structured-replay")).toBe(true);
+
+  const { saveCodexAccountCredential } = await import("../src/codex/account-store");
+  saveCodexAccountCredential("structured-replay", {
+    accessToken: "fresh-login",
+    refreshToken: "fresh-grant",
+    expiresAt: Date.now() + 3600_000,
+    chatgptAccountId: "acc",
+  });
+  expect(isAccountNeedsReauth("structured-replay")).toBe(false);
+});
+
 test("no bearer reaches the console, the debug buffer, or a serialized account row", async () => {
   const { forceRefreshCodexPoolToken } = await import("../src/codex/account-store");
   const { getDebugLogEntries } = await import("../src/lib/debug-log-buffer");
-  const generation = await seedAccount("quiet-refresh");
+  // Registered, not just credentialed: an unlisted account produces no row at all, and the
+  // serializer assertion below would then be checking an empty list.
+  const generation = await seedListedAccount("quiet-refresh");
   globalThis.fetch = (async () =>
     Response.json({ access_token: ROTATED, refresh_token: "grant2", expires_in: 3600 })) as typeof fetch;
 
@@ -275,5 +381,6 @@ test("no bearer reaches the console, the debug buffer, or a serialized account r
   const { listCodexAuthAccounts } = await import("../src/codex/auth-api");
   const { loadConfig } = await import("../src/config");
   const rows = JSON.stringify(await listCodexAuthAccounts(loadConfig(), false));
+  expect(rows).toContain("quiet-refresh");
   for (const secret of secrets) expect(rows).not.toContain(secret);
 });

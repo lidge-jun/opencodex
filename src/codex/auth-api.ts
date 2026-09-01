@@ -997,7 +997,11 @@ async function recoverPoolQuotaFrom401(ctx: {
   if (await isTerminalPoolAuthResponse(resp)) {
     // Durable, not just this response: the account list re-polls, and without a recorded
     // mark the next bare 401 finds nothing terminal and reports the account healthy.
-    markAccountNeedsReauth(accountId);
+    //
+    // Scoped to the generation this evidence is ABOUT. An account-wide mark would outlive
+    // the credential it condemned, so a late terminal response arriving after the operator
+    // re-authenticated would quarantine the replacement.
+    markAccountNeedsReauth(accountId, captureConfigGeneration(), rejectedGeneration);
     return { quota: existing ?? null, needsReauth: true, credentialGeneration: rejectedGeneration };
   }
 
@@ -1039,7 +1043,7 @@ async function recoverPoolQuotaFrom401(ctx: {
     // A refresh that failed terminally is the one case where the credential really is gone.
     // Everything else is unknown, and unknown is not proof.
     if (e instanceof TokenRefreshError && isTerminalRefreshError(e)) {
-      markAccountNeedsReauth(accountId);
+      markAccountNeedsReauth(accountId, captureConfigGeneration(), rejectedGeneration);
       return { quota: existing ?? null, needsReauth: true, credentialGeneration: rejectedGeneration };
     }
     return { quota: existing ?? null, needsReauth: false, credentialGeneration: rejectedGeneration };
@@ -1067,8 +1071,9 @@ async function recoverPoolQuotaFrom401(ctx: {
   if (!replay.ok) {
     if (replay.status === 401 && await isTerminalPoolAuthResponse(replay)) {
       // The refresh already settled this claim non-terminally, so the record alone would
-      // let the next poll call a dead credential healthy.
-      markAccountNeedsReauth(accountId);
+      // let the next poll call a dead credential healthy. The evidence is about the
+      // REFRESHED credential, which is what the replay used.
+      markAccountNeedsReauth(accountId, writerGeneration, refreshed.generation);
       return { quota: existing ?? null, needsReauth: true, credentialGeneration: refreshed.generation };
     }
     return { quota: existing ?? null, needsReauth: false, credentialGeneration: refreshed.generation };
