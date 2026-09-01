@@ -3344,7 +3344,13 @@ describe("service serving confirmation", () => {
       expect(serviceInstallHealthMs("darwin")).toBe(SERVICE_INSTALL_HEALTH_MS);
     });
 
-    test("reports the effective Windows failure budget", async () => {
+    // The failure line reports what the run actually spent, not what it was allowed to.
+    // With the Windows budget the loop exits at 45s and the post-deadline grace knock
+    // adds its 500ms sleep, so the real wait is 45.5s. Reporting the budget printed 45s
+    // for a 45.5s wait -- a small gap here, but the same expression understates every
+    // future grace the loop grows, and the reader is using this number to judge whether
+    // the service was still coming up (#3009).
+    test("reports the wait it actually spent, grace knock included", async () => {
       const errors: string[] = [];
       const previousError = console.error;
       const previousExitCode = process.exitCode;
@@ -3358,8 +3364,35 @@ describe("service serving confirmation", () => {
           now: () => now,
           timeoutMs: SERVICE_INSTALL_HEALTH_WINDOWS_MS,
         });
-        expect(errors.join("\n")).toContain("within 45s");
-        expect(errors.join("\n")).not.toContain("within 20s");
+        expect(now).toBe(SERVICE_INSTALL_HEALTH_WINDOWS_MS + 500);
+        expect(errors.join("\n")).toContain("after 46s");
+        expect(errors.join("\n")).not.toContain("45s");
+        expect(errors.join("\n")).not.toContain("20s");
+      } finally {
+        console.error = previousError;
+        process.exitCode = previousExitCode ?? 0;
+      }
+    });
+
+    // A caller that asked not to wait must not be told it waited: with a zero budget
+    // confirmServiceServing takes its single probe and skips the grace entirely, so the
+    // reported wait is 0 rather than the budget.
+    test("reports no wait when the caller asked not to wait", async () => {
+      const errors: string[] = [];
+      const previousError = console.error;
+      const previousExitCode = process.exitCode;
+      let now = 0;
+      console.error = (...values: unknown[]) => { errors.push(values.join(" ")); };
+      try {
+        await reportServiceServing("started", {
+          port: 10100,
+          probe: async () => false,
+          sleep: async ms => { now += ms; },
+          now: () => now,
+          timeoutMs: 0,
+        });
+        expect(now).toBe(0);
+        expect(errors.join("\n")).toContain("after 0s");
       } finally {
         console.error = previousError;
         process.exitCode = previousExitCode ?? 0;

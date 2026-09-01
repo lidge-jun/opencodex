@@ -740,14 +740,22 @@ export async function reportServiceServing(
   deps: Parameters<typeof confirmServiceServing>[0] = {},
 ): Promise<void> {
   const healthBudgetMs = deps.timeoutMs ?? serviceInstallHealthMs();
+  // Timed here rather than reported from the budget. confirmServiceServing knocks once
+  // more after a grace sleep whenever it waited at all, so the real wait is the budget
+  // plus that grace — and printing the budget states a number the run did not spend.
+  // What the reader is deciding is whether the service was still coming up, which is a
+  // judgement about elapsed time (#3009).
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
   const serving = await confirmServiceServing({ ...deps, timeoutMs: healthBudgetMs });
+  const waitedMs = Math.max(0, now() - startedAt);
   if (serving.ok) {
     console.log(`✅ opencodex service ${verb} and serving on port ${serving.port}.`);
     return;
   }
   console.error(
-    `⚠️  Service ${verb}, but no proxy answered on port ${serving.port} within `
-    + `${Math.trunc(healthBudgetMs / 1000)}s.\n`
+    `⚠️  Service ${verb}, but no proxy answered on port ${serving.port} after `
+    + `${Math.round(waitedMs / 1000)}s.\n`
     + `   The manager registered the job; that is not the same as serving.\n`
     + `   Log:       ${serviceLogPath()}\n`
     + `   Meanwhile: ocx start   (serves in the foreground)`,
