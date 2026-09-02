@@ -3709,6 +3709,34 @@
 				"toolChoiceSupport": "auto"
 			}
 		},
+		"claude-fable-5-1": {
+			"id": "claude-fable-5-1",
+			"name": "Anthropic Fable 5.1",
+			"api": "anthropic-messages",
+			"provider": "anthropic",
+			"baseUrl": "https://api.anthropic.com",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 10,
+				"output": 50,
+				"cacheRead": 0.25,
+				"cacheWrite": 12.5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			},
+			"compat": {
+				"toolChoiceSupport": "auto"
+			}
+		},
 		"claude-haiku-4-5": {
 			"id": "claude-haiku-4-5",
 			"name": "Anthropic Haiku 4.5 (latest)",

@@ -177,22 +177,23 @@ describe("resolveMatchedPrice", () => {
   });
 
   // Claude Fable 5.1 (2026-09-02): 10 / 50 / 12.50 cache write, and a cache-hit rate of
-  // 0.025x base input (0.25) rather than the 0.1x every other family uses. There is no
-  // jawcode row yet, so both Anthropic surfaces resolve from the shipped overlay; an
-  // account-pool log label must collapse onto the same price.
+  // 0.025x base input (0.25) rather than the 0.1x every other family uses. The generated
+  // Anthropic jawcode row is now canonical for both Anthropic surfaces; an account-pool log
+  // label must still collapse onto the same price.
   test("claude-fable-5-1 resolves to the official Fable 5.1 price on both Anthropic surfaces", () => {
     const COST4 = { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 };
+    expect(findExpectedPriceOverlay("anthropic", "claude-fable-5-1")?.cost4).toEqual(COST4);
+    expect(findExpectedPriceOverlay("anthropic-apikey", "claude-fable-5-1")?.cost4).toEqual(COST4);
     for (const provider of ["anthropic", "anthropic-apikey"]) {
       const price = resolveMatchedPrice(provider, "claude-fable-5-1");
       expect(price, provider).toMatchObject({
         provider,
         modelId: "claude-fable-5-1",
         cost4: COST4,
-        source: "expected",
+        source: "jawcode",
+        jawcodeProvider: "anthropic",
         status: "verified",
       });
-      expect(price?.sourceRef).toContain("platform.claude.com");
-      expect(price?.sourceRef).toContain("0.025x");
     }
     expect(resolveMatchedPrice("anthropic-pb51d9b", "claude-fable-5-1")?.cost4).toEqual(COST4);
     // Cursor accepts all three spellings but pricing stores one canonical overlay row.
