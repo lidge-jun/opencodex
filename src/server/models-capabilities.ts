@@ -143,7 +143,8 @@ export interface ModelCapabilityFields {
 function positiveInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   const floored = Math.floor(value);
-  return floored > 0 ? floored : undefined;
+  // Catalog limits are safe integers everywhere else; an unsafe finite value is a bad row.
+  return floored > 0 && Number.isSafeInteger(floored) ? floored : undefined;
 }
 
 export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabilityFields {

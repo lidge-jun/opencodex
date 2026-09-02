@@ -118,6 +118,8 @@ describe("modelCapabilityFields", () => {
       .toBe(128000);
     expect("max_output_tokens" in modelCapabilityFields({ maxOutputTokens: 0 }).capabilities)
       .toBe(false);
+    expect("max_output_tokens" in modelCapabilityFields({ maxOutputTokens: Number.MAX_SAFE_INTEGER + 2 }).capabilities)
+      .toBe(false);
     expect(modelCapabilityFields({ maxOutputTokens: 1.9 }).capabilities.supports_reasoning)
       .toBe(false);
   });
