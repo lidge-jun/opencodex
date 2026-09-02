@@ -16,6 +16,7 @@ import { loadCursorEffortTable } from "../../integrations/cursor-effort-table";
 import { configuredApiAuthToken, isApiAuthRequired, jsonResponse } from "../auth-cors";
 import { fetchAllModels } from "../management-api";
 import { predictCursorEffort } from "../models-capabilities";
+import { expandCursorEffortRow, knownEffortRowIds } from "../effort-row";
 import type { ManagementContext } from "./context";
 
 export const CURSOR_GATEWAY_PLACEHOLDER_KEY = "opencodex-loopback";
@@ -31,6 +32,8 @@ export interface CursorIntegrationStatus {
     id: string;
     reasoning: string[] | null;
     family: string | null;
+    tableLess: boolean;
+    effortRows: string[];
     context: { defaultWindow: number; longWindow: number } | null;
   }>;
   guideUrl: string;
@@ -63,21 +66,32 @@ export async function buildCursorIntegrationStatus(
   const goModels = filterCatalogVisibleModels(await fetchAllModels(config), config);
   // supportsReasoning mirrors what the /v1/models row advertises (a non-empty ladder); the
   // gemini family withholds its control when it is false.
-  const ids: Array<{ id: string; supportsReasoning: boolean }> = [
-    ...visibleNativeSlugs(config).map(id => ({ id, supportsReasoning: nativeReasoningEfforts(id).length > 0 })),
+  const ids: Array<{ id: string; supportsReasoning: boolean; reasoningEfforts: readonly string[] }> = [
+    ...visibleNativeSlugs(config).map(id => {
+      const reasoningEfforts = nativeReasoningEfforts(id);
+      return { id, supportsReasoning: reasoningEfforts.length > 0, reasoningEfforts };
+    }),
     ...uniqueCatalogModelsForRawPublicList(goModels).map(model => ({
       id: model.alias ?? `${model.provider}/${model.id}`,
       supportsReasoning: (model.reasoningEfforts ?? []).length > 0,
+      reasoningEfforts: model.reasoningEfforts ?? [],
     })),
   ];
   const table = (deps.loadCursorEffortTable ?? loadCursorEffortTable)(privateInference);
-  const models = ids.map(({ id, supportsReasoning }) => {
+  const effortRowKnownIds = config.cursorEffortRows === true ? knownEffortRowIds(config) : undefined;
+  const models = ids.map(({ id, supportsReasoning, reasoningEfforts }) => {
     const tier = nativeOpenAiContextTier(id, limits);
     const predicted = predictCursorEffort(id, table, supportsReasoning);
     return {
       id,
       reasoning: predicted.ladder,
       family: predicted.family,
+      tableLess: predicted.ladder === null,
+      effortRows: expandCursorEffortRow({ id }, reasoningEfforts, config, {
+        knownIds: effortRowKnownIds,
+        table,
+        supportsReasoning,
+      }).slice(1).map(row => row.id),
       context: tier ? { defaultWindow: tier.defaultWindow, longWindow: tier.longWindow } : null,
     };
   });

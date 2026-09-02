@@ -166,12 +166,21 @@ describe("GET /api/native-integrations/cursor", () => {
       expect(typeof first.privateInference.installed).toBe("boolean");
       expect(first.guideUrl).toContain("cursor-private-inference");
       const k3 = first.models.find(model => model.id === "kimi/k3");
-      expect(k3).toEqual({ id: "kimi/k3", reasoning: null, family: null, context: null });
+      expect(k3).toEqual({
+        id: "kimi/k3",
+        reasoning: null,
+        family: null,
+        tableLess: true,
+        effortRows: [],
+        context: null,
+      });
       const sol = first.models.find(model => model.id === "gpt-5.6-sol");
       expect(sol).toEqual({
         id: "gpt-5.6-sol",
         reasoning: ["low", "medium", "high", "xhigh"],
         family: null,
+        tableLess: false,
+        effortRows: [],
         context: { defaultWindow: 272000, longWindow: 922000 },
       });
 

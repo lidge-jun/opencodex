@@ -326,6 +326,7 @@ import {
   restoreImageGenCallsInJson,
 } from "../responses-image-gen-repair";
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
+import { parseRequestEffortRowId } from "../effort-row";
 import {
   collectSelfNamedNamespaceScrubAuthorization,
   createSelfNamedToolCallNamespaceScrubRewrite,
@@ -2751,6 +2752,20 @@ async function handleResponsesInner(
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
     parsed = parseRequest(body);
+    const effortRow = parseRequestEffortRowId(parsed.modelId, config);
+    if (effortRow) {
+      parsed.modelId = effortRow.baseId;
+      parsed.options.reasoning = effortRow.effort;
+      const raw = parsed._rawBody as Record<string, unknown>;
+      const rawReasoning = raw.reasoning;
+      raw.model = effortRow.baseId;
+      raw.reasoning = {
+        ...(rawReasoning && typeof rawReasoning === "object" && !Array.isArray(rawReasoning)
+          ? rawReasoning as Record<string, unknown>
+          : {}),
+        effort: effortRow.effort,
+      };
+    }
     if (options.comboReplaySnapshot?.recoveredPlaintext) {
       markBodyNonPersistable(parsed._rawBody);
     }

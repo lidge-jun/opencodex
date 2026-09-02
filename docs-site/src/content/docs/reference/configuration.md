@@ -48,6 +48,15 @@ Aliases are optional short request names. They never change the native model id 
 
 Aliases match case-insensitively. A model alias works as `or/opus` or, when globally unique, bare `opus`; an ambiguous bare alias reports its qualified candidates. Codex model pickers show the qualified alias while preserving the canonical `provider/model` routing id. A provider's `defaultAliases` value overrides `defaultModelAliases`. Built-ins are skipped when multiple models in one provider match the same pattern.
 
+### Cursor effort rows
+
+`cursorEffortRows` is an optional boolean and defaults to `false`. When enabled, the raw OpenAI-style
+`/v1/models` list adds `<base-id>--<effort>` selectors for reasoning-capable models that Cursor Private
+Inference does not match in its installed effort table. Selecting a generated row routes the base model
+and applies that row's effort; models Cursor already recognizes receive no variants. The flag reserves a
+terminal `--<declared-effort>` suffix for generated selectors, except when the complete value is already
+a known configured model id. Cursor may require a model-list refresh or restart after this setting changes.
+
 Valid values in `config.json` override built-in defaults. Missing optional fields use the defaults
 documented on the domain pages. `OPENCODEX_HOME` takes precedence over the default configuration
 directory. Fields that accept an environment reference, such as `apiKey: "${PROVIDER_API_KEY}"`,

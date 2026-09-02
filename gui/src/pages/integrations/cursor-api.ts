@@ -13,6 +13,8 @@ export interface CursorModelExpectation {
   id: string;
   reasoning: string[] | null;
   family: string | null;
+  tableLess: boolean;
+  effortRows: string[];
   context: { defaultWindow: number; longWindow: number } | null;
 }
 

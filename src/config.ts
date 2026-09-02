@@ -1046,6 +1046,8 @@ const configSchema = z.object({
   providers: z.record(z.string(), providerConfigSchema),
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
+  // Malformed hand edits disable this opt-in projection without rejecting providers.
+  cursorEffortRows: z.boolean().optional().catch(false),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),

@@ -227,6 +227,9 @@ import { detectInstall } from "../update/index";
 import { readyProtocolMetadata } from "../remote/protocol";
 import { modelCapabilityFields } from "./models-capabilities";
 import { recordCursorSeen } from "../integrations/cursor-seen";
+import { detectCursorInstalls } from "../integrations/cursor-detect";
+import { loadCursorEffortTable } from "../integrations/cursor-effort-table";
+import { expandCursorEffortRow, knownEffortRowIds } from "./effort-row";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -1566,45 +1569,69 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             return disabledModels.has(id) ? [] : [{ id, metadataId }];
           })
         );
+        // The projection is opt-in. Keep the default path free of Cursor install detection,
+        // and resolve the bundle table once for the whole list rather than once per row.
+        const effortRowsEnabled = config.cursorEffortRows === true;
+        const effortRowKnownIds = effortRowsEnabled ? knownEffortRowIds(config) : undefined;
+        const privateInference = effortRowsEnabled
+          ? detectCursorInstalls().find(install => install.build === "private-inference")
+          : undefined;
+        const cursorEffortTable = effortRowsEnabled
+          ? (deps.managementApi?.loadCursorEffortTable ?? loadCursorEffortTable)(privateInference)
+          : null;
+        const expandedNativeModelRow = (id: string, metadataId = id) => {
+          const reasoningEfforts = nativeReasoningEfforts(metadataId);
+          return expandCursorEffortRow(nativeModelRow(id, metadataId), reasoningEfforts, config, {
+            knownIds: effortRowKnownIds,
+            table: cursorEffortTable,
+            supportsReasoning: reasoningEfforts.length > 0,
+          });
+        };
+        const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered).map(async m => {
+          // Same rule as the anthropic branch: with the global fast switch on, a client
+          // that has no Fast toggle is offered the fast identity directly. An operator
+          // alias is an explicit decision and still wins.
+          const fastModelId = cursorFastIdForListing?.(m.id, m.provider);
+          const publicId = m.alias ?? `${m.provider}/${fastModelId ?? m.id}`;
+          const isCombo = m.provider === "combo" && exactComboSlugs.has(publicId);
+          const provider = config.providers[m.provider];
+          const effective = provider
+            ? (await import("../providers/default-aliases")).effectiveModelAliases(
+                config,
+                provider,
+                knownModelIdsForProvider(m.provider, provider, config),
+              ).get(m.id)
+            : undefined;
+          const row = {
+            id: publicId,
+            object: "model",
+            created: 0,
+            // This endpoint is an OpenAI-compatible inbound contract. Some clients use
+            // owned_by as an adapter selector, so a virtual combo must name that wire
+            // adapter rather than the internal catalog authority marker.
+            owned_by: isCombo ? "openai" : (m.owned_by ?? m.provider),
+            ...(isCombo ? { is_combo: true } : {}),
+            ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
+            ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
+            ...modelCapabilityFields({
+              reasoningEfforts: m.reasoningEfforts,
+              // contextWindow is already the post-cap effective value; contextCap is the raw
+              // operator knob and over-reports models whose real window sits below it.
+              contextWindow: m.contextWindow,
+              maxOutputTokens: m.maxOutputTokens,
+              inputModalities: m.inputModalities,
+            }),
+          };
+          return expandCursorEffortRow(row, m.reasoningEfforts, config, {
+            knownIds: effortRowKnownIds,
+            table: cursorEffortTable,
+            supportsReasoning: (m.reasoningEfforts ?? []).length > 0,
+          });
+        }));
         const data = [
-          ...visibleNatives.map(id => nativeModelRow(id)),
-          ...visibleAccountNatives.map(({ id, metadataId }) => nativeModelRow(id, metadataId)),
-          ...await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered).map(async m => {
-            // Same rule as the anthropic branch: with the global fast switch on, a client
-            // that has no Fast toggle is offered the fast identity directly. An operator
-            // alias is an explicit decision and still wins.
-            const fastModelId = cursorFastIdForListing?.(m.id, m.provider);
-            const publicId = m.alias ?? `${m.provider}/${fastModelId ?? m.id}`;
-            const isCombo = m.provider === "combo" && exactComboSlugs.has(publicId);
-            const provider = config.providers[m.provider];
-            const effective = provider
-              ? (await import("../providers/default-aliases")).effectiveModelAliases(
-                  config,
-                  provider,
-                  knownModelIdsForProvider(m.provider, provider, config),
-                ).get(m.id)
-              : undefined;
-            return {
-              id: publicId,
-              object: "model",
-              created: 0,
-              // This endpoint is an OpenAI-compatible inbound contract. Some clients use
-              // owned_by as an adapter selector, so a virtual combo must name that wire
-              // adapter rather than the internal catalog authority marker.
-              owned_by: isCombo ? "openai" : (m.owned_by ?? m.provider),
-              ...(isCombo ? { is_combo: true } : {}),
-              ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
-              ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
-              ...modelCapabilityFields({
-                reasoningEfforts: m.reasoningEfforts,
-                // contextWindow is already the post-cap effective value; contextCap is the raw
-                // operator knob and over-reports models whose real window sits below it.
-                contextWindow: m.contextWindow,
-                maxOutputTokens: m.maxOutputTokens,
-                inputModalities: m.inputModalities,
-              }),
-            };
-          })),
+          ...visibleNatives.flatMap(id => expandedNativeModelRow(id)),
+          ...visibleAccountNatives.flatMap(({ id, metadataId }) => expandedNativeModelRow(id, metadataId)),
+          ...routedRows.flat(),
         ];
         return jsonResponse({ object: "list", data }, 200, req, policy);
       }

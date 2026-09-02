@@ -46,6 +46,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { handleNativeChatCompletions, isNativeChatRouteEligible } from "./chat-native";
+import { parseRequestEffortRowId } from "./effort-row";
 
 type Rec = Record<string, unknown>;
 
@@ -104,6 +105,8 @@ async function handleChatCompletionsWithBudget(
   }
 
   const requestedModel = chatBody.model as string;
+  const effortRow = parseRequestEffortRowId(requestedModel, config);
+  if (effortRow) chatBody.model = effortRow.baseId;
   const stream = chatBody.stream === true;
   // Best-effort Grok attribution: the managed fence stamps this header on every model
   // it registers (extra_headers, sent verbatim by upstream Grok). Dashboard usage
@@ -113,7 +116,7 @@ async function handleChatCompletionsWithBudget(
   let settledRoute: ReturnType<typeof routeModel> | null = null;
   let chatNativeRoute: ReturnType<typeof routeModel> | null = null;
   try {
-    const route = routeModel(config, requestedModel, evidenceFromBody(chatBody));
+    const route = routeModel(config, chatBody.model as string, evidenceFromBody(chatBody));
     // Settle the wire once so every branch below reads the adapter this model will
     // actually use, not the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "chat");
@@ -133,7 +136,7 @@ async function handleChatCompletionsWithBudget(
       if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));
       logCtx.usageLogInputTokens = Math.max(1, estimateTokens(parts.join("\n"), requestedModel));
     }
-    if (isNativeChatRouteEligible(route, chatBody)) chatNativeRoute = route;
+    if (!effortRow && isNativeChatRouteEligible(route, chatBody)) chatNativeRoute = route;
   } catch (err) {
     if (err instanceof NoEligiblePolicyCandidateError) {
       logCtx.routeDecision = err.trace;
@@ -162,6 +165,12 @@ async function handleChatCompletionsWithBudget(
     // Validate the full Chat boundary after routing. Native Chat keeps `chatBody` as
     // its wire source; this Responses projection is used only by the fallback path.
     internalBody = chatCompletionsToResponsesBody(chatBody);
+    if (effortRow) {
+      internalBody.reasoning = {
+        ...(isRec(internalBody.reasoning) ? internalBody.reasoning : {}),
+        effort: effortRow.effort,
+      };
+    }
   } catch (err) {
     const overflow = isTranslatorBudgetExceededError(err);
     const status = overflow ? 413 : err instanceof ChatCompletionsRequestError ? 400 : 500;
