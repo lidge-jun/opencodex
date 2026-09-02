@@ -23,6 +23,7 @@ const CODEX_ORIGINATORS = new Set([
   "Codex Desktop",
   "codex_app",
   "codex_work_desktop",
+  "codexless_agent",
 ]);
 const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_TOKEN_ISSUERS = new Set(["https://auth.openai.com", "https://auth.openai.com/"]);

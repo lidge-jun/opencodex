@@ -413,4 +413,27 @@ describe("agent task recovery security", () => {
     expect(response.status).toBe(200);
     expect(recoveryOriginator).toBe("codex_work_desktop");
   });
+
+  test("accepts the Codexless originator", async () => {
+    let recoveryOriginator = "";
+    globalThis.fetch = (async (input, init) => {
+      if (String(input).includes("chatgpt.com")) {
+        recoveryOriginator = new Headers(init?.headers).get("originator") ?? "";
+        return new Response(recoverySse("Recover the Codexless child task."), { status: 200 });
+      }
+      return providerResponse();
+    }) as typeof fetch;
+    const headers = codexHeaders();
+    headers.set("originator", "codexless_agent");
+
+    const response = await post(
+      routedConfig(),
+      "xai/grok-4.5",
+      encryptedInput(),
+      headers,
+    );
+
+    expect(response.status).toBe(200);
+    expect(recoveryOriginator).toBe("codexless_agent");
+  });
 });
