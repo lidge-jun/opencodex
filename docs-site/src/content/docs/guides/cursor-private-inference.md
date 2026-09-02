@@ -94,6 +94,19 @@ reachable from this picker. For a model with no control, set a default in openco
 (`modelDefaultReasoningEfforts` on the provider); that default applies when Cursor sends no
 effort.
 
+### "Max" is two different things
+
+Regular Cursor shows a **Max** toggle next to some models. That is Max Mode, a larger context
+window, not a reasoning tier. In the local-agent build the same idea appears as a **Context**
+entry in the model menu, and opencodex lights it up for the native GPT-5.6 family: **272K**
+(default) or **922K** (the 1M opt-in, marked as costing more). The value you pick caps that
+turn's context. Routed models show a single window and no Context entry; a provider context
+cap below 922K removes the entry for the native rows too.
+
+Reasoning-effort **Max** (opencodex's `max`/`ultra`) is the other meaning, and that one is
+not reachable: Cursor takes the effort ladder from its own table rather than from the gateway,
+and the GPT-5.6 entry stops at Extra High.
+
 Because opencodex advertises `responses` in `api_types`, this build sends agent turns to
 `/v1/responses` with `reasoning.effort`, not to `/v1/chat/completions`.
 
@@ -108,4 +121,3 @@ Because opencodex advertises `responses` in `api_types`, this build sends agent 
 | models listed but no Reasoning control | opencodex older than v2.41, or the model id is not in the table above |
 | a schema change is not picked up | Cursor caches `/models` per Base URL string; restart the app, or temporarily save a different spelling of the URL (`localhost` vs `127.0.0.1`) and refresh |
 | 23k-token first turn | expected; that is Cursor's local system prompt |
-
