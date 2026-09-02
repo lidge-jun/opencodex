@@ -164,7 +164,8 @@ hardcoded Bottlerocket effort family". Two ways to still choose an effort:
   `anthropic/claude-fable-5-1--high` or `cursor/kimi-k3--max`, and routes each to the base
   model with that effort applied. Models Cursor already renders get no extra rows, and an exact
   known model id always wins over the `--<effort>` suffix. Press Refresh model list after
-  turning it on. The dashboard card counts the rows it published per model.
+  turning it on. The dashboard card counts the rows it published per model. Picking a row is
+  an explicit choice, so its effort also wins over an `ocx-effort` directive in the request.
 - **A fixed default** (`modelDefaultReasoningEfforts` on the provider): applies when Cursor
   sends no effort.
 
