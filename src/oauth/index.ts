@@ -478,7 +478,7 @@ export function observeActiveOAuthAccessToken(
   };
 }
 
-async function resolveAccessSnapshotForAccount(
+export async function resolveAccessSnapshotForAccount(
   provider: string,
   accountId: string,
   rejectedGeneration?: string,
@@ -1234,7 +1234,6 @@ function isLegacyAntigravityStaticCatalog(provider: OcxProviderConfig): boolean 
       "gemini-3.1-flash-image",
       "claude-sonnet-4-6",
       "claude-opus-4-6-thinking",
-      "gpt-oss-120b-medium",
     ]);
 }
 

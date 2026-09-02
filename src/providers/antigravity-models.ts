@@ -16,24 +16,15 @@ import { isModelCacheGenerationCurrent } from "../codex/model-cache";
 const GEMINI_FLASH_CURRENT = "gemini-3.8-flash";
 
 /**
- * Previous Flash generation — still served, still picker-visible.
- *
- * 3.6 vanished from CCA the moment 3.7 shipped, which is why RETIRED_FLASH_TIERS exists. 3.8
- * did not do that: Google documents 3.7 Flash as "remains fully supported", and a 2026-09-03
- * :fetchAvailableModels call returns 3.8, 3.7 AND 3.6 wire ids together. Retiring 3.7 here
- * would strand a model the backend is actively serving.
+ * Previous Flash generation — still served, but retired from Codex picker per user configuration.
  */
 const GEMINI_FLASH_PREVIOUS = "gemini-3.7-flash";
 
 /**
  * Wire ID that CCA accepts for the RETIRED-tier redirect target (currently 3.7).
- *
- * Google renamed 3.7 to carry a `-tiered` suffix; the picker-visible ID stays
- * `gemini-3.7-flash` (stripped by `pickerModelIdForDiscoveredWireId`). This constant is named
- * for its ROLE, not for the current generation: 3.8 is current and has no `-tiered` id, so a
- * name like GEMINI_FLASH_WIRE_ID would now point readers at the wrong model.
  */
 const GEMINI_RETIRED_FLASH_TARGET_WIRE_ID = "gemini-3.7-flash-tiered";
+const GEMINI_FLASH_WIRE_ID = "gemini-3.8-flash-medium";
 
 /**
  * Retired Flash ids → the reasoning tier they used to encode.
@@ -49,6 +40,12 @@ const GEMINI_RETIRED_FLASH_TARGET_WIRE_ID = "gemini-3.7-flash-tiered";
  * suffixed wire ids, which is why the mapping is id → level and not id → id.
  */
 const RETIRED_FLASH_TIERS: Record<string, string> = {
+  // 3.7 generation.
+  "gemini-3.7-flash": "medium",
+  "gemini-3.7-flash-tiered": "medium",
+  "gemini-3.7-flash-low": "low",
+  "gemini-3.7-flash-medium": "medium",
+  "gemini-3.7-flash-high": "high",
   // 3.6 generation.
   "gemini-3.6-flash": "medium", // bare base carried a medium default
   "gemini-3.6-flash-low": "low",
@@ -63,13 +60,14 @@ const RETIRED_FLASH_TIERS: Record<string, string> = {
 };
 
 const ANTIGRAVITY_WIRE_MODELS = [
-  "gemini-3.7-flash-tiered",
+  "gemini-3.8-flash-low",
+  "gemini-3.8-flash-medium",
+  "gemini-3.8-flash-high",
   "gemini-3.1-pro-low",
   "gemini-pro-agent",
   "gemini-3.1-flash-image",
   "claude-sonnet-4-6",
   "claude-opus-4-6-thinking",
-  "gpt-oss-120b-medium",
 ];
 
 const ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID: Record<string, string> = {
@@ -162,7 +160,6 @@ export const ANTIGRAVITY_MODEL_EFFORTS: Record<string, string[]> = {
   // No `minimal`: Google documents it as an error for this generation, and CCA exposes only
   // the three tiers.
   "gemini-3.8-flash": ["low", "medium", "high"],
-  "gemini-3.7-flash": ["low", "medium", "high"],
   "gemini-3.1-pro": ["low", "high"],
   "claude-sonnet-4-6": ["low", "medium", "high", "max"],
   "claude-opus-4-6-thinking": ["low", "medium", "high", "max"],
@@ -226,9 +223,7 @@ const ANTIGRAVITY_DEFAULT_EFFORT: Record<string, string> = {
  * Gemini base models whose efforts ride on `thinkingLevel` against a single wire id
  * instead of suffixed wire ids, with the level applied when the caller names none.
  */
-const ANTIGRAVITY_THINKING_LEVEL_MODELS: Record<string, string> = {
-  "gemini-3.7-flash": "medium",
-};
+const ANTIGRAVITY_THINKING_LEVEL_MODELS: Record<string, string> = {};
 
 // `minimal` is deliberately absent: Google documents it as unsupported for the current
 // Flash generation, where it is an error rather than a quieter tier.
@@ -239,6 +234,7 @@ const ANTIGRAVITY_THINKING_LEVELS = new Set(["low", "medium", "high"]);
  * Models not listed here use themselves as the wire ID.
  */
 const ANTIGRAVITY_PICKER_TO_WIRE: Record<string, string> = {
+  "gemini-3.8-flash": GEMINI_FLASH_WIRE_ID,
   "gemini-3.7-flash": GEMINI_RETIRED_FLASH_TARGET_WIRE_ID,
 };
 
@@ -266,8 +262,8 @@ const ANTIGRAVITY_COMPATIBILITY_MODEL_ALIASES: Record<string, string> = {
   "gemini-pro-agent": "gemini-pro-agent",
   // ── Retired Flash generations ──
   // Google takes the previous Antigravity Flash model offline almost immediately
-  // once its successor ships, so 3.6 (and the 3.5 ids that used to land on it)
-  // route to 3.7. These stay in the alias map — not only in the tier map below —
+  // once its successor ships, so 3.7/3.6 (and the 3.5 ids that used to land on them)
+  // route to 3.8. These stay in the alias map — not only in the tier map below —
   // because `parseAntigravityAvailableModels` uses THIS map to keep a stale CCA
   // payload from republishing a dead wire id as a picker row.
   ...Object.fromEntries(
@@ -288,7 +284,6 @@ export const ANTIGRAVITY_MODELS = [
   "gemini-3.1-flash-image",
   "claude-sonnet-4-6",
   "claude-opus-4-6-thinking",
-  "gpt-oss-120b-medium",
 ];
 
 function isKnownAntigravityPickerModelId(value: string): boolean {
@@ -312,7 +307,6 @@ const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Collapsed base IDs — explicit entries for the picker.
   "gemini-3.8-flash": 1_048_576,
-  "gemini-3.7-flash": 1_048_576,
   "gemini-3.1-pro": 1_048_576,
   // Wire IDs and aliases via derivation.
   ...ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS,
@@ -330,7 +324,6 @@ export const ANTIGRAVITY_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
   // catalog normalizes `input_modalities` against a closed enum. Advertising a modality
   // the wire cannot carry would be a promise we break at request time.
   "gemini-3.8-flash": ["text", "image"],
-  "gemini-3.7-flash": ["text", "image"],
   "gemini-3.1-pro": ["text", "image"],
   "gemini-3.1-flash-image": ["text", "image"],
   "claude-sonnet-4-6": ["text", "image"],

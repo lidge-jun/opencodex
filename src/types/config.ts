@@ -796,7 +796,14 @@ export interface OcxConfig {
   oauthAccountFailover?: {
     enabled?: boolean;
   };
-  /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
+  /** Google Antigravity OAuth account pool with sticky affinity and quota/verification failover. */
+  antigravityAccountPool?: {
+    enabled?: boolean;
+    autoSwitchThreshold?: number;
+    strategy?: OcxAccountPoolRotationStrategy;
+    stickyLimit?: number;
+  };
+    /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
   /**
    * Routing policy profiles (Router Intelligence, RI-04+): explicitly requested

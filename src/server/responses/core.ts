@@ -127,6 +127,18 @@ import {
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
+import {
+  ANTIGRAVITY_POOL_MAX_FAILOVERS_PER_REQUEST,
+  antigravitySessionKeyFromParts,
+  bindAntigravitySessionAffinity,
+  formatAntigravityProviderForLog,
+  getAntigravityPoolAccessSnapshot,
+  getAntigravityPoolRetryAfterSeconds,
+  isAntigravityAccountPoolEnabled,
+  promoteAntigravityActiveAccount,
+  resolveAntigravityAccountForSession,
+  rotateAntigravityAccountOn429,
+} from "../../oauth/google-antigravity-routing";
 import { stampOAuthAccountLabel } from "../../providers/label";
 import {
   failoverAccountSnapshot,
@@ -446,6 +458,33 @@ export { DEFAULT_SHADOW_SOURCE_MODELS, isShadowSourceModel, shadowSourceModels }
 
 export function codexLogAccountId(authCtx: CodexAuthContext): string | null {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.accountId : null;
+}
+
+function applyAntigravityAccountSnapshot(
+  provider: OcxProviderConfig,
+  snapshot: { accessToken: string; projectId?: string },
+): OcxProviderConfig {
+  const updated = { ...provider, apiKey: snapshot.accessToken };
+  if (snapshot.projectId) updated.project = snapshot.projectId;
+  else delete updated.project;
+  return updated;
+}
+
+async function readAntigravity429ErrorHint(
+  response: Response,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  try {
+    const result = await readBoundedResponseBody(response.clone(), {
+      signal,
+      maxBytes: 8_192,
+      totalTimeoutMs: 1_000,
+      inactivityTimeoutMs: 1_000,
+    });
+    return result.displaySafe && result.text ? result.text : null;
+  } catch {
+    return null;
+  }
 }
 
 type ContinuationOwnerRead =
@@ -3332,6 +3371,17 @@ async function handleResponsesInner(
   let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
+  let antigravityPoolAccountId: string | null = null;
+  let antigravityPoolFailovers = 0;
+  const antigravitySessionKey = route.providerName === "google-antigravity" && route.provider.authMode === "oauth"
+    ? antigravitySessionKeyFromParts({
+      sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
+      threadIdHeader: req.headers.get("thread-id"),
+      promptCacheKey: typeof parsed.options.promptCacheKey === "string" ? parsed.options.promptCacheKey : null,
+      clientThreadId: typeof parsed._clientThreadId === "string" ? parsed._clientThreadId : null,
+      promptCacheKeyIsSharedCohort: options.promptCacheKeyIsSharedCohort === true,
+    })
+    : null;
   // Generic OAuth rotation (#2568) for providers with no pool of their own. Bound to the account
   // the request actually used, so a concurrent rotation cannot cool an innocent replacement.
   let genericFailoverAccountId: string | null = null;
@@ -3425,6 +3475,30 @@ async function handleResponsesInner(
         promoteAnthropicActiveAccount(selection.accountId);
         route.provider = { ...route.provider, apiKey: accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", selection.accountId, config);
+      } else if (route.providerName === "google-antigravity" && isAntigravityAccountPoolEnabled(config)) {
+        const selection = resolveAntigravityAccountForSession(antigravitySessionKey, config);
+        if (!selection.accountId) {
+          if (selection.reason === "all-cooled") {
+            const retryAfterSec = getAntigravityPoolRetryAfterSeconds();
+            return formatErrorResponse(
+              429,
+              "rate_limit_error",
+              "All Google Antigravity OAuth accounts are temporarily rate-limited / quota exhausted",
+              retryAfterSec !== null ? { retryAfter: String(retryAfterSec) } : undefined,
+            );
+          }
+          return formatErrorResponse(401, "authentication_error", "No eligible Google Antigravity OAuth account available");
+        }
+        const snapshot = await getAntigravityPoolAccessSnapshot(selection.accountId);
+        antigravityPoolAccountId = selection.accountId;
+        bindAntigravitySessionAffinity(antigravitySessionKey, selection.accountId);
+        promoteAntigravityActiveAccount(selection.accountId);
+        route.provider = applyAntigravityAccountSnapshot(route.provider, snapshot);
+        replayOAuthCredentialSnapshot = {
+          accountId: snapshot.accountId,
+          generation: snapshot.generation,
+        };
+        logCtx.provider = formatAntigravityProviderForLog("google-antigravity", selection.accountId, config);
       } else {
         // Prefer the account with known headroom BEFORE the first attempt. Rotation alone
         // only reacts to a 429, so a turn could open on an account a previous probe already
@@ -6634,6 +6708,54 @@ async function handleResponsesInner(
           });
           nextContinuationRecoveryKind = "key-429";
           continue;
+        }
+      }
+      if (
+        (response.status === 429 || response.status === 403)
+        && antigravityPoolAccountId
+        && isAntigravityAccountPoolEnabled(config)
+        && antigravityPoolFailovers < ANTIGRAVITY_POOL_MAX_FAILOVERS_PER_REQUEST
+      ) {
+        const errorHint = await readAntigravity429ErrorHint(response, upstream.signal);
+        const nextAccountId = rotateAntigravityAccountOn429(
+          config,
+          antigravityPoolAccountId,
+          response.headers.get("retry-after"),
+          antigravitySessionKey,
+          Date.now(),
+          errorHint,
+        );
+        if (nextAccountId) {
+          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+          try {
+            const snapshot = await getAntigravityPoolAccessSnapshot(nextAccountId);
+            antigravityPoolAccountId = nextAccountId;
+            antigravityPoolFailovers += 1;
+            route.provider = applyAntigravityAccountSnapshot(route.provider, snapshot);
+            replayOAuthCredentialSnapshot = {
+              accountId: snapshot.accountId,
+              generation: snapshot.generation,
+            };
+            invalidateSameTargetRequest();
+            promoteAntigravityActiveAccount(nextAccountId);
+            logCtx.provider = formatAntigravityProviderForLog("google-antigravity", nextAccountId, config);
+            activeAdapter = resolveAdapter(
+              resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+              config.cacheRetention,
+            );
+            bindRouteReasoningReplayScope({
+              parsed,
+              providerName: route.providerName,
+              provider: route.provider,
+              adapterName: activeAdapter.name,
+              oauthCredentialSnapshot: replayOAuthCredentialSnapshot,
+            });
+            sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+            nextContinuationRecoveryKind = "antigravity-oauth-429";
+            continue;
+          } catch {
+            // fall through to emit continuation error below
+          }
         }
       }
       if (

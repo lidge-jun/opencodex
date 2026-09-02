@@ -1,5 +1,6 @@
 import { getCodexAccountHealthSnapshot, type CodexCooldownSource } from "../codex/routing";
 import { getAnthropicAccountHealthSnapshot } from "./anthropic-routing";
+import { getAntigravityAccountHealthSnapshot } from "./google-antigravity-routing";
 import { isAccountNeedsReauth } from "../codex/account-runtime-state";
 import { getCodexAccountCredential, listCodexAccountIds } from "../codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
@@ -179,7 +180,9 @@ export function projectStoredOAuthAccountHealth(
 ): OAuthAccountHealth {
   const anthropicSnap = provider === "anthropic"
     ? getAnthropicAccountHealthSnapshot(account.id, now)
-    : null;
+    : provider === "google-antigravity"
+      ? getAntigravityAccountHealthSnapshot(account.id, now)
+      : null;
   return projectOAuthAccountHealth({
     needsReauth: account.needsReauth === true,
     reauthReason: account.needsReauth === true ? "refresh_failed" : undefined,
