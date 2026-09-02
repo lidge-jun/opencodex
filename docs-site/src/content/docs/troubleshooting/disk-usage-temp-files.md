@@ -63,6 +63,12 @@ still owner-only. A fresh process rewrites an identical snapshot once, and a fil
 whose contents or permissions changed underneath the proxy is rewritten through the
 hardening path rather than left alone.
 
+Each ordinary background cadence performs at most one full atomic rewrite. If the
+continuation cache changes while that write is in progress, opencodex schedules one
+follow-up on the normal delayed cadence instead of rewriting the whole snapshot again
+immediately. Graceful shutdown keeps its bounded retry behavior after in-flight
+requests have drained so the final snapshot can catch up before the process exits.
+
 Together these keep the write rate roughly flat as the cache grows, instead of
 re-serializing and replacing the whole file every two seconds.
 

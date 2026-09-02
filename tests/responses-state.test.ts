@@ -2236,7 +2236,7 @@ describe("Responses previous_response_id state", () => {
 
     await runPendingResponseStatePersistForTests();
 
-    expect(attempts).toBe(4);
+    expect(attempts).toBe(1);
     expect(responseStatePersistPendingForTests()).toBe(true);
     setResponseStatePersistAttemptHookForTests(null);
     await runPendingResponseStatePersistForTests();

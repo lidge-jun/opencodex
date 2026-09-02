@@ -1469,14 +1469,14 @@ function ensureLoaded(): void {
 
 type SnapshotWriteOutcome = "stable" | "unstable" | "failed";
 
-async function writeBoundedSnapshot(path: string): Promise<SnapshotWriteOutcome> {
+async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise<SnapshotWriteOutcome> {
   // Serialize writers so concurrent flush + debounce cannot race on temps / ACL (#612).
   const previous = persistGate;
   let release!: () => void;
   persistGate = new Promise<void>(resolve => { release = resolve; });
   await previous;
   try {
-    for (let attempt = 0; attempt < MAX_SNAPSHOT_REWRITE_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
       const revision = stateRevision;
       const entries: Array<[string, unknown]> = [];
       let total = 0;
@@ -1579,12 +1579,13 @@ async function persistNow(path: string, awaitFollowUp = false): Promise<void> {
     persistTimer = null;
   }
   pendingPersistPath = null;
-  let outcome = await writeBoundedSnapshot(path);
+  const attemptLimit = awaitFollowUp ? MAX_SNAPSHOT_REWRITE_ATTEMPTS : 1;
+  let outcome = await writeBoundedSnapshot(path, attemptLimit);
   if (outcome === "unstable" && awaitFollowUp) {
     if (persistTimer) clearTimeout(persistTimer);
     persistTimer = null;
     pendingPersistPath = null;
-    outcome = await writeBoundedSnapshot(path);
+    outcome = await writeBoundedSnapshot(path, attemptLimit);
   }
   if (outcome === "stable") drainPendingSpillUnlinks();
   else if (outcome === "unstable" && !awaitFollowUp) schedulePersistAt(path, true);
