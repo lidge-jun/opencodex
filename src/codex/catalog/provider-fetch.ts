@@ -1421,11 +1421,7 @@ async function fetchProviderModelsWithAuth(
       ...(cursorFetch ? { fetch: cursorFetch } : {}),
     });
     if (liveResult.ok) {
-      recordLiveCursorClaudeModels(liveResult.models);
       const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
-      // Live Max-Mode evidence feeds the umbrella resolver's ultra gate
-      // (devlog 260828_cursor_umbrella_catalog; union with static evidence).
-      recordLiveCursorMaxModeModels(liveResult.maxModeModels ?? []);
       const result = available.length > 0 ? available : configured;
       // Cache the discovery-filtered roster without combo retention so a later
       // gather can re-apply the current capture's retain set on read.
@@ -1433,6 +1429,13 @@ async function fetchProviderModelsWithAuth(
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
+      // Publish roster-derived state only for a discovery the cache accepted: a stale
+      // in-flight capture (generation revoked by a credential/config change) must not
+      // overwrite the spelling or Max-Mode evidence of the newer one.
+      recordLiveCursorClaudeModels(liveResult.models);
+      // Live Max-Mode evidence feeds the umbrella resolver's ultra gate
+      // (devlog 260828_cursor_umbrella_catalog; union with static evidence).
+      recordLiveCursorMaxModeModels(liveResult.maxModeModels ?? []);
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
