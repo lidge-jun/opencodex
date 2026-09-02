@@ -84,7 +84,6 @@ import {
   isAllowedRequestOrigin,
   jsonResponse,
   parseProviderEditorConfigDTO,
-  PROVIDER_EDITOR_FIELDS,
   providerEditorConfigDTO,
   providerManagementConfigError,
   publicProviderBaseUrl,
@@ -187,17 +186,30 @@ type ProviderEditorMutationValue = ProviderEditorCandidateResult;
 
 function mergeProviderEditorRow(
   persisted: OcxProviderConfig | undefined,
+  baseline: ProviderEditorProviderDTO | undefined,
   next: ProviderEditorProviderDTO,
 ): OcxProviderConfig {
   const merged = structuredClone(persisted ?? {}) as Record<string, unknown>;
-  for (const field of PROVIDER_EDITOR_FIELDS) delete merged[field];
-  for (const [field, value] of Object.entries(next)) merged[field] = structuredClone(value);
+  const fields = new Set([...Object.keys(baseline ?? {}), ...Object.keys(next)]);
+  for (const field of fields) {
+    const baselineHasField = baseline !== undefined && Object.hasOwn(baseline, field);
+    const nextHasField = Object.hasOwn(next, field);
+    if (
+      baselineHasField === nextHasField
+      && (!baselineHasField || isDeepStrictEqual(baseline[field], next[field]))
+    ) {
+      continue;
+    }
+    if (nextHasField) merged[field] = structuredClone(next[field]);
+    else delete merged[field];
+  }
   return merged as unknown as OcxProviderConfig;
 }
 
 /** Build and validate a complete candidate without mutating the caller's snapshot. */
 function providerEditorCandidate(
   persisted: OcxConfig,
+  baseline: ProviderEditorConfigDTO,
   next: ProviderEditorConfigDTO,
 ): ProviderEditorCandidateResult {
   const candidate = structuredClone(persisted);
@@ -231,7 +243,7 @@ function providerEditorCandidate(
     }
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(candidate.codexAccountNamespaces, name);
     if (namespaceCollision) return { ok: false, status: 409, error: namespaceCollision, code: "provider_namespace_conflict" };
-    const merged = mergeProviderEditorRow(persisted.providers[name], publicProvider);
+    const merged = mergeProviderEditorRow(persisted.providers[name], baseline.providers[name], publicProvider);
     const transportCandidate = providerTransportValidationCandidate(merged as unknown as Record<string, unknown>);
     const providerError = providerManagementConfigError(name, transportCandidate)
       ?? providerEmptyToolOutputConfigError(name, transportCandidate)
@@ -789,7 +801,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (!isDeepStrictEqual(providerEditorConfigDTO(observed.diagnostics.config), baselineResult.value)) {
       return jsonResponse({ error: "provider editor baseline is stale", code: "stale_provider_editor_baseline" }, 409);
     }
-    const preview = providerEditorCandidate(observed.diagnostics.config, nextResult.value);
+    const preview = providerEditorCandidate(observed.diagnostics.config, baselineResult.value, nextResult.value);
     if (!preview.ok) return jsonResponse({ error: preview.error, code: preview.code }, preview.status);
 
     // DNS/SSRF validation happens before the persistence callback. The callback repeats every
@@ -813,7 +825,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
           },
         };
       }
-      const candidate = providerEditorCandidate(persisted, nextResult.value);
+      const candidate = providerEditorCandidate(persisted, baselineResult.value, nextResult.value);
       if (!candidate.ok) return { changed: false, value: candidate };
       const changed = !isDeepStrictEqual(providerEditorConfigDTO(persisted), nextResult.value);
       if (!changed) return { changed: false, value: candidate };

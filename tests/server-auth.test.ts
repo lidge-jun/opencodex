@@ -801,7 +801,7 @@ describe("server local API auth", () => {
     const serialized = JSON.stringify(dto);
     for (const forbidden of [
       "sk-secret-value", "provider-secret", "openaiProviderTierVersion",
-      "apiKeyPool", "pool-secret", "private-pool-label", "modelMaxInputTokens",
+      "apiKeyPool", "pool-secret", "private-pool-label",
       "virtualModels", "codexAuthContext", "selectedForwardHeaders",
       "sidecarOutcomeRecorder", "recorder-runtime", "_codexAccountOverride",
       "_codexAccountRequired", "runtime-token", "override-token",
@@ -818,6 +818,7 @@ describe("server local API auth", () => {
     });
     expect(dto.providers.openai).not.toHaveProperty("apiKey");
     expect(dto.providers.openai).not.toHaveProperty("headers");
+    expect(dto.providers.openai.modelMaxInputTokens).toEqual({ "gpt-test": 1000 });
     expect(dto.providers.openai.disabled).toBeUndefined();
   });
 

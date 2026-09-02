@@ -3,38 +3,31 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export interface Config {
   port: number;
   defaultProvider: string;
-  providers: Record<string, { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; defaultModel?: string; models?: string[]; liveModels?: boolean; upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2"; reasoningWireFormat?: "gateway-object"; authMode?: string; keyOptional?: boolean; disabled?: boolean; note?: string; codexAccountMode?: "direct" | "pool"; xaiResponsesOptInState?: boolean | "mixed" }>;
+  providers: Record<string, Record<string, unknown> & { adapter: string; baseUrl: string; hasApiKey?: boolean; hasHeaders?: boolean; xaiResponsesOptInState?: boolean | "mixed" }>;
 }
 
-const PROVIDER_EDITOR_FIELDS = [
-  "adapter",
-  "baseUrl",
-  "defaultModel",
-  "models",
-  "liveModels",
-  "upstreamHttpVersion",
-  "reasoningWireFormat",
-  "authMode",
-  "keyOptional",
-  "disabled",
-  "codexAccountMode",
+const PROVIDER_EDITOR_DERIVED_FIELDS = [
+  "hasApiKey",
+  "hasHeaders",
+  "xaiResponsesOptInState",
 ] as const;
 
-type ProviderEditorField = typeof PROVIDER_EDITOR_FIELDS[number];
 type ProviderEditorConfig = {
   defaultProvider: string;
-  providers: Record<string, Pick<Config["providers"][string], ProviderEditorField>>;
+  providers: Record<string, Record<string, unknown>>;
 };
+
+const PROVIDER_EDITOR_DERIVED_FIELD_SET = new Set<string>(PROVIDER_EDITOR_DERIVED_FIELDS);
 
 function projectProviderEditorConfig(config: Config): ProviderEditorConfig {
   return {
     defaultProvider: config.defaultProvider,
     providers: Object.fromEntries(Object.entries(config.providers).map(([name, provider]) => {
       const projected: Record<string, unknown> = {};
-      for (const field of PROVIDER_EDITOR_FIELDS) {
-        if (Object.hasOwn(provider, field)) projected[field] = structuredClone(provider[field]);
+      for (const [field, value] of Object.entries(provider)) {
+        if (!PROVIDER_EDITOR_DERIVED_FIELD_SET.has(field)) projected[field] = structuredClone(value);
       }
-      return [name, projected as ProviderEditorConfig["providers"][string]];
+      return [name, projected];
     })),
   };
 }

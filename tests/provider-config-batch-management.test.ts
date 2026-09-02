@@ -5,6 +5,7 @@ import { join } from "node:path";
 import * as configModule from "../src/config";
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
 import * as destinationPolicy from "../src/lib/destination-policy";
+import { safeConfigDTO } from "../src/server/auth-cors";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
@@ -55,6 +56,7 @@ function editorBaseline(config: OcxConfig): EditorConfig {
       adapter: provider.adapter,
       baseUrl: provider.baseUrl,
       ...(provider.defaultModel === undefined ? {} : { defaultModel: provider.defaultModel }),
+      ...(provider.project === undefined ? {} : { project: provider.project }),
     }])),
   };
 }
@@ -86,6 +88,80 @@ afterEach(() => {
 });
 
 describe("atomic provider editor batch", () => {
+  test("round-trips an unchanged realistic provider config without rewriting values or secrets", async () => {
+    const liveConfig: OcxConfig = {
+      port: 10100,
+      hostname: "127.0.0.1",
+      defaultProvider: "woong",
+      providers: {
+        woong: {
+          adapter: "openai-chat",
+          baseUrl: "https://woong.example.test/v1",
+          defaultModel: "woong-reasoner",
+          note: "private deployment",
+          modelContextWindows: { "woong-reasoner": 131_072 },
+          modelReasoningEfforts: { "woong-reasoner": ["low", "medium", "high"] },
+          noVisionModels: ["woong-reasoner"],
+          allowPrivateNetwork: true,
+          apiKey: "sk-woong-secret",
+          apiKeyPool: [{ id: "woong-main", key: "sk-woong-secret", label: "primary" }],
+          headers: { "x-tenant-token": "tenant-secret" },
+          mcpServers: {
+            private: {
+              url: "https://mcp.example.test",
+              headers: { authorization: "Bearer mcp-secret" },
+            },
+          },
+          desktopExecutor: {
+            computerUseCommand: "private-runner",
+            env: { ACCESS_TOKEN: "desktop-secret" },
+          },
+        },
+      },
+    };
+    const publicRow = (safeConfigDTO(liveConfig) as {
+      providers: Record<string, Record<string, unknown>>;
+    }).providers.woong!;
+    for (const field of ["apiKey", "apiKeyPool", "headers", "mcpServers", "desktopExecutor"]) {
+      expect(publicRow).not.toHaveProperty(field);
+    }
+    expect(JSON.stringify(publicRow)).not.toContain("secret");
+    saveConfig(liveConfig);
+    const beforeBytes = readFileSync(getConfigPath(), "utf8");
+    const baseline: EditorConfig = {
+      defaultProvider: "woong",
+      providers: {
+        woong: {
+          adapter: "openai-chat",
+          baseUrl: "https://woong.example.test/v1",
+          defaultModel: "woong-reasoner",
+          note: "private deployment",
+          modelContextWindows: { "woong-reasoner": 131_072 },
+          modelReasoningEfforts: { "woong-reasoner": ["low", "medium", "high"] },
+          noVisionModels: ["woong-reasoner"],
+          allowPrivateNetwork: true,
+        },
+      },
+    };
+
+    const destinationSpy = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
+    let response: Response | null;
+    try {
+      response = await putBatch(liveConfig, { baseline, next: structuredClone(baseline) });
+    } finally {
+      destinationSpy.mockRestore();
+    }
+
+    expect(response?.status).toBe(200);
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeBytes);
+    expect(loadConfig().providers.woong).toEqual(liveConfig.providers.woong);
+    expect(loadConfig().providers.woong).toMatchObject({
+      apiKey: "sk-woong-secret",
+      apiKeyPool: [{ id: "woong-main", key: "sk-woong-secret", label: "primary" }],
+      headers: { "x-tenant-token": "tenant-secret" },
+    });
+  });
+
   test("updates several providers in one commit and preserves credentials and private fields", async () => {
     const liveConfig = seededConfig();
     saveConfig(liveConfig);
@@ -159,17 +235,62 @@ describe("atomic provider editor batch", () => {
     saveConfig(liveConfig);
     const beforeBytes = readFileSync(getConfigPath(), "utf8");
     const baseline = editorBaseline(liveConfig);
+
+    for (const [field, value] of [
+      ["hasApiKey", true],
+      ["hasHeaders", true],
+      ["xaiResponsesOptInState", true],
+      ["virtualModels", { "alpha-pro": { wireModelId: "alpha", reasoningMode: "pro" } }],
+    ] as const) {
+      const next = structuredClone(baseline);
+      next.providers.alpha![field] = structuredClone(value);
+
+      const response = await putBatch(liveConfig, { baseline, next });
+
+      expect(response?.status).toBe(400);
+      expect(await response?.json()).toMatchObject({ code: "invalid_provider_editor_field" });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeBytes);
+      expect(loadConfig().providers.alpha).not.toHaveProperty(field);
+    }
+  });
+
+  test("rejects credential-bearing provider fields as editor write authority", async () => {
+    const liveConfig = seededConfig();
+    saveConfig(liveConfig);
+    const beforeBytes = readFileSync(getConfigPath(), "utf8");
+    const baseline = editorBaseline(liveConfig);
+
+    for (const [field, value] of [
+      ["apiKey", "sk-attacker-write"],
+      ["apiKeyPool", [{ id: "attacker", key: "sk-attacker-write" }]],
+      ["headers", { authorization: "Bearer attacker-write" }],
+      ["mcpServers", { attacker: { url: "https://mcp.example.test", headers: { authorization: "Bearer attacker-write" } } }],
+      ["desktopExecutor", { computerUseCommand: "runner", env: { ACCESS_TOKEN: "attacker-write" } }],
+    ] as const) {
+      const next = structuredClone(baseline);
+      next.providers.alpha![field] = structuredClone(value);
+
+      const response = await putBatch(liveConfig, { baseline, next });
+
+      expect(response?.status).toBe(400);
+      expect(await response?.json()).toMatchObject({ code: "invalid_provider_editor_field" });
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeBytes);
+    }
+  });
+
+  test("rejects unknown provider fields instead of creating hidden write authority", async () => {
+    const liveConfig = seededConfig();
+    saveConfig(liveConfig);
+    const beforeBytes = readFileSync(getConfigPath(), "utf8");
+    const baseline = editorBaseline(liveConfig);
     const next = structuredClone(baseline);
-    next.providers.alpha!.hasApiKey = true;
-    next.providers.beta!.hasHeaders = true;
+    next.providers.alpha!.runtimeExtension = { token: "attacker-write" };
 
     const response = await putBatch(liveConfig, { baseline, next });
 
     expect(response?.status).toBe(400);
     expect(await response?.json()).toMatchObject({ code: "invalid_provider_editor_field" });
     expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeBytes);
-    expect(loadConfig().providers.alpha).not.toHaveProperty("hasApiKey");
-    expect(loadConfig().providers.beta).not.toHaveProperty("hasHeaders");
   });
 
   test("returns 409 and preserves a concurrent edit when baseline is stale", async () => {

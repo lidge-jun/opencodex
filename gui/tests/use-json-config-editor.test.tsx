@@ -17,6 +17,10 @@ const config: Config = {
       adapter: "openai-chat",
       baseUrl: "https://alpha.example.test/v1",
       defaultModel: "alpha-old",
+      modelContextWindows: { "alpha-old": 131_072 },
+      modelReasoningEfforts: { "alpha-old": ["low", "high"] },
+      noVisionModels: ["alpha-old"],
+      allowPrivateNetwork: true,
       hasApiKey: true,
       hasHeaders: true,
       note: "derived registry note",
@@ -27,7 +31,7 @@ const config: Config = {
       hasApiKey: false,
     },
   },
-};
+} as Config;
 
 type Editor = ReturnType<typeof useJsonConfigEditor>;
 type RequestRecord = { url: string; method: string; body: unknown };
@@ -114,6 +118,11 @@ test("Save sends one atomic provider PUT with baseline and next, then refreshes"
         adapter: "openai-chat",
         baseUrl: "https://alpha.example.test/v1",
         defaultModel: "alpha-old",
+        modelContextWindows: { "alpha-old": 131_072 },
+        modelReasoningEfforts: { "alpha-old": ["low", "high"] },
+        noVisionModels: ["alpha-old"],
+        allowPrivateNetwork: true,
+        note: "derived registry note",
       },
       beta: {
         adapter: "anthropic",
