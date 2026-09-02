@@ -35,6 +35,7 @@ function sources(overrides: Partial<OverviewSources> = {}): OverviewSources {
     claude: null,
     claudeDesktop: null,
     grok: null,
+    cursor: null,
     native: null,
     nativeSettled: true,
     ...overrides,
@@ -49,14 +50,14 @@ function rowById(built: ReturnType<typeof buildOverviewRows>, id: string) {
 
 test("a null source is unknown, never absent, and is counted in neither total", () => {
   const built = buildOverviewRows(sources());
-  for (const id of ["codex", "claude", "claudeDesktop", "grok"]) {
+  for (const id of ["codex", "claude", "claudeDesktop", "grok", "cursor"]) {
     expect(rowById(built, id).state).toBe("unknown");
   }
   const counts = countOverviewRows(built.rows);
   expect(counts.detected).toBe(0);
   expect(counts.applied).toBe(0);
-  // Four, not five: keys is a credential surface and never a client row.
-  expect(counts.unknown).toBe(4);
+  // Five, not six: keys is a credential surface and never a client row.
+  expect(counts.unknown).toBe(5);
 });
 
 test("Codex reads routingInjected, not status", () => {
@@ -212,18 +213,26 @@ test("every client counts toward the summary, not just the file clients", () => 
       disableBlocked: null,
     }],
     grok: { present: true, models: [{}, {}] },
+    cursor: {
+      privateInference: { installed: true, path: "/Applications/Cursor Private Inference.app", version: "3.18.25" },
+      regularCursor: { installed: false, path: null },
+      gateway: { baseUrl: "http://127.0.0.1:10100/v1", apiKeyMode: "placeholder", placeholder: "opencodex-loopback" },
+      lastSeen: { at: Date.now() - 60_000, userAgent: "Cursor/3.18.25" },
+      models: [],
+      guideUrl: "https://example.invalid/guide",
+    },
   }));
   const counts = countOverviewRows(rows.rows);
-  // codex + claude + desktop + grok + opencode. Keys are deliberately absent:
+  // codex + claude + desktop + grok + cursor + opencode. Keys are deliberately absent:
   // an issued credential is not an applied client.
-  expect(counts.applied).toBe(5);
+  expect(counts.applied).toBe(6);
   expect(counts.stale).toBe(1);
   expect(counts.unknown).toBe(0);
 });
 
 test("an unsettled file list renders unknown rows instead of dropping them", () => {
   const built = buildOverviewRows(sources({ clients: [], clientsSettled: false }));
-  expect(built.rows).toHaveLength(16);
+  expect(built.rows).toHaveLength(17);
   expect(rowById(built, "omp").state).toBe("unknown");
   expect(rowById(built, "mcode").state).toBe("unknown");
   expect(rowById(built, "zcode").state).toBe("unknown");
@@ -238,7 +247,7 @@ test("an unsettled file list renders unknown rows instead of dropping them", () 
 
   // Once settled, a client the server omitted is genuinely gone.
   const settled = buildOverviewRows(sources({ clients: [], clientsSettled: true }));
-  expect(settled.rows).toHaveLength(4);
+  expect(settled.rows).toHaveLength(5);
   expect(settled.rows.some(row => row.hash === "integrations/keys")).toBe(false);
 });
 

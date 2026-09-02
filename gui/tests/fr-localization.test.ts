@@ -86,6 +86,11 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "integrations.tab.codex",
   "integrations.tab.claude",
   "integrations.tab.grok",
+  // Cursor product names and the two field labels Cursor's own gateway form renders in English.
+  "integrations.tab.cursor",
+  "integrations.cursor.title",
+  "integrations.cursor.privateInference",
+  "integrations.cursor.baseUrl",
   "integrations.tab.opencode",
   "integrations.tab.pi",
   "integrations.tab.omp",
