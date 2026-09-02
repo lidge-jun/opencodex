@@ -15,7 +15,7 @@ import Debug from "./Debug";
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
-import { modelTitle } from "./logs-model-title";
+import { modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
 import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
@@ -152,6 +152,9 @@ export interface LogEntry {
   configuredServiceTier?: string;
   configuredSpeedLabel?: string;
   responseServiceTier?: string;
+  // #2455: qualifies responseServiceTier in the model tooltip — the echoed tier alone
+  // cannot say whether Fast was granted on a backend whose echo is not authoritative.
+  tierOutcome?: ModelTitleTierOutcome;
   resolvedModel?: string;
   modelSupportsServiceTier?: boolean;
   status: number;
