@@ -309,6 +309,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // Absent means off (today's Design B injection), so the GUI/CLI render a plain switch.
       codexDesktopAuthless: config.codexDesktopAuthless === true,
       managementAuthDisabled: config.managementAuthDisabled === true,
+      disableOriginCheck: config.disableOriginCheck === true,
       startupHealth: await readStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
@@ -397,6 +398,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       showCodexSparkQuota?: unknown;
       codexDesktopAuthless?: unknown;
       managementAuthDisabled?: unknown;
+      disableOriginCheck?: unknown;
     };
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
@@ -405,8 +407,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.oauthOpenBrowser === undefined
       && body.showCodexSparkQuota === undefined
       && body.codexDesktopAuthless === undefined
-      && body.managementAuthDisabled === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, oauthOpenBrowser, showCodexSparkQuota, codexDesktopAuthless, or managementAuthDisabled" }, 400);
+      && body.managementAuthDisabled === undefined
+      && body.disableOriginCheck === undefined) {
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, oauthOpenBrowser, showCodexSparkQuota, codexDesktopAuthless, managementAuthDisabled, or disableOriginCheck" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -424,8 +427,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
    if (body.showCodexSparkQuota !== undefined && typeof body.showCodexSparkQuota !== "boolean") {
      return jsonResponse({ error: "showCodexSparkQuota boolean is required" }, 400);
    }
-    if (body.managementAuthDisabled !== undefined && typeof body.managementAuthDisabled !== "boolean") {
-      return jsonResponse({ error: "managementAuthDisabled boolean is required" }, 400);
+   if (body.managementAuthDisabled !== undefined && typeof body.managementAuthDisabled !== "boolean") {
+     return jsonResponse({ error: "managementAuthDisabled boolean is required" }, 400);
+   }
+    if (body.disableOriginCheck !== undefined && typeof body.disableOriginCheck !== "boolean") {
+      return jsonResponse({ error: "disableOriginCheck boolean is required" }, 400);
     }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
@@ -485,8 +491,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
      if (typeof body.showCodexSparkQuota === "boolean") {
        config.showCodexSparkQuota = body.showCodexSparkQuota;
      }
-      if (typeof body.managementAuthDisabled === "boolean") {
-        config.managementAuthDisabled = body.managementAuthDisabled;
+     if (typeof body.managementAuthDisabled === "boolean") {
+       config.managementAuthDisabled = body.managementAuthDisabled;
+     }
+      if (typeof body.disableOriginCheck === "boolean") {
+        config.disableOriginCheck = body.disableOriginCheck;
       }
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
@@ -542,6 +551,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       showCodexSparkQuota: config.showCodexSparkQuota === true,
       codexDesktopAuthless: authlessIsEnabled,
       managementAuthDisabled: config.managementAuthDisabled === true,
+      disableOriginCheck: config.disableOriginCheck === true,
       startupHealth: await readStartupHealth(config),
     });
   }

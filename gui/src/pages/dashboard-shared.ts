@@ -51,7 +51,9 @@ export interface SettingsData {
   /** Whether a login may open a browser on the machine running the proxy. */
  oauthOpenBrowser?: boolean;
   /** Whether admin-token auth on /api/* is disabled (loopback only). */
-  managementAuthDisabled?: boolean;
+ managementAuthDisabled?: boolean;
+  /** Whether all origin/CORS checks are disabled (for external reverse proxy). */
+  disableOriginCheck?: boolean;
  port: number;
   hostname: string;
   /** IANA zone of the machine running the proxy, used to render log timestamps (#725). */

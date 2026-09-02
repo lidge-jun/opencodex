@@ -791,7 +791,12 @@ export interface OcxConfig {
   /** Background proactive token refresh ("Token Guardian"). Off by default; see OcxTokenGuardianConfig. */
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
-  corsAllowOrigins?: string[];
+ corsAllowOrigins?: string[];
+  /**
+   * Opt-in: disable all origin/CORS checks so an external reverse proxy can reach the
+   * dashboard and API without the loopback-origin gate 403-ing it. Use with care.
+   */
+  disableOriginCheck?: boolean;
 }
 
 export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";

@@ -85,6 +85,7 @@ export function isSameOriginAsRequest(req: Request, origin: string): boolean {
 }
 
 export function isAllowedRequestOrigin(req: Request, config: RequestPolicyView): boolean {
+  if (config.disableOriginCheck === true) return true;
   const origin = req.headers.get("Origin");
   if (!isApiAuthRequired(config)) {
     if (!isLoopbackRequestHost(req.headers.get("Host"))) return false;
@@ -154,17 +155,13 @@ export function managementRequestOrigin(req: Request, config: OcxConfig): string
 }
 
 export function isAllowedManagementOrigin(req: Request, config: OcxConfig): boolean {
+  if (config.disableOriginCheck === true) return true;
   const requestOrigin = managementRequestOrigin(req, config);
- if (!requestOrigin) return false;
+  if (!requestOrigin) return false;
   const origin = req.headers.get("Origin");
-  // When management auth is disabled (loopback-only opt-in), accept any loopback origin so
-  // a browser visiting http://localhost:PORT is not 403-blocked while the process reports
-  // http://127.0.0.1:PORT as its derived origin.
   if (config.managementAuthDisabled === true && isLoopbackHostname(config.hostname) && origin) {
     if (isLoopbackOriginValue(origin) || isExtraAllowedOrigin(origin, config)) return true;
   }
-  // Exact match against the process-derived origin, or an operator-listed corsAllowOrigins
-  // entry (covers TLS-terminator https://… when the process observes http://…).
   return !origin || origin === requestOrigin || isExtraAllowedOrigin(origin, config);
 }
 
@@ -308,12 +305,13 @@ export function isApiAuthRequired(config: Pick<OcxConfig, "hostname">): boolean 
  * So this type is deliberately narrow: it cannot masquerade as a business config, and a policy
  * view that leaks into a routing path fails to typecheck rather than silently taking effect.
  */
-export type RequestPolicyView = Pick<OcxConfig, "hostname" | "corsAllowOrigins" | "apiKeys">;
+export type RequestPolicyView = Pick<OcxConfig, "hostname" | "corsAllowOrigins" | "apiKeys" | "disableOriginCheck">;
 
 /** Derive the per-request policy view for a listener. Cheap enough to build per request. */
 export function requestPolicyView(config: OcxConfig, bindHostname: string): RequestPolicyView {
   return {
     hostname: bindHostname,
+    ...(config.disableOriginCheck ? { disableOriginCheck: config.disableOriginCheck } : {}),
     ...(config.corsAllowOrigins ? { corsAllowOrigins: config.corsAllowOrigins } : {}),
     ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}),
   };
