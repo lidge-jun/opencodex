@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -9,6 +9,7 @@ import {
 import { injectClaudeAgentDefs } from "../src/claude/agents-inject";
 import { createReadinessGate } from "../src/server/readiness";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const config = (claudeCode: OcxConfig["claudeCode"] = {}): OcxConfig => ({
   providers: [],
@@ -97,7 +98,7 @@ describe("Claude agent roster proxy-start synchronization (#2200)", () => {
         expect(body).not.toContain("[1m]");
       }
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,11 +19,12 @@ import {
   previewLocalPublicEvidence,
 } from "../src/lab/public";
 import { queryLabObservations } from "../src/lab/query";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const homes: string[] = [];
 
 afterEach(() => {
-  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
+  for (const home of homes.splice(0)) removeTreeWithRetry(home);
 });
 
 function tempHome(): string {

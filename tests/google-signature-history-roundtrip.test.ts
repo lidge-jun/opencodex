@@ -3,7 +3,7 @@
  * replay cache is not available — the exact case the cache was masking.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
@@ -24,6 +24,7 @@ import { durableReplayDestinationIdentity } from "../src/responses/reasoning-rep
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxReasoningReplayScopeRef } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
   withTestTranslatorBudget(createGoogleAdapterProduction(...args));
@@ -141,7 +142,7 @@ describe("#1735 thought signature survives history replay", () => {
     resetThoughtSignatureReplayForTests();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    rmSync(testDir, { recursive: true, force: true });
+    removeTreeWithRetry(testDir);
     setIcaclsRunnerForTests(null);
     setAsyncIcaclsRunnerForTests(null);
   });
@@ -752,7 +753,7 @@ describe("Durable Thought-Signature Replay Store Single-Call Invalidation (Mecha
     resetThoughtSignatureReplayForTests();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    rmSync(testDir, { recursive: true, force: true });
+    removeTreeWithRetry(testDir);
     setIcaclsRunnerForTests(null);
     setAsyncIcaclsRunnerForTests(null);
   });
@@ -802,7 +803,7 @@ describe("#2513 rejected signatures are evicted on every Google mode", () => {
     resetThoughtSignatureReplayForTests();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    rmSync(testDir, { recursive: true, force: true });
+    removeTreeWithRetry(testDir);
     setIcaclsRunnerForTests(null);
     setAsyncIcaclsRunnerForTests(null);
   });

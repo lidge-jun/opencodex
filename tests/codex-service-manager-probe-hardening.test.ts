@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,7 @@ import { inspectNativeCodexOwnership } from "../src/integrations/native/ownershi
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
 import { getDefaultConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let home = "";
 let configDir = "";
@@ -31,7 +32,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setTrustedWindowsSystemDirectoryResolverForTests(null);
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 function raw(

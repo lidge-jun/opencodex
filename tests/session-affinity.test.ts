@@ -1,11 +1,12 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { resolveCodexAccountForThread, clearThreadAccountMap, formatCodexProviderForLog } from "../src/codex/routing";
 import { CODEX_ACCOUNT_LOG_LABEL_RE, fallbackCodexAccountLogLabel } from "../src/codex/account-label";
 import { updateAccountQuota, clearAccountQuota } from "../src/codex/auth-api";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-session-affinity-test");
 let previousOpencodexHome: string | undefined;
@@ -41,7 +42,7 @@ function makeActivePoolConfig(active: string, ids: string[] = [active]): OcxConf
 describe("resolveCodexAccountForThread", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     // Isolate the main-account credential source: TEST_DIR has no auth.json, so the
@@ -59,7 +60,7 @@ describe("resolveCodexAccountForThread", () => {
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("returns null when no active account", () => {

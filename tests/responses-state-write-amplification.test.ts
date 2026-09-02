@@ -18,6 +18,7 @@ import {
   rememberResponseState,
   setResponseStateByteCapForTests,
 } from "../src/responses/state";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 function remember(id: string, text: string): void {
   rememberResponseState(
@@ -43,7 +44,7 @@ describe("responses-state snapshot write amplification (#2460)", () => {
   afterEach(() => {
     setResponseStateByteCapForTests(null);
     clearResponseStateForTests();
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
     if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
     else process.env["OPENCODEX_HOME"] = priorHome;
   });

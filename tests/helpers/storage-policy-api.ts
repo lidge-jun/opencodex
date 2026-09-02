@@ -5,7 +5,7 @@
  */
 import { managementFetch as fetch } from "./management-auth";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
@@ -23,6 +23,7 @@ import {
 } from "../../src/storage/policy-job";
 import { stopStorageCleanupScheduler } from "../../src/storage/policy-scheduler";
 import { drainStorageWorkers } from "../../src/storage/worker-lifecycle";
+import { removeTreeWithRetry } from "./remove-tree";
 
 export function baseConfig(): OcxConfig {
   return {
@@ -134,7 +135,7 @@ export async function installPolicyApiHarness(prefix: string): Promise<PolicyApi
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
     isolatedCodexHome?.restore();
-    if (testDir) rmSync(testDir, { recursive: true, force: true });
+    if (testDir) removeTreeWithRetry(testDir);
     throw error;
   }
 }
@@ -151,7 +152,7 @@ export async function uninstallPolicyApiHarness(h: PolicyApiHarness): Promise<vo
     if (h.previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = h.previousHome;
     h.isolatedCodexHome.restore();
-    if (h.testDir) rmSync(h.testDir, { recursive: true, force: true });
+    if (h.testDir) removeTreeWithRetry(h.testDir);
   }
 }
 

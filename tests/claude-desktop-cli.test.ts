@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyProfile, handleClaudeDesktopCommand } from "../src/cli/claude-desktop";
 import { buildClaudeDesktopState } from "../src/server/management-api";
 import { loadConfig, saveConfig } from "../src/config";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let dir = "";
 let previousHome: string | undefined;
@@ -31,7 +32,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousDesktopDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopDir;
-  rmSync(dir, { recursive: true, force: true });
+  removeTreeWithRetry(dir);
 });
 
 test("show --json, move, default and export use the same persisted profile", async () => {

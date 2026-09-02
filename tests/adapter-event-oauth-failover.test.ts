@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProviderAdapter } from "../src/adapters/base";
 import { clearGenericFailoverHealth } from "../src/oauth/generic-account-failover";
 import { saveCredential } from "../src/oauth/store";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const actualResolver = await import("../src/server/adapter-resolve");
 const actualResolveAdapter = actualResolver.resolveAdapter;
@@ -94,7 +95,7 @@ afterEach(() => {
   clearGenericFailoverHealth();
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 describe("#2568 adapter-event OAuth failover", () => {

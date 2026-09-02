@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCredential } from "../src/oauth/store";
@@ -12,6 +12,7 @@ import {
   getNativeMainProfileRequestCount,
   resetLifecycleDrainStateForTests,
 } from "../src/server/lifecycle";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
@@ -51,7 +52,7 @@ afterEach(() => {
   if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
   if (origCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = origCodexHome;
   globalThis.fetch = origFetch;
-  rmSync(tmp, { recursive: true, force: true });
+  removeTreeWithRetry(tmp);
 });
 
 function mockFetchOk(body: object): { count: () => number } {

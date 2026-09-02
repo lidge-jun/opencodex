@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeConfigDir, refreshGatewayModelCacheFromProxy, writeGatewayModelCache } from "../src/claude/gateway-cache";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const dirs: string[] = [];
 function tempDir(): string {
@@ -11,7 +12,7 @@ function tempDir(): string {
   return d;
 }
 afterEach(() => {
-  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  for (const d of dirs.splice(0)) removeTreeWithRetry(d);
 });
 
 describe("Claude Code gateway-model cache pre-write (devlog 260712 030)", () => {

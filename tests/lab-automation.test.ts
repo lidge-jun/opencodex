@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -40,6 +40,7 @@ import {
   resetCompatibilityVersionCacheForTests,
   setCompatibilityVersionOverrideForTests,
 } from "../src/routing/compatibility/version";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const COMPAT_VERSION = "f".repeat(64);
 const HOMES: string[] = [];
@@ -59,7 +60,7 @@ afterEach(() => {
   resetCompatibilityVersionCacheForTests();
   for (const dir of HOMES.splice(0)) {
     try {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     } catch {
       /* ignore */
     }

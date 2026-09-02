@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createKiroAdapter } from "../src/adapters/kiro";
 import { KIRO_BUILDER_ID_SERVICE_PROFILE_ARN } from "../src/adapters/kiro-constants";
 import { getValidAccessTokenSnapshot } from "../src/oauth";
 import { resolveKiroApiRegion, resolveKiroProfileArn, resolveKiroRequestProfileArn } from "../src/oauth/kiro";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /** Mirrors resolveKiroCliNativeSessionEntries so an accountless request reads a real local import. */
 function seedKiroCliBuilderIdSession(): void {
@@ -70,7 +71,7 @@ afterEach(() => {
   if (origApiRegion === undefined) delete process.env.KIRO_API_REGION; else process.env.KIRO_API_REGION = origApiRegion;
   if (origArn === undefined) delete process.env.KIRO_PROFILE_ARN; else process.env.KIRO_PROFILE_ARN = origArn;
   if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
-  rmSync(tmp, { recursive: true, force: true });
+  removeTreeWithRetry(tmp);
 });
 
 const provider = {

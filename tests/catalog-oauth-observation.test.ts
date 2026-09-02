@@ -6,7 +6,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -24,6 +23,7 @@ import {
 import { clearModelCache } from "../src/codex/model-cache";
 import { getAuthRefreshIntentPath } from "../src/oauth/store";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 interface FileSnapshot {
   readonly bytes: Buffer;
@@ -129,7 +129,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = originalOpencodexHome;
   if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = originalCodexHome;
-  rmSync(root, { recursive: true, force: true });
+  removeTreeWithRetry(root);
 });
 
 describe("catalog gather OAuth observation", () => {

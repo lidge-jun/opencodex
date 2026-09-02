@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
@@ -19,6 +19,7 @@ import {
   userCostOverlayInvalidReconcileCountForTests,
 } from "../src/usage/user-cost-overlay-reconciler";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = resolve(import.meta.dir, "..");
 
@@ -93,7 +94,7 @@ afterEach(() => {
   resetPreservedDiskOnlyProvidersForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
   testDir = "";
 });
 

@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { startServer } from "../src/server";
 import { MAX_DECOMPRESSED_BODY_BYTES } from "../src/server/request-decompress";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-server-request-body-size-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
   isolatedCodexHome = installIsolatedCodexHome("ocx-server-body-size-codex-");
@@ -18,7 +19,7 @@ beforeEach(() => {
 afterEach(() => {
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
 });
 
 describe("server maxRequestBodySize (Issue #1601)", () => {

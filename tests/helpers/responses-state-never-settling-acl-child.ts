@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +15,7 @@ import {
   setPlatformForTests,
 } from "../../src/lib/windows-secret-acl";
 import { setAsyncWindowsPrincipalRunnerForTests } from "../../src/lib/windows-user-principal";
+import { removeTreeWithRetry } from "./remove-tree";
 
 type Mode = "principal" | "icacls";
 
@@ -56,4 +57,4 @@ console.log(JSON.stringify({
   pending: pendingResponseSpillMetricsForTests(),
   metrics: responseStateMetrics(),
 }));
-rmSync(home, { recursive: true, force: true });
+removeTreeWithRetry(home);

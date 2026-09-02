@@ -8,7 +8,6 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +30,7 @@ import {
 import type { CatalogSourceEvidence } from "../src/codex/convergence-types";
 import { saveConfig } from "../src/config";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 interface ManifestEntry {
   readonly path: string;
@@ -104,7 +104,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  rmSync(testRoot, { recursive: true, force: true });
+  removeTreeWithRetry(testRoot);
 });
 
 test("source reads record PRESENT and ABSENT before returning their result", () => {

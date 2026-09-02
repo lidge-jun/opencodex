@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -47,6 +47,7 @@ import {
   antigravityReplayMetrics,
   observeAntigravityReplay,
 } from "../src/adapters/google-antigravity-replay";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 function context(
   generation: number,
@@ -89,7 +90,7 @@ afterEach(() => {
   setOcxStartProcessProbeForTests(null);
   if (previousSweeperHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousSweeperHome;
-  rmSync(sweeperHome, { recursive: true, force: true });
+  removeTreeWithRetry(sweeperHome);
 });
 
 describe("state-store sweeper", () => {
@@ -414,7 +415,7 @@ describe("state-store sweeper", () => {
       else process.env.GOOGLE_APPLICATION_CREDENTIALS = previousCredentials;
       if (previousCloudSdk === undefined) delete process.env.CLOUDSDK_CONFIG;
       else process.env.CLOUDSDK_CONFIG = previousCloudSdk;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -482,7 +483,7 @@ describe("state-store sweeper", () => {
       clearProviderQuotaCache();
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 

@@ -10,6 +10,7 @@ import {
   MANAGED_SUBAGENT_DEFAULT_MARKER,
 } from "../src/codex/subagent-defaults";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -34,7 +35,7 @@ describe("codex-journal", () => {
   });
 
   afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
+    removeTreeWithRetry(testDir);
   });
 
   test("writeJournal creates journal file", () => {

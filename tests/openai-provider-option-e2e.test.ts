@@ -11,13 +11,13 @@ import {
   readFileSync,
   readdirSync,
   readlinkSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { watchdogMs } from "./helpers/ci-watchdog";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 type Capture = {
   url: string;
   method: string;
@@ -568,7 +568,7 @@ describe("OpenAI provider-option integration spine", () => {
           expect(receipt.backupMode).toBe(0o600);
         }
       } finally {
-        rmSync(migrationRoot, { recursive: true, force: true });
+        removeTreeWithRetry(migrationRoot);
       }
 
       expect(captures.every(capture => upstreamTuples.has(`${capture.method} ${capture.url}`))).toBe(true);
@@ -599,7 +599,7 @@ describe("OpenAI provider-option integration spine", () => {
         restoreEnv("OPENCODEX_HOME", previousEnv.OPENCODEX_HOME);
         restoreEnv("CODEX_HOME", previousEnv.CODEX_HOME);
         restoreEnv("CLAUDE_CONFIG_DIR", previousEnv.CLAUDE_CONFIG_DIR);
-        rmSync(root, { recursive: true, force: true });
+        removeTreeWithRetry(root);
         expect(hashTree(realClaudeDir)).toBe(realClaudeHashBefore);
       }
     }

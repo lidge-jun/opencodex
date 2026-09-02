@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { OcxConfig } from "../src/types";
@@ -30,6 +30,7 @@ import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest } from "./helpers/management-auth";
 import { handleLabCommand } from "../src/cli/lab";
 import { createProductionLabRouteExecutor } from "../src/lib/lab-live-route-production";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 
@@ -91,7 +92,7 @@ afterEach(() => {
   requestLabAutomationShutdown();
   stopLabAutomationScheduler();
   resetLabAutomationSchedulerStateForTests();
-  for (const dir of HOMES.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of HOMES.splice(0)) removeTreeWithRetry(dir);
   delete process.env.OPENCODEX_HOME;
 });
 

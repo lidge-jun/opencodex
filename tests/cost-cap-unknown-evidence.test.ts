@@ -23,7 +23,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { costEvidenceForCandidate } from "../src/routing/cost";
@@ -33,6 +33,7 @@ import { NoEligiblePolicyCandidateError, routeModel } from "../src/router";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 import { ManagementRequest } from "./helpers/management-auth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -48,7 +49,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (!testDir) return;
   try {
-    rmSync(testDir, { recursive: true, force: true });
+    removeTreeWithRetry(testDir);
   } catch {
     // Windows may keep a handle briefly after management/router I/O.
   }

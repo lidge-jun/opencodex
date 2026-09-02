@@ -10,6 +10,7 @@ import { readIntegrationState } from "../src/integrations/state";
 import { applyIntegration, disableIntegration, restoreIntegration } from "../src/integrations/writer";
 import { printSubcommandUsage, printUsage } from "../src/cli/help";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Properties that hold ACROSS the whole client-integration feature, which is
@@ -73,7 +74,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(dirname(home), { recursive: true, force: true });
+  removeTreeWithRetry(dirname(home));
 });
 
 describe("the client registries cannot drift apart", () => {

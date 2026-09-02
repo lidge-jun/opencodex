@@ -7,11 +7,12 @@
  * valid success would report every completed job as a death.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCodexHistoryJob } from "../src/codex/history-job";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let root = "";
 let previousCodexHome: string | undefined;
@@ -36,7 +37,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
+  while (cleanup.length) removeTreeWithRetry(cleanup.pop()!);
 });
 
 describe("a dead worker is not a slow one", () => {

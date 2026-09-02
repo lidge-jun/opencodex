@@ -9,7 +9,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -40,6 +39,7 @@ import {
   installIsolatedCodexHome,
   type IsolatedCodexHome,
 } from "./helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 type StartedServer = ReturnType<typeof startServer>;
 type IntervalTimer = ReturnType<typeof setInterval>;
@@ -273,7 +273,7 @@ afterEach(async () => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (testDir && existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+  if (testDir && existsSync(testDir)) removeTreeWithRetry(testDir);
   testDir = "";
 });
 

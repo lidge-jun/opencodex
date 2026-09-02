@@ -35,6 +35,7 @@ import type { OcxConfig } from "../src/types";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-pool-rotation-test");
 let previousOpencodexHome: string | undefined;
@@ -313,7 +314,7 @@ describe("pickRoundRobinAccount", () => {
 describe("accountPoolStrategy new-session routing", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     previousCodexHome = process.env.CODEX_HOME;
@@ -333,7 +334,7 @@ describe("accountPoolStrategy new-session routing", () => {
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("round-robin strategy rotates unbound new sessions", () => {
@@ -723,7 +724,7 @@ describe("accountPoolStrategy new-session routing", () => {
 describe("selection order across rotation strategies", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     previousCodexHome = process.env.CODEX_HOME;
@@ -743,7 +744,7 @@ describe("selection order across rotation strategies", () => {
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   function primeAllQuota(usage = 10): void {

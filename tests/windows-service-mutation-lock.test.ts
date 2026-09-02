@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   WindowsServiceMutationBusyError,
   withWindowsServiceMutationLock,
 } from "../src/lib/windows-service-mutation-lock";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // The lock path is injected throughout so the suite never opens the real per-user lock and
 // therefore never serializes against a genuine `ocx service` run on the developer machine.
@@ -57,7 +58,7 @@ afterEach(async () => {
   // than failing an otherwise green assertion on a cleanup race.
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {
-      rmSync(testRoot, { recursive: true, force: true });
+      removeTreeWithRetry(testRoot);
       return;
     } catch (error) {
       if ((error as { code?: string }).code !== "EBUSY") throw error;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluatePolicyProfile } from "../src/routing/evaluator";
@@ -24,6 +24,7 @@ import {
 import { normalizeRouteDecisionTrace } from "../src/routing/trace";
 import type { OcxConfig } from "../src/types";
 import type { CandidateCompatibilityEvidence } from "../src/routing/compatibility/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const COMPAT_VERSION = "f".repeat(64);
 const SUBJECT_ID = "s".repeat(64);
@@ -93,7 +94,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetCompatibilityVersionCacheForTests();
-  if (home) rmSync(home, { recursive: true, force: true });
+  if (home) removeTreeWithRetry(home);
   home = "";
 });
 
@@ -184,7 +185,7 @@ describe("CL-06 routing compatibility", () => {
       expect(resolved.subjectIds.protocol_conformance).toBeDefined();
       expect(existsSync(root)).toBe(false);
     } finally {
-      rmSync(freshHome, { recursive: true, force: true });
+      removeTreeWithRetry(freshHome);
     }
   });
 
@@ -288,7 +289,7 @@ describe("CL-06 routing compatibility", () => {
       const snap = loadCompatibilityEvidenceSnapshot(["missing-subject"], missingHome);
       expect(snap.projectionAvailable).toBe(false);
     } finally {
-      rmSync(missingHome, { recursive: true, force: true });
+      removeTreeWithRetry(missingHome);
     }
   });
 

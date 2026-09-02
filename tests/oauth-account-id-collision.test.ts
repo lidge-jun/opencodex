@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   resetHardenedStateForTests,
@@ -10,6 +10,7 @@ import {
   getCredential,
   saveCredential,
 } from "../src/oauth/store";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-account-id-collision-test");
 let previousOpencodexHome: string | undefined;
@@ -20,7 +21,7 @@ const COLLIDING_ACCOUNT_B = "account-collision-28806";
 describe("OAuth account id collision hardening", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     resetHardenedStateForTests();
@@ -37,7 +38,7 @@ describe("OAuth account id collision hardening", () => {
     resetHardenedStateForTests();
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("distinct identities that collide on the historical 32-bit prefix get distinct slots", async () => {

@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { OAUTH_PROVIDERS, runLogin } from "../src/oauth";
 import { getAccountCredential, getAccountSet, saveCredential } from "../src/oauth/store";
 import type { OAuthController, OAuthCredentials } from "../src/oauth/types";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-reauth-bind");
 const previousHome = process.env.OPENCODEX_HOME;
@@ -32,7 +33,7 @@ function config(): OcxConfig {
 }
 
 beforeEach(() => {
-  rmSync(TEST_DIR, { recursive: true, force: true });
+  removeTreeWithRetry(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
 });
@@ -40,7 +41,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  rmSync(TEST_DIR, { recursive: true, force: true });
+  removeTreeWithRetry(TEST_DIR);
 });
 
 describe("OAuth account-scoped reauth", () => {

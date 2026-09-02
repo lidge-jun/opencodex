@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLabCommand } from "../src/cli/lab";
@@ -18,11 +18,12 @@ import { queryLabObservations } from "../src/lab/query";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 import { ManagementRequest } from "./helpers/management-auth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 
 afterEach(() => {
-  for (const home of HOMES.splice(0)) rmSync(home, { recursive: true, force: true });
+  for (const home of HOMES.splice(0)) removeTreeWithRetry(home);
   delete process.env.OPENCODEX_HOME;
 });
 

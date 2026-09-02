@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runNpmCachePreflight } from "../src/update/npm-cache-preflight.mjs";
 import { isProcessAlive, killProxy } from "../src/lib/process-control";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -274,7 +275,7 @@ esac
         } finally {
           // Ordered after the reap on purpose: deleting the tree out from under a live
           // detached proxy is what turned a missed kill into a permanently spinning orphan.
-          rmSync(root, { recursive: true, force: true });
+          removeTreeWithRetry(root);
         }
       }
     },

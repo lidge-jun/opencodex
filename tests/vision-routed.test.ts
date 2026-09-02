@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -12,6 +12,7 @@ import {
   VISION_DESCRIBE_TERMINAL_HEADER,
 } from "../src/vision/routed-describe";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // Roadmap 180 (revised): the routed describer loops back through the proxy's
 // own chat surface, and its terminal marker is the depth-cap-1 recursion
@@ -42,7 +43,7 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = originalEnvToken;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
 });
 
 const PNG_DATA_URL = "data:image/png;base64,aGVsbG8taW1hZ2UtYnl0ZXM=";

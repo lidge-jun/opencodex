@@ -8,7 +8,7 @@
  * to them, so those regressions have somewhere to fail.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { connect } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -771,7 +771,7 @@ describe("Codex injection targets the loopback listener", () => {
       expect(written).not.toContain("env_http_headers");
       expect(written).not.toContain("env_key");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 });

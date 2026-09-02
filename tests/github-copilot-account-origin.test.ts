@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearGenericFailoverHealth } from "../src/oauth/generic-account-failover";
 import { getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const ACCOUNT_A_ORIGIN = "https://a.githubcopilot.com";
 const ACCOUNT_B_ORIGIN = "https://b.githubcopilot.com";
@@ -155,7 +156,7 @@ afterEach(() => {
   clearGenericFailoverHealth();
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 describe("GitHub Copilot bearer/origin snapshot atomicity", () => {

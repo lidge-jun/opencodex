@@ -1,9 +1,10 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commandInvocation } from "../src/lib/win-exec";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 setDefaultTimeout(30_000);
 
@@ -297,7 +298,7 @@ async function runRelease(version: string, scenario: ReleaseScenario = {}) {
     });
     return { calls: readLoggedCalls(logPath), result };
   } finally {
-    rmSync(shimDir, { recursive: true, force: true });
+    removeTreeWithRetry(shimDir);
   }
 }
 
@@ -345,7 +346,7 @@ process.exit(0);
       : [];
     return { calls, result };
   } finally {
-    rmSync(shimDir, { recursive: true, force: true });
+    removeTreeWithRetry(shimDir);
   }
 }
 

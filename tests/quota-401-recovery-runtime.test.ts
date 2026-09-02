@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Runtime behaviour of the WHAM 401 recovery (#3019).
@@ -32,7 +33,7 @@ afterEach(async () => {
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
   const { resetQuotaRecoveryForTests } = await import("../src/codex/quota-401-recovery");
   resetQuotaRecoveryForTests();
 });

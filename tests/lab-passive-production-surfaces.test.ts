@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLabCommand } from "../src/cli/lab";
@@ -10,6 +10,7 @@ import {
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 import { ManagementRequest } from "./helpers/management-auth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 const originalOpenCodexHome = process.env.OPENCODEX_HOME;
@@ -23,7 +24,7 @@ function tempHome(): string {
 
 afterEach(() => {
   for (const dir of HOMES.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
+    removeTreeWithRetry(dir);
   }
   if (originalOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalOpenCodexHome;

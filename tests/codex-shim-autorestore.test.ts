@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodexShimAutoRestoreResult } from "../src/codex/shim";
@@ -11,6 +11,7 @@ import {
   type CodexShimAutoRestoreCliDeps,
 } from "../src/cli/codex-shim-autorestore";
 import { autoRestoreCodexShim, CODEX_SHIM_STATE_MAX_BYTES, installCodexShim } from "../src/codex/shim";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 
@@ -125,7 +126,7 @@ describe("Codex shim CLI auto-restore policy", () => {
     } finally {
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -171,8 +172,8 @@ describe("Codex shim CLI auto-restore policy", () => {
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   }, 20_000);
 
@@ -210,8 +211,8 @@ describe("Codex shim CLI auto-restore policy", () => {
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   }, 20_000);
 });

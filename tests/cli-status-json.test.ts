@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isConnectionRefused, isUncleanExitEvidence, proxyHealthFailureReason, resolveStatusPid, selectListenTarget } from "../src/cli/status";
 import { findDeadPid } from "./helpers/dead-pid";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -148,7 +149,7 @@ describe("CLI status JSON", () => {
         expect(serialized).not.toContain(forbidden);
       }
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
     }
   });
 
@@ -205,7 +206,7 @@ describe("CLI status JSON", () => {
       });
     } finally {
       resetCodexRuntimeResolveCacheForTests();
-      rmSync(opencodexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
     }
   });
 
@@ -228,7 +229,7 @@ describe("CLI status JSON", () => {
       expect(result.stderr).toContain("Usage: ocx status [--json]");
       expect(result.stdout).toBe("");
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
     }
   });
 
@@ -251,7 +252,7 @@ describe("CLI status JSON", () => {
       expect(result.stderr).toContain("Usage: ocx status [--json]");
       expect(result.stdout).toBe("");
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
     }
   });
 
@@ -282,7 +283,7 @@ describe("CLI status JSON", () => {
       expect(serialized).not.toContain("sk-status-secret");
       expect(serialized).not.toContain("apiKey");
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
     }
   });
 
@@ -480,7 +481,7 @@ describe("status reports stale process records end to end", () => {
       });
       expect(human.stdout).toContain("may have exited unexpectedly");
     } finally {
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -500,7 +501,7 @@ describe("status reports stale process records end to end", () => {
       });
       expect(human.stdout).not.toContain("may have exited unexpectedly");
     } finally {
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -514,7 +515,7 @@ describe("status reports stale process records end to end", () => {
       const parsed = JSON.parse(runStatusJson(home).stdout) as { proxy?: { staleProcessState?: unknown } };
       expect(parsed.proxy?.staleProcessState).toBe(false);
     } finally {
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -540,7 +541,7 @@ describe("status reports stale process records end to end", () => {
       expect(parsed.proxy?.staleProcessState).toBe(true);
     } finally {
       await new Promise<void>(resolve => { occupied.close(() => resolve()); });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 });

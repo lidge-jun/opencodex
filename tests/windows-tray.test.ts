@@ -5,7 +5,6 @@ import {
   mkdtempSync,
   readFileSync,
   renameSync,
-  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -40,6 +39,7 @@ import { handleManagementAPI } from "../src/server/management-api";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../src/server/management/system-restart";
 import type { OcxConfig } from "../src/types";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const entry: WindowsTrayEntry = {
   bun: "C:\\사용자 공간\\%TEMP% ! ^ ( ) & 검증\\bun.exe",
@@ -87,7 +87,7 @@ describe("Windows tray packaging and command safety", () => {
       resetHardenedStateForTests();
       if (previousUsername === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = previousUsername;
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -449,7 +449,7 @@ describe("Windows tray packaging and command safety", () => {
       if (childPid > 0) {
         try { process.kill(childPid); } catch { /* exact test child already exited */ }
       }
-      rmSync(directory, { recursive: true, force: true });
+      removeTreeWithRetry(directory);
     }
   }, { timeout: TRAY_LAUNCH_TIMEOUT_MS });
 

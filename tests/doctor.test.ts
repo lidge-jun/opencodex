@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import {
@@ -31,6 +31,7 @@ import {
   verifyLocalManagementReadCapability,
 } from "../src/lib/local-management-capability";
 import { findDeadPid } from "./helpers/dead-pid";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-doctor-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -50,7 +51,7 @@ describe("doctor", () => {
     prevLowerHttpsProxy = process.env.https_proxy;
     prevProxyRef = process.env.OCX_TEST_PROXY_REF;
     prevAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
     mkdirSync(TEST_OPENCODEX_HOME, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_OPENCODEX_HOME;
@@ -73,7 +74,7 @@ describe("doctor", () => {
     else process.env.OCX_TEST_PROXY_REF = prevProxyRef;
     if (prevAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
     else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = prevAdminToken;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("path report flips auth.json/config.json from absent to present", () => {
@@ -799,7 +800,7 @@ describe("doctor reclaim wiring (end to end)", () => {
     console.log = realLog;
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    rmSync(tempHome, { recursive: true, force: true });
+    removeTreeWithRetry(tempHome);
   });
 
   const seedStaleTemp = (): string => {
@@ -857,7 +858,7 @@ describe("doctor reports an unclean prior proxy exit", () => {
     console.log = realLog;
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    rmSync(tempHome, { recursive: true, force: true });
+    removeTreeWithRetry(tempHome);
   });
 
   /**

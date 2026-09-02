@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { managementFetch as fetch } from "./helpers/management-auth";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -19,6 +19,7 @@ import {
 } from "../src/storage/policy-job";
 import { stopStorageCleanupScheduler } from "../src/storage/policy-scheduler";
 import { drainStorageWorkers } from "../src/storage/worker-lifecycle";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -76,7 +77,7 @@ afterEach(async () => {
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
   testDir = "";
 });
 

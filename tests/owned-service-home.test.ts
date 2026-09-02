@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "./helpers/owned-service-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = resolve(import.meta.dir, "..");
 
@@ -105,6 +106,6 @@ test("Windows owned-service-home fixture masks manager queries in a real child",
     expect(payload.exactNative.stderr).toContain("OCX_TEST_SERVICE_HOME");
     expect(payload.extraNative.stderr).not.toContain("OCX_TEST_SERVICE_HOME");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   }
 });

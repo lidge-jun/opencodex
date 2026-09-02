@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveEffectiveSubagentRoster } from "../src/server/responses/collaboration";
@@ -7,6 +7,7 @@ import {
   NATIVE_GPT56_CONTEXT_WINDOW,
   NATIVE_GPT56_OPT_IN_CONTEXT_WINDOW,
 } from "../src/codex/catalog";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * #2574: the subagent roster reads the persisted Codex catalog, which is only as fresh as the
@@ -60,8 +61,8 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = originalHome;
   if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = originalCodexHome;
-  rmSync(home, { recursive: true, force: true });
-  rmSync(codexHome, { recursive: true, force: true });
+  removeTreeWithRetry(home);
+  removeTreeWithRetry(codexHome);
 });
 
 describe("#2574 a subagent does not inherit a stale catalog width", () => {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,6 +14,7 @@ import { clearKeyCooldowns } from "../src/providers/key-failover";
 import { fastPolicyForModel } from "../src/providers/service-tier";
 import { handleChatCompletions } from "../src/server/chat-completions";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const PROVIDER_NAME = "native-tier-fixture";
 const MODEL_ID = "model";
@@ -305,7 +306,7 @@ describe("native Chat passthrough service-tier policy", () => {
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 });

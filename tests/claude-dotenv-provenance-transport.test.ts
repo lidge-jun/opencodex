@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const PROBE_TIMEOUT_MS = 3_000;
 
@@ -23,7 +24,7 @@ describe("Node launcher context transport", () => {
       + "process.stdout.write(JSON.stringify({ context, args: process.argv.slice(2), contextEnv: process.env.OCX_NODE_LAUNCH_CONTEXT ?? null }));\n",
   );
 
-  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  afterAll(() => removeTreeWithRetry(dir));
 
   const proof = "A".repeat(43);
   const context = JSON.stringify({

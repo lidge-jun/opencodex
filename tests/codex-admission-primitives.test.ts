@@ -9,7 +9,7 @@
  * the phases that make ownership real.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -25,6 +25,7 @@ import { captureCatalogAdmissionSnapshot } from "../src/codex/catalog-admission"
 import { JOURNAL_PATH } from "../src/codex/journal";
 import type { AdmissionSnapshot } from "../src/codex/convergence-types";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let root = "";
 let previousOpencodexHome: string | undefined;
@@ -54,7 +55,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
+  while (cleanup.length) removeTreeWithRetry(cleanup.pop()!);
 });
 
 describe("the config digest is over bytes, not over meaning", () => {

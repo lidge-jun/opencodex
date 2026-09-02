@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota, updateAccountQuota } from "../src/codex/auth-api";
@@ -16,6 +16,7 @@ import { formatPassthroughUpstreamError } from "../src/server/responses/passthro
 import type { OcxConfig, OcxParsedRequest } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -61,7 +62,7 @@ afterEach(() => {
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
   clearAccountQuota();
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
 });
 
 describe("formatPassthroughUpstreamError (#452)", () => {
@@ -189,7 +190,7 @@ async function withPoolPassthrough(
   reply: (request: Request) => Response | Promise<Response>,
   run: (serverUrl: string) => Promise<void>,
 ): Promise<void> {
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
   delete process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -348,7 +349,7 @@ describe("passthrough empty 503 (#452)", () => {
 
 describe("drain 503 JSON (#452)", () => {
   test("POST /v1/responses while draining returns JSON error body", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     delete process.env.OPENCODEX_API_AUTH_TOKEN;

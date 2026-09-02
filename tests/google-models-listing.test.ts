@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCatalogEntries, gatherRoutedModels as gatherRoutedModelsDirect } from "../src/codex/catalog";
@@ -8,6 +8,7 @@ import { captureModelCacheGeneration, clearModelCache, getStaleCached } from "..
 import { registerAntigravityDiscoveredWireModels, resolveAntigravityWireModelId } from "../src/providers/antigravity-models";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { withStubbedProviderFetch } from "./helpers/catalog-provider-fetch";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /** Discovery runs on the pinned transport; hand it back the stubbed global. */
 const gatherRoutedModels: typeof gatherRoutedModelsDirect = (config, options) =>
@@ -170,7 +171,7 @@ describe("Antigravity live model discovery", () => {
       });
       expect(future).not.toHaveProperty("default_reasoning_level");
     } finally {
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -211,7 +212,7 @@ describe("Antigravity live model discovery", () => {
       expect(getStaleCached("google-antigravity")).toBeNull();
     } finally {
       warning.mockRestore();
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -269,7 +270,7 @@ describe("Antigravity live model discovery", () => {
         .toEqual(["configured-only"]);
       expect(resolveAntigravityWireModelId("stale-model", baseUrl)).toBe("stale-model");
     } finally {
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 

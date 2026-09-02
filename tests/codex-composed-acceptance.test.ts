@@ -15,7 +15,6 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -25,6 +24,7 @@ import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
 
 import { watchdogMs } from "./helpers/ci-watchdog";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Per-case budget. A case can start a server twice and stop it, so it must exceed the sum of
@@ -329,7 +329,7 @@ class Fixture {
     for (const path of this.lockAllowlist) {
       if (existsSync(path)) unlinkSync(path);
     }
-    rmSync(this.root, { recursive: true, force: true });
+    removeTreeWithRetry(this.root);
   }
 }
 

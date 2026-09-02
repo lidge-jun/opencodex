@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
@@ -7,6 +7,7 @@ import { startMachineListener } from "../src/client/machine-listener";
 import { serveGuiFile } from "../src/server/gui-static";
 import type { OcxClientConnectionConfig } from "../src/types";
 import type { ManagementAuthState } from "../src/server/management-auth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let root = "";
 let previousHome: string | undefined;
@@ -52,7 +53,7 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await server.stop(true);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (root) rmSync(root, { recursive: true, force: true });
+  if (root) removeTreeWithRetry(root);
 });
 
 function meta(html: string, name: string): string {
@@ -177,7 +178,7 @@ describe("the served document states the client role", () => {
         expect(meta(html, "opencodex-runtime-role")).toBe("client");
       });
     } finally {
-      rmSync(dist, { recursive: true, force: true });
+      removeTreeWithRetry(dist);
     }
   });
 

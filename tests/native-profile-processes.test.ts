@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   type NativeProcessExecutor,
 } from "../src/codex/native-profile-processes";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 async function withTrustedWindowsPowerShell<T>(run: (powershell: string) => Promise<T>): Promise<T> {
   const systemDirectory = mkdtempSync(join(tmpdir(), "ocx-system32-"));
@@ -19,7 +20,7 @@ async function withTrustedWindowsPowerShell<T>(run: (powershell: string) => Prom
     return await run(powershell);
   } finally {
     setTrustedWindowsSystemDirectoryResolverForTests(null);
-    rmSync(systemDirectory, { recursive: true, force: true });
+    removeTreeWithRetry(systemDirectory);
   }
 }
 
@@ -174,7 +175,7 @@ describe("native profile process probe", () => {
       await Bun.sleep(600);
       expect(existsSync(survived)).toBe(false);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      removeTreeWithRetry(directory);
     }
   });
 

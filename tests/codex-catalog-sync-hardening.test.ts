@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -104,8 +105,8 @@ describe("Codex catalog sync hardening", () => {
   });
 
   afterEach(() => {
-    if (existsSync(codexHome)) rmSync(codexHome, { recursive: true, force: true });
-    if (existsSync(opencodexHome)) rmSync(opencodexHome, { recursive: true, force: true });
+    if (existsSync(codexHome)) removeTreeWithRetry(codexHome);
+    if (existsSync(opencodexHome)) removeTreeWithRetry(opencodexHome);
   });
 
   test("Gap B: drops legacy and unentitled account-gated natives but keeps supported + user natives", () => {

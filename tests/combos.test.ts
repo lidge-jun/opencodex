@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -53,6 +53,7 @@ import {
   setCachedProviderQuotaForTests,
 } from "../src/providers/quota-routing-cache";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const VALID_COMBO = { targets: [{ provider: "a", model: "m1" }] };
 
@@ -119,7 +120,7 @@ async function withTempHome<T>(run: (dir: string) => Promise<T> | T): Promise<T>
     else process.env.OPENCODEX_HOME = previousHome;
     if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
-    rmSync(dir, { recursive: true, force: true });
+    removeTreeWithRetry(dir);
   }
 }
 

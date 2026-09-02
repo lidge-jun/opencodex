@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KIRO_COMPLETION_TOOL_NAME } from "../src/adapters/kiro-constants";
@@ -9,6 +9,7 @@ import { saveCredential } from "../src/oauth/store";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const enc = new TextEncoder();
 const CHAT_ENDPOINT = "https://runtime.us-east-1.kiro.dev/";
@@ -45,8 +46,8 @@ afterEach(() => {
   else process.env.KIRO_REGION = previousRegion;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  rmSync(testDir, { recursive: true, force: true });
-  rmSync(emptyHome, { recursive: true, force: true });
+  removeTreeWithRetry(testDir);
+  removeTreeWithRetry(emptyHome);
 });
 
 function config(): OcxConfig {

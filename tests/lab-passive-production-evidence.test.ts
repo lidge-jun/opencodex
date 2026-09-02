@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -13,6 +13,7 @@ import {
   derivePassiveProductionSignals,
   queryPassiveProductionSignals,
 } from "../src/lab/query/passive-production";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 function usageEntryWithAttempt(attempt: Record<string, unknown>): PersistedUsageEntry {
   return {
@@ -186,7 +187,7 @@ describe("CL-09 bounded passive production projection", () => {
       expect(result.truncated).toBe(true);
       expect(result.signals[0]?.requestRef).toBe(`ocx-cl09-config-${PASSIVE_PRODUCTION_MAX_SCAN_ROWS}`);
     } finally {
-      rmSync(configDir, { recursive: true, force: true });
+      removeTreeWithRetry(configDir);
     }
   });
 

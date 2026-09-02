@@ -3,7 +3,6 @@ import {
   existsSync,
   mkdtempSync,
   readdirSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,11 +23,12 @@ import {
   PublicEvidenceValidationError,
   type PublicEvidenceRecordV1,
 } from "../src/lab/public";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 afterEach(() => {
   setPublicEvidencePurgeFaultForTests(null);
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 function configDir(prefix: string): string {

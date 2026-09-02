@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -28,6 +28,7 @@ import {
   verifyPublicEvidenceBundle,
   writePublicEvidenceBundle,
 } from "../src/lab/public";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 const DEFAULT_COMPLETED_AT = Date.UTC(2026, 7, 12, 14, 37, 41);
@@ -42,7 +43,7 @@ function tempHome(): string {
 afterEach(() => {
   for (const dir of HOMES.splice(0)) {
     try {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     } catch {
       /* ignore */
     }

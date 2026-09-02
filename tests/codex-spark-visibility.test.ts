@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { withSparkVisibility } from "../src/codex/auth-api";
 import { loadConfig, saveConfig } from "../src/config";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, afterEach } from "bun:test";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const SPARK = "GPT-5.3-Codex-Spark Weekly";
 const originalHome = process.env.OPENCODEX_HOME;
@@ -28,7 +29,7 @@ beforeEach(() => {
 afterEach(() => {
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 /**

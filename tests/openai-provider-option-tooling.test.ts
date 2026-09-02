@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evidenceDenyFindings, scanEvidence } from "../scripts/openai-provider-option-evidence-scan";
@@ -7,11 +7,12 @@ import { runGateSequence, type GateResult, type GateSpec } from "../scripts/open
 import { evaluateLivePolicy, type LiveOutcome } from "../scripts/openai-hardening-live-policy";
 import { buildSanitizedRuntimeEnv } from "../scripts/openai-hardening-runtime-env";
 import { buildUnixCodexShim } from "../src/codex/shim";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 function writeJson(path: string, value: unknown): void {

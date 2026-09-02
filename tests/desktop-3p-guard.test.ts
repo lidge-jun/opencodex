@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertDesktop3pModelsValid } from "../src/claude/desktop-3p-guard";
 import { generateDesktop3pModels, writeDesktop3pConfig } from "../src/claude/desktop-3p";
 import type { Desktop3pModelEntry } from "../src/claude/desktop-3p";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * D2: the Desktop 3P output guard. The name was never the leak (non-Anthropic names
@@ -86,6 +87,6 @@ test("writeDesktop3pConfig emits a config whose model list passes the guard end 
   } finally {
     if (prev === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
     else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = prev;
-    rmSync(dir, { recursive: true, force: true });
+    removeTreeWithRetry(dir);
   }
 });

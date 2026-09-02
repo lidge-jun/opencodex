@@ -20,6 +20,7 @@ import {
   type UpdateJobState,
 } from "../src/update/job";
 import { checkUpdatePackageIntegrity, updateCommand, updateCommandStr } from "../src/update/index";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 type SpawnResult = { status: number | null; stdout: string };
 function fakeSpawn(result: SpawnResult): typeof import("node:child_process").spawnSync {
@@ -38,7 +39,7 @@ beforeEach(() => {
 afterEach(() => {
   if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = prevHome;
-  rmSync(dir, { recursive: true, force: true });
+  removeTreeWithRetry(dir);
 });
 
 describe("GUI update check", () => {

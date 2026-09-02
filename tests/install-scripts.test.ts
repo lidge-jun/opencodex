@@ -5,7 +5,6 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -14,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizePackageModes } from "../scripts/prepare-package";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // Windows CI runners spawn Node/Bun child processes slowly ("Slow filesystem detected");
 // the package-main import test measured 9.4s there vs bun's 5s default. Same remedy as
@@ -29,7 +29,7 @@ function mode(path: string): number {
 
 function removeModeFixture(path: string): void {
   try { chmodSync(path, 0o700); } catch { /* best-effort cleanup */ }
-  try { rmSync(path, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+  try { removeTreeWithRetry(path); } catch { /* best-effort cleanup */ }
 }
 
 function systemCommandPath(command: string): string {

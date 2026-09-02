@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
@@ -43,6 +43,7 @@ import { encodeLabCursor, verdictCursor } from "../src/lab/query/cursor";
 import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest } from "./helpers/management-auth";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 
@@ -56,7 +57,7 @@ function tempHome(): string {
 afterEach(() => {
   for (const dir of HOMES.splice(0)) {
     try {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     } catch {
       /* ignore */
     }

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   inspectNpmCacheDirectory,
   runNpmCachePreflight,
 } from "../src/update/npm-cache-preflight.mjs";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
@@ -23,7 +24,7 @@ const canSymlink = (() => {
     if ((e as NodeJS.ErrnoException).code === "EPERM") return false;
     throw e;
   } finally {
-    rmSync(probeDir, { recursive: true, force: true });
+    removeTreeWithRetry(probeDir);
   }
 })();
 
@@ -49,7 +50,7 @@ function tempRoot(name: string): string {
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 describe("npm cache access pre-flight", () => {

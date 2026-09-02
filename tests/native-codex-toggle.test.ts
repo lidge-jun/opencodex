@@ -12,13 +12,14 @@
  * act on — rather than artifacts the next start silently undoes.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { handleManagementAPI } from "../src/server/management-api";
 import type { ManagementApiDeps } from "../src/server/management/context";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let fixtureRoot = "";
 let previousOpencodexHome: string | undefined;
@@ -86,7 +87,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
+  while (cleanup.length) removeTreeWithRetry(cleanup.pop()!);
 });
 
 describe("request validation", () => {

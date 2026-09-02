@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { discoverAntigravityProject, refreshAntigravityToken } from "../src/oauth/google-antigravity";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getCredential, saveCredential } from "../src/oauth/store";
 import { ANTIGRAVITY_IDE_VERSION } from "../src/adapters/client-fingerprint";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -153,7 +154,7 @@ describe("antigravity credential persistence (projectId survives the store)", ()
   afterEach(() => {
     if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
     if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
-    if (tmp) rmSync(tmp, { recursive: true, force: true });
+    if (tmp) removeTreeWithRetry(tmp);
   });
 
   test("saveCredential + getCredential round-trips projectId (regression: was stripped by normalizeCredential)", async () => {

@@ -8,7 +8,7 @@
  * fired. Plan: devlog/_fin/260810_release_train_and_triage/040_sec02_remediation.md
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -25,6 +25,7 @@ import { createHostIssuedLabRouteExecutor } from "../src/lib/lab-live-host";
 import { ensureLabDirs } from "../src/lab/paths";
 import type { LabBehaviorValues, LabRouteContext } from "../src/lab/live/types";
 import type { NormalizedObservation } from "../src/lab/conformance/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 function tempHome(): string {
@@ -35,7 +36,7 @@ function tempHome(): string {
 }
 afterEach(() => {
   for (const dir of HOMES.splice(0)) {
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { removeTreeWithRetry(dir); } catch { /* ignore */ }
   }
   delete process.env.OPENCODEX_HOME;
 });

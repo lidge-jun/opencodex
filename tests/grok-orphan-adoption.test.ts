@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { injectGrokConfig, stripGrokConfig } from "../src/grok/inject";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * #511 — Grok Build reported 200k for every model.
@@ -34,7 +35,7 @@ describe("Grok orphan adoption (#511)", () => {
   });
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   });
 
   /** The real shape from a machine that hit #511. */
@@ -1120,7 +1121,7 @@ describe("Grok orphan adoption — fence boundary (#511 follow-up)", () => {
   });
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   });
 
   const orphan = (alias: string): string[] => [

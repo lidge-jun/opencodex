@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { consumeForInspection, trackSseForRequestLog } from "../src/server/relay";
@@ -15,6 +15,7 @@ import {
   resetUsageReadCacheForTests,
   type PersistedUsageAttempt,
 } from "../src/usage/log";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // Port of codex-router #139's streamAborted metering marker: an upstream stream
 // that dies after its 200 head was committed must meter as a truncated turn
@@ -36,7 +37,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
 });
 
 function makeLogCtx(): { logCtx: RequestLogContext; attempt: PersistedUsageAttempt } {

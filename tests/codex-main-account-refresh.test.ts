@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +7,7 @@ import {
   setMainAuthJsonBeforeRenameHookForTests,
 } from "../src/codex/main-account";
 import { codexCredentialMutationEpoch } from "../src/codex/credential-mutation-epoch";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let home: string;
 let previousCodexHome: string | undefined;
@@ -26,7 +27,7 @@ afterEach(() => {
   setMainAuthJsonBeforeRenameHookForTests(null);
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 describe("native main token refresh", () => {
@@ -186,8 +187,8 @@ describe("native main token refresh", () => {
       release?.();
       if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOcxHome;
-      rmSync(homeA, { recursive: true, force: true });
-      rmSync(homeB, { recursive: true, force: true });
+      removeTreeWithRetry(homeA);
+      removeTreeWithRetry(homeB);
     }
   });
 
@@ -242,8 +243,8 @@ describe("native main token refresh", () => {
       releaseFirst.resolve();
       if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOcxHome;
-      rmSync(homeA, { recursive: true, force: true });
-      rmSync(homeB, { recursive: true, force: true });
+      removeTreeWithRetry(homeA);
+      removeTreeWithRetry(homeB);
     }
   });
 });

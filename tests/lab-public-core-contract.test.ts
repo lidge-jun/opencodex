@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { labPublicPublisherKeyPath } from "../src/lab/paths";
@@ -16,6 +16,7 @@ import {
   type PublicEvidenceBundleUnsignedV1,
 } from "../src/lab/public/types";
 import { validatePublicRouteRegistryManifest } from "../src/lab/public/validate";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const FIXED_PRIVATE_KEY = [
   `-----BEGIN PRIVATE ${"KEY"}-----`,
@@ -28,7 +29,7 @@ const REVIEWED_AUTHORITY_SOURCE_COMMIT = "75a21417657ba5a3033198be0d8ae949de723d
 
 const roots: string[] = [];
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 function configDir(prefix: string): string {

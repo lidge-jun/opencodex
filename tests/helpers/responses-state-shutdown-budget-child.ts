@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,6 +19,7 @@ import {
   setIcaclsRunnerForTests,
   setPlatformForTests,
 } from "../../src/lib/windows-secret-acl";
+import { removeTreeWithRetry } from "./remove-tree";
 
 type Scenario = "exhaustion" | "guard";
 
@@ -118,7 +119,7 @@ async function runScenario(scenario: Scenario): Promise<Record<string, unknown>>
     setResponseSpillShutdownTerminalizationPassLimitForTests(null);
     setResponseStateByteCapForTests(null);
     clearResponseStateForTests();
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
     if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = priorHome;
   }

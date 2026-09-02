@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { routeModel } from "../src/router";
@@ -23,6 +23,7 @@ import {
   type RouteDecisionTraceV1,
 } from "../src/routing/trace";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /** Near-budget trace: 8 candidates x 16 exclusions with max-length strings. */
 function oversizedTrace(): RouteDecisionTraceV1 {
@@ -59,7 +60,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
 });
 
 function baseConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {

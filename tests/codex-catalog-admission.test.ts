@@ -4,7 +4,6 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
-  rmSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -22,6 +21,7 @@ import type {
 } from "../src/codex/convergence-types";
 import { saveConfig } from "../src/config";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const CONDITIONAL_SOURCE_ROLES = [
   "active-catalog-merge",
@@ -76,7 +76,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  rmSync(testRoot, { recursive: true, force: true });
+  removeTreeWithRetry(testRoot);
 });
 
 test("captures the given config reference, generation, and catalog target identities", () => {
@@ -222,7 +222,7 @@ test("changes target identity when a parent symlink retargets without changing t
   );
 
   const before = JSON.parse(captureCatalogAdmissionSnapshot(config()).targets.catalog);
-  if (process.platform === "win32") rmSync(linkedParent, { recursive: true, force: true });
+  if (process.platform === "win32") removeTreeWithRetry(linkedParent);
   else unlinkSync(linkedParent);
   symlinkSync(parentB, linkedParent, process.platform === "win32" ? "junction" : "dir");
   const after = JSON.parse(captureCatalogAdmissionSnapshot(config()).targets.catalog);

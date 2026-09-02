@@ -36,6 +36,7 @@ import {
   replaceActiveCodexCatalog,
   replaceCodexModelsCache,
 } from "../src/codex/internal/catalog-writer";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 interface MutatorCase {
   readonly name: string;
@@ -186,7 +187,7 @@ afterEach(() => {
       rmSync(`${databasePath}${suffix}`, { force: true });
     }
   }
-  rmSync(testRoot, { recursive: true, force: true });
+  removeTreeWithRetry(testRoot);
 });
 
 test("every mutator refuses a missing or forged permit before temp creation", () => {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { OcxConfig } from "../src/types";
@@ -34,6 +34,7 @@ import {
   resetCompatibilityVersionCacheForTests,
   setCompatibilityVersionOverrideForTests,
 } from "../src/routing/compatibility/version";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 const COMPAT_VERSION = "9".repeat(64);
@@ -164,7 +165,7 @@ afterEach(() => {
   resetLabAutomationSchedulerStateForTests();
   resetCompatibilityVersionCacheForTests();
   delete process.env.OPENCODEX_HOME;
-  for (const dir of HOMES.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of HOMES.splice(0)) removeTreeWithRetry(dir);
 });
 
 describe("CL-08 final CodeRabbit regressions", () => {

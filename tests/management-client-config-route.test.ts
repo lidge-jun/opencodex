@@ -25,6 +25,7 @@ import {
 } from "../src/clients/config-export";
 import type { OcxConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * A key that looks exactly like a real one. Every assertion about `ocx_` absence is
@@ -50,7 +51,7 @@ afterAll(() => {
   else process.env.OPENCODEX_HOME = originalOpenCodexHome;
   if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = originalCodexHome;
-  rmSync(entitlementTestRoot, { recursive: true, force: true });
+  removeTreeWithRetry(entitlementTestRoot);
 });
 
 afterEach(() => {

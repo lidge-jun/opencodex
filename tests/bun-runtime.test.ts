@@ -1,8 +1,9 @@
 import { describe, it, expect, afterAll, afterEach } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, reportedBunRuntimeSource, withProcessRuntimeProvenance } from "../src/lib/bun-runtime";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // realpath the temp root: on macOS /var is a symlink to /private/var, so a path built
 // from mkdtemp compares unequal to the same path resolved through process.cwd().
@@ -19,7 +20,7 @@ afterEach(() => {
   else process.env[BUN_RUNTIME_PATH_ENV] = previousRuntimePath;
 });
 afterAll(() => {
-  rmSync(tmp, { recursive: true, force: true });
+  removeTreeWithRetry(tmp);
 });
 
 describe("isRealBunBinary (size gate vs placeholder stub)", () => {

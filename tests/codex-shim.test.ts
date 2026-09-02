@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mk
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, inspectCodexShimBackingForCommand, installCodexShim, isLocalAbsoluteInspectionPath, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../src/codex/shim";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
@@ -118,8 +119,8 @@ function withInstalledShim(run: (paths: {
     else process.env.PATH = oldPath;
     if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = oldHome;
-    rmSync(binDir, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(binDir);
+    removeTreeWithRetry(home);
   }
 }
 
@@ -324,7 +325,7 @@ exit 64
       expect(result.stderr).toContain("saved Codex launcher resolved back to the autostart shim");
       expect(result.stderr).toContain("ocx codex-shim uninstall");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -365,8 +366,8 @@ exit 64
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -405,8 +406,8 @@ codex "$@"
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -438,8 +439,8 @@ exit 126
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -470,8 +471,8 @@ exit 126
         else process.env.PATH = oldPath;
         if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
         else process.env.OPENCODEX_HOME = oldHome;
-        rmSync(binDir, { recursive: true, force: true });
-        rmSync(home, { recursive: true, force: true });
+        removeTreeWithRetry(binDir);
+        removeTreeWithRetry(home);
       }
     },
   );
@@ -503,8 +504,8 @@ exit 126
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -532,8 +533,8 @@ exit 126
         else process.env.PATH = oldPath;
         if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
         else process.env.OPENCODEX_HOME = oldHome;
-        rmSync(binDir, { recursive: true, force: true });
-        rmSync(home, { recursive: true, force: true });
+        removeTreeWithRetry(binDir);
+        removeTreeWithRetry(home);
       }
     },
   );
@@ -561,8 +562,8 @@ exit 126
         else process.env.PATH = oldPath;
         if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
         else process.env.OPENCODEX_HOME = oldHome;
-        rmSync(binDir, { recursive: true, force: true });
-        rmSync(home, { recursive: true, force: true });
+        removeTreeWithRetry(binDir);
+        removeTreeWithRetry(home);
       }
     },
   );
@@ -607,8 +608,8 @@ exit 0
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -660,8 +661,8 @@ os._exit(0)
         else process.env.PATH = oldPath;
         if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
         else process.env.OPENCODEX_HOME = oldHome;
-        rmSync(binDir, { recursive: true, force: true });
-        rmSync(home, { recursive: true, force: true });
+        removeTreeWithRetry(binDir);
+        removeTreeWithRetry(home);
       }
     },
   );
@@ -709,8 +710,8 @@ wait "$child"
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   }, 10_000);
 
@@ -744,8 +745,8 @@ wait "$child"
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -776,8 +777,8 @@ wait "$child"
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -808,8 +809,8 @@ wait "$child"
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -843,8 +844,8 @@ wait "$child"
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -888,8 +889,8 @@ wait "$child"
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -938,8 +939,8 @@ wait "$child"
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -980,8 +981,8 @@ exit 0
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -1037,8 +1038,8 @@ exit 0
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -1077,7 +1078,7 @@ printf '%s\\n' child-codex
       expect(result.stdout).toBe("child-codex\n");
       expect(result.stderr).toBe("");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -1270,8 +1271,8 @@ printf '%s\\n' child-codex
       process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(dir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -1727,8 +1728,8 @@ exit 127
       else process.env.PATH = oldPath;
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(binDir, { recursive: true, force: true });
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(binDir);
+      removeTreeWithRetry(home);
     }
   });
 
@@ -1749,7 +1750,7 @@ exit 127
         enabled: () => true,
         stabilitySleep: skipStabilityWait,
         beforeStaleRestoreLockDelete: () => {
-          rmSync(lockPath, { recursive: true });
+          removeTreeWithRetry(lockPath);
           mkdirSync(lockPath);
           writeFileSync(successorPath, successor, "utf8");
         },
@@ -1913,8 +1914,8 @@ exit 127
     } finally {
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(home, { recursive: true, force: true });
-      rmSync(binDir, { recursive: true, force: true });
+      removeTreeWithRetry(home);
+      removeTreeWithRetry(binDir);
     }
   });
 
@@ -1930,7 +1931,7 @@ exit 127
       if (process.platform !== "win32") {
         mkdirSync(wrappers[0]);
         expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait }).status).toBe("deferred");
-        rmSync(wrappers[0], { recursive: true });
+        removeTreeWithRetry(wrappers[0]);
         symlinkSync(join(dirname(wrappers[0]), "missing-target"), wrappers[0]);
         expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait }).status).toBe("ineligible");
       }
@@ -2120,7 +2121,7 @@ describe("Codex shim read-only backing inspection", () => {
     } finally {
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 

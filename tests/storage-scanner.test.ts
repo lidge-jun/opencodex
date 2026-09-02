@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scanStorage, type StorageBucket, type StorageReport } from "../src/storage/scanner";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const OLD_MTIME = new Date("2026-01-02T03:04:05Z");
 const MID_MTIME = new Date("2026-03-04T05:06:07Z");
@@ -98,7 +99,7 @@ afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   previousCodexHome = undefined;
-  if (fixtureHome) rmSync(fixtureHome, { recursive: true, force: true });
+  if (fixtureHome) removeTreeWithRetry(fixtureHome);
   fixtureHome = "";
 });
 

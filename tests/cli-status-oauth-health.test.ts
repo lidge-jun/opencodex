@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatOAuthHealthForStatus } from "../src/cli/status-oauth";
 import { collectOAuthHealthEntries } from "../src/oauth/health";
 import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../src/oauth/store";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
@@ -22,7 +23,7 @@ afterEach(() => {
   else process.env.HOME = origHome;
   if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = origOcxHome;
-  rmSync(tmp, { recursive: true, force: true });
+  removeTreeWithRetry(tmp);
 });
 
 describe("formatOAuthHealthForStatus", () => {

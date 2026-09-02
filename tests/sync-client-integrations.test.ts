@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExportModel } from "../src/clients/config-export";
@@ -11,6 +11,7 @@ import { createIntegrationStateStore, type IntegrationStateStore } from "../src/
 import type { IntegrationWriterLockSeams } from "../src/integrations/writer-lock";
 import { applyIntegration, disableIntegrationCoordinated } from "../src/integrations/writer";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * `ocx sync` used to write the Codex catalog and stop, so a Grok fence or a Desktop profile
@@ -113,7 +114,7 @@ describe("ocx sync refreshes an already-owned MCode integration", () => {
   });
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   });
 
   function input(models: readonly ExportModel[] | (() => Promise<readonly ExportModel[]>)) {
@@ -213,7 +214,7 @@ describe("ocx sync refreshes an already-owned MCode integration", () => {
 
   test("does not recreate the client home or config when MCode was removed", async () => {
     expect(applyIntegration(input(oldModels)).ok).toBe(true);
-    rmSync(INTEGRATION_CLIENTS.mcode.detectDir(env, home), { recursive: true, force: true });
+    removeTreeWithRetry(INTEGRATION_CLIENTS.mcode.detectDir(env, home));
 
     const outcome = await refreshOwnedIntegration(input(newModels));
     expect(outcome?.ok).toBe(false);

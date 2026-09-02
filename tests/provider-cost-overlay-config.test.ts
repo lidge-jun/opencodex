@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,7 @@ import {
 import { providerManagementConfigError, safeConfigDTO } from "../src/server/auth-cors";
 import { activeUserCostOverlays, refreshUserCostOverlays, userCostOverlayVersion } from "../src/usage/user-cost-overlays";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const VALID_COSTS = {
   "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
@@ -33,7 +34,7 @@ afterEach(() => {
   refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (testDir && existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+  if (testDir && existsSync(testDir)) removeTreeWithRetry(testDir);
   testDir = "";
 });
 

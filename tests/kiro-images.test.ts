@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createKiroAdapter } from "../src/adapters/kiro";
@@ -7,6 +7,7 @@ import { normalizeKiroImages, KIRO_IMAGE_BASE64_BUDGET, KIRO_MAX_IMAGES_PER_MESS
 import { resetNormalizeStateForTests, TIER_SPECS, type EncodeFn } from "../src/adapters/anthropic-image-normalize";
 import { sniffImageDimensions } from "../src/adapters/anthropic-image-guard";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const origHome = process.env.HOME;
 const origRegion = process.env.KIRO_REGION;
@@ -23,7 +24,7 @@ afterEach(() => {
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
   if (origRegion === undefined) delete process.env.KIRO_REGION; else process.env.KIRO_REGION = origRegion;
   if (origArn === undefined) delete process.env.KIRO_PROFILE_ARN; else process.env.KIRO_PROFILE_ARN = origArn;
-  rmSync(tmp, { recursive: true, force: true });
+  removeTreeWithRetry(tmp);
 });
 
 const provider = { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", apiKey: "tok-123" } as unknown as OcxProviderConfig;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -8,6 +8,7 @@ import { AUTH_MATRIX } from "../src/server/auth-cors";
 import { clearApiKeyUsageCacheForTests, rollupApiKeyUsage } from "../src/server/management/api-key-usage";
 import { normalizeUsageEntryForTest, usageLogPath, type PersistedUsageEntry } from "../src/usage/log";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const ADMIN_TOKEN = "admin-secret-for-attribution";
 const previousHome = process.env.OPENCODEX_HOME;
@@ -60,7 +61,7 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
   if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
-  if (testHome) rmSync(testHome, { recursive: true, force: true });
+  if (testHome) removeTreeWithRetry(testHome);
   testHome = "";
 });
 

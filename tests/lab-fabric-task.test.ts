@@ -66,6 +66,7 @@ import {
   fabricRouteBoundPatchExecutor,
   runTrustedFabricTask,
 } from "./helpers/fabric-task-test";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CHILD_REAP_GRACE_MS = 2_000;
@@ -289,7 +290,7 @@ afterEach(() => {
   setFabricProducerIsolationLimitsForTests();
   for (const dir of HOMES.splice(0)) {
     try {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     } catch {
       /* ignore */
     }
@@ -571,7 +572,7 @@ export async function execute() {
     writeFileSync(outside, "secret\n");
     try {
       const srcDir = join(scratch.root, "src");
-      rmSync(srcDir, { recursive: true, force: true });
+      removeTreeWithRetry(srcDir);
       try {
         symlinkSync(home, srcDir);
       } catch {

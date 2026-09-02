@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
 import { managementFetch as fetch } from "./helpers/management-auth";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../src/config";
@@ -8,6 +8,7 @@ import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { GROK_APPLY_TERMINAL_MS, runGrokApplyFlightForTests, setGrokApplyFlightTestHooks } from "../src/server/management/agent-settings-routes";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // Full-suite Windows load: startServer + management flows often exceed bun's default
 // 5s per-test budget (same flake class as claude-management-api.test.ts).
@@ -44,8 +45,8 @@ afterEach(() => {
   else process.env.GROK_HOME = previousGrokHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
-  if (grokRoot) rmSync(grokRoot, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
+  if (grokRoot) removeTreeWithRetry(grokRoot);
 });
 
 function deferred<T>() {

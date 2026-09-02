@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeAgentDefs, injectClaudeAgentDefs, syncClaudeAgentDefs } from "../src/claude/agents-inject";
@@ -7,6 +7,7 @@ import { buildClaudeContextWindows } from "../src/claude/context-windows";
 import { fetchProviderModels } from "../src/codex/catalog/provider-fetch";
 import { OAUTH_PROVIDERS } from "../src/oauth";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const dirs: string[] = [];
 function tempDir(): string {
@@ -14,7 +15,7 @@ function tempDir(): string {
   dirs.push(d);
   return d;
 }
-afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
+afterEach(() => { for (const d of dirs.splice(0)) removeTreeWithRetry(d); });
 
 function cfg(extra?: Partial<OcxConfig>): OcxConfig {
   return { port: 10100, defaultProvider: "mock", providers: {}, ...extra } as OcxConfig;

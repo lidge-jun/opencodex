@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { logsFromApiBody } from "./helpers/logs-api";
 import { managementHeaders } from "./helpers/management-auth";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,6 +18,7 @@ import { startServer } from "../src/server";
 import { usageLogPath } from "../src/usage/log";
 
 import { watchdogMs } from "./helpers/ci-watchdog";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 const moduleOriginalFetch = globalThis.fetch;
 const moduleOriginalHome = process.env.OPENCODEX_HOME;
 afterEach(() => {
@@ -362,7 +363,7 @@ describe("OpenAI API compact transport", () => {
       globalThis.fetch = originalFetch;
       await server.stop(true);
       delete process.env.OPENCODEX_HOME;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   }, 20_000);
 });
@@ -514,7 +515,7 @@ describe("OpenAI API Pro transport identities", () => {
       globalThis.fetch = originalFetch;
       await server.stop(true);
       delete process.env.OPENCODEX_HOME;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   }, 20_000);
 });

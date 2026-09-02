@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +10,7 @@ import {
 } from "../src/codex/native-main-claim";
 import { retainNativeMainOwner } from "../src/codex/native-main-owner";
 import type { NativeProfileContext } from "../src/codex/native-profile-store";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 const noHardening = async (): Promise<void> => {};
@@ -27,7 +28,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 describe("native-main shared and exclusive claims", () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   readClaudeCredentialsFile,
   shouldAdoptGrokGeneration,
 } from "../src/oauth/local-token-detect";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let tmp: string;
 let prevConfigDir: string | undefined;
@@ -20,7 +21,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  rmSync(tmp, { recursive: true, force: true });
+  removeTreeWithRetry(tmp);
 });
 
 afterEach(() => {

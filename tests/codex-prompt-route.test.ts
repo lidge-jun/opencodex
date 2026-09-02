@@ -19,6 +19,7 @@ import {
 } from "../src/codex/prompt-text-probe";
 import type { ManagementPrincipal } from "../src/server/management-auth";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const MARKER = "# Auto-injected by opencodex";
 const config = { port: 10100, defaultProvider: "openai", providers: {} } as OcxConfig;
@@ -141,7 +142,7 @@ async function revision(fx: Fixture): Promise<string> {
 
 afterEach(async () => {
   await resetPromptTextProbeForTests();
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
+  while (roots.length) removeTreeWithRetry(roots.pop()!);
 });
 
 describe("GET /api/codex-prompt", () => {

@@ -7,7 +7,6 @@ import {
   mkdtempSync,
   readFileSync,
   renameSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -17,11 +16,12 @@ import { join } from "node:path";
 import { scrubNativeMainAuthTempResidues } from "../src/codex/native-main-auth-temp";
 import { resolveNativeProfileContext } from "../src/codex/native-profile-store";
 import { NativeProfileError } from "../src/codex/native-profile-types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 function fixture() {

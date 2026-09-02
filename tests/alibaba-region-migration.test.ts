@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../src/config";
 import { projectAlibabaRegionMigration } from "../src/providers/alibaba-region-migration";
 import { routeModel } from "../src/router";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const INTL_URL = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
 
@@ -70,7 +71,7 @@ test("the migrated config survives a reload", () => {
   } finally {
     if (prev === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = prev;
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   }
 });
 
@@ -142,7 +143,7 @@ test("a namespace-blocked migration remains valid across reload", () => {
   } finally {
     if (prev === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = prev;
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   }
 });
 

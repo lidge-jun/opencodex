@@ -1,6 +1,6 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
 import { configuredReasoningEfforts } from "../src/reasoning-effort";
 import { isModelTextOnly } from "../src/vision";
 import type { OcxProviderConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -62,7 +63,7 @@ describe("ocx models", () => {
       expect(result.stdout).toContain("test-model-3");
       expect(result.stdout).toContain("* =");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -74,7 +75,7 @@ describe("ocx models", () => {
       expect(result.stdout).toContain("test-model-1");
       expect(result.stdout).toContain("test:");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -85,7 +86,7 @@ describe("ocx models", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("not configured");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -101,7 +102,7 @@ describe("ocx models", () => {
       expect(testModels.length).toBe(3);
       expect(testModels[0].isDefault).toBe(true);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -113,7 +114,7 @@ describe("ocx models", () => {
       const parsed = JSON.parse(result.stdout);
       expect(parsed.models.every((m: { provider: string }) => m.provider === "test")).toBe(true);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -164,7 +165,7 @@ describe("ocx models richer metadata", () => {
       expect(modelB.contextWindow).toBe(32000);
       expect(modelB.inputModalities).toEqual(["text"]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -200,7 +201,7 @@ describe("ocx models richer metadata", () => {
       expect(row.contextWindow).toBe(131000);
       expect(row.reasoningEfforts).toEqual(["low", "high"]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -242,7 +243,7 @@ describe("ocx models richer metadata", () => {
       expect(ladderOf("model-b")).toEqual([]);
       expect(ladderOf("model-c")).toEqual(["low", "high"]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -275,7 +276,7 @@ describe("ocx models richer metadata", () => {
         .find((m: { model: string }) => m.model === "gpt-oss:120b");
       expect(row.inputModalities).toEqual(["text"]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -300,7 +301,7 @@ describe("ocx models richer metadata", () => {
         .find((m: { model: string }) => m.model === "gpt-oss:20b");
       expect(row.contextWindow).toBe(32000);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -311,7 +312,7 @@ describe("ocx models richer metadata", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Unknown flag");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });
@@ -325,7 +326,7 @@ describe("ocx models custom slash ids", () => {
       const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
       expect(config.customModels[0].modelId).toBe("openai/gpt-5.5");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -340,7 +341,7 @@ describe("ocx models custom slash ids", () => {
         const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
         expect(config.customModels ?? []).toEqual([]);
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        removeTreeWithRetry(dir);
       }
     }
   });
@@ -355,7 +356,7 @@ describe("ocx models custom slash ids", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("displayName must not contain /");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -384,7 +385,7 @@ describe("ocx models custom slash ids", () => {
       expect(multi.status).toBe(1);
       expect(multi.stderr).toContain("ambiguous");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -410,7 +411,7 @@ describe("ocx models custom slash ids", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("ambiguous");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -429,7 +430,7 @@ describe("ocx models custom slash ids", () => {
       const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
       expect(config.customModels).toHaveLength(2);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });
@@ -457,7 +458,7 @@ describe("#2491 the removal selector uses the shared equivalence relation", () =
       const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
       expect(config.customModels).toHaveLength(2);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -475,7 +476,7 @@ describe("#2491 the removal selector uses the shared equivalence relation", () =
       const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
       expect(config.customModels.map((m: { modelId: string }) => m.modelId)).toEqual(["unrelated"]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -494,7 +495,7 @@ describe("#2491 the removal selector uses the shared equivalence relation", () =
         expect.objectContaining({ provider: "test", modelId: "openai/gpt-5.5" }),
       ]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -513,7 +514,7 @@ describe("#2491 the removal selector uses the shared equivalence relation", () =
         expect.objectContaining({ provider: "test", modelId: "openai/gpt-5.5" }),
       ]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -540,7 +541,7 @@ describe("#2491 the removal selector uses the shared equivalence relation", () =
         expect.objectContaining({ provider: "acme", modelId: "turbo" }),
       ]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -561,7 +562,7 @@ describe("#2491 the removal selector uses the shared equivalence relation", () =
       const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
       expect(config.customModels).toBeUndefined();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });

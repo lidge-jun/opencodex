@@ -1,12 +1,13 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 import { EXPORT_CLIENT_IDS } from "../src/clients/config-export";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -115,8 +116,8 @@ describe("CLI subcommand help", () => {
         expect(readFileSync(statePath)).toEqual(stateBefore);
       }
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
-      rmSync(binDir, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
+      removeTreeWithRetry(binDir);
     }
   });
 
@@ -204,7 +205,7 @@ describe("CLI subcommand help", () => {
       expect(result.stdout).toContain("routing=");
       expect(result.stdout).not.toContain("the running proxy is unused");
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
     }
   });
 
@@ -235,7 +236,7 @@ describe("CLI subcommand help", () => {
       expect(result.stdout).not.toContain("Plain `codex` now runs natively");
       expect(readFileSync(configPath, "utf8")).toBe(before);
     } finally {
-      rmSync(codexHome, { recursive: true, force: true });
+      removeTreeWithRetry(codexHome);
     }
   });
 
@@ -268,8 +269,8 @@ describe("CLI subcommand help", () => {
         expect(readFileSync(markerPath, "utf8")).toBe('{"installed":true}');
       }
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
+      removeTreeWithRetry(codexHome);
     }
   });
 
@@ -293,7 +294,7 @@ describe("CLI subcommand help", () => {
       expect(result.stderr).toBe("");
       expect(existsSync(statePath)).toBe(false);
     } finally {
-      rmSync(codexHome, { recursive: true, force: true });
+      removeTreeWithRetry(codexHome);
     }
   });
 
@@ -339,8 +340,8 @@ describe("CLI subcommand help", () => {
         .toEqual({ model_provider: "openai", source: "cli" });
       restored.close();
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
+      removeTreeWithRetry(codexHome);
     }
   });
 

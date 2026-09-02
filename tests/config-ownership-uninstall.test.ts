@@ -9,6 +9,7 @@ import {
   removeOwnedConfigState,
 } from "../src/lib/config-ownership";
 import { getDefaultConfig, saveConfig } from "../src/config";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 describe("owned config uninstall", () => {
   test("first owned write creates a missing config root and its metadata", () => {
@@ -20,7 +21,7 @@ describe("owned config uninstall", () => {
       expect(existsSync(join(dir, CONFIG_OWNER_FILE))).toBe(true);
       expect(existsSync(join(dir, CONFIG_UNINSTALL_MANIFEST))).toBe(true);
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -35,7 +36,7 @@ describe("owned config uninstall", () => {
       expect(result.reason).toContain("ownership");
       expect(readFileSync(configPath, "utf8")).toBe('{"keep":true}\n');
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -53,7 +54,7 @@ describe("owned config uninstall", () => {
       });
       expect(existsSync(dir)).toBe(false);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -73,7 +74,7 @@ describe("owned config uninstall", () => {
       expect(existsSync(ownedPath)).toBe(false);
       expect(readFileSync(foreignPath, "utf8")).toBe("keep me\n");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -92,7 +93,7 @@ describe("owned config uninstall", () => {
       });
       expect(existsSync(dir)).toBe(false);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -112,7 +113,7 @@ describe("owned config uninstall", () => {
       expect(removeOwnedConfigState(dir).status).toBe("removed");
       expect(readFileSync(join(external, "keep.bin"), "utf8")).toBe("external");
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -136,7 +137,7 @@ describe("owned config uninstall", () => {
       expect(readFileSync(external, "utf8")).toBe("external");
       expect(readFileSync(ownedPath, "utf8")).toBe("{}\n");
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -161,7 +162,7 @@ describe("owned config uninstall", () => {
       expect(removeOwnedConfigState(dir).status).toBe("refused");
       expect(readFileSync(ownedPath, "utf8")).toBe("{}\n");
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -181,7 +182,7 @@ describe("owned config uninstall", () => {
     } finally {
       if (previous === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previous;
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -202,7 +203,7 @@ describe("owned config uninstall", () => {
     } finally {
       if (previous === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previous;
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -235,7 +236,7 @@ describe("owned config uninstall", () => {
       expect(result).toMatchObject({ status: "removed" });
       expect(existsSync(dir)).toBe(false);
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -253,7 +254,7 @@ describe("owned config uninstall", () => {
       expect(result.status).toBe("partial");
       expect(readFileSync(foreign, "utf8")).toBe("mine\n");
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 });

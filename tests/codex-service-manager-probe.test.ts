@@ -8,7 +8,7 @@
  *   - mutation-test the fixture's argv instead of the argv production emits
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +19,7 @@ import {
 } from "../src/service-manager-probe";
 import { inspectNativeCodexOwnership } from "../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let home = "";
 const cleanup: string[] = [];
@@ -67,7 +68,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
+  while (cleanup.length) removeTreeWithRetry(cleanup.pop()!);
 });
 
 function writePlist(codexHome: string | null, opencodexHome: string | null): string {
@@ -248,7 +249,7 @@ describe("could not ask is not an answer", () => {
       if ((e as NodeJS.ErrnoException).code === "EPERM") return false;
       throw e;
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   })();
 

@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupOpenAiTierBackupAfterInit } from "../src/cli/init";
 import { classifyOpenAiTierBackup, OpenAiTierRollbackPreserveError, preserveOpenAiTierRollbackSnapshot } from "../src/config";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 describe("cleanupOpenAiTierBackupAfterInit", () => {
   const dirs: string[] = [];
@@ -13,7 +14,7 @@ describe("cleanupOpenAiTierBackupAfterInit", () => {
     return dir;
   };
   afterEach(() => {
-    while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
+    while (dirs.length) removeTreeWithRetry(dirs.pop()!);
   });
 
   test("no-op when no backup exists", () => {

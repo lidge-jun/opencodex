@@ -1,7 +1,8 @@
 import { fromBinary, create } from "@bufbuild/protobuf";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // Real child-process spawns resolve packages through bun's install cache; Windows CI runners
 // ("Slow filesystem detected") can take >5s for the first spawn. Explicit headroom.
@@ -74,7 +75,7 @@ describe("Cursor MCP live stdio integration", () => {
   afterEach(async () => {
     await manager.dispose();
     try {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     } catch {
       /* best-effort temp cleanup */
     }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync} from "node:fs";
 import { join } from "node:path";
 import * as accountStoreModule from "../src/codex/account-store";
 import {
@@ -21,6 +21,7 @@ import {
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
 import * as configModule from "../src/config";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-account-delete-atomicity");
 const ACCOUNT_ID = "delete-atomicity";
@@ -53,7 +54,7 @@ function seededConfig(): OcxConfig {
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
 });
@@ -61,7 +62,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
 });
 
 describe("Codex account delete persistence ordering", () => {

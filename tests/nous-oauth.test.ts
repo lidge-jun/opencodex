@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { clearNousRefreshIntent, identityFromNousTokens, loginNous, nousRefreshIntentBlocksReplay, refreshNousToken, RefreshIntentIOError } from "../src/oauth/nous";
 import { getCredential, listAccounts, saveCredential } from "../src/oauth/store";
 import type { OAuthController } from "../src/oauth/types";
 import * as configModule from "../src/config";
 import { BOUNDED_BODY_MAX_BYTES } from "../src/lib/bounded-body";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-nous-oauth-test");
 const TEST_PORTAL = "https://portal.test";
@@ -66,7 +67,7 @@ describe("Nous token-response wiring", () => {
     // Isolate durable refresh-intent state so this block never leaves intent
     // files in the developer/runner config tree (review: 1st wiring test must
     // isolate OPENCODEX_HOME).
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
   });
@@ -77,7 +78,7 @@ describe("Nous token-response wiring", () => {
     else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("refreshNousToken posts the refresh token in the x-nous-refresh-token header and keeps the rotated token", async () => {
@@ -452,7 +453,7 @@ describe("Nous Portal base URL hardening", () => {
   const realFetch = globalThis.fetch;
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
   });
@@ -460,7 +461,7 @@ describe("Nous Portal base URL hardening", () => {
     globalThis.fetch = realFetch;
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("an HTTP override fails before fetch is invoked", async () => {
@@ -579,7 +580,7 @@ describe("Nous refresh token safety", () => {
   beforeEach(() => {
     previousPortalBase = process.env.NOUS_PORTAL_BASE_URL;
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.NOUS_PORTAL_BASE_URL = TEST_PORTAL;
     process.env.OPENCODEX_HOME = TEST_DIR;
@@ -591,7 +592,7 @@ describe("Nous refresh token safety", () => {
     else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("rejecting a missing replacement refresh token does not reuse the consumed one", async () => {
@@ -648,7 +649,7 @@ describe("Nous refresh token safety", () => {
 describe("Nous multiauth via saveCredential", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
   });
@@ -656,7 +657,7 @@ describe("Nous multiauth via saveCredential", () => {
   afterEach(() => {
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("two distinct subs append two nous accounts", async () => {
@@ -709,7 +710,7 @@ describe("Nous refresh failure-atomicity + terminal errors", () => {
     process.env.NOUS_PORTAL_BASE_URL = TEST_PORTAL;
     // Isolate the refresh-intent dir under a temp OPENCODEX_HOME.
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
   });
@@ -720,7 +721,7 @@ describe("Nous refresh failure-atomicity + terminal errors", () => {
     else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("a successful rotation leaves the intent submitted until the store persists", async () => {
@@ -850,7 +851,7 @@ describe("Nous refresh-intent schema is validated fail-closed", () => {
 
   beforeEach(() => {
     previousHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
   });
@@ -859,7 +860,7 @@ describe("Nous refresh-intent schema is validated fail-closed", () => {
     globalThis.fetch = realFetch;
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   // Each corrupt/unknown shape must block replay (fail-closed): the intent file
@@ -928,7 +929,7 @@ describe("Nous HTTP refresh failure-atomicity classification", () => {
 
   beforeEach(() => {
     previousHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
   });
@@ -937,7 +938,7 @@ describe("Nous HTTP refresh failure-atomicity classification", () => {
     globalThis.fetch = realFetch;
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("an ambiguous 5xx response leaves the old token blocked (never replayable)", async () => {

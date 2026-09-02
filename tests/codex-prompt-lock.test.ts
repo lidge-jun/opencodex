@@ -18,6 +18,7 @@ import {
   tryAcquire,
   type LockDeps,
 } from "../src/codex/prompt-lock";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
@@ -33,7 +34,7 @@ const alive: LockDeps = { isProcessAlive: () => true, now: () => 1_000_000 };
 const dead: LockDeps = { isProcessAlive: () => false, now: () => 1_000_000 + STALE_AFTER_MS + 1 };
 
 afterEach(() => {
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
+  while (roots.length) removeTreeWithRetry(roots.pop()!);
 });
 
 describe("basic acquisition", () => {

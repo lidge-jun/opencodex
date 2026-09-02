@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearAccountNeedsReauth } from "../src/codex/auth-api";
@@ -12,6 +12,7 @@ import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/ro
 import { handleResponses, handleResponsesCompact } from "../src/server/responses";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 let home = "";
@@ -77,7 +78,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousOcxHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 function install401ThenRefreshHarness(): { sends: string[]; refreshes: string[] } {

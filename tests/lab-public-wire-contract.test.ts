@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { labPublicPublisherKeyPath } from "../src/lab/paths";
@@ -11,6 +11,7 @@ import {
   signPublicEvidenceBundle,
   verifyPublicEvidenceBundle,
 } from "../src/lab/public";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // Deterministic test-only key material is assembled at runtime so leak scanners do not
 // mistake the fixture for a deployable private-key credential.
@@ -24,7 +25,7 @@ const FIXED_PUBLIC_KEY = "MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZB
 
 const roots: string[] = [];
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 function configDir(prefix: string): string {

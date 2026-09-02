@@ -8,7 +8,7 @@
  * `false` gates the startup sync.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +24,7 @@ import {
   syncCodexOnStartIfEnabled,
 } from "../src/codex/desired-state";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testRoot = "";
 let previousOpencodexHome: string | undefined;
@@ -41,7 +42,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  rmSync(testRoot, { recursive: true, force: true });
+  removeTreeWithRetry(testRoot);
 });
 
 describe("absence means ON", () => {

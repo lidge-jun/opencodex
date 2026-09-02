@@ -19,8 +19,9 @@ import { fetchWithResetRetry, fetchWithTransientRetry } from "../src/lib/upstrea
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { getConfigPath } from "../src/config";
 import type { OcxConfig } from "../src/types";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-issue-914-test");
 let previousOpencodexHome: string | undefined;
@@ -57,7 +58,7 @@ function makeTwoAccountConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
 beforeEach(() => {
   previousOpencodexHome = process.env.OPENCODEX_HOME;
   previousCodexHome = process.env.CODEX_HOME;
-  rmSync(TEST_DIR, { recursive: true, force: true });
+  removeTreeWithRetry(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
   process.env.CODEX_HOME = TEST_DIR;
@@ -71,7 +72,7 @@ function restoreEnv(): void {
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  rmSync(TEST_DIR, { recursive: true, force: true });
+  removeTreeWithRetry(TEST_DIR);
 }
 
 function coded(message: string, code: string): Error {

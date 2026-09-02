@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createAntigravityAccountImportAdapter } from "../src/oauth/account-import/google-antigravity-adapter";
@@ -14,6 +14,7 @@ import {
   type ValidatedAntigravityCredential,
 } from "../src/oauth/account-import/types";
 import { getAccountSet, upsertCredentialByIdentity } from "../src/oauth/store";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const CANARY = "cockpit-canary-refresh-token-DO-NOT-LEAK";
 const originalHome = process.env.OPENCODEX_HOME;
@@ -22,7 +23,7 @@ let testHome = "";
 afterEach(() => {
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
-  if (testHome) rmSync(testHome, { recursive: true, force: true });
+  if (testHome) removeTreeWithRetry(testHome);
   testHome = "";
 });
 

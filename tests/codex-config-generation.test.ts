@@ -24,6 +24,7 @@ import {
   withExpectedConfigGenerationSync,
 } from "../src/config";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const CHILD_TIMEOUT_MS = 10_000;
 const configModuleUrl = pathToFileURL(join(import.meta.dir, "../src/config.ts")).href;
@@ -97,7 +98,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  rmSync(testRoot, { recursive: true, force: true });
+  removeTreeWithRetry(testRoot);
 });
 
 test("observe-only generation reports a missing database without creating or chmodding paths", () => {

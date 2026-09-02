@@ -5,7 +5,7 @@
  * fatals on a compaction turn that came back as an ordinary message.
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, handleResponsesCompact } from "../src/server/responses";
@@ -32,6 +32,7 @@ import { supportsNativeResponsesCompactEndpoint } from "../src/providers/openai-
 import type { RequestLogContext } from "../src/server/request-log";
 import { acquireNativeMainProfileDrain, tryAdmitTurn } from "../src/server/lifecycle";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 
@@ -392,7 +393,7 @@ describe("native compact usage reporting", () => {
     } finally {
       globalThis.fetch = originalFetch;
       clearAccountQuota();
-      rmSync(testDir, { recursive: true, force: true });
+      removeTreeWithRetry(testDir);
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -461,7 +462,7 @@ describe("native Codex pool compaction", () => {
     } finally {
       globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
-      rmSync(testDir, { recursive: true, force: true });
+      removeTreeWithRetry(testDir);
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -531,7 +532,7 @@ describe("native Codex pool compaction", () => {
       Date.now = originalNow;
       globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
-      rmSync(testDir, { recursive: true, force: true });
+      removeTreeWithRetry(testDir);
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -596,7 +597,7 @@ describe("native Codex pool compaction", () => {
       Date.now = originalNow;
       globalThis.fetch = originalFetch;
       clearCodexUpstreamHealth();
-      rmSync(testDir, { recursive: true, force: true });
+      removeTreeWithRetry(testDir);
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -937,7 +938,7 @@ describe("compact alternate-account attempt (#913)", () => {
       clearCodexUpstreamHealth();
       clearUpstreamHostHealth();
       clearAccountQuota();
-      rmSync(testDir, { recursive: true, force: true });
+      removeTreeWithRetry(testDir);
       if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

@@ -4,13 +4,13 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codexShimReadinessWarnings } from "../src/cli/codex-shim-readiness";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -138,7 +138,7 @@ describe("Codex shim install readiness", () => {
       expect(`${result.stdout}\n${result.stderr}`).not.toContain(proxyUrl);
       expect(`${result.stdout}\n${result.stderr}`).not.toContain("user:secret");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   }, 10_000);
 
@@ -175,7 +175,7 @@ describe("Codex shim install readiness", () => {
       expect(result.stdout).toStartWith("⚠️  Codex autostart shim installed");
       expect(result.stderr).toContain("Codex routing could not be verified");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   }, 10_000);
 });

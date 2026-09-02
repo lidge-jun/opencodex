@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadLiveCaseAuthority, observationFromLiveResult, runLiveScenario } from "../src/lab";
 import { createHostIssuedLabRouteExecutor } from "../src/lib/lab-live-host";
 import type { NormalizedObservation } from "../src/lab/conformance/types";
 import type { LabBehaviorValues, LabRouteContext } from "../src/lab/live/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 function behavior(): LabBehaviorValues {
   return {
@@ -72,6 +73,6 @@ test("trusted live receipt rejects post-seal outcome mutation", async () => {
     expect(() => observationFromLiveResult(result, scenario, authority, { configDir: home }))
       .toThrow("trusted execution receipt mismatch");
   } finally {
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   }
 });

@@ -1,14 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serveGuiFile } from "../src/server/gui-static";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
+    removeTreeWithRetry(directory);
   }
 });
 

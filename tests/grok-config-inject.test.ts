@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildGrokManagedBlock, injectGrokConfig, stripGrokConfig } from "../src/grok/inject";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const BEGIN_MARKER = "# >>> opencodex managed block — do not edit (removed by `ocx stop`) >>>";
 const END_MARKER = "# <<< opencodex managed block <<<";
@@ -18,7 +19,7 @@ describe("Grok config injection", () => {
   });
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   });
 
   test("creates and strips a fresh config", () => {

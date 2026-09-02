@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -30,6 +30,7 @@ import {
   LOCAL_MANAGEMENT_READ_PATHS,
   verifyLocalManagementReadCapability,
 } from "../src/lib/local-management-capability";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
@@ -53,7 +54,7 @@ afterEach(() => {
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = origAdminToken;
   clearCodexUpstreamHealth();
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
-  rmSync(tmp, { recursive: true, force: true });
+  removeTreeWithRetry(tmp);
 });
 
 describe("projectOAuthAccountHealth", () => {

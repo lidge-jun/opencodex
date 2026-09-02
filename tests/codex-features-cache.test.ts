@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import {
   resetCodexRuntimeResolveCacheForTests,
   setCodexRuntimeResolveCacheForTests,
 } from "../src/codex/runtime";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
@@ -46,7 +47,7 @@ beforeEach(() => {
 afterEach(() => {
   modeHintCapabilityCache.clear();
   resetCodexRuntimeResolveCacheForTests();
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 describe("Codex mode-hint capability cache", () => {

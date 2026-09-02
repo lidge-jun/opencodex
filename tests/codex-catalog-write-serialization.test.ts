@@ -14,6 +14,7 @@ import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let codexHome = "";
 let otherHome = "";
@@ -36,8 +37,8 @@ afterEach(() => {
       rmSync(`${path}${suffix}`, { force: true });
     }
   }
-  rmSync(codexHome, { recursive: true, force: true });
-  rmSync(otherHome, { recursive: true, force: true });
+  removeTreeWithRetry(codexHome);
+  removeTreeWithRetry(otherHome);
 });
 
 /**

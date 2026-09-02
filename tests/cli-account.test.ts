@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { PassThrough, Readable } from "node:stream";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,7 @@ import {
 } from "../gui/src/account-priority";
 import type { OcxConfig } from "../src/types";
 import { ACCOUNT_IMPORT_MAX_BYTES } from "../src/oauth/account-import";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const RAW_SENTINEL = "test-key-rawsentinel1234567890";
 const MASKED_SENTINEL = "test****7890";
@@ -1683,7 +1684,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(file.stdout).toContain("1 imported, 0 updated, 0 failed");
       expect(file.output).not.toContain(canary);
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      removeTreeWithRetry(directory);
     }
 
     const beforeOversized = requests.length;

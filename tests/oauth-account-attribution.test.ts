@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { oauthAccountLogLabel, ACCOUNT_LOG_LABEL_RE } from "../src/codex/account-label";
@@ -12,6 +12,7 @@ import { summarizeUsage } from "../src/usage/summary";
 import type { RequestLogContext } from "../src/server/request-log";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * #2699: usage could not be attributed per account for non-Codex OAuth providers. The label type
@@ -63,7 +64,7 @@ async function withHome<T>(run: (home: string) => Promise<T>): Promise<T> {
     return await run(home);
   } finally {
     globalThis.fetch = originalFetch;
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
     if (prevOpencodex === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = prevOpencodex;
     if (prevCodex === undefined) delete process.env.CODEX_HOME;

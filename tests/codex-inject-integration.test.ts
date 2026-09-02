@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,6 +10,7 @@ import {
   MANAGED_SUBAGENT_DEFAULT_MARKER,
 } from "../src/codex/subagent-defaults";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -57,8 +58,8 @@ describe("injectCodexConfig integration (Design B)", () => {
   });
 
   afterEach(() => {
-    rmSync(codexHome, { recursive: true, force: true });
-    rmSync(ocxHome, { recursive: true, force: true });
+    removeTreeWithRetry(codexHome);
+    removeTreeWithRetry(ocxHome);
   });
 
   test("remote target validate-only writes nothing; commit journals client ownership and restores exact preimage", () => {

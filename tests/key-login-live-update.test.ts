@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig, writePid, writeRuntimePort } from "../src/config";
@@ -11,6 +11,7 @@ import type { OcxConfig } from "../src/types";
 import { refreshUserCostOverlays } from "../src/usage/user-cost-overlays";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { managementFetch as fetch } from "./helpers/management-auth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Regression: `ocx login <key-provider>` used to POST the unmerged preset row
@@ -53,7 +54,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
 });
 
 describe("CLI key-login live-update overlay preservation", () => {

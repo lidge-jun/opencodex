@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,6 +20,7 @@ import {
   recoverySse,
   routedConfig,
 } from "./helpers/agent-task-recovery";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 function providerCompletion(): Response {
   return Response.json({
@@ -60,7 +61,7 @@ describe("combo path encrypted agent task recovery", () => {
     globalThis.fetch = originalFetch;
     resetAgentTaskRecoveryState();
     clearResponseStateForTests();
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
     if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
     else process.env["OPENCODEX_HOME"] = priorHome;
   });

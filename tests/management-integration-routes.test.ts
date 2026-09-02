@@ -17,6 +17,7 @@ import {
 } from "../src/server/management/integration-routes";
 import type { OcxConfig } from "../src/types";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Route contract for devlog/_fin/260802_client_toggle_api/040 §6-§7.
@@ -104,7 +105,7 @@ beforeEach(() => {
 afterEach(() => {
   setIntegrationMutationFlightTestHooks(null);
   setIntegrationPathTestHooks(null);
-  rmSync(base, { recursive: true, force: true });
+  removeTreeWithRetry(base);
 });
 
 /** Hermes: installed by creating its home directory; YAML on disk. */

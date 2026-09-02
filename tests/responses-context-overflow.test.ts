@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { PROVIDER_INPUT_TOO_LARGE_MESSAGE } from "../src/server/responses/context-overflow";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testDir = "";
 let previousOcxHome: string | undefined;
@@ -21,7 +22,7 @@ afterEach(() => {
   for (const upstream of upstreams.splice(0)) upstream.stop(true);
   if (previousOcxHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOcxHome;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
 });
 
 function upstreamStatus(status: number, onHit?: () => void): ReturnType<typeof Bun.serve> {

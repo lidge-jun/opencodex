@@ -31,6 +31,7 @@ import {
 } from "../src/codex/user-identity";
 import type { OcxConfig } from "../src/types";
 import { INVALID_HISTORY_BACKUP_FIXTURES, validHistoryBackupFixture } from "./helpers/codex-history-manifest-fixtures";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let codexHome = "";
 let opencodexHome = "";
@@ -59,8 +60,8 @@ afterEach(() => {
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
     rmSync(`${coordinatorPath}${suffix}`, { force: true });
   }
-  rmSync(codexHome, { recursive: true, force: true });
-  rmSync(opencodexHome, { recursive: true, force: true });
+  removeTreeWithRetry(codexHome);
+  removeTreeWithRetry(opencodexHome);
 });
 
 function pathInCodexHome(name: string): string {
@@ -351,7 +352,7 @@ for (const shape of catalogPathShapes) {
       });
     } finally {
       rmSync(targetPath, { force: true });
-      rmSync(outsideRoot, { recursive: true, force: true });
+      removeTreeWithRetry(outsideRoot);
     }
   });
 }
@@ -514,7 +515,7 @@ for (const location of ["inside", "outside"] as const) {
       });
     } finally {
       rmSync(configuredPath, { force: true });
-      rmSync(outsideRoot, { recursive: true, force: true });
+      removeTreeWithRetry(outsideRoot);
     }
   });
 }
@@ -986,7 +987,7 @@ test("CODEX_HOME is resolved at call time", () => {
     expect(classifyNativeRoutedResidue()).toMatchObject({ kind: "residue", surface: "profile" });
   } finally {
     process.env.CODEX_HOME = codexHome;
-    rmSync(secondHome, { recursive: true, force: true });
+    removeTreeWithRetry(secondHome);
   }
 });
 

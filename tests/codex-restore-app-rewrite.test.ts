@@ -1,9 +1,10 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * #1798: the Codex app rewrites config.toml AFTER injection, so the journal's
@@ -145,7 +146,7 @@ describe("#1798 restore after the Codex app rewrites the config", () => {
   });
 
   afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
+    removeTreeWithRetry(testDir);
   });
 
   test("an unmarked injected openai_base_url is still removed", () => {

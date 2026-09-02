@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { NativeProfileManager } from "../src/codex/native-profile-manager";
@@ -15,11 +15,12 @@ import {
 } from "../src/codex/native-profile-store";
 import { NativeProfileError, type NativeProfileKey, type NativeProfileKeyProvider } from "../src/codex/native-profile-types";
 import { codexCredentialMutationEpoch } from "../src/codex/credential-mutation-epoch";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 class MemoryKeyProvider implements NativeProfileKeyProvider {
@@ -388,7 +389,7 @@ describe("native main profile transactions", () => {
     let caught: unknown;
     try { await manager.register("personal"); } catch (error) { caught = error; }
     finally {
-      try { rmSync(manager.context.rootDir, { recursive: true, force: true }); } catch { /* fixture cleanup */ }
+      try { removeTreeWithRetry(manager.context.rootDir); } catch { /* fixture cleanup */ }
       if (existsSync(displaced) && !existsSync(manager.context.rootDir)) renameSync(displaced, manager.context.rootDir);
     }
     expect(caught).toBeInstanceOf(NativeProfileError);

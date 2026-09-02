@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { stopProxyGracefully } from "../src/lib/process-control";
 import { performStopTeardown } from "../src/server/stop-teardown";
 import type { CodexNativeRestoreResult } from "../src/codex/inject";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Behavioural cover for the deferred shared teardown (#3008).
@@ -30,7 +31,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 function restoreResult(success: boolean): CodexNativeRestoreResult {
@@ -371,7 +372,7 @@ describe("pending teardown receipts", () => {
     mkdirSync(mod.pendingTeardownPathFor(stuck.nonce), { recursive: true });
     mkdirSync(join(mod.pendingTeardownPathFor(stuck.nonce), "child"), { recursive: true });
     expect(mod.clearPendingTeardown(stuck.nonce)).toBe(false);
-    rmSync(mod.pendingTeardownPathFor(stuck.nonce), { recursive: true, force: true });
+    removeTreeWithRetry(mod.pendingTeardownPathFor(stuck.nonce));
   });
 
   test("an unreadable receipt is invalid, outstanding, and quarantinable", async () => {
@@ -401,7 +402,7 @@ describe("pending teardown receipts", () => {
     // Reading that as absence hides an obligation that may still be outstanding.
     expect(mod.readPendingTeardown(claimed.nonce).state).toBe("invalid");
     expect(mod.pendingTeardownOutstanding()).toBe(true);
-    rmSync(mod.pendingTeardownPathFor(claimed.nonce), { recursive: true, force: true });
+    removeTreeWithRetry(mod.pendingTeardownPathFor(claimed.nonce));
   });
 
   test("a receipt whose body disagrees with its filename is invalid", async () => {

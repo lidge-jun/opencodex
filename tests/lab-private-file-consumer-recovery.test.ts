@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { publicEvidenceId } from "../src/lab/public/ids";
@@ -7,11 +7,12 @@ import { isPrivateFileStageName, setPrivateFileCommitFaultForTests } from "../sr
 import { getOrCreatePublicPublisher, signPublicEvidenceBundle } from "../src/lab/public/signature";
 import { storePublicEvidenceBundle } from "../src/lab/public/storage";
 import type { PublicEvidenceRecordV1 } from "../src/lab/public/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 afterEach(() => {
   setPrivateFileCommitFaultForTests(null);
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 function root(): string {

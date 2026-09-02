@@ -5,7 +5,7 @@
  * CODEX_HOME — these functions read a user's live Codex configuration.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,6 +14,7 @@ import {
   parseStore,
   readPromptLayers,
 } from "../src/codex/prompt-layers";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const MARKER = "# Auto-injected by opencodex";
 const roots: string[] = [];
@@ -33,7 +34,7 @@ function storeJson(layers: unknown[]): string {
 }
 
 afterEach(() => {
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
+  while (roots.length) removeTreeWithRetry(roots.pop()!);
 });
 
 describe("toggles", () => {

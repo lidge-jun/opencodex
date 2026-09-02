@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildGrokManagedBlock, injectGrokConfig } from "../src/grok/inject";
 import { handleChatCompletions } from "../src/server/chat-completions";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * D3 activation evidence: the fence stamps `x-opencodex-grok` on every registered
@@ -32,7 +33,7 @@ test("the fence survives a write and keeps the header line parseable", () => {
     const content = readFileSync(join(grokHome, "config.toml"), "utf8");
     expect(content).toContain('extra_headers = { "x-opencodex-grok" = "1" }');
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   }
 });
 

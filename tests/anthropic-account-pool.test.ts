@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearPoolRotationState, notePoolRotationFailure, POOL_KEY_ANTHROPIC } from "../src/codex/pool-rotation";
@@ -20,6 +20,7 @@ import {
 import { getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../src/providers/quota";
 import type { OcxAccountPoolQuotaWindow, OcxAccountPoolRotationStrategy, OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const originalHome = process.env.OPENCODEX_HOME;
 let home: string;
@@ -38,7 +39,7 @@ afterEach(() => {
   clearAccountQuotaCache("anthropic");
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 async function seedTwoAccounts() {

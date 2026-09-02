@@ -4,7 +4,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
-  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -32,11 +31,12 @@ import {
   publicEvidenceMutationLockIsReclaimableForTests,
   publicEvidenceTryReclaimMutationLockForTests,
 } from "../src/lab/public/mutation-lock";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 function configDir(prefix: string): string {

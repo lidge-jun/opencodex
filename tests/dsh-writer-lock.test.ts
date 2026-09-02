@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,7 @@ import {
   type IntegrationWriterLockSeams,
 } from "../src/integrations/writer-lock";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 function eexist(): Error & { code: string } {
   return Object.assign(new Error("exists"), { code: "EEXIST" });
@@ -130,7 +131,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  removeTreeWithRetry(root);
 });
 
 function writeInput(env: NodeJS.ProcessEnv = {}): IntegrationWriteInput {
@@ -220,7 +221,7 @@ describe("DSH coordinated mutations", () => {
     mkdirSync(dshHome, { recursive: true });
     expect((await applyIntegrationCoordinated(writeInput(), { lockSeams: immediateLock() })).ok).toBe(true);
     const opId = store.listOperations("dsh")[0]!.opId;
-    rmSync(dshHome, { recursive: true, force: true });
+    removeTreeWithRetry(dshHome);
     let acquisitions = 0;
     const restored = await restoreIntegrationCoordinated(
       { ...writeInput(), opId },

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -8,6 +8,7 @@ import { handleResponses } from "../src/server/responses";
 import { isEagerRelaySseResponse } from "../src/server/relay";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 setDefaultTimeout(30_000);
 
@@ -61,7 +62,7 @@ beforeEach(() => {
 afterEach(async () => {
   globalThis.fetch = originalFetch;
   await isolated.restore();
-  rmSync(TEST_DIR, { recursive: true, force: true });
+  removeTreeWithRetry(TEST_DIR);
 });
 
 describe("responsesSnapshotRepair through /v1/responses", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,13 +10,14 @@ import {
   piConfigPath,
 } from "../src/clients/config-export";
 import { INTEGRATION_CLIENTS } from "../src/integrations/registry";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 function withTempHome(run: (home: string) => void): void {
   const home = mkdtempSync(join(tmpdir(), "opencodex-pi-home-"));
   try {
     run(home);
   } finally {
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   }
 }
 

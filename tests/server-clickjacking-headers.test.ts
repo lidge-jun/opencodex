@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browserSecurityHeaders, corsHeaders } from "../src/server/auth-cors";
 import { serveGuiFile } from "../src/server/gui-static";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const EXPECTED = {
   "X-Frame-Options": "DENY",
@@ -28,7 +29,7 @@ describe("clickjacking response headers", () => {
       expect(response?.headers.get("X-Frame-Options")).toBe("DENY");
       expect(response?.headers.get("Content-Security-Policy")).toBe("frame-ancestors 'none'");
     } finally {
-      rmSync(guiDist, { recursive: true, force: true });
+      removeTreeWithRetry(guiDist);
     }
   });
 });

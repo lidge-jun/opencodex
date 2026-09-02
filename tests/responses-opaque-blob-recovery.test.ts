@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADAPTER_REGISTRY } from "../src/adapters/registry";
@@ -14,6 +14,7 @@ import {
 } from "../src/server/responses/core";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 const originalOpenCodexHome = process.env.OPENCODEX_HOME;
@@ -57,7 +58,7 @@ afterEach(() => {
   resetThoughtSignatureReplayForTests();
   if (originalOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalOpenCodexHome;
-  rmSync(testDir, { recursive: true, force: true });
+  removeTreeWithRetry(testDir);
 });
 
 function reasoningReplayInput(): Array<Record<string, unknown>> {

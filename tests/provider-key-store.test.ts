@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../src/config";
@@ -19,6 +19,7 @@ import { managementFetch as fetch } from "./helpers/management-auth";
 import { startServer } from "../src/server";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /** In-memory keychain: service/account → secret, with optional fault injection. */
 function fakeKeychain(options: { unavailable?: boolean; readBackMismatch?: boolean } = {}) {
@@ -66,7 +67,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   isolated?.restore();
   isolated = null;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
 });
 
 describe("provider key resolver (#1221)", () => {

@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { watchdogMs } from "./helpers/ci-watchdog";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // Every wait here is bounded by a real `ocx start` child coming up: spawning Bun,
 // binding a port, and writing its runtime record. That is intrinsic to the
@@ -148,7 +149,7 @@ afterEach(async () => {
     const child = children.pop()!;
     if (child.exitCode === null) await child.exited;
   }
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
+  while (roots.length) removeTreeWithRetry(roots.pop()!);
 });
 
 describe("start and ensure journal ownership (#1230)", () => {

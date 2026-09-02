@@ -4,7 +4,7 @@
  * unscoped credential. Companion: the terminal-barrier bound on persist visibility.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -17,6 +17,7 @@ import {
 } from "../src/responses/thought-signature-replay";
 import { durableReplayCredentialIdentity, durableReplayDestinationIdentity } from "../src/responses/reasoning-replay-cache";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const SIG = "CiQAx-credential-scope-signature-0123456789abcdef";
 
@@ -53,7 +54,7 @@ describe("#1926 durable credential scope", () => {
     resetThoughtSignatureReplayForTests();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    rmSync(testDir, { recursive: true, force: true });
+    removeTreeWithRetry(testDir);
     setIcaclsRunnerForTests(null);
     setAsyncIcaclsRunnerForTests(null);
   });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { syncModelsToCodex } from "../src/codex/sync";
@@ -8,6 +8,7 @@ import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "..
 import type { OcxConfig } from "../src/types";
 import type { OrcaCodexHomeDiagnostic } from "../src/codex/home";
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "./helpers/owned-service-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-sync-api");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -70,7 +71,7 @@ describe("GUI/CLI Codex sync backend", () => {
     prevOpenCodexHome = process.env.OPENCODEX_HOME;
     prevHome = process.env.HOME;
     prevUserProfile = process.env.USERPROFILE;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
     mkdirSync(TEST_OCX_HOME, { recursive: true });
     mkdirSync(TEST_HOME, { recursive: true });
@@ -94,7 +95,7 @@ describe("GUI/CLI Codex sync backend", () => {
     else process.env.USERPROFILE = prevUserProfile;
     serviceManagerEnv = {};
     serviceManagerPreloadPath = undefined;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
   test("returns the structured sync result used by POST /api/sync", async () => {
     let injectedPort = 0;
@@ -378,7 +379,7 @@ describe("GUI/CLI Codex sync backend", () => {
       // The stale ON snapshot wrote nothing: the fixture config is untouched.
       expect(readFileSync(join(raceCodexHome, "config.toml"), "utf8")).toBe(before);
     } finally {
-      rmSync(raceRoot, { recursive: true, force: true });
+      removeTreeWithRetry(raceRoot);
     }
   }, 15_000);
 

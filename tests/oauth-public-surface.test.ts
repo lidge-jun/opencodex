@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { join } from "node:path";
 import {
   cancelLoginFlow,
@@ -20,6 +20,7 @@ import { getCredential } from "../src/oauth/store";
 import * as oauthStore from "../src/oauth/store";
 import { armClaudeCodeBaseline, loadConfig, saveConfig, saveConfigPreservingClaudeCode } from "../src/config";
 import { isApiAuthRequired, requireApiAuth } from "../src/server/auth-cors";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-public-surface");
 const PUBLIC_OAUTH_ERROR = "OAuth authentication failed. Check the OpenCodex account status and retry.";
@@ -41,7 +42,7 @@ function config(): OcxConfig {
 
 beforeEach(() => {
   clearLoginState("xai");
-  rmSync(TEST_DIR, { recursive: true, force: true });
+  removeTreeWithRetry(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
 });
@@ -50,7 +51,7 @@ afterEach(() => {
   clearLoginState("xai");
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  rmSync(TEST_DIR, { recursive: true, force: true });
+  removeTreeWithRetry(TEST_DIR);
 });
 
 async function waitForOAuthDone(provider: string): Promise<ReturnType<typeof getLoginStatus>> {

@@ -6,7 +6,6 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   truncateSync,
   unlinkSync,
   writeFileSync,
@@ -32,6 +31,7 @@ import { runOpenAiTierStartupMigration } from "../src/providers/openai-tier-star
 import { OpenAiTierMigrationCollisionError, projectOpenAiTierMigration } from "../src/providers/openai-tiers";
 import type { OcxConfig } from "../src/types";
 import * as windowsAcl from "../src/lib/windows-secret-acl";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const config: OcxConfig = {
   port: 10100,
@@ -374,7 +374,7 @@ describe("OpenAI provider option startup coordinator", () => {
       windowsAcl.resetHardenedStateForTests();
       if (previousUsername === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = previousUsername;
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -404,7 +404,7 @@ describe("OpenAI provider option startup coordinator", () => {
       windowsAcl.resetHardenedStateForTests();
       if (previousUsername === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = previousUsername;
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -427,7 +427,7 @@ describe("OpenAI provider option startup coordinator", () => {
       windowsAcl.resetHardenedStateForTests();
       if (previousUsername === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = previousUsername;
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -593,7 +593,7 @@ describe("OpenAI provider option startup coordinator", () => {
       expect(preserved).toHaveLength(1);
       expect(readFileSync(join(dir, preserved[0]!), "utf8")).toBe(rollbackBytes);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -631,7 +631,7 @@ describe("OpenAI provider option startup coordinator", () => {
       expect(readFileSync(join(dir, preserved[0]!), "utf8")).toBe(rollbackBytes);
     } finally {
       Date.now = realNow;
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -655,7 +655,7 @@ describe("OpenAI provider option startup coordinator", () => {
       expect(readFileSync(v2Backup, "utf8")).toBe("v2-backup");
       expect(readFileSync(rollbackName, "utf8")).toBe("rollback");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -691,7 +691,7 @@ describe("OpenAI provider option startup coordinator", () => {
       expect(readFileSync(configPath, "utf8")).toBe(currentBytes);
       expect(readdirSync(dir).filter(name => name.includes("pre-openai-tiers-v1-rollback"))).toEqual([]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -707,7 +707,7 @@ describe("OpenAI provider option startup coordinator", () => {
       expect(readFileSync(v2Backup, "utf8")).toBe(stale);
       expect(readdirSync(dir).filter(name => name.includes("pre-openai-tiers-v1-rollback"))).toEqual([]);
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });

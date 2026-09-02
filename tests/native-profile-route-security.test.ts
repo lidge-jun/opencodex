@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -9,6 +9,7 @@ import { initializeManagementAuthState, issueGuiSession, type ManagementAuthStat
 import { consumeGuiPairingGrant, createGuiPairingGrant } from "../src/server/gui-session";
 import type { OcxConfig } from "../src/types";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const previousHome = process.env.HOME;
 const previousOpenCodexHome = process.env.OPENCODEX_HOME;
@@ -89,7 +90,7 @@ afterEach(() => {
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
   if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
-  if (testHome) rmSync(testHome, { recursive: true, force: true });
+  if (testHome) removeTreeWithRetry(testHome);
   testHome = "";
 });
 

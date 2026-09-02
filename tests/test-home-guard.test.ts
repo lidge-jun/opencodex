@@ -10,12 +10,13 @@
  * Incident: devlog/_fin/260730_codex_rs_upstream_v2_live_handoff/070.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assertNotRealHomeUnderTest, isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-home-guard";
 import { getConfigDir } from "../src/config";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Two different things are needed from the repo root, and conflating them is
@@ -82,7 +83,7 @@ const canSymlink = (() => {
     if ((e as NodeJS.ErrnoException).code === "EPERM") return false;
     throw e;
   } finally {
-    rmSync(probeDir, { recursive: true, force: true });
+    removeTreeWithRetry(probeDir);
   }
 })();
   test("armed + the protected home: all three writers throw", () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   resolveResetCreditAutoRedeemSettings,
   type ResetCredit,
 } from "../src/codex/reset-credit-auto-redeem";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const T0 = Date.parse("2026-09-02T10:00:00Z");
 const MIN = 60_000;
@@ -49,7 +50,7 @@ function harness(opts: { credits: () => ResetCredit[]; enabled?: () => boolean; 
 
 let dir = "";
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "ocx-auto-redeem-")); });
-afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+afterEach(() => { removeTreeWithRetry(dir); });
 
 describe("reset-credit auto-redeem settings + plan (#822)", () => {
   test("default off; malformed reads as off; lead time clamped", () => {

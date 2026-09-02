@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -20,6 +20,7 @@ import type {
   LabTransportResponse,
   LiveRunConfig,
 } from "../src/lab/live/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 function tempHome(): string {
@@ -31,7 +32,7 @@ function tempHome(): string {
 
 afterEach(() => {
   for (const dir of HOMES.splice(0)) {
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { removeTreeWithRetry(dir); } catch { /* ignore */ }
   }
   delete process.env.OPENCODEX_HOME;
 });

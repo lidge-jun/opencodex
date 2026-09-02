@@ -4,7 +4,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -30,6 +29,7 @@ import {
   type CleanupResult,
   type ExecuteCleanupOptions,
 } from "../src/storage/cleanup";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // seedHome() writes real files plus a sqlite fixture for every case it backs.
 // On a slow windows-latest runner those cases land at 6-8s against bun's 5s
@@ -48,7 +48,7 @@ let home = "";
 
 afterEach(() => {
   if (home) {
-    try { rmSync(home, { recursive: true, force: true }); } catch { /* */ }
+    try { removeTreeWithRetry(home); } catch { /* */ }
     home = "";
   }
 });

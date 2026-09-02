@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -9,6 +9,7 @@ import {
   withHistoryWriteSerialization,
   type HistoryWritePermit,
 } from "../src/codex/history-lock";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const sandboxes: string[] = [];
@@ -51,7 +52,7 @@ function makeSandbox(prefix: string): Sandbox {
 }
 
 afterEach(() => {
-  for (const root of sandboxes.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of sandboxes.splice(0)) removeTreeWithRetry(root);
 });
 
 async function waitForPath(path: string, timeoutMs = 10_000): Promise<void> {

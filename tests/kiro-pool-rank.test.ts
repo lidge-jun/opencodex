@@ -26,6 +26,7 @@ import {
   clearKiroAccountUsageState,
   commitKiroAccountUsageState,
 } from "../src/providers/kiro-usage";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const realFetch = globalThis.fetch;
 
@@ -173,7 +174,7 @@ describe("pre-dispatch account preference", () => {
       clearAccountQuotaCache();
       if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = originalHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -193,7 +194,7 @@ describe("pre-dispatch account preference", () => {
       clearAccountQuotaCache();
       if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = originalHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -211,7 +212,7 @@ describe("pre-dispatch account preference", () => {
       clearAccountQuotaCache();
       if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = originalHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -233,7 +234,7 @@ describe("pre-dispatch account preference", () => {
       clearAccountQuotaCache();
       if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = originalHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -256,7 +257,7 @@ describe("pre-dispatch account preference", () => {
       clearAccountQuotaCache();
       if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = originalHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -291,7 +292,7 @@ describe("pre-dispatch account preference", () => {
       clearAccountQuotaCache();
       if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = originalHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -325,7 +326,7 @@ describe("pre-dispatch account preference", () => {
       clearAccountQuotaCache();
       if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = originalHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 
@@ -358,7 +359,7 @@ describe("pre-dispatch account preference", () => {
       clearAccountQuotaCache();
       if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = originalHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 });

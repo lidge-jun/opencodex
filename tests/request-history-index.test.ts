@@ -32,6 +32,7 @@ import { InvalidCursorError } from "../src/routing/history/cursor";
 import { HISTORY_DB_FILENAME } from "../src/routing/history/schema";
 import { getConfigDir } from "../src/config";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -75,7 +76,7 @@ afterEach(() => {
   closeRequestHistoryIndex();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
 });
 
 function config(): OcxConfig {

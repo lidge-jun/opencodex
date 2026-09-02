@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -30,6 +30,7 @@ import {
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // beforeEach writes three Codex credentials (NTFS ACL harden on Windows). Under
 // `bun test --isolate` on a loaded windows-latest runner that can exceed the
@@ -116,7 +117,7 @@ afterEach(() => {
   clearCodexUpstreamHealthForAccount("pool-a");
   clearCodexUpstreamHealthForAccount("account-a");
   clearCodexUpstreamHealthForAccount("account-b");
-  rmSync(testDir, { recursive: true, force: true });
+  removeTreeWithRetry(testDir);
 }, { timeout: 30_000 });
 
 describe("subagent model fallback chain", () => {

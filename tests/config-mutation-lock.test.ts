@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { ConfigMutationLockError, loadConfig, saveConfig, withConfigMutationLockSync } from "../src/config";
 import { CodexCredentialRefreshLockTimeoutError, getCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
 import type { OcxConfig } from "../src/types";
 import { ManagementRequest, managementHeaders } from "./helpers/management-auth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testRoot = "";
 let previousOpencodexHome: string | undefined;
@@ -42,7 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  rmSync(testRoot, { recursive: true, force: true });
+  removeTreeWithRetry(testRoot);
 });
 
 test("a live cross-process holder is not stolen and runtime writers fail immediately", async () => {

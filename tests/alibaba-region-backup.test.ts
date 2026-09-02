@@ -6,12 +6,13 @@ import {
   AlibabaBackupIntegrityError,
   backupConfigBeforeAlibabaRegionMigration,
 } from "../src/providers/alibaba-region-backup";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 test("absent source produces no backup", () => {
   const dir = mkdtempSync(join(tmpdir(), "ocx-bak-"));
   try {
     expect(backupConfigBeforeAlibabaRegionMigration(join(dir, "config.json"))).toBe("absent");
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTreeWithRetry(dir); }
 });
 
 test("creates a snapshot, then never replaces it", () => {
@@ -24,7 +25,7 @@ test("creates a snapshot, then never replaces it", () => {
     expect(readFileSync(backupPath, "utf8")).toBe('{"before":true}');
     expect(backupConfigBeforeAlibabaRegionMigration(configPath)).toBe("reused");
     expect(readFileSync(backupPath, "utf8")).toBe('{"before":true}');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTreeWithRetry(dir); }
 });
 
 test("an existing snapshot is kept even after the config legitimately changes", () => {
@@ -40,7 +41,7 @@ test("an existing snapshot is kept even after the config legitimately changes", 
     expect(backupConfigBeforeAlibabaRegionMigration(configPath)).toBe("reused");
     // The earliest snapshot survives: it predates every migration.
     expect(readFileSync(backupPath, "utf8")).toBe('{"before":true}');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTreeWithRetry(dir); }
 });
 
 test("a short copy is never published", () => {
@@ -56,7 +57,7 @@ test("a short copy is never published", () => {
       remove: path => rmSync(path, { force: true }),
     })).toThrow(AlibabaBackupIntegrityError);
     expect(existsSync(`${configPath}.pre-alibaba-region-v1.bak`)).toBe(false);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTreeWithRetry(dir); }
 });
 
 test("a failed copy leaves no snapshot and no temp file", () => {
@@ -74,5 +75,5 @@ test("a failed copy leaves no snapshot and no temp file", () => {
     })).toThrow("disk full");
     expect(existsSync(`${configPath}.pre-alibaba-region-v1.bak`)).toBe(false);
     expect(removed).toHaveLength(1);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { removeTreeWithRetry(dir); }
 });

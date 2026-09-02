@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request as httpRequest } from "node:http";
@@ -25,6 +25,7 @@ import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspection";
 
 import { watchdogMs } from "./helpers/ci-watchdog";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 /** These cases sandbox CODEX_HOME/OPENCODEX_HOME, so the installed service is not their evidence. */
 const inspectNativeCodexOwnership = ownedServiceHomeInspection("native-profile drain server test");
 
@@ -57,8 +58,8 @@ afterEach(() => {
   clearThreadAccountMap();
   clearMainAccountInfoCache();
   resetMainCodexAccountIdentityTrackingForTests();
-  if (opencodexHome) rmSync(opencodexHome, { recursive: true, force: true });
-  if (codexHome) rmSync(codexHome, { recursive: true, force: true });
+  if (opencodexHome) removeTreeWithRetry(opencodexHome);
+  if (codexHome) removeTreeWithRetry(codexHome);
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

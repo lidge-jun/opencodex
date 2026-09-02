@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 async function waitForOutput(
   stream: ReadableStream<Uint8Array>,
@@ -24,7 +25,7 @@ async function waitForOutput(
 describe("ocx init piped stdin (#754)", () => {
   const dirs: string[] = [];
   afterEach(() => {
-    while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
+    while (dirs.length) removeTreeWithRetry(dirs.pop()!);
   });
 
   test("exits cleanly when stdin closes before the first prompt answer", async () => {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeDesktopState } from "../src/server/management/shared";
@@ -10,6 +10,7 @@ import {
   seedCodexModelEntitlementsForTests,
 } from "../src/codex/model-entitlements";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * D1b: native Desktop models carry their real context window, and the DTO and the
@@ -49,7 +50,7 @@ test("buildClaudeDesktopState gives native rows their real context window", asyn
   } finally {
     if (prev === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
     else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = prev;
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
     resetCodexModelEntitlementCacheForTests();
   }
 });

@@ -1,10 +1,11 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "./helpers/owned-service-home";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -44,8 +45,8 @@ describe("ocx restore back", () => {
       expect(JSON.parse(readFileSync(join(ocxHome, "config.json"), "utf8")).clientIntegrations.codex).toBe(false);
       expect(`${result.stdout}\n${result.stderr}`).toContain("Codex integration is OFF and plain `codex` now runs natively.");
     } finally {
-      rmSync(codexHome, { recursive: true, force: true });
-      rmSync(ocxHome, { recursive: true, force: true });
+      removeTreeWithRetry(codexHome);
+      removeTreeWithRetry(ocxHome);
     }
   });
 
@@ -79,8 +80,8 @@ describe("ocx restore back", () => {
       expect(envelope.artifacts.catalog).toHaveProperty("removed", 0);
       expect(envelope.artifacts.history).toHaveProperty("rows", 0);
     } finally {
-      rmSync(codexHome, { recursive: true, force: true });
-      rmSync(ocxHome, { recursive: true, force: true });
+      removeTreeWithRetry(codexHome);
+      removeTreeWithRetry(ocxHome);
     }
   });
 
@@ -107,8 +108,8 @@ describe("ocx restore back", () => {
       expect(combined).toMatch(/Codex integration is OFF; catalog (and models cache refreshed|refresh skipped), Codex config untouched\./);
       expect(statSync(configPath).mtimeMs).toBe(before);
     } finally {
-      rmSync(codexHome, { recursive: true, force: true });
-      rmSync(ocxHome, { recursive: true, force: true });
+      removeTreeWithRetry(codexHome);
+      removeTreeWithRetry(ocxHome);
     }
   });
 
@@ -157,8 +158,8 @@ describe("ocx restore back", () => {
       expect(readFileSync(catalogPath, "utf8")).toBe(catalogBefore);
       expect(readFileSync(cachePath, "utf8")).toBe(cacheBefore);
     } finally {
-      rmSync(codexHome, { recursive: true, force: true });
-      rmSync(ocxHome, { recursive: true, force: true });
+      removeTreeWithRetry(codexHome);
+      removeTreeWithRetry(ocxHome);
     }
   });
 
@@ -183,8 +184,8 @@ describe("ocx restore back", () => {
       expect(restoreHelp.status).toBe(0);
       expect(`${restoreHelp.stdout}\n${restoreHelp.stderr}`).toContain("ocx restore [back]");
     } finally {
-      rmSync(codexHome, { recursive: true, force: true });
-      rmSync(ocxHome, { recursive: true, force: true });
+      removeTreeWithRetry(codexHome);
+      removeTreeWithRetry(ocxHome);
     }
   });
 });

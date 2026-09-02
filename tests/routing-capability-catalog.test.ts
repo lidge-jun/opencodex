@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { candidateCapabilityEvidence } from "../src/routing/capability";
@@ -8,6 +8,7 @@ import { applyCatalogMetadata, ensureStrictCatalogFields } from "../src/codex/ca
 import type { CatalogModel, RawEntry } from "../src/codex/catalog/parsing";
 import { parseAntigravityAvailableModels } from "../src/providers/antigravity-models";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Regression coverage for #1796.
@@ -36,7 +37,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  if (codexHome) rmSync(codexHome, { recursive: true, force: true });
+  if (codexHome) removeTreeWithRetry(codexHome);
 });
 
 function serialize(model: CatalogModel): RawEntry {

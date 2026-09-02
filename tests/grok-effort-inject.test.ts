@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,6 +18,7 @@ import { syncGrokConfig } from "../src/grok/sync";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { ManagementApiDeps } from "../src/server/management/context";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const NATIVE_SOL = "gpt-5.6-sol";
 const ROUTED_WITH_LADDER: CatalogModel = {
@@ -250,7 +251,7 @@ describe("Grok managed-block thinking-intensity injection", () => {
       expect(k3.reasoning_efforts?.map(row => row.value)).toEqual(["low", "high", "max"]);
       expect(k3.reasoning_efforts?.map(row => row.value)).not.toEqual(nativeLadder);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -270,7 +271,7 @@ describe("Grok managed-block thinking-intensity injection", () => {
       expect(plain.reasoning_efforts).toBeUndefined();
       expect(content).not.toMatch(/ocx-kimi-kimi-for-coding[\s\S]*supports_reasoning_effort/);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 });
@@ -304,7 +305,7 @@ describe("dashboard Grok enable apply writes the same ladders", () => {
     else process.env.GROK_HOME = previousGrokHome;
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
+    while (cleanup.length) removeTreeWithRetry(cleanup.pop()!);
   });
 
   test("PUT /api/native-integrations/grok injects native + routed ladders", async () => {
@@ -357,7 +358,7 @@ describe("inject payload threading", () => {
       expect(sol?.reasoningEfforts).toEqual(nativeReasoningEfforts(NATIVE_SOL));
       expect(sol?.reasoningEfforts).toContain("ultra");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 });

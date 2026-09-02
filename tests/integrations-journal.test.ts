@@ -6,6 +6,7 @@ import { getConfigDir } from "../src/config";
 import { SNAPSHOT_RETENTION, type JournalEntry } from "../src/integrations/journal";
 import type { OwnershipRecord } from "../src/integrations/ownership";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../src/integrations/store";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /** Activation coverage for devlog/_fin/260802_client_toggle_api/021 §6. */
 let root: string;
@@ -17,7 +18,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  removeTreeWithRetry(root);
 });
 
 function entry(overrides: Partial<JournalEntry> = {}): JournalEntry {
@@ -196,7 +197,7 @@ describe("store isolation", () => {
       // And the other store really did do the work.
       expect(otherStore.findOperation("elsewhere")).not.toBeNull();
     } finally {
-      rmSync(other, { recursive: true, force: true });
+      removeTreeWithRetry(other);
     }
   });
 
@@ -308,7 +309,7 @@ describe("store isolation", () => {
     try {
       expect(createIntegrationStateStore(other).readRecords().pi).toBeUndefined();
     } finally {
-      rmSync(other, { recursive: true, force: true });
+      removeTreeWithRetry(other);
     }
     io.dropRecord("pi");
     expect(store.readRecords().pi).toBeUndefined();

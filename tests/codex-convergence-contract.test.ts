@@ -40,6 +40,7 @@ import { saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 import { ManagementRequest } from "./helpers/management-auth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let root = "";
 let codexHome = "";
@@ -116,7 +117,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  rmSync(root, { recursive: true, force: true });
+  removeTreeWithRetry(root);
 });
 
 test("T1 gather performs no filesystem write and does not materialize a runtime probe home", async () => {

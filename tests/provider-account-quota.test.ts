@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCredential } from "../src/oauth/store";
@@ -14,6 +14,7 @@ import {
   resetProviderQuotaReconcileStateForTests,
   supportsPerAccountQuota,
 } from "../src/providers/quota";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -47,7 +48,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  rmSync(opencodexHome, { recursive: true, force: true });
+  removeTreeWithRetry(opencodexHome);
   clearAccountQuotaCache();
   clearProviderQuotaCache();
   resetProviderQuotaReconcileStateForTests();

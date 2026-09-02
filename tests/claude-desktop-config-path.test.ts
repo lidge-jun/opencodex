@@ -1,6 +1,6 @@
 import { expect, test, describe } from "bun:test";
 import { managementFetch as fetch } from "./helpers/management-auth";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import { startServer } from "../src/server";
@@ -10,6 +10,7 @@ import {
   resolveElectronUserData,
   resolveUserDataDir,
 } from "../src/claude/desktop-3p-paths";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * GitHub #539. Claude Desktop derives its configLibrary through `GE()`, which has
@@ -120,7 +121,7 @@ describe("Claude Desktop status reports whether our profile is the active one", 
       server.stop(true);
       if (previous === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
       else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previous;
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   }
 

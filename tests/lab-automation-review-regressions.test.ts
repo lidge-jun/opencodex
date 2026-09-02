@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { OcxConfig } from "../src/types";
@@ -37,6 +37,7 @@ import {
   resetCompatibilityVersionCacheForTests,
   setCompatibilityVersionOverrideForTests,
 } from "../src/routing/compatibility/version";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const COMPAT_VERSION = "e".repeat(64);
 const HOMES: string[] = [];
@@ -153,7 +154,7 @@ afterEach(() => {
   resetCompatibilityVersionCacheForTests();
   delete process.env.OPENCODEX_HOME;
   for (const dir of HOMES.splice(0)) {
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { removeTreeWithRetry(dir); } catch { /* ignore */ }
   }
 });
 

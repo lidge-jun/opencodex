@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,7 @@ import {
   USAGE_DEBUG_MAX_LINES,
   usageDebugPath,
 } from "../src/usage/debug";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -29,7 +30,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousDebug === undefined) delete process.env[USAGE_DEBUG_ENV];
   else process.env[USAGE_DEBUG_ENV] = previousDebug;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
 });
 
 describe("isUsageDebugEnabled", () => {

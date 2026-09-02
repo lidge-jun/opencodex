@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -13,10 +13,11 @@ import * as executionAuthority from "../src/lib/lab-live-execution-authority";
 import { isTrustedLabRouteExecutor } from "../src/lib/lab-live-execution-authority";
 import { createHostIssuedLabRouteExecutor } from "../src/lib/lab-live-host";
 import { REQUIRED_LAB_SANDBOX_BOUNDARIES, type LabBehaviorValues, type LabRouteContext, type TrustedLabRouteExecutor } from "../src/lab/live/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 function tempHome(): string { const dir = join(tmpdir(), `ocx-lab-live-${process.pid}-${Math.random().toString(16).slice(2)}`); mkdirSync(dir, { recursive: true, mode: 0o700 }); HOMES.push(dir); return dir; }
-afterEach(() => { for (const dir of HOMES.splice(0)) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } } delete process.env.OPENCODEX_HOME; });
+afterEach(() => { for (const dir of HOMES.splice(0)) { try { removeTreeWithRetry(dir); } catch { /* ignore */ } } delete process.env.OPENCODEX_HOME; });
 
 function behavior(adapter: string, upstreamProtocol: string): LabBehaviorValues {
   return { "wire.adapter": { source: "lab_forced", value: adapter }, "wire.upstreamProtocol": { source: "lab_forced", value: upstreamProtocol }, "auth.mode": { source: "provider_config", value: "api_key" }, "auth.transport": { source: "provider_config", value: "authorization_bearer" }, "mcp.nativeLocalExec": { source: "lab_forced", value: false }, "runtime.bunVersion": { source: "lab_forced", value: Bun.version }, "runtime.platform": { source: "lab_forced", value: process.platform }, "runtime.arch": { source: "lab_forced", value: process.arch }, "runtime.streamMode": { source: "lab_forced", value: "auto" }, "runtime.fastMode": { source: "lab_forced", value: false }, "runtime.effortCap": { source: "lab_forced", value: null }, "headers.nonCredentialBehaviorDigest": { source: "provider_config", value: "0".repeat(64) } };

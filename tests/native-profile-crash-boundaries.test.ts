@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ import type { NativeProfileKey, NativeProfileKeyProvider } from "../src/codex/na
 import type { OcxConfig } from "../src/types";
 import { INTERNAL_DEADLINE_MS } from "./helpers/test-budget";
 import { watchdogMs } from "./helpers/ci-watchdog";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * How long to wait for a spawned startup child to publish its port file.
@@ -44,7 +45,7 @@ function restoreEnv(name: "OPENCODEX_HOME" | "CODEX_HOME", value: string | undef
 afterEach(() => {
   restoreEnv("OPENCODEX_HOME", oldOcx);
   restoreEnv("CODEX_HOME", oldCodex);
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 class MemoryKeyProvider implements NativeProfileKeyProvider {
@@ -351,7 +352,7 @@ describe("native profile OpenCodex process-exit phases", () => {
       writeFileSync(target, JSON.stringify({ gate: { status: "ready" } }));
       expect(await pending).toMatchObject({ gate: { status: "ready" } });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   }, 15_000);
 });

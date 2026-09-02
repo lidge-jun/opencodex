@@ -1,15 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ompModelsConfigPath } from "../src/clients/config-export";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 function withTempHome(run: (home: string) => void): void {
   const home = mkdtempSync(join(tmpdir(), "opencodex-omp-home-"));
   try {
     run(home);
   } finally {
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   }
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { labExportDir, labPublicOriginDir } from "../src/lab/paths";
@@ -17,11 +17,12 @@ import {
   type PublicEvidenceRecordV1,
 } from "../src/lab/public";
 import { setPrivateFileCommitFaultForTests } from "../src/lab/public/private-file";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 afterEach(() => {
   setPrivateFileCommitFaultForTests(null);
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 function configDir(prefix: string): string {

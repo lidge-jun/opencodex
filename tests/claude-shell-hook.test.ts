@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { claudeCodeCliInstalled, reconcileShellHook } from "../src/server/system-env";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const originalPlatform = process.platform;
 let originalHome: string | undefined;
@@ -40,7 +41,7 @@ afterEach(() => {
   if (originalPath === undefined) delete process.env.PATH;
   else process.env.PATH = originalPath;
   setPlatform(originalPlatform);
-  rmSync(root, { recursive: true, force: true });
+  removeTreeWithRetry(root);
 });
 
 describe("Claude Code shell-hook reconciliation", () => {

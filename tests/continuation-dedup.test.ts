@@ -7,7 +7,7 @@
  * expands.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,6 +19,7 @@ import {
   responseStateMetrics,
   setResponseStateByteCapForTests,
 } from "../src/responses/state";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let home: string;
 let priorHome: string | undefined;
@@ -32,7 +33,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearResponseStateForTests();
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
   if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
   else process.env["OPENCODEX_HOME"] = priorHome;
 });

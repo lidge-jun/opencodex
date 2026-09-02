@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -45,7 +46,7 @@ describe("ocx restart", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("ocx restart");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -56,7 +57,7 @@ describe("ocx restart", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("Stop the proxy and restart");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });
@@ -69,7 +70,7 @@ describe("ocx health", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("ocx health");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -80,7 +81,7 @@ describe("ocx health", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("Check proxy health");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -92,7 +93,7 @@ describe("ocx health", () => {
       expect(result.status).toBe(1);
       expect(result.stdout).toContain("not healthy");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -106,7 +107,7 @@ describe("ocx health", () => {
       expect(parsed.ok).toBe(false);
       expect(parsed.pid).toBeNull();
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });
@@ -123,7 +124,7 @@ describe("ocx ready", () => {
       expect(result.stdout).toContain("ocx ready");
       expect(result.stdout).toContain("--wait");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -134,7 +135,7 @@ describe("ocx ready", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("post-sync readiness");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });

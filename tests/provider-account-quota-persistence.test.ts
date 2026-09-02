@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   schedulePersistAccountQuotas,
 } from "../src/providers/account-quota-disk";
 import type { ProviderQuota } from "../src/providers/quota-types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const previousHome = process.env.OPENCODEX_HOME;
 let home: string;
@@ -25,7 +26,7 @@ afterEach(() => {
   cancelPendingAccountQuotaPersist();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 const quota = (percent: number, updatedAt = Date.now()): ProviderQuota => ({

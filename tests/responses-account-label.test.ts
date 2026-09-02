@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fallbackCodexAccountLogLabel } from "../src/codex/account-label";
@@ -14,6 +14,7 @@ import {
 import type { RequestLogContext } from "../src/server/request-log";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 
@@ -81,7 +82,7 @@ async function withPoolHome<T>(run: (home: string) => Promise<T>): Promise<T> {
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
     clearAccountQuota();
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

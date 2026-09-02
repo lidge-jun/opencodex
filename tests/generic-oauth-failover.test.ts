@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +15,7 @@ import { getAccountSet, markAccountNeedsReauth, saveCredential } from "../src/oa
 import { resolveCopilotApiBaseUrl } from "../src/oauth/github-copilot";
 import { resolveProviderTransport } from "../src/providers/xai-transport";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const originalHome = process.env.OPENCODEX_HOME;
 let home: string;
@@ -29,7 +30,7 @@ afterEach(() => {
   clearGenericFailoverHealth();
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 const OAUTH_PROVIDER = {

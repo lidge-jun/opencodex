@@ -17,6 +17,7 @@ import {
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
 import { claimOwnedServiceHome, withOwnedServiceHomePreload } from "./helpers/owned-service-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const sandboxes: Sandbox[] = [];
@@ -163,7 +164,7 @@ afterEach(() => {
   for (const sandbox of sandboxes.splice(0)) {
     const database = resolveCodexCatalogSerializationDatabasePath(identity, sandbox.codexHome);
     for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${database}${suffix}`, { force: true });
-    rmSync(sandbox.root, { recursive: true, force: true });
+    removeTreeWithRetry(sandbox.root);
   }
 });
 

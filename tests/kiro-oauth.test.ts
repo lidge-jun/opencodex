@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OAUTH_PROVIDERS, runLogin } from "../src/oauth";
 import { inspectKiroCliSqlite, kiroCliInstallGuidance, loginKiro, readKiroCliSqlite, refreshKiroToken, resolveKiroApiRegion, resolveKiroProfileArn, resolveKiroRegion, settleKiroLoginTransaction } from "../src/oauth/kiro";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // Windows CI cold runners take 5-7s for the real SQLite create/inspect cycles here
 // (same flake class as 810fa115); the default 5s harness timeout is too tight.
@@ -77,7 +78,7 @@ afterEach(() => {
   if (origCliTokenKey === undefined) delete process.env.KIROCLI_TOKEN_KEY;
   else process.env.KIROCLI_TOKEN_KEY = origCliTokenKey;
   globalThis.fetch = origFetch;
-  rmSync(tmp, { recursive: true, force: true });
+  removeTreeWithRetry(tmp);
 });
 
 /**
@@ -788,7 +789,7 @@ describe("kiro oauth — import-first", () => {
     // Drop the seeded database before re-seeding. This has to follow the platform: removing only
     // `Library` left the Linux store at `.local/share` in place, so the second seed hit
     // "table auth_kv already exists" and the case failed on ubuntu CI while passing on macOS (#718).
-    rmSync(kiroCliDbDir(), { recursive: true, force: true });
+    removeTreeWithRetry(kiroCliDbDir());
     seedKiroCliRawValue("{not json");
 
     const invalid = inspectKiroCliSqlite();

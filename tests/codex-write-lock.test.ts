@@ -23,6 +23,7 @@ import {
   withCodexWriteLock,
 } from "../src/codex/codex-write-lock";
 import type { AdmissionSnapshot } from "../src/codex/convergence-types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let root = "";
 let codexHome = "";
@@ -88,7 +89,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
+  while (cleanup.length) removeTreeWithRetry(cleanup.pop()!);
 });
 
 describe("canonical home identity", () => {

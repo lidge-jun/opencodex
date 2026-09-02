@@ -42,6 +42,7 @@ import { runScenario, resolveProtocolExecutionContext } from "../src/lab/conform
 import { LabValidationError } from "../src/lab/events/validate";
 import { enforceEventStructureLimits } from "../src/lab/events/limits";
 import type { ClaimSnapshotEvent, ObservationEvent, ProtocolSubjectV1 } from "../src/lab/events/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 
@@ -55,7 +56,7 @@ function tempHome(): string {
 afterEach(() => {
   for (const dir of HOMES.splice(0)) {
     try {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     } catch {
       /* ignore */
     }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -73,6 +73,7 @@ import {
 } from "../src/server/lifecycle";
 import type { CodexModelEntitlementSnapshot } from "../src/codex/model-entitlements";
 import { hasForwardableCodexBearer } from "../src/server/auth-cors";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testDir: string;
 let previousOpencodexHome: string | undefined;
@@ -101,7 +102,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setIcaclsRunnerForTests(null);
-  rmSync(testDir, { recursive: true, force: true });
+  removeTreeWithRetry(testDir);
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();

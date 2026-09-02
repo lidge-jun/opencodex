@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { OcxConfig } from "../src/types";
@@ -21,6 +21,7 @@ import {
   acquireServerResourceOwner,
   resetServerResourceOwnershipForTests,
 } from "../src/lib/server-resource-ownership";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 
@@ -39,7 +40,7 @@ afterEach(() => {
   setLabAutomationConfigCommitFaultForTests(null);
   resetServerResourceOwnershipForTests();
   resetLabAutomationSchedulerStateForTests();
-  for (const dir of HOMES.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of HOMES.splice(0)) removeTreeWithRetry(dir);
 });
 
 describe("CL-08 Ingwannu regressions", () => {

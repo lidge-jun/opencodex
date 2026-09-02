@@ -17,6 +17,7 @@ import {
   type IntegrationWriteInput,
 } from "../src/integrations/writer";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Activation coverage for devlog/_fin/260802_client_toggle_api/031 §6.
@@ -57,7 +58,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(dirname(home), { recursive: true, force: true });
+  removeTreeWithRetry(dirname(home));
 });
 
 /**

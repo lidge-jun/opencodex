@@ -4,7 +4,7 @@
  * model, and GET surfaces `{ effort, efforts }` next to the existing model picker.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, loadConfig } from "../src/config";
@@ -12,6 +12,7 @@ import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import { handleManagementAPI } from "../src/server/management-api";
 import { CODEX_REASONING_LEVELS } from "../src/reasoning-effort";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const savedHome = process.env.OPENCODEX_HOME;
 let tempHome: string | null = null;
@@ -19,7 +20,7 @@ let tempHome: string | null = null;
 afterEach(() => {
   if (savedHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = savedHome;
-  if (tempHome) { rmSync(tempHome, { recursive: true, force: true }); tempHome = null; }
+  if (tempHome) { removeTreeWithRetry(tempHome); tempHome = null; }
 });
 
 function isolatedHome(): void {

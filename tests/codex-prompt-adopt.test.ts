@@ -7,7 +7,7 @@
  * exactly what a confirm will store.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -17,6 +17,7 @@ import {
   readPromptLayers,
   salvageProjection,
 } from "../src/codex/prompt-layers";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const MARKER = "# Auto-injected by opencodex";
 const roots: string[] = [];
@@ -32,7 +33,7 @@ function fixture(config: string, store?: string) {
 }
 
 afterEach(() => {
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
+  while (roots.length) removeTreeWithRetry(roots.pop()!);
 });
 
 describe("adopt preview", () => {

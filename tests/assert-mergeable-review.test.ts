@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const gate = join(repoRoot, "scripts", "ci", "assert-mergeable-review.sh");
@@ -189,7 +190,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  rmSync(fixtureRoot, { recursive: true, force: true });
+  removeTreeWithRetry(fixtureRoot);
 });
 
 describe.skipIf(process.platform === "win32")("assert-mergeable-review", () => {

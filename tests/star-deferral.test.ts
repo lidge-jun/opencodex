@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { isDeferralCurrent, maybeShowStarPrompt, setStarPromptDepsForTests } from "../src/cli/star-prompt";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const NOW = Date.parse("2026-08-02T00:00:00.000Z");
 const DAY = 24 * 60 * 60 * 1000;
@@ -85,7 +86,7 @@ describe("maybeShowStarPrompt deferral flow (behavior)", () => {
     else process.env.CODEX_THREAD_ID = priorThread;
     if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = priorHome;
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   });
 
   test("agent deferral fires once per version, never writes the marker, and a human run still prompts", async () => {

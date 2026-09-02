@@ -47,6 +47,7 @@ import { legacyCustomModelCatalogSlugs } from "../src/codex/custom-model-catalog
 import { resetCodexModelEntitlementCacheForTests } from "../src/codex/model-entitlements";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-models";
 import { removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // The canonical-bytes case spawns real syncs and runs ~2.5s in isolation, on this
 // tree and on a clean baseline alike. That is half of bun's 5s default, but full
@@ -347,7 +348,7 @@ afterEach(() => {
   if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
   resetCodexRuntimeResolveCacheForTests();
-  rmSync(root, { recursive: true, force: true });
+  removeTreeWithRetry(root);
 });
 
 test("convergence renders account-qualified rows and preserves only non-generated foreign rows", async () => {

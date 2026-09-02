@@ -12,6 +12,7 @@ import {
   deriveCodexHistoryOperation,
   runCodexHistoryJob,
 } from "../src/codex/history-job";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const sandboxes: string[] = [];
 let previousCodexHome: string | undefined;
@@ -20,7 +21,7 @@ afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   previousCodexHome = undefined;
-  for (const root of sandboxes.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of sandboxes.splice(0)) removeTreeWithRetry(root);
 });
 
 interface Fixture {
@@ -350,6 +351,6 @@ test("the synchronous restore body is gated on skipHistory", () => {
     expect(JSON.parse(restored.stdout.trim().split("\n").filter(Boolean).pop() ?? "{}")).toEqual({ history: "ok" });
     expect(provider()).toBe("openai");
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   }
 }, 30_000);

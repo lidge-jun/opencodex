@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -24,6 +24,7 @@ import {
   resetPreservedDiskOnlyProvidersForTests,
 } from "../src/usage/user-cost-overlays";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * A user or cooperating process can edit config.json while the proxy runs.
@@ -74,7 +75,7 @@ afterEach(() => {
   refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 function customModel(modelId: string): NonNullable<OcxConfig["customModels"]>[number] {

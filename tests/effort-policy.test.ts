@@ -4,7 +4,7 @@
  * and the /api/effort-caps management roundtrip.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyEffortCap, effortCapAppliesTo, effortCapFor, isThreadSpawnRequest, resolveCappedEffort, stripEmptyLadderEffort, supportedLadderFor } from "../src/server/effort-policy";
@@ -14,6 +14,7 @@ import { NoEnabledOpenAiProviderError, routeModel } from "../src/router";
 import { mapReasoningEffort } from "../src/reasoning-effort";
 import { nativeEffortClamp } from "../src/codex/catalog";
 import type { OcxConfig, OcxParsedRequest } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const savedHome = process.env.OPENCODEX_HOME;
 const savedCodexHome = process.env.CODEX_HOME;
@@ -25,8 +26,8 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = savedHome;
   if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = savedCodexHome;
-  if (tempHome) { rmSync(tempHome, { recursive: true, force: true }); tempHome = null; }
-  if (tempCodexHome) { rmSync(tempCodexHome, { recursive: true, force: true }); tempCodexHome = null; }
+  if (tempHome) { removeTreeWithRetry(tempHome); tempHome = null; }
+  if (tempCodexHome) { removeTreeWithRetry(tempCodexHome); tempCodexHome = null; }
 });
 
 function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {

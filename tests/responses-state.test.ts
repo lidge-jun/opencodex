@@ -9,7 +9,6 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
-  rmSync,
   statSync,
   symlinkSync,
   unlinkSync,
@@ -70,6 +69,7 @@ import {
 } from "../src/responses/spill-store";
 import { adapterNeedsForcedContinuation, injectDeveloperMessage } from "../src/server/responses";
 import { watchdogMs } from "./helpers/ci-watchdog";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Windows without Developer Mode or admin cannot create a file symlink (EPERM).
@@ -86,7 +86,7 @@ const canSymlink = (() => {
     if ((e as NodeJS.ErrnoException).code === "EPERM") return false;
     throw e;
   } finally {
-    rmSync(probeDir, { recursive: true, force: true });
+    removeTreeWithRetry(probeDir);
   }
 })();
 import {
@@ -335,7 +335,7 @@ describe("Responses previous_response_id state", () => {
     setResponseStateByteCapForTests(null);
     setSpilledResponseByteCapForTests(null);
     clearResponseStateForTests();
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
     if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
     else process.env["OPENCODEX_HOME"] = priorHome;
   });
@@ -2632,7 +2632,7 @@ describe("Responses previous_response_id state", () => {
     previousResponseProviderState("trigger-load");
 
     expect(existsSync(stranded)).toBe(false);
-    rmSync(realDir, { recursive: true, force: true });
+    removeTreeWithRetry(realDir);
   });
 
   test("stale temp recovery is best-effort when unlink fails", () => {
@@ -3272,7 +3272,7 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
     resetWindowsPrincipalForTests();
     resetHardenedStateForTests();
     clearResponseStateForTests();
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
     if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
     else process.env["OPENCODEX_HOME"] = priorHome;
   });

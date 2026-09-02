@@ -19,7 +19,7 @@
  * registry empty before the next isolate boundary.
  */
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
@@ -35,6 +35,7 @@ import {
   terminateStorageWorker,
 } from "../src/storage/worker-lifecycle";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let testDir = "";
@@ -83,7 +84,7 @@ afterEach(async () => {
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
   testDir = "";
 });
 

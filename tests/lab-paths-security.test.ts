@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureRestrictedDir } from "../src/lab/paths";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const ROOTS: string[] = [];
 
@@ -14,7 +15,7 @@ function tempRoot(): string {
 
 afterEach(() => {
   for (const root of ROOTS.splice(0)) {
-    try { rmSync(root, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { removeTreeWithRetry(root); } catch { /* ignore */ }
   }
 });
 

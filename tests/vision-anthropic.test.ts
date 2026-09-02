@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as oauthModule from "../src/oauth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let oauthAccessError: Error | undefined;
 mock.module("../src/oauth", () => ({
@@ -405,7 +406,7 @@ describe("Anthropic vision planning and management config", () => {
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
-      rmSync(isolatedHome, { recursive: true, force: true });
+      removeTreeWithRetry(isolatedHome);
     }
   });
 
@@ -435,7 +436,7 @@ describe("Anthropic vision planning and management config", () => {
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
-      rmSync(isolatedHome, { recursive: true, force: true });
+      removeTreeWithRetry(isolatedHome);
     }
   });
 });

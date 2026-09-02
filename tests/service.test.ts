@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, posix, win32 } from "node:path";
@@ -17,6 +17,7 @@ import { WindowsSchtasksError } from "../src/lib/windows-elevation";
 import { resolveCurrentWindowsPrincipal, setWindowsPrincipalRunnerForTests } from "../src/lib/windows-user-principal";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_WINDOWS_TASK_SID = "S-1-5-21-111-222-333-1001";
 // The synthetic SID above exists nowhere. On a real Windows host every saveConfig() in this
@@ -55,7 +56,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiAuthToken;
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
 });
 
 const root = new URL("../", import.meta.url);
@@ -161,7 +162,7 @@ describe("systemd service unit", () => {
         env: { PATH: [directoryEntry, nonExecutableEntry, executableEntry].join(delimiter) },
       })).toBe(join(executableEntry, "ocx"));
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -392,7 +393,7 @@ describe("systemd service unit", () => {
 
 describe("service install auth preflight", () => {
   test("rejects non-loopback service install without a persisted API token", () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     delete process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -407,7 +408,7 @@ describe("service install auth preflight", () => {
   });
 
   test("allows non-loopback service install when the API token is in the service environment", () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
@@ -422,7 +423,7 @@ describe("service install auth preflight", () => {
   });
 
   test("hub-mode launchd and systemd installs reuse the protected data-token file", () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     process.env.OPENCODEX_API_AUTH_TOKEN = "phase5-data-secret";
@@ -446,7 +447,7 @@ describe("service install auth preflight", () => {
   });
 
   test("rejects restore operations from a different CODEX_HOME than service install", () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     process.env.CODEX_HOME = "/tmp/current-codex-home";
@@ -1223,11 +1224,11 @@ describe("launchd service plist", () => {
 
     // The upgrade: shim retargeted, old version removed.
     retargetShim(v2Entry);
-    rmSync(v1, { recursive: true, force: true });
+    removeTreeWithRetry(v1);
     expect(existsSync(v1Entry)).toBe(false);
     expect(runShim()).toContain("V2");
 
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
   });
 
   // The relative case is why the resolve() is there at all: a service unit has no meaningful
@@ -1430,7 +1431,7 @@ describe("service lifecycle cleanup ordering", () => {
         "elevate:opencodex-proxy",
       ]);
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -1453,7 +1454,7 @@ describe("service lifecycle cleanup ordering", () => {
 
       expect(calls).toEqual(["create", "elevate"]);
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -1473,7 +1474,7 @@ describe("service lifecycle cleanup ordering", () => {
 
       expect(calls).toEqual(["create"]);
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -1493,7 +1494,7 @@ describe("service lifecycle cleanup ordering", () => {
 
       expect(calls).toEqual(["create", "probe"]);
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -1512,7 +1513,7 @@ describe("service lifecycle cleanup ordering", () => {
 
       expect(calls).toEqual(["create", "probe", "query", "rollback"]);
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -1541,7 +1542,7 @@ describe("service lifecycle cleanup ordering", () => {
       expect(elevatedXml).toContain(`install-attempt=${registrationAttemptNonce}`);
       expect(elevatedXml).not.toContain("foreign-attempt");
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -1565,7 +1566,7 @@ describe("service lifecycle cleanup ordering", () => {
 
       expect(calls).toEqual([]);
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -1699,7 +1700,7 @@ describe("service lifecycle cleanup ordering", () => {
       ]);
       expect(existsSync(stageDir)).toBe(false);
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -1721,7 +1722,7 @@ describe("service lifecycle cleanup ordering", () => {
       })).toThrow("synthetic partial write failure");
       expect(existsSync(stageDir)).toBe(false);
     } finally {
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -1810,7 +1811,7 @@ describe("service lifecycle cleanup ordering", () => {
       mkdirSync(home, { recursive: true });
       writeFileSync(join(home, "legacy.txt"), "keep", "utf8");
       expect(recordOwnedConfigPath(home, join(home, "service-state.json"))).toBe(false);
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
 
       await installFreshWindowsSchedulerSafely({
         register: async path => {
@@ -1840,7 +1841,7 @@ describe("service lifecycle cleanup ordering", () => {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       removeOwnedConfigState(home);
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -1877,7 +1878,7 @@ describe("service lifecycle cleanup ordering", () => {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       removeOwnedConfigState(home);
-      rmSync(parent, { recursive: true, force: true });
+      removeTreeWithRetry(parent);
     }
   });
 
@@ -3613,7 +3614,7 @@ describe("service definitions are not world-readable", () => {
       // The credential is still written — this test pins who can read it, not that it is absent.
       expect(readFileSync(path, "utf8")).toContain("u:p@127.0.0.1");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -3629,7 +3630,7 @@ describe("service definitions are not world-readable", () => {
 
       expect(modeOf(path)).toBe("600");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 
@@ -3641,7 +3642,7 @@ describe("service definitions are not world-readable", () => {
 
       expect(modeOf(path)).toBe("600");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     }
   });
 });

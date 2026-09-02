@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +10,7 @@ import {
   writeVersionCache,
   type VersionCache,
 } from "../src/update/notify";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const prevHome = process.env.OPENCODEX_HOME;
 let dir: string;
@@ -22,7 +23,7 @@ beforeEach(() => {
 afterEach(() => {
   if (prevHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = prevHome;
-  try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { removeTreeWithRetry(dir); } catch { /* ignore */ }
 });
 
 describe("isNewer — latest channel", () => {

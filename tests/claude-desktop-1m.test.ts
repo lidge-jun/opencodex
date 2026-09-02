@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClaudeDesktopState } from "../src/server/management/shared";
 import { DESKTOP_SUPPORTS_1M_THRESHOLD } from "../src/claude/desktop-3p";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * D1c: the dashboard surfaces the same 1M eligibility the writer emits, from one
@@ -46,6 +47,6 @@ test("supports1m is true at and above the threshold, false below it", async () =
   } finally {
     if (prev === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
     else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = prev;
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   }
 });

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { resolveCodexHistoryJobTarget } from "../src/codex/history-job";
 import { historyBackupPathFor } from "../src/codex/history-provider";
 import { resolveCodexLogsDbPath, resolveCodexSqliteHome, resolveCodexStateDbPath } from "../src/codex/paths";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const originalCodexHome = process.env.CODEX_HOME;
 const originalSqliteHome = process.env.CODEX_SQLITE_HOME;
@@ -16,7 +17,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = originalCodexHome;
   if (originalSqliteHome === undefined) delete process.env.CODEX_SQLITE_HOME;
   else process.env.CODEX_SQLITE_HOME = originalSqliteHome;
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 describe("Codex SQLite home resolution", () => {

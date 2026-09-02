@@ -7,7 +7,7 @@
  * that attribution to a user as an explanation.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,6 +18,7 @@ import {
   setPromptTextProbeCloseBarrierForTests,
   setPromptTextProbeCommandForTests,
 } from "../src/codex/prompt-text-probe";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const lifecycleRoots: string[] = [];
 const VALID_PROBE_OUTPUT = JSON.stringify([{
@@ -55,7 +56,7 @@ function root(): string {
 
 afterEach(async () => {
   await resetPromptTextProbeForTests();
-  while (lifecycleRoots.length) rmSync(lifecycleRoots.pop()!, { recursive: true, force: true });
+  while (lifecycleRoots.length) removeTreeWithRetry(lifecycleRoots.pop()!);
 });
 
 describe("section extraction", () => {

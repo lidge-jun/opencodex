@@ -21,6 +21,7 @@ import {
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
 import { formatCoordinatorDoctorLines } from "../src/cli/doctor";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let codexHome = "";
 let opencodexHome = "";
@@ -49,8 +50,8 @@ afterEach(() => {
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
     rmSync(`${coordinatorPath}${suffix}`, { force: true });
   }
-  rmSync(codexHome, { recursive: true, force: true });
-  rmSync(opencodexHome, { recursive: true, force: true });
+  removeTreeWithRetry(codexHome);
+  removeTreeWithRetry(opencodexHome);
 });
 
 function privateFile(path: string, bytes = ""): void {

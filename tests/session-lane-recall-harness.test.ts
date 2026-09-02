@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
@@ -17,6 +17,7 @@ import { sessionLaneIdFromRequest } from "../src/server/request-log-conversation
 import { startServer } from "../src/server";
 import type { AdapterEvent, OcxConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const provider = { adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "key" };
 
@@ -226,7 +227,7 @@ describe("#820 concurrent tool-recall session harness", () => {
       globalThis.fetch = originalFetch;
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 

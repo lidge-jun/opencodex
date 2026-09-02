@@ -5,7 +5,7 @@
  * encrypted native-only fallback, native passthrough terminal finalization.
  */
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +44,7 @@ import {
   encryptedInput as recoverableEncryptedInput,
   recoverySse,
 } from "./helpers/agent-task-recovery";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 setDefaultTimeout(30_000);
 
@@ -79,7 +80,7 @@ afterEach(() => {
   resetAgentTaskRecoveryState();
   resetSubagentModelFallbackStateForTests();
   setMainAccountPlan(null);
-  rmSync(testDir, { recursive: true, force: true });
+  removeTreeWithRetry(testDir);
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;

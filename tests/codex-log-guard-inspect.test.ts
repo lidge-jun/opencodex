@@ -5,7 +5,6 @@ import {
   mkdtempSync,
   readdirSync,
   renameSync,
-  rmSync,
   statSync,
   truncateSync,
   utimesSync,
@@ -16,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { inspectCodexLogs, resetCodexLogGuardInspectionCache } from "../src/codex/log-guard/inspect";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
@@ -82,7 +82,7 @@ function snapshotDir(path: string): Map<string, { size: number; mtimeMs: number 
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 describe("Codex Log Guard inspection", () => {

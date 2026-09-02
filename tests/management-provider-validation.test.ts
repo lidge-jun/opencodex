@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { managementFetch as fetch, ManagementRequest as Request } from "./helpers/management-auth";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readCodexAccountRecord, saveCodexAccountCredential } from "../src/codex/account-store";
@@ -47,6 +47,7 @@ import { LOCAL_PROVIDER_RELOAD_NAME_HEADER, LOCAL_PROVIDER_RELOAD_PATH } from ".
 import { getAccountSet, saveCredential } from "../src/oauth/store";
 import { fastPolicyForModel } from "../src/providers/service-tier";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -132,12 +133,12 @@ afterEach(() => {
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
 });
 
 describe("provider management validation", () => {
   test("provider reload adopts only the validated disk row without rewriting config", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -191,7 +192,7 @@ describe("provider management validation", () => {
   });
 
   test("provider reload rejects an untrusted principal and a disk rewrite during DNS validation", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -311,7 +312,7 @@ describe("provider management validation", () => {
   });
 
   test("normalizes hand-edited structured-output model opt-outs at load", () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify({
@@ -349,7 +350,7 @@ describe("provider management validation", () => {
     } as OcxConfig) as { providers: Record<string, { retainModels?: string[] }> };
     expect(dto.providers.relay?.retainModels).toEqual(["gemini-3.7-flash"]);
 
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify({
@@ -407,7 +408,7 @@ describe("provider management validation", () => {
     } as OcxConfig) as { providers: Record<string, { omitReasoningEffortWithToolsModels?: string[] }> };
     expect(dto.providers.relay?.omitReasoningEffortWithToolsModels).toEqual(["picky-model"]);
 
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify({
@@ -441,7 +442,7 @@ describe("provider management validation", () => {
   });
 
   test("provider POST rejects a non-boolean annotateEmptyToolOutputs at the management boundary", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     // The canonical seed path only engages for the real forward seed, so the plain fixture
@@ -472,7 +473,7 @@ describe("provider management validation", () => {
   });
 
   test("provider PATCH sets, clears, and rejects annotateEmptyToolOutputs", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -690,7 +691,7 @@ describe("provider management validation", () => {
   });
 
   test("provider request pacing PATCH persists provider and model limits without catalog churn", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -862,7 +863,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management rejects externally supplied forward auth providers", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -891,7 +892,7 @@ describe("provider management validation", () => {
   });
 
   test("provider POST overwrite preserves modelCosts when the payload omits it", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -927,7 +928,7 @@ describe("provider management validation", () => {
   });
 
   test("provider POST overwrite preserves modelDisplayNames when the payload omits it", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -965,7 +966,7 @@ describe("provider management validation", () => {
   });
 
   test("provider POST rejects unsafe submitted modelDisplayNames", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -993,7 +994,7 @@ describe("provider management validation", () => {
   });
 
   test("provider POST overwrite preserves the account-failover opt-out when the payload omits it (#2568d)", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -1039,7 +1040,7 @@ describe("provider management validation", () => {
     // transport seed, so a user-owned overlay must be stripped from the comparison candidate
     // the same way contextWindow and modelAutoCompactTokenLimits already are. Without that,
     // validation accepted this field and the seed check then refused the very same request.
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -1076,7 +1077,7 @@ describe("provider management validation", () => {
   });
 
   test("full provider edit preserves aliases owned by the dedicated APIs", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const overlays = {
@@ -1117,7 +1118,7 @@ describe("provider management validation", () => {
   });
 
   test("general provider writes cannot introduce a provider alias collision", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -1153,7 +1154,7 @@ describe("provider management validation", () => {
   });
 
   test("general provider writes reject reserved duplicate and invalid model aliases", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -1190,7 +1191,7 @@ describe("provider management validation", () => {
   });
 
   test("malformed alias overlays return bounded 4xx without config persistence", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -1231,7 +1232,7 @@ describe("provider management validation", () => {
   });
 
   test("canonical transport tampering stays rejected with persisted alias overlays", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const overlays = {
@@ -1266,7 +1267,7 @@ describe("provider management validation", () => {
   });
 
   test("unrelated non-openai provider edits preserve persisted alias overlays", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -1305,7 +1306,7 @@ describe("provider management validation", () => {
   });
 
   test("canonical OpenAI with defaultAliases can still PATCH modelContextWindows", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -1342,7 +1343,7 @@ describe("provider management validation", () => {
 
   // #1409: the add/edit form's payload type has no member for contextWindow or
   test("provider POST overwrite preserves an explicit annotateEmptyToolOutputs: false", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -1429,7 +1430,7 @@ describe("provider management validation", () => {
     }
 
     function freshHome(): void {
-      if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+      if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       process.env.OPENCODEX_HOME = TEST_DIR;
       saveConfig(config("127.0.0.1"));
@@ -1539,7 +1540,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management accepts modelCosts on the canonical openai provider", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -1563,7 +1564,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management rejects runtime metadata and accepts only canonical OpenAI option seeds", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -1825,7 +1826,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management does not persist registry-only static auth headers for opencode-free", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -1856,7 +1857,7 @@ describe("provider management validation", () => {
   });
 
   test("management selections preserve an OpenAI API Pro selected id without wire rewriting", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const selected = "openai-apikey/gpt-5.6-sol-pro";
@@ -1911,7 +1912,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management rejects namespace-breaking or reserved provider names", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -1941,7 +1942,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management rejects names owned by a Codex account namespace without mutating config", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const cfg = {
@@ -1979,7 +1980,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management rejects base URLs with embedded credentials", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2007,7 +2008,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management rejects invalid or non-http base URLs", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2037,7 +2038,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management rejects private-network destinations without explicit opt-in", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2066,7 +2067,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management allows private-network destinations only with explicit opt-in", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2098,7 +2099,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management always rejects metadata endpoints", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2128,7 +2129,7 @@ describe("provider management validation", () => {
  });
 
   test("provider PATCH can enable allowPrivateNetwork and then change baseUrl to localhost", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2175,7 +2176,7 @@ describe("provider management validation", () => {
   });
 
   test("provider PATCH rejects disabling allowPrivateNetwork while baseUrl is private", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2209,7 +2210,7 @@ describe("provider management validation", () => {
   });
 
   test("provider PATCH persists liveModels and provider metadata exposes the normalized state", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2267,7 +2268,7 @@ describe("provider management validation", () => {
   });
 
   test("provider PATCH persists and clears structured-output model opt-outs", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2360,7 +2361,7 @@ describe("provider management validation", () => {
   });
 
  test("provider management rejects sensitive or injectable provider headers", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2395,7 +2396,7 @@ describe("provider management validation", () => {
   });
 
   test("provider deletion does not treat inherited object keys as configured providers", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2412,7 +2413,7 @@ describe("provider management validation", () => {
   });
 
   test("provider deletion removes the deleted provider's OAuth credential", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -2457,7 +2458,7 @@ describe("provider management validation", () => {
   });
 
   test("provider deletion removes stale provider context caps", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -2493,7 +2494,7 @@ describe("provider management validation", () => {
   });
 
   test("provider deletion removes that provider's custom models (#1273)", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -2556,7 +2557,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management switches the default and reassigns it when removed", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -2599,7 +2600,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management rejects POST setDefault for a disabled provider", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -2641,7 +2642,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management refuses to delete the default when only a disabled replacement remains", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -2684,7 +2685,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management can disable and re-enable non-default providers", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -2739,7 +2740,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management rejects disabling the default provider", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
@@ -2761,7 +2762,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management accepts canonical OpenAI modes and rejects legacy Multi", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -2822,7 +2823,7 @@ describe("provider management validation", () => {
   });
 
   test("canonical OpenAI POST passes allowBenchmarkAddresses into destination resolution", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -2878,7 +2879,7 @@ describe("provider management validation", () => {
   });
 
   test("canonical OpenAI POST still rejects non-benchmark private destination answers", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -2925,7 +2926,7 @@ describe("provider management validation", () => {
     // fake-IP user (chatgpt.com → 198.18.0.0/15) could create the provider but could never
     // patch a context overlay onto it. Loopback/RFC1918/metadata and mixed dangerous
     // answers still fail closed (covered by destination-policy-resolved tests and below).
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -2965,7 +2966,7 @@ describe("provider management validation", () => {
   test("PATCH destination benchmark exception stays scoped to the canonical openai row", async () => {
     // A non-canonical openai row and any OpenAI-LOOKING custom provider must not inherit
     // the fake-IP exception: their PATCHes still fail closed on benchmark answers.
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3026,7 +3027,7 @@ describe("provider management validation", () => {
   test("canonical OpenAI PATCH still rejects non-benchmark private destination answers", async () => {
     // The benchmark opt-in must not relax the rest of the SSRF guard: if the probe
     // classifies the canonical destination as loopback/private/metadata, the PATCH fails.
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3063,7 +3064,7 @@ describe("provider management validation", () => {
   });
 
   test("disabled-only PATCH cannot re-enable a noncanonical openai row unchanged", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3114,7 +3115,7 @@ describe("provider management validation", () => {
   });
 
   test("disabled-only PATCH re-enables canonical openai and fills missing pool mode", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -3162,7 +3163,7 @@ describe("provider management validation", () => {
   });
 
   test("disabled OpenAI recovery accepts pure Clash fake-IP via destination check", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3211,7 +3212,7 @@ describe("provider management validation", () => {
   });
 
   test("disabled OpenAI recovery rejects loopback, RFC1918, and metadata and stays disabled", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const disabledCanonical = {
@@ -3275,7 +3276,7 @@ describe("provider management validation", () => {
   });
 
   test("disabled OpenAI recovery ignores persisted allowPrivateNetwork for DNS guard", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3332,7 +3333,7 @@ describe("provider management validation", () => {
   });
 
   test("disabled OpenAI recovery strips allowPrivateNetwork after successful re-enable", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3388,7 +3389,7 @@ describe("provider management validation", () => {
     ["explicit :443 port", "https://chatgpt.com:443/backend-api/codex"],
   ] as const) {
     test(`disabled-only PATCH normalizes ${label} before save-and-reload`, async () => {
-      if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+      if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
       mkdirSync(TEST_DIR, { recursive: true });
       process.env.OPENCODEX_HOME = TEST_DIR;
       saveConfig({
@@ -3441,7 +3442,7 @@ describe("provider management validation", () => {
   }
 
   test("provider mode PATCH is strict, persists live state, clears caches and affinity, and primes Pool only", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3515,7 +3516,7 @@ describe("provider management validation", () => {
   });
 
   test("xAI Responses opt-in reports mixed state and atomically normalizes both model adapters", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3611,7 +3612,7 @@ describe("provider management validation", () => {
   });
 
   test("provider PATCH field-mask edits non-reserved providers and rejects unsafe fields (WP040)", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3697,7 +3698,7 @@ describe("provider management validation", () => {
   });
 
   test("provider management exposes and persists context-window hints for Models GUI (#1073)", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3818,7 +3819,7 @@ describe("provider management validation", () => {
   });
 
   test("provider PATCH manages custom headers with merge and clear semantics", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3885,7 +3886,7 @@ describe("provider management validation", () => {
   });
 
   test("GET /api/providers exposes hasHeaders but never header names or values (#959)", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const sentinelName = "x-fingerprint-sentinel";
@@ -3917,7 +3918,7 @@ describe("provider management validation", () => {
     expect(raw).not.toContain(sentinelValue);
   });
   test("provider PATCH merges headers case-insensitively", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3951,7 +3952,7 @@ describe("provider management validation", () => {
     expect(Object.keys(liveConfig.providers.hdr.headers!)).toHaveLength(1);
   });
   test("provider PATCH clear keeps registry static headers", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -3997,7 +3998,7 @@ describe("provider management validation", () => {
     });
   });
   test("concurrent provider PATCHes serialize mixed fields and per-model soft budgets", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig: OcxConfig = {
@@ -4046,7 +4047,7 @@ describe("provider management validation", () => {
     expect(loadConfig().providers.hdr.modelAutoCompactTokenLimits).toEqual({ m1: 80_000, m2: 64_000 });
   });
   test("provider context-cap API persists toggles and annotates model rows", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -4115,7 +4116,7 @@ describe("provider management validation", () => {
   });
 
   test("provider context-cap API supports global value and set-all toggles", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig({
@@ -4342,7 +4343,7 @@ describe("provider transport option management contract (#1668, #2816)", () => {
   }
 
   test("POST accepts a valid upstreamHttpVersion and persists it; GET exposes it", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig = makeConfig();
@@ -4377,7 +4378,7 @@ describe("provider transport option management contract (#1668, #2816)", () => {
     // The management validator accepts null as "clear this", but POST persisted the body as
     // submitted while the loader schema rejected null. The provider then failed to parse on the
     // next start and the operator landed in invalid-config recovery for a value the API accepted.
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig = makeConfig();
@@ -4420,7 +4421,7 @@ describe("provider transport option management contract (#1668, #2816)", () => {
 
   test("a config already holding upstreamHttpVersion: null still loads", async () => {
     // Compatibility for anything the old POST path already wrote to disk.
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig = makeConfig();
@@ -4436,7 +4437,7 @@ describe("provider transport option management contract (#1668, #2816)", () => {
     expect(Object.keys(reloaded.providers).length).toBe(Object.keys(raw.providers).length);
   });
   test("POST rejects an invalid upstreamHttpVersion at the write boundary without persisting", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig = makeConfig();
@@ -4463,7 +4464,7 @@ describe("provider transport option management contract (#1668, #2816)", () => {
   });
 
   test("PATCH sets, then clears upstreamHttpVersion with live + disk persistence", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig = makeConfig();
@@ -4498,7 +4499,7 @@ describe("provider transport option management contract (#1668, #2816)", () => {
   });
 
   test("safeConfigDTO exposes upstreamHttpVersion without leaking it into the live row", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig = makeConfig();
@@ -4532,7 +4533,7 @@ describe("provider transport option management contract (#1668, #2816)", () => {
   });
 
   test("upstreamWebsocket round-trips through POST, GET, and PATCH", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig = makeConfig();
@@ -4595,7 +4596,7 @@ describe("provider transport option management contract (#1668, #2816)", () => {
   });
 
   test("POST overwrite preserves omitted upstreamWebsocket and honors explicit false", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     const liveConfig = makeConfig();

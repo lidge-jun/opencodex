@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseUsageSurface, summarizeUsage } from "../src/usage/summary";
 import { appendUsageEntry, readUsageEntries } from "../src/usage/log";
 import type { PersistedUsageEntry } from "../src/usage/log";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * D3: the usage surface taxonomy. Before this fix the codex bucket was
@@ -73,6 +74,6 @@ test("a grok surface survives the usage-log round trip", async () => {
   } finally {
     if (prev === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = prev;
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   }
 });

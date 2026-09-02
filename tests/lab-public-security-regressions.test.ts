@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { jcsStringify } from "../src/lab/conformance/jcs";
@@ -16,6 +16,7 @@ import {
   setPlatformForTests,
 } from "../src/lib/windows-secret-acl";
 import { setWindowsPrincipalRunnerForTests } from "../src/lib/windows-user-principal";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
@@ -25,7 +26,7 @@ afterEach(() => {
   setPlatformForTests(null);
   resetHardenedStateForTests();
   for (const root of roots.splice(0)) {
-    if (existsSync(root)) rmSync(root, { recursive: true, force: true });
+    if (existsSync(root)) removeTreeWithRetry(root);
   }
 });
 

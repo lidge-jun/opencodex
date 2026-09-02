@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { updateAccountQuota } from "../src/codex/quota";
@@ -10,6 +10,7 @@ import { routeModel } from "../src/router";
 import { getAccountSet, saveCredential } from "../src/oauth/store";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -25,7 +26,7 @@ afterEach(() => {
   closeRequestHistoryIndex();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
 });
 
 function config(overrides: Partial<OcxConfig> = {}): OcxConfig {

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,11 +14,12 @@ import {
   writeLegacyOpenaiHistoryRecovery,
   type HistoryWriteTarget,
 } from "../src/codex/internal/history-writer";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const sandboxes: string[] = [];
 
 afterEach(() => {
-  for (const root of sandboxes.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of sandboxes.splice(0)) removeTreeWithRetry(root);
 });
 
 function makeTarget(prefix: string): { codexHome: string; target: HistoryWriteTarget } {

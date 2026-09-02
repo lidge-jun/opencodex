@@ -9,6 +9,7 @@ import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const CHILD = join(import.meta.dir, "helpers", "codex-adoption-crash-child.ts");
 let root = "";
@@ -32,7 +33,7 @@ afterEach(() => {
   delete process.env.CODEX_HOME;
   delete process.env.OPENCODEX_HOME;
   rmSync(coordinatorPath, { force: true });
-  rmSync(root, { recursive: true, force: true });
+  removeTreeWithRetry(root);
 });
 
 for (const checkpoint of ["temp-created", "temp-committed", "published"] as const) {

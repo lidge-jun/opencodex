@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProviderAdapter } from "../src/adapters/base";
@@ -16,6 +16,7 @@ import type {
   OcxParsedRequest,
   OcxProviderConfig,
 } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 interface BuildObservation {
   key: string;
@@ -126,7 +127,7 @@ describe("terminal continuation provider-owner rotation", () => {
     else process.env.OPENCODEX_HOME = previousHome;
     clearKeyCooldowns();
     clearResponseStateForTests();
-    rmSync(testHome, { recursive: true, force: true });
+    removeTreeWithRetry(testHome);
   });
 
   test("429 rotation fences inherited state and persists the rotated owner", async () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -11,6 +11,7 @@ import {
 } from "../src/routing/compatibility/version";
 import { ManagementRequest } from "./helpers/management-auth";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -72,7 +73,7 @@ afterEach(() => {
   // already asserted; the state that matters was reset above.
   if (testDir) {
     try {
-      rmSync(testDir, { recursive: true, force: true });
+      removeTreeWithRetry(testDir);
     } catch {
       // Left to the OS.
     }

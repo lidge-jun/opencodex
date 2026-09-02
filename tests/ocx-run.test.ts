@@ -4,11 +4,11 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
-  rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const runner = join(repoRoot, "scripts", "ocx-run");
@@ -37,7 +37,7 @@ describe("ocx-run", () => {
         expect(result.exitCode).toBe(0);
         expect(readFileSync(join(stateDir, `${name}.log`), "utf8")).toBe(`${realpathSync(workdir)}\n`);
       } finally {
-        rmSync(root, { recursive: true, force: true });
+        removeTreeWithRetry(root);
       }
     },
   );

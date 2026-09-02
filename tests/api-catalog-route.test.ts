@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
 import { loadConfig, saveConfig } from "../src/config";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { ManagementRequest, managementHeaders } from "./helpers/management-auth";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, `.tmp-api-catalog-route-${process.pid}`);
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -31,7 +32,7 @@ afterEach(() => {
   isolatedCodexHome = null;
   if (previousOpencodexHome === undefined) {
     delete process.env.OPENCODEX_HOME;
-    rmSync(TEST_DIR, { recursive: true, force: true });
+    removeTreeWithRetry(TEST_DIR);
   } else {
     process.env.OPENCODEX_HOME = previousOpencodexHome;
   }

@@ -5,7 +5,6 @@ import {
   mkdirSync,
   mkdtempSync,
   renameSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +14,7 @@ import {
   compactCodexLogs,
   type CodexLogGuardMaintenanceDeps,
 } from "../src/codex/log-guard/maintenance";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
@@ -90,7 +90,7 @@ function deps(
 }
 
 afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 describe("CodeRabbit Log Guard reclaim regressions", () => {

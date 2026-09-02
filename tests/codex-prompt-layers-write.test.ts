@@ -4,7 +4,7 @@
  * Explicit temp paths only — these functions write a user's live Codex config.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,6 +18,7 @@ import {
   hashBytes,
   type JournalRecord,
 } from "../src/codex/prompt-journal";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const MARKER = "# Auto-injected by opencodex";
 const roots: string[] = [];
@@ -41,7 +42,7 @@ function layer(over: Partial<CustomLayer> = {}): CustomLayer {
 }
 
 afterEach(() => {
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
+  while (roots.length) removeTreeWithRetry(roots.pop()!);
 });
 
 describe("toggles", () => {
@@ -353,7 +354,7 @@ describe("transaction", () => {
     expect(existsSync(join(paths.root, "opencodex-prompt.lock"))).toBe(false);
 
     // And the next write is not poisoned by the failed one.
-    rmSync(paths.storePath, { recursive: true, force: true });
+    removeTreeWithRetry(paths.storePath);
     expect(writeCustomLayers([layer()], readPromptLayers(paths).revision, paths).ok).toBe(true);
   });
 });

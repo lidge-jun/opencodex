@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { injectGrokConfig, type GrokInjectModel } from "../src/grok/inject";
@@ -11,6 +11,7 @@ import {
   seedCodexModelEntitlementsForTests,
 } from "../src/codex/model-entitlements";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const baseConfig = { port: 10100, defaultProvider: "openai", providers: {} } as unknown as OcxConfig;
 
@@ -42,7 +43,7 @@ describe("syncGrokConfig", () => {
       expect(content).toContain("context_window = 500000");
       expect(content).toContain('base_url = "http://127.0.0.1:10190/v1"');
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -77,7 +78,7 @@ describe("syncGrokConfig", () => {
       expect(content).not.toContain("[model.ocx-stub-hidden]");
       expect(content).not.toContain('model = "stub/hidden"');
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -113,7 +114,7 @@ describe("syncGrokConfig", () => {
       expect(content).not.toContain("[model.ocx-disabled-provider-legacy]");
       expect(content).not.toContain('model = "disabled-provider/legacy"');
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -154,7 +155,7 @@ describe("syncGrokConfig", () => {
       expect(result).toMatchObject({ ok: true, changed: true });
       expect(readFileSync(join(grokHome, "config.toml"), "utf8")).toContain(manual);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -218,7 +219,7 @@ describe("syncGrokConfig", () => {
       });
       expect(windowBySlug).toEqual(expectedBySlug);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -243,7 +244,7 @@ describe("syncGrokConfig", () => {
       expect(readFileSync(join(grokHome, "config.toml"), "utf8"))
         .toContain('base_url = "http://[::1]:10100/v1"');
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -259,7 +260,7 @@ describe("syncGrokConfig", () => {
       expect(result.message).toContain("proxy down");
       expect(() => readFileSync(join(grokHome, "config.toml"), "utf8")).toThrow();
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -280,7 +281,7 @@ describe("syncGrokConfig", () => {
       expect(content).not.toContain("[model.ocx-p-old]");
       expect(content).toContain("[model.ocx-p-new]");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 });

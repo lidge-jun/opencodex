@@ -22,6 +22,7 @@ import {
   STABLE_ZERO_BYTE_COORDINATOR_AGE_MS,
 } from "../src/codex/inject-coordination";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = join(import.meta.dir, "..");
 const CHILD = join(repoRoot, "tests", "helpers", "codex-inject-race-child.ts");
@@ -140,7 +141,7 @@ afterEach(() => {
     // directory to the OS -- failing teardown would blame whichever test ran here.
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        rmSync(dir, { recursive: true, force: true });
+        removeTreeWithRetry(dir);
         break;
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;

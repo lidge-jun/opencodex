@@ -3,11 +3,12 @@ import { CLI_COMMANDS } from "../src/cli/registry";
 import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCommand, decideStartWithLiveOwner } from "../src/cli/dispatch";
 import type { CliDispatchDeps } from "../src/cli/dispatch";
 import { runGuiCommand } from "../src/cli/gui";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir } from "../src/config";
 import { getAccountSet, removeCredential, saveCredential } from "../src/oauth/store";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /** Minimal fake deps. dispatchCommand only touches deps for real command
  * runners, which these tests never invoke, so an empty object is enough. */
@@ -88,7 +89,7 @@ describe("dispatchCommand exit codes", () => {
     } finally {
       if (previous === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previous;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 

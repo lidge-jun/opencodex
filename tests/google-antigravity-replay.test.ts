@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir } from "../src/config";
@@ -28,6 +28,7 @@ import {
 import { sanitizeAntigravityClaudeSignatures } from "../src/adapters/google-antigravity-wire";
 
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 afterEach(() => {
   setAntigravityReplayLimitsForTests();
@@ -48,7 +49,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(replayTestHome, { recursive: true, force: true });
+  removeTreeWithRetry(replayTestHome);
   if (priorOpenCodexHome === undefined) delete process.env["OPENCODEX_HOME"];
   else process.env["OPENCODEX_HOME"] = priorOpenCodexHome;
 });

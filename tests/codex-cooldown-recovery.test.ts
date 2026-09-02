@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import {
   clearCodexCooldownRecoveryProbeState,
@@ -25,6 +25,7 @@ import {
   resolveCodexAccountForThread,
 } from "../src/codex/routing";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-cooldown-recovery-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -83,7 +84,7 @@ describe("Codex cooldown recovery worker", () => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
     previousCodexHome = process.env.CODEX_HOME;
     previousFetch = globalThis.fetch;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_CODEX_HOME, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     process.env.CODEX_HOME = TEST_CODEX_HOME;
@@ -101,7 +102,7 @@ describe("Codex cooldown recovery worker", () => {
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
 
   test("recovers cooled A independently while ordinary routing only selects B", async () => {

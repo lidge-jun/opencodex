@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import {
   normalizeHubOrigin,
 } from "../src/client/hub-client";
 import { handleConnectCommand } from "../src/cli/connect";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -53,7 +54,7 @@ describe("remote hub client boundary", () => {
     // Hub role WITH a client block stays mismatched (the honest conflict).
     writeFileSync(join(home, "config.json"), JSON.stringify({ port: 10190, runtimeRole: "hub", client: { serverUrl: "https://hub.example.test" } }));
     expect(readState().kind).toBe("mismatched");
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   });
   test("canonicalizes origin and terminal /v1 only", () => {
     expect(normalizeHubOrigin("https://hub.example.test/v1")).toBe("https://hub.example.test");
@@ -277,8 +278,8 @@ function runTransactionScenario(stage: "success" | "catalog" | "preflight" | "co
     parsed,
     configBytes: readFileSync(configPath, "utf8"),
     cleanup: () => {
-      rmSync(opencodexHome, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
+      removeTreeWithRetry(codexHome);
     },
   };
 }
@@ -432,8 +433,8 @@ function runConnectedStateScenario(mode: "sync-401" | "sync-503" | "disconnect-c
     status: child.status,
     parsed,
     cleanup: () => {
-      rmSync(opencodexHome, { recursive: true, force: true });
-      rmSync(codexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
+      removeTreeWithRetry(codexHome);
     },
   };
 }
@@ -573,7 +574,7 @@ describe("recoverable connected key rotation", () => {
       expect(result.state.value.pendingOperation).toBeUndefined();
       expect(result.credentialZeroed).toBe(true);
     } finally {
-      rmSync(opencodexHome, { recursive: true, force: true });
+      removeTreeWithRetry(opencodexHome);
     }
   });
 
@@ -605,7 +606,7 @@ describe("recoverable connected key rotation", () => {
     } finally {
       if (previous === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previous;
-      rmSync(home, { recursive: true, force: true });
+      removeTreeWithRetry(home);
     }
   });
 });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +10,7 @@ import {
   rememberReasoningForCall,
 } from "../src/responses/reasoning-replay-cache";
 import type { AdapterEvent, OcxReasoningReplayScopeRef } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const REASONING = "I need to inspect files before answering.";
 const SCOPE: OcxReasoningReplayScopeRef = {
@@ -124,7 +125,7 @@ describe("reasoning replay empty-delta robustness", () => {
       expect(existsSync(spill)).toBe(false);
       expect(readdirSync(scratch)).toEqual([]);
     } finally {
-      rmSync(scratch, { recursive: true, force: true });
+      removeTreeWithRetry(scratch);
     }
   });
 });

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dispatchCommand, type CliDispatchDeps } from "../src/cli/dispatch";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * `ocx restore` must finish the WHOLE shared teardown, including when Codex is already
@@ -42,7 +43,7 @@ afterEach(() => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  for (const dir of [grokHome, opencodexHome, codexHome]) rmSync(dir, { recursive: true, force: true });
+  for (const dir of [grokHome, opencodexHome, codexHome]) removeTreeWithRetry(dir);
 });
 
 async function seedOffConfig(): Promise<void> {
@@ -170,7 +171,7 @@ test("a Grok cleanup failure is not reported as a successful restore", async () 
 
 test("with no Grok home at all the no-op path still succeeds quietly", async () => {
   await seedOffConfig();
-  rmSync(grokHome, { recursive: true, force: true });
+  removeTreeWithRetry(grokHome);
   const code = await dispatchCommand({ kind: "run", command: "restore", args: ["restore"] }, depsFor(["restore"]));
   expect(code).toBe(0);
   expect(existsSync(grokHome)).toBe(false);

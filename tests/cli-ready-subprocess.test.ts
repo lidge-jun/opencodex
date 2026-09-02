@@ -6,10 +6,11 @@
  * with isolated homes and an actual discovered proxy fixture.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -132,7 +133,7 @@ describe("ocx ready real subprocess", () => {
       });
     } finally {
       child.kill();
-      rmSync(homes.root, { recursive: true, force: true });
+      removeTreeWithRetry(homes.root);
     }
   });
 
@@ -197,7 +198,7 @@ describe("ocx ready real subprocess", () => {
       expect(result.stderr).toBe("");
     } finally {
       server.stop(true);
-      rmSync(homes.root, { recursive: true, force: true });
+      removeTreeWithRetry(homes.root);
     }
   });
 
@@ -247,7 +248,7 @@ describe("ocx ready real subprocess", () => {
       expect(readyzHits).toBe(0);
     } finally {
       server.stop(true);
-      rmSync(homes.root, { recursive: true, force: true });
+      removeTreeWithRetry(homes.root);
     }
   });
 });

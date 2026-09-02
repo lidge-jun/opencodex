@@ -14,6 +14,7 @@ import {
 import { getAccountCredential, getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
 import type { OAuthController, OAuthCredentials } from "../src/oauth/types";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const ENV_KEYS = [
   "HOME",
@@ -132,7 +133,7 @@ afterEach(() => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  rmSync(tmp, { recursive: true, force: true });
+  removeTreeWithRetry(tmp);
 });
 
 describe("Kiro review regressions", () => {

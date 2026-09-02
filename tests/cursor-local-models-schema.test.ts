@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -16,6 +16,7 @@ import {
 } from "../src/server/models-capabilities";
 import type { OcxConfig } from "../src/types";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // Cursor's local-agent runtime ("Private Inference" build) only enables its reasoning-effort
 // control when a GET /v1/models row carries api_types (+ optional capabilities). These cases
@@ -62,7 +63,7 @@ afterEach(() => {
   resetCodexModelEntitlementCacheForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (testHome) rmSync(testHome, { recursive: true, force: true });
+  if (testHome) removeTreeWithRetry(testHome);
   testHome = "";
 });
 

@@ -11,6 +11,7 @@ import {
   runHistoryUnitUnderLock,
   type HistoryWorkerRunMessage,
 } from "../src/codex/history-worker";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // A held write lock otherwise costs the full production 5s busy timeout per
 // attempt, tripping bun's 5s default per-test timeout.
@@ -23,7 +24,7 @@ const backupArtifacts: string[] = [];
 
 afterEach(() => {
   setBeforeHistoryBackupConsumeForTests(undefined);
-  for (const root of sandboxes.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of sandboxes.splice(0)) removeTreeWithRetry(root);
   for (const path of backupArtifacts.splice(0)) rmSync(path, { force: true });
 });
 

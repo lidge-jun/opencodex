@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -8,6 +8,7 @@ import type { OcxConfig } from "../src/types";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests, setDebugSettings } from "../src/lib/debug-settings";
 import { waitForNativeMainStartupGate } from "../src/codex/native-profile-startup";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * #1686 end to end: a Codex client injected with `env_key` presents the proxy admission
@@ -140,8 +141,8 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
-  if (ocxHome) rmSync(ocxHome, { recursive: true, force: true });
-  if (codexHome) rmSync(codexHome, { recursive: true, force: true });
+  if (ocxHome) removeTreeWithRetry(ocxHome);
+  if (codexHome) removeTreeWithRetry(codexHome);
   ocxHome = "";
   codexHome = "";
 });

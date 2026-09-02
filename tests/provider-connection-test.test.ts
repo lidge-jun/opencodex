@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setFetchCursorUsableModelsForTests } from "../src/adapters/cursor/live-models";
@@ -10,13 +10,14 @@ import { saveCredential } from "../src/oauth/store";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxConfig } from "../src/types";
 import { withRegistryDiscovery } from "./helpers/provider-registry-discovery";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(tmpdir(), "ocx-conn-test");
 const previousHome = process.env.OPENCODEX_HOME;
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
-  if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
 });
@@ -26,7 +27,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  rmSync(TEST_DIR, { recursive: true, force: true });
+  removeTreeWithRetry(TEST_DIR);
 });
 
 function baseConfig(providers: OcxConfig["providers"]): OcxConfig {

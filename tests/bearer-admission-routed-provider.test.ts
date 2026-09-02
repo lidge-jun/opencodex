@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -13,6 +13,7 @@ import { handleNativeProfileAPI } from "../src/codex/native-profile-api";
 import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import type { OcxConfig } from "../src/types";
 import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspection";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Issue #2132: bearer admission must not require a stored ChatGPT credential.
@@ -120,8 +121,8 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
-  if (ocxHome) rmSync(ocxHome, { recursive: true, force: true });
-  if (codexHome) rmSync(codexHome, { recursive: true, force: true });
+  if (ocxHome) removeTreeWithRetry(ocxHome);
+  if (codexHome) removeTreeWithRetry(codexHome);
   ocxHome = "";
   codexHome = "";
 });

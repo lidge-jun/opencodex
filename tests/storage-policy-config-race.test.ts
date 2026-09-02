@@ -16,6 +16,7 @@ import {
   setStorageCleanupPolicyJobTestHooks,
 } from "../src/storage/policy-job";
 import type { OcxConfig, StorageCleanupPolicy } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let configHome = "";
 let previousHome: string | undefined;
@@ -52,7 +53,7 @@ afterEach(async () => {
   setPersistedConfigMutationBeforeCommitForTests(null);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
-  if (configHome) rmSync(configHome, { recursive: true, force: true });
+  if (configHome) removeTreeWithRetry(configHome);
   configHome = "";
 });
 

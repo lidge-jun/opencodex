@@ -4,7 +4,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,6 +52,7 @@ import {
   tryAdmitTurn,
 } from "../src/server/lifecycle";
 import { startServer } from "../src/server";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -67,7 +67,7 @@ function restoreEnv(name: "OPENCODEX_HOME" | "CODEX_HOME", value: string | undef
 afterEach(() => {
   restoreEnv("OPENCODEX_HOME", previousOpencodexHome);
   restoreEnv("CODEX_HOME", previousCodexHome);
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
 class MemoryKeyProvider implements NativeProfileKeyProvider {

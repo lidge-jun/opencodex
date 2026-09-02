@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,7 @@ import {
   inspectServiceManagerInstallation,
   type ProbeRunner,
 } from "../src/service-manager-probe";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 test("Linux reports systemd absent when systemctl cannot be spawned", () => {
   const home = mkdtempSync(join(tmpdir(), "ocx-probe-docker-"));
@@ -23,6 +24,6 @@ test("Linux reports systemd absent when systemctl cannot be spawned", () => {
       kind: "absent",
     });
   } finally {
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   }
 });

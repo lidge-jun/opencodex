@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -38,6 +38,7 @@ import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../src/codex/catalog/native-
 import upstreamModelsSnapshot from "../src/codex/data/upstream-models.json";
 import { readCodexAccountRecord, saveCodexAccountCredential } from "../src/codex/account-store";
 import { installIsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_CLIENT_VERSION = "0.146.0";
 const DAYBREAK = "gpt-daybreak-blue-latest";
@@ -468,7 +469,7 @@ describe("ensureCodexEntitlementFreshness", () => {
     else process.env.OPENCODEX_HOME = originalOpenCodexHome;
     if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalCodexHome;
-    rmSync(root, { recursive: true, force: true });
+    removeTreeWithRetry(root);
     resetCodexModelEntitlementCacheForTests();
   });
 

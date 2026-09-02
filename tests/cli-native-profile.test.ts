@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { cmdAccount } from "../src/cli/account";
 import { apiError } from "../src/cli/account-api";
 import { nativeMainCodexLoginInvocation } from "../src/cli/account-main";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const originalLog = console.log;
 const originalError = console.error;
@@ -22,7 +23,7 @@ afterEach(() => {
   console.error = originalError;
   if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = originalCodexHome;
-  while (tempRoots.length > 0) rmSync(tempRoots.pop()!, { recursive: true, force: true });
+  while (tempRoots.length > 0) removeTreeWithRetry(tempRoots.pop()!);
 });
 
 describe("ocx account main", () => {

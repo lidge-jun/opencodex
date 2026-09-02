@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, readConfigDiagnostics, saveConfig } from "../src/config";
@@ -7,6 +7,7 @@ import { startServer } from "../src/server";
 import { isDataPlaneAdmissionSecret } from "../src/server/auth-cors";
 import { ownAdmissionTokens } from "../src/claude/auth-detect";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 // The /api/keys handlers had no direct test before this file: GET masking, POST
 // persistence and DELETE semantics were only ever exercised through a CLI fixture
@@ -88,7 +89,7 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
   if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
-  if (testHome) rmSync(testHome, { recursive: true, force: true });
+  if (testHome) removeTreeWithRetry(testHome);
   testHome = "";
 });
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { managementFetch as fetch } from "./helpers/management-auth";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCodexAuthAPI } from "../src/codex/auth-api";
@@ -32,7 +32,7 @@ describe("Codex account pool strategy management API", () => {
   afterEach(() => {
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    rmSync(TEST_DIR, { recursive: true, force: true });
+    removeTreeWithRetry(TEST_DIR);
   });
 
   test("GET /api/codex-auth/active surfaces strategy defaults", async () => {
@@ -454,7 +454,7 @@ describe("generic OAuth pool-settings contract (#695)", () => {
   afterEach(() => {
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    if (testDir) rmSync(testDir, { recursive: true, force: true });
+    if (testDir) removeTreeWithRetry(testDir);
   });
 
   test("GET/PUT round-trip for a generic OAuth provider; api-key providers and bad values get 400", async () => {

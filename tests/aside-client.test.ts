@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,6 +21,7 @@ import { createIntegrationStateStore } from "../src/integrations/store";
 import { defaultIntegrationIO } from "../src/integrations/config-io";
 import { applyIntegration } from "../src/integrations/writer";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const CONFIG = {
   port: 10100,
@@ -55,7 +56,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
 });
 
 describe("Aside client config", () => {
@@ -123,7 +124,7 @@ describe("Aside client config", () => {
     mkdirSync(join(other, ".aside"), { recursive: true });
     writeFileSync(join(other, ".aside", "accounts.json"), JSON.stringify({ currentAccountId: 1 }));
     expect(asideConfigPath({}, other)).toBe(join(other, ".aside", "u", "1", "models.json"));
-    rmSync(other, { recursive: true, force: true });
+    removeTreeWithRetry(other);
   });
 
   /*

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { createImageBudget, guessExtFromMagic, materializeInlineImage } from "../../src/images/artifacts";
@@ -7,6 +7,7 @@ import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../../src/adapters/google";
 import type { AdapterEvent, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const createGoogleAdapter = (...args: Parameters<typeof createGoogleAdapterProduction>) =>
   withTestTranslatorBudget(createGoogleAdapterProduction(...args));
@@ -25,7 +26,7 @@ beforeAll(() => {
 afterAll(() => {
   if (savedHome !== undefined) process.env.OPENCODEX_HOME = savedHome;
   else delete process.env.OPENCODEX_HOME;
-  rmSync(tempHome, { recursive: true, force: true });
+  removeTreeWithRetry(tempHome);
 });
 
 // 1x1 red PNG pixel in base64 (real PNG magic bytes: 89 50 4E 47)
@@ -137,7 +138,7 @@ describe("materializeInlineImage", () => {
   });
 
   test("creates the artifacts directory if missing", async () => {
-    rmSync(artifactsDir, { recursive: true, force: true });
+    removeTreeWithRetry(artifactsDir);
     expect(existsSync(artifactsDir)).toBe(false);
     const result = await materializeInlineImage(TINY_PNG);
     expect(existsSync(artifactsDir)).toBe(true);
@@ -325,7 +326,7 @@ describe("artifact markdown never leaks OPENCODEX_HOME paths", () => {
   afterAll(() => {
     if (savedHome !== undefined) process.env.OPENCODEX_HOME = savedHome;
     else delete process.env.OPENCODEX_HOME;
-    rmSync(underHome, { recursive: true, force: true });
+    removeTreeWithRetry(underHome);
   });
 
   test("streaming: no home/username path segments in markdown", async () => {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +12,7 @@ import type {
   CodexIntegrationRecord,
   CodexProvenanceEntry,
 } from "../src/codex/convergence-types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let opencodexHome = "";
 let previousOpencodexHome: string | undefined;
@@ -58,7 +59,7 @@ beforeEach(() => {
 afterEach(() => {
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  rmSync(opencodexHome, { recursive: true, force: true });
+  removeTreeWithRetry(opencodexHome);
 });
 
 describe("Codex integration record", () => {

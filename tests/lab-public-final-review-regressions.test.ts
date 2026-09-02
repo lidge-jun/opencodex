@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureLabDirs, labPublicOriginDir } from "../src/lab/paths";
@@ -14,13 +14,14 @@ import {
 } from "../src/lab/public";
 import { listValidPublicOriginsForPurge } from "../src/lab/public/origin-purge";
 import { setPublicEvidencePurgeFaultForTests } from "../src/lab/public/purge-test-fault";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const roots: string[] = [];
 
 afterEach(() => {
   setPublicEvidencePurgeFaultForTests(null);
   for (const root of roots.splice(0)) {
-    if (existsSync(root)) rmSync(root, { recursive: true, force: true });
+    if (existsSync(root)) removeTreeWithRetry(root);
   }
 });
 

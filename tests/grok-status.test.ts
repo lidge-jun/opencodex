@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { injectGrokConfig } from "../src/grok/inject";
 import { grokFenceEndpointDrift, readGrokStatus } from "../src/grok/status";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 function tempGrokHome(): { root: string; grokHome: string } {
   const root = mkdtempSync(join(tmpdir(), "ocx-grok-status-"));
@@ -21,7 +22,7 @@ describe("readGrokStatus", () => {
       expect(status.models).toEqual([]);
       expect(status.configPath).toBe(join(grokHome, "config.toml"));
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -31,7 +32,7 @@ describe("readGrokStatus", () => {
       writeFileSync(join(grokHome, "config.toml"), '[model.mine]\nmodel = "my-model"\n', "utf8");
       expect(readGrokStatus({ grokHome }).present).toBe(false);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -56,7 +57,7 @@ describe("readGrokStatus", () => {
         "no-window-model:none",
       ]);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -75,7 +76,7 @@ describe("readGrokStatus", () => {
       expect(JSON.stringify(status)).not.toContain("sk-user-secret");
       expect(JSON.stringify(status)).not.toContain("secret-model");
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 
@@ -100,7 +101,7 @@ describe("readGrokStatus", () => {
       expect(status.baseUrl).toBe("http://127.0.0.1:10190/v1");
       expect(status.models.map(m => m.id)).toEqual(["gpt-5.6-sol"]);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 });
@@ -145,7 +146,7 @@ describe("Grok fence endpoint drift", () => {
       expect(grokFenceEndpointDrift(status, 10100)).toBeNull();
       expect(grokFenceEndpointDrift(status, 4179)).toEqual({ fencePort: 10100, livePort: 4179 });
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      removeTreeWithRetry(root);
     }
   });
 });

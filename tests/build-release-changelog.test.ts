@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -14,6 +14,7 @@ import {
   trailingLandingPr,
   type ReleaseCommit,
 } from "../scripts/build-release-changelog";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const sha = (char: string): string => char.repeat(40);
 
@@ -255,7 +256,7 @@ describe("release metadata parsers", () => {
         { sha: second, subject: "feat: second", body: "feat: second" },
       ]);
     } finally {
-      rmSync(repo, { recursive: true, force: true });
+      removeTreeWithRetry(repo);
     }
   });
 

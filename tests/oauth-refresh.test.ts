@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getValidAccessToken, getValidAccessTokenForAccount, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, seedOAuthTokenRefreshFlightsForTests } from "../src/oauth";
@@ -22,6 +22,7 @@ import {
 } from "../src/oauth/store";
 import * as storeModule from "../src/oauth/store";
 import * as configModule from "../src/config";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const origHome = process.env.HOME;
 const origLocalAppData = process.env.LOCALAPPDATA;
@@ -63,7 +64,7 @@ afterEach(() => {
   if (origClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = origClaudeConfigDir;
   globalThis.fetch = origFetch;
   console.warn = origWarn;
-  rmSync(tmp, { recursive: true, force: true });
+  removeTreeWithRetry(tmp);
 });
 
 function seedKiroCliDb(token: {

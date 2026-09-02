@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync} from "node:fs";
 import { isAbsolute, join, parse } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -13,6 +13,7 @@ import {
   probeCodexCoordinatorNamespace,
   samePathIdentity,
 } from "../src/codex/user-identity";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let codexHome = "";
 let previousHome: string | undefined;
@@ -92,7 +93,7 @@ test("the coordinator namespace probe is read-only", () => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
-  rmSync(codexHome, { recursive: true, force: true });
+  removeTreeWithRetry(codexHome);
 });
 
 test("the effective identity is uid/SID and does not follow HOME", () => {
@@ -211,7 +212,7 @@ test("real processes resolve one identity and coordinator path across every home
     expect(probes[1]?.identity).toEqual(probes[0]?.identity);
     expect(probes[1]?.databasePath).toBe(probes[0]?.databasePath);
   } finally {
-    for (const { root } of environmentRoots) rmSync(root, { recursive: true, force: true });
+    for (const { root } of environmentRoots) removeTreeWithRetry(root);
   }
 }, { timeout: 20_000 });
 

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -20,6 +20,7 @@ import { discoverScenarios, loadCaseAuthority } from "../src/lab/conformance/man
 import { resolveProtocolExecutionContext } from "../src/lab/conformance/executor";
 import type { CaseRecord } from "../src/lab/conformance/types";
 import type { InvalidationEvent } from "../src/lab/events/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 
@@ -33,7 +34,7 @@ function tempHome(): string {
 afterEach(() => {
   for (const dir of HOMES.splice(0)) {
     try {
-      rmSync(dir, { recursive: true, force: true });
+      removeTreeWithRetry(dir);
     } catch {
       /* ignore */
     }

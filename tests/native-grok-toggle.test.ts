@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -7,6 +7,7 @@ import type { ManagementApiDeps } from "../src/server/management/context";
 import { syncGrokConfig } from "../src/grok/sync";
 import { injectGrokConfig, type GrokInjectModel } from "../src/grok/inject";
 import type { OcxConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * Route contract for devlog/_fin/260803_integrations_toggle_all/012 (Rev 3).
@@ -56,7 +57,7 @@ afterEach(() => {
   else process.env.GROK_HOME = previousGrokHome;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
+  while (cleanup.length) removeTreeWithRetry(cleanup.pop()!);
 });
 
 /** Overwrite the owned install-state with a FOREIGN one (home_mismatch tests). */

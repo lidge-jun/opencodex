@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseReasoningArgs, handleModels } from "../src/cli/models";
 import { handleModelsRuntimeCommand } from "../src/cli/models-runtime";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /**
  * The API validates reasoning ladders (9 tests in catalog-input-modality-enum.test.ts),
@@ -136,7 +137,7 @@ describe("ocx models add persists reasoning metadata into config.json", () => {
   afterAll(() => {
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    rmSync(home, { recursive: true, force: true });
+    removeTreeWithRetry(home);
   });
 
   function readConfig(): { customModels?: Array<Record<string, unknown>> } {

@@ -8,7 +8,7 @@
  * codexAutoStart-only PUTs keep working).
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
@@ -31,6 +31,7 @@ import {
 } from "../src/server/management/usage-summary-cache";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 import { startupHealthFixture } from "./helpers/startup-health";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let TEST_DIR = "";
 const previousHome = process.env.OPENCODEX_HOME;
@@ -92,7 +93,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (TEST_DIR && existsSync(TEST_DIR)) {
     try {
-      rmSync(TEST_DIR, { recursive: true, force: true });
+      removeTreeWithRetry(TEST_DIR);
     } catch {
       /* Windows may briefly retain file handles during test cleanup */
     }

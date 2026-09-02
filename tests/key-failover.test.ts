@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
@@ -13,6 +13,7 @@ import {
 import { deriveXaiConvId } from "../src/providers/xai-transport";
 import { routeModel } from "../src/router";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let home: string;
 
@@ -46,7 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.OPENCODEX_HOME;
-  rmSync(home, { recursive: true, force: true });
+  removeTreeWithRetry(home);
   clearKeyCooldowns();
 });
 

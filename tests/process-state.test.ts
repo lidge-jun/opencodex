@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import * as configFacade from "../src/config";
@@ -20,6 +20,7 @@ import {
   writeRuntimePort,
 } from "../src/config/process-state";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testDir = "";
 
@@ -35,7 +36,7 @@ afterEach(() => {
   setTrustedWindowsSystemDirectoryResolverForTests(null);
   setOcxStartProcessCacheForTests([]);
   delete process.env.OPENCODEX_HOME;
-  if (testDir && existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
+  if (testDir && existsSync(testDir)) removeTreeWithRetry(testDir);
   testDir = "";
 });
 

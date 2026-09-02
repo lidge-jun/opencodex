@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -17,10 +17,11 @@ import { expandLiveSuiteManifest } from "../src/lab/live/suite-manifest";
 import type { LabBehaviorValues, LabRouteContext, LiveScenarioRunResult } from "../src/lab/live/types";
 import type { ProtocolSubjectV1, RouteSubjectV1 } from "../src/lab/events/types";
 import type { NormalizedObservation } from "../src/lab/conformance/types";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const HOMES: string[] = [];
 function tempHome(): string { const dir = join(tmpdir(), `ocx-lab-probe-${process.pid}-${Math.random().toString(16).slice(2)}`); mkdirSync(dir, { recursive: true, mode: 0o700 }); HOMES.push(dir); return dir; }
-afterEach(() => { for (const dir of HOMES.splice(0)) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } } delete process.env.OPENCODEX_HOME; clearMcpStub(); });
+afterEach(() => { for (const dir of HOMES.splice(0)) { try { removeTreeWithRetry(dir); } catch { /* ignore */ } } delete process.env.OPENCODEX_HOME; clearMcpStub(); });
 
 function behavior(adapter: string, upstreamProtocol: string): LabBehaviorValues {
   return {

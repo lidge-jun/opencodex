@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -12,6 +12,7 @@ import {
   resolveVisionTimeoutMs,
 } from "../src/vision";
 import { ManagementRequest as Request } from "./helpers/management-auth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 async function getSidecarSettings(config: OcxConfig): Promise<Response> {
   const url = new URL("http://localhost/api/sidecar-settings");
@@ -76,7 +77,7 @@ describe("sidecar-settings remaining vision controls", () => {
   afterEach(() => {
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
-    if (isolatedHome) rmSync(isolatedHome, { recursive: true, force: true });
+    if (isolatedHome) removeTreeWithRetry(isolatedHome);
     isolatedHome = undefined;
   });
 

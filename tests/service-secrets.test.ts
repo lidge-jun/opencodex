@@ -24,6 +24,7 @@ import {
   writeServiceApiTokenFile,
   writeTokenBackup,
 } from "../src/lib/service-secrets";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let home = "";
 
@@ -34,7 +35,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.OPENCODEX_HOME;
-  if (home) rmSync(home, { recursive: true, force: true });
+  if (home) removeTreeWithRetry(home);
 });
 
 describe("service API token ownership", () => {

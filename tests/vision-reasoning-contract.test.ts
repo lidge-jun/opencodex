@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleConfigCommand } from "../src/cli/config-command";
@@ -12,6 +12,7 @@ import {
 import type { OcxConfig } from "../src/types";
 import { resolveOpenAiVisionModel } from "../src/vision";
 import { ManagementRequest as Request } from "./helpers/management-auth";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 async function getVision(config: OcxConfig): Promise<Response> {
   const url = new URL("http://localhost/api/sidecar-settings");
@@ -160,7 +161,7 @@ describe("vision reasoning capability contracts", () => {
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
-      rmSync(isolatedHome, { recursive: true, force: true });
+      removeTreeWithRetry(isolatedHome);
     }
   });
 
@@ -185,7 +186,7 @@ describe("vision reasoning capability contracts", () => {
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
-      rmSync(isolatedHome, { recursive: true, force: true });
+      removeTreeWithRetry(isolatedHome);
     }
   });
 
@@ -215,7 +216,7 @@ describe("vision reasoning capability contracts", () => {
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
-      rmSync(isolatedHome, { recursive: true, force: true });
+      removeTreeWithRetry(isolatedHome);
       resetCodexModelEntitlementCacheForTests();
     }
   });

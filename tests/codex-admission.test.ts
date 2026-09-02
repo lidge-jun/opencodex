@@ -8,11 +8,12 @@
  * admission that manufactures the state it is admitting cannot refuse.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { admitCodexWrite as admitRaw, hashAuthority } from "../src/codex/admission";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 /*
  * Ownership is proven by shelling out to the platform service manager, and a
@@ -83,7 +84,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true });
+  while (cleanup.length) removeTreeWithRetry(cleanup.pop()!);
 });
 
 describe("it refuses rather than guessing", () => {
