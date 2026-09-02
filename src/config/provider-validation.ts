@@ -94,6 +94,20 @@ export function positiveIntegerRecordConfigError(value: unknown, field: string):
   return null;
 }
 
+export function contextTierRecordConfigError(value: unknown, field: string): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  for (const [key, entry] of Object.entries(value)) {
+    if (!key.trim()) return `${field} keys must be nonblank model ids`;
+    if (entry !== "default" && entry !== "long_context") {
+      return `${field}.${key} must be one of: default, long_context`;
+    }
+  }
+  return null;
+}
+
 export function positiveIntegerConfigError(value: unknown, field: string): string | null {
   if (value === undefined) return null;
   if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {

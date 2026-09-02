@@ -2,6 +2,7 @@ import type { AdapterRequest, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { applyGithubCopilotContextTier } from "../providers/github-copilot-context";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { isDebugEnabled } from "../lib/debug-settings";
@@ -1611,7 +1612,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       if (parsed.stream) body.stream_options = { include_usage: true };
 
-      const bodyJson = JSON.stringify(body);
+      const bodyJson = JSON.stringify(applyGithubCopilotContextTier(body, provider, parsed.modelId));
       const actualServiceTier = typeof body.service_tier === "string" ? body.service_tier : null;
       const tierLog = createAdapterTierMetadata(
         parsed.options.tierObservation,

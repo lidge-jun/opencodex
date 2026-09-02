@@ -7,6 +7,7 @@ import { isValidProviderName, hasOwnProvider } from "./config/provider-name";
 import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
+  contextTierRecordConfigError,
   modelAdapterRecordConfigError,
   modelDisplayNamesConfigError,
   nonBlankStringArrayConfigError,
@@ -561,6 +562,7 @@ const providerConfigSchema = z.object({
   retryOn429: retryOn429PolicySchema.optional(),
   transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
+  modelContextTiers: z.record(z.string(), z.enum(["default", "long_context"])).optional(),
   // Validated rather than passed through: this schema ends in `.passthrough()`, so an
   // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be
   // accepted, persisted, and then silently resolved to the `code_mode_only` default — the
@@ -580,6 +582,7 @@ export { isValidProviderName, hasOwnProvider } from "./config/provider-name";
 export {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
+  contextTierRecordConfigError,
   modelAdapterRecordConfigError,
   modelDisplayNamesConfigError,
   nonBlankStringArrayConfigError,
@@ -1300,6 +1303,17 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelAdapters"],
         message: modelAdaptersError,
+      });
+    }
+    const contextTiersError = contextTierRecordConfigError(
+      (provider as { modelContextTiers?: unknown }).modelContextTiers,
+      "modelContextTiers",
+    );
+    if (contextTiersError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "modelContextTiers"],
+        message: contextTiersError,
       });
     }
     const preferHostedToolsError = modelPreferHostedToolsConfigError(

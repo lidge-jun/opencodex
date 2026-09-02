@@ -42,6 +42,16 @@ function provider(liveModels?: boolean): WorkspaceItem {
   } as WorkspaceItem;
 }
 
+function copilotProvider(tier?: "default" | "long_context"): WorkspaceItem {
+  return {
+    name: "github-copilot",
+    adapter: "openai-responses",
+    baseUrl: "https://api.githubcopilot.com",
+    authMode: "oauth",
+    ...(tier ? { modelContextTiers: { "gpt-5.6-luna": tier } } : {}),
+  } as WorkspaceItem;
+}
+
 async function mountSettings(item: WorkspaceItem): Promise<{
   root: Root;
   container: HTMLElement;
@@ -114,6 +124,26 @@ test("changing an explicit false to true sends an explicit liveModels choice", a
   await save(container);
 
   expect(patches[0]?.liveModels).toBe(true);
+  await act(async () => { root.unmount(); });
+});
+
+test("changing Copilot's context tier sends a provider patch", async () => {
+  const { root, container, patches } = await mountSettings(copilotProvider());
+  const select = [...container.querySelectorAll<HTMLSelectElement>("select")]
+    .find(candidate => candidate.querySelector('option[value="long_context"]'));
+  expect(select).toBeTruthy();
+
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
+      .set!.call(select, "long_context");
+    select!.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+  await save(container);
+
+  expect(patches).toHaveLength(1);
+  expect(patches[0]).toMatchObject({
+    modelContextTiers: { "gpt-5.6-luna": "long_context" },
+  });
   await act(async () => { root.unmount(); });
 });
 

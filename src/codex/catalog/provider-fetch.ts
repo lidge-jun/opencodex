@@ -43,6 +43,7 @@ import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../../providers/registry";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
 import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
+import { githubCopilotCatalogContextWindow } from "../../providers/github-copilot-context";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { effectiveModelAliases } from "../../providers/default-aliases";
 import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
@@ -582,6 +583,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     defaultModel: prov.defaultModel ?? null,
     ctx: prov.contextWindow ?? null,
     ctxW: prov.modelContextWindows ?? null,
+    ctxTier: prov.modelContextTiers ?? null,
     maxIn: prov.modelMaxInputTokens ?? null,
     maxOut: prov.modelMaxOutputTokens ?? null,
     autoCompact: prov.modelAutoCompactTokenLimits ?? null,
@@ -731,6 +733,9 @@ export function applyProviderConfigHints(
 ): CatalogModel {
   const displayName = configuredModelDisplayName(prov, model.id);
   const configuredCap = configuredContextWindow(prov, model.id);
+  const tieredModelContextWindow = configuredCap === undefined
+    ? githubCopilotCatalogContextWindow(name, prov, model.id, model.contextWindow)
+    : model.contextWindow;
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
   const maxOutputTokens = routedMaxOutputTokens(name, prov, model, model.id, metadataModelIdCaseFold);
   const configuredAutoCompact = configuredAutoCompactTokenLimit(prov, model.id);
@@ -758,8 +763,8 @@ export function applyProviderConfigHints(
     ...modelWithoutServiceTier
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
-  const discoveredWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
-    ? model.contextWindow
+  const discoveredWindow = typeof tieredModelContextWindow === "number" && tieredModelContextWindow > 0
+    ? tieredModelContextWindow
     : undefined;
   const hintedWindow = discoveredWindow !== undefined
     ? (configuredCap !== undefined ? Math.min(discoveredWindow, configuredCap) : discoveredWindow)

@@ -38,6 +38,8 @@ export interface WorkspaceProvider {
   models?: string[];
   /** Whether the proxy fetches the provider's live model catalog (default true). */
   liveModels?: boolean;
+  /** Model-specific upstream context tier, currently exposed for GitHub Copilot. */
+  modelContextTiers?: Record<string, "default" | "long_context">;
   /** Optional upstream HTTP version pin. Cursor defaults to HTTP/2 when omitted. */
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2";
   authMode?: "key" | "forward" | "oauth" | "local" | string;

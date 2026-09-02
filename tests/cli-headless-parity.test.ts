@@ -312,6 +312,21 @@ describe("headless GUI parity CLI", () => {
     }]);
   });
 
+  test("provider edit sends a per-model Copilot context tier", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleProviderRuntimeCommand("edit", [
+      "github-copilot",
+      "--model-context-tier", "gpt-5.6-luna=long_context",
+      "--json",
+    ], runtime.deps);
+    expect(code).toBe(0);
+    expect(runtime.requests).toEqual([{
+      path: "/api/providers?name=github-copilot",
+      method: "PATCH",
+      body: { modelContextTiers: { "gpt-5.6-luna": "long_context" } },
+    }]);
+  });
+
   test("provider edit --headers sends the parsed block and - clears it", async () => {
     const runtime = fakeRuntime();
     const code = await handleProviderRuntimeCommand("edit", [

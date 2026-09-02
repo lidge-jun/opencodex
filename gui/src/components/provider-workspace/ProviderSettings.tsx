@@ -23,8 +23,10 @@ import type { WorkspaceItem, ProviderUpdatePatch, ProviderUpdateResult } from ".
 
 const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"] as const;
 const EMPTY_MODELS: string[] = [];
+const GITHUB_COPILOT_MODEL = "gpt-5.6-luna";
 
 type ChoicesStatus = "idle" | "loading" | "ready" | "error";
+type ContextTier = "default" | "long_context";
 type PacingRule = { requestsPerMinute?: number; minIntervalMs?: number };
 type PacingStatus = { enabled: boolean; queued: number; nextSlotInMs: number; lastStartedAt?: number; lastModelId?: string };
 type CursorHttpVersion = "http2" | "http1.1";
@@ -81,6 +83,10 @@ export default function ProviderSettings({
   const [note, setNote] = useState(item.note ?? "");
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
   const [liveModels, setLiveModels] = useState(savedLiveModels);
+  const persistedCopilotContextTier: ContextTier = item.modelContextTiers?.[GITHUB_COPILOT_MODEL] === "long_context"
+    ? "long_context"
+    : "default";
+  const [copilotContextTier, setCopilotContextTier] = useState<ContextTier>(persistedCopilotContextTier);
   const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(savedCursorHttpVersion);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -109,6 +115,7 @@ export default function ProviderSettings({
     setNote(item.note ?? "");
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
     setLiveModels(savedLiveModels);
+    setCopilotContextTier(item.modelContextTiers?.[GITHUB_COPILOT_MODEL] === "long_context" ? "long_context" : "default");
     setCursorHttpVersion(savedCursorHttpVersion);
     setPacingEnabled(item.requestPacing?.enabled === true);
     setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
@@ -117,7 +124,7 @@ export default function ProviderSettings({
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.modelContextTiers, item.requestPacing, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -194,6 +201,7 @@ export default function ProviderSettings({
     || note.trim() !== (item.note ?? "")
     || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false)
     || liveModels !== savedLiveModels
+    || (item.name === "github-copilot" && copilotContextTier !== persistedCopilotContextTier)
     || (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion);
   const pacingDirty = pacingSignature(pacingDraft) !== pacingSignature(item.requestPacing);
   const formDirty = dirty || pacingDirty;
@@ -256,6 +264,12 @@ export default function ProviderSettings({
         }
         if (supportsApiKeyTransport) patch.apiKeyTransport = apiKeyTransport;
         else if (item.apiKeyTransport !== undefined) patch.apiKeyTransport = "";
+        if (item.name === "github-copilot" && copilotContextTier !== persistedCopilotContextTier) {
+          patch.modelContextTiers = {
+            ...(item.modelContextTiers ?? {}),
+            [GITHUB_COPILOT_MODEL]: copilotContextTier,
+          };
+        }
       }
       const res = await onUpdateProvider(item.name, patch);
       setMsg(res.ok ? { ok: true, text: t("pws.settingsSaved") } : { ok: false, text: res.error || t("prov.saveFailed") });
@@ -301,6 +315,7 @@ export default function ProviderSettings({
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion); setMsg(null);
+    setCopilotContextTier(persistedCopilotContextTier);
     setPacingEnabled(item.requestPacing?.enabled === true); setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
     setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs)); setPacingModels({ ...(item.requestPacing?.models ?? {}) });
     setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
@@ -405,6 +420,21 @@ export default function ProviderSettings({
           </select>
         )}
       </label>
+      {item.name === "github-copilot" && (
+        <label className="pwi-settings-field">
+          <span className="pwi-settings-label">{t("pws.copilotContextTier")}</span>
+          <select
+            className="input"
+            value={copilotContextTier}
+            disabled={saving || modeSaving}
+            onChange={e => setCopilotContextTier(e.target.value as ContextTier)}
+          >
+            <option value="default">{t("pws.copilotContextTierDefault")}</option>
+            <option value="long_context">{t("pws.copilotContextTierLong")}</option>
+          </select>
+          <span className="pwi-settings-hint">{t("pws.copilotContextTierDesc")}</span>
+        </label>
+      )}
       {isCanonicalOpenAi && (
         <label className="pwi-settings-field">
           <span className="pwi-settings-label">{t("codexAuth.accountModeTitle")}</span>

@@ -53,6 +53,13 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(provider.authMode).toBe("key");
   });
 
+  test("keeps the Copilot context tier across an OAuth provider upsert", () => {
+    const config = configWithKey("github-copilot", "openai-chat", "https://api.githubcopilot.com");
+    config.providers["github-copilot"]!.modelContextTiers = { "gpt-5.6-luna": "long_context" };
+    upsertOAuthProvider(config, "github-copilot");
+    expect(config.providers["github-copilot"]!.modelContextTiers).toEqual({ "gpt-5.6-luna": "long_context" });
+  });
+
   test("carries user-configured modelCosts across a re-login upsert", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
     const costs = { "grok-4": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };

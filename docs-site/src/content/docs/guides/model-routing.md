@@ -97,6 +97,12 @@ Routing and catalog visibility are separate controls:
   only when "apply to every routed provider" is toggled on; otherwise each provider keeps its own
   cap. Caps only lower a known context window; they never raise one or change the upstream model's
   actual limit.
+- GitHub Copilot models that expose a long-context tier can opt in through
+  `providers.github-copilot.modelContextTiers.<model> = "long_context"` (or the Providers
+  settings UI). For example, `gpt-5.6-luna` advertises the one-million-token tier and carries
+  `contextTier: "long_context"` upstream. OpenCodex applies the existing provider cap afterwards,
+  so a `400000` cap produces a 400,000-token Codex catalog window. The `"default"` tier preserves
+  the model's normal live context metadata; unsupported models should remain on that tier.
 
 ```json
 {
