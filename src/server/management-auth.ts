@@ -53,6 +53,7 @@ import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, h
 import type { OcxConfig } from "../types";
 import {
   isDataPlaneAdmissionSecret,
+  isLoopbackHostname,
 } from "./auth-cors";
 import {
   authorizeGuiSessionRequest,
@@ -513,6 +514,9 @@ export function requireManagementAuth(
   local?: LocalManagementAuthContext,
 ): Response | null {
   if (resolveManagementAdmission(req, state, config, local)) return null;
+  if (config?.managementAuthDisabled === true && isLoopbackHostname(config.hostname)) {
+    return null;
+  }
   if (!state.available) {
     return Response.json({
       error: "management API unavailable",

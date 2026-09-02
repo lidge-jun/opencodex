@@ -550,7 +550,13 @@ export interface OcxConfig {
    * model at the shared routing layer with routeReason "blocked-model-redirect".
    * Unset or omitted by default.
    */
-  blockedModelRedirects?: Record<string, string>;
+ blockedModelRedirects?: Record<string, string>;
+  /**
+   * Opt-in: disable admin-token auth on the management API (/api/*). Only takes effect
+   * on a loopback bind; a non-loopback hostname with this flag still requires a data-plane
+   * credential. Useful for local single-user deployments where the admin token is a nuisance.
+   */
+  managementAuthDisabled?: boolean;
   /**
    * 3-state multi-agent surface override:
    * - "v1": force ALL models to v1 surface (override upstream pins)

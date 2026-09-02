@@ -1106,7 +1106,11 @@ const configSchema = z.object({
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
-  blockedModelRedirects: z.record(z.string(), z.string()).optional().catch(undefined),
+ blockedModelRedirects: z.record(z.string(), z.string()).optional().catch(undefined),
+  // Opt-in: disable admin-token auth on the management API (/api/*). Only takes effect on a
+  // loopback bind; a non-loopback hostname with this flag still requires a data-plane
+  // credential. Useful for local single-user deployments where the admin token is a nuisance.
+  managementAuthDisabled: z.boolean().optional().catch(false),
   // Same degrade-don't-reject rationale as the fields above: a hand-edited
   // non-string must not trip the backup-and-defaults repair path. Unset then
   // takes the canonical sideband path (src/server/live.ts normalizeSidebandRoot).
