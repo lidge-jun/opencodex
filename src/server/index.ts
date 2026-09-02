@@ -1432,7 +1432,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             : idsParam === "desktop"
               ? "desktop3p" as const
               : (/^claude-code\//i.test(req.headers.get("user-agent") ?? "") ? "readable" as const : "desktop3p" as const);
-          const data = buildAnthropicModelInfos(desktopNativeSlugs, goOrdered, resolveAutoContext(config.claudeCode), idStyle, activeDesktop3pAlias, nativeContextLimits(config));
+          const data = buildAnthropicModelInfos(desktopNativeSlugs, goOrdered, resolveAutoContext(config.claudeCode), idStyle, activeDesktop3pAlias, nativeContextLimits(config), config.fastMode);
           return jsonResponse({ data }, 200, req, policy);
         }
         if (url.searchParams.has("client_version")) {
@@ -1552,7 +1552,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ...visibleNatives.map(id => nativeModelRow(id)),
           ...visibleAccountNatives.map(({ id, metadataId }) => nativeModelRow(id, metadataId)),
           ...await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered).map(async m => {
-            const publicId = m.alias ?? `${m.provider}/${m.id}`;
+            // Same rule as the anthropic branch: with the global fast switch on, a client
+            // that has no Fast toggle is offered the fast identity directly. An operator
+            // alias is an explicit decision and still wins.
+            const fastModelId = config.fastMode === true && m.provider === "cursor"
+              ? (await import("../adapters/cursor/catalog")).cursorFastIdFor(m.id)
+              : undefined;
+            const publicId = m.alias ?? `${m.provider}/${fastModelId ?? m.id}`;
             const isCombo = m.provider === "combo" && exactComboSlugs.has(publicId);
             const provider = config.providers[m.provider];
             const effective = provider

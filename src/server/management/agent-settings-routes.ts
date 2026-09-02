@@ -1048,7 +1048,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     for (const m of models) {
       if (isDisabled(m.provider, m.id)) continue;
-      aliases.push({ id: claudeCodeAlias(m.provider, m.id), display_name: `${m.id} (${m.provider})` });
+      // Match what Claude Code will actually discover: with the global fast switch on,
+      // /v1/models lists the fast identity for a fast-capable cursor base, so the
+      // dashboard must show the same id rather than the umbrella one.
+      const listedId = config.fastMode === true && m.provider === "cursor"
+        ? (await import("../../adapters/cursor/catalog")).cursorFastIdFor(m.id) ?? m.id
+        : m.id;
+      aliases.push({ id: claudeCodeAlias(m.provider, listedId), display_name: `${listedId} (${m.provider})` });
     }
     const contextWindows = buildClaudeContextWindows([...visibleNativeSlugs(config)], models, nativeContextLimits(config));
     const webSearchOverride = config.claudeCode?.webSearchSidecar;

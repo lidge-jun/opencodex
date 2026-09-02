@@ -210,6 +210,35 @@ contract; existing configurations see these migration deltas:
 
 Explicit capability `false` and Responses caller-tier forwarding retain their existing contracts.
 
+### Cursor Fast (`cursor-variant`)
+
+Cursor has no `service_tier` field. Its fast product is a different **model variant** —
+`claude-opus-5-thinking-high-fast`, or a `{id:"fast",value:"true"}` request parameter for
+Grok — so the Cursor entry declares `fastWire.kind: "cursor-variant"` and the request
+builder resolves the variant instead of setting a request field.
+
+Only the bases that actually declare a fast variant advertise Fast: `claude-opus-4-7`,
+`claude-opus-4-8`, `claude-opus-5`, `grok-4.5`, `grok-4.6`. Every other Cursor row publishes
+`supportsServiceTier: false`, so Codex shows no toggle rather than a dead one.
+
+A base whose umbrella row routes thinking upgrades to its **thinking-fast** variant, not to
+the plain fast sibling — that sibling is a different product with a shorter effort ladder,
+and for `claude-opus-5` its regular family is quarantined upstream.
+
+`fastMode` behaves differently per surface, because only Codex has a Fast toggle of its own:
+
+| Surface | `fastMode: true` |
+|---|---|
+| Codex | rows stay umbrella rows; the app's Fast toggle selects the variant |
+| Claude Code (`?ids=cli`) | lists the fast identity, e.g. `claude-ocx-cursor--claude-opus-5-thinking-fast` |
+| OpenAI `/v1/models` | lists `cursor/claude-opus-5-thinking-fast` |
+| Claude Desktop (3P) | unchanged — its aliases are hashed from the model name |
+| Dashboard `/api/models` | row ids unchanged; they are the enable/disable keys |
+
+Requests are promoted either way: with `fastMode: true`, picking the umbrella id still
+resolves to the fast variant, so a client whose saved config predates the switch does not
+need to rediscover. Every legacy variant id keeps routing unchanged.
+
 ### xAI Priority Processing
 
 The built-in `xai` preset advertises and injects Fast only when its effective transport uses

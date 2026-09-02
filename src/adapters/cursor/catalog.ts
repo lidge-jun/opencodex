@@ -469,6 +469,27 @@ export function cursorFastCapableBases(): string[] {
     .map(([baseId]) => baseId);
 }
 
+/**
+ * The id to LIST for a base when the global fast switch is on, for clients that have no
+ * Fast toggle of their own. Undefined when the base has no fast dimension, so a caller
+ * cannot advertise an id that would not route.
+ *
+ * Composed from the base's defaultVariant rather than a bare `-fast` suffix. Measured: for a
+ * thinking-default base, `claude-opus-5-fast` parses back as the REGULAR-fast sibling and
+ * resolves to `claude-opus-5-high-fast` — a shorter ladder, in the quarantined regular
+ * family, and a different wire from what the Codex toggle sends. The mirror case is equally
+ * wrong: grok has no thinkingFast spec, so `grok-4.6-thinking-fast` would fall back to the
+ * regular spec and emit a bare `grok-4.6` with no effort and no fast marker at all.
+ */
+export function cursorFastIdFor(baseId: string): string | undefined {
+  const capability = CURSOR_CAPABILITIES[baseId];
+  if (!capability) return undefined;
+  const kind = upgradeToFast(baseId, capability.defaultVariant);
+  if (kind === "thinkingFast") return `${baseId}-thinking-fast`;
+  if (kind === "fast") return `${baseId}-fast`;
+  return undefined;
+}
+
 function normalizeRequestedEffort(reasoning: string | undefined): string | undefined {
   const normalized = reasoning?.toLowerCase();
   return normalized === "ultra" ? "max" : normalized;
