@@ -15,6 +15,7 @@ import {
   unlinkSync,
   utimesSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -3248,6 +3249,12 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
     setResponseStateByteCapForTests(null);
     setResponseSpillPayloadCapForTests(null);
     setPlatformForTests(null);
+    setIcaclsRunnerForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
+    setWindowsPrincipalRunnerForTests(null);
+    setAsyncWindowsPrincipalRunnerForTests(null);
+    resetWindowsPrincipalForTests();
+    resetHardenedStateForTests();
     clearResponseStateForTests();
     rmSync(home, { recursive: true, force: true });
     if (priorHome === undefined) delete process.env["OPENCODEX_HOME"];
@@ -3447,6 +3454,73 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
     expandPreviousResponseInput(body);
     expect(previousResponseReplayFailure(body)?.reason).toBe("spill_failed");
     expect((expandChained("resp_keep") as { input: unknown[] }).input.length).toBeGreaterThan(1);
+  });
+
+  // Windows routes oversized admission through the queued async publication
+  // (src/responses/state.ts runPendingResponseSpill). The two cases above prove the sync
+  // lane; these prove the same contract on the async one, after the queue settles.
+  test("win32: post-write envelope enforcement tombstones through the async lane", async () => {
+    forceWindowsAclLane();
+    setIcaclsRunnerForTests(() => ICACLS_OK);
+    setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
+    setResponseStateByteCapForTests(1024);
+    rememberResponseState({ model: "m", input: "env" }, completedResponse("resp_env_w", "e".repeat(4096)));
+    await flushPendingResponseSpillsForTests();
+    const dir = responseSpillDirectory();
+    const files = readdirSync(dir);
+    expect(files.length).toBe(1);
+    const envelope = statSync(join(dir, files[0])).size;
+    const firstGeneration = files[0];
+    clearResponseStateMemoryForTests();
+    setResponseSpillPayloadCapForTests(envelope - 1);
+    const dropsBefore = responseAdmissionCountersForTests().oversizedDrops;
+    rememberResponseState({ model: "m", input: "env" }, completedResponse("resp_env_w", "e".repeat(4096)));
+    await flushPendingResponseSpillsForTests();
+    expect(responseAdmissionCountersForTests().oversizedDrops).toBe(dropsBefore + 1);
+    const body = {
+      model: "m",
+      previous_response_id: "resp_env_w",
+      input: [{ type: "function_call_output", call_id: "c", output: "ok" }],
+    };
+    expandPreviousResponseInput(body);
+    // The async lane deletes the over-ceiling file and tombstones at publication time, so
+    // replay reports the tombstone (spill_failed); the sync lane's spill_too_large is a
+    // read-time classification of a file that was never written here.
+    expect(previousResponseReplayFailure(body)?.reason).toBe("spill_failed");
+    // The over-ceiling publication was deleted; only the first generation's file (orphaned by
+    // the memory clear, owned by the orphan GC) remains.
+    expect(readdirSync(dir)).toEqual([firstGeneration]);
+  });
+
+  test("win32: async direct-spill write failure installs a tombstone and keeps unrelated residents", async () => {
+    forceWindowsAclLane();
+    setIcaclsRunnerForTests(() => ICACLS_OK);
+    setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
+    setResponseStateByteCapForTests(4 * 1024);
+    rememberResponseState({ model: "m", input: "a" }, completedResponse("resp_keep_w", "keep"));
+    await flushPendingResponseSpillsForTests();
+    // Unlike the sync lane, the queued candidate counts against the RAM cap while it waits,
+    // which demotes "keep" too. Fail only the oversized candidate's write so the case still
+    // proves the tombstone is scoped to the failing generation.
+    const bigBytes = 8 * 1024;
+    setSpillIoForTest({
+      write: (fd, bytes) => {
+        if (bytes.byteLength >= bigBytes) throw new Error("injected write failure");
+        let offset = 0;
+        while (offset < bytes.byteLength) offset += writeSync(fd, bytes, offset, bytes.byteLength - offset);
+      },
+    });
+    rememberResponseState({ model: "m", input: "big" }, completedResponse("resp_fail_w", "v".repeat(bigBytes)));
+    await flushPendingResponseSpillsForTests();
+    setSpillIoForTest(null);
+    const body = {
+      model: "m",
+      previous_response_id: "resp_fail_w",
+      input: [{ type: "function_call_output", call_id: "c", output: "ok" }],
+    };
+    expandPreviousResponseInput(body);
+    expect(previousResponseReplayFailure(body)?.reason).toBe("spill_failed");
+    expect((expandChained("resp_keep_w") as { input: unknown[] }).input.length).toBeGreaterThan(1);
   });
 
   test("same-ID oversized replacement releases the old resident exactly once", () => {

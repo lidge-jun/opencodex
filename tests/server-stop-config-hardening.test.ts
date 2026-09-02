@@ -106,7 +106,8 @@ test("a rejected native-lifecycle release still drains the ACL flight before sto
   try {
     server = startServer(0);
     let settled: "pending" | "rejected" | "resolved" = "pending";
-    const stopping = server.stop(true).then(() => { settled = "resolved"; }, () => { settled = "rejected"; });
+    let rejection: unknown;
+    const stopping = server.stop(true).then(() => { settled = "resolved"; }, (error: unknown) => { settled = "rejected"; rejection = error; });
     await new Promise(resolve => setTimeout(resolve, 60));
     // The release already threw, but stop() must not settle until the flight is drained.
     expect(settled).toBe("pending");
@@ -115,6 +116,9 @@ test("a rejected native-lifecycle release still drains the ACL flight before sto
     await stopping;
     expect(flightSettled).toBe(true);
     expect(settled).toBe("rejected");
+    // The original failure is what the caller sees; the flush never replaces it.
+    expect(rejection).toBeInstanceOf(Error);
+    expect((rejection as Error).message).toBe("native release exploded");
     server = null;
   } finally {
     release();
