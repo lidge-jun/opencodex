@@ -76,9 +76,11 @@ describe("antigravity CCA envelope", () => {
     expect(req.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse");
   });
 
-  test("exposes Gemini 3.7 Flash while retired Flash ids resolve to it", async () => {
-    // Collapsed picker: base models only.
+  test("exposes Gemini 3.8 and 3.7 Flash while retired Flash ids resolve to 3.7", async () => {
+    // Collapsed picker: base models only. 3.8 leads because CCA ranks it first in the
+    // Recommended sort; 3.7 stays because Google still serves it.
     expect(ANTIGRAVITY_MODELS).toEqual([
+      "gemini-3.8-flash",
       "gemini-3.7-flash",
       "gemini-3.1-pro",
       "gemini-3.1-flash-image",
@@ -125,6 +127,38 @@ describe("antigravity CCA envelope", () => {
       // The retired tier ids no longer exist upstream; they route to the live model.
       expect(JSON.parse(req.body).model).toBe("gemini-3.7-flash-tiered");
     }
+  });
+
+  test("static and discovered resolution agree for every 3.8 effort", () => {
+    // These two paths answered differently for the same input: discovery clamped max/xhigh/
+    // ultra to `high` before its lookup, while static resolution failed the `in effortMap`
+    // test and fell back to the medium default. Same request, two tiers, decided by whether
+    // discovery happened to have run. Asserting the paths SEPARATELY is what let that hide,
+    // so this compares them directly.
+    const modelIds = ["gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high"];
+    const rows = parseAntigravityAvailableModels({
+      models: Object.fromEntries(modelIds.map(id => [id, { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds }] }],
+    })!;
+    expect(rows.map(model => model.id)).toEqual(["gemini-3.8-flash"]);
+
+    const baseUrl = "https://cca-38-parity.example";
+    registerAntigravityDiscoveredWireModels(baseUrl, rows);
+    for (const effort of [undefined, "low", "medium", "high", "xhigh", "max", "ultra"]) {
+      expect(resolveAntigravityEffortWireModel("gemini-3.8-flash", effort, baseUrl))
+        .toEqual(resolveAntigravityEffortWireModel("gemini-3.8-flash", effort));
+    }
+  });
+
+  test("a partial 3.8 ladder stays as raw wire rows instead of a half-collapsed model", () => {
+    // A collapsed row promises three rungs. Publishing it from two would advertise a tier the
+    // backend did not offer, so the degradation is deliberate: raw suffix ids remain routable.
+    const modelIds = ["gemini-3.8-flash-low", "gemini-3.8-flash-high"];
+    const rows = parseAntigravityAvailableModels({
+      models: Object.fromEntries(modelIds.map(id => [id, { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds }] }],
+    })!;
+    expect(rows.map(model => model.id)).toEqual(modelIds);
   });
 
   test("collapses a complete CCA Gemini tier set but retains partial sets as wire IDs", () => {

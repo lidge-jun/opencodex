@@ -35,16 +35,26 @@ const RETIRED_TIERS: Record<string, string> = {
 };
 
 describe("Gemini 3.7 Flash replaces 3.6 on Antigravity", () => {
-  test("3.7 is the only picker-visible Flash model", () => {
+  test("no retired Flash id is picker-visible", () => {
     expect(ANTIGRAVITY_MODELS).toContain("gemini-3.7-flash");
     for (const retired of Object.keys(RETIRED_TIERS)) {
       expect(ANTIGRAVITY_MODELS).not.toContain(retired);
     }
   });
 
+  test("3.7 survives the 3.8 launch instead of being retired with it", () => {
+    // Google documents 3.7 Flash as "remains fully supported" and CCA still serves it, so
+    // unlike the 3.6 generation it must NOT join the retired map when its successor ships.
+    // A regression here would strand every saved 3.7 selection on a redirect it never needed.
+    expect(RETIRED_TIERS).not.toHaveProperty("gemini-3.7-flash");
+    expect(ANTIGRAVITY_MODELS).toContain("gemini-3.7-flash");
+    expect(ANTIGRAVITY_MODEL_EFFORTS["gemini-3.7-flash"]).toEqual(["low", "medium", "high"]);
+  });
+
   test("the provider default points at the live model", () => {
     const entry = PROVIDER_REGISTRY.find(row => row.id === "google-antigravity");
-    expect(entry?.defaultModel).toBe("gemini-3.7-flash");
+    expect(entry?.defaultModel).toBe("gemini-3.8-flash");
+    expect(entry?.models).toContain("gemini-3.8-flash");
     expect(entry?.models).toContain("gemini-3.7-flash");
   });
 
@@ -321,5 +331,69 @@ describe("the -tiered wire rename reaches the request path", () => {
     for (const retired of Object.keys(RETIRED_TIERS)) {
       expect(ANTIGRAVITY_MODEL_CONTEXT_WINDOWS[retired]).toBe(1_048_576);
     }
+  });
+});
+
+// Gemini 3.8 arrives on top of 3.7 rather than replacing it: Google documents 3.7 as still
+// fully supported and CCA serves 3.5/3.6/3.7/3.8 together. It also publishes three suffixed
+// wire ids and no `-tiered` row, so its tiers ride the suffix — the 3.6 shape, not the 3.7 one.
+describe("Gemini 3.8 Flash lands additively with a suffix ladder", () => {
+  test("3.8 is picker-visible with its own capability records", () => {
+    expect(ANTIGRAVITY_MODELS).toContain("gemini-3.8-flash");
+    expect(ANTIGRAVITY_MODEL_CONTEXT_WINDOWS["gemini-3.8-flash"]).toBe(1_048_576);
+    expect(ANTIGRAVITY_MODEL_EFFORTS["gemini-3.8-flash"]).toEqual(["low", "medium", "high"]);
+    // Google documents video/audio/PDF, but this proxy transports only text and image parts.
+    expect(ANTIGRAVITY_MODEL_INPUT_MODALITIES["gemini-3.8-flash"]).toEqual(["text", "image"]);
+    // `minimal` errors on this generation, so it must not appear in the ladder.
+    expect(ANTIGRAVITY_MODEL_EFFORTS["gemini-3.8-flash"]).not.toContain("minimal");
+  });
+
+  test("each effort routes to its own wire id and carries no thinking level", () => {
+    // The suffix already names the tier. Sending thinkingLevel beside it states the effort
+    // twice, and CCA accepts the contradiction (a `-low` wire id with HIGH returns 200), so a
+    // mismatch would silently run at an unknown tier instead of failing loudly.
+    for (const [effort, wireModelId] of [
+      ["low", "gemini-3.8-flash-low"],
+      ["medium", "gemini-3.8-flash-medium"],
+      ["high", "gemini-3.8-flash-high"],
+    ] as const) {
+      expect(resolveAntigravityEffortWireModel("gemini-3.8-flash", effort))
+        .toEqual({ wireModelId });
+    }
+  });
+
+  test("an unset effort falls to the documented medium default", () => {
+    expect(resolveAntigravityEffortWireModel("gemini-3.8-flash"))
+      .toEqual({ wireModelId: "gemini-3.8-flash-medium" });
+  });
+
+  test("efforts above the CCA ladder clamp to high rather than falling back to medium", () => {
+    for (const effort of ["xhigh", "max", "ultra"]) {
+      expect(resolveAntigravityEffortWireModel("gemini-3.8-flash", effort))
+        .toEqual({ wireModelId: "gemini-3.8-flash-high" });
+    }
+  });
+
+  test("3.8 usage rows aggregate onto the base while retired ids keep their own identity", () => {
+    for (const wire of ["gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high"]) {
+      expect(canonicalAntigravityUsageModel(wire)).toBe("gemini-3.8-flash");
+    }
+    // Retirement changes what we CALL, not what we RECORD: historical spend must not migrate.
+    expect(canonicalAntigravityUsageModel("gemini-3.6-flash-high")).toBe("gemini-3.6-flash-high");
+    expect(canonicalAntigravityUsageModel("gemini-3.7-flash")).toBe("gemini-3.7-flash");
+  });
+
+  test("retired 3.6 and 3.5 ids still redirect to 3.7 with their recorded tier", () => {
+    // 3.8 becoming current must not re-point the retirement target: those ids were retired
+    // onto 3.7, and 3.7 is still served.
+    expect(resolveAntigravityEffortWireModel("gemini-3.6-flash-high"))
+      .toEqual({ wireModelId: "gemini-3.7-flash-tiered", thinkingLevel: "high" });
+    expect(resolveAntigravityEffortWireModel("gemini-3.5-flash-extra-low"))
+      .toEqual({ wireModelId: "gemini-3.7-flash-tiered", thinkingLevel: "low" });
+  });
+
+  test("3.7 keeps its single-wire tiered routing untouched", () => {
+    expect(resolveAntigravityEffortWireModel("gemini-3.7-flash", "high"))
+      .toEqual({ wireModelId: "gemini-3.7-flash-tiered", thinkingLevel: "high" });
   });
 });
