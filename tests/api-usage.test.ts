@@ -466,8 +466,10 @@ describe("GET /api/usage", () => {
     const originalScan = usageLedgerScannerModule.scanUsageLedgerCooperatively;
     let bumped = false;
     let scans = 0;
+    const scanOverlayVersions: number[] = [];
     const spy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively").mockImplementation(async options => {
       scans += 1;
+      scanOverlayVersions.push(userCostOverlayVersion());
       const snapshot = await originalScan(options);
       if (!bumped) {
         bumped = true;
@@ -494,10 +496,18 @@ describe("GET /api/usage", () => {
       // second scan.
       expect(scans).toBe(2);
       expect(getUsageSummaryCacheEntry("30d:all")?.overlayVersion)
-        .toBe(userCostOverlayVersion());
-      const cached = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
-      expect(cached.summary).toEqual(raced.summary);
-      expect(scans).toBe(2);
+        .toBe(scanOverlayVersions[1]);
+
+      spy.mockRestore();
+      // The process-global overlay may move again after the response (for
+      // example when the config poller reloads disk). That cannot retroactively
+      // change the version the settled scan used; the next request must either
+      // reuse that exact version or rebuild under a newer one.
+      const nextRequestVersion = userCostOverlayVersion();
+      const settled = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
+      expect(settled.summary).toEqual(raced.summary);
+      expect(getUsageSummaryCacheEntry("30d:all")?.overlayVersion)
+        .toBeGreaterThanOrEqual(nextRequestVersion);
     } finally {
       spy.mockRestore();
       // Clear the module-level overlay and summary cache even when an
