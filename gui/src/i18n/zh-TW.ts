@@ -2474,7 +2474,7 @@ export const zhTW: Record<TKey, string> = {
   "models.displayNameModelId": "模型 ID",
   "models.displayNameCurrent": "目前名稱",
   "models.displayNameSourceOperator": "你的名稱",
-  "models.displayNameSourceProvider": "提供者名稱",
+  "models.displayNameSourceProvider": "供應商名稱",
   "models.displayNameSourceFallback": "模型 ID 預設值",
   "models.displayNameField": "友善名稱",
   "models.displayNamePlaceholder": "例如 Grok 4.6",

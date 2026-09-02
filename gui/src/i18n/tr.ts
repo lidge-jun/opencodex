@@ -2515,7 +2515,7 @@ export const tr: Record<TKey, string> = {
   "models.displayNameSourceProvider": "Sağlayıcı adı",
   "models.displayNameSourceFallback": "Model kimliği varsayılanı",
   "models.displayNameField": "Görünen ad",
-  "models.displayNamePlaceholder": "ör. Grok 4.6",
+  "models.displayNamePlaceholder": "örn. Grok 4.6",
   "models.displayNameHelp": "Yalnızca görünümü değiştirir. Yönlendirme {model} olarak kalır.",
   "models.displayNameReset": "Adı sıfırla",
   "models.displayNameSaved": "Görünen ad kaydedildi",
