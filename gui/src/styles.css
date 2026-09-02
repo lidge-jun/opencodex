@@ -1992,7 +1992,18 @@ dialog.modal-overlay::backdrop {
 table.logs-table {
   width: 100%;
   min-width: 1100px;
+  table-layout: fixed;
 }
+.logs-table col.logs-col-time { width: 12%; }
+.logs-table col.logs-col-tokens { width: 9%; }
+.logs-table col.logs-col-rate { width: 7%; }
+.logs-table col.logs-col-cost { width: 8%; }
+.logs-table col.logs-col-model { width: 15%; }
+.logs-table col.logs-col-effort { width: 9%; }
+.logs-table col.logs-col-provider { width: 13%; }
+.logs-table col.logs-col-status { width: 8%; }
+.logs-table col.logs-col-request { width: 11%; }
+.logs-table col.logs-col-duration { width: 8%; }
 .log-col-rate { min-width: 7ch; white-space: nowrap; }
 .log-col-cost { min-width: 10ch; white-space: nowrap; }
 .log-status-cell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: var(--space-0-5); min-width: 7ch; line-height: var(--leading-tight); }
@@ -2050,6 +2061,8 @@ table.logs-table {
 
 .logs-table-wrap {
   overflow-y: auto;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
   /* `dvh`, not `vh`: static `vh` resolves against the LARGE viewport, so on mobile the
      cap is computed for a viewport taller than the one the user can see and the last rows
      sit under the browser chrome. The rest of the shell already moved to `100dvh`

@@ -162,6 +162,33 @@ function expectTableLoaded(container: HTMLElement, model: string): void {
   expect(container.textContent).toContain(model);
 }
 
+test("Logs: renders the ordered ten-column layout schema", async () => {
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([sampleLog]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  const colgroup = container.querySelector(".logs-table > colgroup");
+  expect(colgroup).not.toBeNull();
+  expect([...colgroup!.children].map(column => column.className)).toEqual([
+    "logs-col-time",
+    "logs-col-tokens",
+    "logs-col-rate",
+    "logs-col-cost",
+    "logs-col-model",
+    "logs-col-effort",
+    "logs-col-provider",
+    "logs-col-status",
+    "logs-col-request",
+    "logs-col-duration",
+  ]);
+
+  await act(async () => { root.unmount(); });
+});
+
 test("Logs: initial failure shows error; silent failure keeps it; retry then recovers", async () => {
   const calls: string[] = [];
   let mode: "fail" | "ok" = "fail";

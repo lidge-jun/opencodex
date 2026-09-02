@@ -523,8 +523,12 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const rowVirtualizer = useVirtualizer({
     count: filteredLogs.length,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => 44,
+    estimateSize: () => 92,
     overscan: 15,
+    getItemKey: index => {
+      const log = filteredLogs[filteredLogs.length - 1 - index]!;
+      return log.requestId ?? `${log.timestamp}:${log.model}:${log.provider}`;
+    },
   });
   const virtualRows = rowVirtualizer.getVirtualItems();
   const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
@@ -713,6 +717,18 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         <>
         <div ref={scrollContainerRef} className="tbl-wrap logs-table-wrap">
           <table className="tbl logs-table">
+            <colgroup>
+              <col className="logs-col-time" />
+              <col className="logs-col-tokens" />
+              <col className="logs-col-rate" />
+              <col className="logs-col-cost" />
+              <col className="logs-col-model" />
+              <col className="logs-col-effort" />
+              <col className="logs-col-provider" />
+              <col className="logs-col-status" />
+              <col className="logs-col-request" />
+              <col className="logs-col-duration" />
+            </colgroup>
             <thead>
              <tr>
                <th>{t("logs.col.time")}</th>
@@ -739,7 +755,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                 const when = formatLogDateParts(log.timestamp, localeTag, serverTimeZone);
                 return (
                <tr
-                 key={log.requestId ?? `${log.timestamp}-${virtualRow.index}`}
+                 key={virtualRow.key}
                  data-index={virtualRow.index}
                  ref={rowVirtualizer.measureElement}
                >
