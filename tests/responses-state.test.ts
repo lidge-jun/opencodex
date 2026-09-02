@@ -1284,6 +1284,12 @@ describe("Responses previous_response_id state", () => {
 
   test("shutdown drain cap expiry enters the synchronous spill fallback", async () => {
     forceWindowsAclLane();
+    // Freeze the ACL/spill clocks: the sync fallback harden now really runs on every host
+    // (harden() follows the platform seam), and its budget must not race a loaded CI
+    // shard's wall clock inside the 80 ms reserve — run 33603770447 shard 3 lost that race.
+    let aclClock = 0;
+    setNowForTests(() => aclClock);
+    setResponseSpillNowForTests(() => aclClock);
     setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
     let release!: () => void;
     let entered!: () => void;
@@ -1321,6 +1327,12 @@ describe("Responses previous_response_id state", () => {
     // (debt + footprint) and (old + debt + footprint) admits a publication that puts the
     // directory over budget.
     forceWindowsAclLane();
+    // Freeze the ACL/spill clocks: the sync fallback harden now really runs on every host
+    // (harden() follows the platform seam), and its budget must not race a loaded CI
+    // shard's wall clock inside the 80 ms reserve — run 33603770447 shard 3 lost that race.
+    let aclClock = 0;
+    setNowForTests(() => aclClock);
+    setResponseSpillNowForTests(() => aclClock);
     setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
     let release!: () => void;
     let entered!: () => void;
@@ -1410,6 +1422,10 @@ describe("Responses previous_response_id state", () => {
   test("late async spill completion cannot overwrite the shutdown fallback", async () => {
     forceWindowsAclLane();
     setStatForTests(() => ({ dev: 1n, ino: 10n, ctimeNs: 100n }));
+    // Frozen clocks for the same reason as the drain-cap case above.
+    let aclClock = 0;
+    setNowForTests(() => aclClock);
+    setResponseSpillNowForTests(() => aclClock);
     setResponseSpillShutdownBudgetForTests({ totalMs: 120, fallbackReserveMs: 80 });
     let release!: () => void;
     let entered!: () => void;
