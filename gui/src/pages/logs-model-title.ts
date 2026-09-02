@@ -22,17 +22,18 @@ export interface ModelTitleEntry {
  * honest answer, but only if the operator can see it. Qualify the echoed value with
  * how much it is worth, and name the reason when the tier was actually declined.
  *
- * Deliberately no new i18n key: the qualifier reuses the `responseTier` label, and the
- * values are the same technical identifiers the other tooltip fields already print
- * untranslated.
+ * The confirmation word is this proxy's own judgement about the turn, not a value the
+ * upstream returned, so it is translated like any other visible string. The downgrade
+ * reason stays verbatim: it is a diagnostic identifier (`response-declined`) that maps
+ * to `fastDowngradeReason` in the source, and translating it would break that link.
  */
-function tierConfirmationSuffix(outcome: ModelTitleEntry["tierOutcome"]): string {
+function tierConfirmationSuffix(outcome: ModelTitleEntry["tierOutcome"], t: TFn): string {
   const confirmation = outcome?.confirmation;
   if (!confirmation) return "";
   const reason = confirmation === "downgraded" && outcome?.fastDowngradeReason
     ? `: ${outcome.fastDowngradeReason}`
     : "";
-  return ` (${confirmation}${reason})`;
+  return ` (${t(`logs.modelTooltip.tierOutcome.${confirmation}`)}${reason})`;
 }
 
 export function modelTitle(log: ModelTitleEntry, t: TFn): string {
@@ -42,7 +43,7 @@ export function modelTitle(log: ModelTitleEntry, t: TFn): string {
     log.requestedServiceTier ? `${t("logs.modelTooltip.requestedTier")}=${log.requestedServiceTier}` : undefined,
     log.configuredServiceTier ? `${t("logs.modelTooltip.configuredTier")}=${log.configuredServiceTier}` : undefined,
     log.responseServiceTier
-      ? `${t("logs.modelTooltip.responseTier")}=${log.responseServiceTier}${tierConfirmationSuffix(log.tierOutcome)}`
+      ? `${t("logs.modelTooltip.responseTier")}=${log.responseServiceTier}${tierConfirmationSuffix(log.tierOutcome, t)}`
       : undefined,
     log.modelSupportsServiceTier !== undefined
       ? `${t("logs.modelTooltip.supportsTier")}=${log.modelSupportsServiceTier}`
