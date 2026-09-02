@@ -27,6 +27,13 @@ export interface SubagentDelegationSectionProps {
   onUltraModeSave: (patch: UltraModePatch) => void;
   ultraLoadFailed: boolean;
   onUltraModeRetry: () => void;
+  fallback: string[];
+  fallbackPollMs: number;
+  fallbackBusy: boolean;
+  availableModels: string[];
+  onFallbackChange: (models: string[]) => void;
+  onFallbackPollMsChange: (pollMs: number) => void;
+  onFallbackSave: () => void;
 }
 
 export default function SubagentDelegationSection({
@@ -43,6 +50,7 @@ export default function SubagentDelegationSection({
   onUltraModeSave,
   ultraLoadFailed,
   onUltraModeRetry,
+  fallback, fallbackPollMs, fallbackBusy, availableModels, onFallbackChange, onFallbackPollMsChange, onFallbackSave,
 }: SubagentDelegationSectionProps) {
   const t = useT();
   // A present empty/whitespace hint is an upstream override that suppresses the
@@ -93,6 +101,31 @@ export default function SubagentDelegationSection({
               align="right"
             />
           )}
+        </div>
+      </div>
+
+      <div className="swi-delegation-row swi-fallback-editor">
+        <div className="setting-copy">
+          <div className="font-semibold">{t("sub.fallbackLabel")}</div>
+          <div className="muted setting-hint">{t("sub.fallbackHint")}</div>
+        </div>
+        <div className="swi-fallback-controls">
+          {fallback.map((modelName, index) => (
+            <div key={modelName} className="swi-fallback-row">
+              <span>{index + 1}. {modelName}</span>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { const next = [...fallback]; if (index > 0) [next[index - 1], next[index]] = [next[index], next[index - 1]]; onFallbackChange(next); }} disabled={fallbackBusy || index === 0} aria-label={t("sub.moveUp", { m: modelName })}>↑</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { const next = [...fallback]; if (index < next.length - 1) [next[index], next[index + 1]] = [next[index + 1], next[index]]; onFallbackChange(next); }} disabled={fallbackBusy || index === fallback.length - 1} aria-label={t("sub.moveDown", { m: modelName })}>↓</button>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onFallbackChange(fallback.filter(item => item !== modelName))} disabled={fallbackBusy}>×</button>
+            </div>
+          ))}
+          <select className="input" value="" onChange={e => { if (e.target.value && !fallback.includes(e.target.value)) onFallbackChange([...fallback, e.target.value]); }} disabled={fallbackBusy}>
+            <option value="">{t("sub.fallbackAdd")}</option>
+            {availableModels.filter(modelName => !fallback.includes(modelName)).map(modelName => <option key={modelName} value={modelName}>{modelName}</option>)}
+          </select>
+          <label className="setting-hint">{t("sub.fallbackPoll")}
+            <input className="input" type="number" min={5000} max={600000} step={1000} value={fallbackPollMs} onChange={e => onFallbackPollMsChange(Number(e.target.value) || 60000)} disabled={fallbackBusy} /> ms
+          </label>
+          <button type="button" className="btn btn-primary btn-sm" onClick={onFallbackSave} disabled={fallbackBusy}>{t("common.save")}</button>
         </div>
       </div>
 
