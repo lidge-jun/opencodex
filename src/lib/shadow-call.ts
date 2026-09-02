@@ -79,10 +79,10 @@ export function shadowSourceModelPrefix(modelId: string, configured?: unknown): 
  */
 export function shadowCallReplacementFor(
   modelId: string,
-  sci: { model?: string; modelMap?: Record<string, string> } | undefined,
+  sci: { model?: string; modelMap?: Record<string, string>; sourceModels?: unknown } | undefined,
 ): string | undefined {
   if (!sci) return undefined;
-  const prefix = shadowSourceModelPrefix(modelId, undefined);
+  const prefix = shadowSourceModelPrefix(modelId, sci.sourceModels);
   if (!prefix) return undefined;
   if (sci.modelMap && typeof sci.modelMap === "object") {
     const mapped = sci.modelMap[prefix];

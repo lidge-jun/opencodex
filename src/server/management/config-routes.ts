@@ -877,7 +877,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     let raw: unknown;
     try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
-    const body = raw as { enabled?: unknown; model?: unknown; modelMap?: unknown };
+    const body = raw as { enabled?: unknown; model?: unknown; modelMap?: unknown; sourceModels?: unknown };
     if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
       return jsonResponse({ error: "enabled must be a boolean" }, 400);
     }
@@ -887,11 +887,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.modelMap !== undefined && (typeof body.modelMap !== "object" || body.modelMap === null || Array.isArray(body.modelMap))) {
       return jsonResponse({ error: "modelMap must be an object" }, 400);
     }
-    if (body.modelMap !== undefined) {
-      for (const [k, v] of Object.entries(body.modelMap as Record<string, unknown>)) {
-        if (typeof k !== "string" || k.trim() === "") return jsonResponse({ error: "modelMap keys must be non-empty strings" }, 400);
-        if (typeof v !== "string") return jsonResponse({ error: `modelMap[${k}] must be a string` }, 400);
-      }
+   if (body.modelMap !== undefined) {
+     for (const [k, v] of Object.entries(body.modelMap as Record<string, unknown>)) {
+       if (typeof k !== "string" || k.trim() === "") return jsonResponse({ error: "modelMap keys must be non-empty strings" }, 400);
+       if (typeof v !== "string") return jsonResponse({ error: `modelMap[${k}] must be a string` }, 400);
+     }
+   }
+    if (body.sourceModels !== undefined && (!Array.isArray(body.sourceModels) || body.sourceModels.some(v => typeof v !== "string" || v.trim() === ""))) {
+      return jsonResponse({ error: "sourceModels must be an array of non-empty strings" }, 400);
     }
    const candidateModel = typeof body.model === "string"
      ? body.model
@@ -918,12 +921,16 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
      if (body.model === "") delete config.shadowCallIntercept.model;
      else config.shadowCallIntercept.model = body.model;
    }
-    if (body.modelMap && typeof body.modelMap === "object") {
-      const next: Record<string, string> = {};
-      for (const [k, v] of Object.entries(body.modelMap as Record<string, unknown>)) {
-        if (typeof v === "string" && v.trim() !== "") next[k] = v;
-      }
-      config.shadowCallIntercept.modelMap = Object.keys(next).length > 0 ? next : undefined;
+   if (body.modelMap && typeof body.modelMap === "object") {
+     const next: Record<string, string> = {};
+     for (const [k, v] of Object.entries(body.modelMap as Record<string, unknown>)) {
+       if (typeof v === "string" && v.trim() !== "") next[k] = v;
+     }
+     config.shadowCallIntercept.modelMap = Object.keys(next).length > 0 ? next : undefined;
+   }
+    if (Array.isArray(body.sourceModels)) {
+      const cleaned = [...new Set((body.sourceModels as unknown[]).map(v => String(v).trim()).filter(v => v !== ""))];
+      config.shadowCallIntercept.sourceModels = cleaned.length > 0 ? cleaned : undefined;
     }
    saveConfigPreservingClaudeCode(config);
    const sci = config.shadowCallIntercept;
