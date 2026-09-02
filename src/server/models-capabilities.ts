@@ -41,7 +41,9 @@ export interface ModelCapabilityFields {
 }
 
 function positiveInt(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const floored = Math.floor(value);
+  return floored > 0 ? floored : undefined;
 }
 
 export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabilityFields {

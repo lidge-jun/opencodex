@@ -89,6 +89,9 @@ describe("modelCapabilityFields", () => {
   test("non-positive context and text-only modalities are reported honestly", () => {
     const fields = modelCapabilityFields({ contextWindow: 0, inputModalities: ["text"], reasoningEfforts: ["", "low"] });
     expect("context_length" in fields.capabilities).toBe(false);
+    // A fractional value below 1 floors to 0 and must be omitted, not emitted as 0.
+    expect("context_length" in modelCapabilityFields({ contextWindow: 0.5 }).capabilities).toBe(false);
+    expect(modelCapabilityFields({ contextWindow: 1.9 }).capabilities.context_length).toBe(1);
     expect(fields.capabilities.input_modalities).toEqual(["text"]);
     expect(fields.capabilities.supports_vision).toBe(false);
     expect(fields.capabilities.reasoning_effort).toEqual(["low"]);
