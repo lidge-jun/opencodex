@@ -37,7 +37,20 @@ in #3242 → `2cb592174` (92 pass / 0 fail across the three recovery/fallback fi
 revert). #3228's disposition is corrected on the PR: the reported behaviour is the documented
 opt-in, not a bug; a defaults change is a product decision for a feature request. The p3228
 review ran the fallback and security files but not `agent-task-recovery.test.ts` — recorded
-as the miss. A second dispatch on the reverted tip follows.
+as the miss.
+
+Second dispatch on the reverted tip `2cb592174` (run 33582128589, Windows on): Linux test
+1/4–4/4 all green (the `agent-task-recovery` failure is gone), gates, storage, api-usage,
+keyring ×3, npm-global ×3 green. Windows 1/2/4 failed with the known runner signatures
+(`EPERM rm tests/.tmp-codex-accounts-test` ×49, icacls `ETIMEDOUT`, "Bun runtime crash");
+3/4 cancelled by the gate. macOS failed one case: `native-profile-manager` "preserves exact
+auth bytes, encrypts inactive profiles…" at 12.7 s — a file untouched since `#3054`
+(2026-08-29, on `main`), which passed in both earlier dispatches (33562938994, 33581824312)
+and 49/49 three times locally on this tip; its history is two macOS-timing bounding commits
+(`bef2869c7`, `c1be34da4`). Classified as a macOS timing flake; a third dispatch
+(run 33584155821) is recorded below to settle it.
+
+Third dispatch on `2cb592174` (run 33584155821): CI4_PLACEHOLDER
 
 ## Devlog landing
 
