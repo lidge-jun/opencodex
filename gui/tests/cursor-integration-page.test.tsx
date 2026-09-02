@@ -33,9 +33,10 @@ function payload(overrides: Partial<CursorIntegrationStatus> = {}): CursorIntegr
     regularCursor: { installed: true, path: "/Applications/Cursor.app" },
     gateway: { baseUrl: "http://127.0.0.1:10100/v1", apiKeyMode: "placeholder", placeholder: "opencodex" },
     lastSeen: null,
+    effortTable: { source: "bundle", version: "3.18.25", families: 16 },
     models: [
-      { id: "gpt-5.6-sol", reasoning: ["low", "medium", "high", "xhigh"], context: { defaultWindow: 272_000, longWindow: 922_000 } },
-      { id: "kimi/k3", reasoning: null, context: null },
+      { id: "gpt-5.6-sol", reasoning: ["low", "medium", "high", "xhigh"], family: "gpt-5.6", tableLess: false, effortRows: [], context: { defaultWindow: 272_000, longWindow: 922_000 } },
+      { id: "kimi/k3", reasoning: null, family: null, tableLess: true, effortRows: [], context: null },
     ],
     guideUrl: "https://example.invalid/guides/cursor-private-inference/",
     ...overrides,
@@ -230,6 +231,41 @@ test("the model table shows the reasoning ladder and both context windows", asyn
   expect(rows[0]).toContain("922K");
   expect(rows[1]).toContain("kimi/k3");
   expect(rows[1]).toContain("—");
+});
+
+test("the ladder provenance names the installed bundle, and table-less rows get the hint", async () => {
+  await mount();
+  const text = textOf();
+  expect(text).toContain("installed Cursor Private Inference 3.18.25 bundle");
+  expect(text).toContain("no effort rows");
+  expect(container.querySelector("[data-cursor-tableless-hint]")).not.toBeNull();
+  const marker = container.querySelector(".cursor-no-control");
+  expect(marker?.getAttribute("aria-label")).toContain("not in Cursor's built-in effort table");
+});
+
+test("the static mirror is named when no bundle was read, and effort rows are counted", async () => {
+  statusResponse = () => json(payload({
+    effortTable: { source: "static", version: null, families: null },
+    models: [
+      { id: "gpt-5.6-sol", reasoning: ["low", "medium", "high", "xhigh"], family: null, tableLess: false, effortRows: [], context: null },
+      { id: "anthropic/claude-fable-5-1", reasoning: null, family: null, tableLess: true, effortRows: ["anthropic/claude-fable-5-1--low", "anthropic/claude-fable-5-1--high"], context: null },
+      { id: "cursor/kimi-k3", reasoning: null, family: null, tableLess: true, effortRows: ["cursor/kimi-k3--max"], context: null },
+    ],
+  }));
+  await mount();
+  const text = textOf();
+  expect(text).toContain("static mirror of Cursor 3.18.25");
+  expect(text).toContain("2 effort rows published");
+  expect(text).toContain("1 effort row published");
+});
+
+test("without a table-less row the hint paragraph is absent", async () => {
+  statusResponse = () => json(payload({
+    models: [{ id: "gpt-5.6-sol", reasoning: ["low", "medium", "high", "xhigh"], family: "gpt-5.6", tableLess: false, effortRows: [], context: null }],
+  }));
+  await mount();
+  expect(container.querySelector("[data-cursor-tableless-hint]")).toBeNull();
+  expect(textOf()).not.toContain("no effort rows");
 });
 
 test("a failed read is an error notice, never a fake 'not installed'", async () => {
