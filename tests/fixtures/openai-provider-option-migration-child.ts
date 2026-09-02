@@ -17,6 +17,16 @@ mkdirSync(codexHome, { recursive: true, mode: 0o700 });
 process.env.OPENCODEX_HOME = opencodexHome;
 process.env.CODEX_HOME = codexHome;
 
+const ACL_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+const PRINCIPAL_OK = {
+  success: true,
+  exitCode: 0,
+  timedOut: false,
+  stdout: "S-1-5-21-1-2-3-1001\nocx-provider-option-migration\n",
+};
+let aclSeamCalls = 0;
+let principalSeamCalls = 0;
+
 const forward = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -80,11 +90,30 @@ writeFileSync(v1BackupPath, v1Sentinel, { mode: 0o600 });
 chmodSync(configPath, 0o600);
 chmodSync(v1BackupPath, 0o600);
 
-const [configModule, startupModule, migrationModule] = await Promise.all([
+const [configModule, configPaths, startupModule, migrationModule, windowsAcl, windowsPrincipal] = await Promise.all([
   import("../../src/config"),
+  import("../../src/config/paths"),
   import("../../src/providers/openai-tier-startup"),
   import("../../src/providers/openai-tiers"),
+  import("../../src/lib/windows-secret-acl"),
+  import("../../src/lib/windows-user-principal"),
 ]);
+windowsAcl.setIcaclsRunnerForTests(() => {
+  aclSeamCalls += 1;
+  return ACL_OK;
+});
+windowsAcl.setAsyncIcaclsRunnerForTests(async () => {
+  aclSeamCalls += 1;
+  return ACL_OK;
+});
+windowsPrincipal.setWindowsPrincipalRunnerForTests(() => {
+  principalSeamCalls += 1;
+  return PRINCIPAL_OK;
+});
+windowsPrincipal.setAsyncWindowsPrincipalRunnerForTests(async () => {
+  principalSeamCalls += 1;
+  return PRINCIPAL_OK;
+});
 const warnings: string[] = [];
 const originalWarn = console.warn;
 console.warn = message => { warnings.push(String(message)); };
@@ -161,12 +190,14 @@ try {
     && relevantWarnings.every(warning => warning === "[openai-provider-migration] providerContextCaps.openai + providerContextCaps.openai-multi: kept lower positive cap");
 
   process.stdout.write(JSON.stringify({
+    aclSeamCalls,
     backupMatchesOriginal: backupBytes === original,
     backupMode: statSync(v2BackupPath).mode & 0o777,
     v1BackupUnchanged: readFileSync(v1BackupPath, "utf8") === v1Sentinel,
     firstProviderIds: Object.keys(first.providers),
     firstDefaultProvider: first.defaultProvider,
     mode: first.providers.openai?.codexAccountMode,
+    principalSeamCalls,
     hiddenLegacy: !Object.hasOwn(first.providers, "openai-multi") && !Object.hasOwn(first.providers, "chatgpt"),
     marker: first.openaiProviderTierVersion,
     selectedModels: first.providers.openai?.selectedModels,
@@ -193,4 +224,11 @@ try {
   }) + "\n");
 } finally {
   console.warn = originalWarn;
+  await configPaths.flushConfigDirHardeningForTests();
+  windowsAcl.setIcaclsRunnerForTests(null);
+  windowsAcl.setAsyncIcaclsRunnerForTests(null);
+  windowsAcl.resetHardenedStateForTests();
+  windowsPrincipal.setWindowsPrincipalRunnerForTests(null);
+  windowsPrincipal.setAsyncWindowsPrincipalRunnerForTests(null);
+  windowsPrincipal.resetWindowsPrincipalForTests();
 }

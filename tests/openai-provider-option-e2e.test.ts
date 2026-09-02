@@ -27,12 +27,14 @@ type Capture = {
 };
 
 type MigrationReceipt = {
+  aclSeamCalls: number;
   backupMatchesOriginal: boolean;
   backupMode: number;
   v1BackupUnchanged: boolean;
   firstProviderIds: string[];
   firstDefaultProvider: string;
   mode: string;
+  principalSeamCalls: number;
   hiddenLegacy: boolean;
   marker: number;
   selectedModels: string[];
@@ -48,6 +50,14 @@ type MigrationReceipt = {
   remigrated: boolean;
   absencePreserved: boolean;
   collisionFailsBeforeSave: boolean;
+};
+
+const ACL_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+const PRINCIPAL_OK = {
+  success: true,
+  exitCode: 0,
+  timedOut: false,
+  stdout: "S-1-5-21-1-2-3-1001\nocx-provider-option-e2e\n",
 };
 
 function hashTree(path: string): string {
@@ -122,8 +132,12 @@ describe("OpenAI provider-option integration spine", () => {
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
     };
     const savedFetch = globalThis.fetch;
+    const savedWebSocket = globalThis.WebSocket;
+    const blockedUpstreamWebSocketUrls: string[] = [];
     const captures: Capture[] = [];
     const resets: Array<() => void> = [];
+    let aclSeamCalls = 0;
+    let principalSeamCalls = 0;
     let loopbackOrigin: string | null = null;
     let server: { url: URL; stop(closeActiveConnections?: boolean): Promise<void> } | null = null;
 
@@ -162,6 +176,13 @@ describe("OpenAI provider-option integration spine", () => {
       }) + "\n", { mode: 0o600 });
       chmodSync(authPath, 0o600);
 
+      globalThis.WebSocket = new Proxy(savedWebSocket, {
+        construct(_target, args) {
+          const url = String(args[0]);
+          blockedUpstreamWebSocketUrls.push(url);
+          throw new Error(`deny-by-default WebSocket blocked: ${url}`);
+        },
+      }) as typeof WebSocket;
       globalThis.fetch = (async (input, init) => {
         const request = new Request(input, init);
         const url = new URL(request.url);
@@ -231,6 +252,8 @@ describe("OpenAI provider-option integration spine", () => {
         serverModule,
         mainAccount,
         sidecar,
+        windowsAcl,
+        windowsPrincipal,
       ] = await Promise.all([
         import("../src/config"),
         import("../src/providers/derive"),
@@ -245,7 +268,26 @@ describe("OpenAI provider-option integration spine", () => {
         import("../src/server"),
         import("../src/codex/main-account"),
         import("../src/providers/openai-sidecar"),
+        import("../src/lib/windows-secret-acl"),
+        import("../src/lib/windows-user-principal"),
       ]);
+
+      windowsAcl.setIcaclsRunnerForTests(() => {
+        aclSeamCalls += 1;
+        return ACL_OK;
+      });
+      windowsAcl.setAsyncIcaclsRunnerForTests(async () => {
+        aclSeamCalls += 1;
+        return ACL_OK;
+      });
+      windowsPrincipal.setWindowsPrincipalRunnerForTests(() => {
+        principalSeamCalls += 1;
+        return PRINCIPAL_OK;
+      });
+      windowsPrincipal.setAsyncWindowsPrincipalRunnerForTests(async () => {
+        principalSeamCalls += 1;
+        return PRINCIPAL_OK;
+      });
 
       resets.push(
         requestLog.clearRequestLogsForTests,
@@ -258,6 +300,12 @@ describe("OpenAI provider-option integration spine", () => {
         websocketRegistry.clearCodexWebSocketRegistry,
         () => authApi.clearAccountNeedsReauth("fixture-pool"),
         () => authApi.clearAccountNeedsReauth(mainAccount.MAIN_CODEX_ACCOUNT_ID),
+        () => windowsAcl.setIcaclsRunnerForTests(null),
+        () => windowsAcl.setAsyncIcaclsRunnerForTests(null),
+        windowsAcl.resetHardenedStateForTests,
+        () => windowsPrincipal.setWindowsPrincipalRunnerForTests(null),
+        () => windowsPrincipal.setAsyncWindowsPrincipalRunnerForTests(null),
+        windowsPrincipal.resetWindowsPrincipalForTests,
       );
 
       const seed = (id: string) => deriveModule.providerConfigSeed(
@@ -351,10 +399,9 @@ describe("OpenAI provider-option integration spine", () => {
       expect(captures.at(-1)).toMatchObject({ authorization: "Bearer fixture-pool-access", accountId: "fixture-pool-account" });
       expect(captures.at(-1)?.body.reasoning).toBeUndefined();
 
-      const NativeWebSocket = globalThis.WebSocket;
       const expectedWsUrl = new URL("/v1/responses", server.url);
       expectedWsUrl.protocol = "ws:";
-      const ws = new NativeWebSocket(expectedWsUrl, {
+      const ws = new savedWebSocket(expectedWsUrl, {
         headers: { authorization: "Bearer fixture-caller-main" },
       } as unknown as string[]);
       await new Promise<void>((resolve, reject) => {
@@ -542,12 +589,14 @@ describe("OpenAI provider-option integration spine", () => {
         expect(exitCode).toBe(0);
         const receipt = JSON.parse(stdout) as MigrationReceipt;
         expect(receipt).toEqual({
+          aclSeamCalls: expect.any(Number),
           backupMatchesOriginal: true,
           backupMode: expect.any(Number),
           v1BackupUnchanged: true,
           firstProviderIds: ["openai", "openai-apikey", "custom"],
           firstDefaultProvider: "openai",
           mode: "pool",
+          principalSeamCalls: expect.any(Number),
           hiddenLegacy: true,
           marker: 2,
           selectedModels: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
@@ -566,11 +615,21 @@ describe("OpenAI provider-option integration spine", () => {
         });
         if (process.platform !== "win32") {
           expect(receipt.backupMode).toBe(0o600);
+        } else {
+          expect(receipt.aclSeamCalls).toBeGreaterThan(0);
+          expect(receipt.principalSeamCalls).toBeGreaterThan(0);
         }
       } finally {
         removeTreeWithRetry(migrationRoot);
       }
 
+      expect(new Set(blockedUpstreamWebSocketUrls)).toEqual(new Set([
+        "wss://chatgpt.com/backend-api/codex/responses",
+      ]));
+      if (process.platform === "win32") {
+        expect(aclSeamCalls).toBeGreaterThan(0);
+        expect(principalSeamCalls).toBeGreaterThan(0);
+      }
       expect(captures.every(capture => upstreamTuples.has(`${capture.method} ${capture.url}`))).toBe(true);
       const evidenceDir = process.env.OCX_EVIDENCE_DIR;
       if (evidenceDir) {
@@ -595,6 +654,7 @@ describe("OpenAI provider-option integration spine", () => {
         if (server) await server.stop(true);
       } finally {
         globalThis.fetch = savedFetch;
+        globalThis.WebSocket = savedWebSocket;
         for (const reset of resets) reset();
         restoreEnv("OPENCODEX_HOME", previousEnv.OPENCODEX_HOME);
         restoreEnv("CODEX_HOME", previousEnv.CODEX_HOME);
