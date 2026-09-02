@@ -59,4 +59,4 @@ no regression main..dev at 5bc6939d8) plus the Windows repair reviews above for 
 2. A release-branch commit that touches only `.github/workflows/release.yml` needs a manual
    `service-lifecycle.yml` dispatch before the release gate passes (path filter).
 3. One more Windows dispatch on dev after #3258 to confirm 4/4 with the last two residual fixes
-   (dispatched below).
+   (dispatched below). Result: 33618250161 on 272ff6b11 — windows 1/4, 2/4, 3/4, 4/4 SUCCESS; every other job SUCCESS.
