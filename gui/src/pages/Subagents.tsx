@@ -139,6 +139,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     setChosen(next.chosen);
     setFallback(next.fallback);
     setFallbackPollMs(next.pollMs);
+    setUseSubagentModels(next.useSubagentModels);
     writeSessionListCache(cacheKey, next);
     return next;
   }, [apiBase, cacheKey, t]);

@@ -406,7 +406,7 @@ export interface OcxConfig {
    * turn to the next available entry before routing.
    */
   subagentModelFallback?: string[];
-  /** When enabled, encrypted native-only sub-agent fallback uses `subagentModels` instead. */
+  /** When enabled, spawned sub-agent fallback uses `subagentModels` as the complete ordered list. */
   subagentModelFallbackUseSubagentModels?: boolean;
   /**
    * Per-primary-model fallback chains for spawned sub-agents, keyed by the

@@ -15,4 +15,5 @@ test("Subagents exposes and persists the global fallback chain", async () => {
   expect(workspace).toContain("onFallbackChange");
   expect(workspace).toContain("onFallbackPollMsChange");
   expect(workspace).toContain('t("sub.fallbackUseRoster")');
+  expect(page).toContain('setUseSubagentModels(next.useSubagentModels)');
 });
