@@ -248,6 +248,32 @@ describe("syncGrokConfig", () => {
     }
   });
 
+  test("a hub targets its unauthenticated loopback listener instead of skipping (#3306)", async () => {
+    const { root, grokHome } = tempGrokHome();
+    try {
+      const config = {
+        ...baseConfig,
+        runtimeRole: "hub",
+        hostname: "100.64.0.10",
+        unauthenticatedLoopbackListener: { enabled: true, port: 10102 },
+      } as OcxConfig;
+      const result = await syncGrokConfig(10100, config, {
+        grokHome,
+        hostname: "100.64.0.10",
+      }, {
+        fetchAllModels: async () => [],
+        injectGrokConfig,
+      });
+
+      expect(result).toMatchObject({ ok: true, changed: true });
+      const content = readFileSync(join(grokHome, "config.toml"), "utf8");
+      expect(content).toContain('base_url = "http://127.0.0.1:10102/v1"');
+      expect(content).not.toContain("100.64.0.10");
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  });
+
   test("catalog failure surfaces ok:false without touching the config", async () => {
     const { root, grokHome } = tempGrokHome();
     try {

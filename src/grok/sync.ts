@@ -7,6 +7,7 @@
  * Deps are injectable (mirrors src/codex/sync.ts) so tests can run without a live proxy.
  */
 import type { CatalogModel } from "../codex/catalog";
+import { standaloneCodexRoutingTarget } from "../codex/inject";
 import type { OcxConfig } from "../types";
 import { projectGrokCatalog } from "./catalog";
 import { injectGrokConfig, type GrokInjectResult } from "./inject";
@@ -47,8 +48,15 @@ export async function syncGrokConfig(
   // Pass the FULL list plus the exclusion set: the writer allocates aliases over
   // everything and emits only what is switched on, so a model's alias never depends on
   // its neighbours' switches. Absent/empty selection keeps today's behaviour exactly.
-  return deps.injectGrokConfig(port, projection.models, {
-    ...(opts.hostname !== undefined ? { hostname: opts.hostname } : {}),
+  const target = standaloneCodexRoutingTarget(port, {
+    hostname: opts.hostname ?? config.hostname,
+    unauthenticatedLoopbackListener: config.unauthenticatedLoopbackListener,
+  });
+  const targetUrl = new URL(target.baseUrl);
+  return deps.injectGrokConfig(Number(targetUrl.port), projection.models, {
+    hostname: target.requiresAdmissionToken
+      ? (opts.hostname ?? config.hostname)
+      : targetUrl.hostname,
     ...(opts.grokHome !== undefined ? { grokHome: opts.grokHome } : {}),
     excluded: new Set(config.grokExcludedModels ?? []),
     catalogModelIds: projection.catalogModelIds,

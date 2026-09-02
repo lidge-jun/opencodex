@@ -12,7 +12,7 @@
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
-import { isLoopbackHostname } from "../codex/inject";
+import { shouldInjectApiAuthHeader } from "../codex/inject";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
 import {
@@ -290,7 +290,7 @@ function applyOrRefreshIntegration(
   if (io.statKind(detectDir) !== "dir") {
     return refuse(clientId, "not_installed", "absent", `${clientId} is not installed`);
   }
-  if (isLoopbackOnly(clientId) && !isLoopbackHostname(input.config.hostname)) {
+  if (isLoopbackOnly(clientId) && shouldInjectApiAuthHeader(input.config)) {
     return refuse(clientId, "non_loopback", classified.state,
       `The generated ${clientId} integration is loopback-only and does not emit the admission header a non-loopback bind requires. Give it loopback access instead, through a tunnel or a local forwarder.`);
   }

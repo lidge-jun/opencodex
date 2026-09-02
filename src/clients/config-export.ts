@@ -22,7 +22,7 @@
 import { homedir } from "node:os";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import { shouldInjectApiAuthHeader } from "../codex/inject";
+import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { providerCodexAccountMode } from "../providers/registry";
 import { canonicalizeReasoningEfforts, sanitizeCodexReasoningEfforts } from "../reasoning-effort";
@@ -301,7 +301,17 @@ export function ompModelsConfigPath(env: OpencodeLaunchEnv = process.env, home: 
 }
 
 /** Compose the OpenAI-compatible proxy base URL from a live probe result. */
-export function opencodeProxyBaseUrl(port: number, hostname?: string): string {
+export function opencodeProxyBaseUrl(
+  port: number,
+  hostname?: string,
+  config?: Pick<OcxConfig, "unauthenticatedLoopbackListener">,
+): string {
+  if (config?.unauthenticatedLoopbackListener?.enabled) {
+    return standaloneCodexRoutingTarget(port, {
+      hostname,
+      unauthenticatedLoopbackListener: config.unauthenticatedLoopbackListener,
+    }).baseUrl;
+  }
   return `http://${probeHostname(hostname)}:${port}/v1`;
 }
 

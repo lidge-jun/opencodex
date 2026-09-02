@@ -360,6 +360,31 @@ describe("apply", () => {
     expect(after.provider.opencodex!.models["mystery/model"]!.limit).toBeUndefined();
   });
 
+  test("ZCode on a hub writes and recognizes the unauthenticated loopback listener (#3306)", () => {
+    const configPath = installZcode();
+    const request = input({
+      clientId: "zcode",
+      config: {
+        ...CONFIG,
+        runtimeRole: "hub",
+        hostname: "100.64.0.10",
+        unauthenticatedLoopbackListener: { enabled: true, port: 10102 },
+      },
+    });
+
+    const result = applyIntegration(request);
+    expect(result.ok).toBe(true);
+
+    const document = JSON.parse(readFileSync(configPath, "utf8")) as {
+      provider: Record<string, { options: { apiKey: string; baseURL: string } }>;
+    };
+    expect(document.provider.opencodex!.options).toMatchObject({
+      apiKey: "opencodex-loopback",
+      baseURL: "http://127.0.0.1:10102/v1",
+    });
+    expect(readIntegrationState(request)).toMatchObject({ state: "current" });
+  });
+
   test("ZCode key-order normalization stays refreshable with derived metadata (#2759)", () => {
     const configPath = installZcode();
     const models: ExportModel[] = [

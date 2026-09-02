@@ -369,7 +369,7 @@ export function exportContextOf(input: {
      * loopback, and every client we write into deserves the same answer the
      * export command already gives.
      */
-    baseUrl: opencodeProxyBaseUrl(input.port, input.config.hostname),
+    baseUrl: opencodeProxyBaseUrl(input.port, input.config.hostname, input.config),
     models: input.models,
     config: input.config,
   };

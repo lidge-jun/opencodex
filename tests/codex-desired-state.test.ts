@@ -204,6 +204,35 @@ describe("the startup gate", () => {
     expect(shouldSyncGrokOnStart({ ...baseConfig(), runtimeRole: "standalone" })).toBe(true);
   });
 
+  test("a hub with an unauthenticated loopback listener syncs only enabled local clients (#3306)", async () => {
+    const hubClient = {
+      ...baseConfig(),
+      runtimeRole: "hub" as const,
+      hostname: "100.64.0.10",
+      unauthenticatedLoopbackListener: { enabled: true as const, port: 10102 },
+    };
+
+    expect(shouldSyncCodexOnStart(hubClient)).toBe(true);
+    expect(shouldSyncGrokOnStart(hubClient)).toBe(true);
+    expect(shouldSyncCodexOnStart({
+      ...hubClient,
+      clientIntegrations: { codex: false },
+    })).toBe(false);
+    expect(shouldSyncGrokOnStart({
+      ...hubClient,
+      clientIntegrations: { grok: false },
+    })).toBe(false);
+
+    let calls = 0;
+    const result = await syncCodexOnStartIfEnabled(
+      10100,
+      hubClient,
+      async () => { calls += 1; return undefined; },
+    );
+    expect(result.ran).toBe(true);
+    expect(calls).toBe(1);
+  });
+
   test("absence, an empty object, and an explicit true all still sync", async () => {
     for (const clientIntegrations of [undefined, {}, { codex: true }]) {
       let calls = 0;
