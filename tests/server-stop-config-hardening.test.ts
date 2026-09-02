@@ -68,8 +68,16 @@ test("server.stop(true) waits for the config-dir ACL flight the startup loadConf
     expect(started).toBe(1);
     let stopped = false;
     const stopping = server.stop(true).then(() => { stopped = true; });
-    await new Promise(resolve => setTimeout(resolve, 60));
-    // Listeners are closed by now; the only thing keeping stop() open is the ACL child.
+    // Deterministic oracle: wait until the listener is actually closed (a connect attempt is
+    // refused) instead of guessing a delay. After that, the only thing keeping stop() open is
+    // the held ACL flight.
+    const port = server.port;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const refused = await fetch(`http://127.0.0.1:${port}/healthz`).then(() => false, () => true);
+      if (refused) break;
+      await Bun.sleep(5);
+    }
+    await Bun.sleep(5);
     expect(stopped).toBe(false);
     release();
     await stopping;
