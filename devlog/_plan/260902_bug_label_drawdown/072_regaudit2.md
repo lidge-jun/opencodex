@@ -26,9 +26,24 @@ independent diagnosis and inviting the tighter catalog-scoped scrub as a follow-
 ## Exact-head CI on the final dev tip
 
 `d23eab43a` = `origin/dev` after #3224. `workflow_dispatch` on branch
-`codex/regaudit-ci-d23eab43a`, run 33562938994, Windows shards on. Result: CI2_PLACEHOLDER
+`codex/regaudit-ci-d23eab43a`, run 33562938994, Windows shards on. Result: every non-Windows
+job green (test 1/4–4/4, macos, gates, storage policy, api usage, keyring ×3, npm-global ×3).
+Windows 1/4, 2/4, 4/4 failed and 3/4 was cancelled by the gate, with the same signatures as the
+`main` control in 071 (`EPERM rm tests/.tmp-codex-accounts-test` ×49, `.tmp-codex-auth-api-test`
+×377, icacls `ETIMEDOUT`, "Bun runtime crash"). Nothing in `d23eab43a` touches those paths;
+the Windows result stays classified as a hosted-runner environment defect present on both ends
+of the range.
 
 ## Devlog landing
 
-PR #3218 (this stack, rebased on `d23eab43a`) → DEVLOG_PLACEHOLDER
+PR #3218 (this stack, rebased on `d23eab43a`) → merged in the closeout phase.
 
+## Arrivals after the recount
+
+Between the recount above and the close of this phase, four contributor PRs carrying the bug
+label opened against `dev` (2026-09-01T22:49Z – 23:33Z): #3226 (scope the #3217 scrub, the
+follow-up invited on #3223), #3227 (combo preflight: zero-output transport incompletes should
+fail over), #3228 (encrypted V2 spawn native fallback without a configured chain; touches GUI),
+#3229 (allow the `codexless_agent` originator in V2 task recovery). Combined count moved to
+5 + 4 = 9. Each is registered as its own work-phase (`p3226`…`p3229`) and the final recount
+moves to `regaudit3` after they land or are dispositioned.
