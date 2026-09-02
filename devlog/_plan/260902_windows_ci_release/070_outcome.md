@@ -43,8 +43,9 @@ no regression main..dev at 5bc6939d8) plus the Windows repair reviews above for 
   reusable call to `dev-version-bump.yml` (#3129) had never run live and the caller job lacked
   the callee's `contents`/`pull-requests` write. Fixed as #3262 (`7ce0ba518`), carried onto
   main (#3263 → `35ff3a462`) and preview (#3264 → `49812c9e8`).
-- Service-lifecycle does not trigger on a preview push or a workflow-only commit; dispatched by
-  hand on both refs (33617431510, 33617434280), green.
+- Service-lifecycle's push trigger is path-filtered and the workflow-only cherry-pick touched
+  none of its paths, so the release gate found no run for the new tips; dispatched by hand on
+  both refs (33617431510, 33617434280), green.
 - Release runs 33617562805 (preview) and 33617573070 (main): publish SUCCESS.
 - Proof: npm `latest=2.40.0` gitHead `35ff3a462…`, `preview=2.40.0-preview.20260902` gitHead
   `49812c9e8…`; GitHub releases v2.40.0 / v2.40.0-preview.20260902; tags equal branch tips.
@@ -55,6 +56,7 @@ no regression main..dev at 5bc6939d8) plus the Windows repair reviews above for 
 ## Follow-ups (not blocking)
 
 1. Repo setting: allow Actions to create PRs, or the bump will need a hand each release.
-2. `service-lifecycle.yml` `push.branches` lacks `preview`; the release gate on preview always
-   needs a manual dispatch until it does.
-3. One more Windows dispatch on dev after #3258 to confirm 4/4 with the last two residual fixes.
+2. A release-branch commit that touches only `.github/workflows/release.yml` needs a manual
+   `service-lifecycle.yml` dispatch before the release gate passes (path filter).
+3. One more Windows dispatch on dev after #3258 to confirm 4/4 with the last two residual fixes
+   (dispatched below).
