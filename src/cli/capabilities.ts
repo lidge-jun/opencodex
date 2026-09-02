@@ -498,7 +498,7 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["integration", "native"],
-    summary: "Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor Private Inference status.",
+    summary: "Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor status (which builds are installed, gateway values, last request seen).",
     routes: [
       { method: "GET", path: "/api/native-integrations" },
       { method: "PUT", path: "/api/native-integrations/claude" },
