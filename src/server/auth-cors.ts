@@ -754,9 +754,13 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
  * admission. `satisfies Record<keyof OcxProviderConfig, ...>` makes a newly added
  * provider field fail typecheck until it is deliberately classified.
  *
- * MCP and desktop executor blocks are redacted as a whole because both contain
- * arbitrary environment variables and/or headers.
+ * `editor` fields are user-authored, `redacted` fields may contain credentials,
+ * and `runtime` fields are observations/limits that must never become editor write
+ * authority. MCP and desktop executor blocks are redacted as a whole because both
+ * contain arbitrary environment variables and/or headers.
  */
+type ProviderConfigFieldPolicy = "editor" | "redacted" | "runtime";
+
 const PROVIDER_CONFIG_FIELD_POLICY = {
   alias: "editor",
   modelAliases: "editor",
@@ -799,7 +803,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   contextWindow: "editor",
   modelContextWindows: "editor",
   modelInputModalities: "editor",
-  modelMaxInputTokens: "editor",
+  modelMaxInputTokens: "runtime",
   modelAutoCompactTokenLimits: "editor",
   defaultMaxOutputTokens: "editor",
   modelMaxOutputTokens: "editor",
@@ -863,19 +867,24 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   desktopExecutor: "redacted",
   unsafeAllowNativeLocalExec: "editor",
   nativeLocalExec: "editor",
-} as const satisfies Record<keyof OcxProviderConfig, "editor" | "redacted">;
+} as const satisfies Record<keyof OcxProviderConfig, ProviderConfigFieldPolicy>;
 
-type ProviderFieldWithPolicy<Policy extends "editor" | "redacted"> = {
+type ProviderFieldWithPolicy<Policy extends ProviderConfigFieldPolicy> = {
   [Field in keyof typeof PROVIDER_CONFIG_FIELD_POLICY]:
     typeof PROVIDER_CONFIG_FIELD_POLICY[Field] extends Policy ? Field : never;
 }[keyof typeof PROVIDER_CONFIG_FIELD_POLICY];
 
 type RedactedProviderField = ProviderFieldWithPolicy<"redacted">;
+type RuntimeProviderField = ProviderFieldWithPolicy<"runtime">;
 export const REDACTED_PROVIDER_FIELDS = Object.freeze(Object.entries(PROVIDER_CONFIG_FIELD_POLICY)
   .filter(([, policy]) => policy === "redacted")
   .map(([field]) => field as RedactedProviderField));
+const RUNTIME_PROVIDER_FIELDS = Object.freeze(Object.entries(PROVIDER_CONFIG_FIELD_POLICY)
+  .filter(([, policy]) => policy === "runtime")
+  .map(([field]) => field as RuntimeProviderField));
 
 const PROVIDER_EDITOR_DERIVED_FIELDS = [
+  ...RUNTIME_PROVIDER_FIELDS,
   ...FORBIDDEN_PROVIDER_RUNTIME_FIELDS,
   "fetch",
   "hasApiKey",
@@ -888,7 +897,8 @@ export const PROVIDER_EDITOR_DENIED_FIELDS = [
   ...PROVIDER_EDITOR_DERIVED_FIELDS,
 ] as const;
 
-export type ProviderEditorProviderDTO = Omit<OcxProviderConfig, RedactedProviderField> & Record<string, unknown>;
+export type ProviderEditorProviderDTO = Omit<OcxProviderConfig, RedactedProviderField | RuntimeProviderField>
+  & Record<string, unknown>;
 
 export interface ProviderEditorConfigDTO {
   defaultProvider: string;
@@ -899,7 +909,6 @@ export type ProviderEditorConfigParseResult =
   | { ok: true; value: ProviderEditorConfigDTO }
   | { ok: false; error: string; code: "invalid_provider_editor_body" | "invalid_provider_editor_field" };
 
-const REDACTED_PROVIDER_FIELD_SET = new Set<string>(REDACTED_PROVIDER_FIELDS);
 const PROVIDER_EDITOR_DENIED_FIELD_SET = new Set<string>(PROVIDER_EDITOR_DENIED_FIELDS);
 const PROVIDER_CONFIG_FIELD_SET = new Set<string>(Object.keys(PROVIDER_CONFIG_FIELD_POLICY));
 

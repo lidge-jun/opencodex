@@ -100,6 +100,7 @@ describe("atomic provider editor batch", () => {
           defaultModel: "woong-reasoner",
           note: "private deployment",
           modelContextWindows: { "woong-reasoner": 131_072 },
+          modelMaxInputTokens: { "woong-reasoner": 120_000 },
           modelReasoningEfforts: { "woong-reasoner": ["low", "medium", "high"] },
           noVisionModels: ["woong-reasoner"],
           allowPrivateNetwork: true,
@@ -122,7 +123,14 @@ describe("atomic provider editor batch", () => {
     const publicRow = (safeConfigDTO(liveConfig) as {
       providers: Record<string, Record<string, unknown>>;
     }).providers.woong!;
-    for (const field of ["apiKey", "apiKeyPool", "headers", "mcpServers", "desktopExecutor"]) {
+    for (const field of [
+      "apiKey",
+      "apiKeyPool",
+      "headers",
+      "mcpServers",
+      "desktopExecutor",
+      "modelMaxInputTokens",
+    ]) {
       expect(publicRow).not.toHaveProperty(field);
     }
     expect(JSON.stringify(publicRow)).not.toContain("secret");
@@ -252,6 +260,22 @@ describe("atomic provider editor batch", () => {
       expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeBytes);
       expect(loadConfig().providers.alpha).not.toHaveProperty(field);
     }
+  });
+
+  test("rejects runtime-derived provider metadata as editor write authority", async () => {
+    const liveConfig = seededConfig();
+    saveConfig(liveConfig);
+    const beforeBytes = readFileSync(getConfigPath(), "utf8");
+    const baseline = editorBaseline(liveConfig);
+    const next = structuredClone(baseline);
+    next.providers.alpha!.modelMaxInputTokens = { "alpha-old": 128_000 };
+
+    const response = await putBatch(liveConfig, { baseline, next });
+
+    expect(response?.status).toBe(400);
+    expect(await response?.json()).toMatchObject({ code: "invalid_provider_editor_field" });
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeBytes);
+    expect(loadConfig().providers.alpha).not.toHaveProperty("modelMaxInputTokens");
   });
 
   test("rejects credential-bearing provider fields as editor write authority", async () => {

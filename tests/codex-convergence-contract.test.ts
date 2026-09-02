@@ -373,9 +373,9 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
   expect(body).not.toContain("failed writing");
 });
 
-test("the route inventory contains exactly the specified 7 + 14 + 2 + 2 convergence calls", () => {
+test("the route inventory contains exactly the specified 8 + 14 + 2 + 2 convergence calls", () => {
   const counts = Object.fromEntries([
-    ["provider-routes.ts", 7],
+    ["provider-routes.ts", 8],
     ["model-routes.ts", 14],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 2],
@@ -387,7 +387,7 @@ test("the route inventory contains exactly the specified 7 + 14 + 2 + 2 converge
     return [file, count];
   }));
   expect(counts).toEqual({
-    "provider-routes.ts": 7,
+    "provider-routes.ts": 8,
     "model-routes.ts": 14,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 2,
@@ -455,4 +455,24 @@ test("the attested reload route converges the Codex catalog like the other write
   // The reload handler returns before the next route check; scope the search to its body.
   const handlerBody = source.slice(handlerStart, source.indexOf("url.pathname ===", handlerStart + 1));
   expect(handlerBody).toContain("await convergeCodexCatalog()");
+});
+
+/**
+ * The eighth provider-route call belongs to the atomic provider batch PUT: one commit can
+ * add, edit, or remove several routed rows, so the post-commit live state must converge once.
+ * Keep this route-specific assertion beside the total so the inventory cannot be satisfied
+ * by an unrelated extra call while the batch route loses its own convergence.
+ */
+test("the atomic provider batch route converges the Codex catalog once", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "..", "src", "server", "management", "provider-routes.ts"),
+    "utf8",
+  );
+  const handlerStart = source.indexOf('url.pathname === "/api/providers" && req.method === "PUT"');
+  expect(handlerStart).toBeGreaterThan(-1);
+  const handlerBody = source.slice(handlerStart, source.indexOf(
+    'url.pathname === "/api/providers" && req.method === "POST"',
+    handlerStart + 1,
+  ));
+  expect(handlerBody.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
 });
