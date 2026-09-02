@@ -20,7 +20,8 @@ time and recorded in the ledger; the table is the shape, not the evidence.
    reads credential *presence* (`configuredApiAuthToken`, `apiKeys`) to choose `apiKeyMode`. A
    read-only security reviewer checks that no key value is serialized, the route is
    session/admin-gated, the UA recorder is bounded, and detection reads only well-known paths.
-   Its verdict is pasted into PR 1.
+   Its verdict is pasted into PR 1 and is a GATE: `SECURITY: PASS` is required before PR 1
+   merges; on FAIL the findings are fixed, the stack restacked, and the review re-run.
 4. Wait for exact-head CI: `gh pr view --json headRefOid,statusCheckRollup`; every check on
    the exact head must be SUCCESS/NEUTRAL/SKIPPED. Address Codex/CodeRabbit findings that are
    correct; rebut the rest in-thread.
@@ -30,9 +31,10 @@ time and recorded in the ledger; the table is the shape, not the evidence.
    `origin/dev` → `git push --force-with-lease --no-verify` → fresh exact-head CI → admin
    squash-merge. Repeat for PR 3.
 6. Approval: the repository has one active maintainer and the user explicitly authorized admin
-   merge for this stack; the merge command documents the owner bypass in the PR thread the way
-   prior admin landings did (#3230/#3231). Admin covers approval only; CI, privacy scan, the
-   security lane and reviewer threads remain required evidence.
+   merge for this stack. `gh pr merge --admin` posts nothing, so before each merge run
+   `gh pr comment <n> --body` stating the user-authorized owner bypass, the exact head SHA
+   merged, the CI rollup result, and (for PR 1) the security verdict. Admin covers approval
+   only; CI, privacy scan, the security lane and reviewer threads remain required evidence.
 7. Proof: `git fetch origin dev && git merge-base --is-ancestor <mergeSha> FETCH_HEAD` x3.
 8. Move the devlog unit to `_fin` in a follow-up if the maintainer wants; not part of this PR.
 
