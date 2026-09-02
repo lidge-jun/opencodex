@@ -101,6 +101,8 @@ export default function CursorIntegrationPage({ apiBase, active }: { apiBase: st
             {!status.privateInference.installed && (
               <Notice tone="warn">
                 {t(status.regularCursor.installed ? "integrations.cursor.regularOnly" : "integrations.cursor.nothingFound")}
+                {" "}
+                <a href={status.guideUrl} target="_blank" rel="noreferrer" data-cursor-guide="notice">{t("integrations.cursor.guide")}</a>
               </Notice>
             )}
           </div>

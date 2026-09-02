@@ -196,6 +196,37 @@ test("every locale key set matches the English source", async () => {
   }
 });
 
+/**
+ * The Cursor tab landed with six locales carrying English copies that key-set parity could
+ * not see. This guard is scoped to the Cursor keys in EVERY locale: a value equal to English
+ * is a placeholder unless it is a brand or a label Cursor itself renders in English.
+ */
+const CURSOR_KEEP_ENGLISH: ReadonlySet<string> = new Set([
+  "integrations.tab.cursor",
+  "integrations.cursor.title",
+  "integrations.cursor.privateInference",
+  "integrations.cursor.baseUrl",
+  // "API Key" is the literal field name in Cursor's gateway form.
+  "integrations.cursor.apiKey",
+  // "Model" is the Turkish word too; the table header is a true cognate, not a placeholder.
+  "integrations.cursor.colModel",
+]);
+
+test("every locale translates the Cursor tab beyond the brand labels", async () => {
+  const en = await readDict("en");
+  for (const locale of LOCALES.filter(l => l !== "en")) {
+    const dict = await readDict(locale);
+    const stale: string[] = [];
+    for (const [key, value] of dict) {
+      if (!key.startsWith("integrations.cursor.") && !key.startsWith("integrations.detail.cursor")) continue;
+      if (CURSOR_KEEP_ENGLISH.has(key)) continue;
+      if (value === en.get(key)) stale.push(key);
+    }
+    expect(`${locale} Cursor keys still English placeholders: ${stale.join(", ")}`)
+      .toBe(`${locale} Cursor keys still English placeholders: `);
+  }
+});
+
 const DSH_VISIBLE_COPY: Record<(typeof LOCALES)[number], readonly [string, string, string]> = {
   en: [
     "DeepSeek Harness (DSH)",

@@ -143,6 +143,9 @@ test("regular Cursor alone gets the tunnel explanation, not a gateway promise", 
   expect(text).toContain("Only regular Cursor was found");
   expect(text).toContain("public tunnel");
   expect(container.querySelectorAll("[data-installed='false']").length).toBe(1);
+  // The remediation is a link inside the warning itself, not a footer the user must scroll to.
+  const notice = container.querySelector("a[data-cursor-guide='notice']");
+  expect(notice?.getAttribute("href")).toBe("https://example.invalid/guides/cursor-private-inference/");
 });
 
 test("no Cursor at all still hands over the gateway values", async () => {
@@ -163,7 +166,58 @@ test("credential mode links to the API Keys tab instead of inventing a key", asy
   expect(text).toContain("One of your opencodex API keys");
   const copies = Array.from(container.querySelectorAll("button")).filter(button => (button.textContent ?? "").trim() === "Copy");
   expect(copies.length).toBe(1);
-  expect(Array.from(container.querySelectorAll("button")).some(button => (button.textContent ?? "").trim() === "API Keys")).toBe(true);
+  const keysButton = Array.from(container.querySelectorAll("button")).find(button => (button.textContent ?? "").trim() === "API Keys");
+  expect(keysButton).toBeDefined();
+  await act(async () => { keysButton!.click(); });
+  expect(testWindow.location.hash).toBe("#integrations/keys");
+});
+
+test("Copy writes the value to the clipboard and flips the label", async () => {
+  const written: string[] = [];
+  Object.defineProperty(testWindow.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (value: string) => { written.push(value); } },
+  });
+  await mount();
+  const copies = Array.from(container.querySelectorAll("button")).filter(button => (button.textContent ?? "").trim() === "Copy");
+  await act(async () => { copies[0]!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10)); });
+  expect(written).toEqual(["http://127.0.0.1:10100/v1"]);
+  expect((copies[0]!.textContent ?? "").trim()).toBe("Copied");
+  await act(async () => { copies[1]!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 10)); });
+  expect(written).toEqual(["http://127.0.0.1:10100/v1", "opencodex"]);
+});
+
+/**
+ * The 15 s timer itself belongs to the shared store (tests/client-resource-poll.test.tsx). What
+ * this page owns is polling membership: while mounted and active it must be a polling
+ * subscriber, and after unmount it must not be. A visibility flip makes every polling store
+ * do one make-up fetch, so it is the cheapest observable proof of membership.
+ */
+async function flipVisibility(): Promise<void> {
+  for (const state of ["hidden", "visible"] as const) {
+    Object.defineProperty(testWindow.document, "visibilityState", { configurable: true, get: () => state });
+    await act(async () => {
+      testWindow.document.dispatchEvent(new testWindow.Event("visibilitychange"));
+      await Promise.resolve();
+    });
+  }
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+}
+
+test("an active tab is a polling subscriber and stops after unmount", async () => {
+  await mount();
+  const before = requests.length;
+  expect(before).toBeGreaterThan(0);
+  await flipVisibility();
+  expect(requests.length).toBeGreaterThan(before);
+  const afterPoll = requests.length;
+  const current = root!;
+  await act(async () => { current.unmount(); });
+  root = null;
+  await flipVisibility();
+  expect(requests.length).toBe(afterPoll);
 });
 
 test("the model table shows the reasoning ladder and both context windows", async () => {
