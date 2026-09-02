@@ -235,7 +235,9 @@ function nextSpillHardenDeadlineMs(budget: SpillAclBudget | undefined): number |
 }
 
 function harden(path: string, mode: number, budget?: SpillAclBudget): void {
-  const aclApplies = budget ? windowsSecretAclApplies() : process.platform === "win32";
+  // One predicate for both lanes: the test seam that forces a platform must reach the
+  // sync harden too, or a fixture pinned to "linux" on a Windows host still spawns icacls.
+  const aclApplies = windowsSecretAclApplies();
   try {
     chmodSync(path, mode);
   } catch {
