@@ -15,6 +15,7 @@ const PLACEHOLDER_RE = /\{([a-zA-Z0-9_]+)\}/g;
 
 const INTENTIONAL_ENGLISH = new Set<TKey>([
   // Units, symbols, protocol values, machine labels, and product names.
+  "integrations.cursor.noControl",
   "uptime.hour",
   "uptime.second",
   // "auto" is the same word in French, and it labels a machine-derived alias source rather
