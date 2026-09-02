@@ -69,6 +69,30 @@ its own; the variable has to be in the environment of whatever launches the app.
 The build exists for macOS (arm64, x64, universal), Windows (x64, arm64) and Linux (x64,
 arm64). Configuration is identical across them.
 
+## From the dashboard
+
+The opencodex dashboard has a **Cursor** tab under Integrations (`/#integrations/cursor`). It is
+read-only toward Cursor: it never writes Cursor's settings database, keychain entry, or app
+bundle, so there is no switch to flip. What it does is hand you the values and show you whether
+they took.
+
+- **Installed builds.** Whether Cursor Private Inference and regular Cursor are present, with
+  the path and version. If only regular Cursor is found, the tab says so and links back here:
+  regular Cursor routes custom endpoints through Cursor's servers, so a loopback proxy is
+  unreachable without a public tunnel.
+- **Gateway values.** The Base URL for the port the dashboard itself reached, with a Copy
+  button. The API Key row depends on the bind: when it needs no credential the row is
+  `opencodex-loopback` with Copy; when API auth is on, or any opencodex API key is configured,
+  the row tells you to use one of your own keys and links to the API Keys tab. Any configured
+  key works, not only `OPENCODEX_API_AUTH_TOKEN`.
+- **Connection.** The last `/v1/models` request whose User-Agent starts with `Cursor/`, with
+  the time and the version. It reads "never seen" until Cursor calls the proxy; pressing
+  **Refresh model list** in Cursor is what makes it flip. The card refreshes every 15 seconds
+  while the tab is open.
+- **What Cursor will show.** A Model / Reasoning / Context table for the models on the raw
+  list, following the same rules as the next section. It is a prediction: Cursor picks the
+  Reasoning ladder from its own table.
+
 ## Models and reasoning effort
 
 The picker is opencodex's raw `/v1/models` list. Two things decide whether a model row gets

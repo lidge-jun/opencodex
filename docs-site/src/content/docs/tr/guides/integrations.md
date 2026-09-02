@@ -68,7 +68,7 @@ opencodex bunları kendi ortamından okur. Ağ geçidiniz bir profil veya taşı
 bir ev dizini ile çalışıyorsa, opencodex'i aynı değişkenler ayarlanmış olarak
 başlatın; aksi takdirde doğru şekilde farklı bir kurulumu takip eder.
 
-## Diğer dört yüzey anahtar değildir
+## Diğer beş yüzey anahtar değildir
 
 **API Anahtarları (API Keys)** opencodex'in kendi kimlik bilgilerini yönetir ve
 hiçbir şekilde bir istemci değildir. **Codex CLI**, proxy servisinin kendisi
@@ -76,7 +76,9 @@ tarafından bağlanır — opencodex'i başlatmak uygular, durdurmak yerel
 yönlendirmeyi geri yükler — bu nedenle dosya başına değiştirilecek bir şey
 yoktur. **Claude** kendi etkinleştirme bayrağını ve Desktop'ın Kaydet/Uygula
 akışını korur; **Grok Build** ise seç ve uygula model çitini korur. Bu
-anlambilimler bu özellikten öncedir ve değişmemiştir.
+anlambilimler bu özellikten öncedir ve değişmemiştir. **Cursor** hiçbir şey
+yazmaz: sekmesi algılama durumunu, ağ geçidi değerlerini ve görülen son isteği
+gösterir; geri kalanı Cursor Private Inference içinde gerçekleşir.
 
 ## Geri Alma (Rollback)
 

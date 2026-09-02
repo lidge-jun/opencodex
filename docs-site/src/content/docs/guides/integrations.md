@@ -59,9 +59,11 @@ One caveat specific to Aside: the running app rewrites `models.json` itself, so
 fully quit and reopen Aside after applying, the same way Claude Desktop needs a
 restart. Aside's block is loopback-only and never carries a real credential.
 
-Cursor is not on this list. Regular Cursor calls custom endpoints from its own backend, so a
-loopback proxy is unreachable without a public tunnel, and Cursor's separate local-agent build
-is configured inside Cursor rather than from this tab. See
+Cursor has a tab but is not one of these switches. Regular Cursor calls custom endpoints from
+its own backend, so a loopback proxy is unreachable without a public tunnel, and Cursor's
+separate Private Inference build is configured inside Cursor. The **Cursor** tab is read-only:
+it detects which build is installed, shows the Base URL and API Key to paste into Cursor, and
+reports the last request Cursor made to the proxy. See
 [Cursor Private Inference](/guides/cursor-private-inference/).
 
 Paths honor each client's own environment override where it has one. For OMP,
@@ -92,13 +94,15 @@ opencodex reads these from its own environment. If your gateway runs with a prof
 or a relocated home, start opencodex with the same variables set, or it will
 correctly follow a different installation.
 
-## The other four surfaces are not switches
+## The other five surfaces are not switches
 
 **API Keys** manages opencodex's own credentials and is not a client at all. **Codex
 CLI** is wired by the proxy service itself — starting opencodex applies it, stopping it
 restores native routing — so there is nothing to toggle per-file. **Claude** keeps its
 own enable flag and Desktop's Save/Apply flow, and **Grok Build** keeps its
 select-then-apply model fence. Those semantics predate this feature and are unchanged.
+**Cursor** writes nothing at all: its tab shows detection, the gateway values, and the last
+request seen, and the rest happens inside Cursor Private Inference.
 
 ## Rollback
 
