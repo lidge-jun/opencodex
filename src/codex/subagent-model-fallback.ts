@@ -7,7 +7,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_SUBAGENT_MODELS, hasOwnProvider } from "../config";
+import { hasOwnProvider } from "../config";
 import { isRateLimitOrQuotaFailureMessage } from "../lib/errors";
 import type { OcxParsedRequest, OcxConfig } from "../types";
 import { slugsEquivalent } from "../providers/slug-codec";
@@ -609,14 +609,9 @@ export function applySubagentModelFallback(
   resolvedFallbackChain?: readonly string[] | null,
 ): { from?: string; to?: string; skipped?: string[] } | null {
   if (!isThreadSpawnRequest(headers)) return null;
-  const configuredFallbackChain = resolvedFallbackChain === undefined
+  const fallbackChain = resolvedFallbackChain === undefined
     ? resolveSubagentFallbackChain(parsed, config)
     : resolvedFallbackChain;
-  // Native-only encrypted V2 tasks need a readable ChatGPT backend even when the
-  // operator configured no fallback chain. Keep ordinary routed spawns unchanged.
-  const fallbackChain = configuredFallbackChain === null && nativeFallbackOnly
-    ? normalizedChain(parsed.modelId, config, [], DEFAULT_SUBAGENT_MODELS)
-    : configuredFallbackChain;
   if (!fallbackChain) return null;
   const selection = selectAvailableSubagentModel(
     parsed.modelId,

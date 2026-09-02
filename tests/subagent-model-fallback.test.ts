@@ -1056,29 +1056,6 @@ describe("subagent model fallback chain", () => {
     expect((parsed._rawBody as { model?: string }).model).toBe("alibaba-token-plan/qwen3.8-max");
   });
 
-  test("encrypted routed spawn gets an automatic native fallback when none is configured", () => {
-    const config = cfg({
-      subagentModelFallback: undefined,
-      defaultProvider: "xai",
-    });
-    const parsed = {
-      modelId: "xai/grok-4.5",
-      options: {},
-      context: { messages: [] },
-      _rawBody: { model: "xai/grok-4.5" },
-    };
-    const result = applySubagentModelFallback(
-      parsed as never,
-      new Headers({ "x-openai-subagent": "collab_spawn" }),
-      config,
-      "pool-a",
-      Date.now(),
-      true,
-    );
-    expect(result?.to).toBe("gpt-5.5");
-    expect(parsed.modelId).toBe("gpt-5.5");
-  });
-
   test("applySubagentModelFallback is a no-op for main turns", () => {
     updateAccountQuota("pool-a", 95);
     const parsed = {
