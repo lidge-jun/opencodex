@@ -14,31 +14,55 @@ npm install -g @bitkyc08/opencodex
 ocx start        # proxy + dashboard on localhost:10100
 ```
 
-<table align="center">
-  <tr>
-    <td align="center">
-      <img src="assets/claude-code-models.gif" alt="Claude Code running a routed model through opencodex — the status bar shows gpt-5.6-luna-medium as the active model" width="560"><br>
-      <sub><b>Claude Code, running any model.</b><br>The picker is stock Claude Code. The brain behind it isn't.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/demo.gif" alt="opencodex demo — running a task in the Codex app on a routed non-OpenAI model" width="560"><br>
-      <sub><b>Codex, running any model.</b><br>Pick a provider and go — same workflow, different brain.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/claude-desktop-subagent.gif" alt="Claude Desktop answering as Claude Opus 4.8, then dispatching a GPT-5.6 Sol subagent through opencodex" width="560"><br>
-      <sub><b>Claude Desktop, running any model.</b><br>Opus answers, then hands the task to a GPT-5.6 Sol subagent.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/grok-build-subagent.gif" alt="Grok Build running GPT-5.6 Sol through opencodex and calling a Kimi K3 subagent" width="560"><br>
-      <sub><b>Grok Build, running any model.</b><br>Sol drives the session and calls a Kimi K3 subagent.</sub>
-    </td>
-  </tr>
+<table>
+<tr>
+<td width="50%" valign="middle">
+
+### Claude Code, running any model
+
+The picker is stock Claude Code. The brain behind it isn't.
+
+</td>
+<td width="50%">
+  <img src="assets/claude-code-models.gif" alt="Claude Code running a routed model through opencodex — the status bar shows gpt-5.6-luna-medium as the active model" width="100%">
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Codex, running any model
+
+Pick a provider and go — same workflow, different brain.
+
+</td>
+<td width="50%">
+  <img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/demo.gif" alt="opencodex demo — running a task in the Codex app on a routed non-OpenAI model" width="100%">
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Claude Desktop, running any model
+
+Opus answers, then hands the task to a GPT-5.6 Sol subagent.
+
+</td>
+<td width="50%">
+  <img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/claude-desktop-subagent.gif" alt="Claude Desktop answering as Claude Opus 4.8, then dispatching a GPT-5.6 Sol subagent through opencodex" width="100%">
+</td>
+</tr>
+<tr>
+<td width="50%" valign="middle">
+
+### Grok Build, running any model
+
+Sol drives the session and calls a Kimi K3 subagent.
+
+</td>
+<td width="50%">
+  <img src="https://raw.githubusercontent.com/lidge-jun/opencodex/main/assets/grok-build-subagent.gif" alt="Grok Build running GPT-5.6 Sol through opencodex and calling a Kimi K3 subagent" width="100%">
+</td>
+</tr>
 </table>
 
 <p align="center">
