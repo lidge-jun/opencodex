@@ -79,6 +79,7 @@ describe("antigravity CCA envelope", () => {
   test("exposes Gemini 3.7 Flash while retired Flash ids resolve to it", async () => {
     // Collapsed picker: base models only.
     expect(ANTIGRAVITY_MODELS).toEqual([
+      "gemini-3.8-flash",
       "gemini-3.7-flash",
       "gemini-3.1-pro",
       "gemini-3.1-flash-image",
@@ -87,6 +88,9 @@ describe("antigravity CCA envelope", () => {
       "gpt-oss-120b-medium",
     ]);
     for (const hidden of [
+      "gemini-3.8-flash-low",
+      "gemini-3.8-flash-medium",
+      "gemini-3.8-flash-high",
       "gemini-3.6-flash",
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-medium",
@@ -515,6 +519,41 @@ describe("antigravity CCA envelope", () => {
 
   // 3.7 Flash carries its tiers on thinkingLevel against ONE wire id, unlike the 3.6
   // generation which used suffixed wire ids.
+  test("gemini-3.8-flash with effort=low routes to gemini-3.8-flash-low + thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.8-flash", "low"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.8-flash-low");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("low");
+  });
+
+  test("gemini-3.8-flash with effort=medium routes to gemini-3.8-flash-medium + thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.8-flash", "medium"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.8-flash-medium");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("medium");
+  });
+
+  test("gemini-3.8-flash with effort=high routes to gemini-3.8-flash-high + thinkingConfig", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.8-flash", "high"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.8-flash-high");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  });
+
+  test("gemini-3.8-flash with no effort defaults to gemini-3.8-flash-medium", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.8-flash"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.8-flash-medium");
+    expect(env.request.generationConfig?.thinkingConfig).toBeUndefined();
+  });
+
+  test("gemini-3.8-flash with effort=max clamps to high", async () => {
+    const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.8-flash", "max"));
+    const env = JSON.parse(req.body);
+    expect(env.model).toBe("gemini-3.8-flash-high");
+    expect(env.request.generationConfig?.thinkingConfig?.thinkingLevel).toBe("high");
+  });
+
   test("gemini-3.7-flash with effort=high keeps the wire id + thinkingConfig", async () => {
     const req = await createGoogleAdapter(effortProvider).buildRequest(parsedWithEffort("gemini-3.7-flash", "high"));
     const env = JSON.parse(req.body);

@@ -50,6 +50,9 @@ const RETIRED_FLASH_TIERS: Record<string, string> = {
 };
 
 const ANTIGRAVITY_WIRE_MODELS = [
+  "gemini-3.8-flash-low",
+  "gemini-3.8-flash-medium",
+  "gemini-3.8-flash-high",
   "gemini-3.7-flash-tiered",
   "gemini-3.1-pro-low",
   "gemini-pro-agent",
@@ -60,6 +63,9 @@ const ANTIGRAVITY_WIRE_MODELS = [
 ];
 
 const ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID: Record<string, string> = {
+  "gemini-3.8-flash-low": "gemini-3.8-flash",
+  "gemini-3.8-flash-medium": "gemini-3.8-flash",
+  "gemini-3.8-flash-high": "gemini-3.8-flash",
   "gemini-3.1-pro-low": "gemini-3.1-pro",
   "gemini-pro-agent": "gemini-3.1-pro",
 };
@@ -143,6 +149,7 @@ function collapsesIntoKnownPickerModel(candidateId: string): boolean {
 // Gemini models: effort → wire model suffix (official agy UI pattern).
 // Claude Opus: effort → thinkingConfig.thinkingLevel (CLIProxyAPI proven pattern).
 export const ANTIGRAVITY_MODEL_EFFORTS: Record<string, string[]> = {
+  "gemini-3.8-flash": ["low", "medium", "high"],
   "gemini-3.7-flash": ["low", "medium", "high"],
   "gemini-3.1-pro": ["low", "high"],
   "claude-sonnet-4-6": ["low", "medium", "high", "max"],
@@ -151,6 +158,11 @@ export const ANTIGRAVITY_MODEL_EFFORTS: Record<string, string[]> = {
 
 // ── Effort → wire model map for Gemini base models ──
 const ANTIGRAVITY_EFFORT_WIRE_MAP: Record<string, Record<string, string>> = {
+  "gemini-3.8-flash": {
+    low: "gemini-3.8-flash-low",
+    medium: "gemini-3.8-flash-medium",
+    high: "gemini-3.8-flash-high",
+  },
   "gemini-3.1-pro": {
     low: "gemini-3.1-pro-low",
     high: "gemini-pro-agent",
@@ -178,6 +190,7 @@ function completeDiscoveredEffortWireModelIds(
 
 // ── Default effort per Gemini base model ──
 const ANTIGRAVITY_DEFAULT_EFFORT: Record<string, string> = {
+  "gemini-3.8-flash": "medium",
   "gemini-3.1-pro": "high",
 };
 
@@ -221,6 +234,9 @@ const ANTIGRAVITY_VISIBLE_MODEL_ALIASES: Record<string, string> = {
 // Wire suffix IDs are identity aliases — they resolve to themselves so saved configs
 // with explicit suffixes (e.g. gemini-3.6-flash-low) continue to work.
 const ANTIGRAVITY_COMPATIBILITY_MODEL_ALIASES: Record<string, string> = {
+  "gemini-3.8-flash-low": "gemini-3.8-flash-low",
+  "gemini-3.8-flash-medium": "gemini-3.8-flash-medium",
+  "gemini-3.8-flash-high": "gemini-3.8-flash-high",
   "gemini-3.1-pro-low": "gemini-3.1-pro-low",
   "gemini-pro-agent": "gemini-pro-agent",
   // ── Retired Flash generations ──
@@ -241,6 +257,7 @@ export const ANTIGRAVITY_MODEL_ALIASES: Record<string, string> = {
 
 // Picker-visible: collapsed base models only.
 export const ANTIGRAVITY_MODELS = [
+  "gemini-3.8-flash",
   GEMINI_FLASH_CURRENT,
   "gemini-3.1-pro",
   "gemini-3.1-flash-image",
@@ -255,6 +272,9 @@ function isKnownAntigravityPickerModelId(value: string): boolean {
 
 // Context windows from the upstream `:fetchAvailableModels` maxTokens per model.
 const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "gemini-3.8-flash-low": 1_048_576,
+  "gemini-3.8-flash-medium": 1_048_576,
+  "gemini-3.8-flash-high": 1_048_576,
   "gemini-3.7-flash-tiered": 1_048_576,
   "gemini-3.1-pro-low": 1_048_576,
   "gemini-pro-agent": 1_048_576,
@@ -266,6 +286,7 @@ const ANTIGRAVITY_WIRE_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 export const ANTIGRAVITY_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Collapsed base IDs — explicit entries for the picker.
+  "gemini-3.8-flash": 1_048_576,
   "gemini-3.7-flash": 1_048_576,
   "gemini-3.1-pro": 1_048_576,
   // Wire IDs and aliases via derivation.
@@ -283,6 +304,7 @@ export const ANTIGRAVITY_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
   // carries only text and image parts (`OcxImageContent`, src/types.ts) and the Codex
   // catalog normalizes `input_modalities` against a closed enum. Advertising a modality
   // the wire cannot carry would be a promise we break at request time.
+  "gemini-3.8-flash": ["text", "image"],
   "gemini-3.7-flash": ["text", "image"],
   "gemini-3.1-pro": ["text", "image"],
   "gemini-3.1-flash-image": ["text", "image"],

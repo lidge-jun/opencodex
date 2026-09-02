@@ -107,6 +107,7 @@ export function clampGoogleMaxOutputTokens(
  * stable and make the mapping configurable for deployments that still serve the bare id.
  */
 const GEMINI_DIRECT_WIRE_RENAMES: Record<string, string> = {
+  "gemini-3.8-flash": "gemini-3.8-flash-tiered",
   "gemini-3.7-flash": "gemini-3.7-flash-tiered",
   "gemini-3.6-flash": "gemini-3.6-flash-tiered",
 };
@@ -748,7 +749,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
       const identityModelId = provider.googleMode === "cloud-code-assist" ? routedModelId : parsed.modelId;
       const stripRejectedClaudeSdkParagraph = provider.googleMode === "cloud-code-assist"
-        && parsed.modelId === "gemini-3.7-flash";
+        && (parsed.modelId === "gemini-3.7-flash" || parsed.modelId === "gemini-3.8-flash");
       const { systemInstruction, contents, replayedCallIds } = messagesToGeminiFormat(
         parsed,
         identityModelId,
