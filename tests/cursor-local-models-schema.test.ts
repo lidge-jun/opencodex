@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
-import { nativeReasoningEfforts } from "../src/codex/catalog";
+import { nativeOpenAiContextTier, nativeReasoningEfforts } from "../src/codex/catalog";
 import {
   resetCodexModelEntitlementCacheForTests,
   seedCodexModelEntitlementsForTests,
@@ -107,6 +107,22 @@ describe("modelCapabilityFields", () => {
     expect(flat.capabilities.context_length).toBe(272000);
     expect("pricing" in flat).toBe(false);
     expect("pricing" in modelCapabilityFields({ longContextWindow: 922000 })).toBe(false);
+  });
+});
+
+describe("nativeOpenAiContextTier", () => {
+  test("native GPT-5.6 carries the 272k/922k pair and other natives carry none", () => {
+    expect(nativeOpenAiContextTier("gpt-5.6-sol")).toEqual({ defaultWindow: 272000, longWindow: 922000 });
+    expect(nativeOpenAiContextTier("gpt-5.5")).toBeUndefined();
+  });
+
+  test("any user lever below the long window removes the tier; levers at or above it keep it", () => {
+    expect(nativeOpenAiContextTier("gpt-5.6-sol", { cap: 500000 })).toBeUndefined();
+    expect(nativeOpenAiContextTier("gpt-5.6-sol", { providerWindow: 400000 })).toBeUndefined();
+    expect(nativeOpenAiContextTier("gpt-5.6-sol", { modelWindows: { "gpt-5.6-sol": 300000 } })).toBeUndefined();
+    expect(nativeOpenAiContextTier("gpt-5.6-sol", { cap: 1050000, providerWindow: 922000 })).toEqual({ defaultWindow: 272000, longWindow: 922000 });
+    // A window override for another slug does not touch this one.
+    expect(nativeOpenAiContextTier("gpt-5.6-sol", { modelWindows: { "gpt-5.6-terra": 300000 } })).toEqual({ defaultWindow: 272000, longWindow: 922000 });
   });
 });
 

@@ -276,9 +276,10 @@ export function nativeOpenAiContextWindow(slug: string, limits?: NativeContextLi
  * pick a window per request (Cursor's local-agent "Context" selector). The pair is the family's
  * pinned default window and its opt-in ceiling, independent of whether the operator has
  * already opted the proxy into the long window: the selector exists so the client can choose.
- * A provider cap below the long tier removes the tier; a cap at or above it leaves it intact
- * (the 922k/1050k opt-in values are the levers, not a request to shrink). Undefined when the
- * family has no separate tier or when the two windows coincide.
+ * Any user lever below the long window removes the tier: a per-model window override, the
+ * provider-level window override, or a provider context cap. A lever at or above it leaves the
+ * tier intact (the 922k/1050k opt-in values are the levers, not a request to shrink). Undefined
+ * when the family has no separate tier or when the two windows coincide.
  */
 export function nativeOpenAiContextTier(
   slug: string,
@@ -288,8 +289,13 @@ export function nativeOpenAiContextTier(
   const defaultWindow = positiveInt(override?.contextWindow);
   const longWindow = positiveInt(override?.maxContextWindow);
   if (defaultWindow === undefined || longWindow === undefined || longWindow <= defaultWindow) return undefined;
-  const cap = positiveInt(asLimits(limits).cap);
-  if (cap !== undefined && cap < longWindow) return undefined;
+  const resolved = asLimits(limits);
+  const levers = [
+    positiveInt(resolved.modelWindows?.[slug]),
+    positiveInt(resolved.providerWindow),
+    positiveInt(resolved.cap),
+  ];
+  if (levers.some(lever => lever !== undefined && lever < longWindow)) return undefined;
   return { defaultWindow, longWindow };
 }
 
