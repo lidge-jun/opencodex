@@ -5,6 +5,7 @@ const DEFAULT_SOCKS5_PORT = 1080;
 const SOCKS5_CONNECT_TIMEOUT_MS = 30_000;
 const SOCKS5_RESPONSE_TIMEOUT_MS = 200_000;
 const MAX_RESPONSE_HEADER_BYTES = 64 * 1024;
+const MAX_BODY_SLICE_BYTES = 64 * 1024;
 const SOCKS5_VERSION = 0x05;
 const SOCKS5_NO_AUTH = 0x00;
 const SOCKS5_USER_PASS = 0x02;
@@ -342,6 +343,18 @@ async function secureSocket(socket: Socket, target: URL, signal: AbortSignal): P
   });
 }
 
+function parseChunkSize(line: string): number {
+  const token = line.split(";", 1)[0]!.trim();
+  if (!/^[0-9a-fA-F]+$/.test(token)) {
+    throw new Socks5FetchError("SOCKS5 upstream returned an invalid chunk size");
+  }
+  const size = Number.parseInt(token, 16);
+  if (!Number.isSafeInteger(size) || size < 0) {
+    throw new Socks5FetchError("SOCKS5 upstream returned an invalid chunk size");
+  }
+  return size;
+}
+
 function parseResponseHead(raw: Buffer): { status: number; statusText: string; headers: Headers } {
   const text = raw.toString("latin1");
   const lines = text.split("\r\n");
@@ -429,8 +442,7 @@ function responseBody(
     if (chunked) {
       if (chunkRemaining === 0) {
         const line = (await reader.readUntil(CRLF, MAX_RESPONSE_HEADER_BYTES, signal)).subarray(0, -2).toString("ascii");
-        const size = Number.parseInt(line.split(";", 1)[0]!.trim(), 16);
-        if (!Number.isSafeInteger(size) || size < 0) throw new Socks5FetchError("SOCKS5 upstream returned an invalid chunk size");
+        const size = parseChunkSize(line);
         if (size === 0) {
           while (true) {
             const trailer = await reader.readUntil(CRLF, MAX_RESPONSE_HEADER_BYTES, signal);
@@ -440,15 +452,17 @@ function responseBody(
         }
         chunkRemaining = size;
       }
-      const value = await reader.read(chunkRemaining, signal);
-      chunkRemaining = 0;
-      const ending = await reader.read(2, signal);
-      if (!ending.equals(CRLF)) throw new Socks5FetchError("SOCKS5 upstream returned an invalid chunk terminator");
+      const value = await reader.read(Math.min(chunkRemaining, MAX_BODY_SLICE_BYTES), signal);
+      chunkRemaining -= value.byteLength;
+      if (chunkRemaining === 0) {
+        const ending = await reader.read(2, signal);
+        if (!ending.equals(CRLF)) throw new Socks5FetchError("SOCKS5 upstream returned an invalid chunk terminator");
+      }
       return value;
     }
     if (remaining !== undefined) {
       if (remaining === 0) return null;
-      const value = await reader.read(Math.min(remaining, 64 * 1024), signal);
+      const value = await reader.read(Math.min(remaining, MAX_BODY_SLICE_BYTES), signal);
       remaining -= value.byteLength;
       return value;
     }
