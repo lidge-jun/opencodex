@@ -6,6 +6,7 @@ import { INTEGRATION_MARKS } from "../components/integration-marks";
 import ApiKeys from "./ApiKeys";
 import Claude from "./Claude";
 import Grok from "./Grok";
+import CursorIntegrationPage from "./integrations/CursorIntegrationPage";
 import IntegrationsOverview from "./integrations/IntegrationsOverview";
 import FileIntegrationPage, {
   type FileIntegrationClientId,
@@ -28,7 +29,7 @@ function panelDomId(tab: IntegrationTab): string {
 }
 
 /*
- * The strip carries 17 tabs on one row, which is precisely where a mark earns
+ * The strip carries 18 tabs on one row, which is precisely where a mark earns
  * its place: the eye finds a logo faster than it reads the tenth label. Two
  * tabs have no client behind them -- `overview` is the page itself and `keys`
  * is a credential surface, not an integration -- so they stay text-only rather
@@ -194,6 +195,7 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
             )}
             {definition.id === "claude" && <Claude apiBase={apiBase} active={active} />}
             {definition.id === "grok" && <Grok apiBase={apiBase} active={active} />}
+            {definition.id === "cursor" && <CursorIntegrationPage apiBase={apiBase} active={active} />}
             {FILE_CLIENTS.has(definition.id as FileIntegrationClientId) && (
               <FileIntegrationPage
                 apiBase={apiBase}

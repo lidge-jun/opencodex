@@ -21,12 +21,14 @@ import {
   type IntegrationStatus,
 } from "./integration-api";
 import type { NativeIntegrationClientId, NativeStatus } from "./native-api";
+import { CURSOR_SEEN_WINDOW_MS, type CursorIntegrationStatus } from "./cursor-api";
 
 export type OverviewClientId =
   | "codex"
   | "claude"
   | "claudeDesktop"
   | "grok"
+  | "cursor"
   | FileIntegrationClientId;
 
 /** How far the `/api/keys` read has got, since the count alone cannot say. */
@@ -132,6 +134,7 @@ export interface OverviewSources {
   claude: ClaudeCodePayload | null;
   claudeDesktop: ClaudeDesktopPayload | null;
   grok: GrokPayload | null;
+  cursor: CursorIntegrationStatus | null;
   native: NativeStatus[] | null;
   nativeSettled: boolean;
 }
@@ -433,6 +436,37 @@ function grokRow(
   };
 }
 
+
+/**
+ * Cursor has no switch: its gateway is configured inside Cursor, and this proxy never
+ * writes there. "Applied" therefore means a Cursor client actually called us recently.
+ */
+function cursorRow(payload: CursorIntegrationStatus | null, now = Date.now()): OverviewRow {
+  const base = {
+    id: "cursor" as const,
+    hash: "integrations/cursor",
+    labelKey: "integrations.tab.cursor" as TKey,
+    toggle: null,
+    toggleBlocked: null,
+    togglePath: null,
+    status: null,
+    detail: null,
+    detailVars: null,
+  };
+  if (!payload) return { ...base, state: "unknown", installed: false, applied: false, detailKey: null };
+  if (!payload.privateInference.installed) {
+    return { ...base, state: "not-installed", installed: false, applied: false, detailKey: "integrations.detail.cursorAbsent" };
+  }
+  const seenRecently = payload.lastSeen !== null && now - payload.lastSeen.at < CURSOR_SEEN_WINDOW_MS;
+  return {
+    ...base,
+    state: seenRecently ? "current" : "absent",
+    installed: true,
+    applied: seenRecently,
+    detailKey: seenRecently ? "integrations.detail.cursorSeen" : "integrations.detail.cursorNeverSeen",
+  };
+}
+
 function fileRow(status: IntegrationStatus): OverviewRow {
   return {
     id: status.clientId,
@@ -472,6 +506,7 @@ export function buildOverviewRows(sources: OverviewSources): OverviewRows {
       sources.nativeSettled,
     ),
     grokRow(sources.grok, nativeGrok, sources.nativeSettled),
+    cursorRow(sources.cursor),
   ];
   for (const clientId of FILE_INTEGRATION_CLIENTS) {
     const status = statusByClient.get(clientId);

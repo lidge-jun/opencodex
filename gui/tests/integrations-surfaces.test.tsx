@@ -210,7 +210,10 @@ test("the DSH surface uses localized ownership semantics and its own API route",
   await mountClient(true, "dsh");
 
   const text = container.textContent ?? "";
-  expect(text).toContain("DeepSeek Harness (DSH)");
+  // The tab strip ran out of room, so the tab and the page heading both read the short
+  // form; the full product name still lives on the API Keys page (api.clientConfig.clientDsh).
+  expect(text).toContain("DSH");
+  expect(text).not.toContain("DeepSeek Harness (DSH)");
   expect(text).toContain("llm-pi-ai.providers.opencodex");
   expect(text).toContain("hot reload");
   expect(text).toContain("default model");

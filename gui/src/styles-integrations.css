@@ -162,3 +162,17 @@
 /* The Claude Code connection switch, relocated out of the sidebar. */
 .claudecode-connection-head { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
 .claudecode-connection-head .switch { margin-left: auto; }
+
+/* Cursor tab: a read-only companion page — detection, the two gateway values, last-seen, and the model table. */
+.cursor-page { display: flex; flex-direction: column; gap: 14px; }
+.cursor-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.cursor-card h4 { margin: 0; }
+.cursor-detect-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cursor-detect-name { font-weight: var(--weight-semibold); min-width: 12ch; }
+.cursor-detect-path { font-family: var(--font-code); font-size: var(--text-caption); overflow-wrap: anywhere; }
+.cursor-gateway-row { display: grid; grid-template-columns: minmax(7ch, auto) 1fr auto; align-items: center; gap: 10px; }
+.cursor-gateway-label { font-weight: var(--weight-semibold); }
+.cursor-gateway-value { font-family: var(--font-code); padding: 4px 8px; border-radius: var(--radius); background: var(--bg); border: 1px solid var(--border); overflow-wrap: anywhere; }
+.cursor-model-table { width: 100%; border-collapse: collapse; font-size: var(--text-caption); }
+.cursor-model-table th, .cursor-model-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.cursor-model-table th { font-weight: var(--weight-semibold); color: var(--muted); }

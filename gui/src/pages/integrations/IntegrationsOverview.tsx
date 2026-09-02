@@ -11,6 +11,7 @@ import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import RestoreDialog from "./RestoreDialog";
 import { RollbackHistory } from "./RollbackHistory";
 import { describeRefusal } from "./refusal-copy";
+import { loadCursorIntegrationStatus } from "./cursor-api";
 import {
   buildOverviewRows,
   countOverviewRows,
@@ -225,6 +226,10 @@ export default function IntegrationsOverview({
     (signal: AbortSignal) => loadGrokFenceStatus(apiBase, signal),
     [apiBase],
   );
+  const fetchCursor = useCallback(
+    (signal: AbortSignal) => loadCursorIntegrationStatus(apiBase, signal),
+    [apiBase],
+  );
   const fetchNative = useCallback(
     async (signal: AbortSignal) => (await loadNativeIntegrations(apiBase, signal))?.clients ?? null,
     [apiBase],
@@ -274,6 +279,12 @@ export default function IntegrationsOverview({
     fetchGrok,
     { isEmpty: value => value === null, enabled: active, sessionCacheKey: `ocx.integrations.grok.v1:${apiBase}` },
   );
+  const cursorResource = useDataSurface(
+    `integration-cursor:${apiBase}`,
+    [apiBase],
+    fetchCursor,
+    { isEmpty: value => value === null, enabled: active, sessionCacheKey: `ocx.integrations.cursor.v1:${apiBase}` },
+  );
   const nativeResource = useDataSurface<NativeStatus[] | null>(
     `integration-native:${apiBase}`,
     [apiBase],
@@ -318,6 +329,7 @@ export default function IntegrationsOverview({
     claude: claudeResource.state.data ?? null,
     claudeDesktop: claudeDesktopResource.state.data ?? null,
     grok: grokResource.state.data ?? null,
+    cursor: cursorResource.state.data ?? null,
     native,
     nativeSettled,
   });

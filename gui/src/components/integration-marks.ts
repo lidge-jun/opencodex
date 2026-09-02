@@ -30,6 +30,8 @@ const NATIVE_MARKS: Record<Exclude<OverviewClientId, ExportClientId>, string> = 
   claude: "/provider-icons/claude-color.svg",
   claudeDesktop: "/provider-icons/claude-color.svg",
   grok: "/provider-icons/grok.svg",
+  // Two-ink brand artwork, drawn as an image (never masked).
+  cursor: "/provider-icons/cursor-color.svg",
 };
 
 /**
