@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { managementFetch as fetch } from "./helpers/management-auth";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
 import { join } from "node:path";
 import {
@@ -16,8 +17,14 @@ import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { findAvailablePort } from "../src/server/ports";
 import type { OcxConfig } from "../src/types";
+import { flushConfigDirHardeningForTests } from "../src/config/paths";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-oauth-manual-code-test");
+// Per-test scratch home with both icacls runners stubbed: this file tests the manual-code
+// login flow, not Windows ACLs. With a real icacls the credential persist failed on the hosted
+// runner and the login settled as "OAuth authentication failed" (run 33603770447 shard 4).
+let TEST_DIR = "";
+const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 let previousOpencodexHome: string | undefined;
 
 function b64url(input: Buffer | string): string {
@@ -113,18 +120,23 @@ describe("parseCallbackInput kinds", () => {
 describe("OAuth manual login code fallback", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
+    setIcaclsRunnerForTests(() => ICACLS_OK);
+    setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
+    TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-oauth-manual-code-"));
     process.env.OPENCODEX_HOME = TEST_DIR;
     clearLoginState("xai");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cancelLoginFlow("xai");
     clearLoginState("xai");
+    await flushConfigDirHardeningForTests();
+    setIcaclsRunnerForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    if (TEST_DIR && existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+    TEST_DIR = "";
   });
 
   test("submitManualLoginCode rejects when no login is in progress", () => {
