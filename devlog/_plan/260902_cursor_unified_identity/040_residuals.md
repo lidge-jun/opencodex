@@ -99,3 +99,19 @@ Each child was re-stacked by CHERRY-PICKING its unique commits onto the landed p
 by rebasing. A parent squash absorbs the child's content under a different commit id, so a
 plain rebase conflicts against work that is already in the base - the hazard the stacked-PR
 rules warn about, observed here on #3225.
+
+### Closeout verification (landed dev `21416a7af`)
+
+```
+git merge-base --is-ancestor 7aa64bb0b FETCH_HEAD   -> OK   (#3222)
+git merge-base --is-ancestor 83838e7fa FETCH_HEAD   -> OK   (#3225)
+git merge-base --is-ancestor 8d2dd6639 FETCH_HEAD   -> OK   (#3233)
+git merge-base --is-ancestor 21416a7af FETCH_HEAD   -> OK   (#3243, this record)
+
+bun run typecheck                                    exit 0
+bun test (11 files: cursor-*, fastwire-policy, claude-*, codex-catalog,
+          agent-task-recovery)                       662 pass / 0 fail
+```
+
+No PR from this unit is left open. Remote branch deletion is refused by the repository
+ruleset, which is expected protection and does not affect the landings.
