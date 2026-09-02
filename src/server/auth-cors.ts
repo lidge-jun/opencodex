@@ -155,8 +155,14 @@ export function managementRequestOrigin(req: Request, config: OcxConfig): string
 
 export function isAllowedManagementOrigin(req: Request, config: OcxConfig): boolean {
   const requestOrigin = managementRequestOrigin(req, config);
-  if (!requestOrigin) return false;
+ if (!requestOrigin) return false;
   const origin = req.headers.get("Origin");
+  // When management auth is disabled (loopback-only opt-in), accept any loopback origin so
+  // a browser visiting http://localhost:PORT is not 403-blocked while the process reports
+  // http://127.0.0.1:PORT as its derived origin.
+  if (config.managementAuthDisabled === true && isLoopbackHostname(config.hostname) && origin) {
+    if (isLoopbackOriginValue(origin) || isExtraAllowedOrigin(origin, config)) return true;
+  }
   // Exact match against the process-derived origin, or an operator-listed corsAllowOrigins
   // entry (covers TLS-terminator https://… when the process observes http://…).
   return !origin || origin === requestOrigin || isExtraAllowedOrigin(origin, config);
