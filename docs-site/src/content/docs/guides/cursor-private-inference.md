@@ -76,22 +76,25 @@ read-only toward Cursor: it never writes Cursor's settings database, keychain en
 bundle, so there is no switch to flip. What it does is hand you the values and show you whether
 they took.
 
-- **Installed builds.** Whether Cursor Private Inference and regular Cursor are present, with
-  the path and version. If only regular Cursor is found, the tab says so and links back here:
+- **Installed builds.** Whether Cursor Private Inference (with its path and version) and
+  regular Cursor (path only) are present. If only regular Cursor is found, the tab says so and links back here:
   regular Cursor routes custom endpoints through Cursor's servers, so a loopback proxy is
   unreachable without a public tunnel.
-- **Gateway values.** The Base URL for the port the dashboard itself reached, with a Copy
-  button. The API Key row depends on the bind: when it needs no credential the row is
+- **Gateway values.** The Base URL on the proxy's own listening port (from its runtime record,
+  so a reverse-proxied dashboard still shows the port Cursor on this machine can reach), with a
+  Copy button. The API Key row depends on the bind: when it needs no credential the row is
   `opencodex-loopback` with Copy; when API auth is on, or any opencodex API key is configured,
   the row tells you to use one of your own keys and links to the API Keys tab. Any configured
   key works, not only `OPENCODEX_API_AUTH_TOKEN`.
-- **Connection.** The last `/v1/models` request whose User-Agent starts with `Cursor/`, with
-  the time and the version. It reads "never seen" until Cursor calls the proxy; pressing
+- **Connection.** The last `/v1/models` request whose User-Agent is exactly `Cursor/<version>`
+  (the header Cursor's local-agent runtime sends), with the time and the version. It reads
+  "never seen" until Cursor calls the proxy; pressing
   **Refresh model list** in Cursor is what makes it flip. The card refreshes every 15 seconds
   while the tab is open.
-- **What Cursor will show.** A Model / Reasoning / Context table for the models on the raw
-  list, following the same rules as the next section. It is a prediction: Cursor picks the
-  Reasoning ladder from its own table.
+- **What Cursor will show.** A Model / Reasoning / Context table for the models opencodex
+  advertises (disabled models and provider allowlists apply, the same as the raw list),
+  following the rules in the next section. It is a prediction: Cursor picks the Reasoning
+  ladder from its own table.
 
 ## Models and reasoning effort
 
