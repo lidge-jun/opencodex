@@ -11,6 +11,8 @@ import type { injectGrokConfig } from "../../grok/inject";
 import type { removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
 import type { probeClaudeDesktopPolicy } from "../../claude/desktop-policy";
 import type { RuntimePortState } from "../../config/process-state";
+import type { CursorInstall } from "../../integrations/cursor-detect";
+import type { CursorEffortTable } from "../../integrations/cursor-effort-table";
 import type { CatalogDisposition, ConvergeCodex } from "../../codex/convergence-types";
 import type {
   performCodexRestart,
@@ -58,6 +60,7 @@ export interface ManagementApiDeps {
    * on the developer's real runtime state file.
    */
   readRuntimePort?: (pid: number) => RuntimePortState | null;
+  loadCursorEffortTable?: (install: CursorInstall | undefined) => CursorEffortTable | null;
   clearThreadAccountMap?: () => void;
   clearProviderQuotaCache?: () => void;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void> | void;

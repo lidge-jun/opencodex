@@ -12,9 +12,10 @@ import { readRuntimePort } from "../../config/process-state";
 import { filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextTier, uniqueCatalogModelsForRawPublicList, visibleNativeSlugs } from "../../codex/catalog";
 import { cursorLastSeen, type CursorSeen } from "../../integrations/cursor-seen";
 import { detectCursorInstalls, type CursorInstall } from "../../integrations/cursor-detect";
+import { loadCursorEffortTable } from "../../integrations/cursor-effort-table";
 import { configuredApiAuthToken, isApiAuthRequired, jsonResponse } from "../auth-cors";
 import { fetchAllModels } from "../management-api";
-import { cursorEffortFamily } from "../models-capabilities";
+import { predictCursorEffort } from "../models-capabilities";
 import type { ManagementContext } from "./context";
 
 export const CURSOR_GATEWAY_PLACEHOLDER_KEY = "opencodex-loopback";
@@ -25,9 +26,11 @@ export interface CursorIntegrationStatus {
   regularCursor: { installed: boolean; path: string | null };
   gateway: { baseUrl: string; apiKeyMode: "credential" | "placeholder"; placeholder: string };
   lastSeen: CursorSeen | null;
+  effortTable: { source: "bundle" | "static"; version: string | null; families: number | null };
   models: Array<{
     id: string;
     reasoning: string[] | null;
+    family: string | null;
     context: { defaultWindow: number; longWindow: number } | null;
   }>;
   guideUrl: string;
@@ -62,14 +65,20 @@ export async function buildCursorIntegrationStatus(
     ...visibleNativeSlugs(config),
     ...uniqueCatalogModelsForRawPublicList(goModels).map(model => model.alias ?? `${model.provider}/${model.id}`),
   ];
+  const table = (deps.loadCursorEffortTable ?? loadCursorEffortTable)(privateInference);
   const models = ids.map(id => {
     const tier = nativeOpenAiContextTier(id, limits);
+    const predicted = predictCursorEffort(id, table);
     return {
       id,
-      reasoning: cursorEffortFamily(id),
+      reasoning: predicted.ladder,
+      family: predicted.family,
       context: tier ? { defaultWindow: tier.defaultWindow, longWindow: tier.longWindow } : null,
     };
   });
+  const effortTable = table
+    ? { source: "bundle" as const, version: table.version, families: table.families.length }
+    : { source: "static" as const, version: null, families: null };
 
   return {
     privateInference: {
@@ -84,6 +93,7 @@ export async function buildCursorIntegrationStatus(
       placeholder: CURSOR_GATEWAY_PLACEHOLDER_KEY,
     },
     lastSeen: cursorLastSeen(),
+    effortTable,
     models,
     guideUrl: CURSOR_GUIDE_URL,
   };

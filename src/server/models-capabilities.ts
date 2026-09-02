@@ -1,3 +1,5 @@
+import type { CursorEffortTable } from "../integrations/cursor-effort-table";
+
 /**
  * Extended capability advertisement for the OpenAI-shape `GET /v1/models` list.
  *
@@ -23,7 +25,8 @@ export const OPENAI_FAMILY_API_TYPES: ReadonlySet<string> = new Set(["chat_compl
  * The reasoning-effort ladder Cursor's local-agent runtime attaches to a model, keyed by the
  * model id after its last `/`. Cursor decides this from its own table rather than from the
  * gateway's `reasoning_effort` list, so the dashboard can only PREDICT it; the values here
- * mirror that table (read from the 3.18.25 bundle) and carry no Cursor behavior of their own.
+ * form the fallback mirror of the 3.18.25 table; the live table is read by
+ * `src/integrations/cursor-effort-table.ts`. These values carry no Cursor behavior of their own.
  * Null means Cursor shows no Reasoning control for the id. Distinct from
  * `src/adapters/cursor/effort-map.ts`, which maps opencodex efforts onto Cursor's *backend*
  * tiers for the outbound provider; this is what Cursor's *local* picker renders.
@@ -43,15 +46,47 @@ const CURSOR_EFFORT_FAMILIES: ReadonlyArray<{ test: RegExp; ladder: readonly str
 ];
 
 export function cursorEffortFamily(modelId: string): string[] | null {
+  const id = normalizeCursorPickerId(modelId);
+  for (const family of CURSOR_EFFORT_FAMILIES) {
+    if (family.test.test(id)) return family.ladder.length > 0 ? [...family.ladder] : null;
+  }
+  return null;
+}
+
+export interface CursorEffortPrediction {
+  ladder: string[] | null;
+  source: "bundle" | "static";
+  /** Bundle family id when one matched (e.g. "anthropic-opus-5"); null otherwise. */
+  family: string | null;
+  outputCap?: number;
+}
+
+export function normalizeCursorPickerId(modelId: string): string {
   let id = modelId.trim().toLowerCase();
   const slash = id.lastIndexOf("/");
   if (slash !== -1) id = id.slice(slash + 1);
   const at = id.indexOf("@");
   if (at !== -1) id = id.slice(0, at);
-  for (const family of CURSOR_EFFORT_FAMILIES) {
-    if (family.test.test(id)) return family.ladder.length > 0 ? [...family.ladder] : null;
+  return id;
+}
+
+export function predictCursorEffort(modelId: string, table: CursorEffortTable | null): CursorEffortPrediction {
+  const id = normalizeCursorPickerId(modelId);
+  if (table) {
+    for (const family of table.families) {
+      if (family.pattern.test(id)) {
+        return {
+          ladder: family.ladder.length > 0 ? [...family.ladder] : null,
+          source: "bundle",
+          family: family.id,
+          ...(family.outputCap !== undefined ? { outputCap: family.outputCap } : {}),
+        };
+      }
+    }
+    if (table.bareGpt5?.pattern.test(id)) return { ladder: [...table.bareGpt5.ladder], source: "bundle", family: "gpt-5" };
+    return { ladder: null, source: "bundle", family: null };
   }
-  return null;
+  return { ladder: cursorEffortFamily(modelId), source: "static", family: null };
 }
 
 export interface ModelCapabilityInput {

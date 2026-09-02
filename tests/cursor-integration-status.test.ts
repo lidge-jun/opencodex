@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, readFileSync} from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -8,6 +8,7 @@ import {
   seedCodexModelEntitlementsForTests,
 } from "../src/codex/model-entitlements";
 import { cursorProductJsonCandidates, detectCursorInstalls, type CursorDetectDeps } from "../src/integrations/cursor-detect";
+import { parseCursorEffortTable, type CursorEffortTable } from "../src/integrations/cursor-effort-table";
 import { cursorLastSeen, recordCursorSeen, resetCursorSeenForTests } from "../src/integrations/cursor-seen";
 import { cursorEffortFamily } from "../src/server/models-capabilities";
 import { startServer } from "../src/server";
@@ -93,6 +94,14 @@ describe("cursorEffortFamily", () => {
 
 const previousHome = process.env.OPENCODEX_HOME;
 let testHome = "";
+const CURSOR_EFFORT_FIXTURE = readFileSync(join(import.meta.dir, "fixtures/cursor-agent-exec-effort-table.min.js"), "utf8");
+const STATIC_CURSOR_EFFORT_DEPS = { managementApi: { loadCursorEffortTable: () => null } };
+
+function fixtureEffortTable(): CursorEffortTable {
+  const parsed = parseCursorEffortTable(CURSOR_EFFORT_FIXTURE);
+  if (!parsed) throw new Error("Cursor effort fixture did not parse");
+  return { ...parsed, version: "3.18.25", bundlePath: "/fixture/main.js" };
+}
 
 function statusConfig(): OcxConfig {
   return {
@@ -134,7 +143,7 @@ describe("GET /api/native-integrations/cursor", () => {
   test("reports gateway values, model expectations, and a last-seen Cursor request", async () => {
     seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol"]);
     saveConfig(statusConfig());
-    const server = startServer(0);
+    const server = startServer(0, STATIC_CURSOR_EFFORT_DEPS);
     try {
       const adminToken = readFileSync(join(testHome, "admin-api-token"), "utf8").trim();
       const headers = { "x-opencodex-api-key": adminToken };
@@ -144,7 +153,8 @@ describe("GET /api/native-integrations/cursor", () => {
       const first = await before.json() as {
         gateway: { baseUrl: string; apiKeyMode: string; placeholder: string };
         lastSeen: unknown;
-        models: Array<{ id: string; reasoning: string[] | null; context: { defaultWindow: number; longWindow: number } | null }>;
+        effortTable: { source: string };
+        models: Array<{ id: string; reasoning: string[] | null; family: string | null; context: { defaultWindow: number; longWindow: number } | null }>;
         privateInference: { installed: boolean };
         guideUrl: string;
       };
@@ -152,14 +162,16 @@ describe("GET /api/native-integrations/cursor", () => {
       expect(first.gateway.apiKeyMode).toBe("placeholder");
       expect(first.gateway.placeholder).toBe("opencodex-loopback");
       expect(first.lastSeen).toBeNull();
+      expect(first.effortTable.source).toBe("static");
       expect(typeof first.privateInference.installed).toBe("boolean");
       expect(first.guideUrl).toContain("cursor-private-inference");
       const k3 = first.models.find(model => model.id === "kimi/k3");
-      expect(k3).toEqual({ id: "kimi/k3", reasoning: null, context: null });
+      expect(k3).toEqual({ id: "kimi/k3", reasoning: null, family: null, context: null });
       const sol = first.models.find(model => model.id === "gpt-5.6-sol");
       expect(sol).toEqual({
         id: "gpt-5.6-sol",
         reasoning: ["low", "medium", "high", "xhigh"],
+        family: null,
         context: { defaultWindow: 272000, longWindow: 922000 },
       });
 
@@ -178,7 +190,7 @@ describe("GET /api/native-integrations/cursor", () => {
     const config = statusConfig();
     config.apiKeys = [{ id: "k1", name: "test", key: "ocx_test_key_value_1234567890", createdAt: new Date(0).toISOString() }];
     saveConfig(config);
-    const server = startServer(0);
+    const server = startServer(0, STATIC_CURSOR_EFFORT_DEPS);
     try {
       const adminToken = readFileSync(join(testHome, "admin-api-token"), "utf8").trim();
       const res = await fetch(new URL("/api/native-integrations/cursor", server.url), { headers: { "x-opencodex-api-key": adminToken } });
@@ -192,7 +204,7 @@ describe("GET /api/native-integrations/cursor", () => {
   test("a disabled model leaves the prediction the same way it leaves /v1/models", async () => {
     seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol"]);
     saveConfig({ ...statusConfig(), disabledModels: ["kimi/k3"] });
-    const server = startServer(0);
+    const server = startServer(0, STATIC_CURSOR_EFFORT_DEPS);
     try {
       const adminToken = readFileSync(join(testHome, "admin-api-token"), "utf8").trim();
       const status = await fetch(new URL("/api/native-integrations/cursor", server.url), { headers: { "x-opencodex-api-key": adminToken } });
@@ -201,6 +213,26 @@ describe("GET /api/native-integrations/cursor", () => {
       const raw = await fetch(new URL("/v1/models", server.url), { headers: { "user-agent": "Cursor/3.18.25" } });
       const list = await raw.json() as { data: Array<{ id: string }> };
       expect(list.data.some(model => model.id === "kimi/k3")).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("reports bundle effort-table provenance and unmatched model families through the server deps seam", async () => {
+    saveConfig(statusConfig());
+    const server = startServer(0, { managementApi: { loadCursorEffortTable: () => fixtureEffortTable() } });
+    try {
+      const adminToken = readFileSync(join(testHome, "admin-api-token"), "utf8").trim();
+      const status = await fetch(new URL("/api/native-integrations/cursor", server.url), {
+        headers: { "x-opencodex-api-key": adminToken },
+      });
+      expect(status.status).toBe(200);
+      const body = await status.json() as {
+        effortTable: { source: string; version: string | null; families: number | null };
+        models: Array<{ id: string; family: string | null }>;
+      };
+      expect(body.effortTable).toEqual({ source: "bundle", version: "3.18.25", families: 16 });
+      expect(body.models.find(model => model.id === "kimi/k3")?.family).toBeNull();
     } finally {
       await server.stop(true);
     }
