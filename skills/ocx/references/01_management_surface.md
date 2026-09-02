@@ -436,13 +436,13 @@ Show or set how an account pool picks the next account.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit the applied strategy and sticky limit as JSON. |
+| `--json` | boolean | Emit the applied strategy, sticky limit, and reset order as JSON. |
 
 JSON mode: `envelope`.
 
 - A bare invocation reads and never writes.
 - The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.
-- Values are not re-validated in the CLI: the server owns the strategy names and the 1-100 sticky bound.
+- Values are not re-validated in the CLI: the server owns the strategy names, reset directions, and the 1-100 sticky bound.
 - `anthropic` is the only OAuth pool with this setting; other OAuth providers are refused without a round-trip.
 
 ### `ocx account sticky`
@@ -458,11 +458,31 @@ Show or set how many consecutive requests stay on one account.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--json` | boolean | Emit the applied strategy and sticky limit as JSON. |
+| `--json` | boolean | Emit the applied strategy, sticky limit, and reset order as JSON. |
 
 JSON mode: `envelope`.
 
 - Only meaningful under the sticky-capable strategies; the pool strategy is the other half of this setting.
+
+### `ocx account reset-order`
+
+Show or set reset-window ordering for an account pool.
+
+| Method | Route |
+|---|---|
+| GET | `/api/codex-auth/active` |
+| PUT | `/api/codex-auth/pool-strategy` |
+| GET | `/api/oauth/accounts/pool` |
+| PUT | `/api/oauth/accounts/pool` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the applied strategy, sticky limit, and reset order as JSON. |
+
+JSON mode: `envelope`.
+
+- Accepted values are soonest and latest; the setting is only used by reset-window strategy.
+- A bare invocation reads and never writes, and unsupported OAuth pools are refused without a round-trip.
 
 ### `ocx storage cleanup`
 
@@ -587,6 +607,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 32
-- of those, state-changing: 13
+- declared capabilities: 33
+- of those, state-changing: 14
 - head-resolved invocations: 2

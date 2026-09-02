@@ -6,6 +6,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   DEFAULT_ACCOUNT_POOL_STICKY_LIMIT,
   DEFAULT_ACCOUNT_POOL_STRATEGY,
+  DEFAULT_ACCOUNT_POOL_RESET_ORDER,
+  normalizeAccountPoolResetOrder,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimitDraft,
@@ -90,8 +92,15 @@ describe("account pool strategy helpers", () => {
     expect(normalizeAccountPoolStrategy("quota")).toBe("quota");
     expect(normalizeAccountPoolStrategy("round-robin")).toBe("round-robin");
     expect(normalizeAccountPoolStrategy("fill-first")).toBe("fill-first");
+    expect(normalizeAccountPoolStrategy("reset-window")).toBe("reset-window");
     expect(normalizeAccountPoolStrategy("weighted")).toBe(DEFAULT_ACCOUNT_POOL_STRATEGY);
     expect(normalizeAccountPoolStrategy(undefined)).toBe("quota");
+  });
+
+  test("normalizes reset-window direction and defaults unknowns to soonest", () => {
+    expect(normalizeAccountPoolResetOrder("soonest")).toBe("soonest");
+    expect(normalizeAccountPoolResetOrder("latest")).toBe("latest");
+    expect(normalizeAccountPoolResetOrder("newest")).toBe(DEFAULT_ACCOUNT_POOL_RESET_ORDER);
   });
 
   test("normalizes sticky limits to 1–100 integers", () => {
@@ -121,23 +130,25 @@ describe("account pool strategy helpers", () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const result = await putCodexPoolStrategy(
       "http://proxy",
-      { strategy: "round-robin", stickyLimit: 3 },
+      { strategy: "reset-window", stickyLimit: 3, resetOrder: "latest" },
       async (url, init) => {
         calls.push({ url, init });
         return new Response(JSON.stringify({
           ok: true,
-          accountPoolStrategy: "round-robin",
+          accountPoolStrategy: "reset-window",
           accountPoolStickyLimit: 3,
+          accountPoolResetOrder: "latest",
         }), { status: 200 });
       },
     );
-    expect(result).toEqual({ ok: true, strategy: "round-robin", stickyLimit: 3 });
+    expect(result).toEqual({ ok: true, strategy: "reset-window", stickyLimit: 3, resetOrder: "latest" });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("http://proxy/api/codex-auth/pool-strategy");
     expect(calls[0]!.init.method).toBe("PUT");
     expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
-      strategy: "round-robin",
+      strategy: "reset-window",
       stickyLimit: 3,
+      resetOrder: "latest",
     });
   });
 });
@@ -148,8 +159,10 @@ describe("AccountPoolStrategyControls", () => {
       <LanguageProvider>
         <AccountPoolStrategyControls
           strategy="quota"
+          resetOrder="soonest"
           stickyDraft="1"
           onStrategyChange={() => {}}
+          onResetOrderChange={() => {}}
           onStickyDraftChange={() => {}}
           onStickyCommit={() => {}}
         />
@@ -165,8 +178,10 @@ describe("AccountPoolStrategyControls", () => {
       <LanguageProvider>
         <AccountPoolStrategyControls
           strategy="round-robin"
+          resetOrder="soonest"
           stickyDraft="2"
           onStrategyChange={() => {}}
+          onResetOrderChange={() => {}}
           onStickyDraftChange={() => {}}
           onStickyCommit={() => {}}
         />
@@ -182,8 +197,10 @@ describe("AccountPoolStrategyControls", () => {
       <LanguageProvider>
         <AccountPoolStrategyControls
           strategy="quota"
+          resetOrder="soonest"
           stickyDraft="1"
           onStrategyChange={() => {}}
+          onResetOrderChange={() => {}}
           onStickyDraftChange={() => {}}
           onStickyCommit={() => {}}
         />
@@ -207,8 +224,10 @@ describe("AccountPoolStrategyControls", () => {
       <LanguageProvider>
         <AccountPoolStrategyControls
           strategy="quota"
+          resetOrder="soonest"
           stickyDraft="1"
           onStrategyChange={() => {}}
+          onResetOrderChange={() => {}}
           onStickyDraftChange={() => {}}
           onStickyCommit={() => {}}
         />
@@ -229,10 +248,12 @@ describe("AccountPoolStrategyControls", () => {
       <LanguageProvider>
         <AccountPoolStrategyControls
           strategy="round-robin"
+          resetOrder="soonest"
           stickyDraft="3"
           strategySelectId="anthropic-pool-strategy"
           stickyInputId="anthropic-pool-sticky-limit"
           onStrategyChange={() => {}}
+          onResetOrderChange={() => {}}
           onStickyDraftChange={() => {}}
           onStickyCommit={() => {}}
         />
@@ -244,6 +265,26 @@ describe("AccountPoolStrategyControls", () => {
     // Round-robin adds its own row, and the sticky help text is a desc rather than a card-sub.
     expect(markup).toContain("New/unbound assignments before rotate");
     expect((markup.match(/class="setting-row"/g) ?? []).length).toBe(2);
+  });
+
+  test("reset-window exposes an explicit reset direction control", () => {
+    const markup = renderToStaticMarkup(
+      <LanguageProvider>
+        <AccountPoolStrategyControls
+          strategy="reset-window"
+          resetOrder="latest"
+          stickyDraft="1"
+          onStrategyChange={() => {}}
+          onResetOrderChange={() => {}}
+          onStickyDraftChange={() => {}}
+          onStickyCommit={() => {}}
+        />
+      </LanguageProvider>,
+    );
+    expect(markup).toContain("Reset window");
+    expect(markup).toContain("Reset order");
+    expect(markup).toContain("Latest first");
+    expect(markup).toContain('id="account-pool-reset-order"');
   });
 });
 

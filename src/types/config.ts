@@ -712,6 +712,8 @@ export interface OcxConfig {
   autoSwitchThreshold?: number;
   /** New-session account rotation strategy for the Codex pool. Default quota (today's behaviour). */
   accountPoolStrategy?: OcxAccountPoolRotationStrategy;
+  /** Reset-window direction when accountPoolStrategy is reset-window. Default soonest. */
+  accountPoolResetOrder?: OcxAccountPoolResetOrder;
   /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
   accountPoolStickyLimit?: number;
   /** Consecutive non-2xx upstream responses before switching future new threads. Default 3. 0 = disabled. */
@@ -743,6 +745,8 @@ export interface OcxConfig {
     autoSwitchThreshold?: number;
     /** New-session rotation strategy. Default quota (today's behaviour). */
     strategy?: OcxAccountPoolRotationStrategy;
+    /** Reset-window direction when strategy is reset-window. Default soonest. */
+    resetOrder?: OcxAccountPoolResetOrder;
     /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
     stickyLimit?: number;
     /** Usage window for quota-based scoring. Default "five-hour" (today's behaviour). */
@@ -779,7 +783,8 @@ export interface OcxConfig {
   corsAllowOrigins?: string[];
 }
 
-export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";
+export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first" | "reset-window";
+export type OcxAccountPoolResetOrder = "soonest" | "latest";
 
 export type OcxAccountPoolQuotaWindow = "five-hour" | "weekly" | "max-utilization";
 

@@ -518,6 +518,18 @@ export function getAccountQuota(accountId: string): StoredAccountQuota | null {
   return accountQuota.get(accountId) ?? null;
 }
 
+/** Reset ordering must not route from an old timestamp that merely survived in memory. */
+export function getFreshAccountQuota(accountId: string, now = Date.now()): StoredAccountQuota | null {
+  const quota = getAccountQuota(accountId);
+  if (
+    !quota
+    || !Number.isFinite(quota.updatedAt)
+    || quota.updatedAt > now
+    || now - quota.updatedAt > QUOTA_DISK_MAX_AGE_MS
+  ) return null;
+  return quota;
+}
+
 export function listAccountQuotas(): IterableIterator<[string, StoredAccountQuota]> {
   hydrateAccountQuotasFromDisk();
   return accountQuota.entries();

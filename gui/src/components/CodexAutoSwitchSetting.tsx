@@ -19,6 +19,10 @@ const AUTO_SWITCH_DESCRIPTION_KEYS = {
     on: "codexAuth.autoSwitchFillFirstDesc",
     off: "codexAuth.autoSwitchFillFirstOffDesc",
   },
+  "reset-window": {
+    on: "codexAuth.autoSwitchResetWindowDesc",
+    off: "codexAuth.autoSwitchResetWindowOffDesc",
+  },
 } as const;
 
 export interface CodexAutoSwitchSettingProps {

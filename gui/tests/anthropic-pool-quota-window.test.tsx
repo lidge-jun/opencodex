@@ -239,6 +239,7 @@ describe("Anthropic account pool quota window", () => {
       strategy: "quota",
       stickyLimit: 1,
       quotaWindow: "weekly",
+      resetOrder: "soonest",
     });
   });
 });

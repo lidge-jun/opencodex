@@ -1,4 +1,4 @@
-import type { OcxAccountPoolRotationStrategy } from "../types";
+import type { OcxAccountPoolResetOrder, OcxAccountPoolRotationStrategy } from "../types";
 import type { GenerationContext } from "../lib/state-store-sweeper";
 
 export const POOL_KEY_CODEX = "codex";
@@ -17,7 +17,9 @@ const DEFAULT_STICKY_LIMIT = 1;
 const MIN_STICKY_LIMIT = 1;
 const MAX_STICKY_LIMIT = 100;
 const DEFAULT_STRATEGY: OcxAccountPoolRotationStrategy = "quota";
-const VALID_STRATEGIES = new Set<OcxAccountPoolRotationStrategy>(["quota", "round-robin", "fill-first"]);
+const VALID_STRATEGIES = new Set<OcxAccountPoolRotationStrategy>(["quota", "round-robin", "fill-first", "reset-window"]);
+const DEFAULT_RESET_ORDER: OcxAccountPoolResetOrder = "soonest";
+const VALID_RESET_ORDERS = new Set<OcxAccountPoolResetOrder>(["soonest", "latest"]);
 
 /** Selection order for an account with no stored preference: one flat tier. */
 export const DEFAULT_ACCOUNT_PRIORITY = 0;
@@ -42,6 +44,55 @@ export function parseAccountPoolStickyLimit(raw: unknown): number | null {
 
 export function normalizeAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy {
   return parseAccountPoolStrategy(raw) ?? DEFAULT_STRATEGY;
+}
+
+/** Strict parse for management APIs — returns null instead of defaulting. */
+export function parseAccountPoolResetOrder(raw: unknown): OcxAccountPoolResetOrder | null {
+  if (typeof raw === "string" && VALID_RESET_ORDERS.has(raw as OcxAccountPoolResetOrder)) {
+    return raw as OcxAccountPoolResetOrder;
+  }
+  return null;
+}
+
+export function normalizeAccountPoolResetOrder(raw: unknown): OcxAccountPoolResetOrder {
+  return parseAccountPoolResetOrder(raw) ?? DEFAULT_RESET_ORDER;
+}
+
+/**
+ * Pick one account from fresh future reset evidence.
+ *
+ * Threshold headroom is an ordering input, not an eligibility override: when at
+ * least one account has headroom, drained accounts leave the reset race; when the
+ * whole tier is drained, keep the tier available so upstream rejection/failover
+ * semantics remain unchanged. Missing, elapsed, or non-finite reset timestamps are
+ * unknown evidence and return null when no known candidate remains, allowing the
+ * caller to fall back to its established quota picker.
+ */
+export function pickResetWindowAccount(
+  eligibleIds: readonly string[],
+  resetAtOf: (accountId: string) => number | null | undefined,
+  order: OcxAccountPoolResetOrder,
+  now: number,
+  hasHeadroom: (accountId: string) => boolean,
+): string | null {
+  if (eligibleIds.length === 0) return null;
+  const withHeadroom = eligibleIds.filter(hasHeadroom);
+  const candidates = withHeadroom.length > 0 ? withHeadroom : eligibleIds;
+
+  let picked: string | null = null;
+  let pickedResetAt = order === "soonest"
+    ? Number.POSITIVE_INFINITY
+    : Number.NEGATIVE_INFINITY;
+
+  for (const accountId of candidates) {
+    const resetAt = resetAtOf(accountId);
+    if (typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt <= now) continue;
+    const better = order === "soonest" ? resetAt < pickedResetAt : resetAt > pickedResetAt;
+    if (!better) continue;
+    picked = accountId;
+    pickedResetAt = resetAt;
+  }
+  return picked;
 }
 
 export function normalizeAccountPoolStickyLimit(raw: unknown): number {

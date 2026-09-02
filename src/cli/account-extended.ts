@@ -43,7 +43,8 @@ const EXTENDED_USAGE = `Usage:
   ocx account pause <provider> <id|main> [--json]
   ocx account resume <provider> <id|main> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-window>] [--json]
+  ocx account reset-order <provider> [<soonest|latest>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account remove <provider> <id|main> --yes [--json]
   ocx account clear-cooldown <provider> <id|main> [--json]
@@ -809,13 +810,13 @@ export async function cmdPauseExhausted(args: string[], deps: AccountDeps): Prom
 }
 
 /**
- * Two pools expose strategy and sticky, and they are NOT reached the same way:
+ * Two pools expose strategy, sticky, and reset order, and they are NOT reached the same way:
  *
  * |  | Codex pool | Anthropic pool |
  * |---|---|---|
  * | read | `GET /api/codex-auth/active` | `GET /api/oauth/accounts/pool?provider=` |
  * | write | `PUT /api/codex-auth/pool-strategy` | `PUT /api/oauth/accounts/pool` |
- * | keys | `accountPoolStrategy`/`accountPoolStickyLimit` | `strategy`/`stickyLimit` |
+ * | keys | `accountPoolStrategy`/`accountPoolStickyLimit`/`accountPoolResetOrder` | `strategy`/`stickyLimit`/`resetOrder` |
  * | body | bare field | field **plus** a mandatory `provider` |
  *
  * Omitting `provider` from the Anthropic write body earns a 400
@@ -832,7 +833,9 @@ interface PoolTransport {
   strategyKey: string;
   /** Response key carrying the applied sticky limit. */
   stickyKey: string;
-  writeBody: (field: "strategy" | "stickyLimit", value: unknown) => Record<string, unknown>;
+  /** Response key carrying the applied reset direction. */
+  resetOrderKey: string;
+  writeBody: (field: "strategy" | "stickyLimit" | "resetOrder", value: unknown) => Record<string, unknown>;
 }
 
 const CODEX_POOL_TRANSPORT: PoolTransport = {
@@ -840,6 +843,7 @@ const CODEX_POOL_TRANSPORT: PoolTransport = {
   writePath: "/api/codex-auth/pool-strategy",
   strategyKey: "accountPoolStrategy",
   stickyKey: "accountPoolStickyLimit",
+  resetOrderKey: "accountPoolResetOrder",
   writeBody: (field, value) => ({ [field]: value }),
 };
 
@@ -849,6 +853,7 @@ function anthropicPoolTransport(provider: string): PoolTransport {
     writePath: "/api/oauth/accounts/pool",
     strategyKey: "strategy",
     stickyKey: "stickyLimit",
+    resetOrderKey: "resetOrder",
     writeBody: (field, value) => ({ provider, [field]: value }),
   };
 }
@@ -868,7 +873,7 @@ function poolTransportFor(
 }
 
 /**
- * `ocx account strategy <provider> [<name>]` and `ocx account sticky <provider> [<n>]` (#2702).
+ * `ocx account strategy`, `sticky`, and `reset-order` expose one pool setting family (#2702, #2874).
  *
  * One implementation rather than two near-duplicates, because strategy and sticky are two
  * fields of one setting on every pool that has them.
@@ -880,12 +885,14 @@ function poolTransportFor(
 async function poolSetting(
   args: string[],
   deps: AccountDeps,
-  field: "strategy" | "stickyLimit",
+  field: "strategy" | "stickyLimit" | "resetOrder",
 ): Promise<number> {
   const wantsJson = flag(args, "--json");
   const name = args.shift();
   const requested = args.shift();
-  const label = field === "strategy" ? "pool strategy" : "sticky limit";
+  const label = field === "strategy"
+    ? "pool strategy"
+    : field === "stickyLimit" ? "sticky limit" : "reset order";
   if (!name || args.length) return usage();
   const classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
@@ -902,19 +909,23 @@ async function poolSetting(
     if (response.status !== 200) return apiError(response.json, `failed to read ${label}`, response.status);
     const strategy = response.json[transport.strategyKey];
     const sticky = response.json[transport.stickyKey];
+    const resetOrder = response.json[transport.resetOrderKey];
     if (wantsJson) {
       // Pool-neutral key names: the two routes spell the same two settings differently, and a
       // `--json` consumer should not have to branch on which pool answered.
-      console.log(JSON.stringify({ ok: true, provider: name, strategy, stickyLimit: sticky }, null, 2));
+      console.log(JSON.stringify({ ok: true, provider: name, strategy, stickyLimit: sticky, resetOrder }, null, 2));
     } else {
-      console.log(`${name}: ${label} is ${String(field === "strategy" ? strategy : sticky)}`);
+      const applied = field === "strategy"
+        ? strategy
+        : field === "stickyLimit" ? sticky : resetOrder;
+      console.log(`${name}: ${label} is ${String(applied)}`);
     }
     return 0;
   }
 
   // Sent as a number when it parses as one so the server sees the type it validates;
   // a non-numeric string still goes through and earns the server's own 400.
-  const value = field === "strategy"
+  const value = field === "strategy" || field === "resetOrder"
     ? requested
     : (Number.isNaN(Number(requested)) ? requested : Number(requested));
   const response = await apiJson(deps, baseUrl, "PUT", transport.writePath, transport.writeBody(field, value));
@@ -927,11 +938,14 @@ async function poolSetting(
       provider: name,
       strategy: response.json[transport.strategyKey],
       stickyLimit: response.json[transport.stickyKey],
+      resetOrder: response.json[transport.resetOrderKey],
     }, null, 2));
   } else {
     // Echo the APPLIED value from the response, not the requested one: the server normalizes,
     // and printing the request would hide a normalization the operator should see.
-    const applied = field === "strategy" ? response.json[transport.strategyKey] : response.json[transport.stickyKey];
+    const applied = field === "strategy"
+      ? response.json[transport.strategyKey]
+      : field === "stickyLimit" ? response.json[transport.stickyKey] : response.json[transport.resetOrderKey];
     console.log(`${name}: ${label} is now ${String(applied)}`);
   }
   return 0;
@@ -943,6 +957,10 @@ export function cmdStrategy(args: string[], deps: AccountDeps): Promise<number> 
 
 export function cmdSticky(args: string[], deps: AccountDeps): Promise<number> {
   return poolSetting(args, deps, "stickyLimit");
+}
+
+export function cmdResetOrder(args: string[], deps: AccountDeps): Promise<number> {
+  return poolSetting(args, deps, "resetOrder");
 }
 
 export async function cmdAlias(args: string[], deps: AccountDeps): Promise<number> {

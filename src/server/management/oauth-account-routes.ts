@@ -34,10 +34,12 @@ import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQu
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import {
+  normalizeAccountPoolResetOrder,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   parseAccountPoolStickyLimit,
   parseAccountPoolStrategy,
+  parseAccountPoolResetOrder,
 } from "../../codex/pool-rotation";
 import { normalizeAccountPoolQuotaWindow, parseAccountPoolQuotaWindow } from "../../oauth/anthropic-routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
@@ -343,6 +345,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       strategy: normalizeAccountPoolStrategy(pool.strategy),
       stickyLimit: normalizeAccountPoolStickyLimit(pool.stickyLimit),
       quotaWindow: normalizeAccountPoolQuotaWindow(pool.quotaWindow),
+      resetOrder: normalizeAccountPoolResetOrder(pool.resetOrder),
       experimental: true,
     });
   }
@@ -358,6 +361,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       strategy?: unknown;
       stickyLimit?: unknown;
       quotaWindow?: unknown;
+      resetOrder?: unknown;
     };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     if (provider !== "anthropic") {
@@ -418,7 +422,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (body.strategy !== undefined) {
       const parsed = parseAccountPoolStrategy(body.strategy);
       if (parsed === null) {
-        return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
+        return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first, reset-window" }, 400);
       }
       strategy = parsed;
     }
@@ -438,12 +442,21 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       quotaWindow = parsed;
     }
+    let resetOrder = config.anthropicAccountPool?.resetOrder;
+    if (body.resetOrder !== undefined) {
+      const parsed = parseAccountPoolResetOrder(body.resetOrder);
+      if (parsed === null) {
+        return jsonResponse({ error: "resetOrder must be one of: soonest, latest" }, 400);
+      }
+      resetOrder = parsed;
+    }
     config.anthropicAccountPool = {
       enabled,
       autoSwitchThreshold: threshold,
       ...(strategy !== undefined ? { strategy } : {}),
       ...(stickyLimit !== undefined ? { stickyLimit } : {}),
       ...(quotaWindow !== undefined ? { quotaWindow } : {}),
+      ...(resetOrder !== undefined ? { resetOrder } : {}),
     };
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
@@ -455,6 +468,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       strategy: normalizeAccountPoolStrategy(strategy),
       stickyLimit: normalizeAccountPoolStickyLimit(stickyLimit),
       quotaWindow: normalizeAccountPoolQuotaWindow(quotaWindow),
+      resetOrder: normalizeAccountPoolResetOrder(resetOrder),
       experimental: true,
     });
   }

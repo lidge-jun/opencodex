@@ -38,11 +38,14 @@ kasıtlı olarak ikiye ayrılmıştır:
   mobile bağlı Codex oturumu görüşmenin ortasında yeniden dengelenmek yerine tek
   bir hesabı kullanmaya devam eder.
 - **Yeni oturumlar yeniden dengelenebilir.** Yeni bir iş parçacığı için
-  opencodex, `accountPoolStrategy` (varsayılan olarak `quota` veya `round-robin`
-  / `fill-first`) kullanarak uygun hesaplar arasından seçim yapar. `quota`
+  opencodex, `accountPoolStrategy` (varsayılan `quota`; `round-robin`, `fill-first`
+  ve `reset-window` da desteklenir) kullanarak uygun hesaplar arasından seçim yapar. `quota`
   stratejisi, 5 saatlik, haftalık ve 30 günlük pencerelerdeki bilinen kullanımı
   karşılaştırır ve aktif hesap `autoSwitchThreshold` eşiğini aştığında daha
-  düşük kullanımlı bir hesaba geçebilir. Bekleme modunda (cooldown) olan veya
+  düşük kullanımlı bir hesaba geçebilir. `reset-window`, geçerli haftalık sıfırlama
+  zamanlarını (aylık planlarda 30 günlük pencereyi) seçilen en yakın veya en uzak
+  yönünde sıralar; sıfırlama kanıtı eksik ya da eskiyse `quota` yönlendirmesine döner.
+  Bekleme modunda (cooldown) olan veya
   yeniden kimlik doğrulaması gereken hesaplar, stratejiden bağımsız olarak
   atlanır.
 - **Kota ve hata sinyalleri yönlendirmeyi besler.** Kontrol paneli `GET
@@ -138,5 +141,3 @@ sadıktır: akıl yürütme özetleri, MCP araç ad alanları, serbest biçimli
 (`apply_patch`) araçlar ve `tool_search` keşfi doğru şekilde gidiş-dönüş yapar.
 Olay olay eşleme için [Mimari referansı](/tr/reference/architecture/) sayfasına
 bakın.
-
-

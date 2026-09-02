@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cmdPause, cmdPauseExhausted, cmdStrategy, cmdSticky } from "../src/cli/account-extended";
+import { cmdPause, cmdPauseExhausted, cmdResetOrder, cmdStrategy, cmdSticky } from "../src/cli/account-extended";
 import type { AccountDeps } from "../src/cli/account-api";
 
 /**
@@ -190,6 +190,32 @@ describe("ocx account strategy / sticky", () => {
     expect(stickyCalls[0]?.body).toEqual({ stickyLimit: 7 });
   });
 
+  test("reset-order shares the pool route and echoes the applied direction", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      await cmdResetOrder(["openai", "latest"], deps(() => ({
+        json: { accountPoolStrategy: "reset-window", accountPoolStickyLimit: 1, accountPoolResetOrder: "latest" },
+      }), calls));
+    } finally { out.restore(); }
+    expect(calls[0]?.path).toBe("/api/codex-auth/pool-strategy");
+    expect(calls[0]?.body).toEqual({ resetOrder: "latest" });
+    expect(out.lines.join("\n")).toContain("latest");
+  });
+
+  test("a bare reset-order read prints the reset direction instead of the sticky limit", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      await cmdResetOrder(["openai"], deps(() => ({
+        json: { accountPoolStrategy: "reset-window", accountPoolStickyLimit: 7, accountPoolResetOrder: "latest" },
+      }), calls));
+    } finally { out.restore(); }
+    expect(calls.every(call => call.method === "GET")).toBe(true);
+    expect(out.lines.join("\n")).toContain("latest");
+    expect(out.lines.join("\n")).not.toContain("7");
+  });
+
   test("the APPLIED value is echoed, not the requested one", async () => {
     // The server normalizes. Printing the request would hide a normalization the operator
     // should see.
@@ -273,6 +299,19 @@ describe("ocx account strategy / sticky on the anthropic pool", () => {
     // Omitting `provider` here earns a 400 from the real route, so it is asserted exactly.
     expect(calls[0]?.body).toEqual({ provider: "anthropic", stickyLimit: 6 });
     expect(out.lines.join("\n")).toContain("6");
+  });
+
+  test("reset-order uses the Anthropic pool transport and mandatory provider", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      await cmdResetOrder(["anthropic", "soonest"], anthropicDeps(() => ({
+        json: { ok: true, strategy: "reset-window", stickyLimit: 1, resetOrder: "soonest" },
+      }), calls));
+    } finally { out.restore(); }
+    expect(calls[0]?.path).toBe("/api/oauth/accounts/pool");
+    expect(calls[0]?.body).toEqual({ provider: "anthropic", resetOrder: "soonest" });
+    expect(out.lines.join("\n")).toContain("soonest");
   });
 
   test("--json uses pool-neutral key names so a consumer need not branch on which pool answered", async () => {

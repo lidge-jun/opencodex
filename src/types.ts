@@ -70,6 +70,7 @@ export type {
   OcxConfig,
   OcxAccountPoolRotationStrategy,
   OcxAccountPoolQuotaWindow,
+  OcxAccountPoolResetOrder,
   OcxComboStrategy,
   OcxComboDefaultEffort,
   OcxComboReasoningEffortMode,

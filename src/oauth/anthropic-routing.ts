@@ -16,18 +16,20 @@
  */
 import { createHash } from "node:crypto";
 import { setActiveAccount, getAccountSet, getAccountCredential } from "./store";
-import { getCachedProviderAccountQuota } from "../providers/quota";
+import { getCachedProviderAccountQuota, getFreshCachedProviderAccountQuota } from "../providers/quota";
 import { fallbackCodexAccountLogLabel } from "../codex/account-label";
 import {
+  normalizeAccountPoolResetOrder,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   notePoolRotationFailure,
   notePoolRotationSuccess,
+  pickResetWindowAccount,
   pickRoundRobinAccount,
   POOL_KEY_ANTHROPIC,
   seedPoolRotationAccount,
 } from "../codex/pool-rotation";
-import type { OcxAccountPoolQuotaWindow, OcxAccountPoolRotationStrategy, OcxConfig } from "../types";
+import type { OcxAccountPoolQuotaWindow, OcxAccountPoolResetOrder, OcxAccountPoolRotationStrategy, OcxConfig } from "../types";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { retainedUtf8Bytes } from "../lib/admission";
 
@@ -50,6 +52,8 @@ export interface AnthropicAccountPoolConfig {
   autoSwitchThreshold?: number;
   /** New-session rotation strategy. Default quota (today's behaviour). */
   strategy?: OcxAccountPoolRotationStrategy;
+  /** Reset-window direction when strategy is reset-window. Default soonest. */
+  resetOrder?: OcxAccountPoolResetOrder;
   /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
   stickyLimit?: number;
   /** Usage window for quota-based scoring. Default "five-hour" (today's behaviour). */
@@ -340,6 +344,9 @@ function pickAlternateAnthropicAccount(
   if (strategy === "fill-first") {
     return pickNextFillFirstAnthropicAccount(config, excludeId, eligible);
   }
+  if (strategy === "reset-window") {
+    return pickResetWindowAnthropicAccount(config, eligible, now) ?? pickLowestUsage(config, excludeId, now);
+  }
   return pickLowestUsage(config, excludeId, now);
 }
 
@@ -361,6 +368,7 @@ export type AnthropicAccountSelectionReason =
   | "only-eligible"
   | "round-robin"
   | "fill-first"
+  | "reset-window"
   | "none"
   | "all-cooled";
 
@@ -377,6 +385,10 @@ function anthropicPoolStrategy(config: OcxConfig): OcxAccountPoolRotationStrateg
   return normalizeAccountPoolStrategy(anthropicAccountPoolConfig(config).strategy);
 }
 
+function anthropicPoolResetOrder(config: OcxConfig): OcxAccountPoolResetOrder {
+  return normalizeAccountPoolResetOrder(anthropicAccountPoolConfig(config).resetOrder);
+}
+
 function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): boolean {
   const threshold = anthropicAutoSwitchThreshold(config);
   if (threshold <= 0) return true;
@@ -385,6 +397,16 @@ function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): 
   // Unknown usage must not force fill-first to abandon the active account.
   if (!hasKnownUsage(config, accountId)) return true;
   return usageScore(config, accountId) < threshold;
+}
+
+function pickResetWindowAnthropicAccount(config: OcxConfig, eligible: readonly string[], now: number): string | null {
+  return pickResetWindowAccount(
+    eligible,
+    accountId => getFreshCachedProviderAccountQuota(PROVIDER, accountId, now)?.weeklyResetAt,
+    anthropicPoolResetOrder(config),
+    now,
+    accountId => isActiveUnderFillFirstThreshold(config, accountId),
+  );
 }
 
 /**
@@ -413,13 +435,13 @@ function pickFillFirstAnthropicAccount(config: OcxConfig, now: number): string |
 }
 
 /**
- * Unbound new-session pick for round-robin / fill-first. Returns null to fall through
- * to the legacy quota path (or when the strategy is quota).
+ * Unbound new-session pick for round-robin / fill-first / reset-window.
+ * Returns null to fall through to the legacy quota path (or when the strategy is quota).
  */
 function pickUnboundStrategyAccount(
   config: OcxConfig,
   now: number,
-): { accountId: string; reason: "round-robin" | "fill-first" } | null {
+): { accountId: string; reason: "round-robin" | "fill-first" | "reset-window" } | null {
   const strategy = anthropicPoolStrategy(config);
   if (strategy === "quota") return null;
 
@@ -436,6 +458,13 @@ function pickUnboundStrategyAccount(
     const picked = pickFillFirstAnthropicAccount(config, now);
     if (!picked) return null;
     return { accountId: picked, reason: "fill-first" };
+  }
+
+  if (strategy === "reset-window") {
+    const eligible = getEligibleAnthropicAccounts(now);
+    const picked = pickResetWindowAnthropicAccount(config, eligible, now);
+    if (!picked) return null;
+    return { accountId: picked, reason: "reset-window" };
   }
 
   return null;
@@ -473,9 +502,9 @@ export function resolveAnthropicAccountForSession(
 
   const strategy = anthropicPoolStrategy(config);
   // No session identity (Desktop turns without a sticky key): hold the current
-  // active under RR/fill-first instead of treating every turn as a new session.
-  // Round-robin only when there is a real new-session key (or active is unusable).
-  if (!key && (strategy === "round-robin" || strategy === "fill-first")) {
+  // active under an explicit rotation strategy instead of treating every turn as a new session.
+  // Rotate only when there is a real new-session key (or active is unusable).
+  if (!key && (strategy === "round-robin" || strategy === "fill-first" || strategy === "reset-window")) {
     const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
       && !isCooled(set.activeAccountId, now)
       && isPoolCredentialUsable(set.activeAccountId, now);

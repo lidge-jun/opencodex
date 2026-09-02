@@ -117,7 +117,8 @@ Open **http://localhost:10100** and configure everything in the web dashboard â€
 re-opens the dashboard at any time.
 It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
 refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
-the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
+the lowest-usage healthy account; round-robin, fill-first, and reset-window use their own policies.
+Reset-window can drain accounts by the nearest or farthest fresh governing reset. Existing Codex
 threads normally retain affinity to the account that started them, so long SSH, tmux, or
 mobile-connected sessions do not jump accounts mid-conversation â€” but quota re-evaluation, failover,
 account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them. Give the accounts a

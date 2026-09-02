@@ -20,8 +20,9 @@ description: プロバイダー エントリ、認証、エンドポイント、
 | `codexAccountPickerEnabled?` | `boolean` | map が空なら off | 有効な `codexAccountNamespaces` mapping から account-qualified Codex picker row を生成するかを制御します。`true` は mapping された行の表示を許可します。空でない map で省略した場合は後方互換性のため有効として扱われ、map が空なら off です。`false` は mapping を削除せず、明示的な `<selector>/<native-openai-model>` routing も無効にせずに、生成行を非表示にして picker の bare native 行を復元します。 |
 | `activeCodexAccountId?` | `string` | — |次のリクエスト用に手動で選択されたプール アカウント。選択するとスレッドのアフィニティがクリアされます。実行中のリクエストでは、取得された資格情報が保持されます。 |
 | `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool のアカウント別選択順。アカウント ID → `-100` から `100` の整数で、**大きいほど先に使われ**、未設定は `0` です。これは eligibility ではなく順序の境界です。選択は適格なアカウントを、まだ quota に余裕がある最上位 tier に絞り込み、その tier の中を `accountPoolStrategy` が選びます。tier が飛ばされるのは、そのメンバー全員が `autoSwitchThreshold` 超過、cooldown 中、soft-avoid、一時停止、または再認証待ちのときだけで、usage 不明が tier を drain させることはありません。順序付けが不適格なアカウントを選択可能にすることはなく、すでにアカウントが結び付いた thread を再 bind することもありません。メインの `__main__` も同じ条件で参加するため、Codex Desktop ログインを最後に使わせられます。エントリが 1 つもなければ挙動は従来どおりです。map が不正な場合は警告を出して順序付けを無効にします（config の修復処理は走りません）。`ocx account priority` と Codex Auth ページで管理します。 |
-| `autoSwitchThreshold?` | `number` | `80` | 使用量ベースのプロアクティブ切り替えしきい値。`quota` は紐付け済み/未紐付けタスクの次のリクエストを再評価でき、`fill-first` は未紐付け割り当ての使い切り基準としてのみ使用し、通常の `round-robin` 選択は使用しません。既知の 5 時間、週次、30 日 quota window の最大スコアを使います。`0` は使用量ベースの切り替えだけを無効にし、未紐付け割り当てや障害回復は無効にしません。 |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新規/未紐付け Codex リクエストの割り当て戦略。live な `(parent thread id, quota scope)` affinity がなければ未紐付けで、プロキシ再起動や affinity リセット後は既存の表示タスクも未紐付けになり得ます。`quota` はアクティブアカウントがなければ既知 usage 最小の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。しきい値到達後は、未紐付けリクエストまたは紐付け済みタスクの次のリクエストを usage の低い適格アカウントへ移せます。`round-robin` は未紐付けリクエストを均等分散し、`fill-first` は cooldown、使用不可、または drain threshold までアクティブアカウントへ割り当てます。 |
+| `autoSwitchThreshold?` | `number` | `80` | 使用量ベースのプロアクティブ切り替えしきい値。`quota` は紐付け済み/未紐付けタスクの次のリクエストを再評価でき、`fill-first` と `reset-window` は未紐付け割り当ての使い切り基準として使用し、通常の `round-robin` 選択は使用しません。既知の 5 時間、週次、30 日 quota window の最大スコアを使います。`0` は使用量ベースの切り替えだけを無効にし、未紐付け割り当てや障害回復は無効にしません。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 新規/未紐付け Codex リクエストの割り当て戦略。live な `(parent thread id, quota scope)` affinity がなければ未紐付けで、プロキシ再起動や affinity リセット後は既存の表示タスクも未紐付けになり得ます。`quota` はアクティブアカウントがなければ既知 usage 最小の適格アカウントを選び、適格なアクティブアカウントが `autoSwitchThreshold` 未満なら維持します。しきい値到達後は、未紐付けリクエストまたは紐付け済みタスクの次のリクエストを usage の低い適格アカウントへ移せます。`round-robin` は未紐付けリクエストを均等分散し、`fill-first` は cooldown、使用不可、または drain threshold までアクティブアカウントへ割り当てます。`reset-window` は有効期限内の将来 reset 時刻を指定方向に並べ、情報がないか古い場合は quota にフォールバックします。 |
+| `accountPoolResetOrder?` | `"soonest" \| "latest"` | `"soonest"` | `reset-window` の方向です。`soonest` は最も近い reset、`latest` は最も遠い reset から使い切ります。通常は週次、月次プランでは 30 日 reset を使います。このアカウントプール戦略は、全 quota window のうち最も近い reset だけを選び、`latest` 方向を持たない combo `reset-window` とは異なります。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 1 回の round-robin 選択で次へ進む前に保持する新規/未紐付けタスク割り当て数。カウンターは上流の成功後ではなくタスクの紐付け時に増えます。範囲 1–100。`accountPoolStrategy` が `round-robin` のときのみ。 |
 | `upstreamFailoverThreshold?` | `number` | `3` |今後の新しいセッションがフェイルオーバーする前に一時的なエラーが連続して発生する。 `0` を無効に設定します。通常のResponses送信とネイティブcompact送信では、実証済みの接続前DNS/TCP到達不能障害はprovider-host単位で記録され、アカウントの健全性、アカウントのクールダウン、スレッド/セッションの親和性、アクティブアカウントの選択、Poolルーティングには影響せず、この閾値にもカウントされません。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | ネイティブOpenAI forwardのResponses送信とcompact送信で、実証済みの接続前DNS/TCP障害に適用するオプトインのサーキットしきい値です。`0`で無効、`1`〜`20`ではその回数の終端論理リクエストが失敗するとprovider-originを30秒間遮断します。遮断中はアカウント選択やupstream送信の前に`Retry-After`付き`503`を返し、時間経過後はhalf-openリクエストを1件だけ許可します。タイムアウトとHTTP応答は数えず、HTTP応答が1件でもあれば回路を閉じます。 Codex Pool ルーティングでアカウントが固定されていない場合にのみ適用され、`codexAccountMode: "direct"` とアカウント修飾セレクターでは動作しません。 |
@@ -157,7 +158,9 @@ pause、cooldown、再認証、障害処理も独立して routing を消去ま�
 未紐付けリクエストを均等分散し、しきい値は通常の rotation を変えません。`accountPoolStickyLimit`
 （既定 `1`、1–100）は成功応答ではなく割り当て/紐付け数を数えます。`fill-first` は未紐付けリクエストを
 cooldown、再認証、または drain threshold までアクティブアカウントへ割り当て、正常な紐付け済みタスクは
-affinity を維持します。これらの戦略は provider enforcement を回避しません。
+affinity を維持します。`reset-window` は有効期限内の governing reset 時刻を `accountPoolResetOrder` に従って
+近い順または遠い順に並べ、余裕のある別アカウントがあれば drain threshold 以上のアカウントを飛ばします。
+reset 情報がないか古い場合は `quota` に戻り、正常な紐付け済みタスクは affinity を維持します。これらの戦略は provider enforcement を回避しません。
 
 ### `anthropicAccountPool` (実験的)
 
@@ -167,8 +170,9 @@ affinity を維持します。これらの戦略は provider enforcement を回�
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` |スティッキー アフィニティと 429 クールダウン フェイルオーバーを有効にします。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` |新しいセッションでは、アクティブなアカウントがこのしきい値に達すると、設定した期間で既知のキャッシュ使用量が最も低いアカウントを選択します。 `0` はクォータ選択を無効にします。 |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` |新しいセッション戦略。`quota` は `quotaWindow` で指定した期間（既定は 5 時間足）でアカウントを順位付けし、`fill-first` も同じ期間で使い切りのしきい値を判定します。 |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` |新しいセッション戦略。`quota` は `quotaWindow` で指定した期間でアカウントを順位付けし、`fill-first` も同じ期間でしきい値を判定し、`reset-window` は有効期限内の週次 reset 情報を使い、情報がないか古い場合は quota に戻ります。 |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` |使用量ベースのアカウント選択で使う、プロバイダー報告のキャッシュ済み使用率です。`five-hour` は従来の動作を維持します。`weekly` は週次使用量を使い、他に対象アカウントが残る間だけ 5 時間使用量が上限に達したアカウントを除外し、残らない場合はそれらへフォールバックします。`max-utilization` は判明している値のうち最も高いものを使うため、週次使用量が未取得でも 5 時間使用量を利用できます。どちらも不明なら unknown の順位付けに従います。既知の使用量は unknown より先ですが、対象がすべて unknown でも対象順の先頭を選択します。記載した 5 時間使用量による同点判定後も完全に同点なら、対象順を維持します。正常な affinity セッションを先回りして再配置することはありません。新規セッションの割り当てと、対象となる 429 代替後のルーティング復旧では、`quota` はこの期間で対象候補を直接順位付けし、`fill-first` はこの期間のしきい値と上限到達ルールを使って安定順に進み、`round-robin` はこの設定を無視します。クールダウン、フェイルオーバー上限、再認証の適格性は別のローカル状態です。アカウント別の週次使用量は、ダッシュボードのプロバイダーページで取得した後にのみ利用できます。 |
+| `anthropicAccountPool.resetOrder?` | `"soonest" \| "latest"` | `"soonest"` | `reset-window` で最も近い、または最も遠い週次 reset を先に選びます。 |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` |成功した新しいセッションのバインドは 1 つのラウンドロビン選択で保持されます。範囲は 1 ～ 100。 |
 
 有効にすると、429 レコードは `Retry-After` またはデフォルトのバックオフからの制限されたクールダウンを記録し、リクエスト内でローテーションする可能性があります。アフィニティはプロセスローカルであり、サイズ制限があります。資格情報 401/403 は、アカウントに再認証が必要であることをマークします。すべての対象となるアカウントが冷却されている場合、クライアントは、既知の場合、認証エラーではなく、`Retry-After` を含む 429 を受け取ります。

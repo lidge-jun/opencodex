@@ -20,8 +20,9 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 | `codexAccountPickerEnabled?` | `boolean` | 映射为空时关闭 | 控制是否根据有效的 `codexAccountNamespaces` 映射生成账户限定的 Codex 选择器行。`true` 允许显示映射行。在非空映射中省略此字段时，为保持向后兼容会视为已启用；映射为空时则关闭。`false` 会隐藏生成行并恢复选择器中的裸原生行，但不会删除映射，也不会禁用精确的 `<selector>/<native-openai-model>` 路由。 |
 | `activeCodexAccountId?` | `string` | — | 为下一次请求手动选定的 Pool 账户。选择会清除线程亲和性；进行中的请求会保留捕获到的凭据。 |
 | `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool 各账号的选择顺序：账号 ID → `-100` 到 `100` 的整数，**数值越大越先使用**，未设置即为 `0`。这是顺序边界而非资格边界：选择会把已经合格的账号收窄到仍有 quota 余量的最高 tier，再由 `accountPoolStrategy` 在该 tier 内挑选。只有当某个 tier 的所有成员都超过 `autoSwitchThreshold`、处于 cooldown、被 soft-avoid、已暂停或需要重新认证时，该 tier 才会被跳过；usage 未知不会让 tier 耗尽。顺序不会让不合格的账号变得可选，也不会重新绑定已经绑定账号的 thread。主账号 `__main__` 同样参与排序，因此可以让 Codex Desktop 登录账号最后才被用到。没有任何条目时，行为与以往完全一致。映射格式非法时会打印警告并关闭排序（不会触发 config 修复）。可通过 `ocx account priority` 和 Codex Auth 页面管理。 |
-| `autoSwitchThreshold?` | `number` | `80` | 基于用量的主动切换阈值。`quota` 可在下一次请求中重新评估已绑定和未绑定任务；`fill-first` 仅把它用作未绑定分配的耗尽点；正常 `round-robin` 不使用它。分数取已知 5 小时、周或 30 天 quota window 的最高值。`0` 只关闭基于用量的主动切换，不关闭未绑定任务分配或故障恢复。 |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新建/未绑定 Codex 请求的分配策略。没有 live `(parent thread id, quota scope)` affinity 的请求属于未绑定；代理重启或 affinity 重置后，已有可见任务也可能未绑定。`quota` 在没有活跃账号时选择已知 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求或已绑定任务的下一次请求切换到 usage 更低的合格账号。`round-robin` 均匀分配未绑定请求；`fill-first` 在 cooldown、不可用或耗尽阈值前持续分配给活跃账号。 |
+| `autoSwitchThreshold?` | `number` | `80` | 基于用量的主动切换阈值。`quota` 可在下一次请求中重新评估已绑定和未绑定任务；`fill-first` 与 `reset-window` 把它用作未绑定分配的耗尽点；正常 `round-robin` 不使用它。分数取已知 5 小时、周或 30 天 quota window 的最高值。`0` 只关闭基于用量的主动切换，不关闭未绑定任务分配或故障恢复。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 新建/未绑定 Codex 请求的分配策略。没有 live `(parent thread id, quota scope)` affinity 的请求属于未绑定；代理重启或 affinity 重置后，已有可见任务也可能未绑定。`quota` 在没有活跃账号时选择已知 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求或已绑定任务的下一次请求切换到 usage 更低的合格账号。`round-robin` 均匀分配未绑定请求；`fill-first` 在 cooldown、不可用或耗尽阈值前持续分配给活跃账号。`reset-window` 按新鲜且有效的未来 reset 时间排序；reset 信息缺失或过期时回退到 quota。 |
+| `accountPoolResetOrder?` | `"soonest" \| "latest"` | `"soonest"` | `reset-window` 的方向。`soonest` 先耗尽最近重置的账号，`latest` 先耗尽最晚重置的账号。普通方案使用周窗口，月度方案使用 30 天窗口。此账号池策略不同于 combo `reset-window`；后者只选择所有 quota window 中最近的重置，且没有 `latest` 方向。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的新建/未绑定任务分配数。计数在任务绑定时增加，而不是在上游成功后增加。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次瞬态故障后，后续新会话会切换到备用上游。设为 `0` 可禁用。对于常规 Responses 和原生 compact 发送，已证明的连接前 DNS/TCP 不可达故障按 provider-host 粒度记录，不影响账户健康、账户冷却、线程/会话亲和性、活动账户选择或 Pool 路由，也不会计入此阈值。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | 原生 OpenAI forward Responses 与 compact 发送的可选断路器阈值，仅统计已证明的连接前 DNS/TCP 故障。`0` 表示禁用；`1`–`20` 表示在这么多个终止逻辑请求失败后，对 provider-origin 冷却 30 秒。断路期间会在账户选择和上游发送之前返回带 `Retry-After` 的 `503`；冷却结束后只允许一个半开请求。超时和 HTTP 响应不计数，任意 HTTP 响应都会关闭断路器。 仅适用于未固定账户的 Codex Pool 路由；在 `codexAccountMode: "direct"` 或使用账户限定选择器时不会启用。 |
@@ -155,7 +156,9 @@ routing。未绑定请求没有 live 账号绑定，也可能是代理重启或 
 **分配与主动切换策略：** `quota`（默认）在没有活跃账号时选择 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求或已绑定任务的下一次请求切换到 usage 更低的合格账号。`round-robin` 均匀分配未绑定请求，用量
 阈值不会改变正常轮换。`accountPoolStickyLimit`（默认 `1`，1–100）统计分配/绑定，而不是成功响应。
 `fill-first` 在 cooldown、重新认证或耗尽阈值前把未绑定请求分配给活跃账号；健康的已绑定任务保持
-affinity。这些策略不能规避 provider enforcement。
+affinity。`reset-window` 按 `accountPoolResetOrder` 将新鲜且有效的 governing reset 时间由近到远或由远到近排序；
+当其他账号仍有余量时会跳过达到耗尽阈值的账号，reset 信息缺失或过期时回退到 `quota`，健康的已绑定任务保持 affinity。
+这些策略不能规避 provider enforcement。
 
 ### `anthropicAccountPool`（实验性）
 
@@ -165,8 +168,9 @@ affinity。这些策略不能规避 provider enforcement。
 | --- | --- | --- | --- |
 | `anthropicAccountPool.enabled?` | `boolean` | `false` | 启用粘性亲和性和 429 冷却故障转移。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 对于新会话，当活动账户达到此阈值时，选择配置窗口中已知缓存使用率最低的账户。`0` 会禁用配额选择。 |
-| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新会话策略；`quota` 按 `quotaWindow` 指定的窗口（默认是 5 小时条形数据）对账户排序，`fill-first` 也在同一窗口中判定其耗尽阈值。 |
+| `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-window"` | `"quota"` | 新会话策略；`quota` 按 `quotaWindow` 指定的窗口对账户排序，`fill-first` 在同一窗口中判定耗尽阈值，`reset-window` 使用新鲜且有效的未来周重置时间；证据缺失或过期时回退到 quota。 |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 基于用量选择账户时使用的、由提供商报告并缓存的用量条。`five-hour` 保持原有行为。`weekly` 使用每周用量条，并在仍有其他可用账户时跳过 5 小时用量已耗尽的账户；若没有其他账户，则回退使用这些账户。`max-utilization` 使用已知值中的最高值，因此每周用量尚不可用时仍可使用 5 小时用量；两者都未知时，账户遵循 unknown 用量排序。已知用量排在 unknown 之前，但如果所有可用账户都未知，仍会按可用顺序选择一个账户。在前述较低 5 小时用量的同分判定之后，完全相同时也保留可用顺序。不会主动重新平衡健康且已建立亲和性的会话。在新会话分配和符合条件的 429 替代后的路由恢复中，`quota` 直接按此窗口对可用候选账户排序；`fill-first` 按此窗口的阈值和耗尽规则以稳定顺序前进；`round-robin` 忽略此设置。冷却状态、故障转移上限和重新认证资格仍是独立的本地状态。各账户的每周用量只有在控制面板的提供商页面完成查询后才可用。 |
+| `anthropicAccountPool.resetOrder?` | `"soonest" \| "latest"` | `"soonest"` | `reset-window` 先选择最近或最晚的周重置。 |
 | `anthropicAccountPool.stickyLimit?` | `number` | `1` | 在一次轮询选择中保留的成功新会话绑定次数。范围 1–100。 |
 
 启用后，429 会根据 `Retry-After` 记录有界冷却，或者使用默认退避，并且可能在同一请求内轮换。亲和性是进程本地的，并且有大小上限。凭据 401/403 会将账户标记为需要重新认证。如果所有合格账户都在冷却，客户端会在已知时收到带 `Retry-After` 的 429，而不是身份验证错误。

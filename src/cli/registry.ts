@@ -172,7 +172,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "account",
-    usage: "ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|main> ...",
+    usage: "ocx account <list|current|use|refresh|auto-switch|priority|strategy|sticky|reset-order|login|reauth|code|cancel|remove|add-key|reset-credits|main> ...",
     summary: "List and switch provider accounts and API-key pools (GUI parity).",
     details: [
       "list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).",

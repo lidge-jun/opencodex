@@ -1208,6 +1208,7 @@ describe("codex-auth API", () => {
       upstreamFailoverThreshold: 3,
       accountPoolStrategy: "quota",
       accountPoolStickyLimit: 1,
+      accountPoolResetOrder: "soonest",
     });
   });
 
