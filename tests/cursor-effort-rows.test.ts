@@ -260,7 +260,7 @@ describe("Cursor effort variant rows", () => {
         method: "POST",
         headers: {
           ...childHeaders,
-          "x-api-key": "sk-ant-fixture-native-credential",
+          "x-api-key": "native-fixture-credential",
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
