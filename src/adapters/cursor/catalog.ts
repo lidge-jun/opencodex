@@ -205,6 +205,12 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     defaultVariant: "regular",
     variants: { regular: { levels: ["low", "medium", "high"] } },
   },
+  "gemini-3.8-flash": {
+    displayName: "Gemini 3.8 Flash",
+    window: CONTEXT_GEMINI,
+    defaultVariant: "regular",
+    variants: { regular: { levels: ["low", "medium", "high"] } },
+  },
   "kimi-k3": {
     displayName: "Kimi K3",
     window: CONTEXT_1M,

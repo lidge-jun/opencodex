@@ -23,7 +23,7 @@ const DEFAULT_ANTHROPIC_SIDECAR_MODEL = "claude-sonnet-5";
 // Default Grok model for the xai-backed sidecar (probe-verified with hosted tools, devlog 003).
 const DEFAULT_XAI_SIDECAR_MODEL = "grok-4.6";
 // Default Gemini model for the gemini-backed sidecar (CCA grounding probe, devlog 002).
-const DEFAULT_GEMINI_SIDECAR_MODEL = "gemini-3.7-flash";
+const DEFAULT_GEMINI_SIDECAR_MODEL = "gemini-3.8-flash";
 // "low" is the lightest effort the ChatGPT backend allows with web_search ("minimal" is rejected:
 // "tools cannot be used with reasoning.effort 'minimal'") — keeps the sidecar fast/cheap.
 const DEFAULT_SIDECAR_REASONING = "low";
