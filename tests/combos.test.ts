@@ -361,6 +361,7 @@ describe("combo target cooldowns", () => {
     expect(parseRetryAfterMs("120", now)).toBe(120_000);
     expect(parseRetryAfterMs("999999", now)).toBe(600_000);
     expect(parseRetryAfterMs(new Date(now + 90_000).toUTCString(), now)).toBe(90_000);
+    expect(parseRetryAfterMs(new Date(now + 90_000).toUTCString().toLowerCase(), now)).toBe(90_000);
     expect(parseRetryAfterMs(new Date(now + 900_000).toUTCString(), now)).toBe(600_000);
   });
 
@@ -371,6 +372,37 @@ describe("combo target cooldowns", () => {
     expect(parseRetryAfterMs("0", now)).toBeUndefined();
     expect(parseRetryAfterMs("not-a-date", now)).toBeUndefined();
     expect(parseRetryAfterMs(new Date(now - 1_000).toUTCString(), now)).toBeUndefined();
+  });
+
+  test("can preserve valid immediate Retry-After directives", () => {
+    const now = Date.parse("2026-07-18T00:00:00.000Z");
+    const options = { preserveImmediate: true };
+    expect(parseRetryAfterMs("0", now, options)).toBe(1);
+    expect(parseRetryAfterMs(new Date(now - 1_000).toUTCString(), now, options)).toBe(1);
+    expect(parseRetryAfterMs("Sunday, 06-Nov-94 08:49:37 GMT", now, options)).toBe(1);
+    expect(parseRetryAfterMs("Sunday, 06-Nov-50 08:49:37 GMT", now, options)).toBe(600_000);
+    expect(parseRetryAfterMs("Sun Nov  6 08:49:37 1994", now, options)).toBe(1);
+    expect(parseRetryAfterMs("not-a-date", now, options)).toBeUndefined();
+    expect(parseRetryAfterMs("-1", now, options)).toBeUndefined();
+    expect(parseRetryAfterMs("March 1, 2020", now, options)).toBeUndefined();
+    expect(parseRetryAfterMs("Sun Sep 99 99:99:99 2026", now, options)).toBeUndefined();
+    const centuryBoundary = Date.parse("2099-12-31T23:59:00.000Z");
+    expect(parseRetryAfterMs("Friday, 01-Jan-00 00:01:00 GMT", centuryBoundary, options)).toBe(120_000);
+    const fullTimestampBoundary = Date.parse("2026-01-01T00:00:00.000Z");
+    expect(parseRetryAfterMs("Wednesday, 01-Jan-76 00:00:00 GMT", fullTimestampBoundary, options)).toBe(600_000);
+    expect(parseRetryAfterMs("Friday, 31-Dec-76 00:00:00 GMT", fullTimestampBoundary, options)).toBe(1);
+  });
+
+  test("parses asctime Retry-After values as UTC outside the UTC process timezone", () => {
+    const originalTimezone = process.env.TZ;
+    process.env.TZ = "America/Los_Angeles";
+    try {
+      const now = Date.parse("2026-09-06T00:59:00.000Z");
+      expect(parseRetryAfterMs("Sun Sep  6 01:00:00 2026", now)).toBe(60_000);
+    } finally {
+      if (originalTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTimezone;
+    }
   });
 
   test("expires cooldowns and clears only the requested combo", () => {

@@ -202,11 +202,11 @@ export function rotateGenericOAuthAccountOn429(
   // A single stored account has nowhere to go; rotating to itself would just replay the 429.
   if (!set || set.accounts.length < 2) return null;
 
-  const parsed = parseRetryAfterMs(retryAfterHeader, now);
+  const parsed = parseRetryAfterMs(retryAfterHeader, now, { preserveImmediate: true });
   // An account whose allowance is provably spent gets a reset-aligned cooldown instead of
   // the default minute: retrying it every 60s until the window rolls over is pure waste.
   // A Retry-After from upstream still wins — it is the server's own instruction.
-  const exhausted = parsed === null ? exhaustedCooldownMs(providerName, failedAccountId, now) : null;
+  const exhausted = parsed === undefined ? exhaustedCooldownMs(providerName, failedAccountId, now) : null;
   const cooldownMs = exhausted ?? Math.min(parsed ?? DEFAULT_COOLDOWN_MS, MAX_COOLDOWN_MS);
   health.set(healthKey(providerName, failedAccountId), {
     cooldownUntil: now + cooldownMs,
