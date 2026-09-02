@@ -7,6 +7,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import {
+  setAsyncWindowsPrincipalRunnerForTests,
+  setWindowsPrincipalRunnerForTests,
+} from "../../src/lib/windows-user-principal";
 
 const [opencodexHome, codexHome] = Bun.argv.slice(2);
 if (!opencodexHome || !codexHome) {
@@ -16,6 +21,18 @@ mkdirSync(opencodexHome, { recursive: true, mode: 0o700 });
 mkdirSync(codexHome, { recursive: true, mode: 0o700 });
 process.env.OPENCODEX_HOME = opencodexHome;
 process.env.CODEX_HOME = codexHome;
+
+const icaclsOk = { success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" };
+const windowsPrincipalOk = {
+  success: true,
+  exitCode: 0,
+  timedOut: false,
+  stdout: "S-1-5-21-111-222-333-1001\r\nOPENCODEX\\Fixture\r\n",
+};
+setIcaclsRunnerForTests(() => icaclsOk);
+setAsyncIcaclsRunnerForTests(async () => icaclsOk);
+setWindowsPrincipalRunnerForTests(() => windowsPrincipalOk);
+setAsyncWindowsPrincipalRunnerForTests(async () => windowsPrincipalOk);
 
 const forward = {
   adapter: "openai-responses",

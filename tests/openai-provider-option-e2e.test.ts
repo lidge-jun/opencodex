@@ -16,6 +16,16 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
+import {
+  resetHardenedStateForTests,
+  setAsyncIcaclsRunnerForTests,
+  setIcaclsRunnerForTests,
+} from "../src/lib/windows-secret-acl";
+import {
+  resetWindowsPrincipalForTests,
+  setAsyncWindowsPrincipalRunnerForTests,
+  setWindowsPrincipalRunnerForTests,
+} from "../src/lib/windows-user-principal";
 import { watchdogMs } from "./helpers/ci-watchdog";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
 type Capture = {
@@ -48,6 +58,14 @@ type MigrationReceipt = {
   remigrated: boolean;
   absencePreserved: boolean;
   collisionFailsBeforeSave: boolean;
+};
+
+const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "processed file: 1" };
+const WINDOWS_PRINCIPAL_OK = {
+  success: true,
+  exitCode: 0,
+  timedOut: false,
+  stdout: "S-1-5-21-111-222-333-1001\r\nOPENCODEX\\Fixture\r\n",
 };
 
 function hashTree(path: string): string {
@@ -122,7 +140,9 @@ describe("OpenAI provider-option integration spine", () => {
       CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
     };
     const savedFetch = globalThis.fetch;
+    const NativeWebSocket = globalThis.WebSocket;
     const captures: Capture[] = [];
+    const blockedUpstreamWebSocketUrls: string[] = [];
     const resets: Array<() => void> = [];
     let loopbackOrigin: string | null = null;
     let server: { url: URL; stop(closeActiveConnections?: boolean): Promise<void> } | null = null;
@@ -150,6 +170,18 @@ describe("OpenAI provider-option integration spine", () => {
     ]);
 
     try {
+      setIcaclsRunnerForTests(() => ICACLS_OK);
+      setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
+      setWindowsPrincipalRunnerForTests(() => WINDOWS_PRINCIPAL_OK);
+      setAsyncWindowsPrincipalRunnerForTests(async () => WINDOWS_PRINCIPAL_OK);
+      resets.push(
+        () => setIcaclsRunnerForTests(null),
+        () => setAsyncIcaclsRunnerForTests(null),
+        resetHardenedStateForTests,
+        () => setWindowsPrincipalRunnerForTests(null),
+        () => setAsyncWindowsPrincipalRunnerForTests(null),
+        resetWindowsPrincipalForTests,
+      );
       for (const dir of [opencodexHome, codexHome, claudeConfigDir]) {
         mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
@@ -216,6 +248,19 @@ describe("OpenAI provider-option integration spine", () => {
           usage: { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
         });
       }) as typeof fetch;
+      globalThis.WebSocket = class extends NativeWebSocket {
+        constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+          const parsed = new URL(String(url));
+          const loopback = parsed.hostname === "localhost"
+            || parsed.hostname === "127.0.0.1"
+            || parsed.hostname === "[::1]";
+          if (!loopback) {
+            blockedUpstreamWebSocketUrls.push(parsed.href);
+            throw new Error(`deny-by-default WebSocket blocked: ${parsed.origin}${parsed.pathname}`);
+          }
+          super(url, protocols as string[]);
+        }
+      } as typeof WebSocket;
 
       const [
         configModule,
@@ -351,7 +396,6 @@ describe("OpenAI provider-option integration spine", () => {
       expect(captures.at(-1)).toMatchObject({ authorization: "Bearer fixture-pool-access", accountId: "fixture-pool-account" });
       expect(captures.at(-1)?.body.reasoning).toBeUndefined();
 
-      const NativeWebSocket = globalThis.WebSocket;
       const expectedWsUrl = new URL("/v1/responses", server.url);
       expectedWsUrl.protocol = "ws:";
       const ws = new NativeWebSocket(expectedWsUrl, {
@@ -572,6 +616,9 @@ describe("OpenAI provider-option integration spine", () => {
       }
 
       expect(captures.every(capture => upstreamTuples.has(`${capture.method} ${capture.url}`))).toBe(true);
+      expect(new Set(blockedUpstreamWebSocketUrls)).toEqual(new Set([
+        "wss://chatgpt.com/backend-api/codex/responses",
+      ]));
       const evidenceDir = process.env.OCX_EVIDENCE_DIR;
       if (evidenceDir) {
         mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
@@ -595,6 +642,7 @@ describe("OpenAI provider-option integration spine", () => {
         if (server) await server.stop(true);
       } finally {
         globalThis.fetch = savedFetch;
+        globalThis.WebSocket = NativeWebSocket;
         for (const reset of resets) reset();
         restoreEnv("OPENCODEX_HOME", previousEnv.OPENCODEX_HOME);
         restoreEnv("CODEX_HOME", previousEnv.CODEX_HOME);
