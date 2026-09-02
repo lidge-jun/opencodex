@@ -689,11 +689,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     return jsonResponse({
       models: config.subagentModelFallback ?? [],
       pollMs: config.subagentModelFallbackPollMs ?? 60_000,
+      useSubagentModels: config.subagentModelFallbackUseSubagentModels === true,
       available,
     });
   }
   if (url.pathname === "/api/subagent-model-fallback" && req.method === "PUT") {
-    let body: { models?: unknown; pollMs?: unknown };
+    let body: { models?: unknown; pollMs?: unknown; useSubagentModels?: unknown };
     try {
       body = await readManagementJsonBody(req);
     } catch (error) {
@@ -705,6 +706,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     }
     let nextModels = config.subagentModelFallback;
     let nextPollMs = config.subagentModelFallbackPollMs;
+    let nextUseSubagentModels = config.subagentModelFallbackUseSubagentModels === true;
     if ("models" in body) {
       if (!Array.isArray(body.models)) return jsonResponse({ error: "models must be an array" }, 400);
       const models: string[] = [];
@@ -730,15 +732,24 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         return jsonResponse({ error: "pollMs must be an integer between 5000 and 600000" }, 400);
       }
     }
+    if ("useSubagentModels" in body) {
+      if (typeof body.useSubagentModels !== "boolean") {
+        return jsonResponse({ error: "useSubagentModels must be a boolean" }, 400);
+      }
+      nextUseSubagentModels = body.useSubagentModels;
+    }
     if (nextModels !== undefined) config.subagentModelFallback = nextModels;
     else deleteConfigTopLevelKey(config, "subagentModelFallback");
     if (nextPollMs !== undefined) config.subagentModelFallbackPollMs = nextPollMs;
     else deleteConfigTopLevelKey(config, "subagentModelFallbackPollMs");
+    if (nextUseSubagentModels) config.subagentModelFallbackUseSubagentModels = true;
+    else deleteConfigTopLevelKey(config, "subagentModelFallbackUseSubagentModels");
     saveConfigPreservingClaudeCode(config);
     return jsonResponse({
       ok: true,
       models: config.subagentModelFallback ?? [],
       pollMs: config.subagentModelFallbackPollMs ?? 60_000,
+      useSubagentModels: config.subagentModelFallbackUseSubagentModels === true,
     });
   }
 

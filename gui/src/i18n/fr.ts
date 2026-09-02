@@ -304,6 +304,7 @@ export const fr: Record<TKey, string> = {
   "sub.fallbackPoll": "Intervalle de vérification de disponibilité",
   "sub.fallbackSaved": "Paramètres de secours des sous-agents enregistrés.",
   "sub.fallbackSaveFailed": "Échec de l’enregistrement des paramètres de secours",
+  "sub.fallbackUseRoster": "Utiliser le roster de sous-agents sélectionné comme liste de secours",
   "dash.shadowCallIntercept": "Interception des appels fantômes",
   "dash.shadowCallInterceptHint": "Intercepte les appels auxiliaires en arrière-plan de l’application Codex ({models}) pour générer les titres et les messages de commit, puis les redirige vers le modèle choisi.",
   "dash.shadowCallWarning": "⚠ Lorsque cette option est activée, TOUTES les requêtes destinées à {models} sont remplacées par le modèle sélectionné.",

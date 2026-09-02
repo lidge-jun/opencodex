@@ -2347,6 +2347,7 @@ export const ja: Record<TKey, string> = {
   "sub.fallbackPoll": "利用可能性チェック間隔",
   "sub.fallbackSaved": "サブエージェントのフォールバック設定を保存しました。",
   "sub.fallbackSaveFailed": "フォールバック設定の保存に失敗しました",
+  "sub.fallbackUseRoster": "注目のサブエージェント一覧をフォールバック一覧として使用",
   "models.newPolicyGlobal": "新しいモデルを無効で追加", "models.newPolicyProvider": "新しいモデルのポリシー",
   "models.newPolicy_inherit": "継承", "models.newPolicy_off": "オフ", "models.newPolicy_on": "オン", "models.newBadge": "新着", "models.newCount": "新着 {count} 件、オフ",
   "models.aliases": "エイリアス",

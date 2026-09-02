@@ -314,6 +314,7 @@ export const en = {
   "sub.fallbackPoll": "Availability check interval",
   "sub.fallbackSaved": "Sub-agent fallback settings saved.",
   "sub.fallbackSaveFailed": "Failed to save fallback settings",
+  "sub.fallbackUseRoster": "Use the featured sub-agent roster as the fallback list",
   "dash.shadowCallIntercept": "Shadow Call Intercept",
   "dash.shadowCallInterceptHint": "Intercepts Codex App's background helper calls ({models}) for title generation and commit messages and redirects them to your chosen model.",
   "dash.shadowCallWarning": "⚠ When enabled, ALL requests for {models} will be replaced with the selected model.",

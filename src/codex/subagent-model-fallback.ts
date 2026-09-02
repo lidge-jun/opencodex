@@ -612,11 +612,10 @@ export function applySubagentModelFallback(
   const configuredFallbackChain = resolvedFallbackChain === undefined
     ? resolveSubagentFallbackChain(parsed, config)
     : resolvedFallbackChain;
-  // Encrypted V2 fallback is opt-in through the configured subagent roster. Do not
-  // synthesize native candidates when the roster is unset; that would silently
-  // spend a native credential for an operator who never configured this path.
-  const fallbackChain = configuredFallbackChain === null
-    && nativeFallbackOnly
+  // Encrypted V2 fallback may explicitly reuse the featured subagent roster. Do not
+  // synthesize native candidates unless the dashboard opt-in is enabled.
+  const fallbackChain = nativeFallbackOnly
+    && config.subagentModelFallbackUseSubagentModels === true
     && config.subagentModels !== undefined
     ? normalizedChain(parsed.modelId, config, [], config.subagentModels)
     : configuredFallbackChain;

@@ -1069,6 +1069,7 @@ describe("subagent model fallback chain", () => {
       cfg({
         subagentModelFallback: undefined,
         subagentModels: ["gpt-5.6-sol", "gpt-5.5"],
+        subagentModelFallbackUseSubagentModels: true,
       }),
       "pool-a",
       Date.now(),
@@ -1076,6 +1077,28 @@ describe("subagent model fallback chain", () => {
     );
     expect(result?.to).toBe("gpt-5.6-sol");
     expect(parsed.modelId).toBe("gpt-5.6-sol");
+  });
+
+  test("native-only encrypted fallback stays disabled when roster reuse is off", () => {
+    const parsed = {
+      modelId: "xai/grok-4.5",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "xai/grok-4.5" },
+    };
+    expect(applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      cfg({
+        subagentModelFallback: undefined,
+        subagentModels: ["gpt-5.6-sol"],
+        subagentModelFallbackUseSubagentModels: false,
+      }),
+      "pool-a",
+      Date.now(),
+      true,
+    )).toBeNull();
+    expect(parsed.modelId).toBe("xai/grok-4.5");
   });
 
   test("native-only encrypted fallback stays disabled when the roster is unset", () => {
@@ -1088,12 +1111,14 @@ describe("subagent model fallback chain", () => {
     expect(applySubagentModelFallback(
       parsed as never,
       new Headers({ "x-openai-subagent": "collab_spawn" }),
-      cfg({ subagentModelFallback: undefined }),
+      cfg({
+        subagentModelFallback: undefined,
+        subagentModelFallbackUseSubagentModels: true,
+      }),
       "pool-a",
       Date.now(),
       true,
     )).toBeNull();
-    expect(parsed.modelId).toBe("xai/grok-4.5");
   });
 
   test("applySubagentModelFallback is a no-op for main turns", () => {

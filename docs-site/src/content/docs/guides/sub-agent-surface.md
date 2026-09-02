@@ -120,6 +120,11 @@ Fallback does not make incompatible encrypted tasks readable. When the child tas
 ChatGPT, selection is restricted to canonical native ChatGPT targets even if an external model
 appears earlier in the chain.
 
+The dashboard's **Use sub-agent roster for encrypted fallback** switch sets
+`subagentModelFallbackUseSubagentModels`. When enabled, a native-only encrypted v2 fallback uses
+`subagentModels` in its configured order; it does not change ordinary fallback ordering, and it
+does nothing when the roster is unset.
+
 ## Encrypted v2 task delivery
 
 Codex may send a v2 native-to-routed child task only as backend-encrypted `encrypted_content`. That

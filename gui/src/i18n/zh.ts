@@ -2347,6 +2347,7 @@ export const zh: Record<TKey, string> = {
   "sub.fallbackPoll": "可用性检查间隔",
   "sub.fallbackSaved": "子代理回退设置已保存。",
   "sub.fallbackSaveFailed": "保存回退设置失败",
+  "sub.fallbackUseRoster": "将精选子代理列表用作回退列表",
   "models.newPolicyGlobal": "新模型默认停用", "models.newPolicyProvider": "新模型策略",
   "models.newPolicy_inherit": "继承", "models.newPolicy_off": "关闭", "models.newPolicy_on": "开启", "models.newBadge": "新增", "models.newCount": "{count} 个新增，已关闭",
   "models.aliases": "别名",

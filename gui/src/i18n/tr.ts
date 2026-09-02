@@ -2349,6 +2349,7 @@ export const tr: Record<TKey, string> = {
   "sub.fallbackPoll": "Kullanılabilirlik kontrol aralığı",
   "sub.fallbackSaved": "Alt ajan yedek ayarları kaydedildi.",
   "sub.fallbackSaveFailed": "Yedek ayarlar kaydedilemedi",
+  "sub.fallbackUseRoster": "Öne çıkarılan alt ajan listesini yedek liste olarak kullan",
   "models.newPolicyGlobal": "Yeni modeller devre dışı başlasın", "models.newPolicyProvider": "Yeni model ilkesi",
   "models.newPolicy_inherit": "Devral", "models.newPolicy_off": "Kapalı", "models.newPolicy_on": "Açık", "models.newBadge": "YENİ", "models.newCount": "{count} yeni, kapalı",
   "models.aliases": "Takma adlar",

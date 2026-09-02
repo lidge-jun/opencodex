@@ -2326,6 +2326,7 @@ export const de: Record<TKey, string> = {
   "sub.fallbackPoll": "Intervall der Verfügbarkeitsprüfung",
   "sub.fallbackSaved": "Fallback-Einstellungen für Sub-Agenten gespeichert.",
   "sub.fallbackSaveFailed": "Fallback-Einstellungen konnten nicht gespeichert werden",
+  "sub.fallbackUseRoster": "Das hervorgehobene Sub-Agenten-Set als Fallback-Liste verwenden",
   "models.newPolicyGlobal": "Neue Modelle zunächst deaktivieren", "models.newPolicyProvider": "Richtlinie für neue Modelle",
   "models.newPolicy_inherit": "Übernehmen", "models.newPolicy_off": "Aus", "models.newPolicy_on": "An", "models.newBadge": "NEU", "models.newCount": "{count} neu, aus",
   "models.aliases": "Aliase",

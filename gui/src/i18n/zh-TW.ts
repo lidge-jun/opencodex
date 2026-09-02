@@ -2311,6 +2311,7 @@ export const zhTW: Record<TKey, string> = {
   "sub.fallbackPoll": "可用性檢查間隔",
   "sub.fallbackSaved": "子代理備援設定已儲存。",
   "sub.fallbackSaveFailed": "備援設定儲存失敗",
+  "sub.fallbackUseRoster": "使用精選子代理清單作為備援清單",
   "models.newPolicyGlobal": "新模型預設停用", "models.newPolicyProvider": "新模型策略",
   "models.newPolicy_inherit": "繼承", "models.newPolicy_off": "關閉", "models.newPolicy_on": "開啟", "models.newBadge": "新增", "models.newCount": "{count} 個新增，已關閉",
   "models.aliases": "別名",

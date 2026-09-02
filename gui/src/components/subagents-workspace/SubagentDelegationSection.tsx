@@ -29,10 +29,12 @@ export interface SubagentDelegationSectionProps {
   onUltraModeRetry: () => void;
   fallback: string[];
   fallbackPollMs: number;
+  useSubagentModels: boolean;
   fallbackBusy: boolean;
   availableModels: string[];
   onFallbackChange: (models: string[]) => void;
   onFallbackPollMsChange: (pollMs: number) => void;
+  onUseSubagentModelsChange: (enabled: boolean) => void;
   onFallbackSave: () => void;
 }
 
@@ -50,7 +52,7 @@ export default function SubagentDelegationSection({
   onUltraModeSave,
   ultraLoadFailed,
   onUltraModeRetry,
-  fallback, fallbackPollMs, fallbackBusy, availableModels, onFallbackChange, onFallbackPollMsChange, onFallbackSave,
+  fallback, fallbackPollMs, useSubagentModels, fallbackBusy, availableModels, onFallbackChange, onFallbackPollMsChange, onUseSubagentModelsChange, onFallbackSave,
 }: SubagentDelegationSectionProps) {
   const t = useT();
   // A present empty/whitespace hint is an upstream override that suppresses the
@@ -124,6 +126,11 @@ export default function SubagentDelegationSection({
           </select>
           <label className="setting-hint">{t("sub.fallbackPoll")}
             <input className="input" type="number" min={5000} max={600000} step={1000} value={fallbackPollMs} onChange={e => onFallbackPollMsChange(Number(e.target.value) || 60000)} disabled={fallbackBusy} /> ms
+          </label>
+          <label className="setting-hint">
+            <button type="button" className={`switch ${useSubagentModels ? "on" : ""}`} onClick={() => onUseSubagentModelsChange(!useSubagentModels)} disabled={fallbackBusy} aria-label={t("sub.fallbackUseRoster")} aria-pressed={useSubagentModels}>
+              <span className="knob" />
+            </button> {t("sub.fallbackUseRoster")}
           </label>
           <button type="button" className="btn btn-primary btn-sm" onClick={onFallbackSave} disabled={fallbackBusy}>{t("common.save")}</button>
         </div>

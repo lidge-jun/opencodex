@@ -2349,6 +2349,7 @@ export const ru: Record<TKey, string> = {
   "sub.fallbackPoll": "Интервал проверки доступности",
   "sub.fallbackSaved": "Настройки резервных моделей субагента сохранены.",
   "sub.fallbackSaveFailed": "Не удалось сохранить настройки резервных моделей",
+  "sub.fallbackUseRoster": "Использовать избранный список субагентов как список резервных моделей",
   "models.newPolicyGlobal": "Добавлять новые модели выключенными", "models.newPolicyProvider": "Политика новых моделей",
   "models.newPolicy_inherit": "Наследовать", "models.newPolicy_off": "Выкл.", "models.newPolicy_on": "Вкл.", "models.newBadge": "НОВАЯ", "models.newCount": "Новых: {count}, выкл.",
   "models.aliases": "Псевдонимы",

@@ -38,9 +38,11 @@ export interface SubagentsWorkspaceProps {
   onSave: () => void;
   fallback: string[];
   fallbackPollMs: number;
+  useSubagentModels: boolean;
   fallbackBusy: boolean;
   onFallbackChange: (models: string[]) => void;
   onFallbackPollMsChange: (pollMs: number) => void;
+  onUseSubagentModelsChange: (enabled: boolean) => void;
   onFallbackSave: () => void;
   delegation: {
     model: string;
@@ -68,7 +70,7 @@ export default function SubagentsWorkspace({
   onToggle,
   onMove,
   onSave,
-  fallback, fallbackPollMs, fallbackBusy, onFallbackChange, onFallbackPollMsChange, onFallbackSave,
+  fallback, fallbackPollMs, useSubagentModels, fallbackBusy, onFallbackChange, onFallbackPollMsChange, onUseSubagentModelsChange, onFallbackSave,
   delegation,
 }: SubagentsWorkspaceProps) {
   const t = useT();
@@ -243,10 +245,12 @@ export default function SubagentsWorkspace({
             onUltraModeRetry={delegation.onUltraModeRetry}
             fallback={fallback}
             fallbackPollMs={fallbackPollMs}
+            useSubagentModels={useSubagentModels}
             fallbackBusy={fallbackBusy}
             availableModels={available}
             onFallbackChange={onFallbackChange}
             onFallbackPollMsChange={onFallbackPollMsChange}
+            onUseSubagentModelsChange={onUseSubagentModelsChange}
             onFallbackSave={onFallbackSave}
           />
         </section>

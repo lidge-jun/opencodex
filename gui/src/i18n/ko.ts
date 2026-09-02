@@ -2348,6 +2348,7 @@ export const ko: Record<TKey, string> = {
   "sub.fallbackPoll": "가용성 확인 간격",
   "sub.fallbackSaved": "서브에이전트 폴백 설정을 저장했습니다.",
   "sub.fallbackSaveFailed": "폴백 설정을 저장하지 못했습니다",
+  "sub.fallbackUseRoster": "추천 서브 에이전트 목록을 폴백 목록으로 사용",
   "models.newPolicyGlobal": "새 모델을 비활성화 상태로 추가", "models.newPolicyProvider": "새 모델 정책",
   "models.newPolicy_inherit": "상속", "models.newPolicy_off": "끔", "models.newPolicy_on": "켬", "models.newBadge": "신규", "models.newCount": "신규 {count}개, 꺼짐",
   "models.aliases": "별칭",
