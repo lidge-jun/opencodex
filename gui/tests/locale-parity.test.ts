@@ -208,9 +208,13 @@ const CURSOR_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.cursor.baseUrl",
   // "API Key" is the literal field name in Cursor's gateway form.
   "integrations.cursor.apiKey",
-  // "Model" is the Turkish word too; the table header is a true cognate, not a placeholder.
-  "integrations.cursor.colModel",
 ]);
+
+/** Per-locale cognates: English-identical values that are correct in that one locale only. */
+const CURSOR_KEEP_ENGLISH_BY_LOCALE: Record<string, ReadonlySet<string>> = {
+  // "Model" is the Turkish word too; the table header is a true cognate, not a placeholder.
+  tr: new Set(["integrations.cursor.colModel"]),
+};
 
 test("every locale translates the Cursor tab beyond the brand labels", async () => {
   const en = await readDict("en");
@@ -220,6 +224,7 @@ test("every locale translates the Cursor tab beyond the brand labels", async () 
     for (const [key, value] of dict) {
       if (!key.startsWith("integrations.cursor.") && !key.startsWith("integrations.detail.cursor")) continue;
       if (CURSOR_KEEP_ENGLISH.has(key)) continue;
+      if (CURSOR_KEEP_ENGLISH_BY_LOCALE[locale]?.has(key)) continue;
       if (value === en.get(key)) stale.push(key);
     }
     expect(`${locale} Cursor keys still English placeholders: ${stale.join(", ")}`)

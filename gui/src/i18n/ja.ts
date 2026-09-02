@@ -2411,7 +2411,7 @@ export const ja: Record<TKey, string> = {
   "integrations.cursor.seen": "Cursor からの最終リクエスト: {time} ({ua})",
   "integrations.cursor.neverSeen": "プロキシの起動後、Cursor からのリクエストはありません。ゲートウェイを保存したら、Cursor で Refresh model list を押してください。",
   "integrations.cursor.models": "Cursor に表示される内容",
-  "integrations.cursor.modelsHint": "Cursor は独自のモデルテーブルから推論レベルの階段を選ぶため、opencodex が示せるのは予測のみです。コンテキスト欄にはデフォルトとオプトインのウィンドウ（Cursor の Max Mode）を表示します。",
+  "integrations.cursor.modelsHint": "Cursor は独自のモデルテーブルから推論レベルの段階を決めるため、opencodex が示せるのは予測のみです。コンテキスト欄にはデフォルトとオプトインのウィンドウ（Cursor の Max Mode）を表示します。",
   "integrations.cursor.colModel": "モデル",
   "integrations.cursor.colReasoning": "推論",
   "integrations.cursor.colContext": "コンテキスト",
