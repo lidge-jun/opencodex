@@ -1079,6 +1079,33 @@ describe("subagent model fallback chain", () => {
     expect(parsed.modelId).toBe("gpt-5.5");
   });
 
+  test("the synthesized native chain yields to enabled encrypted-task recovery", () => {
+    // With recovery on, the first fallback pass must leave the routed spawn alone so
+    // recoverEncryptedAgentTask runs (and its security gates fire); rerouting here
+    // would bypass them.
+    const config = cfg({
+      subagentModelFallback: undefined,
+      defaultProvider: "xai",
+      agentTaskRecovery: { enabled: true },
+    });
+    const parsed = {
+      modelId: "xai/grok-4.5",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "xai/grok-4.5" },
+    };
+    const result = applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      config,
+      "pool-a",
+      Date.now(),
+      true,
+    );
+    expect(result).toBeNull();
+    expect(parsed.modelId).toBe("xai/grok-4.5");
+  });
+
   test("applySubagentModelFallback is a no-op for main turns", () => {
     updateAccountQuota("pool-a", 95);
     const parsed = {
