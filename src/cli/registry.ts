@@ -88,7 +88,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "ensure", usage: "ocx ensure", summary: "Ensure the proxy is running and Codex config/cache are current." },
   {
     name: "connect",
-    usage: "ocx connect <url> [--management-url <url>] (--pairing-code-stdin | --admin-token-stdin) [--clients codex,claude] [--management-transport direct|relay] [--no-sync]",
+    usage: "ocx connect <url> [--management-url <url>] (--pairing-code-stdin | --admin-token-stdin) [--clients codex,claude] [--management-transport direct|relay] [--catalog-timeout <seconds>] [--no-sync]",
     summary: "Connect this machine to a remote OpenCodex hub without persisting the one-time authority.",
     details: [
       "Status: ocx connect status [--json]",

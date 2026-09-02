@@ -184,6 +184,14 @@ describe("remote hub client boundary", () => {
       errors.length = 0;
       expect(await handleConnectCommand(["revoke", "client-key-override", "--admin-token-stdin"])).toBe(2);
       expect(errors.join(" ")).not.toContain("client-key-override");
+      errors.length = 0;
+      expect(await handleConnectCommand([
+        "https://hub.example.test",
+        "--admin-token-stdin",
+        "--catalog-timeout",
+        "0",
+      ])).toBe(2);
+      expect(errors.join(" ")).toContain("--catalog-timeout must be an integer >= 1");
     } finally {
       spy.mockRestore();
     }

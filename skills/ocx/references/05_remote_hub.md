@@ -87,7 +87,8 @@ Connect flags: `--clients codex,claude` (which client configs to point at the hu
 `--management-url <url>` (when management lives at a different address),
 `--management-transport direct|relay` (`relay` tunnels management over the data
 connection when no management port can be opened), `--no-sync` (connect without pulling
-the catalog).
+the catalog), and `--catalog-timeout <seconds>` (1–120 seconds of catalog-transfer
+inactivity before failing; arriving bytes reset the deadline).
 
 `ocx gui pair` refuses an origin that is not in `hub.managementPublicOrigin` or
 `corsAllowOrigins`. Grants are single-use, expire in five minutes, are origin-bound,
@@ -160,4 +161,3 @@ Do not work around these. Each one means unwinding would damage state that
   new one is issued, or a client that has not yet been updated is stranded.
 - *"Why is there no remote UI on my machine?"* Expected — `runtimeRole` is not `hub`.
 - *"Can I pass the pairing code as an argument?"* No. Credentials are stdin-only by design.
-

@@ -17,6 +17,7 @@ import {
   rejectArgs,
   runCliAction,
   takeFlag,
+  takeIntegerOption,
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
@@ -25,7 +26,7 @@ export const CONNECT_USAGE = `Usage:
   ocx connect <url> [--management-url <url>]
       (--pairing-code-stdin | --admin-token-stdin)
       [--clients codex,claude] [--management-transport direct|relay]
-      [--no-sync]
+      [--catalog-timeout <seconds>] [--no-sync]
   ocx connect status [--json]
   ocx connect rotate (--pairing-code-stdin | --admin-token-stdin)
       [--json]
@@ -147,6 +148,10 @@ async function runConnect(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (!serverUrl || serverUrl.startsWith("--")) throw new CliUsageError("hub URL is required", CONNECT_USAGE);
   const managementUrl = takeOption(args, "--management-url");
   const clients = parseClients(takeOption(args, "--clients"));
+  const catalogTimeoutSeconds = takeIntegerOption(args, "--catalog-timeout", { min: 1 });
+  if (catalogTimeoutSeconds !== undefined && catalogTimeoutSeconds > 120) {
+    throw new CliUsageError("--catalog-timeout must be an integer between 1 and 120", CONNECT_USAGE);
+  }
   const managementTransport = takeOption(args, "--management-transport") ?? "direct";
   if (managementTransport !== "direct" && managementTransport !== "relay") {
     throw new CliUsageError("--management-transport must be direct or relay", CONNECT_USAGE);
@@ -167,6 +172,7 @@ async function runConnect(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     selectedClients: clients,
     managementTransport,
     noSync,
+    ...(catalogTimeoutSeconds === undefined ? {} : { catalogTimeoutMs: catalogTimeoutSeconds * 1_000 }),
   }, { fetchImpl: deps.fetchImpl });
   console.log(`Connected to ${connection.serverUrl} as key ${connection.apiKeyId}.`);
 }

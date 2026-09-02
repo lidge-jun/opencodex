@@ -1,5 +1,6 @@
 import { MAX_REMOTE_CATALOG_BYTES } from "../server/catalog-download";
 import { readBoundedResponseBytes } from "../lib/bounded-body";
+import { clearableDeadline } from "../lib/abort";
 
 /**
  * A pairing grant may cross loopback or authenticated HTTPS, and nothing else.
@@ -84,13 +85,17 @@ async function fetchBounded(
   url: string,
   init: RequestInit,
   timeoutMs: number | undefined,
+  timeoutScope: "request" | "headers" = "request",
 ): Promise<Response> {
+  const timeout = safeTimeout(timeoutMs);
+  const headerDeadline = timeoutScope === "headers" ? clearableDeadline(timeout) : null;
   try {
     const response = await fetchImpl(url, {
       ...init,
       redirect: "manual",
-      signal: AbortSignal.timeout(safeTimeout(timeoutMs)),
+      signal: headerDeadline?.signal ?? AbortSignal.timeout(timeout),
     });
+    headerDeadline?.clear();
     if (response.status >= 300 && response.status < 400 && response.status !== 304) {
       throw new HubClientError("redirect_refused", "Hub request redirect was refused", response.status);
     }
@@ -98,15 +103,24 @@ async function fetchBounded(
   } catch (error) {
     if (error instanceof HubClientError) throw error;
     throw new HubClientError("unreachable", "Hub request did not complete", undefined, { cause: error });
+  } finally {
+    headerDeadline?.clear();
   }
 }
 
-async function boundedText(response: Response, maxBytes: number): Promise<string> {
+async function boundedText(
+  response: Response,
+  maxBytes: number,
+  options: { inactivityTimeoutMs?: number } = {},
+): Promise<string> {
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw new HubClientError("body_too_large", "Hub response exceeded the allowed size", response.status);
   }
-  const result = await readBoundedResponseBytes(response, { maxBytes });
+  const result = await readBoundedResponseBytes(response, {
+    maxBytes,
+    ...(options.inactivityTimeoutMs === undefined ? {} : { inactivityTimeoutMs: options.inactivityTimeoutMs }),
+  });
   if (result.oversized) {
     throw new HubClientError("body_too_large", "Hub response exceeded the allowed size", response.status);
   }
@@ -422,7 +436,7 @@ export async function downloadClientCatalog(
   const response = await fetchBounded(options.fetchImpl ?? fetch, `${origin}/v1/catalog`, {
     method: "GET",
     headers,
-  }, options.timeoutMs);
+  }, options.timeoutMs, "headers");
   if (response.status === 304) {
     throw new HubClientError("catalog_unexpected_304", "Hub answered 304 to an unconditional catalog request", 304);
   }
@@ -434,7 +448,17 @@ export async function downloadClientCatalog(
     try { await response.body?.cancel(); } catch { /* best effort */ }
     throw new HubClientError("catalog_content_type_invalid", "Hub catalog response was not JSON", response.status);
   }
-  const body = await boundedText(response, options.maxBytes ?? MAX_REMOTE_CATALOG_BYTES);
+  let body: string;
+  try {
+    body = await boundedText(response, options.maxBytes ?? MAX_REMOTE_CATALOG_BYTES, {
+      inactivityTimeoutMs: safeTimeout(options.timeoutMs),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new HubClientError("unreachable", "Hub catalog download stalled", undefined, { cause: error });
+    }
+    throw error;
+  }
   const parsed = parseJson(body, "catalog_invalid");
   validateRemoteCatalog(parsed);
   const keyId = response.headers.get("x-opencodex-key-id")?.trim() || undefined;

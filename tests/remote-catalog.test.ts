@@ -8,6 +8,56 @@ function response(body: string, headers: HeadersInit = JSON_HEADERS): Response {
 }
 
 describe("remote catalog adversarial consumer", () => {
+  test("allows a catalog download to exceed five seconds while bytes keep arriving", async () => {
+    const chunks = ['{"models":[', '{"slug":"provider/model"}', ']}'];
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        let index = 0;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            const send = () => {
+              const chunk = chunks[index++];
+              if (chunk === undefined) return controller.close();
+              controller.enqueue(new TextEncoder().encode(chunk));
+              if (index < chunks.length) setTimeout(send, 2_600);
+              else controller.close();
+            };
+            send();
+          },
+        }), { headers: JSON_HEADERS });
+      },
+    });
+    try {
+      const result = await downloadClientCatalog(`http://127.0.0.1:${server.port}`, "ocx_data_test");
+      expect(JSON.parse(result.body)).toEqual({ models: [{ slug: "provider/model" }] });
+    } finally {
+      server.stop(true);
+    }
+  }, { timeout: 8_000 });
+
+  test("fails a stalled catalog download within the explicit inactivity bound", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"models":['));
+          },
+        }), { headers: JSON_HEADERS });
+      },
+    });
+    const startedAt = performance.now();
+    try {
+      await expect(downloadClientCatalog(`http://127.0.0.1:${server.port}`, "ocx_data_test", {
+        timeoutMs: 50,
+      })).rejects.toMatchObject({ code: "unreachable" });
+      expect(performance.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("accepts additive fields only after the required model schema and key id pass", async () => {
     const body = JSON.stringify({ models: [{ slug: "provider/model", future: { enabled: true } }], futureTop: 1 });
     const result = await downloadClientCatalog("https://hub.example.test", "ocx_data_test", {

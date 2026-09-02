@@ -71,6 +71,7 @@ export interface ConnectOptions {
   selectedClients: OcxConnectedClientId[];
   managementTransport: "direct" | "relay";
   noSync?: boolean;
+  catalogTimeoutMs?: number;
 }
 
 export interface ClientConnectDeps {
@@ -408,7 +409,10 @@ export async function connectClient(
     const persisted = writeServiceApiTokenFile(issued.key);
     tokenFingerprint = persisted.fingerprint;
 
-    const catalog = await downloadClientCatalog(serverUrl, issued.key, { fetchImpl: deps.fetchImpl });
+    const catalog = await downloadClientCatalog(serverUrl, issued.key, {
+      fetchImpl: deps.fetchImpl,
+      timeoutMs: options.catalogTimeoutMs,
+    });
     atomicWriteFile(DEFAULT_CATALOG_PATH, catalog.body);
     writtenCatalogFingerprint = sha256(catalog.body);
 
