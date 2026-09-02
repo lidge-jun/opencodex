@@ -62,6 +62,15 @@ describe("port selection", () => {
     expect(shouldPersistSelectedPort(10100, 10100, 10100)).toBe(false);
   });
 
+  test("a sibling start never persists its explicit port over the configured one", () => {
+    // `ocx start --port 10198` beside a live proxy on 10100: the sibling gets its port,
+    // but config.port stays 10100 so the next `ocx service` install is not re-pinned.
+    expect(shouldPersistSelectedPort(10100, 10198, 10198, { sibling: true })).toBe(false);
+    // The same arguments without the sibling flag are the ordinary first-start persist.
+    expect(shouldPersistSelectedPort(10100, 10198, 10198)).toBe(true);
+    expect(shouldPersistSelectedPort(10100, 10198, 10198, { sibling: false })).toBe(true);
+  });
+
   test("waitForPortAvailable resolves once a busy port is released", async () => {
     const { server, port } = await listen();
     expect(await isPortAvailable(port)).toBe(false);

@@ -252,6 +252,19 @@ describe("start probes the configured port before shadowing it (source-level)", 
     expect(cliSource).not.toContain("explicitSiblingPort");
   });
 
+  test("a sibling start carries its flag into every chooseListenPort call", () => {
+    // The sibling instance must not persist its explicit port into config.port: the
+    // configured-port proxy still owns this home, and `ocx service` bakes config.port.
+    // Both call sites (initial pick and the EADDRINUSE re-pick) have to pass the flag,
+    // or the re-pick path silently regains the old behavior.
+    const calls = cliSource.match(/await chooseListenPort(([^)]*))/g) ?? [];
+    expect(calls.length).toBe(2);
+    for (const call of calls) {
+      expect(call).toContain("sibling: siblingStart");
+    }
+    expect(cliSource).toContain("siblingStart = true;");
+  });
+
   test("the probe option still gates on an explicit true", () => {
     // A truthy-but-not-true default would silently probe for callers that pass
     // nothing, which is a different behavior than the one asserted above.

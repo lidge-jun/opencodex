@@ -151,6 +151,13 @@ export function shouldPersistSelectedPort(
   configPort: number | undefined,
   selectedPort: number,
   preferredPort: number,
+  options: { sibling?: boolean } = {},
 ): boolean {
+  // A sibling start (`--port X` beside a live proxy on the configured port) is a
+  // second instance, not a new home for this config. Persisting its port rewrote
+  // config.port under the still-running configured-port proxy, and the next
+  // `ocx service` install then baked the sibling's port into the service and
+  // re-pointed every client at a listener that no longer existed.
+  if (options.sibling) return false;
   return selectedPort === preferredPort && configPort !== selectedPort;
 }

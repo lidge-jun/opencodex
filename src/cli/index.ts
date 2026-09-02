@@ -149,7 +149,10 @@ function startArgv(port?: number): string[] {
   return selfLaunchArgv(args);
 }
 
-async function chooseListenPort(requestedPort?: number): Promise<number> {
+async function chooseListenPort(
+  requestedPort?: number,
+  options: { sibling?: boolean } = {},
+): Promise<number> {
   const config = loadConfig();
   const preferred = requestedPort ?? config.port ?? 10100;
   const hardPin = requestedPort !== undefined && requestedPort > 0;
@@ -197,7 +200,7 @@ async function chooseListenPort(requestedPort?: number): Promise<number> {
     if (preferred > 0 && selected !== preferred) {
       console.log(`⚠️  Port ${preferred} is busy; starting opencodex on ${selected}.`);
     }
-    if (shouldPersistSelectedPort(config.port, selected, preferred)) {
+    if (shouldPersistSelectedPort(config.port, selected, preferred, options)) {
       config.port = selected;
       saveConfig(config);
     }
@@ -253,6 +256,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // shutdown then left no runtime record for discovery at all. `handleEnsure`
   // already passes this; `handleStart` is the path that did not.
   const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
+  let siblingStart = false;
   if (owner.live) {
     // Rationale and the full decision table live on `decideStartWithLiveOwner`.
     const decision = decideStartWithLiveOwner({
@@ -276,6 +280,10 @@ async function handleStart(options: { block?: boolean } = {}) {
     // Sibling path. Honest about the side effects it shares with any start in this home:
     // the new instance takes over this home's ocx.pid / runtime-port.json while it runs,
     // and re-points this home's Codex config at the new port when injection applies.
+    // What it must NOT do is persist its port into config.port: the configured-port
+    // proxy is still the owner of this home, and a later `ocx service` reads config.port
+    // to bake the service (observed: a probe on 10198 left the service pinned there).
+    siblingStart = true;
     console.warn(
       `Proxy already running on port ${owner.live.port}; starting a second instance on requested port ${requestedPort}. `
       + `The new instance takes over this home's pid/runtime records and Codex config while it runs.`,
@@ -304,7 +312,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Port selection is check-then-bind: a concurrent `ocx start`/`ensure` can win the port
   // between the probe and Bun.serve. Soft starts may re-pick; hard-pinned `--port` retries
   // the same port only (never hop — that was the remaining PR #152 gap).
-  let port = await chooseListenPort(requestedPort);
+  let port = await chooseListenPort(requestedPort, { sibling: siblingStart });
   const { drainAndShutdown, isRecyclingForExit, startServer } = await import("../server");
   // One private readiness gate for this startServer invocation, captured by the
   // listener's closure. handleStart owns it and transitions it after the
@@ -334,7 +342,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         continue;
       }
       console.log(`⚠️  Port ${port} was taken while starting; picking another...`);
-      port = await chooseListenPort(requestedPort);
+      port = await chooseListenPort(requestedPort, { sibling: siblingStart });
     }
   }
   // A single request's streaming error must never crash the daemon serving every
