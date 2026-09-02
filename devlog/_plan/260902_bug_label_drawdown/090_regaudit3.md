@@ -15,8 +15,8 @@ next step (#2999 is the runtime-primitive blocker). No item was closed to lower 
 |---|---|---|
 | #3226 → #3234 | `b732b0d0f` | carry + nested `function.name` fix |
 | #3227 → #3236 | `1c8278b4d` | carry, author credit |
-| #3228 → #3239 | `744d12d02` | source half only; GUI editor left for a feature PR |
-| regression from #3239 → #3240 | `7f00d0eee` | r3239: recovery gates bypassed by the synthesized chain |
+| #3228 → #3239 | `744d12d02` | **reverted** by #3242 `2cb592174` — see below |
+| regression from #3239 → #3240 | `7f00d0eee` | **reverted** by #3242 together with #3239 |
 | #3229 → #3241 | `b54508c8c` | carry on the repaired tip |
 | #3232 | `261b7e012` | merged by the maintainer directly; verified |
 
@@ -26,7 +26,18 @@ The `push` runs on `dev` during this train were all cancelled by the next push. 
 regression was caught by the next cycle's focused check, not by CI, and repaired before anything
 else landed — which is the point of pairing "CI behind the work" with a focused red-green gate
 on every PR. Exact-head `workflow_dispatch` on `b54508c8c` (branch
-`codex/regaudit-ci-b54508c8c`, run 33581824312, Windows on): CI3_PLACEHOLDER
+`codex/regaudit-ci-b54508c8c`, run 33581824312, Windows on): **test 3/4 failed** on
+`tests/agent-task-recovery.test.ts` "keeps the disabled fail-fast response byte-identical to
+the absent feature" (400 expected, 502 received). Bisect: 19/19 at `1c8278b4d`, 7/19 at
+`744d12d02` (#3239), 18/19 at `7f00d0eee` (#3240). The contract that file pins — recovery
+absent/disabled ⇒ fail-fast 400 with zero upstream fetches — is a credential-spend boundary:
+synthesizing a native chain reroutes a routed spawn to the ChatGPT backend without the operator
+opting in. #3240 could not restore that without removing the feature, so **both were reverted**
+in #3242 → `2cb592174` (92 pass / 0 fail across the three recovery/fallback files after the
+revert). #3228's disposition is corrected on the PR: the reported behaviour is the documented
+opt-in, not a bug; a defaults change is a product decision for a feature request. The p3228
+review ran the fallback and security files but not `agent-task-recovery.test.ts` — recorded
+as the miss. A second dispatch on the reverted tip follows.
 
 ## Devlog landing
 
@@ -36,4 +47,3 @@ PR #3218 (this stack) → DEVLOG_PLACEHOLDER
 
 Met at the fallback threshold: 5 open bug-labelled items, all with recorded, evidence-backed
 blockers. From 24 at the start of the campaign.
-
