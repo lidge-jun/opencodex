@@ -7,6 +7,7 @@ export type ApiKeyRotationStart = {
   id: string;
   name: string;
   key: string;
+  createdAt: string;
   rotationId: string;
   expiresAt: string;
 };
@@ -44,7 +45,7 @@ export function startApiKeyRotation(
   const createdAt = new Date(now).toISOString();
   const expiresAt = new Date(now + API_KEY_ROTATION_TTL_MS).toISOString();
   entry.pendingRotation = { id: rotationId, key, createdAt, expiresAt };
-  return { id: entry.id, name: entry.name, key, rotationId, expiresAt };
+  return { id: entry.id, name: entry.name, key, createdAt, rotationId, expiresAt };
 }
 
 export function commitApiKeyRotation(

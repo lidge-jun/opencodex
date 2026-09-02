@@ -6,6 +6,7 @@ import { loadConfig, readConfigDiagnostics, saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { isDataPlaneAdmissionSecret } from "../src/server/auth-cors";
 import { ownAdmissionTokens } from "../src/claude/auth-detect";
+import { commitClientKeyRotation, startClientKeyRotation } from "../src/client/hub-client";
 import type { OcxConfig } from "../src/types";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
 
@@ -94,6 +95,45 @@ afterEach(() => {
 });
 
 describe("API key rotation", () => {
+  test("BUG-R3303 completes the server-to-client rotation round trip with the persisted creation time", async () => {
+    saveConfig(baseConfig());
+    const server = startServer(0);
+    try {
+      const created = await keysRequest(server, "POST", { name: "client" });
+      const oldKey = created.json.key as string;
+      const id = created.json.id as string;
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const requested = new URL(String(input));
+        return fetch(new URL(`${requested.pathname}${requested.search}`, server.url), init);
+      };
+      const credential = { kind: "admin" as const, value: new TextEncoder().encode(ADMIN_TOKEN) };
+
+      const started = await startClientKeyRotation(
+        "https://hub.example.test",
+        credential,
+        id,
+        { fetchImpl },
+      );
+      const pending = (loadConfig().apiKeys ?? [])[0]?.pendingRotation;
+      expect(started.createdAt).toBe(pending?.createdAt);
+      expect(started.expiresAt).toBe(pending?.expiresAt);
+      expect(isDataPlaneAdmissionSecret(oldKey, loadConfig())).toBe(true);
+      expect(isDataPlaneAdmissionSecret(started.key, loadConfig())).toBe(true);
+
+      await commitClientKeyRotation(
+        "https://hub.example.test",
+        credential,
+        id,
+        started.rotationId,
+        { fetchImpl },
+      );
+      expect(isDataPlaneAdmissionSecret(oldKey, loadConfig())).toBe(false);
+      expect(isDataPlaneAdmissionSecret(started.key, loadConfig())).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("overlaps under one id, masks the pending secret, and commits atomically", async () => {
     saveConfig(baseConfig());
     const server = startServer(0);
