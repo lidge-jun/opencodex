@@ -185,7 +185,7 @@ export default function CursorIntegrationPage({ apiBase, active }: { apiBase: st
                           </>
                         )}
                     </td>
-                    <td>{model.context ? `${formatTokens(model.context.defaultWindow, locale)} · ${formatTokens(model.context.longWindow, locale)}` : t("integrations.cursor.noControl")}</td>
+                    <td>{model.context ? `${formatTokens(model.context.defaultWindow, locale)} · ${formatTokens(model.context.longWindow, locale)}` : t("integrations.cursor.singleWindow")}</td>
                   </tr>
                 ))}
               </tbody>

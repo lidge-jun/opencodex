@@ -231,6 +231,7 @@ test("the model table shows the reasoning ladder and both context windows", asyn
   expect(rows[0]).toContain("922K");
   expect(rows[1]).toContain("kimi/k3");
   expect(rows[1]).toContain("—");
+  expect(rows[1]).toContain("single window");
 });
 
 test("the ladder provenance names the installed bundle, and table-less rows get the hint", async () => {
