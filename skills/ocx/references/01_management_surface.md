@@ -548,7 +548,7 @@ JSON mode: `payload`.
 
 ### `ocx integration native`
 
-Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations.
+Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations, and read the Cursor Private Inference status.
 
 | Method | Route |
 |---|---|
@@ -557,6 +557,7 @@ Show or toggle the native Claude, Claude Desktop, Codex, and Grok integrations.
 | PUT | `/api/native-integrations/claude-desktop` |
 | PUT | `/api/native-integrations/codex` |
 | PUT | `/api/native-integrations/grok` |
+| GET | `/api/native-integrations/cursor` |
 
 | Flag | Value | Meaning |
 |---|---|---|

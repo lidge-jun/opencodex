@@ -19,6 +19,41 @@ export const OPENCODEX_MODEL_API_TYPES: readonly string[] = Object.freeze(["chat
 
 export const OPENAI_FAMILY_API_TYPES: ReadonlySet<string> = new Set(["chat_completions", "responses", "openai_chat", "openai_responses"]);
 
+/**
+ * The reasoning-effort ladder Cursor's local-agent runtime attaches to a model, keyed by the
+ * model id after its last `/`. Cursor decides this from its own table rather than from the
+ * gateway's `reasoning_effort` list, so the dashboard can only PREDICT it; the values here
+ * mirror that table (read from the 3.18.25 bundle) and carry no Cursor behavior of their own.
+ * Null means Cursor shows no Reasoning control for the id. Distinct from
+ * `src/adapters/cursor/effort-map.ts`, which maps opencodex efforts onto Cursor's *backend*
+ * tiers for the outbound provider; this is what Cursor's *local* picker renders.
+ */
+const CURSOR_EFFORT_FAMILIES: ReadonlyArray<{ test: RegExp; ladder: readonly string[] }> = [
+  { test: /^gpt-5[.-]6-(?:luna|sol|terra)$/u, ladder: ["low", "medium", "high", "xhigh"] },
+  { test: /^gpt-5(?:\.\d+)?$/u, ladder: ["low", "medium", "high", "xhigh"] },
+  { test: /^claude-opus-5$/u, ladder: ["low", "medium", "high", "xhigh", "max"] },
+  { test: /^claude-opus-4[-.](?:7|8)$/u, ladder: ["low", "medium", "high", "xhigh", "max"] },
+  { test: /^claude-sonnet-5$/u, ladder: ["low", "medium", "high", "xhigh", "max"] },
+  { test: /^claude-opus-4[-.](?:5|6)$/u, ladder: ["low", "medium", "high", "max"] },
+  { test: /^claude-sonnet-4[-.]6$/u, ladder: ["low", "medium", "high", "max"] },
+  { test: /^grok-4[.-](?:3|5|6)(?:-(?:batch|build|nocomp))?$/u, ladder: ["minimal", "low", "medium", "high", "xhigh"] },
+  { test: /^grok-build-latest$/u, ladder: ["minimal", "low", "medium", "high", "xhigh"] },
+  { test: /^gemini-3\.[1-9].*flash-lite/u, ladder: [] },
+  { test: /^gemini-/u, ladder: ["minimal", "low", "medium", "high"] },
+];
+
+export function cursorEffortFamily(modelId: string): string[] | null {
+  let id = modelId.trim().toLowerCase();
+  const slash = id.lastIndexOf("/");
+  if (slash !== -1) id = id.slice(slash + 1);
+  const at = id.indexOf("@");
+  if (at !== -1) id = id.slice(0, at);
+  for (const family of CURSOR_EFFORT_FAMILIES) {
+    if (family.test.test(id)) return family.ladder.length > 0 ? [...family.ladder] : null;
+  }
+  return null;
+}
+
 export interface ModelCapabilityInput {
   reasoningEfforts?: readonly string[];
   contextWindow?: number;

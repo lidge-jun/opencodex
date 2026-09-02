@@ -225,6 +225,7 @@ import {
 import { detectInstall } from "../update/index";
 import { readyProtocolMetadata } from "../remote/protocol";
 import { modelCapabilityFields } from "./models-capabilities";
+import { recordCursorSeen } from "../integrations/cursor-seen";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
@@ -1327,6 +1328,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         if (!isAllowedRequestOrigin(req, policy)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
+        // The Integrations page reports whether a Cursor client has reached this proxy; the
+        // recorder keeps only a bounded User-Agent value and a timestamp, in memory.
+        recordCursorSeen(req.headers);
         let goModels;
         let modelEntitlements;
         try {
