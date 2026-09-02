@@ -59,13 +59,20 @@ and 49/49 three times locally on this tip; its history is two macOS-timing bound
 (`bef2869c7`, `c1be34da4`). Classified as a macOS timing flake; a third dispatch
 (run 33584155821) is recorded below to settle it.
 
-Third dispatch on `2cb592174` (run 33584155821): CI4_PLACEHOLDER
+Third dispatch on `2cb592174` (run 33584155821): **macOS green**, Linux 1/4–4/4 green, gates,
+storage, api-usage, keyring ×3, npm-global ×3 green. The `native-profile-manager` case is
+settled as a macOS timing flake (fail 1 of 3 dispatches on an unchanged file). Windows shards
+remain the hosted-runner defect proven on `main` in 071. Verdict for the campaign's last
+source commit: green on every platform this repository can currently trust.
 
 ## Devlog landing
 
-PR #3218 (this stack) → DEVLOG_PLACEHOLDER
+PR #3218 (this stack, rebased on the current `dev` tip) → admin squash-merge; SHA recorded in
+the ledger and the goalplan criterion evidence.
 
 ## Criterion c-7
 
-Met at the fallback threshold: 5 open bug-labelled items, all with recorded, evidence-backed
-blockers. From 24 at the start of the campaign.
+Met: **4** open bug-labelled items (≤5 fallback; 3 would have required closing a blocker without
+its evidence), all four with recorded, evidence-backed blockers. From 24 at the start of the
+campaign: 14 PRs + 10 issues → 0 PRs + 4 issues. 22 landings / closures with SHAs or evidence
+comments, one honest revert.
