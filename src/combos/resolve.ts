@@ -250,6 +250,9 @@ export function advanceComboAfterFailure(
     retryAfter?: string | null;
     now?: number;
     eligible?: (target: Required<OcxComboTarget>) => boolean;
+    status?: number;
+    code?: string | null;
+    message?: string;
   } = {},
 ): ComboPick | null {
   noteComboFailure(pick.comboId, pick.target, pick.writerGeneration);

@@ -17,6 +17,8 @@ import {
   comboPublicModelId,
   comboRequestHasImageInput,
   concreteComboRequestBody,
+  comboCooldownRetryAfterSeconds,
+  COMBO_REQUEST_RATE_COOLDOWN_MS,
   coolComboTarget,
   earliestQuotaResetAt,
   getCombo,
@@ -29,6 +31,7 @@ import {
   normalizeComboConfig,
   parseComboModelId,
   parseRetryAfterMs,
+  remainingComboCooldownMs,
   pickComboTarget,
   preservesPhysicalComboProvider,
   resetComboEffortWarningStateForTests,
@@ -38,6 +41,7 @@ import {
   UnknownComboError,
 } from "../src/combos";
 import { comboFailureDecision } from "../src/combos/failover";
+import { comboUnavailableResponse } from "../src/server/responses/core";
 import { getConfigPath, readConfigDiagnostics, saveConfig } from "../src/config";
 import { routeModel } from "../src/router";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -413,6 +417,55 @@ describe("combo target cooldowns", () => {
     expect(isComboTargetInCooldown("other", target, 1_050)).toBe(true);
     clearComboTargetCooldowns("other");
     expect(isComboTargetInCooldown("other", target, 1_050)).toBe(false);
+  });
+
+  test("uses a short cooldown for request-rate 1302 without Retry-After", () => {
+    coolComboTarget("free", target, {
+      now: 1_000,
+      code: "1302",
+      message: "Rate limit reached for requests",
+    });
+    expect(isComboTargetInCooldown("free", target, 1_000 + COMBO_REQUEST_RATE_COOLDOWN_MS - 1)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + COMBO_REQUEST_RATE_COOLDOWN_MS)).toBe(false);
+  });
+
+  test("keeps the default cooldown for usage-window 1308", () => {
+    coolComboTarget("free", target, {
+      now: 1_000,
+      code: "1308",
+      message: "Usage limit reached for 5 hour",
+    });
+    expect(isComboTargetInCooldown("free", target, 1_000 + 59_999)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 60_000)).toBe(false);
+  });
+
+  test("honors explicit Retry-After over the request-rate default", () => {
+    coolComboTarget("free", target, {
+      now: 1_000,
+      retryAfter: "30",
+      code: "1302",
+    });
+    expect(isComboTargetInCooldown("free", target, 1_000 + 29_999)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 30_000)).toBe(false);
+  });
+
+  test("reports the soonest remaining cooldown as Retry-After seconds", () => {
+    const later = { provider: "b", model: "m2" };
+    coolComboTarget("free", target, { now: 1_000, cooldownMs: 5_000 });
+    coolComboTarget("free", later, { now: 1_000, cooldownMs: 20_000 });
+    expect(remainingComboCooldownMs("free", 1_000)).toBe(5_000);
+    expect(comboCooldownRetryAfterSeconds("free", 1_000)).toBe("5");
+    expect(comboCooldownRetryAfterSeconds("free", 3_500)).toBe("3");
+    expect(comboCooldownRetryAfterSeconds("missing", 1_000)).toBeUndefined();
+  });
+
+  test("combo unavailable responses advertise remaining cooldown as Retry-After", () => {
+    coolComboTarget("free", target, { now: 1_000, cooldownMs: 5_000 });
+    const response = comboUnavailableResponse("No available targets for combo: free", {
+      retryAfter: comboCooldownRetryAfterSeconds("free", 1_000),
+    });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("Retry-After")).toBe("5");
   });
 });
 

@@ -13,6 +13,21 @@ interface TargetCooldown {
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000;
+/** Short cooldown for request-rate 429s (for example provider code 1302) that omit Retry-After. */
+export const COMBO_REQUEST_RATE_COOLDOWN_MS = 5_000;
+
+const QUOTA_LIMIT_CODES = new Set([
+  "1308",
+  "1310",
+  "1316",
+  "1317",
+  "1318",
+  "1319",
+  "1320",
+  "1321",
+  "insufficient_quota",
+]);
+const TRANSIENT_REQUEST_RATE_CODES = new Set(["1302", "1305"]);
 const IMF_FIXDATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
 const RFC850_DATE_RE = /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/i;
 const ASCTIME_DATE_RE = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( \d|\d{2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/i;
@@ -136,10 +151,58 @@ export function isComboTargetInCooldown(
   return true;
 }
 
+export function isTransientRequestRateLimit(input: {
+  status?: number;
+  code?: string | null;
+  message?: string;
+}): boolean {
+  const code = (input.code ?? "").trim().toLowerCase().replaceAll("-", "_");
+  if (QUOTA_LIMIT_CODES.has(code)) return false;
+  if (TRANSIENT_REQUEST_RATE_CODES.has(code)) return true;
+  const text = (input.message ?? "").toLowerCase();
+  if (
+    text.includes("usage limit reached")
+    || text.includes("insufficient_quota")
+    || text.includes("quota exhausted")
+  ) {
+    return false;
+  }
+  return text.includes("rate limit reached for requests");
+}
+
+export function remainingComboCooldownMs(comboId: string, now = Date.now()): number | undefined {
+  const prefix = `${comboId}\0`;
+  let soonest: number | undefined;
+  for (const [key, cooldown] of targetCooldowns) {
+    if (!key.startsWith(prefix)) continue;
+    const remaining = cooldown.cooldownUntil - now;
+    if (remaining <= 0) {
+      targetCooldowns.delete(key);
+      continue;
+    }
+    if (soonest === undefined || remaining < soonest) soonest = remaining;
+  }
+  return soonest;
+}
+
+export function comboCooldownRetryAfterSeconds(comboId: string, now = Date.now()): string | undefined {
+  const remainingMs = remainingComboCooldownMs(comboId, now);
+  if (remainingMs === undefined) return undefined;
+  return String(Math.max(1, Math.ceil(remainingMs / 1000)));
+}
+
 export function coolComboTarget(
   comboId: string,
   target: Pick<OcxComboTarget, "provider" | "model">,
-  options?: { retryAfter?: string | null; now?: number; cooldownMs?: number; writerGeneration?: number },
+  options?: {
+    retryAfter?: string | null;
+    now?: number;
+    cooldownMs?: number;
+    writerGeneration?: number;
+    status?: number;
+    code?: string | null;
+    message?: string;
+  },
 ): void {
   const now = options?.now ?? Date.now();
   const writerGeneration = options?.writerGeneration ?? captureConfigGeneration();
@@ -147,7 +210,11 @@ export function coolComboTarget(
   if (writerGeneration < lastReconciledGeneration && !liveComboTargets.has(ownerKey)) return;
   const cooldownMs = options?.cooldownMs
     ?? parseRetryAfterMs(options?.retryAfter, now)
-    ?? DEFAULT_COOLDOWN_MS;
+    ?? (isTransientRequestRateLimit({
+      status: options?.status,
+      code: options?.code,
+      message: options?.message,
+    }) ? COMBO_REQUEST_RATE_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
   targetCooldowns.set(cooldownMapKey(comboId, target), {
     cooldownUntil: now + Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS),
   });

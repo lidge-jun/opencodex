@@ -74,6 +74,7 @@ import {
   concreteComboRequestBody,
   getCombo,
   isComboTargetInCooldown,
+  comboCooldownRetryAfterSeconds,
   NoAvailableComboTargetsError,
   noteComboSuccess,
   parseRetryAfterMs,
@@ -1435,13 +1436,27 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
 
 
 
-export function comboUnavailableResponse(message: string): Response {
+export function comboUnavailableResponse(
+  message: string,
+  options?: { retryAfter?: string | null },
+): Response {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  const retryAfter = options?.retryAfter?.trim();
+  if (retryAfter && retryAfter.length > 0 && retryAfter.length <= 128) {
+    headers.set("Retry-After", retryAfter);
+  }
   return new Response(
     JSON.stringify({
       error: { message, type: "server_error", code: "combo_unavailable" },
     }),
-    { status: 503, headers: { "Content-Type": "application/json" } },
+    { status: 503, headers },
   );
+}
+
+function comboUnavailable(comboId: string, now = Date.now()): Response {
+  return comboUnavailableResponse(`No available targets for combo: ${comboId}`, {
+    retryAfter: comboCooldownRetryAfterSeconds(comboId, now),
+  });
 }
 
 
@@ -2298,7 +2313,7 @@ export async function handleComboResponses(
         config,
         { parentThreadId: inboundClientThreadId },
       );
-      return comboUnavailableResponse(`No available targets for combo: ${comboId}`);
+      return comboUnavailable(comboId);
     }
     let recovered = false;
     try {
@@ -2335,7 +2350,7 @@ export async function handleComboResponses(
   }
 
   if (!pick) {
-    return comboUnavailableResponse(`No available targets for combo: ${comboId}`);
+    return comboUnavailable(comboId);
   }
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.
@@ -2543,6 +2558,9 @@ export async function handleComboResponses(
       retryAfter: failure.retryAfter,
       now: Date.now(),
       eligible: payloadEligible,
+      status: failure.response.status,
+      code: failure.upstreamCode,
+      message: failure.classificationText,
     });
     if (!nextPick) adoptFailedChildLog(childLog);
     pick = nextPick;
@@ -2913,7 +2931,7 @@ async function handleResponsesInner(
     logCtx.routeDecision = route.routeDecision;
   } catch (err) {
     if (err instanceof NoAvailableComboTargetsError) {
-      return comboUnavailableResponse(err.message);
+      return comboUnavailable(err.comboId);
     }
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
@@ -3023,7 +3041,7 @@ async function handleResponsesInner(
         logCtx.routeDecision = route.routeDecision;
       } catch (err) {
         if (err instanceof NoAvailableComboTargetsError) {
-          return comboUnavailableResponse(err.message);
+          return comboUnavailable(err.comboId);
         }
         if (err instanceof NoEligiblePolicyCandidateError) {
           logCtx.routeDecision = err.trace;
@@ -3147,7 +3165,7 @@ async function handleResponsesInner(
               logCtx.routeDecision = route.routeDecision;
             } catch (err) {
               if (err instanceof NoAvailableComboTargetsError) {
-                return comboUnavailableResponse(err.message);
+                return comboUnavailable(err.comboId);
               }
               if (err instanceof NoEligiblePolicyCandidateError) {
                 logCtx.routeDecision = err.trace;
