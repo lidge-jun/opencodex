@@ -2,12 +2,21 @@
 
 Terminal phase after `p3226`–`p3232` and `r3239`.
 
-## Recount (2026-09-02, tip `b54508c8c`)
+## Recount (2026-09-02, final)
 
-`gh issue list -l bug --state open` → 5, `gh pr list -l bug --state open` → 0. Combined **5**.
-The five are the recorded blockers from 072 (#3152, #3141, #2999, #1527, #1419), each with a
-maintainer comment naming the evidence it needs and `needs-info` where the reporter owns the
-next step (#2999 is the runtime-primitive blocker). No item was closed to lower the count.
+`gh issue list -l bug --state open` → **4** (#3152, #3141, #2999, #1527),
+`gh pr list -l bug --state open` → 0. Combined **4**.
+
+An earlier pass of this doc read 5: #1419 (bundled Bun SIGTRAP) was closed by the maintainer at
+2026-09-02T02:43Z as completed — the bundled Bun moved to 1.4.0, with a reopen invitation if it
+recurs. That closure was not made by this loop and not made to lower the count; it is the
+platform fix the blocker was waiting for. The four remaining are the recorded blockers from 072,
+each with a maintainer comment naming the evidence it needs and `needs-info` where the
+reporter owns the next step (#2999 is the runtime-primitive blocker).
+
+`origin/dev` has since moved past `2cb592174` with feature/docs landings by the maintainer
+(#3222, #3230, #3231, #3225); none carries the bug label and none is in this campaign's scope.
+The CI verdict below is pinned to `2cb592174`, the last commit this campaign put on `dev`.
 
 ## Landings since regaudit2 (all ancestors of `origin/dev`)
 
