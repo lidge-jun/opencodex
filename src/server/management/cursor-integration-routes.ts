@@ -9,7 +9,7 @@
  * started — plus which active models will show Cursor's Reasoning and Context controls.
  */
 import { readRuntimePort } from "../../config/process-state";
-import { nativeContextLimits, nativeOpenAiContextTier, uniqueCatalogModelsForRawPublicList, visibleNativeSlugs } from "../../codex/catalog";
+import { filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextTier, uniqueCatalogModelsForRawPublicList, visibleNativeSlugs } from "../../codex/catalog";
 import { cursorLastSeen, type CursorSeen } from "../../integrations/cursor-seen";
 import { detectCursorInstalls, type CursorInstall } from "../../integrations/cursor-detect";
 import { configuredApiAuthToken, isApiAuthRequired, jsonResponse } from "../auth-cors";
@@ -55,7 +55,9 @@ export async function buildCursorIntegrationStatus(
   const apiKeyMode = isApiAuthRequired(config) || credentialConfigured ? "credential" : "placeholder";
 
   const limits = nativeContextLimits(config);
-  const goModels = await fetchAllModels(config);
+  // Same visibility rules as the raw /v1/models list Cursor will read: disabled models and
+  // provider allowlists drop out here too, or the prediction shows rows Cursor never gets.
+  const goModels = filterCatalogVisibleModels(await fetchAllModels(config), config);
   const ids = [
     ...visibleNativeSlugs(config),
     ...uniqueCatalogModelsForRawPublicList(goModels).map(model => model.alias ?? `${model.provider}/${model.id}`),

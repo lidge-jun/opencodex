@@ -187,4 +187,21 @@ describe("GET /api/native-integrations/cursor", () => {
       await server.stop(true);
     }
   });
+
+  test("a disabled model leaves the prediction the same way it leaves /v1/models", async () => {
+    seedCodexModelEntitlementsForTests("main", ["gpt-5.6-sol"]);
+    saveConfig({ ...statusConfig(), disabledModels: ["kimi/k3"] });
+    const server = startServer(0);
+    try {
+      const adminToken = readFileSync(join(testHome, "admin-api-token"), "utf8").trim();
+      const status = await fetch(new URL("/api/native-integrations/cursor", server.url), { headers: { "x-opencodex-api-key": adminToken } });
+      const body = await status.json() as { models: Array<{ id: string }> };
+      expect(body.models.some(model => model.id === "kimi/k3")).toBe(false);
+      const raw = await fetch(new URL("/v1/models", server.url), { headers: { "user-agent": "Cursor/3.18.25" } });
+      const list = await raw.json() as { data: Array<{ id: string }> };
+      expect(list.data.some(model => model.id === "kimi/k3")).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
 });
