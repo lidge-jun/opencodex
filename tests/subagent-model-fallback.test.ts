@@ -1026,6 +1026,46 @@ describe("subagent model fallback chain", () => {
     expect((parsed._rawBody as { model?: string }).model).toBe("alibaba-token-plan/qwen3.8-max");
   });
 
+  test("native-only encrypted fallback uses the configured subagent roster", () => {
+    const parsed = {
+      modelId: "xai/grok-4.5",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "xai/grok-4.5" },
+    };
+    const result = applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      cfg({
+        subagentModelFallback: undefined,
+        subagentModels: ["gpt-5.6-sol", "gpt-5.5"],
+      }),
+      "pool-a",
+      Date.now(),
+      true,
+    );
+    expect(result?.to).toBe("gpt-5.6-sol");
+    expect(parsed.modelId).toBe("gpt-5.6-sol");
+  });
+
+  test("native-only encrypted fallback stays disabled when the roster is unset", () => {
+    const parsed = {
+      modelId: "xai/grok-4.5",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "xai/grok-4.5" },
+    };
+    expect(applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      cfg({ subagentModelFallback: undefined }),
+      "pool-a",
+      Date.now(),
+      true,
+    )).toBeNull();
+    expect(parsed.modelId).toBe("xai/grok-4.5");
+  });
+
   test("applySubagentModelFallback is a no-op for main turns", () => {
     updateAccountQuota("pool-a", 95);
     const parsed = {
