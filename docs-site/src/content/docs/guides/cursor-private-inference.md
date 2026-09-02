@@ -34,6 +34,26 @@ Read this section first; it is the part people miss.
   and leave "Import data from existing Cursor installation" unchecked on first run unless
   you want your settings copied.
 
+## Identify the installed build
+
+Both builds are named "Cursor" in the Dock and share a bundle id, so check `product.json`:
+
+| Platform | product.json |
+|---|---|
+| macOS | `/Applications/Cursor Private Inference.app/Contents/Resources/app/product.json` |
+| Windows | `%LOCALAPPDATA%\\Programs\\cursor-private-inference\\resources\\app\\product.json` |
+| Linux | `<install root>/resources/app/product.json` (an AppImage must be extracted first) |
+
+`nameLong` is `"Cursor Private Inference"` for the local-agent build and `"Cursor"` for the
+regular one; `version` is the build (3.18.25 at the time of writing). The dashboard's
+Integrations > Cursor card runs the same check and lists what it found. Local mode is switched
+on inside the workbench bundle, not in `product.json`, so there is no flag to flip: if
+`nameLong` says regular Cursor, that install cannot reach a loopback gateway.
+
+The agent loop that talks to the gateway lives in one file under the same install root,
+`extensions/cursor-agent-exec/dist/main.js`. opencodex reads it (read-only, bounded) to learn
+Cursor's reasoning-effort table; see "Models and reasoning effort".
+
 ## Configure the gateway
 
 opencodex needs to be running (`ocx service status`). Then either of these works; both
@@ -54,8 +74,16 @@ rows you want.
 ```text
 CURSOR_LOCAL_AGENT_BASE_URL=http://127.0.0.1:10100/v1
 CURSOR_LOCAL_AGENT_API_KEY=opencodex-loopback
-CURSOR_LOCAL_AGENT_HEADERS=            # optional, extra headers as key=value pairs
+CURSOR_LOCAL_AGENT_HEADERS=            # optional, newline-separated "Header-Name: value" lines
 ```
+
+`CURSOR_LOCAL_AGENT_HEADERS` rejects `User-Agent` and unresolved `{...}` placeholders;
+`{gitOrgRepo}` and `{gitBranch}` are expanded.
+
+Precedence, highest first: per-model credentials → the gateway saved in Settings →
+`CURSOR_LOCAL_AGENT_*` → `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` (compatibility
+fallback). The environment does not override a saved gateway; clear it in Settings first if you
+intend to switch through the environment.
 
 Cursor Private Inference is a GUI app, so an interactive shell profile is not enough on
 its own; the variable has to be in the environment of whatever launches the app.
@@ -103,8 +131,13 @@ a **Reasoning** control:
 
 1. opencodex must advertise capabilities on the row (`api_types` plus a `capabilities`
    object). It does, from v2.41. Older proxies show the models but no effort control.
-2. The model id, after stripping everything up to the last `/`, must match Cursor's own
-   effort table. Cursor decides the ladder, not opencodex:
+2. The model id, after stripping everything up to the last `/` and any `@…` suffix, must
+   match Cursor's own effort table. That table is compiled into the app
+   (`extensions/cursor-agent-exec/dist/main.js`); opencodex reads it from the detected install
+   so the dashboard prediction follows a Cursor update, and the card says which build it read
+   or "static mirror" when none was found. Cursor decides the ladder, not opencodex, and no
+   `/v1/models` field can add a model to that table. The matrix below is the 3.18.25 snapshot
+   the static mirror carries:
 
 | Model id (after the last `/`) | Ladder Cursor shows | Wire field |
 |---|---|---|
@@ -117,9 +150,23 @@ a **Reasoning** control:
 | anything else, including `claude-fable-5-1`, `kimi-k3` | no control | — |
 
 So `anthropic/claude-opus-5` works, and opencodex's `max`/`ultra` tiers for GPT-5.6 are not
-reachable from this picker. For a model with no control, set a default in opencodex instead
-(`modelDefaultReasoningEfforts` on the provider); that default applies when Cursor sends no
-effort.
+reachable from this picker.
+
+### Models with no control
+
+`anthropic/claude-fable-5-1`, `cursor/kimi-k3`, and anything else outside the table get no
+Reasoning control, and Cursor logs one line per such id when the gateway advertises
+`supports_reasoning`: "Local provider advertises reasoning support for a model with no
+hardcoded Bottlerocket effort family". Two ways to still choose an effort:
+
+- **Effort rows** (`cursorEffortRows: true` in the opencodex config, default off): the gateway
+  publishes one picker entry per effort for table-less models, such as
+  `anthropic/claude-fable-5-1--high` or `cursor/kimi-k3--max`, and routes each to the base
+  model with that effort applied. Models Cursor already renders get no extra rows, and an exact
+  known model id always wins over the `--<effort>` suffix. Press Refresh model list after
+  turning it on. The dashboard card counts the rows it published per model.
+- **A fixed default** (`modelDefaultReasoningEfforts` on the provider): applies when Cursor
+  sends no effort.
 
 ### "Max" is two different things
 
@@ -137,6 +184,13 @@ and the GPT-5.6 entry stops at Extra High.
 Because opencodex advertises `responses` in `api_types`, this build sends agent turns to
 `/v1/responses` with `reasoning.effort`, not to `/v1/chat/completions`.
 
+That wire choice has a side effect for Claude rows: Cursor sends Claude effort only as
+`output_config.effort` on the Anthropic Messages wire, so with a `/v1` Base URL a Claude row
+that does show a control still runs at the provider default. A Base URL ending in `/messages`
+reverses it: Claude effort is sent and OpenAI-family effort is dropped. One gateway entry cannot
+serve both families; effort rows (above) side-step this because opencodex applies the effort
+itself.
+
 ## Verify
 
 `ocx observe logs` shows the turns as `inboundProtocol: responses` with `admissionKind: loopback`.
@@ -145,6 +199,6 @@ Because opencodex advertises `responses` in `api_types`, this build sends agent 
 |---|---|
 | 401 from the gateway | the API Key does not match `OPENCODEX_API_AUTH_TOKEN`; for a loopback bind without API auth any value works |
 | picker is empty | opencodex is not running, or the Base URL is missing `/v1`; press Refresh model list after fixing |
-| models listed but no Reasoning control | opencodex older than v2.41, or the model id is not in the table above |
-| a schema change is not picked up | Cursor caches `/models` per Base URL string; restart the app, or temporarily save a different spelling of the URL (`localhost` vs `127.0.0.1`) and refresh |
+| models listed but no Reasoning control | opencodex older than v2.41, or the id is not in Cursor's table (the dashboard marks it —); turn on `cursorEffortRows` or set a provider default |
+| a schema change is not picked up | Cursor caches `/models` per Base URL string with no expiry; Refresh model list re-reads it, otherwise restart the app or temporarily save a different spelling of the URL (`localhost` vs `127.0.0.1`) |
 | 23k-token first turn | expected; that is Cursor's local system prompt |
