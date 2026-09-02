@@ -1528,6 +1528,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               inputModalities: nativeInputModalities(metadataId),
             }),
           });
+        // Resolved once per request, not per model: the global fast switch offers the fast
+        // identity to clients that have no Fast toggle of their own. Null when the switch is
+        // off, so the row mapper does no work and loads no adapter module.
+        const cursorFastIdForListing = config.fastMode === true
+          ? await (async () => {
+            const { cursorFastIdFor } = await import("../adapters/cursor/catalog");
+            return (modelId: string, provider = "cursor") => provider === "cursor" ? cursorFastIdFor(modelId) : undefined;
+          })()
+          : null;
         // Selector-active discovery follows the same complete supported set as the Codex catalog
         // for both bare and qualified rows. Without selectors, the live catalog continues to own
         // bare availability.
@@ -1555,9 +1564,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             // Same rule as the anthropic branch: with the global fast switch on, a client
             // that has no Fast toggle is offered the fast identity directly. An operator
             // alias is an explicit decision and still wins.
-            const fastModelId = config.fastMode === true && m.provider === "cursor"
-              ? (await import("../adapters/cursor/catalog")).cursorFastIdFor(m.id)
-              : undefined;
+            const fastModelId = cursorFastIdForListing?.(m.id, m.provider);
             const publicId = m.alias ?? `${m.provider}/${fastModelId ?? m.id}`;
             const isCombo = m.provider === "combo" && exactComboSlugs.has(publicId);
             const provider = config.providers[m.provider];
