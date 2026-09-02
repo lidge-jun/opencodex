@@ -13,7 +13,7 @@ import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../src/providers/re
 import { providerConfigSeed } from "../src/providers/derive";
 import type { OcxProviderConfig } from "../src/types";
 
-const MUSE_MODEL = "muse-spark-1.2-contributor";
+const MUSE_MODELS = ["muse-spark-1.2-contributor", "muse-spark-1.3-contributor"] as const;
 const MUSE_CONTEXT = 1_048_576;
 
 /** Seeded OpenCode Go provider config for the Muse Spark context assertions. */
@@ -26,29 +26,37 @@ function opencodeGo(): OcxProviderConfig {
 describe("OpenCode Go Muse Spark context window", () => {
   test("registry declares the 1M context window for Muse", () => {
     const entry = PROVIDER_REGISTRY.find(e => e.id === "opencode-go");
-    expect(entry?.modelContextWindows?.[MUSE_MODEL]).toBe(MUSE_CONTEXT);
+    for (const m of MUSE_MODELS) {
+      expect(entry?.modelContextWindows?.[m]).toBe(MUSE_CONTEXT);
+    }
   });
 
   test("the registry seed carries the 1M context window for Muse", () => {
     const prov = opencodeGo();
-    expect(prov.modelContextWindows?.[MUSE_MODEL]).toBe(MUSE_CONTEXT);
+    for (const m of MUSE_MODELS) {
+      expect(prov.modelContextWindows?.[m]).toBe(MUSE_CONTEXT);
+    }
   });
 
   test("applyProviderConfigHints exposes the 1M context window for Muse", () => {
     const prov = opencodeGo();
-    const hinted = applyProviderConfigHints("opencode-go", prov, {
-      id: MUSE_MODEL,
-      provider: "opencode-go",
-    });
-    expect(hinted.contextWindow).toBe(MUSE_CONTEXT);
+    for (const m of MUSE_MODELS) {
+      const hinted = applyProviderConfigHints("opencode-go", prov, {
+        id: m,
+        provider: "opencode-go",
+      });
+      expect(hinted.contextWindow).toBe(MUSE_CONTEXT);
+    }
   });
 
   test("a discovered row with no window inherits the configured 1M window", () => {
     const prov = opencodeGo();
-    const hinted = applyProviderConfigHints("opencode-go", prov, {
-      id: MUSE_MODEL,
-      provider: "opencode-go",
-    });
-    expect(hinted.contextWindow).toBe(MUSE_CONTEXT);
+    for (const m of MUSE_MODELS) {
+      const hinted = applyProviderConfigHints("opencode-go", prov, {
+        id: m,
+        provider: "opencode-go",
+      });
+      expect(hinted.contextWindow).toBe(MUSE_CONTEXT);
+    }
   });
 });

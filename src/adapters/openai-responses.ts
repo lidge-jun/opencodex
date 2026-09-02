@@ -1976,7 +1976,10 @@ export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
  */
 function stripMuseSparkUnsupportedWebSearchFields(body: unknown, modelId: unknown): unknown {
   if (!isPlainObject(body)) return body;
-  if (typeof modelId !== "string" || modelId.trim().toLowerCase() !== "muse-spark-1.2-contributor") return body;
+  if (typeof modelId !== "string") return body;
+  const normalized = modelId.trim().toLowerCase();
+  const slug = normalized.includes("/") ? normalized.split("/").pop()! : normalized;
+  if (!slug.startsWith("muse-spark")) return body;
 
   const rewriteTools = (tools: unknown[]): { tools: unknown[]; changed: boolean } => {
     let changed = false;

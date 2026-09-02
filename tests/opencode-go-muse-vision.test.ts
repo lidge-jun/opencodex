@@ -14,7 +14,7 @@ import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../src/providers/re
 import { providerConfigSeed } from "../src/providers/derive";
 import type { OcxProviderConfig } from "../src/types";
 
-const MUSE_MODEL = "muse-spark-1.2-contributor";
+const MUSE_MODELS = ["muse-spark-1.2-contributor", "muse-spark-1.3-contributor"] as const;
 
 /** Seeded OpenCode Go provider config for the Muse Spark vision assertions. */
 function opencodeGo(): OcxProviderConfig {
@@ -26,27 +26,35 @@ function opencodeGo(): OcxProviderConfig {
 describe("OpenCode Go Muse Spark image input (#vision)", () => {
   test("registry declares Muse as text+image", () => {
     const entry = PROVIDER_REGISTRY.find(e => e.id === "opencode-go");
-    expect(entry?.modelInputModalities?.[MUSE_MODEL]).toEqual(["text", "image"]);
+    for (const m of MUSE_MODELS) {
+      expect(entry?.modelInputModalities?.[m]).toEqual(["text", "image"]);
+    }
   });
 
   test("the registry seed carries Muse as text+image", () => {
     const prov = opencodeGo();
-    expect(prov.modelInputModalities?.[MUSE_MODEL]).toEqual(["text", "image"]);
+    for (const m of MUSE_MODELS) {
+      expect(prov.modelInputModalities?.[m]).toEqual(["text", "image"]);
+    }
   });
 
   test("applyProviderConfigHints advertises image input for Muse", () => {
     const prov = opencodeGo();
-    const hinted = applyProviderConfigHints("opencode-go", prov, {
-      id: MUSE_MODEL,
-      provider: "opencode-go",
-    });
-    expect(hinted.inputModalities).toEqual(["text", "image"]);
+    for (const m of MUSE_MODELS) {
+      const hinted = applyProviderConfigHints("opencode-go", prov, {
+        id: m,
+        provider: "opencode-go",
+      });
+      expect(hinted.inputModalities).toEqual(["text", "image"]);
+    }
   });
 
   test("Muse is NOT in noVisionModels (it is natively multimodal, not sidecar-only)", () => {
     const prov = opencodeGo();
-    expect(prov.noVisionModels ?? []).not.toContain(MUSE_MODEL);
-    expect(prov.modelInputModalities?.[MUSE_MODEL]).toEqual(["text", "image"]);
+    for (const m of MUSE_MODELS) {
+      expect(prov.noVisionModels ?? []).not.toContain(m);
+      expect(prov.modelInputModalities?.[m]).toEqual(["text", "image"]);
+    }
   });
 
   // The registry declaration only matters if it survives a live discovery row that
@@ -57,20 +65,24 @@ describe("OpenCode Go Muse Spark image input (#vision)", () => {
   // still blocked image attachments in production.
   test("the configured declaration overrides a text-only discovered row", () => {
     const prov = opencodeGo();
-    const hinted = applyProviderConfigHints("opencode-go", prov, {
-      id: MUSE_MODEL,
-      provider: "opencode-go",
-      inputModalities: ["text"],
-    });
-    expect(hinted.inputModalities).toEqual(["text", "image"]);
+    for (const m of MUSE_MODELS) {
+      const hinted = applyProviderConfigHints("opencode-go", prov, {
+        id: m,
+        provider: "opencode-go",
+        inputModalities: ["text"],
+      });
+      expect(hinted.inputModalities).toEqual(["text", "image"]);
+    }
   });
 
   test("the configured declaration fills in a discovered row with no modalities", () => {
     const prov = opencodeGo();
-    const hinted = applyProviderConfigHints("opencode-go", prov, {
-      id: MUSE_MODEL,
-      provider: "opencode-go",
-    });
-    expect(hinted.inputModalities).toEqual(["text", "image"]);
+    for (const m of MUSE_MODELS) {
+      const hinted = applyProviderConfigHints("opencode-go", prov, {
+        id: m,
+        provider: "opencode-go",
+      });
+      expect(hinted.inputModalities).toEqual(["text", "image"]);
+    }
   });
 });

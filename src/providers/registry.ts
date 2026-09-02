@@ -1487,7 +1487,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     - 다른 대안 대신 이 방식을 선택한 이유: OpenCode Go documents sibling models on Chat or Anthropic endpoints, and an exact registry default preserves both those routes and explicit opt-out precedence.
     - 장점, 단점 및 영향: Each listed model reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
     */
-    modelWireDefaults: { "gpt-5.6-luna": "openai-responses", "muse-spark-1.2-contributor": "openai-responses" },
+    modelWireDefaults: { "gpt-5.6-luna": "openai-responses", "muse-spark-1.2-contributor": "openai-responses", "muse-spark-1.3-contributor": "openai-responses" },
     modelContextWindows: {
       "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
       // The DeepSeek vision preview id is metadata-only here: the Go roster is
@@ -1497,6 +1497,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       // /responses on Zen Go, matching its 1.1 sibling (Meta developer docs, verified 2026-08-28).
       // Without this declaration the catalog falls back to 128k, capping real usable context.
       "muse-spark-1.2-contributor": 1_048_576,
+      "muse-spark-1.3-contributor": 1_048_576,
     },
     modelInputModalities: {
       "kimi-k3": ["text", "image"],
@@ -1507,6 +1508,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       // advertises it text-only and the Codex app blocks image attachments client-side with
       // "This model does not support image inputs" before the request ever reaches the proxy.
       "muse-spark-1.2-contributor": ["text", "image"],
+      "muse-spark-1.3-contributor": ["text", "image"],
     },
     modelReasoningEfforts: {
       "gpt-5.6-luna": OPENAI_API_GPT56_REASONING_EFFORTS,
@@ -3040,7 +3042,14 @@ export function providerModelWireDefault(
   if (!allowedWires.has(provider.adapter)) return undefined;
   const entry = getProviderRegistryEntry(id);
   if (!entry?.modelWireDefaults || !providerMatchesRegistryTransport(id, provider)) return undefined;
-  const declared = entry.modelWireDefaults[modelId.trim().toLowerCase()];
+  let declared = entry.modelWireDefaults[modelId.trim().toLowerCase()];
+  if (declared === undefined) {
+    const trimmed = modelId.trim().toLowerCase();
+    const slug = trimmed.includes("/") ? trimmed.split("/").pop()! : trimmed;
+    if (id === "opencode-go" && slug.startsWith("muse-spark")) {
+      declared = "openai-responses";
+    }
+  }
   if (declared === undefined) return undefined;
   // A bare string applies to every inbound/auth mode; the object form may narrow either.
   if (typeof declared !== "string") {

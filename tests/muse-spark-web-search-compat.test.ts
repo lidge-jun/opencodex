@@ -46,6 +46,14 @@ const toolsOf = (body: Record<string, unknown>) => body.tools as Array<Record<st
  * guard rather than a symptom patch — the tool type and every other accepted option survive.
  */
 describe("#2617 Muse Spark web_search compatibility", () => {
+    test("drops search_content_types for muse-spark-1.3-contributor too", () => {
+    const body = build("muse-spark-1.3-contributor", { tools: [webSearchTool()] });
+    const tool = toolsOf(body)[0]!;
+    expect(tool.type).toBe("web_search");
+    expect(tool.search_context_size).toBe("medium");
+    expect(Object.hasOwn(tool, "search_content_types")).toBe(false);
+  });
+
   test("drops search_content_types from a plain web_search, keeping the tool and its other fields", () => {
     const body = build("muse-spark-1.2-contributor", { tools: [webSearchTool()] });
     const tool = toolsOf(body)[0]!;

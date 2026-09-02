@@ -1,3 +1,4 @@
+import { modelRecordValue } from "../reasoning-effort";
 import { createRegisteredAdapter } from "../adapters/registry";
 import type { OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
@@ -29,7 +30,7 @@ export function resolveWireProtocolOverride(
   }
   // Re-check the allow-list here, not just in the config validator: the file may have
   // been hand-edited, or written by a build that allowed more values.
-  const configured = providerConfig.modelAdapters?.[modelId];
+  const configured = modelRecordValue(providerConfig.modelAdapters, modelId);
   // An explicit allowed override wins, including one naming the provider-wide adapter (the
   // opt-out from a registry default). Invalid hand-edited values fall through to the default.
   const requested = configured && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configured)

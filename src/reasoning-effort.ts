@@ -124,6 +124,12 @@ export function modelRecordValue<T>(record: Record<string, T> | undefined, model
   for (const [key, value] of Object.entries(record)) {
     if (key.toLowerCase() === folded) return value;
   }
+  const slug = folded.includes("/") ? folded.split("/").pop()! : folded;
+  if (slug.startsWith("muse-spark")) {
+    for (const [key, value] of Object.entries(record)) {
+      if (key.toLowerCase().startsWith("muse-spark")) return value;
+    }
+  }
   return undefined;
 }
 
