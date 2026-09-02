@@ -120,20 +120,35 @@ export type ListenTarget = {
   dashboardUrl: string;
 };
 
+type StatusListenConfig = Pick<OcxConfig, "port" | "hostname" | "runtimeRole" | "hub">;
+
+function statusDashboardUrl(config: StatusListenConfig, hostname: string | undefined, port: number): string {
+  const managementOrigin = config.runtimeRole === "hub" ? config.hub?.managementPublicOrigin : undefined;
+  if (managementOrigin) return managementOrigin.endsWith("/") ? managementOrigin : `${managementOrigin}/`;
+
+  const reachableHostname = probeHostname(hostname);
+  const dashboardHostname = reachableHostname === "127.0.0.1"
+    || reachableHostname === "[::1]"
+    || reachableHostname.toLowerCase() === "localhost"
+    ? "localhost"
+    : reachableHostname;
+  return `http://${dashboardHostname}:${port}/`;
+}
+
 export function selectListenTarget(
-  config: Pick<OcxConfig, "port" | "hostname">,
+  config: StatusListenConfig,
   pid: number | null,
   runtimePort: RuntimePortState | null,
 ): ListenTarget {
   const currentRuntimePort = pid && runtimePort?.pid === pid ? runtimePort : null;
   const port = currentRuntimePort ? currentRuntimePort.port : config.port ?? 10100;
-  const hostname = currentRuntimePort ? currentRuntimePort.hostname : config.hostname;
+  const hostname = currentRuntimePort?.hostname ?? config.hostname;
   return {
     port,
     hostname,
     source: currentRuntimePort ? "runtime" : "config",
     healthUrl: `http://${probeHostname(hostname)}:${port}/healthz`,
-    dashboardUrl: `http://localhost:${port}/`,
+    dashboardUrl: statusDashboardUrl(config, hostname, port),
   };
 }
 
@@ -341,7 +356,7 @@ export async function collectStatus(): Promise<CliStatusView> {
       hostname: live.hostname,
       source: live.source,
       healthUrl: `http://${probeHostname(live.hostname)}:${live.port}/healthz`,
-      dashboardUrl: `http://localhost:${live.port}/`,
+      dashboardUrl: statusDashboardUrl(config, live.hostname, live.port),
     }
     : selectListenTarget(config, pidFile, pidFile ? readRuntimePort(pidFile) : null);
   // findLiveProxy already identity-probed /healthz; avoid a second fetch that can race.

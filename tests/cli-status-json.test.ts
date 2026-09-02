@@ -300,6 +300,41 @@ describe("CLI status JSON", () => {
     expect(target.dashboardUrl).toBe("http://localhost:58195/");
   });
 
+  test("listen target keeps the loopback dashboard URL unchanged", () => {
+    const target = selectListenTarget(
+      { port: 10100, hostname: "127.0.0.1" },
+      null,
+      null,
+    );
+
+    expect(target.dashboardUrl).toBe("http://localhost:10100/");
+  });
+
+  test("hub listen target prefers its management public origin", () => {
+    const target = selectListenTarget(
+      {
+        port: 10100,
+        hostname: "100.64.0.10",
+        runtimeRole: "hub",
+        hub: { managementPublicOrigin: "https://hub.example.test" },
+      },
+      null,
+      null,
+    );
+
+    expect(target.dashboardUrl).toBe("https://hub.example.test/");
+  });
+
+  test("non-loopback listen target uses its configured hostname", () => {
+    const target = selectListenTarget(
+      { port: 10100, hostname: "100.64.0.11" },
+      null,
+      null,
+    );
+
+    expect(target.dashboardUrl).toBe("http://100.64.0.11:10100/");
+  });
+
   test("resolveStatusPid preserves an authoritative null from live orphan checks", () => {
     expect(resolveStatusPid({ pid: null }, 4242)).toBeNull();
     expect(resolveStatusPid({ pid: 1111 }, 4242)).toBe(1111);
