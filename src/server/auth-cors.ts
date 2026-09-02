@@ -749,13 +749,107 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
   if (value !== undefined) out[key as string] = value as unknown;
 }
 
-/** Public dashboard DTO for config.json: provider entries with secrets stripped and documented fields exposed (including `modelCosts`). */
-export function safeConfigDTO(config: OcxConfig): unknown {
-  const providers: Record<string, Record<string, unknown>> = {};
+export const PROVIDER_EDITOR_FIELDS = [
+  "adapter",
+  "baseUrl",
+  "defaultModel",
+  "models",
+  "liveModels",
+  "upstreamHttpVersion",
+  "reasoningWireFormat",
+  "authMode",
+  "keyOptional",
+  "disabled",
+  "codexAccountMode",
+] as const satisfies readonly (keyof OcxProviderConfig)[];
+
+type ProviderEditorField = typeof PROVIDER_EDITOR_FIELDS[number];
+export type ProviderEditorProviderDTO = Pick<OcxProviderConfig, ProviderEditorField>;
+
+export interface ProviderEditorConfigDTO {
+  defaultProvider: string;
+  providers: Record<string, ProviderEditorProviderDTO>;
+}
+
+export type ProviderEditorConfigParseResult =
+  | { ok: true; value: ProviderEditorConfigDTO }
+  | { ok: false; error: string; code: "invalid_provider_editor_body" | "invalid_provider_editor_field" };
+
+const PROVIDER_EDITOR_FIELD_SET = new Set<string>(PROVIDER_EDITOR_FIELDS);
+
+function isPlainDataRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * The only provider shape the raw GUI editor may round-trip. Presence markers and
+ * registry-derived display fields are deliberately absent: they are observations,
+ * never write authority.
+ */
+export function providerEditorConfigDTO(config: OcxConfig): ProviderEditorConfigDTO {
+  const providers: Record<string, ProviderEditorProviderDTO> = Object.create(null);
   for (const [name, provider] of Object.entries(config.providers)) {
     const dto: Record<string, unknown> = {
       adapter: provider.adapter,
       baseUrl: publicProviderBaseUrl(provider.baseUrl),
+    };
+    for (const key of PROVIDER_EDITOR_FIELDS) {
+      if (key === "adapter" || key === "baseUrl" || key === "codexAccountMode") continue;
+      copyIfDefined(dto, provider, key);
+    }
+    const codexAccountMode = providerCodexAccountMode(name, provider);
+    if (codexAccountMode) dto.codexAccountMode = codexAccountMode;
+    providers[name] = dto as ProviderEditorProviderDTO;
+  }
+  return { defaultProvider: config.defaultProvider, providers };
+}
+
+/** Strictly parse an editor snapshot; unknown/derived fields fail closed. */
+export function parseProviderEditorConfigDTO(value: unknown): ProviderEditorConfigParseResult {
+  if (!isPlainDataRecord(value)) {
+    return { ok: false, error: "provider editor config must be a plain object", code: "invalid_provider_editor_body" };
+  }
+  const rootKeys = Object.keys(value);
+  if (rootKeys.length !== 2 || !Object.hasOwn(value, "defaultProvider") || !Object.hasOwn(value, "providers")) {
+    return { ok: false, error: "provider editor config must contain only defaultProvider and providers", code: "invalid_provider_editor_body" };
+  }
+  if (typeof value.defaultProvider !== "string" || value.defaultProvider.trim() === "") {
+    return { ok: false, error: "defaultProvider must be a non-empty string", code: "invalid_provider_editor_body" };
+  }
+  if (!isPlainDataRecord(value.providers)) {
+    return { ok: false, error: "providers must be a plain object", code: "invalid_provider_editor_body" };
+  }
+
+  const providers: Record<string, ProviderEditorProviderDTO> = Object.create(null);
+  for (const [name, provider] of Object.entries(value.providers)) {
+    if (!isPlainDataRecord(provider)) {
+      return { ok: false, error: `provider ${JSON.stringify(redactSecretString(name))} must be a plain object`, code: "invalid_provider_editor_body" };
+    }
+    const unknownField = Object.keys(provider).find(field => !PROVIDER_EDITOR_FIELD_SET.has(field));
+    if (unknownField) {
+      return {
+        ok: false,
+        error: `provider ${JSON.stringify(redactSecretString(name))} contains non-editable field ${JSON.stringify(redactSecretString(unknownField))}`,
+        code: "invalid_provider_editor_field",
+      };
+    }
+    providers[name] = structuredClone(provider) as ProviderEditorProviderDTO;
+  }
+  return {
+    ok: true,
+    value: { defaultProvider: value.defaultProvider, providers },
+  };
+}
+
+/** Public dashboard DTO for config.json: provider entries with secrets stripped and documented fields exposed (including `modelCosts`). */
+export function safeConfigDTO(config: OcxConfig): unknown {
+  const editor = providerEditorConfigDTO(config);
+  const providers: Record<string, Record<string, unknown>> = {};
+  for (const [name, provider] of Object.entries(config.providers)) {
+    const dto: Record<string, unknown> = {
+      ...editor.providers[name],
       hasApiKey: !!provider.apiKey,
       hasHeaders: !!provider.headers && Object.keys(provider.headers).length > 0,
     };

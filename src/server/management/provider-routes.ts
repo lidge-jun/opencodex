@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { clearGatherRoutedModelsInflight } from "../../codex/catalog/provider-fetch";
@@ -11,6 +12,7 @@ import {
   isValidProviderName,
   modelDisplayNamesConfigError,
   multiAgentGuidanceEnabled,
+  mutatePersistedConfig,
   nonBlankStringArrayConfigError,
   normalizeNonBlankStringArray,
   providerBaseUrlConfigError,
@@ -19,6 +21,7 @@ import {
   readConfigAdmissionSnapshot,
   saveConfigPreservingClaudeCode,
   upstreamHttpVersionConfigError,
+  validateConfigCandidate,
   withConfigMutationLockSync,
 } from "../../config";
 import {
@@ -77,7 +80,18 @@ import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
-import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
+import {
+  isAllowedRequestOrigin,
+  jsonResponse,
+  parseProviderEditorConfigDTO,
+  PROVIDER_EDITOR_FIELDS,
+  providerEditorConfigDTO,
+  providerManagementConfigError,
+  publicProviderBaseUrl,
+  safeConfigDTO,
+  type ProviderEditorConfigDTO,
+  type ProviderEditorProviderDTO,
+} from "../auth-cors";
 import { providerServiceTierConfigError } from "./provider-capability-config";
 import { providerEmptyToolOutputConfigError } from "../../config/provider-validation";
 import { applySystemEnvToggle } from "../system-env";
@@ -86,10 +100,12 @@ import {
   LOCAL_PROVIDER_RELOAD_PATH,
 } from "../../lib/local-provider-reload-contract";
 import { refreshUserCostOverlays } from "../../usage/user-cost-overlays";
+import { redactSecretString } from "../../lib/redact";
 import {
   XAI_RESPONSES_OPT_IN_MODELS,
   xaiResponsesOptInState,
 } from "../../providers/xai-responses-opt-in";
+import { dropProviderCustomModels } from "../../providers/provider-id-rewrite";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -161,6 +177,103 @@ function restorePersistedAliasOverlays(target: OcxProviderConfig, existing: OcxP
       ? structuredClone(value)
       : value;
   }
+}
+
+type ProviderEditorCandidateResult =
+  | { ok: true; config: OcxConfig; removedProviders: string[] }
+  | { ok: false; status: 400 | 409; error: string; code: string };
+
+type ProviderEditorMutationValue = ProviderEditorCandidateResult;
+
+function mergeProviderEditorRow(
+  persisted: OcxProviderConfig | undefined,
+  next: ProviderEditorProviderDTO,
+): OcxProviderConfig {
+  const merged = structuredClone(persisted ?? {}) as Record<string, unknown>;
+  for (const field of PROVIDER_EDITOR_FIELDS) delete merged[field];
+  for (const [field, value] of Object.entries(next)) merged[field] = structuredClone(value);
+  return merged as unknown as OcxProviderConfig;
+}
+
+/** Build and validate a complete candidate without mutating the caller's snapshot. */
+function providerEditorCandidate(
+  persisted: OcxConfig,
+  next: ProviderEditorConfigDTO,
+): ProviderEditorCandidateResult {
+  const candidate = structuredClone(persisted);
+  const removedProviders = Object.keys(persisted.providers)
+    .filter(name => !Object.hasOwn(next.providers, name));
+
+  for (const name of removedProviders) {
+    const dependentCombos = Object.entries(persisted.combos ?? {})
+      .filter(([, combo]) => combo.targets.some(target => target.provider === name))
+      .map(([id]) => id)
+      .sort((a, b) => a.localeCompare(b));
+    if (dependentCombos.length > 0) {
+      return {
+        ok: false,
+        status: 409,
+        error: `cannot delete provider ${JSON.stringify(redactSecretString(name))} while combos depend on it`,
+        code: "provider_has_dependent_combos",
+      };
+    }
+  }
+
+  const providers: Record<string, OcxProviderConfig> = Object.create(null);
+  for (const [name, publicProvider] of Object.entries(next.providers)) {
+    if (!isValidProviderName(name)) {
+      return {
+        ok: false,
+        status: 400,
+        error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key",
+        code: "invalid_provider_name",
+      };
+    }
+    const namespaceCollision = codexAccountNamespaceProviderCollisionError(candidate.codexAccountNamespaces, name);
+    if (namespaceCollision) return { ok: false, status: 409, error: namespaceCollision, code: "provider_namespace_conflict" };
+    const merged = mergeProviderEditorRow(persisted.providers[name], publicProvider);
+    const transportCandidate = providerTransportValidationCandidate(merged as unknown as Record<string, unknown>);
+    const providerError = providerManagementConfigError(name, transportCandidate)
+      ?? providerEmptyToolOutputConfigError(name, transportCandidate)
+      ?? providerServiceTierConfigError(name, transportCandidate);
+    if (providerError) return { ok: false, status: 400, error: providerError, code: "invalid_provider" };
+    providers[name] = merged;
+  }
+
+  const defaultProvider = next.defaultProvider.trim();
+  const selectedDefault = providers[defaultProvider];
+  if (!selectedDefault) {
+    return { ok: false, status: 400, error: "defaultProvider must name a configured provider", code: "invalid_default_provider" };
+  }
+  if (selectedDefault.disabled === true) {
+    return { ok: false, status: 400, error: "defaultProvider cannot be disabled", code: "default_provider_disabled" };
+  }
+
+  candidate.defaultProvider = defaultProvider;
+  candidate.providers = providers;
+  for (const name of removedProviders) {
+    dropProviderCustomModels(candidate, name);
+    setProviderContextCap(candidate, name, false);
+  }
+  const validated = validateConfigCandidate(candidate);
+  if (!validated.ok) {
+    return { ok: false, status: 400, error: validated.error, code: "invalid_provider_editor_config" };
+  }
+  return { ok: true, config: candidate, removedProviders };
+}
+
+function adoptProviderEditorCandidate(live: OcxConfig, persisted: OcxConfig): void {
+  live.defaultProvider = persisted.defaultProvider;
+  for (const name of Object.keys(live.providers)) {
+    if (!Object.hasOwn(persisted.providers, name)) delete live.providers[name];
+  }
+  for (const [name, provider] of Object.entries(persisted.providers)) {
+    live.providers[name] = structuredClone(provider);
+  }
+  if (persisted.customModels === undefined) delete live.customModels;
+  else live.customModels = structuredClone(persisted.customModels);
+  if (persisted.providerContextCaps === undefined) delete live.providerContextCaps;
+  else live.providerContextCaps = structuredClone(persisted.providerContextCaps);
 }
 
 /**
@@ -647,6 +760,98 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (name === "openai") (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
     const catalogRefresh = await convergeCodexCatalog();
     return jsonResponse({ success: true, name, catalogRefresh });
+  }
+
+  if (url.pathname === "/api/providers" && req.method === "PUT") {
+    let rawBody: unknown;
+    try {
+      rawBody = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    if (!isPlainRecord(rawBody)) {
+      return jsonResponse({ error: "provider batch body must be a plain object", code: "invalid_provider_editor_body" }, 400);
+    }
+    const bodyKeys = Object.keys(rawBody);
+    if (bodyKeys.length !== 2 || !Object.hasOwn(rawBody, "baseline") || !Object.hasOwn(rawBody, "next")) {
+      return jsonResponse({ error: "provider batch body must contain only baseline and next", code: "invalid_provider_editor_body" }, 400);
+    }
+    const baselineResult = parseProviderEditorConfigDTO(rawBody.baseline);
+    if (!baselineResult.ok) return jsonResponse({ error: baselineResult.error, code: baselineResult.code }, 400);
+    const nextResult = parseProviderEditorConfigDTO(rawBody.next);
+    if (!nextResult.ok) return jsonResponse({ error: nextResult.error, code: nextResult.code }, 400);
+
+    const observed = readConfigAdmissionSnapshot();
+    if (observed.kind !== "read" || observed.diagnostics.source !== "file" || observed.diagnostics.error !== null) {
+      return jsonResponse({ error: "provider config is unavailable", code: "provider_config_unavailable" }, 409);
+    }
+    if (!isDeepStrictEqual(providerEditorConfigDTO(observed.diagnostics.config), baselineResult.value)) {
+      return jsonResponse({ error: "provider editor baseline is stale", code: "stale_provider_editor_baseline" }, 409);
+    }
+    const preview = providerEditorCandidate(observed.diagnostics.config, nextResult.value);
+    if (!preview.ok) return jsonResponse({ error: preview.error, code: preview.code }, preview.status);
+
+    // DNS/SSRF validation happens before the persistence callback. The callback repeats every
+    // synchronous check against a fresh snapshot and rejects a changed baseline, so this awaited
+    // phase can never authorize a stale provider set.
+    for (const [name, provider] of Object.entries(preview.config.providers)) {
+      const allowBenchmarkAddresses = name === "openai" && isCanonicalOpenAiForwardProvider(provider);
+      const resolvedError = await providerDestinationResolvedError(name, provider, { allowBenchmarkAddresses });
+      if (resolvedError) return jsonResponse({ error: resolvedError, code: "invalid_provider_destination" }, 400);
+    }
+
+    const outcome = mutatePersistedConfig<ProviderEditorMutationValue>(persisted => {
+      if (!isDeepStrictEqual(providerEditorConfigDTO(persisted), baselineResult.value)) {
+        return {
+          changed: false,
+          value: {
+            ok: false,
+            status: 409,
+            error: "provider editor baseline is stale",
+            code: "stale_provider_editor_baseline",
+          },
+        };
+      }
+      const candidate = providerEditorCandidate(persisted, nextResult.value);
+      if (!candidate.ok) return { changed: false, value: candidate };
+      const changed = !isDeepStrictEqual(providerEditorConfigDTO(persisted), nextResult.value);
+      if (!changed) return { changed: false, value: candidate };
+
+      persisted.defaultProvider = candidate.config.defaultProvider;
+      persisted.providers = structuredClone(candidate.config.providers);
+      for (const name of candidate.removedProviders) {
+        dropProviderCustomModels(persisted, name);
+        setProviderContextCap(persisted, name, false);
+      }
+      return {
+        changed: true,
+        value: {
+          ok: true,
+          config: structuredClone(persisted),
+          removedProviders: candidate.removedProviders,
+        },
+      };
+    });
+    if (outcome.status === "unavailable") {
+      const code = outcome.reason === "conflict" ? "provider_config_conflict" : "provider_config_unavailable";
+      return jsonResponse({ error: "provider config changed before it could be saved", code }, 409);
+    }
+    if (!outcome.value.ok) {
+      return jsonResponse({ error: outcome.value.error, code: outcome.value.code }, outcome.value.status);
+    }
+
+    adoptProviderEditorCandidate(config, outcome.value.config);
+    reconcileLiveStateStores();
+    refreshUserCostOverlays(outcome.value.config);
+    clearGatherRoutedModelsInflight();
+    (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
+    clearAccountQuotaCache();
+    clearKeyCooldowns();
+    clearModelCache();
+    (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ success: true, catalogRefresh });
   }
 
   // Add (or overwrite) a single provider. Merges into the live in-memory config and
