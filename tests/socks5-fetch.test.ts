@@ -21,6 +21,7 @@ const proxyEnvKeys = [
 ] as const;
 const originalFetch = globalThis.fetch;
 const originalEnv = Object.fromEntries(proxyEnvKeys.map(key => [key, process.env[key]]));
+const openConnections = new WeakMap<object, Set<Socket>>();
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -33,6 +34,12 @@ afterEach(() => {
 });
 
 async function listen(server: TcpServer | ReturnType<typeof createHttpServer>): Promise<number> {
+  const sockets = new Set<Socket>();
+  openConnections.set(server, sockets);
+  server.on("connection", socket => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -41,6 +48,7 @@ async function listen(server: TcpServer | ReturnType<typeof createHttpServer>): 
 }
 
 async function close(server: TcpServer | ReturnType<typeof createHttpServer>): Promise<void> {
+  for (const socket of openConnections.get(server) ?? []) socket.destroy();
   await new Promise<void>(resolve => server.close(() => resolve()));
 }
 
@@ -405,7 +413,60 @@ describe("socks5Fetch", () => {
       expect(clientSocket.destroyed).toBe(true);
       expect(clientSocket.listenerCount("data")).toBe(0);
       expect(clientSocket.listenerCount("error")).toBe(0);
-      expect(clientSocket.listenerCount("end")).toBe(0);
+      expect(clientSocket.listenerCount("close")).toBe(0);
+    } finally {
+      net.createConnection = originalCreateConnection;
+      await Promise.all([close(proxy), close(target)]);
+    }
+  });
+
+  test("errors a huge declared chunk and releases the socket", async () => {
+    const originalCreateConnection = net.createConnection;
+    let clientSocket: Socket | undefined;
+    const target = createTcpServer(socket => {
+      socket.once("error", () => undefined);
+      let request = Buffer.alloc(0);
+      socket.on("data", chunk => {
+        request = Buffer.concat([request, chunk]);
+        if (!request.toString("latin1").includes("\r\n\r\n")) return;
+        socket.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n7fffffff\r\n");
+        socket.write(Buffer.alloc(8 * 1024, 0x62));
+      });
+    });
+    const proxy = socksProxy();
+    const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+    net.createConnection = ((...args: Parameters<typeof originalCreateConnection>) => {
+      const socket = originalCreateConnection(...(args as Parameters<typeof originalCreateConnection>));
+      const opts = args[0];
+      if (typeof opts === "object" && opts !== null && "port" in opts && Number(opts.port) === proxyPort) {
+        clientSocket = socket;
+      }
+      return socket;
+    }) as typeof net.createConnection;
+    try {
+      const response = await socks5Fetch(
+        `http://provider.invalid:${targetPort}/huge-chunk-error`,
+        undefined,
+        `socks5://127.0.0.1:${proxyPort}`,
+      );
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("huge chunked response had no body");
+      const pending = reader.read();
+      await Bun.sleep(50);
+      if (!clientSocket) throw new Error("SOCKS5 client socket was not captured");
+      clientSocket.destroy(new Error("test chunk stream failure"));
+      const outcome = await Promise.race([
+        pending.then(
+          result => result,
+          error => error,
+        ),
+        Bun.sleep(1_000).then(() => "timed out"),
+      ]);
+      expect(outcome).toBeInstanceOf(Error);
+      await Bun.sleep(50);
+      expect(clientSocket.destroyed).toBe(true);
+      expect(clientSocket.listenerCount("data")).toBe(0);
+      expect(clientSocket.listenerCount("error")).toBe(0);
       expect(clientSocket.listenerCount("close")).toBe(0);
     } finally {
       net.createConnection = originalCreateConnection;
