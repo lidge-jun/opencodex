@@ -45,3 +45,57 @@ clean stash of this branch, so none is caused by this unit:
 
 Not this unit's to fix. Recorded so a later cycle does not mistake them for a regression it
 introduced.
+
+## R5 — `agent-task-recovery` is red on dev itself (landing cycle, 2026-09-02)
+
+While landing this stack, `test 3/4` failed on the rebased PR #3222 head:
+
+```
+(fail) agent task recovery (opt-in, default off)
+      > keeps the disabled fail-fast response byte-identical to the absent feature
+  tests/agent-task-recovery.test.ts:53   Received: 502
+```
+
+Not caused by this stack. Reproduced on a DETACHED checkout of pure `origin/dev`
+HEAD `b54508c8c` (`fix(agents): allow Codexless V2 task recovery (#3241)`): same one
+failure, 18 pass / 1 fail. The surrounding commits `#3239` -> `#3240` -> `#3241` are a
+live repair chain in that area, so the red is theirs to close.
+
+Recorded so a later reader does not attribute it to the Cursor identity work, and so the
+landing decision is auditable: the stack was merged with this pre-existing failure present
+on the base branch, not introduced by it.
+
+**Closed 2026-09-02, by dev, not by this unit.** `#3242`
+(`revert(subagents): drop the synthesized native chain for encrypted spawns`) reverted
+`#3239` and `#3240`. On the resulting `origin/dev` the file is green:
+
+```
+$ bun test tests/agent-task-recovery.test.ts
+19 pass / 0 fail
+```
+
+The mechanism matches the diagnosis recorded above: the synthesized native chain rewrote
+`xai/grok-4.5` to `gpt-5.5` for BOTH the absent and the disabled config, so the final route
+was native and the honest 400 gate (`core.ts` "encrypted child tasks may only reach the
+canonical native backend") never fired - the request went out and the fixture's throwing
+`fetch` turned it into a 502. With the chain gone, `applySubagentModelFallback` returns
+`null` for all three config shapes and the 400 is restored. No follow-up PR needed.
+
+## Landing record (2026-09-02)
+
+The stack landed on `dev` in dependency order, each with exact-head CI green and ancestry
+proven by `git merge-base --is-ancestor` against a freshly fetched `origin/dev`:
+
+| PR | merged head | squash commit |
+|---|---|---|
+| #3222 umbrella seed + labels | `419e89625` | `7aa64bb0bf1700482c74064a4d7523a5a960cf11` |
+| #3225 cursor-variant Fast toggle | `61d6d38d9` | `83838e7fab0e2b1a23ab86dee4ef606f25eeb8d6` |
+| #3233 fastMode -fast listing | `f26169712` | `8d2dd66398450974e28ec158aed4a77862f0cdf7` |
+
+Maintainer `--admin` cleared only the `Protect dev` ruleset's review requirement. No red
+check was bypassed: every merged head reported zero FAILURE conclusions.
+
+Each child was re-stacked by CHERRY-PICKING its unique commits onto the landed parent, not
+by rebasing. A parent squash absorbs the child's content under a different commit id, so a
+plain rebase conflicts against work that is already in the base - the hazard the stacked-PR
+rules warn about, observed here on #3225.
