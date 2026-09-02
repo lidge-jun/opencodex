@@ -15,9 +15,16 @@ import { CONFIG_OWNER_FILE, CONFIG_UNINSTALL_MANIFEST, recordOwnedConfigPath, re
 import { serviceApiTokenFilePath } from "../src/lib/service-secrets";
 import { WindowsSchtasksError } from "../src/lib/windows-elevation";
 import { resolveCurrentWindowsPrincipal, setWindowsPrincipalRunnerForTests } from "../src/lib/windows-user-principal";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../src/types";
 
 const TEST_WINDOWS_TASK_SID = "S-1-5-21-111-222-333-1001";
+// The synthetic SID above exists nowhere. On a real Windows host every saveConfig() in this
+// file would hand it to a REAL icacls, which rejects the unknown principal (EICACLS) and
+// fails the config write. Stub both runners so the SID stays a scheduler-XML fixture only.
+const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+setIcaclsRunnerForTests(() => ICACLS_OK);
+setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
 setWindowsPrincipalRunnerForTests(() => ({
   success: true,
   exitCode: 0,
@@ -25,7 +32,11 @@ setWindowsPrincipalRunnerForTests(() => ({
   stdout: `${TEST_WINDOWS_TASK_SID}\nMACHINE\\tester\n`,
 }));
 resolveCurrentWindowsPrincipal(1_000);
-afterAll(() => { setWindowsPrincipalRunnerForTests(null); });
+afterAll(() => {
+  setWindowsPrincipalRunnerForTests(null);
+  setIcaclsRunnerForTests(null);
+  setAsyncIcaclsRunnerForTests(null);
+});
 
 const buildWindowsTaskXml = (...args: Parameters<typeof buildWindowsTaskXmlProduction>) =>
   buildWindowsTaskXmlProduction(args[0], args[1], args[2], args[3] ?? TEST_WINDOWS_TASK_SID);

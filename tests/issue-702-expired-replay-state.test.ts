@@ -10,6 +10,7 @@ import {
 import {
   clearResponseStateForTests,
   clearResponseStateMemoryForTests,
+  flushPendingResponseSpillsForTests,
   rememberResponseState,
   responseStateMetrics,
   setResponseStateByteCapForTests,
@@ -254,6 +255,9 @@ describe("Issue #702 expired forward replay state", () => {
       undefined,
       { force: true },
     );
+    // Windows publishes spills asynchronously; the case is about a spill that later goes
+    // MISSING, so let the publication settle before deleting it.
+    await flushPendingResponseSpillsForTests();
     const spillDir = responseSpillDirectory(testHome);
     const spill = readdirSync(spillDir).find(name => name.endsWith(".spill.json"));
     expect(spill).toBeDefined();
