@@ -67,7 +67,7 @@ import {
 } from "./models-shared";
 import { EmptyProviderHint } from "./models-provider-hints";
 import { shadowCallModelOptions } from "./dashboard-shared";
-import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
+import { shadowSourceModelBadge, shadowSourceModelList, shadowSourceModelLabel } from "./shadow-call-source";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -356,14 +356,21 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     () => activeModelOptions(models, disabled, selectedModels ?? {}, t),
     [models, disabled, selectedModels, t],
   );
-  const shadowCallOptions = useMemo(() => {
-    const activeNamespaced = new Set(shadowModelOptions.map(option => option.value));
-    return shadowCallModelOptions(
-      models.filter(model => activeNamespaced.has(model.namespaced)),
-      shadowCall?.model,
-      shadowCall?.sourceModels,
-    );
-  }, [models, shadowCall?.model, shadowCall?.sourceModels, shadowModelOptions]);
+ const shadowCallOptions = useMemo(() => {
+   const activeNamespaced = new Set(shadowModelOptions.map(option => option.value));
+   return shadowCallModelOptions(
+     models.filter(model => activeNamespaced.has(model.namespaced)),
+     shadowCall?.model,
+     shadowCall?.sourceModels,
+   );
+ }, [models, shadowCall?.model, shadowCall?.sourceModels, shadowModelOptions]);
+  const activeModels = useMemo(
+    () => {
+      const activeNamespaced = new Set(shadowModelOptions.map(option => option.value));
+      return models.filter(model => activeNamespaced.has(model.namespaced));
+    },
+    [models, shadowModelOptions],
+  );
 
   const loadShadowCall = useCallback(async () => {
     const bounded = createBoundedFetch(15_000);
@@ -1595,10 +1602,38 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip></span>
           <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
           <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
-          <div className="models-shadow-model-slot">
-            <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
-          </div>
-        </div>
+         <div className="models-shadow-model-slot">
+           <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
+         </div>
+       </div>
+        {shadowCall?.enabled && shadowSourceModelList(shadowCall?.sourceModels).map(sourceModel => {
+          const current = shadowCall?.modelMap?.[sourceModel] ?? "";
+         const perSourceOptions = shadowCallModelOptions(
+            activeModels,
+           current || undefined,
+           [sourceModel],
+         );
+          return (
+            <div key={sourceModel} className="models-shadow-row row muted text-control">
+              <code className="text-caption models-shadow-source-label" style={{ opacity: 0.6 }}>{sourceModel} →</code>
+              <div className="models-shadow-model-slot">
+                <Select
+                  value={current}
+                  options={perSourceOptions}
+                  onChange={v => {
+                    const next = { ...(shadowCall?.modelMap ?? {}) };
+                    if (v === "") delete next[sourceModel];
+                    else next[sourceModel] = v;
+                    setShadowCall(c => c ? { ...c, modelMap: next } : c);
+                    void saveShadowCall({ modelMap: next });
+                  }}
+                  disabled={!shadowCall || shadowCallSaving}
+                  label={sourceModel}
+                />
+              </div>
+            </div>
+          );
+        })}
 
         {(v2Loading || v2) && (
           <div className="models-v2-mode-row row">

@@ -8,7 +8,7 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, isShadowSourceModel } from "../src/server/responses";
-import { shouldInterceptShadowCall } from "../src/lib/shadow-call";
+import { shadowCallReplacementFor, shouldInterceptShadowCall } from "../src/lib/shadow-call";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { RequestLogContext } from "../src/server/request-log";
 import type { OcxConfig } from "../src/types";
@@ -27,15 +27,19 @@ describe("isShadowSourceModel", () => {
     expect(isShadowSourceModel("gpt-5.6-luna-2026-08")).toBe(true);
   });
 
-  test("does not match the legacy helper by default but supports an explicit override", () => {
-    expect(isShadowSourceModel("gpt-5.4-mini")).toBe(false);
+  test("matches the legacy helper as a default and supports an explicit override", () => {
+    // gpt-5.4-mini is now a default source model (Plan B expanded defaults).
+    expect(isShadowSourceModel("gpt-5.4-mini")).toBe(true);
     expect(isShadowSourceModel("gpt-5.4-mini", ["gpt-5.4-mini"])).toBe(true);
   });
 
-  test("does not match non-helper models", () => {
-    expect(isShadowSourceModel("gpt-5.6-terra")).toBe(false);
-    expect(isShadowSourceModel("gpt-5.5")).toBe(false);
-    expect(isShadowSourceModel("gpt-5.6-sol")).toBe(false);
+ test("does not match non-helper models", () => {
+    // luna/sol/terra/5.5/5.4-mini are all default shadow source models now.
+    expect(isShadowSourceModel("gpt-5.6-terra")).toBe(true);
+    expect(isShadowSourceModel("gpt-5.5")).toBe(true);
+    expect(isShadowSourceModel("gpt-5.6-sol")).toBe(true);
+    // a non-listed native id still does not match.
+    expect(isShadowSourceModel("gpt-5.4")).toBe(false);
   });
 
   test("hard-excludes slash-prefixed routed ids, even for configured overrides", () => {
@@ -67,11 +71,14 @@ describe("shouldInterceptShadowCall", () => {
     expect(shouldInterceptShadowCall("gpt-5.6-luna-2026-08", undefined, source, target)).toBe(true);
   });
 
-  test("does not intercept non-source models", () => {
-    const source = { providerName: "openai", modelId: "gpt-5.6-luna" };
-    const target = { providerName: "xai", modelId: "grok-4.5" };
-    expect(shouldInterceptShadowCall("gpt-5.6-terra", undefined, source, target)).toBe(false);
-    expect(shouldInterceptShadowCall("gpt-5.5", undefined, source, target)).toBe(false);
+ test("does not intercept non-source models", () => {
+   const source = { providerName: "openai", modelId: "gpt-5.6-luna" };
+   const target = { providerName: "xai", modelId: "grok-4.5" };
+    // terra/5.5 are now default source models, so they intercept.
+    expect(shouldInterceptShadowCall("gpt-5.6-terra", undefined, source, target)).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.5", undefined, source, target)).toBe(true);
+    // gpt-5.4 is not a default source model.
+    expect(shouldInterceptShadowCall("gpt-5.4", undefined, source, target)).toBe(false);
   });
 
   test("respects configured sourceModels override", () => {
@@ -235,18 +242,21 @@ describe("shadow call intercept request path (issue #311)", () => {
     expect(logCtx.shadowCallRewrittenFrom).toBe("gpt-5.4-mini");
   });
 
-  test("leaves gpt-5.6-terra requests unrewritten", async () => {
-    let sawFetch = false;
-    globalThis.fetch = (async () => {
-      sawFetch = true;
-      return new Response(JSON.stringify({ error: { message: "unreachable" } }), { status: 500 });
+  test("rewrites gpt-5.6-terra to the configured fallback model", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return new Response(JSON.stringify({
+        choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
 
     const response = await post(interceptConfig(), "gpt-5.6-terra");
-    // gpt-5.6-terra is not routable in this minimal config: the request must fail
-    // routing (404) BEFORE any upstream fetch — proving no shadow rewrite happened.
-    expect(sawFetch).toBe(false);
-    expect(response.status).toBe(404);
+    // terra is now a default source model; the shared `model` fallback rewrites it.
+    expect(response.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+    expect(String(bodies[0]?.model ?? "")).toContain("grok-4.5");
   });
 });
 
@@ -303,12 +313,12 @@ async function shadowApiResponse(config: OcxConfig, body: unknown): Promise<Resp
 }
 
 describe("shadow-call settings API reports the intercepted source models", () => {
-  test("GET reports the 0.145.0+ helper-model default", async () => {
-    await withTempHome(async () => {
-      const body = await shadowApi({ port: 0, defaultProvider: "xai", providers: {} } as OcxConfig, "GET");
-      expect(body.sourceModels).toEqual(["gpt-5.6-luna"]);
-    });
-  });
+ test("GET reports the 0.145.0+ helper-model default", async () => {
+   await withTempHome(async () => {
+     const body = await shadowApi({ port: 0, defaultProvider: "xai", providers: {} } as OcxConfig, "GET");
+      expect(body.sourceModels).toEqual(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4-mini"]);
+   });
+ });
 
   test("GET and PUT report a configured override instead of the defaults", async () => {
     await withTempHome(async () => {
@@ -350,7 +360,39 @@ describe("shadow-call settings API reports the intercepted source models", () =>
       const response = await shadowApiResponse(config, { enabled: true, model: "xai/custom-helper" });
 
       expect(response.status).toBe(400);
-      expect(config.shadowCallIntercept).toEqual({ sourceModels: ["custom-helper"] });
-    });
+     expect(config.shadowCallIntercept).toEqual({ sourceModels: ["custom-helper"] });
+   });
+ });
+});
+
+describe("shadowCallReplacementFor (Plan B per-source mapping)", () => {
+  test("prefers modelMap over the shared model fallback", () => {
+    const sci = { enabled: true, model: "xai/grok-4.5", modelMap: { "gpt-5.6-luna": "deepseek/deepseek-chat" } };
+    expect(shadowCallReplacementFor("gpt-5.6-luna", sci)).toBe("deepseek/deepseek-chat");
+    expect(shadowCallReplacementFor("gpt-5.6-sol", sci)).toBe("xai/grok-4.5");
+  });
+
+  test("returns undefined when no replacement is configured for the source", () => {
+    expect(shadowCallReplacementFor("gpt-5.6-luna", { enabled: true })).toBeUndefined();
+    const sci = { enabled: true, modelMap: { "gpt-5.6-luna": "xai/grok-4.5" } };
+    expect(shadowCallReplacementFor("gpt-5.6-terra", sci)).toBeUndefined();
+  });
+
+  test("each source routes to a different third-party model", () => {
+    const sci = {
+      enabled: true,
+      modelMap: {
+        "gpt-5.6-luna": "deepseek/deepseek-chat",
+        "gpt-5.6-sol": "anthropic/claude-opus-5",
+        "gpt-5.6-terra": "xai/grok-4.5",
+        "gpt-5.5": "google/gemini-3-pro",
+        "gpt-5.4-mini": "ollama/llama3",
+      },
+    };
+    expect(shadowCallReplacementFor("gpt-5.6-luna", sci)).toBe("deepseek/deepseek-chat");
+    expect(shadowCallReplacementFor("gpt-5.6-sol", sci)).toBe("anthropic/claude-opus-5");
+    expect(shadowCallReplacementFor("gpt-5.6-terra", sci)).toBe("xai/grok-4.5");
+    expect(shadowCallReplacementFor("gpt-5.5", sci)).toBe("google/gemini-3-pro");
+    expect(shadowCallReplacementFor("gpt-5.4-mini", sci)).toBe("ollama/llama3");
   });
 });

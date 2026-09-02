@@ -8,7 +8,7 @@ export type { MultiAgentGuidanceOptions, MultiAgentGuidanceDeps } from "./respon
 export { hasUnreadableEncryptedAgentTask, sanitizeEncryptedContentInPlace } from "./responses/encrypted-payload";
 export { COMPACT_RESPONSE_MAX_BYTES, bufferCompactResponse } from "./responses/compact";
 export { disableResponsesRequestTimeout, safeHostLabel, fetchWithHeaderTimeout } from "./responses/fetch-helpers";
-export { sidecarOutcomeRecorder, isShadowSourceModel, codexLogAccountId, usesCodexForwardPoolAuth, codexForwardTerminalOutcomeRecorder, decodeRequestErrorResponse, buildComboChildHeaders, linkAbortSignal } from "./responses/core";
+export { sidecarOutcomeRecorder, isShadowSourceModel, shadowCallReplacementFor, shadowSourceModels, codexLogAccountId, usesCodexForwardPoolAuth, codexForwardTerminalOutcomeRecorder, decodeRequestErrorResponse, buildComboChildHeaders, linkAbortSignal } from "./responses/core";
 export { handleResponses, handleResponsesWithPolicyFallback, rankPolicyFallbackCandidates } from "./responses/policy-fallback";
 export { adapterNeedsForcedContinuation } from "./responses/core";
 

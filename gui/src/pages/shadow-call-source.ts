@@ -6,7 +6,7 @@
  * The GUI renders whatever the runtime reports rather than a baked-in label;
  * this fallback only covers a runtime too old to send `sourceModels`.
  */
-const FALLBACK_SOURCE_MODELS = ["gpt-5.6-luna"];
+const FALLBACK_SOURCE_MODELS = ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5", "gpt-5.4-mini"];
 
 export function shadowSourceModelList(sourceModels?: string[]): string[] {
   const cleaned = Array.isArray(sourceModels)
