@@ -17,6 +17,15 @@ verbatim below. Amendments made at P of the wp3 cycle: (a) "table-less" must con
 as the static fallback, so the projection follows the installed bundle; (b) exact known full
 model ids take precedence over the synthetic grammar (open question 1 → yes).
 
+Amendment (c), audit blocker 1 (005): on `/v1/messages` reuse the existing `effortOverride`
+slot (`claude-messages.ts:603/649`, written as `output_config.effort` before translation and
+already respected by `anthropicToResponsesTranslation`) instead of injecting the internal
+Responses `reasoning.effort`: `effortOverride = effortRow?.effort ?? extractOcxEffortDirective(...)`.
+The `none` rung the lane worried about is never published as a row (Cursor's own ladders have
+no `none`; filter it from the row set), so the translator's exclusion of `none` is moot.
+Amendment (d): `tableLess` in the status route uses `predictCursorEffort(id, table, supportsReasoning).ladder === null`
+(wp1 landed the `supportsReasoning` parameter).
+
 ---
 
 No files were modified. The untracked `devlog/_plan/260902_cursor_bundle_effort_table/` appeared concurrently and was left untouched. No tests were run.
@@ -412,5 +421,4 @@ Do not run the repository-wide suite in this lane.
 - Should an exact real model ID ending in `--high` always beat the synthetic grammar, even after `cursorEffortRows` is enabled? Recommended: yes, once an exact-known-ID check can cover static, live, custom, combo, policy, and alias rows consistently.
 - Should the dashboard merely report `effortRows`, or render them inline under each table-less base? This lane recommends the API contract now and leaves presentation to the UI/UX lane.
 - Should synthetic rows be added for table-less aliases of otherwise table-matched models? Recommended: yes—the matcher sees the public ID, so an alias such as `opus` genuinely has no Cursor control.
-
 
