@@ -22,6 +22,13 @@ export const OPENAI_FAMILY_API_TYPES: ReadonlySet<string> = new Set(["chat_compl
 export interface ModelCapabilityInput {
   reasoningEfforts?: readonly string[];
   contextWindow?: number;
+  /**
+   * Larger opt-in window (Cursor "Max Mode"). When it exceeds contextWindow, the row advertises
+   * the long window as context_length and the default window as the long-context threshold,
+   * which makes Cursor's local runtime show a Context selector (default vs long, long marked
+   * as costing more).
+   */
+  longContextWindow?: number;
   inputModalities?: readonly string[];
 }
 
@@ -38,6 +45,12 @@ export interface ModelCapabilityFields {
     supports_vision?: boolean;
     reasoning_effort?: string[];
   };
+  /**
+   * Cursor reads the long-context threshold from `pricing.overrides[].min_prompt_tokens`. That
+   * key sits outside its validated capability schema, so it is the one place a threshold can
+   * be carried without failing row validation (`cost.long_context` is rejected by that schema).
+   */
+  pricing?: { overrides: Array<{ min_prompt_tokens: number }> };
 }
 
 function positiveInt(value: unknown): number | undefined {
@@ -49,6 +62,8 @@ function positiveInt(value: unknown): number | undefined {
 export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabilityFields {
   const efforts = (input.reasoningEfforts ?? []).filter(effort => typeof effort === "string" && effort.length > 0);
   const contextLength = positiveInt(input.contextWindow);
+  const longContextLength = positiveInt(input.longContextWindow);
+  const hasLongTier = contextLength !== undefined && longContextLength !== undefined && longContextLength > contextLength;
   const modalities = Array.isArray(input.inputModalities)
     ? input.inputModalities.filter(modality => typeof modality === "string" && modality.length > 0)
     : undefined;
@@ -56,7 +71,9 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
   return {
     api_types: [...OPENCODEX_MODEL_API_TYPES],
     capabilities: {
-      ...(contextLength !== undefined ? { context_length: contextLength } : {}),
+      ...(hasLongTier
+        ? { context_length: longContextLength }
+        : contextLength !== undefined ? { context_length: contextLength } : {}),
       // Once a gateway advertises api_types, Cursor keeps only rows whose output_modalities
       // include "text"; omitting the key drops the row from the extended catalog.
       output_modalities: ["text"],
@@ -67,5 +84,6 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
       ...(supportsVision !== undefined ? { supports_vision: supportsVision } : {}),
       ...(efforts.length > 0 ? { reasoning_effort: [...efforts] } : {}),
     },
+    ...(hasLongTier ? { pricing: { overrides: [{ min_prompt_tokens: contextLength }] } } : {}),
   };
 }

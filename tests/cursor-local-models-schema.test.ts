@@ -97,6 +97,17 @@ describe("modelCapabilityFields", () => {
     expect(fields.capabilities.reasoning_effort).toEqual(["low"]);
     expect(fields.capabilities.supports_reasoning).toBe(true);
   });
+
+  test("a larger opt-in window becomes context_length with the default window as the long-context threshold", () => {
+    const tiered = modelCapabilityFields({ contextWindow: 272000, longContextWindow: 922000 });
+    expect(tiered.capabilities.context_length).toBe(922000);
+    expect(tiered.pricing).toEqual({ overrides: [{ min_prompt_tokens: 272000 }] });
+    // Equal or smaller opt-in window: plain context_length, no pricing block.
+    const flat = modelCapabilityFields({ contextWindow: 272000, longContextWindow: 272000 });
+    expect(flat.capabilities.context_length).toBe(272000);
+    expect("pricing" in flat).toBe(false);
+    expect("pricing" in modelCapabilityFields({ longContextWindow: 922000 })).toBe(false);
+  });
 });
 
 describe("raw /v1/models list advertises Cursor local-agent capabilities", () => {
@@ -139,9 +150,12 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
       const solCaps = sol!.capabilities as Record<string, unknown>;
       expect(solCaps.output_modalities).toEqual(["text"]);
       expect(solCaps.reasoning_effort).toEqual(nativeReasoningEfforts("gpt-5.6-sol"));
-      expect(typeof solCaps.context_length).toBe("number");
-      expect(solCaps.context_length as number).toBeGreaterThan(0);
+      // Native GPT-5.6: 272k default window, 922k opt-in ceiling → Cursor Context selector.
+      expect(solCaps.context_length).toBe(922000);
+      expect(sol!.pricing).toEqual({ overrides: [{ min_prompt_tokens: 272000 }] });
       expect(solCaps.supports_vision).toBe(true);
+      // Routed rows have no separate opt-in tier, so no pricing block.
+      expect("pricing" in k3!).toBe(false);
     } finally {
       await server.stop(true);
     }

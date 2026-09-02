@@ -1346,7 +1346,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           }
           throw error;
         }
-        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiContextTier, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
         const { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } = await import("../codex/catalog/native-models");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
@@ -1504,6 +1504,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // to enable its effort control; every other consumer ignores them. See
         // src/server/models-capabilities.ts.
         const nativeLimits = nativeContextLimits(config);
+        const nativeContextInput = (metadataId: string) => {
+          const tier = nativeOpenAiContextTier(metadataId, nativeLimits);
+          return tier
+            ? { contextWindow: tier.defaultWindow, longContextWindow: tier.longWindow }
+            : { contextWindow: nativeOpenAiContextWindow(metadataId, nativeLimits) };
+        };
         const nativeModelRow = (id: string, metadataId = id) => ({
             id,
             object: "model",
@@ -1515,7 +1521,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             ),
             ...modelCapabilityFields({
               reasoningEfforts: nativeReasoningEfforts(metadataId),
-              contextWindow: nativeOpenAiContextWindow(metadataId, nativeLimits),
+              // Cursor "Max Mode": advertise the family's default/long pair (272k/922k for
+              // GPT-5.6) so the client can pick per request; without a tier, the effective
+              // window is the only value.
+              ...nativeContextInput(metadataId),
               inputModalities: nativeInputModalities(metadataId),
             }),
           });
