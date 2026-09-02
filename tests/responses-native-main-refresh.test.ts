@@ -298,7 +298,7 @@ describe("native main 401 refresh and replay", () => {
             config(),
             { model: "", provider: "" } as RequestLogContext,
           );
-        while (!claimWaitListener?.mock.calls.some(([type]) => type === "abort")) await Promise.resolve();
+        while (!claimWaitListener?.mock.calls.some(([type]) => type === "abort")) await Bun.sleep(1);
         controller.abort("websocket turn superseded or closed");
 
         const response = await pending;

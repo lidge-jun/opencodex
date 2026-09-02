@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as authApi from "../src/codex/auth-api";
@@ -94,8 +95,8 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
-  rmSync(opencodexHome, { recursive: true, force: true });
-  rmSync(codexHome, { recursive: true, force: true });
+  removeTreeWithRetry(opencodexHome);
+  removeTreeWithRetry(codexHome);
 });
 
 describe("fetchProviderQuotaReports", () => {
