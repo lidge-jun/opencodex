@@ -609,9 +609,17 @@ export function applySubagentModelFallback(
   resolvedFallbackChain?: readonly string[] | null,
 ): { from?: string; to?: string; skipped?: string[] } | null {
   if (!isThreadSpawnRequest(headers)) return null;
-  const fallbackChain = resolvedFallbackChain === undefined
+  const configuredFallbackChain = resolvedFallbackChain === undefined
     ? resolveSubagentFallbackChain(parsed, config)
     : resolvedFallbackChain;
+  // Encrypted V2 fallback is opt-in through the configured subagent roster. Do not
+  // synthesize native candidates when the roster is unset; that would silently
+  // spend a native credential for an operator who never configured this path.
+  const fallbackChain = configuredFallbackChain === null
+    && nativeFallbackOnly
+    && config.subagentModels !== undefined
+    ? normalizedChain(parsed.modelId, config, [], config.subagentModels)
+    : configuredFallbackChain;
   if (!fallbackChain) return null;
   const selection = selectAvailableSubagentModel(
     parsed.modelId,
