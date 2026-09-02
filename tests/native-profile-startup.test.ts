@@ -237,7 +237,9 @@ async function waitForPath(path: string, timeoutMs = 10_000): Promise<void> {
  * 0 — which is how a CI run fetched http://127.0.0.1:0 and called it a flake.
  * Wait for a port that is actually a port.
  */
-async function waitForPort(path: string, timeoutMs = 10_000): Promise<number> {
+// A spawned proxy child needs 10-18 s to reach its port file on a loaded windows-latest shard
+// (runs 33601508392 and 33610501053); every caller here has a 20 s+ budget.
+async function waitForPort(path: string, timeoutMs = 18_000): Promise<number> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (existsSync(path)) {
