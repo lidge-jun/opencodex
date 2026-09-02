@@ -271,6 +271,11 @@ export function nativeOpenAiContextWindow(slug: string, limits?: NativeContextLi
   return narrowToLimits(raw, slug, limits);
 }
 
+export function nativeOpenAiMaxOutputTokens(slug: string): number | undefined {
+  const sourceSlug = nativeOpenAiCapabilitySourceSlug(slug);
+  return positiveInt(getModelMetadata("openai", sourceSlug)?.maxTokens);
+}
+
 /**
  * Long-context tier for a native slug as a (default, long) pair, for clients that let the user
  * pick a window per request (Cursor's local-agent "Context" selector). The pair is the family's

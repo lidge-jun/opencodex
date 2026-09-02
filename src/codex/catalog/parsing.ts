@@ -112,6 +112,8 @@ export interface CatalogModel {
   defaultReasoningEffort?: string;
   contextWindow?: number;
   maxInputTokens?: number;
+  /** Model-scoped output-token ceiling; omitted when no authoritative value is known. */
+  maxOutputTokens?: number;
   /** Soft client compaction threshold; hard context/input limits remain authoritative. */
   autoCompactTokenLimit?: number;
   contextCap?: number;

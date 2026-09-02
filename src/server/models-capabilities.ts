@@ -114,6 +114,7 @@ export interface ModelCapabilityInput {
    * as costing more).
    */
   longContextWindow?: number;
+  maxOutputTokens?: number;
   inputModalities?: readonly string[];
 }
 
@@ -121,6 +122,7 @@ export interface ModelCapabilityFields {
   api_types: readonly string[];
   capabilities: {
     context_length?: number;
+    max_output_tokens?: number;
     /** Cursor's extended-row filter REQUIRES this to contain "text"; every route emits text. */
     output_modalities: string[];
     input_modalities?: string[];
@@ -148,6 +150,7 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
   const efforts = (input.reasoningEfforts ?? []).filter(effort => typeof effort === "string" && effort.length > 0);
   const contextLength = positiveInt(input.contextWindow);
   const longContextLength = positiveInt(input.longContextWindow);
+  const maxOutputTokens = positiveInt(input.maxOutputTokens);
   const hasLongTier = contextLength !== undefined && longContextLength !== undefined && longContextLength > contextLength;
   const modalities = Array.isArray(input.inputModalities)
     ? input.inputModalities.filter(modality => typeof modality === "string" && modality.length > 0)
@@ -159,6 +162,7 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
       ...(hasLongTier
         ? { context_length: longContextLength }
         : contextLength !== undefined ? { context_length: contextLength } : {}),
+      ...(maxOutputTokens !== undefined ? { max_output_tokens: maxOutputTokens } : {}),
       // Once a gateway advertises api_types, Cursor keeps only rows whose output_modalities
       // include "text"; omitting the key drops the row from the extended catalog.
       output_modalities: ["text"],

@@ -844,6 +844,7 @@ describe("server combo failover 030 activation matrix", () => {
         liveModels: false,
         models: ["deepseek-chat"],
         modelContextWindows: { "deepseek-chat": 128_000 },
+        modelMaxOutputTokens: { "deepseek-chat": 64_000 },
       }),
     }, combo.targets, { alias: combo.alias });
     saveConfig(config);
@@ -853,7 +854,12 @@ describe("server combo failover 030 activation matrix", () => {
         const response = await fetch(new URL("/v1/models", server.url));
         expect(response.status).toBe(200);
         const payload = await response.json() as {
-          data: Array<{ id: string; owned_by: string; is_combo?: boolean }>;
+          data: Array<{
+            id: string;
+            owned_by: string;
+            is_combo?: boolean;
+            capabilities?: { max_output_tokens?: number };
+          }>;
         };
         return payload.data;
       };
@@ -868,6 +874,7 @@ describe("server combo failover 030 activation matrix", () => {
       const initialRows = (await publicRows()).filter(model => model.id === selector);
       expect(initialRows).toHaveLength(1);
       expect(initialRows[0]).toMatchObject({ id: selector, object: "model", created: 0, owned_by: "openai", is_combo: true });
+      expect(initialRows[0]!.capabilities?.max_output_tokens).toBe(64_000);
 
       const renamed = await updateAlias("fast-chat");
       expect(renamed.status).toBe(200);
@@ -875,6 +882,7 @@ describe("server combo failover 030 activation matrix", () => {
       const renamedSelectorRows = renamedRows.filter(model => model.id === selector);
       expect(renamedSelectorRows).toHaveLength(1);
       expect(renamedSelectorRows[0]).toMatchObject({ id: selector, object: "model", created: 0, owned_by: "deepseek" });
+      expect(renamedSelectorRows[0]!.capabilities?.max_output_tokens).toBe(64_000);
       expect(renamedSelectorRows[0].is_combo).toBeUndefined();
       const renamedAliasRows = renamedRows.filter(model => model.id === "fast-chat");
       expect(renamedAliasRows).toHaveLength(1);
@@ -888,6 +896,7 @@ describe("server combo failover 030 activation matrix", () => {
       const deletedSelectorRows = deletedRows.filter(model => model.id === selector);
       expect(deletedSelectorRows).toHaveLength(1);
       expect(deletedSelectorRows[0]).toMatchObject({ id: selector, object: "model", created: 0, owned_by: "deepseek" });
+      expect(deletedSelectorRows[0]!.capabilities?.max_output_tokens).toBe(64_000);
       expect(deletedSelectorRows[0].is_combo).toBeUndefined();
       expect(deletedRows.some(model => model.is_combo === true)).toBe(false);
     } finally {

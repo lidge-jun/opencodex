@@ -81,7 +81,7 @@ import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } fr
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
-import { disabledNativeSlugs, hasComboTargets, isNativeOpenAiCapabilityAliasModel, NATIVE_GPT56_MAX_INPUT_TOKENS, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
+import { disabledNativeSlugs, hasComboTargets, isNativeOpenAiCapabilityAliasModel, NATIVE_GPT56_MAX_INPUT_TOKENS, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, nativeOpenAiMaxOutputTokens, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
@@ -163,6 +163,7 @@ interface CapturedProviderGather {
   readonly policy: CatalogProviderDiscoveryPolicySnapshot;
   readonly request: CapturedModelsRequest;
   readonly fastPolicyAuthority: FastPolicyAuthority;
+  readonly metadataModelIdCaseFold: boolean;
   readonly observedAuth?: ModelsAuthResolution;
   /**
    * Configured model ids this provider must keep even when live discovery omits
@@ -379,6 +380,7 @@ function captureTrustedOpenAiApiPolicy(
     models: entry.models,
     ...(entry.modelContextWindows ? { modelContextWindows: entry.modelContextWindows } : {}),
     ...(entry.modelMaxInputTokens ? { modelMaxInputTokens: entry.modelMaxInputTokens } : {}),
+    ...(entry.virtualModels ? { virtualModels: entry.virtualModels } : {}),
     ...(entry.modelInputModalities ? { modelInputModalities: entry.modelInputModalities } : {}),
     ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: entry.modelReasoningEfforts } : {}),
   });
@@ -422,6 +424,7 @@ function captureProviderGather(
     registryTransportMatch,
     configured,
   );
+  const metadataModelIdCaseFold = shouldCaseFoldMetadataModelId(name);
   const observedAuth = authResolver.kind === "observed"
     && provider.authMode !== "forward"
     && provider.liveModels !== false
@@ -458,6 +461,7 @@ function captureProviderGather(
     policy,
     request,
     fastPolicyAuthority,
+    metadataModelIdCaseFold,
     ...(observedAuth ? { observedAuth: Object.freeze({ ...observedAuth }) } : {}),
     ...(retainConfiguredModelIds && retainConfiguredModelIds.size > 0
       ? { retainConfiguredModelIds }
@@ -579,6 +583,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     ctx: prov.contextWindow ?? null,
     ctxW: prov.modelContextWindows ?? null,
     maxIn: prov.modelMaxInputTokens ?? null,
+    maxOut: prov.modelMaxOutputTokens ?? null,
     autoCompact: prov.modelAutoCompactTokenLimits ?? null,
     inMod: prov.modelInputModalities ?? null,
     re: prov.modelReasoningEfforts ?? null,
@@ -645,6 +650,44 @@ export function configuredMaxInputTokens(prov: OcxProviderConfig, id: string): n
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
+function generatedMaxOutputTokens(
+  providerName: string,
+  id: string,
+  metadataId = id,
+  metadataModelIdCaseFold?: boolean,
+): number | undefined {
+  const metadataProvider = providerName === OPENAI_API_PROVIDER_ID || providerName === OPENAI_CODEX_PROVIDER_ID
+    ? "openai"
+    : resolveMetadataProvider(providerName);
+  if (!metadataProvider) return undefined;
+  const metadata = getModelMetadata(metadataProvider, metadataId)
+    ?? ((metadataModelIdCaseFold ?? (providerName === OPENAI_API_PROVIDER_ID || providerName === OPENAI_CODEX_PROVIDER_ID
+      ? false
+      : shouldCaseFoldMetadataModelId(providerName)))
+      ? getModelMetadataCaseInsensitive(metadataProvider, metadataId)
+      : undefined);
+  return positiveSafeInteger(metadata?.maxTokens);
+}
+
+function routedMaxOutputTokens(
+  providerName: string,
+  provider: OcxProviderConfig,
+  model: CatalogModel,
+  metadataId = model.id,
+  metadataModelIdCaseFold?: boolean,
+): number | undefined {
+  const discovered = positiveSafeInteger(model.maxOutputTokens);
+  const generated = generatedMaxOutputTokens(providerName, model.id, metadataId, metadataModelIdCaseFold);
+  const configured = positiveSafeInteger(
+    modelRecordValue(provider.modelMaxOutputTokens, model.id),
+  );
+  const authoritative = discovered ?? generated;
+  if (configured === undefined) return authoritative;
+  return authoritative === undefined
+    ? configured
+    : Math.min(authoritative, configured);
+}
+
 export function configuredAutoCompactTokenLimit(
   prov: OcxProviderConfig | undefined,
   id: string,
@@ -679,10 +722,17 @@ function configuredVerbositySupport(name: string, prov: OcxProviderConfig | unde
   return prov.supportsVerbosity;
 }
 
-export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
+export function applyProviderConfigHints(
+  name: string,
+  prov: OcxProviderConfig,
+  model: CatalogModel,
+  providerCap?: number,
+  metadataModelIdCaseFold?: boolean,
+): CatalogModel {
   const displayName = configuredModelDisplayName(prov, model.id);
   const configuredCap = configuredContextWindow(prov, model.id);
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
+  const maxOutputTokens = routedMaxOutputTokens(name, prov, model, model.id, metadataModelIdCaseFold);
   const configuredAutoCompact = configuredAutoCompactTokenLimit(prov, model.id);
   let inputModalities = configuredInputModalities(prov, model.id);
   // The shared vision-sidecar consumer predicate keeps catalog advertisement and request-time
@@ -727,6 +777,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
           : configuredMaxInput,
       }
       : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsVerbosity === "boolean" ? { supportsVerbosity } : {}),
@@ -769,14 +820,26 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   };
 }
 
-export function catalogHintsFromProviderConfig(name: string, prov: OcxProviderConfig, id: string, contextCap?: number): Partial<CatalogModel> {
-  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap);
+export function catalogHintsFromProviderConfig(
+  name: string,
+  prov: OcxProviderConfig,
+  id: string,
+  contextCap?: number,
+  metadataModelIdCaseFold?: boolean,
+): Partial<CatalogModel> {
+  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold);
   const { provider: _provider, id: _id, ...hints } = hinted;
   return hints;
 }
 
-export function applyConfigHintsToCachedModels(name: string, prov: OcxProviderConfig, models: CatalogModel[], contextCap?: number): CatalogModel[] {
-  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap));
+export function applyConfigHintsToCachedModels(
+  name: string,
+  prov: OcxProviderConfig,
+  models: CatalogModel[],
+  contextCap?: number,
+  metadataModelIdCaseFold?: boolean,
+): CatalogModel[] {
+  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold));
 }
 
 
@@ -793,6 +856,7 @@ interface ComboCatalogMemberFallback {
   readonly contextWindow?: number;
   /** Input ceiling when it is lower than the window (native GPT-5.6: 922k under 1.05M). */
   readonly maxInputTokens?: number;
+  readonly maxOutputTokens?: number;
   readonly autoCompactTokenLimit?: number;
   readonly inputModalities?: readonly string[];
   readonly reasoningEfforts?: readonly string[];
@@ -814,6 +878,7 @@ export function resolveComboCatalogMember(
   providers: ReadonlyMap<string, OcxProviderConfig>,
   contextCap?: number,
   fallback?: ComboCatalogMemberFallback,
+  metadataModelIdCaseFold?: boolean,
 ): CatalogModel | undefined {
   const existing = memberByKey.get(targetKey(target));
   const prov = providers.get(target.provider);
@@ -827,6 +892,10 @@ export function resolveComboCatalogMember(
       : undefined;
     const addMaxInput = fallback !== undefined && contextWindow !== undefined
       && !(typeof member.maxInputTokens === "number" && member.maxInputTokens > 0);
+    const addMaxOutput = fallback !== undefined
+      && typeof fallback.maxOutputTokens === "number"
+      && fallback.maxOutputTokens > 0
+      && !(typeof member.maxOutputTokens === "number" && member.maxOutputTokens > 0);
     const effectiveMaxInput = addMaxInput
       ? Math.min(fallback?.maxInputTokens ?? contextWindow!, contextWindow!)
       : member.maxInputTokens;
@@ -840,12 +909,13 @@ export function resolveComboCatalogMember(
       && fallback?.inputModalities !== undefined;
     const addReasoning = member.reasoningEfforts === undefined
       && fallback?.reasoningEfforts !== undefined;
-    if (!addMaxInput && !adjustAutoCompact && !addModalities && !addReasoning) return member;
+    if (!addMaxInput && !addMaxOutput && !adjustAutoCompact && !addModalities && !addReasoning) return member;
     return {
       ...member,
       // Never claim a larger input budget than the window, and prefer the model's own
       // measured ceiling when the fallback carries one.
       ...(addMaxInput ? { maxInputTokens: effectiveMaxInput } : {}),
+      ...(addMaxOutput ? { maxOutputTokens: fallback!.maxOutputTokens } : {}),
       ...(adjustAutoCompact && autoCompactTokenLimit !== undefined ? { autoCompactTokenLimit } : {}),
       ...(addModalities ? { inputModalities: [...fallback!.inputModalities!] } : {}),
       ...(addReasoning ? { reasoningEfforts: [...fallback!.reasoningEfforts!] } : {}),
@@ -882,7 +952,7 @@ export function resolveComboCatalogMember(
     provider: target.provider,
   };
   const hinted = prov
-    ? applyProviderConfigHints(target.provider, prov, base, contextCap)
+    ? applyProviderConfigHints(target.provider, prov, base, contextCap, metadataModelIdCaseFold)
     : base;
   const hintedContext = typeof hinted.contextWindow === "number" && hinted.contextWindow > 0
     ? hinted.contextWindow
@@ -923,6 +993,8 @@ export function resolveComboCatalogMember(
     ?? (prov ? configuredReasoningEfforts(prov, target.model) : undefined)
     ?? base.reasoningEfforts
     ?? (fallback?.reasoningEfforts ? [...fallback.reasoningEfforts] : undefined);
+  const maxOutputTokens = positiveSafeInteger(hinted.maxOutputTokens, base.maxOutputTokens)
+    ?? (existing || prov ? positiveSafeInteger(fallback?.maxOutputTokens) : undefined);
   // The model's own measured input ceiling still applies when discovery gave us nothing:
   // GPT-5.6 advertises a 1.05M window but refuses input past 922k.
   const effectiveMaxInput = knownMaxInput ?? fallbackMaxInput;
@@ -950,6 +1022,7 @@ export function resolveComboCatalogMember(
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     contextWindow,
     maxInputTokens,
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(autoCompactTokenLimit !== undefined ? { autoCompactTokenLimit } : {}),
     ...(fallbackCapped ? { contextCap, contextCapped: true as const } : {}),
   };
@@ -1233,6 +1306,12 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       plainRecord(item.meta)?.n_ctx_train,
     );
   const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
+  const maxOutputTokens = positiveSafeInteger(
+    capabilityRecord?.max_output_tokens,
+    limits?.max_output_tokens,
+    metadata?.max_output_tokens,
+    item.max_output_tokens,
+  );
   // Some OpenAI-compatible catalogs expose the selectable ladder under
   // `reasoning_parameters.efforts` instead of the older `reasoning_efforts` key.
   // Treat both as model metadata: otherwise a valid upstream capability disappears
@@ -1260,6 +1339,7 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
   return {
     ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(capabilities ? { capabilities } : {}),
@@ -1305,7 +1385,7 @@ async function fetchProviderModelsWithAuth(
   contextCap: number | undefined,
   resolveAuth: ModelsAuthResolver,
 ): Promise<ProviderModelsResult> {
-  const { name, provider: prov, discovery, request } = captured;
+  const { name, provider: prov, discovery, request, metadataModelIdCaseFold } = captured;
   const observed = (
     models: CatalogModel[],
     state: CatalogGatherProviderModelOutcome["state"],
@@ -1330,7 +1410,7 @@ async function fetchProviderModelsWithAuth(
   const configured: CatalogModel[] = configuredIds.map(id => ({
     id,
     provider: name,
-    ...catalogHintsFromProviderConfig(name, prov, id, contextCap),
+    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold),
   }));
   const withConfiguredRetention = (
     models: CatalogModel[],
@@ -1345,6 +1425,7 @@ async function fetchProviderModelsWithAuth(
       contextCap,
       seedVertexDefault,
       retainComboTargets: options?.retainComboTargets,
+      metadataModelIdCaseFold,
     });
     if (
       options?.warnDrops === true
@@ -1383,7 +1464,7 @@ async function fetchProviderModelsWithAuth(
     : [{
       id: prov.defaultModel,
       provider: name,
-      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap),
+      ...catalogHintsFromProviderConfig(name, prov, prov.defaultModel, contextCap, metadataModelIdCaseFold),
     }];
   const vertexDefaultSeed = seedVertexDefault ? configured[0] : undefined;
   const withVertexDefaultSeed = (models: CatalogModel[]): CatalogModel[] => (
@@ -1400,7 +1481,7 @@ async function fetchProviderModelsWithAuth(
     const cachedCursor = getFreshCached(name, ttlMs);
     if (cachedCursor) {
       return observed(
-        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor)),
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cachedCursor, undefined, metadataModelIdCaseFold)),
         "authoritative",
       );
     }
@@ -1408,7 +1489,7 @@ async function fetchProviderModelsWithAuth(
       const cooling = getStaleCached(name);
       return observed(
         withConfiguredRetention(
-          cooling ? applyConfigHintsToCachedModels(name, prov, cooling) : configured,
+          cooling ? applyConfigHintsToCachedModels(name, prov, cooling, undefined, metadataModelIdCaseFold) : configured,
         ),
         "degraded",
       );
@@ -1449,7 +1530,7 @@ async function fetchProviderModelsWithAuth(
     const staleCursor = getStaleCached(name);
     return observed(
       withConfiguredRetention(
-        staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor) : configured,
+        staleCursor ? applyConfigHintsToCachedModels(name, prov, staleCursor, undefined, metadataModelIdCaseFold) : configured,
       ),
       "degraded",
     );
@@ -1467,7 +1548,7 @@ async function fetchProviderModelsWithAuth(
   if (fresh) {
     return observed(
       withConfiguredRetention(
-        withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap)),
+        withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold)),
       ),
       "authoritative",
     ); // dedups Codex's frequent /v1/models polling within the TTL
@@ -1479,7 +1560,7 @@ async function fetchProviderModelsWithAuth(
     return observed(
       withConfiguredRetention(
         stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap))
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold))
           : failedDiscoveryConfigured,
       ),
       "degraded",
@@ -1519,7 +1600,7 @@ async function fetchProviderModelsWithAuth(
     return {
       models: withConfiguredRetention(
         stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap))
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold))
           : failedDiscoveryConfigured,
       ),
       fallback: stale ? "stale" : "configured",
@@ -1596,7 +1677,7 @@ async function fetchProviderModelsWithAuth(
         reasoningEfforts: [],
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
-      }, contextCap));
+      }, contextCap, metadataModelIdCaseFold));
       const forCache = withConfiguredRetention(live, { retainComboTargets: false });
       if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
         return observed(withConfiguredRetention(configured), "degraded");
@@ -1659,7 +1740,7 @@ async function fetchProviderModelsWithAuth(
         provider: name,
         ...(ownedBy ? { owned_by: ownedBy } : {}),
         ...discoveredHints,
-      }, contextCap);
+      }, contextCap, metadataModelIdCaseFold);
     })
       .filter(m => shouldExposeProviderModel(name, m.id));
     // Capture the count BEFORE the alias/configured augmentation below pushes extra rows into
@@ -1756,6 +1837,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   contextCap?: number;
   seedVertexDefault?: boolean;
   retainComboTargets?: boolean;
+  metadataModelIdCaseFold?: boolean;
 }): { models: CatalogModel[]; droppedConfiguredIds: string[] } {
   const {
     name,
@@ -1765,6 +1847,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     contextCap,
     seedVertexDefault,
     retainComboTargets = true,
+    metadataModelIdCaseFold,
   } = opts;
   const out = [...opts.models];
   const present = new Set(out.map(model => model.id));
@@ -1773,7 +1856,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     if (present.has(candidate.id)) continue;
     const dated = out.find(live => isDatedVariantId(live.id, candidate.id));
     if (dated) {
-      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap));
+      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap, metadataModelIdCaseFold));
       present.add(candidate.id);
       continue;
     }
@@ -1959,7 +2042,16 @@ async function gatherRoutedModelsUncached(
     config,
     capture.openAiApiPolicy,
   );
-  const all = augmentRoutedModelsWithMetadata(apiAugmented, activeProviders.map(provider => provider.name), config.providers, config)
+  const metadataModelIdCaseFoldByProvider = new Map(
+    activeProviders.map(provider => [provider.name, provider.metadataModelIdCaseFold]),
+  );
+  const all = augmentRoutedModelsWithMetadata(
+    apiAugmented,
+    activeProviders.map(provider => provider.name),
+    config.providers,
+    config,
+    metadataModelIdCaseFoldByProvider,
+  )
     // Drop image/video generation models (e.g. Grok image/video) by default. Cursor's static catalog
     // intentionally mirrors Cursor's public model table, including Gemini image preview, so the
     // exposure decision goes through shouldExposeRoutedModel (single choke point).
@@ -2013,6 +2105,9 @@ async function gatherRoutedModelsUncached(
         // stay separate fields because routed/API rows of the same family run a wider window.
         // Falls back to the window for slugs with no separate ceiling.
         maxInputTokens: Math.min(nativeOpenAiMaxInputTokens(slug, openaiContextCap) ?? contextWindow, contextWindow),
+        ...(nativeOpenAiMaxOutputTokens(slug) !== undefined
+          ? { maxOutputTokens: nativeOpenAiMaxOutputTokens(slug) }
+          : {}),
         autoCompactTokenLimit: nativeOpenAiAutoCompactTokenLimit(slug, openaiContextCap),
         inputModalities: nativeInputModalities(slug),
         reasoningEfforts: nativeReasoningEfforts(slug),
@@ -2046,6 +2141,9 @@ async function gatherRoutedModelsUncached(
       ? {
         contextWindow: nativeContextWindow,
         ...(nativeAliasMaxInput !== undefined ? { maxInputTokens: nativeAliasMaxInput } : {}),
+        ...(nativeOpenAiMaxOutputTokens(combo.alias) !== undefined
+          ? { maxOutputTokens: nativeOpenAiMaxOutputTokens(combo.alias) }
+          : {}),
         ...(nativeAliasAutoCompact !== undefined ? { autoCompactTokenLimit: nativeAliasAutoCompact } : {}),
         inputModalities: nativeInputModalities(combo.alias),
         reasoningEfforts: nativeReasoningEfforts(combo.alias),
@@ -2058,6 +2156,7 @@ async function gatherRoutedModelsUncached(
         enrichedByName,
         providerContextCap(config, target.provider),
         nativeAliasFallback,
+        metadataModelIdCaseFoldByProvider.get(target.provider),
       ))
       .filter((member): member is CatalogModel => member !== undefined);
     const derived = deriveComboCatalogModel(id, combo, members);
@@ -2109,6 +2208,9 @@ async function gatherRoutedModelsUncached(
     const nativeAliasMaxInputTokens = codexForwardNativeCapabilityAlias
       ? nativeOpenAiMaxInputTokens(cm.modelId, customNativeLimits)
       : undefined;
+    const nativeAliasMaxOutputTokens = codexForwardNativeCapabilityAlias
+      ? nativeOpenAiMaxOutputTokens(cm.modelId)
+      : undefined;
     const configuredMaxInput = rawProvider
       ? configuredMaxInputTokens(rawProvider, cm.modelId)
       : undefined;
@@ -2120,6 +2222,13 @@ async function gatherRoutedModelsUncached(
         ...(customContextWindow !== undefined ? [customContextWindow] : []),
       )
       : undefined;
+    const customMaxOutputTokens = rawProvider
+      ? routedMaxOutputTokens(cm.provider, rawProvider, {
+        id: cm.modelId,
+        provider: cm.provider,
+        ...(nativeAliasMaxOutputTokens !== undefined ? { maxOutputTokens: nativeAliasMaxOutputTokens } : {}),
+      }, cm.modelId, metadataModelIdCaseFoldByProvider.get(cm.provider))
+      : nativeAliasMaxOutputTokens;
     const configuredAutoCompact = configuredAutoCompactTokenLimit(rawProvider, cm.modelId);
     const customAutoCompactTokenLimit = codexForwardNativeCapabilityAlias
       ? nativeOpenAiAutoCompactTokenLimit(cm.modelId, customNativeLimits)
@@ -2146,6 +2255,7 @@ async function gatherRoutedModelsUncached(
         : codexForwardNativeCapabilityAlias ? { displayName: "Daybreak Blue" } : {}),
       ...(customContextWindow !== undefined ? { contextWindow: customContextWindow } : {}),
       ...(customMaxInputTokens !== undefined ? { maxInputTokens: customMaxInputTokens } : {}),
+      ...(customMaxOutputTokens !== undefined ? { maxOutputTokens: customMaxOutputTokens } : {}),
       ...(customAutoCompactTokenLimit !== undefined ? { autoCompactTokenLimit: customAutoCompactTokenLimit } : {}),
       ...(cm.inputModalities
         ? { inputModalities: cm.inputModalities }
@@ -2197,10 +2307,16 @@ async function gatherRoutedModelsUncached(
     const mergedMaxInput = mergedMaxInputCandidates.length > 0
       ? Math.min(...mergedMaxInputCandidates)
       : undefined;
+    const mergedMaxOutputCandidates = [base.maxOutputTokens, replaced?.maxOutputTokens]
+      .filter((value): value is number => typeof value === "number" && value > 0);
+    const mergedMaxOutput = mergedMaxOutputCandidates.length > 0
+      ? Math.min(...mergedMaxOutputCandidates)
+      : undefined;
     const merged: CatalogModel = replaced ? {
       ...base,
       ...(base.contextWindow === undefined && replaced.contextWindow !== undefined ? { contextWindow: replaced.contextWindow } : {}),
       ...(mergedMaxInput !== undefined ? { maxInputTokens: mergedMaxInput } : {}),
+      ...(mergedMaxOutput !== undefined ? { maxOutputTokens: mergedMaxOutput } : {}),
       ...(base.autoCompactTokenLimit === undefined && replaced.autoCompactTokenLimit !== undefined
         ? { autoCompactTokenLimit: replaced.autoCompactTokenLimit }
         : {}),
@@ -2335,12 +2451,19 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
     const autoCompactTokenLimit = contextWindow !== undefined && configuredAutoCompact !== undefined
       ? clampAutoCompactTokenLimit(contextWindow, maxInputTokens, configuredAutoCompact)
       : undefined;
+    const maxOutputTokens = routedMaxOutputTokens(
+      OPENAI_API_PROVIDER_ID,
+      configured,
+      existingById.get(id) ?? { provider: OPENAI_API_PROVIDER_ID, id },
+      policy.virtualModels?.[id]?.wireModelId ?? id,
+    );
     return {
       provider: OPENAI_API_PROVIDER_ID,
       id,
       owned_by: OPENAI_API_PROVIDER_ID,
       ...(contextWindow ? { contextWindow } : {}),
       ...(maxInputTokens ? { maxInputTokens } : {}),
+      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       ...(autoCompactTokenLimit !== undefined ? { autoCompactTokenLimit } : {}),
       ...(policy.modelInputModalities?.[id] ? { inputModalities: [...policy.modelInputModalities[id]!] } : {}),
       ...(policy.modelReasoningEfforts?.[id] ? { reasoningEfforts: [...policy.modelReasoningEfforts[id]!] } : {}),
@@ -2370,6 +2493,7 @@ export function augmentRoutedModelsWithMetadata(
   providerNames: string[],
   providers?: Record<string, OcxProviderConfig>,
   caps?: Pick<OcxConfig, "providerContextCaps">,
+  metadataModelIdCaseFoldByProvider?: ReadonlyMap<string, boolean>,
 ): CatalogModel[] {
   const out = [...models];
   const seen = new Set(out.map(m => `${m.provider}/${m.id}`));
@@ -2388,11 +2512,20 @@ export function augmentRoutedModelsWithMetadata(
         id: meta.id,
         owned_by: provider,
         ...(typeof meta.contextWindow === "number" && meta.contextWindow > 0 ? { contextWindow: meta.contextWindow } : {}),
+        ...(typeof meta.maxTokens === "number" && meta.maxTokens > 0 ? { maxOutputTokens: meta.maxTokens } : {}),
         ...(Array.isArray(meta.input) && meta.input.length > 0 ? { inputModalities: [...meta.input] } : {}),
       };
       out.push({
         ...model,
-        ...(providers?.[provider] ? applyProviderConfigHints(provider, providers[provider], model, contextCap) : {}),
+        ...(providers?.[provider]
+          ? applyProviderConfigHints(
+            provider,
+            providers[provider],
+            model,
+            contextCap,
+            metadataModelIdCaseFoldByProvider?.get(provider),
+          )
+          : {}),
       });
     }
   }

@@ -247,15 +247,22 @@ describe("registry-owned provider model discovery", () => {
 
   test("accepts only positive safe-integer token limits from live metadata", () => {
     expect(catalogHintsFromModelsApiItem("example", {
+      id: "valid-output",
+      capabilities: { max_output_tokens: 8192 },
+    })).toEqual({ maxOutputTokens: 8192 });
+
+    expect(catalogHintsFromModelsApiItem("example", {
       id: "fractional",
       context_size: 1_000,
       max_input_tokens: 0.5,
+      capabilities: { max_output_tokens: 0.5 },
     })).toEqual({ contextWindow: 1_000 });
 
     expect(catalogHintsFromModelsApiItem("example", {
       id: "unsafe",
       context_size: Number.MAX_SAFE_INTEGER + 1,
       max_input_tokens: Number.MAX_SAFE_INTEGER + 1,
+      max_output_tokens: Number.MAX_SAFE_INTEGER + 1,
     })).toEqual({});
   });
 

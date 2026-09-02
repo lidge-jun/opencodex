@@ -123,6 +123,9 @@ describe("raw /v1/models list reasoning-effort advertisement (Grok Build discove
       expect("supports_reasoning_effort" in plain!).toBe(false);
       expect("reasoning_effort" in plain!).toBe(false);
       expect("reasoning_efforts" in plain!).toBe(false);
+      const capabilities = plain!.capabilities as Record<string, unknown>;
+      expect(capabilities.supports_reasoning).toBe(false);
+      expect("reasoning_effort" in capabilities).toBe(false);
     } finally {
       await server.stop(true);
     }

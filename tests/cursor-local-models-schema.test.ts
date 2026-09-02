@@ -43,6 +43,7 @@ function capabilityConfig(): OcxConfig {
         },
         modelDefaultReasoningEfforts: { k3: "high" },
         modelContextWindows: { k3: 200000 },
+        modelMaxOutputTokens: { k3: 64_000 },
         modelInputModalities: { k3: ["text", "image"] },
       },
       openai: {
@@ -103,11 +104,22 @@ describe("modelCapabilityFields", () => {
     const tiered = modelCapabilityFields({ contextWindow: 272000, longContextWindow: 922000 });
     expect(tiered.capabilities.context_length).toBe(922000);
     expect(tiered.pricing).toEqual({ overrides: [{ min_prompt_tokens: 272000 }] });
+    expect("long_context_threshold_tokens" in tiered).toBe(false);
     // Equal or smaller opt-in window: plain context_length, no pricing block.
     const flat = modelCapabilityFields({ contextWindow: 272000, longContextWindow: 272000 });
     expect(flat.capabilities.context_length).toBe(272000);
     expect("pricing" in flat).toBe(false);
+    expect("long_context_threshold_tokens" in flat).toBe(false);
     expect("pricing" in modelCapabilityFields({ longContextWindow: 922000 })).toBe(false);
+  });
+
+  test("max output tokens are sanitized independently of reasoning", () => {
+    expect(modelCapabilityFields({ maxOutputTokens: 128000 }).capabilities.max_output_tokens)
+      .toBe(128000);
+    expect("max_output_tokens" in modelCapabilityFields({ maxOutputTokens: 0 }).capabilities)
+      .toBe(false);
+    expect(modelCapabilityFields({ maxOutputTokens: 1.9 }).capabilities.supports_reasoning)
+      .toBe(false);
   });
 });
 
@@ -142,6 +154,7 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
       expect(k3!.api_types).toEqual(["chat_completions", "responses", "anthropic_messages"]);
       expect(k3!.capabilities).toEqual({
         context_length: 200000,
+        max_output_tokens: 64_000,
         output_modalities: ["text"],
         input_modalities: ["text", "image"],
         supports_tool_use: true,
@@ -160,6 +173,7 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
       const plainCaps = plain!.capabilities as Record<string, unknown>;
       expect(plainCaps.supports_reasoning).toBe(false);
       expect("reasoning_effort" in plainCaps).toBe(false);
+      expect("max_output_tokens" in plainCaps).toBe(false);
 
       const sol = body.data.find(m => m.id === "gpt-5.6-sol");
       expect(sol).toBeDefined();
@@ -169,7 +183,9 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
       expect(solCaps.reasoning_effort).toEqual(nativeReasoningEfforts("gpt-5.6-sol"));
       // Native GPT-5.6: 272k default window, 922k opt-in ceiling → Cursor Context selector.
       expect(solCaps.context_length).toBe(922000);
+      expect(solCaps.max_output_tokens).toBe(128_000);
       expect(sol!.pricing).toEqual({ overrides: [{ min_prompt_tokens: 272000 }] });
+      expect("long_context_threshold_tokens" in sol!).toBe(false);
       expect(solCaps.supports_vision).toBe(true);
       // Routed rows have no separate opt-in tier, so no pricing block.
       expect("pricing" in k3!).toBe(false);

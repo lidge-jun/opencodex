@@ -226,6 +226,20 @@ describe("combo catalog capability intersection", () => {
     });
   });
 
+  test("combo output ceiling is the smallest known member ceiling and stays unknown if any member is unknown", () => {
+    const known = deriveComboCatalogModel("known-output", normalizedCombo(), [
+      { provider: "a", id: "m1", contextWindow: 128_000, maxOutputTokens: 64_000 },
+      { provider: "b", id: "m2", contextWindow: 128_000, maxOutputTokens: 32_000 },
+    ]);
+    expect(known?.maxOutputTokens).toBe(32_000);
+
+    const partial = deriveComboCatalogModel("partial-output", normalizedCombo(), [
+      { provider: "a", id: "m1", contextWindow: 128_000, maxOutputTokens: 64_000 },
+      { provider: "b", id: "m2", contextWindow: 128_000 },
+    ]);
+    expect(partial).not.toHaveProperty("maxOutputTokens");
+  });
+
   test("handles vision, missing modalities, reasoning defaults, and parallel tools conservatively", () => {
     expect(deriveComboCatalogModel("vision", normalizedCombo({ defaultEffort: "low" }), [
       memberA,
@@ -1825,7 +1839,7 @@ describe("provider discovered model display names", () => {
     modelDisplayNames: { "grok-4.6": "Grok 4.6" },
   };
 
-  test("an exact provider model id receives only the configured display name", () => {
+  test("an exact provider model id receives the configured display name without losing catalog metadata", () => {
     const discovered = {
       provider: "xai",
       id: "grok-4.6",
@@ -1848,8 +1862,38 @@ describe("provider discovered model display names", () => {
     const { displayName: _afterDisplayName, ...afterIdentity } = output;
 
     expect(output.displayName).toBe("Grok 4.6");
-    expect(afterIdentity).toEqual({ ...beforeIdentity, supportsServiceTier: false });
+    expect(afterIdentity).toEqual({
+      ...beforeIdentity,
+      maxOutputTokens: 500_000,
+      supportsServiceTier: false,
+    });
     expect(catalogModelSlug(output)).toBe("xai/grok-4.6");
+  });
+
+  test("output ceilings prefer live metadata and only model-scoped config may narrow", () => {
+    const generated = applyProviderConfigHints("xai", {
+      ...provider,
+      defaultMaxOutputTokens: 1,
+    }, { provider: "xai", id: "grok-4.6" });
+    expect(generated.maxOutputTokens).toBe(500_000);
+
+    const narrowed = applyProviderConfigHints("xai", {
+      ...provider,
+      modelMaxOutputTokens: { "grok-4.6": 64_000 },
+    }, { provider: "xai", id: "grok-4.6", maxOutputTokens: 128_000 });
+    expect(narrowed.maxOutputTokens).toBe(64_000);
+
+    const discoveredSmaller = applyProviderConfigHints("xai", {
+      ...provider,
+      modelMaxOutputTokens: { "grok-4.6": 64_000 },
+    }, { provider: "xai", id: "grok-4.6", maxOutputTokens: 32_000 });
+    expect(discoveredSmaller.maxOutputTokens).toBe(32_000);
+
+    const defaultOnly = applyProviderConfigHints("unknown", {
+      ...provider,
+      defaultMaxOutputTokens: 1,
+    }, { provider: "unknown", id: "unknown-model" });
+    expect(defaultOnly.maxOutputTokens).toBeUndefined();
   });
 
   test("display names use exact case-sensitive ids and stay provider scoped", () => {
@@ -4715,6 +4759,8 @@ describe("Codex catalog routed normalization", () => {
 
     expect(slugs.has("deepseek/deepseek-v4-flash")).toBe(true);
     expect(slugs.has("deepseek/deepseek-v4-pro")).toBe(true);
+    expect(models.find(model => model.id === "deepseek-v4-flash")?.maxOutputTokens)
+      .toBe(384_000);
     for (const model of models) {
       expect(model.contextWindow).toBe(1_048_576);
       expect(model.inputModalities).toEqual(["text"]);
@@ -5887,6 +5933,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
     expect(rows.find(row => row.provider === "openai-apikey" && row.id === "gpt-5.6-sol")).toMatchObject({
       contextWindow: 1_050_000,
       maxInputTokens: 922_000,
+      maxOutputTokens: 128_000,
       inputModalities: ["text", "image"],
       reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     });
@@ -5920,6 +5967,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
         expect(row).toMatchObject({
           contextWindow: 1_050_000,
           maxInputTokens: 922_000,
+          maxOutputTokens: 128_000,
           inputModalities: ["text", "image"],
           reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
         });
@@ -6022,7 +6070,8 @@ describe("OpenAI API trusted catalog augmentation", () => {
     try {
       const equalDifferentOrder = {
         provider: "openai-apikey", id: "gpt-5.6-sol", contextWindow: 1_050_000, maxInputTokens: 922_000,
-        inputModalities: ["image", "text", "image"], reasoningEfforts: ["max", "low", "xhigh", "medium", "high", "low"], owned_by: "openai-apikey",
+        maxOutputTokens: 128_000, inputModalities: ["image", "text", "image"],
+        reasoningEfforts: ["max", "low", "xhigh", "medium", "high", "low"], owned_by: "openai-apikey",
       };
       augmentRoutedModelsWithRegistryOpenAiApiRows([equalDifferentOrder], openAiApiCatalogConfig());
       expect(warn).not.toHaveBeenCalled();

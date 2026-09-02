@@ -429,6 +429,7 @@ export interface CatalogTrustedOpenAiApiPolicySnapshot {
   readonly models?: readonly string[];
   readonly modelContextWindows?: Readonly<Record<string, number>>;
   readonly modelMaxInputTokens?: Readonly<Record<string, number>>;
+  readonly virtualModels?: Readonly<Record<string, Readonly<{ wireModelId: string; reasoningMode: "pro" }>>>;
   readonly modelInputModalities?: Readonly<Record<string, readonly string[]>>;
   readonly modelReasoningEfforts?: Readonly<Record<string, readonly string[]>>;
 }
