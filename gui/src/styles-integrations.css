@@ -176,3 +176,4 @@
 .cursor-model-table { width: 100%; border-collapse: collapse; font-size: var(--text-caption); }
 .cursor-model-table th, .cursor-model-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .cursor-model-table th { font-weight: var(--weight-semibold); color: var(--muted); }
+.cursor-effort-rows { margin-left: .5rem; font-size: .85em; }

@@ -139,7 +139,13 @@ export default function CursorIntegrationPage({ apiBase, active }: { apiBase: st
 
           <div className="cursor-card">
             <h4>{t("integrations.cursor.models")}</h4>
-            <p className="muted">{t("integrations.cursor.modelsHint")}</p>
+            <p className="muted">
+              {status.effortTable.source === "bundle"
+                ? t("integrations.cursor.ladderFromBundle", {
+                    version: status.effortTable.version ?? t("integrations.cursor.unknownVersion"),
+                  })
+                : t("integrations.cursor.ladderFromStatic")}
+            </p>
             <table className="cursor-model-table">
               <thead>
                 <tr>
@@ -152,12 +158,41 @@ export default function CursorIntegrationPage({ apiBase, active }: { apiBase: st
                 {status.models.map(model => (
                   <tr key={model.id}>
                     <td><code>{model.id}</code></td>
-                    <td>{model.reasoning ? model.reasoning.join(" · ") : "—"}</td>
-                    <td>{model.context ? `${formatTokens(model.context.defaultWindow, locale)} · ${formatTokens(model.context.longWindow, locale)}` : "—"}</td>
+                    <td>
+                      {model.reasoning
+                        ? model.reasoning.join(" · ")
+                        : (
+                          <>
+                            <span
+                              className="cursor-no-control"
+                              title={t("integrations.cursor.noControlTitle")}
+                              aria-label={t("integrations.cursor.noControlTitle")}
+                            >
+                              {t("integrations.cursor.noControl")}
+                            </span>
+                            {model.effortRows.length > 0
+                              ? (
+                                <span className="cursor-effort-rows">
+                                  {t(
+                                    model.effortRows.length === 1
+                                      ? "integrations.cursor.effortRowsOne"
+                                      : "integrations.cursor.effortRowsMany",
+                                    { n: model.effortRows.length },
+                                  )}
+                                </span>
+                              )
+                              : <span className="cursor-effort-rows muted">{t("integrations.cursor.effortRowsOff")}</span>}
+                          </>
+                        )}
+                    </td>
+                    <td>{model.context ? `${formatTokens(model.context.defaultWindow, locale)} · ${formatTokens(model.context.longWindow, locale)}` : t("integrations.cursor.noControl")}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {status.models.some(model => model.tableLess) && (
+              <p className="muted" data-cursor-tableless-hint>{t("integrations.cursor.tableLessHint")}</p>
+            )}
           </div>
 
           <p>
