@@ -14,6 +14,10 @@ on:
       - "package.json"
       - "bun.lock"
       - ".github/workflows/service-lifecycle.yml"
+      # release.yml gates on THIS workflow having run for the release SHA. A release-branch
+      # commit that touches only release.yml (e.g. the v2.40.0 permissions carry, #3263/#3264)
+      # produced no run and the gate dead-ended until a manual dispatch.
+      - ".github/workflows/release.yml"
   push:
     paths:
       - "src/service.ts"
@@ -24,6 +28,10 @@ on:
       - "package.json"
       - "bun.lock"
       - ".github/workflows/service-lifecycle.yml"
+      # release.yml gates on THIS workflow having run for the release SHA. A release-branch
+      # commit that touches only release.yml (e.g. the v2.40.0 permissions carry, #3263/#3264)
+      # produced no run and the gate dead-ended until a manual dispatch.
+      - ".github/workflows/release.yml"
   workflow_dispatch:
 
 permissions:
