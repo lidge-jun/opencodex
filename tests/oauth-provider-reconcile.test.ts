@@ -79,8 +79,9 @@ describe("OAuth provider reconciliation", () => {
 
     expect(reconcileOAuthProviders(config)).toBe(true);
     const provider = config.providers["google-antigravity"];
-    expect(provider.defaultModel).toBe("gemini-3.7-flash");
+    expect(provider.defaultModel).toBe("gemini-3.8-flash");
     expect(provider.models).toEqual([
+      "gemini-3.8-flash",
       "gemini-3.7-flash",
       "gemini-3.1-pro",
       "gemini-3.1-flash-image",
@@ -93,6 +94,7 @@ describe("OAuth provider reconciliation", () => {
     expect(provider.models).not.toContain("gemini-3.6-flash-low");
     expect(provider.models).not.toContain("gemini-3.6-flash-medium");
     expect(provider.models).not.toContain("gemini-3.6-flash-high");
+    expect(provider.modelContextWindows?.["gemini-3.8-flash"]).toBe(1_048_576);
     expect(provider.modelContextWindows?.["gemini-3.7-flash"]).toBe(1_048_576);
     expect(provider.liveModels).toBe(true);
     expect(provider.project).toBe("config-project-sentinel");
@@ -104,7 +106,7 @@ describe("OAuth provider reconciliation", () => {
     });
 
     const persisted = loadConfig();
-    expect(persisted.providers["google-antigravity"]?.defaultModel).toBe("gemini-3.7-flash");
+    expect(persisted.providers["google-antigravity"]?.defaultModel).toBe("gemini-3.8-flash");
     expect(persisted.providers["google-antigravity"]?.liveModels).toBe(true);
     expect(reconcileOAuthProviders(config)).toBe(false);
   });
@@ -139,7 +141,40 @@ describe("OAuth provider reconciliation", () => {
 
     upsertOAuthProvider(config, "google-antigravity");
     expect(config.providers["google-antigravity"].liveModels).toBe(true);
-    expect(config.providers["google-antigravity"].models).toHaveLength(6);
+    expect(config.providers["google-antigravity"].models).toHaveLength(7);
+  });
+
+  test("an explicit 3.7 default survives the 3.8 launch while its capabilities refresh", () => {
+    // The 3.5 case above starts from a RETIRED id, so it only exercises the stale-default
+    // healing branch. This one is the opposite claim, and the one that matters for an
+    // additive rollout: a user who deliberately chose 3.7 must still be on 3.7 afterwards.
+    // Google still serves it, so healing it onto 3.8 would be silently overriding a choice.
+    saveCredential("google-antigravity", { access: "a", refresh: "r", projectId: "p" });
+    const config = {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+          authMode: "oauth",
+          googleMode: "cloud-code-assist",
+          defaultModel: "gemini-3.7-flash",
+          models: ["gemini-3.7-flash"],
+          liveModels: true,
+        },
+      },
+    } satisfies OcxConfig;
+
+    reconcileOAuthProviders(config);
+    const provider = config.providers["google-antigravity"];
+
+    expect(provider.defaultModel).toBe("gemini-3.7-flash");
+    expect(provider.models).toContain("gemini-3.7-flash");
+    expect(provider.models).toContain("gemini-3.8-flash");
+    // Capability records still refresh from the registry — preservation is about the
+    // user's CHOICE, not about freezing the row.
+    expect(provider.modelReasoningEfforts?.["gemini-3.8-flash"]).toEqual(["low", "medium", "high"]);
   });
 
   test("preserves an explicit Antigravity static opt-out without the legacy migration marker", () => {

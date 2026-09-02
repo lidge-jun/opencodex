@@ -58,6 +58,10 @@ const GEMINI_36_FLASH: Cost4 = { input: 1.5, output: 7.5, cacheRead: 0.15, cache
 // through 2026-12-31, stepping up to $1.50 / $7.50 on 2027-01-01. Revisit this row
 // then — the promotional rate is dated on the pricing page, not open-ended.
 const GEMINI_37_FLASH: Cost4 = { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 };
+// Gemini 3.8 Flash carries the same published promotional shape as 3.7 through 2026-12-31,
+// rising to $1.50 / $7.50 on 2027-01-01. A SEPARATE constant on purpose: equal today, but
+// aliasing them would silently drag 3.8 along if 3.7's row is ever re-verified differently.
+const GEMINI_38_FLASH: Cost4 = { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 };
 const MINIMAX_M21_HIGHSPEED: Cost4 = { input: 0.6, output: 2.4, cacheRead: 0.03, cacheWrite: 0.375 };
 const KIMI_K3: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 };
 const KIMI_K27_CODE: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0.95 };
@@ -81,6 +85,7 @@ const ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pric
 
 const GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-07-22); cacheWrite=0: storage is billed per-hour, not per-token";
 const GEMINI_37_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-08-14); promotional rate through 2026-12-31, rises to 1.50/7.50 on 2027-01-01; cacheWrite=0: storage is billed per-hour, not per-token";
+const GEMINI_38_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-09-03); promotional rate through 2026-12-31, rises to 1.50/7.50 on 2027-01-01; cacheWrite=0: storage is billed per-hour, not per-token";
 const MINIMAX_PRICING = "https://platform.minimax.io/docs/guides/pricing-paygo";
 const OPENAI_GPT56_PRICING = "https://developers.openai.com/api/docs/pricing";
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
@@ -123,6 +128,10 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // 3.7 Flash rides CCA, whose billing equivalence to the Developer API list price is
   // not published, so this is `verified-derived` rather than `verified`: the number is
   // proven, the claim that Antigravity charges it is inferred.
+  { provider: "google-antigravity", modelId: "gemini-3.8-flash", cost4: GEMINI_38_FLASH, source: `derived: Gemini 3.8 Flash promotional rate through 2026-12-31 ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-03", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-3.8-flash-low", cost4: GEMINI_38_FLASH, source: `derived: gemini-3.8-flash ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-03", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-3.8-flash-medium", cost4: GEMINI_38_FLASH, source: `derived: gemini-3.8-flash ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-03", status: "verified-derived" },
+  { provider: "google-antigravity", modelId: "gemini-3.8-flash-high", cost4: GEMINI_38_FLASH, source: `derived: gemini-3.8-flash ${GEMINI_38_PRICING}`, verifiedAt: "2026-09-03", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.7-flash", cost4: GEMINI_37_FLASH, source: `derived: Gemini 3.7 Flash promotional rate through 2026-12-31 ${GEMINI_37_PRICING}`, verifiedAt: "2026-08-14", status: "verified-derived" },
   // Retained after the 3.6 retirement: historical usage.jsonl rows still carry these
   // ids, and dropping the row would silently zero the cost of requests already made.
@@ -160,6 +169,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "google", modelId: "gemini-3.6-flash", cost4: GEMINI_36_FLASH, source: GEMINI_PRICING, verifiedAt: "2026-07-22", status: "verified" },
   // Developer API row: the price IS published for this surface, so `verified`.
   { provider: "google", modelId: "gemini-3.7-flash", cost4: GEMINI_37_FLASH, source: GEMINI_37_PRICING, verifiedAt: "2026-08-14", status: "verified" },
+  { provider: "google", modelId: "gemini-3.8-flash", cost4: GEMINI_38_FLASH, source: GEMINI_38_PRICING, verifiedAt: "2026-09-03", status: "verified" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro-preview", cost4: GEMINI_31_PRO, source: GEMINI_PRICING, verifiedAt: "2026-07-20", status: "verified" },
   // Antigravity-bundled third-party models — derived from the underlying vendor's
   // official API price (Antigravity itself bills via subscription quota).

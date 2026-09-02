@@ -396,4 +396,22 @@ describe("Gemini 3.8 Flash lands additively with a suffix ladder", () => {
     expect(resolveAntigravityEffortWireModel("gemini-3.7-flash", "high"))
       .toEqual({ wireModelId: "gemini-3.7-flash-tiered", thinkingLevel: "high" });
   });
+
+  test("Antigravity 3.8 cost resolves to the derived overlay, not a bundled verified price", () => {
+    // Declaring the overlay is not enough. Bundled generated metadata is consulted FIRST and
+    // returns status "verified", so a cost block on the google/gemini-3.8-flash source row
+    // would shadow this overlay and assert a CCA billing equivalence Google never published.
+    // The source record omits cost precisely so this lookup lands here.
+    const matched = resolveMatchedPrice("google-antigravity", "gemini-3.8-flash");
+    expect(matched?.status).toBe("verified-derived");
+    expect(matched?.cost4).toEqual({ input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 });
+    expect(matched?.source).not.toBe("jawcode");
+  });
+
+  test("the direct Google surface may claim a verified 3.8 price", () => {
+    // The Developer API price IS published for this surface, so unlike the CCA row it is not
+    // an inference.
+    expect(resolveMatchedPrice("google", "gemini-3.8-flash")?.cost4)
+      .toEqual({ input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 });
+  });
 });
