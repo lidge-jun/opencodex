@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { buildClaudeEnv, claudeNotFoundHint, rootSkipPermissionsNotice, shouldAllowRootSkipPermissions } from "../src/cli/claude";
+import { buildClaudeEnv, claudeNotFoundHint, ensureProxyForClaude, rootSkipPermissionsNotice, shouldAllowRootSkipPermissions } from "../src/cli/claude";
 import { commandInvocation } from "../src/lib/win-exec";
+import type { LivenessIo, LiveProxy } from "../src/server/proxy-liveness";
 import type { OcxConfig } from "../src/types";
 
 function cfg(extra?: Partial<OcxConfig>): OcxConfig {
@@ -24,6 +25,20 @@ const AUTH_PRESENT = {
     keychainProbe: () => "present" as const,
   },
 };
+
+describe("ocx claude proxy liveness", () => {
+  test("retries the initial liveness probe before spawning a proxy", async () => {
+    const seen: (number | undefined)[] = [];
+    const findLiveProxy = async (io?: LivenessIo): Promise<LiveProxy> => {
+      seen.push(io?.attempts);
+      // retry semantics are covered by tests/proxy-liveness.test.ts:102-119; this pins that the launcher hands the stop-path budget down.
+      return { pid: 4242, port: 10100, source: "runtime" };
+    };
+
+    expect(await ensureProxyForClaude({ findLiveProxy })).toBe(10100);
+    expect(seen).toEqual([3]);
+  });
+});
 
 describe("ocx claude env assembly", () => {
   test("connected target injects only the hub base and client admission token", () => {

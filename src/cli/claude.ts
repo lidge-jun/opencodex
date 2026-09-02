@@ -354,8 +354,17 @@ export function readConnectedClaudeContextWindows(path = DEFAULT_CATALOG_PATH): 
   }
 }
 
-async function ensureProxyForClaude(): Promise<number | null> {
-  const live = await findLiveProxy();
+export type ClaudeProxyEnsureDeps = {
+  findLiveProxy?: typeof findLiveProxy;
+};
+
+export async function ensureProxyForClaude(deps: ClaudeProxyEnsureDeps = {}): Promise<number | null> {
+  // A proxy that has only just bound can miss a single probe while its event loop
+  // is still settling startup work — the same just-started race the stop paths
+  // already retry for (#764, SERVICE_STOP_LIVENESS). Only the attempts budget is
+  // borrowed here; the probe timeout remains DEFAULT_PROBE_TIMEOUT_MS (750 ms).
+  // Without this, `ocx claude` can spawn a second proxy while the first is serving.
+  const live = await (deps.findLiveProxy ?? findLiveProxy)({ attempts: 3 });
   if (live) return live.port;
   const cfgPort = loadConfig().port;
   const pinPort = typeof cfgPort === "number" && cfgPort > 0 ? cfgPort : 10100;
