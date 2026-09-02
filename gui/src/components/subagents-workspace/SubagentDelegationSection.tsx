@@ -119,9 +119,9 @@ export default function SubagentDelegationSection({
                 <span className="swi-fallback-index">{index + 1}</span>
                 <span className="swi-fallback-model">{modelName}</span>
                 <div className="swi-fallback-actions">
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => { const next = [...fallback]; if (index > 0) [next[index - 1], next[index]] = [next[index], next[index - 1]]; onFallbackChange(next); }} disabled={fallbackBusy || index === 0} aria-label={t("sub.moveUp", { m: modelName })}>↑</button>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => { const next = [...fallback]; if (index < next.length - 1) [next[index], next[index + 1]] = [next[index + 1], next[index]]; onFallbackChange(next); }} disabled={fallbackBusy || index === fallback.length - 1} aria-label={t("sub.moveDown", { m: modelName })}>↓</button>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => onFallbackChange(fallback.filter(item => item !== modelName))} disabled={fallbackBusy} aria-label={t("sub.removeAria", { m: modelName })}>×</button>
+                  <button type="button" className="btn btn-ghost btn-icon swi-fallback-action" onClick={() => { const next = [...fallback]; if (index > 0) [next[index - 1], next[index]] = [next[index], next[index - 1]]; onFallbackChange(next); }} disabled={fallbackBusy || index === 0} aria-label={t("sub.moveUp", { m: modelName })}>↑</button>
+                  <button type="button" className="btn btn-ghost btn-icon swi-fallback-action" onClick={() => { const next = [...fallback]; if (index < next.length - 1) [next[index], next[index + 1]] = [next[index + 1], next[index]]; onFallbackChange(next); }} disabled={fallbackBusy || index === fallback.length - 1} aria-label={t("sub.moveDown", { m: modelName })}>↓</button>
+                  <button type="button" className="btn btn-ghost btn-icon swi-fallback-action" onClick={() => onFallbackChange(fallback.filter(item => item !== modelName))} disabled={fallbackBusy} aria-label={t("sub.removeAria", { m: modelName })}>×</button>
                 </div>
               </div>
             ))}

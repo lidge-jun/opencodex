@@ -159,6 +159,10 @@
   gap: 2px;
 }
 
+.swi-fallback-action {
+  flex: 0 0 28px;
+}
+
 .swi-fallback-add .input {
   width: 100%;
 }
@@ -204,9 +208,46 @@
 }
 
 @container subagents-workspace (max-width: 700px) {
+  .swi-fallback-editor {
+    flex-wrap: wrap;
+  }
+
+  .swi-fallback-editor > .setting-copy,
+  .swi-fallback-controls {
+    flex-basis: 100%;
+  }
+
+  .swi-fallback-options {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .swi-fallback-poll {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .swi-fallback-roster {
+    grid-column: 1 / -1;
+    align-items: flex-start;
+  }
+
+  .swi-fallback-save {
+    grid-column: 2;
+    justify-self: end;
+  }
+}
+
+@container subagents-workspace (max-width: 480px) {
   .swi-fallback-options {
     grid-template-columns: 1fr;
     align-items: start;
+  }
+
+  .swi-fallback-roster,
+  .swi-fallback-save {
+    grid-column: auto;
   }
 
   .swi-fallback-save {
