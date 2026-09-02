@@ -146,7 +146,7 @@ describe("Cursor effort variant rows", () => {
   test("parseEffortRowId enables only the --<effort> grammar behind cursorEffortRows", () => {
     expect(parseEffortRowId("kimi/k3--high", {})).toBeNull();
     expect(parseEffortRowId("kimi/k3--high", { cursorEffortRows: false })).toBeNull();
-    for (const id of ["kimi/k3@high", "kimi/k3:high", "kimi/k3-high", "kimi/k3--", "kimi/k3--turbo"]) {
+    for (const id of ["kimi/k3@high", "kimi/k3:high", "kimi/k3-high", "kimi/k3--", "kimi/k3--turbo", "kimi/k3--none"]) {
       expect(parseEffortRowId(id, { cursorEffortRows: true })).toBeNull();
     }
     expect(parseEffortRowId("kimi/k3--high", { cursorEffortRows: true })).toEqual({

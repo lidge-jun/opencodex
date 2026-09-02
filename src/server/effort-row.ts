@@ -86,7 +86,8 @@ export function parseEffortRowId(
   if (separator <= 0) return null;
   const baseId = id.slice(0, separator);
   const effort = id.slice(separator + EFFORT_ROW_SEPARATOR.length);
-  if (!isDeclaredReasoningEffort(effort)) return null;
+  // "none" is never published as a row (discovery filters it), so it is never accepted either.
+  if (effort === "none" || !isDeclaredReasoningEffort(effort)) return null;
   if (predictCursorEffort(baseId, options.table ?? null, options.supportsReasoning).ladder !== null) {
     return null;
   }
@@ -96,6 +97,9 @@ export function parseEffortRowId(
 /** Parse one ingress selector against the current config and installed Cursor table. */
 export function parseRequestEffortRowId(id: string, config: OcxConfig): ParsedEffortRowId | null {
   if (config.cursorEffortRows !== true) return null;
+  // Ordinary ids carry no separator; bail before the known-id scan and install detection so
+  // the flag costs nothing on the request path for models that are not effort rows.
+  if (id.lastIndexOf(EFFORT_ROW_SEPARATOR) <= 0) return null;
   return parseEffortRowId(id, config, {
     knownIds: knownEffortRowIds(config),
     table: loadDetectedCursorEffortTable(),
