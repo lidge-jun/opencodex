@@ -93,7 +93,8 @@ export function parseCursorEffortTable(source: string): Omit<CursorEffortTable, 
     });
   }
   if (families.length === 0 || families.length !== openers) return null;
-  const bareRe = /if\(\/(\^gpt-5[^/]+)\/([a-z]*)\.test\(t\)\)return ([A-Za-z_$][\w$]*)\}/u.exec(source);
+  // The tested variable and the returned constant are minifier-assigned names; bind by shape.
+  const bareRe = /if\(\/(\^gpt-5[^/]+)\/([a-z]*)\.test\([A-Za-z_$][\w$]*\)\)return ([A-Za-z_$][\w$]*)\}/u.exec(source);
   const bareConst = bareRe ? constants.get(bareRe[3]!) : undefined;
   let bareGpt5: CursorBareGpt5Rule | null = null;
   if (bareRe && bareConst) {
