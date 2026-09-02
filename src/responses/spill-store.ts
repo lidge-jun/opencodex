@@ -215,7 +215,9 @@ function isErrno(error: unknown, code: string): boolean {
 }
 
 function canUseExclusiveCopyFallback(error: unknown): boolean {
-  return process.platform === "win32" || ["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]
+  // Same platform seam as harden(): a fixture pinned to the POSIX lane on a Windows host must
+  // see a link failure as a failure, not as a cue to copy.
+  return windowsSecretAclApplies() || ["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]
     .some(code => isErrno(error, code));
 }
 

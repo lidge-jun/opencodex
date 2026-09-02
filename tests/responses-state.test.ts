@@ -57,6 +57,7 @@ import {
   pendingResponseSpillMetricsForTests,
 } from "../src/responses/state";
 import {
+  RESPONSE_SPILL_DIR_NAME,
   readResponseSpill,
   deleteResponseSpill,
   recoverOrphanedResponseSpills,
@@ -110,6 +111,15 @@ import {
  * EACLIDENTITY before the case reached its own seams (run 33584155821, :1304). Both
  * resolvers are injected so the lane is hermetic on every host.
  */
+const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+/**
+ * Gated runners must only gate SPILL hardens. On a real Windows host the snapshot flush also
+ * hardens responses-state.json through the same async runner; a gate that swallowed that
+ * call held flushResponseState() open until the 30 s ACL deadline (run 33595585136, shard 2).
+ */
+function isSpillAclTarget(args: string[]): boolean {
+  return args.some(arg => arg.includes(RESPONSE_SPILL_DIR_NAME));
+}
 const SYNTHETIC_SID = { success: true, exitCode: 0, timedOut: false, stdout: "S-1-5-21-1-2-3-1001\nocx-test\n" };
 function forceWindowsAclLane(): void {
   setPlatformForTests("win32");
@@ -885,13 +895,14 @@ describe("Responses previous_response_id state", () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const started = new Promise<void>(resolve => { entered = resolve; });
     let announced = false;
-    setAsyncIcaclsRunnerForTests(async () => {
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (!isSpillAclTarget(args)) return ICACLS_OK;
       if (!announced) {
         announced = true;
         entered();
       }
       await gate;
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      return ICACLS_OK;
     });
     setResponseStateByteCapForTests(1_024);
 
@@ -1129,13 +1140,14 @@ describe("Responses previous_response_id state", () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const started = new Promise<void>(resolve => { entered = resolve; });
     let announced = false;
-    setAsyncIcaclsRunnerForTests(async () => {
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (!isSpillAclTarget(args)) return ICACLS_OK;
       if (!announced) {
         announced = true;
         entered();
       }
       await gate;
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      return ICACLS_OK;
     });
     setResponseStateByteCapForTests(1_024);
 
@@ -1163,13 +1175,14 @@ describe("Responses previous_response_id state", () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const started = new Promise<void>(resolve => { entered = resolve; });
     let announced = false;
-    setAsyncIcaclsRunnerForTests(async () => {
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (!isSpillAclTarget(args)) return ICACLS_OK;
       if (!announced) {
         announced = true;
         entered();
       }
       await gate;
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      return ICACLS_OK;
     });
     setResponseStateByteCapForTests(1_024);
     rememberLarge("resp_shutdown_pending", "p".repeat(2 * 1024 * 1024 + 4_096));
@@ -1194,13 +1207,14 @@ describe("Responses previous_response_id state", () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const started = new Promise<void>(resolve => { entered = resolve; });
     let announced = false;
-    setAsyncIcaclsRunnerForTests(async () => {
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (!isSpillAclTarget(args)) return ICACLS_OK;
       if (!announced) {
         announced = true;
         entered();
       }
       await gate;
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      return ICACLS_OK;
     });
     setResponseStateByteCapForTests(1_024);
     const payload = `restart-${"r".repeat(2 * 1024 * 1024 + 4_096)}`;
@@ -1274,10 +1288,11 @@ describe("Responses previous_response_id state", () => {
     let entered!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const started = new Promise<void>(resolve => { entered = resolve; });
-    setAsyncIcaclsRunnerForTests(async () => {
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (!isSpillAclTarget(args)) return ICACLS_OK;
       entered();
       await gate;
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      return ICACLS_OK;
     });
     let synchronousCalls = 0;
     setIcaclsRunnerForTests(() => {
@@ -1311,13 +1326,14 @@ describe("Responses previous_response_id state", () => {
     const gate = new Promise<void>(resolve => { release = resolve; });
     const started = new Promise<void>(resolve => { entered = resolve; });
     let announced = false;
-    setAsyncIcaclsRunnerForTests(async () => {
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (!isSpillAclTarget(args)) return ICACLS_OK;
       if (!announced) {
         announced = true;
         entered();
       }
       await gate;
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      return ICACLS_OK;
     });
     setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
     setResponseStateByteCapForTests(1_024);
@@ -1363,10 +1379,11 @@ describe("Responses previous_response_id state", () => {
     const started = new Promise<void>(resolve => { entered = resolve; });
     let aclClock = 0;
     setNowForTests(() => aclClock);
-    setAsyncIcaclsRunnerForTests(async () => {
+    setAsyncIcaclsRunnerForTests(async args => {
+      if (!isSpillAclTarget(args)) return ICACLS_OK;
       entered();
       await gate;
-      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+      return ICACLS_OK;
     });
     const deadlines: number[] = [];
     setIcaclsRunnerForTests((_args, timeoutMs) => {
