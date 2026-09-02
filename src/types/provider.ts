@@ -520,9 +520,17 @@ export interface OcxProviderConfig {
    * SSE/JSON; raw inspection state remains authoritative.
    */
   responsesSnapshotRepair?: boolean;
-  /** Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values. */
+  /**
+   * Provider-wide mapping from Codex effort labels to upstream `reasoning_effort` values.
+   * Map a label to `REASONING_EFFORT_OMIT_SENTINEL` ("__omit__") to omit the reasoning field
+   * for that effort so the upstream model's own default applies.
+   */
   reasoningEffortMap?: Record<string, string>;
-  /** Model-specific mapping from Codex effort labels to upstream `reasoning_effort` values. */
+  /**
+   * Model-specific mapping from Codex effort labels to upstream `reasoning_effort` values.
+   * Map a label to `REASONING_EFFORT_OMIT_SENTINEL` ("__omit__") to omit the reasoning field
+   * for that effort so the upstream model's own default applies.
+   */
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
   /** OpenAI-compatible gateway reasoning wire shape. Default sends `reasoning_effort`. */
   reasoningWireFormat?: "gateway-object";

@@ -73,8 +73,8 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 | xAI Responses 選用（儀表板） | 開關 | 僅用於 `xai`，以原子方式設定或清除 `grok-4.5` 與 `grok-4.6` 的 `modelAdapters` 項目。若只有一個項目，會顯示混合狀態，直到下次開關寫入統一兩者。其他覆寫與層級行為不變。 |
 | `annotateEmptyToolOutputs?` | `boolean` | 在工具結果送達模型前，將已存在但為空的結果替換成簡短標記，使空白結果不會被解讀為遺漏的結果。適用於空白字串及僅含文字部分的陣列；影像、檔案及加密部分絕不會被更動。DeepSeek 透過內建登錄檔預設為 `true`，其他情況則不設定。設為 `false` 可讓供應商停用此功能；後續編輯即使省略此欄位，也會保留明確設定的 `false`。`PATCH /api/providers?name=<provider>` 接受 `true`、`false` 或 `null`；`null` 會清除覆寫並恢復使用登錄檔的預設行為。 |
 | `xaiResponsesXSearch?` | `boolean` | 預設停用。在 xAI Responses 目的地上，僅當即時 `web_search` 工具通過最終請求正規化後仍保留時，才附加由供應商託管的 `x_search` 宣告。既有宣告不會重複，呼叫端的 `tool_choice`／`allowed_tools` 選擇器絕不會擴大，且此設定與網頁搜尋輔助服務的 `search.xSearch` 選項分開。 |
-| `reasoningEffortMap?` | `Record<string, string>` | 供應商範圍的 reasoning 標籤 wire 別名。 |
-| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Per-model 的 reasoning 標籤 wire 別名。 |
+| `reasoningEffortMap?` | `Record<string, string>` | 供應商範圍的 reasoning 標籤 wire 別名。將標籤對應為 `"__omit__"` 可在上游請求中完全省略推理欄位（例如針對需要省略 `reasoning_effort` 才能觸發深度思考模式的 Ollama 本地模型）。 |
+| `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Per-model 的 reasoning 標籤 wire 別名。將標籤對應為 `"__omit__"` 可在上游請求中完全省略推理欄位。 |
 | `noReasoningModels?` | `string[]` | 拒絕 reasoning/thinking 參數的模型。 |
 | `noTemperatureModels?` | `string[]` | 拒絕呼叫者指定 `temperature` 的模型。 |
 | `noTopPModels?` | `string[]` | 拒絕呼叫者指定 `top_p` 的模型。 |
