@@ -34,15 +34,25 @@ function collectBareToolSpecs(
       }
       continue;
     }
-    if (typeof spec.name !== "string") continue;
+    // `buildTools` (parser.ts) also accepts the Chat-shaped `{ type: "function", function: { name } }`
+    // declaration, and the undeclared-tool guard authorizes it the same way. Reading only
+    // `spec.name` here left such a function out of the raw-body set, so the intersection dropped
+    // it and a self-named echo for it reached Codex again.
+    const nestedFunction = spec.type === "function" && isPlainObject(spec.function) ? spec.function : undefined;
+    const name = typeof spec.name === "string" && spec.name.length > 0
+      ? spec.name
+      : typeof nestedFunction?.name === "string" && nestedFunction.name.length > 0
+        ? nestedFunction.name
+        : undefined;
+    if (!name) continue;
     const namespace = typeof spec.namespace === "string" ? spec.namespace : undefined;
-    if (namespace !== "functions" && namespace === spec.name) {
-      if (spec.type === "custom") sameNameNamespacedCustomNames.add(spec.name);
-      else if (spec.type === "function") sameNameNamespacedFunctionNames.add(spec.name);
+    if (namespace !== "functions" && namespace === name) {
+      if (spec.type === "custom") sameNameNamespacedCustomNames.add(name);
+      else if (spec.type === "function") sameNameNamespacedFunctionNames.add(name);
     }
     if (!namespace || namespace === "functions") {
-      if (spec.type === "custom") bareCustomNames.add(spec.name);
-      else if (spec.type === "function") bareFunctionNames.add(spec.name);
+      if (spec.type === "custom") bareCustomNames.add(name);
+      else if (spec.type === "function") bareFunctionNames.add(name);
     }
   }
 }
@@ -169,4 +179,3 @@ export function createSelfNamedToolCallNamespaceScrubRewrite(
 ): SsePayloadRewrite {
   return payload => scrubSelfNamedToolCallNamespaceInJson(payload, authorization);
 }
-

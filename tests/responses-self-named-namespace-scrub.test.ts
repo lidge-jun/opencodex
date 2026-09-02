@@ -163,6 +163,29 @@ test("a self-named namespace on a passthrough bare function_call is scrubbed", a
   expect(text).not.toContain('\"namespace\":\"wait\"');
 });
 
+test("a Chat-shaped function declaration still authorizes the bare function scrub", async () => {
+  // `buildTools` accepts `{ type: "function", function: { name } }` and the undeclared-tool guard
+  // authorizes it, so the scrub's raw-body collector has to read the nested name too; otherwise
+  // the intersection drops the tool and a self-named echo for it loops Codex again.
+  const chatShaped = {
+    ...requestBody,
+    input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "wait" }] },
+    ],
+    tools: [{ type: "function", function: { name: "wait", parameters: { type: "object", properties: {} } } }],
+  };
+  const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "wait", namespace: "wait", arguments: "{}", status: "completed" };
+  globalThis.fetch = (async () => new Response(sseFrom([call]), {
+    status: 200, headers: { "content-type": "text/event-stream" },
+  })) as typeof fetch;
+
+  const res = await handleResponses(request(chatShaped), forwardConfig(), { model: "", provider: "" });
+  expect(res.status).toBe(200);
+  const text = await res.text();
+  expect(text).toContain('"type":"function_call"');
+  expect(text).not.toContain('"namespace":"wait"');
+});
+
 test("tool_choice for a namespaced custom tool cannot authorize a colliding bare scrub", async () => {
   const call = { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "exec", namespace: "exec", input: "pwd", status: "completed" };
   globalThis.fetch = (async () => new Response(sseFrom([call]), {
