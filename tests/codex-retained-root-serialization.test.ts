@@ -95,7 +95,10 @@ function sandboxChildEnv(sandbox: Sandbox): Record<string, string> {
   return { ...sandbox.env, ...sandbox.serviceManagerEnv };
 }
 
-async function waitForPath(path: string, timeoutMs = 10_000): Promise<void> {
+// The default sits inside the 20 s test budgets below. A `bun --eval` child on a loaded
+// windows-latest shard takes 8-11 s just to boot and reach the marker (runs 33590540220
+// and 33605898170), so a 10 s wait was the coin flip, not the child.
+async function waitForPath(path: string, timeoutMs = 16_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!existsSync(path)) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${path}`);
