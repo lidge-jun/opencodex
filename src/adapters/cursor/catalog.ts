@@ -1,3 +1,9 @@
+import {
+  composeCursorClaudeWireId,
+  normalizeCursorClaudeId,
+  type NormalizedCursorClaudeId,
+} from "./claude-id";
+
 /**
  * Cursor umbrella catalog — the single source of truth for cursor model
  * identities (devlog 260828_cursor_umbrella_catalog).
@@ -120,12 +126,8 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
       thinking: { levels: FULL, order: T },
     },
   },
-  // 260902 preemptive: Claude Fable 5.1 seeded ahead of Cursor's lineup update, mirroring
-  // claude-fable-5 (same 1M window and full effort ladder). Cursor has spelled Claude ids
-  // both Anthropic-style (`claude-opus-4-7`, thinking-then-effort) and version-first
-  // (`claude-4.6-opus`, effort-then-thinking), so all three plausible spellings are seeded;
-  // the live GetUsableModels filter drops whichever the roster does not expose. Collapse to
-  // the one real spelling once it is observed.
+  // Claude Fable 5.1 has one canonical capability row. Saved aliases and the live roster's
+  // exact spelling are normalized and round-tripped at the adapter boundary.
   "claude-fable-5-1": {
     displayName: "Claude Fable 5.1",
     window: CONTEXT_1M,
@@ -133,24 +135,6 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     variants: {
       regular: { levels: FULL },
       thinking: { levels: FULL, order: T },
-    },
-  },
-  "claude-fable-5.1": {
-    displayName: "Claude Fable 5.1",
-    window: CONTEXT_1M,
-    defaultVariant: "thinking",
-    variants: {
-      regular: { levels: FULL },
-      thinking: { levels: FULL, order: T },
-    },
-  },
-  "claude-5.1-fable": {
-    displayName: "Claude Fable 5.1",
-    window: CONTEXT_1M,
-    defaultVariant: "thinking",
-    variants: {
-      regular: { levels: FULL },
-      thinking: { levels: FULL, order: E },
     },
   },
   "claude-sonnet-5": {
@@ -382,12 +366,25 @@ const REAL_1M_WIRE_IDS: ReadonlySet<string> = new Set(["claude-4-sonnet-1m"]);
 
 export function parseCursorVariantId(rawId: string): ParsedCursorVariantId {
   const id = rawId.trim();
+  if (REAL_1M_WIRE_IDS.has(id)) {
+    return { baseId: id, kind: "regular", ultra: false, known: false };
+  }
+  const claude = normalizeCursorClaudeId(id);
+  if (claude && CURSOR_CAPABILITIES[claude.canonicalBaseId]) {
+    const explicitVariant = claude.thinking || claude.fast || claude.level !== undefined;
+    return {
+      baseId: claude.canonicalBaseId,
+      kind: explicitVariant
+        ? claude.thinking ? (claude.fast ? "thinkingFast" : "thinking") : claude.fast ? "fast" : "regular"
+        : defaultKindFor(claude.canonicalBaseId),
+      ...(claude.level ? { level: claude.level } : {}),
+      ultra: false,
+      known: true,
+    };
+  }
   // 1. Exact base identity.
   if (CURSOR_CAPABILITIES[id]) {
     return { baseId: id, kind: defaultKindFor(id), ultra: false, known: true };
-  }
-  if (REAL_1M_WIRE_IDS.has(id)) {
-    return { baseId: id, kind: "regular", ultra: false, known: false };
   }
   // 2. cursor- wire prefix (regular grok wire forms).
   if (id.startsWith("cursor-")) {
@@ -537,17 +534,32 @@ export interface CursorResolvedSelection {
   readonly known: boolean;
 }
 
+type CursorLiveClaudeWireIdentity = Pick<NormalizedCursorClaudeId, "sourceBaseId" | "spelling">;
+
 /**
  * Compose a variant's flattened wire id, reproducing the legacy effort-map
  * order rules exactly (thinking-then-effort / effort-then-thinking / bare;
  * fast marker terminal; wrong order is ERROR_BAD_MODEL_NAME on the wire).
  */
-function composeWireId(baseId: string, kind: CursorVariantKind, effort: string | undefined): string {
+function composeWireId(
+  baseId: string,
+  kind: CursorVariantKind,
+  effort: string | undefined,
+  claudeIdentity?: CursorLiveClaudeWireIdentity,
+): string {
   const capability = CURSOR_CAPABILITIES[baseId];
   const spec = capability?.variants[kind];
   if (!capability || !spec) return baseId;
   const thinking = kind === "thinking" || kind === "thinkingFast";
   const fast = kind === "fast" || kind === "thinkingFast";
+  if (claudeIdentity) {
+    return composeCursorClaudeWireId(claudeIdentity, {
+      thinking,
+      fast,
+      effort,
+      bareThinking: spec.order === "bare",
+    });
+  }
   if (thinking) {
     const order = spec.order ?? "thinking-then-effort";
     if (order === "bare" || effort === undefined) return `${baseId}-thinking`;
@@ -587,7 +599,12 @@ export function resolveCursorSelection(
   }
   const requested = parsed.level ?? reasoning;
   const effort = cursorVariantEffort(spec, requested);
-  const canonicalId = composeWireId(parsed.baseId, kind, effort);
+  const requestedClaude = normalizeCursorClaudeId(pickedId);
+  const claudeIdentity = liveCursorClaudeWireIdentities.get(parsed.baseId)
+    ?? (requestedClaude
+      ? { sourceBaseId: requestedClaude.sourceBaseId, spelling: requestedClaude.spelling }
+      : undefined);
+  const canonicalId = composeWireId(parsed.baseId, kind, effort, claudeIdentity);
   const wireId = capability.wirePrefix && kind === "regular"
     ? `${capability.wirePrefix}${canonicalId}`
     : canonicalId;
@@ -604,6 +621,25 @@ export function resolveCursorSelection(
  * arrives — never from window size (devlog 260828 blocker-4 fold).
  */
 let liveCursorMaxModeBases: ReadonlySet<string> = new Set();
+let liveCursorClaudeWireIdentities: ReadonlyMap<string, CursorLiveClaudeWireIdentity> = new Map();
+
+export function recordLiveCursorClaudeModels(liveIds: readonly string[]): void {
+  const next = new Map<string, CursorLiveClaudeWireIdentity>();
+  for (const rawId of liveIds) {
+    const n = normalizeCursorClaudeId(rawId.startsWith("cursor-") ? rawId.slice(7) : rawId);
+    if (!n || !CURSOR_CAPABILITIES[n.canonicalBaseId]) continue;
+    if (!next.has(n.canonicalBaseId)) next.set(n.canonicalBaseId, { sourceBaseId: n.sourceBaseId, spelling: n.spelling });
+  }
+  liveCursorClaudeWireIdentities = next;
+}
+
+export function liveCursorClaudeWireIdentitiesForTests(): ReadonlyMap<string, CursorLiveClaudeWireIdentity> {
+  return liveCursorClaudeWireIdentities;
+}
+
+export function resetLiveCursorClaudeWireIdentitiesForTests(): void {
+  liveCursorClaudeWireIdentities = new Map();
+}
 
 export function recordLiveCursorMaxModeModels(liveIds: readonly string[]): void {
   const bases = new Set<string>();

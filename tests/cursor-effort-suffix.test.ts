@@ -203,6 +203,19 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(cursorModelEffortLadder("glm-5.2")).toEqual(["high", "max"]);
     expect(cursorModelEffortLadder("composer-2.5")).toBeUndefined();
   });
+
+  test("all Fable 5.1 spellings share the canonical effort ladder", () => {
+    for (const id of [
+      "claude-fable-5-1",
+      "claude-fable-5.1",
+      "claude-5.1-fable",
+      "claude-fable-5.1-thinking",
+      "claude-5.1-fable-thinking",
+    ]) {
+      expect(cursorModelEffortLadder(id), id).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(cursorEffortSuffix(id, "xhigh"), id).toBe("xhigh");
+    }
+  });
 });
 
 describe("#2569 Cursor catalog tracks the live GetUsableModels roster", () => {
@@ -232,7 +245,7 @@ describe("#2569 Cursor catalog tracks the live GetUsableModels roster", () => {
   });
 });
 
-describe("#2569 Cursor explicit-thinking variants", () => {
+describe("#2569 Cursor explicit-thinking wire order", () => {
   /**
    * Suffix ORDER differs per family and the wrong one is rejected ERROR_BAD_MODEL_NAME.
    * Cases recorded from the live GetUsableModels roster on 2026-08-25.
@@ -244,9 +257,9 @@ describe("#2569 Cursor explicit-thinking variants", () => {
     ["claude-opus-4-8-thinking-fast", "xhigh", "claude-opus-4-8-thinking-xhigh-fast"],
     ["claude-sonnet-5-thinking", "medium", "claude-sonnet-5-thinking-medium"],
     ["claude-fable-5-thinking", "xhigh", "claude-fable-5-thinking-xhigh"],
+    // The same canonical Fable family preserves each input's own wire spelling/order.
     ["claude-fable-5-1-thinking", "xhigh", "claude-fable-5-1-thinking-xhigh"],
     ["claude-fable-5.1-thinking", "xhigh", "claude-fable-5.1-thinking-xhigh"],
-    // Version-first spelling follows the 4.x families: marker at the END.
     ["claude-5.1-fable-thinking", "max", "claude-5.1-fable-max-thinking"],
     // The marker moves to the END for these families.
     ["claude-4.6-opus-thinking", "max", "claude-4.6-opus-max-thinking"],

@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   cursorUmbrellaRows,
+  liveCursorClaudeWireIdentitiesForTests,
+  recordLiveCursorClaudeModels,
   recordLiveCursorMaxModeModels,
+  resetLiveCursorClaudeWireIdentitiesForTests,
   resolveCursorSelection,
 } from "../src/adapters/cursor/catalog";
 import {
@@ -33,6 +36,9 @@ describe("cursor umbrella picker rows (devlog 260828_cursor_umbrella_catalog)", 
     expect(ids).not.toContain("claude-opus-5-fast");
     expect(ids).not.toContain("grok-4.5-fast");
     expect(ids).not.toContain("grok-4.6-fast");
+    expect(ids).not.toContain("claude-fable-5.1");
+    expect(ids).not.toContain("claude-5.1-fable");
+    expect(ids.filter(id => id === "claude-fable-5-1")).toHaveLength(1);
     // composer-2.5-fast has no umbrella base with effort dimensions; it stays.
     expect(ids).toContain("composer-2.5-fast");
   });
@@ -42,7 +48,7 @@ describe("cursor umbrella picker rows (devlog 260828_cursor_umbrella_catalog)", 
   });
 
   test("the seed is composed of routers + umbrella bases + declared product ids", () => {
-    // 4 routers + 34 umbrella bases + 13 product ids + 3 real-id exceptions.
+    // 4 routers + 32 umbrella bases + 13 product ids + 3 real-id exceptions.
     // Derived, not frozen: the hard-coded count drifted twice already (51 -> 54 when
     // #3211 pre-seeded Claude Fable 5.1 under three spellings), so the expectation now
     // comes from the same capability table the seed is built from.
@@ -123,6 +129,28 @@ describe("cursor umbrella picker rows (devlog 260828_cursor_umbrella_catalog)", 
       expect(resolveCursorSelection("claude-opus-4-8", "ultra").maxMode).toBe(false);
       // Static evidence survives the reset.
       expect(resolveCursorSelection("kimi-k3", "ultra").maxMode).toBe(true);
+    });
+  });
+
+  describe("live Claude wire identity", () => {
+    test("each successful roster replaces the spelling map atomically and reset clears it", () => {
+      resetLiveCursorClaudeWireIdentitiesForTests();
+      recordLiveCursorClaudeModels([
+        "claude-5.1-fable-high-thinking",
+        "claude-opus-5-thinking-high",
+      ]);
+      expect([...liveCursorClaudeWireIdentitiesForTests().entries()]).toEqual([
+        ["claude-fable-5-1", { sourceBaseId: "claude-5.1-fable", spelling: "version-first" }],
+        ["claude-opus-5", { sourceBaseId: "claude-opus-5", spelling: "anthropic" }],
+      ]);
+
+      recordLiveCursorClaudeModels(["claude-fable-5.1-thinking-xhigh"]);
+      expect([...liveCursorClaudeWireIdentitiesForTests().entries()]).toEqual([
+        ["claude-fable-5-1", { sourceBaseId: "claude-fable-5.1", spelling: "anthropic" }],
+      ]);
+
+      resetLiveCursorClaudeWireIdentitiesForTests();
+      expect(liveCursorClaudeWireIdentitiesForTests().size).toBe(0);
     });
   });
 });

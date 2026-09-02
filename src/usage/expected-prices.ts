@@ -1,3 +1,5 @@
+import { normalizeCursorClaudeId } from "../adapters/cursor/claude-id";
+
 /**
  * Expected-price overlay for models whose jawcode cost rows are missing or all-zero
  * (subscription/OAuth surfaces). Sourced from official pricing pages only
@@ -100,13 +102,8 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // bundle collapses anthropic-apikey onto anthropic).
   { provider: "anthropic", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
   { provider: "anthropic-apikey", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
-  // Cursor seeds Fable 5.1 preemptively under three spellings (adapters/cursor/catalog.ts);
-  // the model-level vendor fallback only searches jawcode metadata, which has no Fable 5.1
-  // row yet, so each Cursor spelling needs its own overlay. Vendor list price, like the
-  // cursor/claude-opus-5 row.
+  // Cursor canonicalizes every Fable 5.1 spelling onto this sole overlay row.
   { provider: "cursor", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input; vendor list price applied to the Cursor surface`, verifiedAt: "2026-09-02", status: "verified-derived" },
-  { provider: "cursor", modelId: "claude-fable-5.1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input; vendor list price applied to the Cursor surface`, verifiedAt: "2026-09-02", status: "verified-derived" },
-  { provider: "cursor", modelId: "claude-5.1-fable", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input; vendor list price applied to the Cursor surface`, verifiedAt: "2026-09-02", status: "verified-derived" },
   // claude-opus-5 is exposed by three providers but absent from the jawcode bundle, so
   // cost resolution returned null and the Logs `~$` column rendered an em dash. The
   // model-level vendor fallback only searches jawcode metadata, never overlays, so one
@@ -236,8 +233,14 @@ export function findExpectedPriceOverlay(
   overlays: readonly ExpectedPriceOverlay[] = EXPECTED_PRICE_OVERLAYS,
 ): ExpectedPriceOverlay | undefined {
   const exact = overlays.filter(row => row.provider === provider && row.modelId === modelId);
-  return exact.find(row => row.status === "verified")
+  const match = exact.find(row => row.status === "verified")
     ?? exact.find(row => row.status === "verified-derived");
+  if (match || provider !== "cursor") return match;
+  const canonicalBaseId = normalizeCursorClaudeId(modelId)?.canonicalBaseId;
+  if (!canonicalBaseId) return undefined;
+  const canonical = overlays.filter(row => row.provider === provider && row.modelId === canonicalBaseId);
+  return canonical.find(row => row.status === "verified")
+    ?? canonical.find(row => row.status === "verified-derived");
 }
 
 /** OpenAI Fast price multipliers retained as a compatibility export. */

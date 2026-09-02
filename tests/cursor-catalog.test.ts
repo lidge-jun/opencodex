@@ -3,6 +3,8 @@ import {
   CURSOR_CAPABILITIES,
   cursorUmbrellaRows,
   parseCursorVariantId,
+  recordLiveCursorClaudeModels,
+  resetLiveCursorClaudeWireIdentitiesForTests,
   resolveCursorSelection,
 } from "../src/adapters/cursor/catalog";
 import {
@@ -31,6 +33,26 @@ const LEGACY_EFFORT_IDS = [
 ] as const;
 
 const CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra", undefined] as const;
+
+const EXISTING_CLAUDE_WIRE_SNAPSHOT = {
+  "claude-opus-5@high": "claude-opus-5-thinking-high",
+  "claude-opus-5-thinking-fast@max": "claude-opus-5-thinking-max-fast",
+  "claude-4.6-opus@max": "claude-4.6-opus-max-thinking",
+  "claude-4.6-opus-thinking@high": "claude-4.6-opus-high-thinking",
+  "claude-4.5-sonnet@high": "claude-4.5-sonnet-thinking",
+  "claude-4.5-sonnet-thinking@max": "claude-4.5-sonnet-thinking",
+} as const;
+
+function existingClaudeWireSnapshot(): Record<keyof typeof EXISTING_CLAUDE_WIRE_SNAPSHOT, string> {
+  return {
+    "claude-opus-5@high": resolveCursorSelection("claude-opus-5", "high").wireId,
+    "claude-opus-5-thinking-fast@max": resolveCursorSelection("claude-opus-5-thinking-fast", "max").wireId,
+    "claude-4.6-opus@max": resolveCursorSelection("claude-4.6-opus", "max").wireId,
+    "claude-4.6-opus-thinking@high": resolveCursorSelection("claude-4.6-opus-thinking", "high").wireId,
+    "claude-4.5-sonnet@high": resolveCursorSelection("claude-4.5-sonnet", "high").wireId,
+    "claude-4.5-sonnet-thinking@max": resolveCursorSelection("claude-4.5-sonnet-thinking", "max").wireId,
+  };
+}
 
 /** Legacy composition: what request-builder sends today for a picked id + effort. */
 function legacyWireId(pickedId: string, reasoning: string | undefined): string {
@@ -95,6 +117,23 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
         }
       }
     });
+
+    test("existing Claude wire ids are byte-identical before and after live-roster state is reset", () => {
+      resetLiveCursorClaudeWireIdentitiesForTests();
+      const before = existingClaudeWireSnapshot();
+      try {
+        recordLiveCursorClaudeModels([
+          "claude-5-opus-thinking-high",
+          "claude-opus-4-6-thinking-high",
+          "claude-sonnet-4-5-thinking",
+        ]);
+      } finally {
+        resetLiveCursorClaudeWireIdentitiesForTests();
+      }
+      const after = existingClaudeWireSnapshot();
+      expect(before).toEqual(EXISTING_CLAUDE_WIRE_SNAPSHOT);
+      expect(after).toEqual(EXISTING_CLAUDE_WIRE_SNAPSHOT);
+    });
   });
 
   describe("parser precedence", () => {
@@ -120,6 +159,16 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
       expect(parseCursorVariantId("grok-4.6-high-fast")).toMatchObject({ baseId: "grok-4.6", kind: "fast", level: "high" });
     });
 
+    test("every Fable 5.1 spelling parses to the canonical capability base", () => {
+      for (const id of ["claude-fable-5-1", "claude-fable-5.1", "claude-5.1-fable"]) {
+        expect(parseCursorVariantId(id), id).toMatchObject({
+          baseId: "claude-fable-5-1",
+          kind: "thinking",
+          known: true,
+        });
+      }
+    });
+
     test("unknown ids pass through unchanged", () => {
       const parsed = parseCursorVariantId("composer-9.9-special");
       expect(parsed.known).toBe(false);
@@ -140,6 +189,26 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
     test("per-variant ladders diverge: opus-5 fast clamps to high, thinking-fast reaches max", () => {
       expect(resolveCursorSelection("claude-opus-5-fast", "max").wireId).toBe("claude-opus-5-high-fast");
       expect(resolveCursorSelection("claude-opus-5-thinking-fast", "max").wireId).toBe("claude-opus-5-thinking-max-fast");
+    });
+
+    test("Fable 5.1 saved aliases stay routable with their exact spelling when no roster is recorded", () => {
+      resetLiveCursorClaudeWireIdentitiesForTests();
+      expect(resolveCursorSelection("claude-fable-5.1", "high").wireId).toBe("claude-fable-5.1-thinking-high");
+      expect(resolveCursorSelection("claude-5.1-fable", "max").wireId).toBe("claude-5.1-fable-max-thinking");
+      expect(resolveCursorSelection("claude-fable-5.1-thinking", "xhigh").wireId)
+        .toBe("claude-fable-5.1-thinking-xhigh");
+      expect(resolveCursorSelection("claude-5.1-fable-thinking", "max").wireId)
+        .toBe("claude-5.1-fable-max-thinking");
+    });
+
+    test("the live roster spelling overrides both requested and canonical spellings", () => {
+      recordLiveCursorClaudeModels(["claude-5.1-fable-high-thinking"]);
+      try {
+        expect(resolveCursorSelection("claude-fable-5-1", "high").wireId).toBe("claude-5.1-fable-high-thinking");
+        expect(resolveCursorSelection("claude-fable-5.1", "high").wireId).toBe("claude-5.1-fable-high-thinking");
+      } finally {
+        resetLiveCursorClaudeWireIdentitiesForTests();
+      }
     });
 
     test("ultra arms maxMode only on evidence-gated bases", () => {
@@ -164,6 +233,7 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
       expect(ids).not.toContain("claude-opus-5-thinking");
       expect(ids).not.toContain("claude-opus-5-fast");
       expect(ids).not.toContain("kimi-k3-1m");
+      expect(ids.filter(id => id.includes("fable") && id.includes("5-1"))).toEqual(["claude-fable-5-1"]);
       expect(rows.length).toBe(Object.keys(CURSOR_CAPABILITIES).length);
       const kimi = rows.find(row => row.id === "kimi-k3");
       expect(kimi?.maxModeVerified).toBe(true);
