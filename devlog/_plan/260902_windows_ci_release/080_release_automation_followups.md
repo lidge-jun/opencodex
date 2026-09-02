@@ -36,6 +36,11 @@ Verification: re-read the setting; the exact failing step (`gh pr create` under 
 is proven live by the next release's bump job — a synthetic probe would need its own workflow on
 `dev` and is not worth landing for one step.
 
+Applied 2026-09-02 via `gh api -X PUT repos/lidge-jun/opencodex/actions/permissions/workflow
+-f default_workflow_permissions=read -F can_approve_pull_request_reviews=true`; the API accepted
+it, so Aside was not needed. Read-back: `{"default_workflow_permissions":"read",
+"can_approve_pull_request_reviews":true}`. Default token permission stays `read`.
+
 ## service-lifecycle trigger
 
 `release.yml`'s gate requires a successful `service-lifecycle.yml` run for the release SHA when
