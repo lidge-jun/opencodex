@@ -70,11 +70,24 @@ export function normalizeCursorPickerId(modelId: string): string {
   return id;
 }
 
-export function predictCursorEffort(modelId: string, table: CursorEffortTable | null): CursorEffortPrediction {
+/**
+ * `supportsReasoning` is what the gateway row will advertise in
+ * `capabilities.supports_reasoning`; Cursor's gemini family withholds its control when that is
+ * false (`effortRequiresReasoningCapability`). Callers that do not know the row pass nothing
+ * and get the id-only prediction.
+ */
+export function predictCursorEffort(
+  modelId: string,
+  table: CursorEffortTable | null,
+  supportsReasoning?: boolean,
+): CursorEffortPrediction {
   const id = normalizeCursorPickerId(modelId);
   if (table) {
     for (const family of table.families) {
       if (family.pattern.test(id)) {
+        if (family.requiresReasoningCapability && supportsReasoning === false) {
+          return { ladder: null, source: "bundle", family: family.id };
+        }
         return {
           ladder: family.ladder.length > 0 ? [...family.ladder] : null,
           source: "bundle",
@@ -86,7 +99,9 @@ export function predictCursorEffort(modelId: string, table: CursorEffortTable | 
     if (table.bareGpt5?.pattern.test(id)) return { ladder: [...table.bareGpt5.ladder], source: "bundle", family: "gpt-5" };
     return { ladder: null, source: "bundle", family: null };
   }
-  return { ladder: cursorEffortFamily(modelId), source: "static", family: null };
+  const staticLadder = cursorEffortFamily(modelId);
+  const gated = supportsReasoning === false && id.startsWith("gemini-") ? null : staticLadder;
+  return { ladder: gated, source: "static", family: null };
 }
 
 export interface ModelCapabilityInput {

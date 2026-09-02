@@ -76,11 +76,24 @@ describe("Cursor installed-bundle effort table", () => {
     });
     expect(loadSource("function unrelated(){}", 1)).toBeNull();
     expect(loadSource(FIXTURE.replace("/^claude-opus-5$/u", "/[/u"), 2)).toBeNull();
+    // A build that adds a property to ONE family row must not yield a partial table.
+    expect(loadSource(FIXTURE.replace('effort:k,outputCap:128e3}', 'effort:k,outputCap:128e3,newFlag:!0}'), 3)).toBeNull();
+    // A malformed bare gpt-5 pattern rejects the whole parse instead of throwing.
+    expect(loadSource(FIXTURE.replace("/^gpt-5(?:\\.\\d+)?$/u.test(t)", "/^gpt-5(/u.test(t)"), 4)).toBeNull();
     expect(predictCursorEffort("anthropic/claude-opus-5", null)).toEqual({
       ladder: ["low", "medium", "high", "xhigh", "max"],
       source: "static",
       family: null,
     });
+  });
+
+  test("gemini withholds its ladder when the row will not advertise supports_reasoning", () => {
+    const table = parsedFixtureTable();
+    expect(predictCursorEffort("cursor/gemini-3.7-flash", table, true).ladder).toEqual(["minimal", "low", "medium", "high"]);
+    expect(predictCursorEffort("cursor/gemini-3.7-flash", table, false)).toEqual({ ladder: null, source: "bundle", family: "gemini" });
+    expect(predictCursorEffort("cursor/gemini-3.7-flash", null, false).ladder).toBeNull();
+    // Other families ignore the flag: Cursor gates only gemini on it.
+    expect(predictCursorEffort("anthropic/claude-opus-5", table, false).ladder).toHaveLength(5);
   });
 
   test("caches by bundle path, mtime, and size and re-reads after mtime changes", () => {

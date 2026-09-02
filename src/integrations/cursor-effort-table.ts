@@ -23,10 +23,16 @@ export interface CursorEffortFamily {
   requiresReasoningCapability: boolean;
 }
 
+export interface CursorBareGpt5Rule {
+  pattern: RegExp;
+  ladder: readonly string[];
+  defaultValue: string;
+}
+
 export interface CursorEffortTable {
   families: readonly CursorEffortFamily[];
   /** The bare gpt-5 / gpt-5.x rule that runs when no family matched. */
-  bareGpt5: { pattern: RegExp; ladder: readonly string[]; defaultValue: string } | null;
+  bareGpt5: CursorBareGpt5Rule | null;
   version: string | null;
   bundlePath: string;
 }
@@ -62,6 +68,10 @@ export function parseCursorEffortTable(source: string): Omit<CursorEffortTable, 
   const body = source.slice(tableStart + 2, tableEnd + 1);
   const entryRe = /\{id:"([^"]+)",matches:e=>\/((?:\\\/|[^/])+)\/([a-z]*)\.test\(e\)((?:,(?:effort:(?:[A-Za-z_$][\w$]*|\{[^}]*\})|outputCap:[\de.]+|effortRequiresReasoningCapability:!0))*)\}/gu;
   const families: CursorEffortFamily[] = [];
+  // Every "{id:" opener in the window must be consumed by entryRe. A build that adds a
+  // property to one family would otherwise drop that family silently and the caller would
+  // report a bundle-sourced "no control" for it instead of falling back to the mirror.
+  const openers = body.split('{id:"').length - 1;
   for (const m of body.matchAll(entryRe)) {
     let pattern: RegExp;
     try { pattern = new RegExp(m[2]!, m[3]!); } catch { return null; }
@@ -82,12 +92,15 @@ export function parseCursorEffortTable(source: string): Omit<CursorEffortTable, 
       requiresReasoningCapability: tail.includes("effortRequiresReasoningCapability:!0"),
     });
   }
-  if (families.length === 0) return null;
+  if (families.length === 0 || families.length !== openers) return null;
   const bareRe = /if\(\/(\^gpt-5[^/]+)\/([a-z]*)\.test\(t\)\)return ([A-Za-z_$][\w$]*)\}/u.exec(source);
   const bareConst = bareRe ? constants.get(bareRe[3]!) : undefined;
-  const bareGpt5 = bareRe && bareConst
-    ? { pattern: new RegExp(bareRe[1]!, bareRe[2]!), ladder: bareConst.values, defaultValue: bareConst.defaultValue }
-    : null;
+  let bareGpt5: CursorBareGpt5Rule | null = null;
+  if (bareRe && bareConst) {
+    let pattern: RegExp;
+    try { pattern = new RegExp(bareRe[1]!, bareRe[2]!); } catch { return null; }
+    bareGpt5 = { pattern, ladder: bareConst.values, defaultValue: bareConst.defaultValue };
+  }
   return { families, bareGpt5 };
 }
 
