@@ -6298,6 +6298,56 @@ async function handleResponsesInner(
         upstreamResponse = result;
       }
 
+      // Google Antigravity OAuth account pool: cool the failed account and retry with another eligible account.
+      while (
+        (upstreamResponse.status === 429 || upstreamResponse.status === 403)
+        && antigravityPoolAccountId
+        && isAntigravityAccountPoolEnabled(config)
+        && antigravityPoolFailovers < ANTIGRAVITY_POOL_MAX_FAILOVERS_PER_REQUEST
+      ) {
+        const errorHint = await readAntigravity429ErrorHint(upstreamResponse, upstream.signal);
+        const nextAccountId = rotateAntigravityAccountOn429(
+          config,
+          antigravityPoolAccountId,
+          upstreamResponse.headers.get("retry-after"),
+          antigravitySessionKey,
+          Date.now(),
+          errorHint,
+        );
+        if (!nextAccountId) break;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        try {
+          const snapshot = await getAntigravityPoolAccessSnapshot(nextAccountId);
+          antigravityPoolAccountId = nextAccountId;
+          antigravityPoolFailovers += 1;
+          route.provider = applyAntigravityAccountSnapshot(route.provider, snapshot);
+          replayOAuthCredentialSnapshot = {
+            accountId: snapshot.accountId,
+            generation: snapshot.generation,
+          };
+          invalidateSameTargetRequest();
+          promoteAntigravityActiveAccount(nextAccountId);
+          logCtx.provider = formatAntigravityProviderForLog("google-antigravity", nextAccountId, config);
+          activeAdapter = resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            config.cacheRetention,
+          );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: activeAdapter.name,
+            oauthCredentialSnapshot: replayOAuthCredentialSnapshot,
+          });
+          sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+          const result = await rebuildAndRefetch("antigravity-oauth-429");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+        } catch {
+          break;
+        }
+      }
+
       // Opt-in Anthropic OAuth account pool (#294): cool the failed account and retry
       // with another eligible OAuth account (bounded per request). Disabled by default.
       while (

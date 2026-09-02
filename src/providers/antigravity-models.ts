@@ -158,8 +158,8 @@ function collapsesIntoKnownPickerModel(candidateId: string): boolean {
 // Claude Opus: effort → thinkingConfig.thinkingLevel (CLIProxyAPI proven pattern).
 export const ANTIGRAVITY_MODEL_EFFORTS: Record<string, string[]> = {
   // No `minimal`: Google documents it as an error for this generation, and CCA exposes only
-  // the three tiers.
-  "gemini-3.8-flash": ["low", "medium", "high"],
+  // the three tiers. Supports max reasoning effort.
+  "gemini-3.8-flash": ["low", "medium", "high", "max"],
   "gemini-3.1-pro": ["low", "high"],
   "claude-sonnet-4-6": ["low", "medium", "high", "max"],
   "claude-opus-4-6-thinking": ["low", "medium", "high", "max"],
@@ -681,10 +681,8 @@ export function resolveAntigravityEffortWireModel(
   const effortMap = ANTIGRAVITY_EFFORT_WIRE_MAP[modelId];
   if (effortMap) {
     const suffixTiered = ANTIGRAVITY_SUFFIX_TIER_MODELS.has(modelId);
-    // Normalize FIRST for suffix-tiered models. The discovery path clamps max/xhigh/ultra to
-    // `high` before its own lookup, so a static path that skipped the clamp answered `medium`
-    // for the same request: one input, two tiers, decided by whether discovery happened to run.
-    const requested = suffixTiered && effort
+    // Normalize max/xhigh/ultra to high so tiered maps and thinking levels resolve consistently.
+    const requested = effort
       ? resolveAntigravityThinkingLevel(effort) ?? effort
       : effort;
     if (requested && requested in effortMap) {
