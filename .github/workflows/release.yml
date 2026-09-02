@@ -67,6 +67,14 @@ jobs:
   bump-dev-version:
     needs: publish
     if: ${{ inputs.dry-run != true }}
+    # A reusable-workflow CALL cannot grant the callee more than the calling job holds,
+    # and GitHub refuses the whole run at startup when the called workflow's own job
+    # declares permissions the caller did not pass down ("startup_failure", runs
+    # 33615174183 / 33615177849 — the first dispatches since #3129 wired this call).
+    # The callee's job declares exactly these two; nothing else in this file gains them.
+    permissions:
+      contents: write
+      pull-requests: write
     uses: ./.github/workflows/dev-version-bump.yml
     with:
       released-version: v${{ inputs.version }}
