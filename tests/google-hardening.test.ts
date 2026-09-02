@@ -792,8 +792,10 @@ describe("google provider hardening", () => {
     expect(google?.modelReasoningEfforts?.["gemini-3.5-flash"]).toEqual([
       "minimal", "low", "medium", "high",
     ]);
+    // 3.7 and 3.8 exclude `minimal`: Google documents it as a validation error on both model
+    // pages, so advertising it would offer a rung the API rejects.
     expect(google?.modelReasoningEfforts?.["gemini-3.7-flash"]).toEqual([
-      "minimal", "low", "medium", "high",
+      "low", "medium", "high",
     ]);
     expect(google?.modelReasoningEfforts?.["gemini-3.1-pro-preview"]).toEqual([
       "low", "medium", "high",

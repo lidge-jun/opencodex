@@ -1740,12 +1740,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: { "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
     modelInputModalities: { "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
     modelReasoningEfforts: {
-      // 3.8 omits `minimal` deliberately: Google documents it as a validation error for this
-      // generation. The 3.5/3.6/3.7 rows keep theirs; correcting those is a separate change.
+      // 3.7 and 3.8 omit `minimal`: Google documents it as a validation error on both model
+      // pages, so advertising it hands the user a rung the API rejects. 3.5/3.6 keep theirs —
+      // their pages still list it, and this unit has no evidence to change them.
       "gemini-3.8-flash": ["low", "medium", "high"],
+      "gemini-3.7-flash": ["low", "medium", "high"],
       "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
       "gemini-3.5-flash": ["minimal", "low", "medium", "high"],
-      "gemini-3.7-flash": ["minimal", "low", "medium", "high"],
       "gemini-3.1-pro-preview": ["low", "medium", "high"],
     },
     jawcodeBundle: "google", extraMetadataAliases: ["gemini"],

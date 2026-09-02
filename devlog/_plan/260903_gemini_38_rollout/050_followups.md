@@ -7,11 +7,13 @@ already attached.
    declaration; discovery never reads it. It reads like a source of truth and is not one.
    Deleting it is a cleanup with its own review surface, not a line in a model rollout.
 
-2. **The direct `google` 3.7 row advertises `minimal`.** `registry.ts:1745` lists
-   `["minimal","low","medium","high"]` for `gemini-3.7-flash`, but Google's 3.7 model page
-   documents `minimal` as an error for that generation — the same fact this unit relies on for
-   3.8. The 3.8 row is added correctly without it; correcting 3.7 is a behavior change for
-   existing users and belongs in its own unit.
+2. ~~**The direct `google` 3.7 row advertises `minimal`.**~~ FOLDED into this PR after the
+   maintainer review asked (see `006`): the evidence is the same one 3.8 relies on, and the
+   line was already being edited here. 3.5 and 3.6 keep theirs.
+
+2b. **`gemini-3.5-flash` has no `modelInputModalities` entry** on the direct `google` provider,
+   even though it is that provider's `defaultModel`. Pre-existing and unrelated to this diff,
+   but a default model with no advertised modalities is worth its own evidence pass.
 
 3. **OpenRouter publishes `google/gemini-3.8-flash`** (`001`). Seeding router catalogs is out of
    scope here, but the id is proven whenever that unit happens.

@@ -72,17 +72,26 @@ const ANTIGRAVITY_CLAUDE_SDK_PARAGRAPH_REJECTORS = new Set([
 ]);
 
 /**
- * Whether CCA rejects the Claude-Agent identity paragraph for this selector.
+ * Whether CCA rejects the Claude-Agent identity paragraph for this request.
  *
- * Canonicalize before the membership test: when discovery returns a PARTIAL ladder the picker
- * publishes raw suffix ids, so `parsed.modelId` can be `gemini-3.8-flash-high` rather than the
- * collapsed base. Those are the exact ids the 429 probe used, so a base-only test would miss
- * the degraded path — and the moment CCA is flaky is the worst possible time to also lose the
- * guard. `canonicalAntigravityUsageModel` collapses suffix ids through the effort-wire map and
- * returns unknown ids unchanged, so this adds no new mapping surface.
+ * Judged on the ROUTED WIRE id, not the selector, because three different selectors reach the
+ * same rejecting generation:
+ *
+ * - the collapsed base (`gemini-3.8-flash`);
+ * - a raw suffix id (`gemini-3.8-flash-high`), which the picker publishes whenever discovery
+ *   returns a PARTIAL ladder;
+ * - a RETIRED id (`gemini-3.6-flash`), which rule 0 redirects onto `gemini-3.7-flash-tiered`.
+ *
+ * That last one is why a selector-keyed test is not enough: retired ids deliberately keep their
+ * own identity for usage accounting, so they never canonicalize into the generation they
+ * actually call. A saved 3.6 selection was probed at 429 with the paragraph intact for exactly
+ * this reason. Matching on the wire id also means a future generation is covered by naming its
+ * wire spelling once, rather than every selector that can reach it.
  */
-function rejectsClaudeSdkParagraph(modelId: string): boolean {
-  return ANTIGRAVITY_CLAUDE_SDK_PARAGRAPH_REJECTORS.has(canonicalAntigravityUsageModel(modelId));
+function rejectsClaudeSdkParagraph(modelId: string, wireModelId: string): boolean {
+  const canonicalWire = canonicalAntigravityUsageModel(wireModelId.replace(/-tiered$/, ""));
+  return ANTIGRAVITY_CLAUDE_SDK_PARAGRAPH_REJECTORS.has(canonicalWire)
+    || ANTIGRAVITY_CLAUDE_SDK_PARAGRAPH_REJECTORS.has(canonicalAntigravityUsageModel(modelId));
 }
 
 function stripAntigravityRejectedClaudeSdkParagraph(systemText: string): string {
@@ -776,7 +785,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
       const identityModelId = provider.googleMode === "cloud-code-assist" ? routedModelId : parsed.modelId;
       const stripRejectedClaudeSdkParagraph = provider.googleMode === "cloud-code-assist"
-        && rejectsClaudeSdkParagraph(parsed.modelId);
+        && rejectsClaudeSdkParagraph(parsed.modelId, routedModelId);
       const { systemInstruction, contents, replayedCallIds } = messagesToGeminiFormat(
         parsed,
         identityModelId,
