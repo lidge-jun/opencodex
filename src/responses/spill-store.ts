@@ -384,7 +384,8 @@ function publishNoReplace(
       else copyFileSync(tempPath, destinationPath, constants.COPYFILE_EXCL);
       copied = true;
       harden(destinationPath, 0o600, budget);
-      const copyFd = openSync(destinationPath, "r");
+      // "r+": a read-only handle cannot be fsynced on Windows (EPERM).
+      const copyFd = openSync(destinationPath, "r+");
       try {
         if (spillIoForTest?.fsync) spillIoForTest.fsync(copyFd);
         else fsyncSync(copyFd);
@@ -422,7 +423,7 @@ async function publishNoReplaceAsync(
       copied = true;
       await hardenAsync(destinationPath, 0o600, budget, retryTimedOutOnce);
       throwIfPublicationSuperseded(publicationControl);
-      const copyFd = openSync(destinationPath, "r");
+      const copyFd = openSync(destinationPath, "r+");
       try {
         if (spillIoForTest?.fsync) spillIoForTest.fsync(copyFd);
         else fsyncSync(copyFd);

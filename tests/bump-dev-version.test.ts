@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { decideDevVersion } from "../scripts/bump-dev-version";
 
 /**
@@ -12,7 +13,15 @@ import { decideDevVersion } from "../scripts/bump-dev-version";
  * case that disproves it, so that row is load-bearing rather than an edge case.
  */
 
-const CLI = new URL("../scripts/bump-dev-version.ts", import.meta.url).pathname;
+// fileURLToPath, not .pathname: on Windows the pathname is "/D:/a/.../bump-dev-version.ts",
+// which bun cannot open, so every CLI case exited 1 before reaching the code under test —
+// and the malformed-input case read that same load failure as a correct rejection.
+const CLI = fileURLToPath(new URL("../scripts/bump-dev-version.ts", import.meta.url));
+
+function runCli(...args: string[]) {
+  const proc = Bun.spawnSync([process.execPath, CLI, ...args]);
+  return { ...proc, stderrText: new TextDecoder().decode(proc.stderr) };
+}
 
 function tempPackageJson(version: string): string {
   const dir = mkdtempSync(join(tmpdir(), "ocx-bump-"));
@@ -89,8 +98,8 @@ describe("dev version bump rule", () => {
   test("the CLI rewrites only the version line", () => {
     const path = tempPackageJson("2.36.0");
     const before = readFileSync(path, "utf8");
-    const proc = Bun.spawnSync(["bun", CLI, "2.36.0", path]);
-    expect(proc.exitCode).toBe(0);
+    const proc = runCli("2.36.0", path);
+    expect(proc.exitCode, proc.stderrText).toBe(0);
     const after = readFileSync(path, "utf8");
     expect(after).toContain('"version": "2.37.0"');
     // Everything else survives. A JSON round-trip would reformat the file and turn a
@@ -102,8 +111,8 @@ describe("dev version bump rule", () => {
   test("the CLI leaves the file byte-identical when nothing is needed", () => {
     const path = tempPackageJson("2.37.0");
     const before = readFileSync(path, "utf8");
-    const proc = Bun.spawnSync(["bun", CLI, "2.36.0", path]);
-    expect(proc.exitCode).toBe(0);
+    const proc = runCli("2.36.0", path);
+    expect(proc.exitCode, proc.stderrText).toBe(0);
     // Byte-identical, not merely "still parses": a no-op run that reformats the file
     // would open a pull request with a diff and no version change.
     expect(readFileSync(path, "utf8")).toBe(before);
@@ -117,8 +126,8 @@ describe("dev version bump rule", () => {
     // scripts/AGENTS.md requires atomic replacement for exactly this class of file.
     const path = tempPackageJson("2.36.0");
     const dir = dirname(path);
-    const proc = Bun.spawnSync(["bun", CLI, "2.36.0", path]);
-    expect(proc.exitCode).toBe(0);
+    const proc = runCli("2.36.0", path);
+    expect(proc.exitCode, proc.stderrText).toBe(0);
     // The temp sibling must be gone: a leftover .tmp-<pid> means the rename never
     // happened and the write was not atomic.
     expect(readdirSync(dir).filter(f => f.includes(".tmp-"))).toEqual([]);
@@ -143,7 +152,7 @@ describe("dev version bump rule", () => {
     const dir = dirname(path);
     chmodSync(dir, 0o500);
     try {
-      const proc = Bun.spawnSync(["bun", CLI, "2.36.0", path]);
+      const proc = runCli("2.36.0", path);
       expect(proc.exitCode).not.toBe(0);
       // Byte-identical: the failure path must leave the checkout installable.
       expect(readFileSync(path, "utf8")).toBe(before);
@@ -156,8 +165,10 @@ describe("dev version bump rule", () => {
   test("the CLI fails without writing when the released version is malformed", () => {
     const path = tempPackageJson("2.36.0");
     const before = readFileSync(path, "utf8");
-    const proc = Bun.spawnSync(["bun", CLI, "nonsense", path]);
+    const proc = runCli("nonsense", path);
     expect(proc.exitCode).not.toBe(0);
+    // The specific rejection, not "any nonzero": a module-load failure also exits 1.
+    expect(proc.stderrText).toContain("released version is not parseable");
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 });

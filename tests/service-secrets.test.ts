@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as nodeFs from "node:fs";
 import {
   existsSync,
   lstatSync,
@@ -92,7 +93,22 @@ describe("service API token ownership", () => {
 
   test("writes, restores, and removes the exact owner-only .prev backup", () => {
     const original = writeServiceApiTokenFile("ocx_data_original");
-    const backup = writeTokenBackup(original.fingerprint);
+    // Every fsync in this module must run on a writable handle: Windows returns EPERM for
+    // fsync on an "r" fd, which is how all three ownership cases failed on windows-latest.
+    const openModes: string[] = [];
+    const realOpen = nodeFs.openSync;
+    const openSpy = spyOn(nodeFs, "openSync").mockImplementation(((path: never, flags?: never, mode?: never) => {
+      if (typeof flags === "string") openModes.push(flags);
+      return realOpen(path, flags, mode);
+    }) as typeof realOpen);
+    let backup: ReturnType<typeof writeTokenBackup>;
+    try {
+      backup = writeTokenBackup(original.fingerprint);
+    } finally {
+      openSpy.mockRestore();
+    }
+    expect(openModes.length).toBeGreaterThan(0);
+    expect(openModes.filter(mode => mode === "r")).toEqual([]);
     expect(backup.path).toBe(serviceApiTokenBackupPath());
     expect(readTokenBackupState()).toMatchObject({ kind: "present", token: "ocx_data_original" });
     if (process.platform !== "win32") expect(lstatSync(backup.path).mode & 0o777).toBe(0o600);

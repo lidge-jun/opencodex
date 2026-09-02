@@ -66,7 +66,9 @@ export function writeServiceApiTokenFile(token: string): PersistedServiceApiToke
 }
 
 function fsyncRegularFile(path: string): void {
-  const fd = openSync(path, "r");
+  // "r+", not "r": Windows rejects fsync on a read-only handle with EPERM, so a read-only
+  // open turned every token backup/replace/restore into a hard failure there.
+  const fd = openSync(path, "r+");
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 
