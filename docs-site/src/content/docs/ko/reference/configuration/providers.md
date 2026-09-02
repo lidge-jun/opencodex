@@ -402,3 +402,15 @@ Vercel AI Gateway는 하나의 모델을 여러 기반 추론 공급자에 걸�
   "visionSidecar": { "enabled": true }
 }
 ```
+
+### Responses 터미널 이벤트 복구 정책
+
+이 세 가지 키는 네이티브 Responses 스트림이 터미널 이벤트를 전달하지 않을 때 제한된 복구가 필요한 커스텀 공급자를 위한 제어 항목입니다. 요청된 각 모델에 대해 유효한 어댑터(공급자 어댑터 또는 해당 modelAdapters 재정의)가 openai-responses여야 합니다. Chat Completions 및 기타 와이어는 활성화되지 않습니다. 모델 매칭은 대소문자를 구분하지 않습니다.
+
+해석 우선순위:
+
+1. 일치하는 modelResponsesCompatibility 항목은 모델을 터미널 복구에 포함시킵니다. 기본 유예 시간은 500ms입니다(modelResponsesTerminalRepair에 명시적인 유예 시간이 제공되지 않는 한).
+2. 그렇지 않으면 일치하는 modelResponsesTerminalRepair 항목이 모델별 유예 시간을 제공합니다.
+3. 그렇지 않으면 responsesTerminalRepair가 공급자 수준의 대체값을 제공합니다.
+
+유예 시간 값은 양의 유한 밀리초여야 하며, 런타임은 이를 버림 처리하고 최대 60초로 제한합니다. 설정 검증은 잘못된 값을 거부하고 정식 ChatGPT forward 공급자에서 이 세 가지 키를 거부합니다(공급자 이름이 아닌 adapter, authMode, 정규화된 baseUrl 기준).

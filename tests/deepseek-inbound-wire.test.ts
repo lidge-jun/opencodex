@@ -12,6 +12,15 @@
  * assert the captured upstream URL, which is externally observable.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { safeConfigDTO, providerManagementConfigError } from "../src/server/auth-cors";
+import {
+  getDefaultConfig,
+  modelResponsesCompatibilityConfigError,
+  modelResponsesTerminalRepairConfigError,
+  responsesTerminalRepairConfigError,
+  validateConfigCandidate,
+} from "../src/config";
+import type { OcxConfig } from "../src/types";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import {
   getProviderRegistryEntry,
@@ -1013,5 +1022,485 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
     const input = (JSON.parse(String(built.body)) as { input: Array<{ type?: string; call_id?: string }> }).input;
     expect(input.some(item => item.call_id === "call_orphan")).toBe(false);
     expect(input.some(item => item.type === "message")).toBe(true);
+  });
+
+  describe("Custom provider Responses terminal repair escape hatch (#1809)", () => {
+    test("custom provider opts into default 500ms terminal repair via modelResponsesCompatibility", () => {
+      const customProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: {
+          "My-Model": "terminal-repair" as const,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "my-model")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "MY-MODEL")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "My-Model")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "other-model")).toBeUndefined();
+    });
+
+    test("custom provider specifies explicit graceMs via modelResponsesTerminalRepair", () => {
+      const customProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: {
+          "Model-Num": 1500,
+          "Model-Obj": { graceMs: 2000 },
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "model-num")).toEqual({ graceMs: 1500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "MODEL-NUM")).toEqual({ graceMs: 1500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "model-obj")).toEqual({ graceMs: 2000 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "MODEL-OBJ")).toEqual({ graceMs: 2000 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProv, "unconfigured")).toBeUndefined();
+    });
+
+    test("custom provider specifies provider-level responsesTerminalRepair", () => {
+      const customProvString = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: "terminal-repair" as const,
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProvString, "any-model")).toEqual({ graceMs: 500 });
+
+      const customProvNumber = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: 750,
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", customProvNumber, "any-model")).toEqual({ graceMs: 750 });
+    });
+
+    test("rejects repair for non-responses wires even when compatibility is set", () => {
+      const chatProv = {
+        adapter: "openai-chat",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: {
+          "my-model": "terminal-repair" as const,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", chatProv, "my-model")).toBeUndefined();
+    });
+
+    test("respects per-model modelAdapters overrides", () => {
+      const hybridProv = {
+        adapter: "openai-chat",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelAdapters: {
+          "responses-model": "openai-responses",
+        },
+        modelResponsesCompatibility: {
+          "responses-model": "terminal-repair" as const,
+          "chat-model": "terminal-repair" as const,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hybridProv, "responses-model")).toEqual({ graceMs: 500 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hybridProv, "chat-model")).toBeUndefined();
+    });
+
+    test("fails closed on non-positive or invalid grace values", () => {
+      const invalidProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: 750,
+        modelResponsesTerminalRepair: {
+          "zero-grace": 0,
+          "neg-grace": -500,
+          "nan-grace": NaN,
+        },
+        modelResponsesCompatibility: {
+          "compat-zero": "terminal-repair" as const,
+          "compat-neg": "terminal-repair" as const,
+          "compat-nan": "terminal-repair" as const,
+        },
+      };
+      const invalidCompatProv = {
+        ...invalidProv,
+        modelResponsesTerminalRepair: {
+          "compat-zero": 0,
+          "compat-neg": -500,
+          "compat-nan": NaN,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "zero-grace")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "neg-grace")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidProv, "nan-grace")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-zero")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-neg")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", invalidCompatProv, "compat-nan")).toBeUndefined();
+    });
+
+    test("canonical ChatGPT forward provider never undergoes terminal repair", () => {
+      const canonicalOpenAi = {
+        adapter: "openai-responses",
+        authMode: "forward" as const,
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        responsesTerminalRepair: "terminal-repair" as const,
+        modelResponsesTerminalRepair: { "gpt-5": 1000 },
+        modelResponsesCompatibility: { "gpt-5": "terminal-repair" as const },
+      };
+      expect(providerModelResponsesTerminalRepair("openai", canonicalOpenAi, "gpt-5")).toBeUndefined();
+    });
+
+    test("validateConfigCandidate rejects every terminal-repair key on the canonical forward provider", () => {
+      const base = getDefaultConfig();
+      const entries = [
+        ["modelResponsesCompatibility", { "gpt-5": "terminal-repair" }],
+        ["modelResponsesTerminalRepair", { "gpt-5": 500 }],
+        ["responsesTerminalRepair", "terminal-repair"],
+      ] as const;
+
+      for (const [field, value] of entries) {
+        const result = validateConfigCandidate({
+          ...base,
+          providers: {
+            ...base.providers,
+            openai: { ...base.providers.openai!, [field]: value },
+          },
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error).toContain(`${field} is not supported on the canonical ChatGPT forward provider`);
+        }
+      }
+    });
+
+    test("duplicate case-folded keys fail closed on ambiguity", () => {
+      const conflictProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: {
+          "My-Model": 500,
+          "my-model": 1500,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", conflictProv, "My-Model")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", conflictProv, "my-model")).toBeUndefined();
+      expect(providerModelResponsesTerminalRepair("custom-gateway", conflictProv, "MY-MODEL")).toBeUndefined();
+    });
+
+    test("ambiguous explicit values do not fall back to a provider-level grace", () => {
+      const conflictProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: 750,
+        modelResponsesTerminalRepair: {
+          "My-Model": 500,
+          "my-model": 1500,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", conflictProv, "MY-MODEL")).toBeUndefined();
+
+      const compatibilityConflict = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: 750,
+        modelResponsesCompatibility: {
+          "My-Model": "terminal-repair" as const,
+          "my-model": "terminal-repair" as const,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", compatibilityConflict, "MY-MODEL")).toBeUndefined();
+    });
+
+    test("matches modelAdapters with the exact wire resolver key semantics", () => {
+      const provider = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelAdapters: { "My-Model": "openai-chat" },
+        modelResponsesTerminalRepair: { "my-model": 1500 },
+      };
+      // resolveWireProtocolOverride does not match the differently-cased key, so the
+      // effective wire remains openai-responses and terminal repair is applicable.
+      expect(providerModelResponsesTerminalRepair("custom-gateway", provider, "my-model")).toEqual({ graceMs: 1500 });
+    });
+
+    test("clamps grace period to maximum 60,000 ms", () => {
+      const hugeProv = {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: {
+          "huge-model": 120_000,
+          "max-safe": Number.MAX_SAFE_INTEGER,
+        },
+      };
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hugeProv, "huge-model")).toEqual({ graceMs: 60_000 });
+      expect(providerModelResponsesTerminalRepair("custom-gateway", hugeProv, "max-safe")).toEqual({ graceMs: 60_000 });
+    });
+
+    test("safeConfigDTO preserves terminal-repair configuration keys", () => {
+      const config: OcxConfig = {
+        providers: {
+          "custom-gw": {
+            adapter: "openai-responses",
+            baseUrl: "https://custom-gateway.test/v1",
+            modelResponsesCompatibility: { "my-model": "terminal-repair" },
+            modelResponsesTerminalRepair: { "my-model": 1500 },
+            responsesTerminalRepair: { graceMs: 800 },
+          },
+        },
+      } as unknown as OcxConfig;
+      const dto = safeConfigDTO(config) as { providers: Record<string, Record<string, unknown>> };
+      expect(dto.providers["custom-gw"].modelResponsesCompatibility).toEqual({ "my-model": "terminal-repair" });
+      expect(dto.providers["custom-gw"].modelResponsesTerminalRepair).toEqual({ "my-model": 1500 });
+      expect(dto.providers["custom-gw"].responsesTerminalRepair).toEqual({ graceMs: 800 });
+    });
+
+    test("providerManagementConfigError validates terminal-repair configuration", () => {
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: { "my-model": "terminal-repair" },
+        modelResponsesTerminalRepair: { "my-model": 1500 },
+        responsesTerminalRepair: 800,
+      })).toBeNull();
+
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: { "my-model": "invalid" },
+      })).toContain('modelResponsesCompatibility.my-model must be "terminal-repair"');
+
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: -500,
+      })).toContain('responsesTerminalRepair must be "terminal-repair", a positive number');
+
+      const canonicalOpenAi = {
+        adapter: "openai-responses",
+        authMode: "forward",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      };
+      expect(responsesTerminalRepairConfigError("terminal-repair", "responsesTerminalRepair", "openai", canonicalOpenAi))
+        .toContain("responsesTerminalRepair is not supported on the canonical ChatGPT forward provider");
+      expect(modelResponsesCompatibilityConfigError({ "gpt-5": "terminal-repair" }, "modelResponsesCompatibility", "openai", canonicalOpenAi))
+        .toContain("modelResponsesCompatibility is not supported on the canonical ChatGPT forward provider");
+      expect(modelResponsesTerminalRepairConfigError({ "gpt-5": 500 }, "modelResponsesTerminalRepair", "openai", canonicalOpenAi))
+        .toContain("modelResponsesTerminalRepair is not supported on the canonical ChatGPT forward provider");
+
+      // Reject duplicate case-folded keys
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesCompatibility: { "My-Model": "terminal-repair", "my-model": "terminal-repair" },
+      })).toContain('modelResponsesCompatibility contains duplicate case-insensitive model id "my-model"');
+
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: { "My-Model": 1500, "my-model": 2000 },
+      })).toContain('modelResponsesTerminalRepair contains duplicate case-insensitive model id "my-model"');
+
+      // Reject fractional grace flooring to zero
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        responsesTerminalRepair: 0.5,
+      })).toContain('responsesTerminalRepair must be "terminal-repair", a positive number');
+
+      expect(providerManagementConfigError("custom-gw", {
+        adapter: "openai-responses",
+        baseUrl: "https://custom-gateway.test/v1",
+        modelResponsesTerminalRepair: { "my-model": 0.5 },
+      })).toContain('modelResponsesTerminalRepair.my-model must be a positive number');
+    });
+
+    test("handleResponses executes terminal repair on custom openai-responses provider", async () => {
+      const source = controlledSse();
+      const scheduler = new ManualTerminalScheduler();
+      const testAbort = new AbortController();
+
+      globalThis.fetch = (async () => {
+        return new Response(source.stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }) as typeof fetch;
+
+      const config = {
+        providers: {
+          "custom-gw": {
+            adapter: "openai-responses",
+            baseUrl: "https://custom-gateway.test/v1",
+            responsesTerminalRepair: 500,
+          },
+        },
+      } as unknown as OcxConfig;
+
+      const response = await handleResponses(
+        new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "custom-gw/custom-model", input: "hello", stream: true }),
+        }),
+        config,
+        { model: "", provider: "" },
+        {
+          abortSignal: testAbort.signal,
+          responsesTerminalRepairScheduler: scheduler,
+        } as Parameters<typeof handleResponses>[3],
+      );
+
+      const reader = response.body!.getReader();
+      try {
+        source.push([
+          sse({ type: "response.created", response: { id: "resp_custom", status: "in_progress", output: [] }, sequence_number: 0 }),
+          sse({ type: "response.output_item.added", item: { type: "message", id: "msg_custom", role: "assistant", status: "in_progress", content: [] }, output_index: 0, sequence_number: 1 }),
+          sse({ type: "response.output_item.done", item: { type: "message", id: "msg_custom", role: "assistant", status: "completed", content: [{ type: "output_text", text: "hi" }] }, output_index: 0, sequence_number: 2 }),
+        ].join(""));
+
+        const first = await readUntil(reader, "response.output_item.done");
+        expect(first).toContain("response.output_item.done");
+
+        for (let attempts = 0; attempts < 20 && scheduler.pending() === 0; attempts += 1) {
+          await Bun.sleep(0);
+        }
+        expect(scheduler.pending()).toBe(1);
+        scheduler.advance(500);
+
+        const tail = await readUntil(reader, "response.completed");
+        expect(tail).toContain("response.completed");
+        expect(tail).toContain("resp_custom");
+      } finally {
+        testAbort.abort();
+        source.cancel();
+        await reader.cancel().catch(() => {});
+      }
+    });
+    test("WebSocket delivery executes terminal repair on custom openai-responses provider", async () => {
+      const source = controlledSse();
+      const scheduler = new ManualTerminalScheduler();
+      const testAbort = new AbortController();
+
+      globalThis.fetch = (async () => {
+        return new Response(source.stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }) as typeof fetch;
+
+      const config = {
+        providers: {
+          "custom-ws": {
+            adapter: "openai-responses",
+            baseUrl: "https://custom-ws-gateway.test/v1",
+            responsesTerminalRepair: 500,
+          },
+        },
+      } as unknown as OcxConfig;
+
+      const response = await handleResponses(
+        new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "custom-ws/custom-model", input: "hello", stream: true }),
+        }),
+        config,
+        { model: "", provider: "" },
+        {
+          abortSignal: testAbort.signal,
+          inboundTransport: "websocket",
+          responsesTerminalRepairScheduler: scheduler,
+        } as Parameters<typeof handleResponses>[3],
+      );
+
+      const sent: string[] = [];
+      const ws = {
+        readyState: 1,
+        data: {},
+        send(message: string) { sent.push(message); return 1; },
+      } as Parameters<typeof sendResponseToWebSocket>[0];
+
+      try {
+        const pump = sendResponseToWebSocket(ws, response, () => true);
+
+        source.push([
+          sse({ type: "response.created", response: { id: "resp_custom_ws", status: "in_progress", output: [] }, sequence_number: 0 }),
+          sse({ type: "response.output_item.added", item: { type: "message", id: "msg_custom_ws", role: "assistant", status: "in_progress", content: [] }, output_index: 0, sequence_number: 1 }),
+          sse({ type: "response.output_item.done", item: { type: "message", id: "msg_custom_ws", role: "assistant", status: "completed", content: [{ type: "output_text", text: "ws-hi" }] }, output_index: 0, sequence_number: 2 }),
+        ].join(""));
+
+        for (let i = 0; i < 20 && !sent.some(frame => JSON.parse(frame).type === "response.output_item.done"); i += 1) {
+          await Bun.sleep(0);
+        }
+        expect(sent.some(frame => JSON.parse(frame).type === "response.output_item.done")).toBe(true);
+        expect(sent.some(frame => JSON.parse(frame).type === "response.completed")).toBe(false);
+
+        for (let i = 0; i < 20 && scheduler.pending() === 0; i += 1) {
+          await Bun.sleep(0);
+        }
+        expect(scheduler.pending()).toBe(1);
+        scheduler.advance(500);
+        await pump;
+
+        const eventTypes = sent.map(frame => JSON.parse(frame).type as string);
+        expect(eventTypes.filter(type => type === "response.completed")).toHaveLength(1);
+        expect(eventTypes).toContain("response.output_item.done");
+      } finally {
+        testAbort.abort();
+        source.cancel();
+      }
+    });
+
+    test("custom openai-responses provider passes through a real upstream terminal without repair", async () => {
+      const source = controlledSse();
+      const scheduler = new ManualTerminalScheduler();
+      const testAbort = new AbortController();
+
+      globalThis.fetch = (async () => {
+        return new Response(source.stream, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }) as typeof fetch;
+
+      const config = {
+        providers: {
+          "custom-pt": {
+            adapter: "openai-responses",
+            baseUrl: "https://custom-passthrough.test/v1",
+            responsesTerminalRepair: 500,
+          },
+        },
+      } as unknown as OcxConfig;
+
+      const response = await handleResponses(
+        new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "custom-pt/custom-model", input: "hello", stream: true }),
+        }),
+        config,
+        { model: "", provider: "" },
+        {
+          abortSignal: testAbort.signal,
+          responsesTerminalRepairScheduler: scheduler,
+        } as Parameters<typeof handleResponses>[3],
+      );
+
+      const reader = response.body!.getReader();
+      try {
+        source.push([
+          sse({ type: "response.created", response: { id: "resp_passthrough", status: "in_progress", output: [] }, sequence_number: 0 }),
+          sse({ type: "response.output_item.added", item: { type: "message", id: "msg_pt", role: "assistant", status: "in_progress", content: [] }, output_index: 0, sequence_number: 1 }),
+          sse({ type: "response.output_item.done", item: { type: "message", id: "msg_pt", role: "assistant", status: "completed", content: [{ type: "output_text", text: "done" }] }, output_index: 0, sequence_number: 2 }),
+          sse({ type: "response.completed", response: { id: "resp_passthrough", status: "completed", output: [{ type: "message", id: "msg_pt", role: "assistant", status: "completed", content: [{ type: "output_text", text: "done" }] }], usage: { input_tokens: 7, output_tokens: 3, total_tokens: 10 } }, sequence_number: 3 }),
+        ].join(""));
+
+        const full = await readUntil(reader, "response.completed");
+        expect(full).toContain("response.completed");
+        expect(full).toContain("resp_passthrough");
+        expect(full).toContain('"input_tokens":7');
+        source.cancel();
+        const tail = await drainReader(reader);
+        expect((full + tail).match(/"type":"response\.completed"/g)).toHaveLength(1);
+        expect(scheduler.pending()).toBe(0);
+      } finally {
+        testAbort.abort();
+        source.cancel();
+        await reader.cancel().catch(() => {});
+      }
+    });
   });
 });

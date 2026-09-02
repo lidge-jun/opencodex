@@ -395,3 +395,15 @@ Vercel AI Gateway は、1 つのモデルを複数の基盤となる推論プロ
   "visionSidecar": { "enabled": true }
 }
 ```
+
+### Responses ターミナル イベント修復ポリシー
+
+これらの3つのキーは、ネイティブ Responses ストリームがターミナル イベントを配信しない場合に、制限付きの修復を必要とするカスタム プロバイダー向けの制御機能です。要求されたモデルごとに、有効なアダプター（プロバイダーのアダプターまたはその modelAdapters オーバーライド）が openai-responses である必要があります。Chat Completions やその他の配線はオプトインしません。モデルの一致は大文字と小文字を区別しません。
+
+解決の優先順位：
+
+1. 一致する modelResponsesCompatibility エントリは、モデルをターミナル修復にオプトインします。デフォルトの猶予時間は 500 ms です（一致する modelResponsesTerminalRepair が明示的な猶予時間を指定していない限り）。
+2. それ以外の場合、一致する modelResponsesTerminalRepair エントリがモデルごとの猶予時間を指定します。
+3. それ以外の場合、responsesTerminalRepair がプロバイダー レベルのフォールバックを提供します。
+
+猶予時間の値は正の有限ミリ秒であり、ランタイムは切り捨てて最大 60 秒に制限します。設定検証では無効な値を拒否し、正規の ChatGPT forward プロバイダーではこれら3つのキーを拒否します（プロバイダー名ではなく adapter、authMode、正規化 baseUrl で判定）。

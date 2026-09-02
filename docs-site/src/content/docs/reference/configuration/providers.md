@@ -107,6 +107,9 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | Set a model to `false` to stop advertising summaries and strip summary-delivery fields. |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Per-model Responses delivery enum; rewrites an existing delivery field. |
 | `modelAdapters?` | `Record<string, string>` | Per-model `openai-chat` or `openai-responses` wire override for mixed-wire gateways. Explicit entries beat registry defaults. The OpenCode Go preset selects Responses for `gpt-5.6-luna` while leaving sibling models on their documented wires; DeepSeek can select native Responses for `deepseek-v4-flash`; and GitHub Copilot declares Responses-only defaults for its GPT-5 family (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`) because those models reject `/chat/completions` for agent traffic. Models without a built-in default (for example `gpt-5.4-nano`) can be opted in here. Single-wire upstream pins and canonical ChatGPT forward reject overrides. |
+| `modelResponsesCompatibility?` | `Record<string, "terminal-repair">` | Case-insensitive per-model opt-in for the Responses terminal-repair policy on custom providers. A matching model gets the 500 ms default grace unless `modelResponsesTerminalRepair` supplies an explicit grace. The effective model wire must be `openai-responses`; canonical ChatGPT forward rejects this key. |
+| `modelResponsesTerminalRepair?` | `Record<string, number \| { graceMs: number }>` | Case-insensitive per-model terminal-repair grace in milliseconds. It overrides the compatibility default and takes precedence over `responsesTerminalRepair`; positive values are floored and capped at 60 seconds. Invalid or ambiguous case-folded entries fail closed at resolution. |
+| `responsesTerminalRepair?` | `"terminal-repair" \| number \| { graceMs: number }` | Provider-level terminal-repair fallback for models using the `openai-responses` wire. The string selects the 500 ms default; numeric/object values set the grace and are capped at 60 seconds. It is considered only after compatibility and explicit per-model settings, and is rejected on the canonical ChatGPT forward provider. |
 | xAI Responses opt-in (dashboard) | switch | For `xai` only, atomically sets or clears the `grok-4.5` and `grok-4.6` `modelAdapters` entries. A hand-edited single entry appears as mixed until the next switch write normalizes both. Other overrides and tier behavior are unchanged. |
 | `xaiResponsesXSearch?` | `boolean` | Disabled by default. On an xAI Responses destination, append the provider-hosted `x_search` declaration only when a live `web_search` tool survives final request normalization. Existing declarations are not duplicated, caller `tool_choice`/`allowed_tools` selectors are never widened, and this is separate from the web-search sidecar's `search.xSearch` options. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Exact-model opt-in for non-forward Responses gateways that reserve a hosted-tool namespace. Currently accepts only `["image_generation"]`; a matching model must use the `openai-responses` wire and support that hosted tool. It removes colliding client `image_gen` declarations and rewrites their selectors to preserve caller tool choice. For OpenAI API virtual `-pro` models, the selected public ID is matched first and the resolved base wire-model ID is a fallback. `modelAdapters` resolves the public ID first, then the base ID; the second resolution determines the final wire. Other models retain normal alias behavior. |
@@ -188,6 +191,35 @@ projection, and merge precedence, so only a selector present in the catalog prod
 that sync can become an override. Native upstream values are preserved when the setting is
 cleared or unresolved. The persisted catalog field is read by Codex for the current turn's
 model, which is why a valid configured selector is copied to each applicable entry.
+### Responses terminal-repair policy
+
+These three keys are overlapping controls for custom providers that need a bounded repair when a
+native Responses stream does not deliver its terminal event. For each requested model, the
+effective adapter (the provider adapter or its `modelAdapters` override) must be
+`openai-responses`; Chat Completions and other wires never opt in. Model matching is
+case-insensitive.
+
+Resolution uses this precedence:
+
+1. A matching `modelResponsesCompatibility` entry opts the model into terminal repair. Its
+   default grace is 500 ms, unless a matching `modelResponsesTerminalRepair` entry supplies an
+   explicit grace.
+2. Otherwise, a matching `modelResponsesTerminalRepair` entry supplies the per-model grace.
+3. Otherwise, `responsesTerminalRepair` supplies the provider-level fallback.
+
+Grace values are positive finite milliseconds, and the runtime floors them and caps any result at
+60 seconds. Config validation rejects malformed values and rejects all three keys on the canonical
+ChatGPT forward provider (matching by adapter, authMode, and normalized baseUrl configuration, not provider name). The runtime resolver is defense in depth: an invalid or ambiguous
+case-folded per-model entry is not selected, so resolution fails closed instead of choosing an
+arbitrary entry.
+
+#### Decision Log: why three overlapping knobs?
+
+`modelResponsesCompatibility` provides a readable opt-in with a safe default, while
+`modelResponsesTerminalRepair` handles models that need a different grace period. The
+provider-level `responsesTerminalRepair` covers a gateway whose Responses models share one policy.
+Keeping all three preserves simple compatibility migration without giving a broad default priority
+over an explicit per-model choice.
 
 ### FastWire B1 capability migration
 

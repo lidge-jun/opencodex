@@ -266,6 +266,20 @@ export interface OcxProviderConfig {
    */
   preserveResponsesReasoningContent?: boolean;
   /**
+   * Optional per-model Responses compatibility escape hatch for custom providers (issue #1809).
+   * Keyed by the upstream model id (case-insensitive).
+   * "terminal-repair" opts into the bounded terminal repair state machine (default 500ms grace).
+   */
+  modelResponsesCompatibility?: Record<string, "terminal-repair">;
+  /**
+   * Explicit per-model terminal-repair grace period for native Responses streams (in ms).
+   */
+  modelResponsesTerminalRepair?: Record<string, { graceMs: number } | number>;
+  /**
+   * Provider-level default terminal-repair grace period for native Responses streams.
+   */
+  responsesTerminalRepair?: { graceMs: number } | number | "terminal-repair";
+  /**
    * Explicit opt-in for a relay that genuinely fronts OpenAI and can decode native
    * compaction blobs. Absent or false degrades foreign blobs to an opaque note.
    */

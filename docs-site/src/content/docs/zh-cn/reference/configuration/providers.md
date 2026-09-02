@@ -398,3 +398,15 @@ Vercel AI Gateway 可以在多个底层推理提供者之间路由一个模型�
   "visionSidecar": { "enabled": true }
 }
 ```
+
+### Responses 终端事件修复策略 (Terminal-Repair Policy)
+
+这三个配置键是针对自定义 Provider 提供的重叠控制项，用于在原生 Responses 流未送达终端事件时提供有界的修复机制。对于每个请求的模型，有效适配器（Provider 的 adapter 或其 modelAdapters 覆盖）必须为 openai-responses；Chat Completions 与其他线协议绝不启用。模型匹配不区分大小写。
+
+解析优先级如下：
+
+1. 匹配的 modelResponsesCompatibility 条目为模型启用终端修复，默认宽限期为 500 毫秒（除非匹配的 modelResponsesTerminalRepair 提供显式宽限期）。
+2. 否则，匹配的 modelResponsesTerminalRepair 条目提供 per-model 宽限期。
+3. 否则，由 responsesTerminalRepair 提供 Provider 级别的回退值。
+
+宽限期数值必须为正有限毫秒数，Runtime 会对其取整并将上限约束在 60 秒。配置验证会拒绝格式错误的值，并在规范的 ChatGPT forward Provider 上拒绝这三个键（通过 adapter、authMode 与规范化 baseUrl 判定，而非 Provider 名称启发式）。Runtime 解析器实施纵深防御：无效或大小写冲突的 per-model 条目不会被选取，从而 fail-closed 拒绝，而非任意挑选条目。

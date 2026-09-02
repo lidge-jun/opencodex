@@ -77,7 +77,7 @@ import {
   type ProviderCostOverlay,
 } from "./types";
 import type { OcxRuntimeRole } from "./types/config";
-import { OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
 import { modelAutoCompactTokenLimitsConfigError } from "./providers/auto-compact-budget";
 import { fastWireDeclarationError, hasFastWireCapabilityConflict } from "./providers/fastwire";
 import {
@@ -767,6 +767,92 @@ export function modelPreferHostedToolsConfigError(
   return null;
 }
 
+/**
+ * Validate a provider's per-model wire override map (#404).
+ *
+ * Rejects, rather than silently ignoring, configurations the resolver would refuse:
+ * a value outside the allowed wires, a model the upstream pins to one wire, and any
+ * override on a canonical forward provider (where switching wires would drop the
+ * caller's forwarded credential). Silently dropping them would leave the user
+ * believing an override is in effect.
+ */
+export function modelResponsesCompatibilityConfigError(
+  value: unknown,
+  field = "modelResponsesCompatibility",
+  providerName?: string,
+  provider?: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
+): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  const entries = Object.entries(value);
+  if (entries.length > 0 && provider && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return `${field} is not supported on the canonical ChatGPT forward provider`;
+  }
+  const seen = new Set<string>();
+  for (const [key, entry] of entries) {
+    const lower = key.toLowerCase();
+    if (seen.has(lower)) {
+      return `${field} contains duplicate case-insensitive model id "${key}"`;
+    }
+    seen.add(lower);
+    if (!key.trim() || key !== key.trim()) return `${field} keys must be nonblank trimmed model ids`;
+    if (entry !== "terminal-repair") {
+      return `${field}.${key} must be "terminal-repair"`;
+    }
+  }
+  return null;
+}
+
+export function modelResponsesTerminalRepairConfigError(
+  value: unknown,
+  field = "modelResponsesTerminalRepair",
+  providerName?: string,
+  provider?: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
+): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
+  const entries = Object.entries(value);
+  if (entries.length > 0 && provider && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return `${field} is not supported on the canonical ChatGPT forward provider`;
+  }
+  const seen = new Set<string>();
+  for (const [key, entry] of entries) {
+    const lower = key.toLowerCase();
+    if (seen.has(lower)) {
+      return `${field} contains duplicate case-insensitive model id "${key}"`;
+    }
+    seen.add(lower);
+    if (!key.trim() || key !== key.trim()) return `${field} keys must be nonblank trimmed model ids`;
+    const grace = typeof entry === "number" ? entry : (typeof entry === "object" && entry ? (entry as { graceMs?: unknown }).graceMs : null);
+    if (typeof grace !== "number" || !Number.isFinite(grace) || Math.floor(grace) <= 0) {
+      return `${field}.${key} must be a positive number of milliseconds or { graceMs: number }`;
+    }
+  }
+  return null;
+}
+
+export function responsesTerminalRepairConfigError(
+  value: unknown,
+  field = "responsesTerminalRepair",
+  providerName?: string,
+  provider?: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown },
+): string | null {
+  if (value === undefined) return null;
+  if (provider && isCanonicalOpenAiForwardProvider(provider as OcxProviderConfig)) {
+    return `${field} is not supported on the canonical ChatGPT forward provider`;
+  }
+  if (value === "terminal-repair") return null;
+  const grace = typeof value === "number" ? value : (typeof value === "object" && value ? (value as { graceMs?: unknown }).graceMs : null);
+  if (typeof grace !== "number" || !Number.isFinite(grace) || Math.floor(grace) <= 0) {
+    return `${field} must be "terminal-repair", a positive number of milliseconds, or { graceMs: number }`;
+  }
+  return null;
+}
+
 const CODEX_ACCOUNT_NAMESPACES_RECORD_ERROR =
   "codexAccountNamespaces must be a plain object mapping account selectors to Codex account ids";
 const CODEX_ACCOUNT_NAMESPACE_KEY_ERROR =
@@ -1296,6 +1382,45 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelAdapters"],
         message: modelAdaptersError,
+      });
+    }
+    const compatError = modelResponsesCompatibilityConfigError(
+      (provider as { modelResponsesCompatibility?: unknown }).modelResponsesCompatibility,
+      "modelResponsesCompatibility",
+      name,
+      provider,
+    );
+    if (compatError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelResponsesCompatibility"],
+        message: compatError,
+      });
+    }
+    const modelRepairError = modelResponsesTerminalRepairConfigError(
+      (provider as { modelResponsesTerminalRepair?: unknown }).modelResponsesTerminalRepair,
+      "modelResponsesTerminalRepair",
+      name,
+      provider,
+    );
+    if (modelRepairError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelResponsesTerminalRepair"],
+        message: modelRepairError,
+      });
+    }
+    const repairError = responsesTerminalRepairConfigError(
+      (provider as { responsesTerminalRepair?: unknown }).responsesTerminalRepair,
+      "responsesTerminalRepair",
+      name,
+      provider,
+    );
+    if (repairError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "responsesTerminalRepair"],
+        message: repairError,
       });
     }
     const preferHostedToolsError = modelPreferHostedToolsConfigError(
