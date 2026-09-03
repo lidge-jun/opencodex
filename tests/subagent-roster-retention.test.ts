@@ -12,6 +12,7 @@ import { describe, expect, test } from "bun:test";
 import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest as Request } from "./helpers/management-auth";
 import type { OcxConfig } from "../src/types";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   return { port: 10100, providers: {}, defaultProvider: "openai", ...overrides } as OcxConfig;
@@ -70,5 +71,37 @@ describe("/api/subagent-models roster retention", () => {
 
     expect(available).not.toContain("gpt-5.6-sol");
     expect(available).toContain("gpt-5.6-terra");
+  });
+
+  test("a picker-order update preserves the featured roster and rejects hidden models", async () => {
+    const config = makeConfig({ subagentModels: ["gpt-5.6-luna"] });
+    const url = new URL("http://localhost/api/subagent-models");
+    const deps = {
+      saveConfigPreservingClaudeCode: () => {},
+      createManagementConvergeCodex: catalogConvergenceFactory(),
+      fetchAllModels: async () => [
+        { provider: "alpha", id: "first" },
+        { provider: "beta", id: "second" },
+      ],
+    };
+
+    const save = await handleManagementAPI(new Request(url, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pickerOrder: ["beta/second", "alpha/first"] }),
+    }), url, config, deps);
+
+    expect(save?.status).toBe(200);
+    expect(config.subagentModels).toEqual(["gpt-5.6-luna"]);
+    expect(config.modelPickerOrder).toEqual(["beta/second", "alpha/first"]);
+
+    const invalid = await handleManagementAPI(new Request(url, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pickerOrder: ["not-visible/model"] }),
+    }), url, config, deps);
+
+    expect(invalid?.status).toBe(400);
+    expect(config.modelPickerOrder).toEqual(["beta/second", "alpha/first"]);
   });
 });

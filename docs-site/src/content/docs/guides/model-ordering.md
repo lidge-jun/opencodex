@@ -130,6 +130,11 @@ featured block:
 }
 ```
 
+The dashboard's **Models** page can write this setting for all currently visible routed models.
+Choose **Default** to keep the normal provider/model order, **A–Z** to sort by model id,
+**Provider** to group by provider, or **Most used** to rank by all recorded request history. The
+dashboard fetches usage only when you apply the Most used order.
+
 Listed routed rows appear in the configured order. A routed row omitted from the array keeps its
 normal priority, so it remains ahead of the `modelPickerOrder` display band; list every routed row
 whose relative position you want to control. A row also present in `subagentModels` keeps its

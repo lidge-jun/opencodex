@@ -625,7 +625,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // Subagent model picker: which ≤5 routed models Codex's spawn_agent advertises (it shows the
   // first 5 routed catalog entries). PUT reorders the injected catalog so the chosen ones lead.
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
-    const models = await fetchAllModels(config);
+    const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
     const disabled = new Set(config.disabledModels ?? []);
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
     // catalog, just buried by priority. List them first so the user can feature them over routed.
@@ -657,19 +657,61 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // in-memory catalog than the one on disk.
     const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
     const catalogState = collectCodexAppServerCatalogState();
-    return jsonResponse({ chosen, available, catalogState });
+    return jsonResponse({
+      chosen,
+      available,
+      // modelPickerOrder is deliberately display-only: native and featured rows
+      // retain their own catalog priorities, and spawn_agent keeps its natural
+      // priority through opencodex_spawn_priority.
+      pickerAvailable: visibleRouted,
+      pickerOrder: config.modelPickerOrder ?? [],
+      catalogState,
+    });
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
-    let body: { models?: unknown };
+    let body: { models?: unknown; pickerOrder?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
-    const chosen = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string").slice(0, 5) : [];
-    config.subagentModels = chosen;
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    save(config);
+    if (body.models === undefined && body.pickerOrder === undefined) {
+      return jsonResponse({ error: "models or pickerOrder is required" }, 400);
+    }
+
+    let chosen = config.subagentModels ?? [];
+    const updatesRoster = body.models !== undefined;
+    if (updatesRoster) {
+      if (!Array.isArray(body.models) || body.models.some(m => typeof m !== "string")) {
+        return jsonResponse({ error: "models must be an array of strings" }, 400);
+      }
+      chosen = body.models.slice(0, 5);
+      config.subagentModels = chosen;
+    }
+
+    if (body.pickerOrder !== undefined) {
+      if (body.pickerOrder === null || (Array.isArray(body.pickerOrder) && body.pickerOrder.length === 0)) {
+        deleteConfigTopLevelKey(config, "modelPickerOrder");
+      } else {
+        if (!Array.isArray(body.pickerOrder) || body.pickerOrder.some(model => typeof model !== "string" || model.trim() === "")) {
+          return jsonResponse({ error: "pickerOrder must be an array of non-empty routed model ids, or null" }, 400);
+        }
+        const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
+        const disabled = new Set(config.disabledModels ?? []);
+        const visibleRouted = new Set(models
+          .filter(m => ![...disabled].some(stored => stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)))
+          .map(catalogModelSlug));
+        const pickerOrder = body.pickerOrder.map(model => model.trim());
+        if (new Set(pickerOrder).size !== pickerOrder.length || pickerOrder.some(model => !visibleRouted.has(model))) {
+          return jsonResponse({ error: "pickerOrder must contain each visible routed model at most once" }, 400);
+        }
+        config.modelPickerOrder = pickerOrder;
+      }
+    }
+
+    (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     const catalogRefresh = await convergeCodexCatalog();
-    await syncClaudeAgentDefsBestEffort();
-    await autoApplyDesktopBestEffort();
-    return jsonResponse({ ok: true, applied: chosen, catalogRefresh });
+    if (updatesRoster) {
+      await syncClaudeAgentDefsBestEffort();
+      await autoApplyDesktopBestEffort();
+    }
+    return jsonResponse({ ok: true, applied: chosen, pickerOrder: config.modelPickerOrder ?? [], catalogRefresh });
   }
 
   // Priority-ordered subagent model fallback chain for quota-aware spawn routing.
