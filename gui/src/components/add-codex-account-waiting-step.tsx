@@ -5,6 +5,8 @@ import type { StatusTone } from "./add-codex-account-reducer";
 export function AddCodexAccountWaitingStep({
   reauthAccountId,
   authUrl,
+  deviceCode,
+  instructions,
   manualCode,
   manualCodeBusy,
   manualCodeWaiting,
@@ -12,12 +14,16 @@ export function AddCodexAccountWaitingStep({
   statusTone,
   flowId,
   error,
+  onSwitchToDevice,
   onManualCodeChange,
   onSubmitManualCode,
   onClose,
 }: {
   reauthAccountId?: string;
   authUrl: string;
+  /** Short human code when the login is a device flow; empty otherwise. */
+  deviceCode?: string;
+  instructions?: string;
   manualCode: string;
   manualCodeBusy: boolean;
   manualCodeWaiting: boolean;
@@ -25,6 +31,8 @@ export function AddCodexAccountWaitingStep({
   statusTone: StatusTone;
   flowId: string | null;
   error: string;
+  /** Restart this login as a device flow; omitted once one is already running. */
+  onSwitchToDevice?: () => void;
   onManualCodeChange: (value: string) => void;
   onSubmitManualCode: () => void;
   onClose: () => void;
@@ -36,7 +44,7 @@ export function AddCodexAccountWaitingStep({
       <h3 style={{ marginBottom: 4 }}>{reauthAccountId ? t("codexAuth.reauthenticate") : t("codexAuth.oauthLogin")}</h3>
       <p className="modal-desc">{t("codexAuth.oauthWaiting")}</p>
       <LoginHint
-        hint={{ url: authUrl }}
+        hint={{ url: authUrl, deviceCode, instructions }}
         paste={{
           value: manualCode,
           busy: manualCodeBusy,
@@ -62,6 +70,19 @@ export function AddCodexAccountWaitingStep({
         </div>
       )}
       {error && <div className="notice notice-err" style={{ marginTop: 12 }}>{error}</div>}
+      {onSwitchToDevice && !deviceCode && (
+        // Reauth skips the pick step and starts the browser flow on its own, so
+        // this is the only place a headless operator can reach the device grant
+        // for an existing account.
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={onSwitchToDevice}
+          style={{ width: "100%", marginTop: 8 }}
+        >
+          {t("codexAuth.deviceLogin")}
+        </button>
+      )}
       <div style={{ textAlign: "center", padding: "24px 0" }}>
         <span className="spin" style={{ width: 24, height: 24 }} />
       </div>

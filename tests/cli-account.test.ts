@@ -334,6 +334,16 @@ async function mockManagementApi(req: Request): Promise<Response> {
   }
 
   if (req.method === "POST" && url.pathname === "/api/codex-auth/login") {
+    // A device login answers with the verification page plus the short code,
+    // exactly as the Codex-auth route does once #3366 stops dropping it.
+    if ((body as { device?: boolean } | undefined)?.device === true) {
+      return json({
+        url: "https://auth.openai.com/codex/device",
+        flowId: "flow-device",
+        deviceCode: "ABCD-EFGH",
+        instructions: "Enter code: ABCD-EFGH",
+      });
+    }
     return json({ url: "https://auth.example/authorize", flowId: "flow-mock" });
   }
 
@@ -405,6 +415,92 @@ async function run(args: string[], deps: AccountDeps = defaultDeps()): Promise<C
   const stderr = errors.join("\n");
   return { code, stdout, stderr, output: [stdout, stderr].filter(Boolean).join("\n") };
 }
+
+/**
+ * `--device` is the headless login path (#3366): the operator reads a short
+ * code here and enters it on another machine, so the code and the verification
+ * URL both have to reach stdout.
+ */
+describe("account login --device", () => {
+  test("prints the verification URL and device code to a piped stdout while polling", async () => {
+    // The block is written to fd 1 directly (#1007), so it needs a real pipe.
+    const child = Bun.spawn({
+      cmd: [process.execPath, "run", fileURLToPath(new URL("./helpers/account-login-device-child.ts", import.meta.url))],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    try {
+      const reader = child.stdout.getReader();
+      let received = "";
+      // The marker is emitted when the request lands, which is BEFORE the CLI
+      // prints its block — wait for both, not just the first one.
+      while (!received.includes("device-requested") || !received.includes("Flow: flow-device")) {
+        const { value, done } = await Promise.race([
+          reader.read(),
+          Bun.sleep(5_000).then(() => ({ value: undefined, done: true }) as const),
+        ]);
+        if (done) break;
+        if (value) received += new TextDecoder().decode(value);
+      }
+      expect(received).toContain("https://auth.openai.com/codex/device");
+      expect(received).toContain("Device code: ABCD-EFGH");
+      expect(received).toContain("Flow: flow-device");
+      // The flag reached the server, not just the terminal.
+      expect(received).toContain("device-requested");
+      // Still polling: a device login must not give up while the user is away.
+      expect(child.exitCode).toBeNull();
+    } finally {
+      child.kill();
+      await child.exited.catch(() => {});
+    }
+  }, 15_000);
+
+  test("asks the server for device mode", async () => {
+    requests.length = 0;
+    await run(["login", "openai", "--device", "--no-wait", "--json"]);
+
+    const start = requests.find(entry => entry.path === "/api/codex-auth/login");
+    expect((start?.body as { device?: boolean } | undefined)?.device).toBe(true);
+  });
+
+  test("preserves the device code under --no-wait --json", async () => {
+    const result = await run(["login", "openai", "--device", "--no-wait", "--json"]);
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      deviceCode: "ABCD-EFGH",
+      url: "https://auth.openai.com/codex/device",
+    });
+  });
+
+  test("is rejected for providers that have no device flow", async () => {
+    const result = await run(["login", "anthropic", "--device", "--no-wait"]);
+
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("--device is not supported for provider 'anthropic'");
+  });
+
+  test("is accepted as a no-op for providers that are already device flows", async () => {
+    // kimi/nous/github-copilot have no other login, so --device is true of them.
+    const result = await run(["login", "kimi", "--device", "--no-wait", "--json"]);
+
+    expect(result.code).toBe(0);
+  });
+
+  test("waits out the full 15-minute grant instead of the 5-minute browser budget", async () => {
+    // A budget regression to 150 attempts is invisible to an output assertion,
+    // so read the loop bound from the source itself.
+    const source = await Bun.file(new URL("../src/cli/account-auth.ts", import.meta.url)).text();
+    const budget = /const maxAttempts = device \? (\d+) : (\d+);/.exec(source);
+    expect(budget).toBeTruthy();
+    // 2s per attempt. 900s is the grant itself; the budget must also leave
+    // settlement margin for the token exchange after the final poll, so 450
+    // (exactly 900s) is a regression, not a pass.
+    expect(Number(budget?.[1]) * 2).toBeGreaterThanOrEqual(960);
+    // The browser path is unchanged.
+    expect(budget?.[2]).toBe("150");
+  });
+});
 
 beforeAll(() => {
   server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: mockManagementApi });

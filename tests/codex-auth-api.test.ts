@@ -3683,6 +3683,53 @@ describe("codex-auth API", () => {
     expect(data.status).toBe("expired");
   });
 
+  /**
+   * Device login (#3366): the route used to drop `deviceCode` and hand every
+   * non-empty URL to a local browser. On a headless hub that means no code to
+   * type and a browser spawn that cannot work.
+   */
+  test("POST /api/codex-auth/login with device:true returns the code and opens no browser", async () => {
+    const oauth = await import("../src/oauth");
+    const openUrlModule = await import("../src/lib/open-url");
+    const startSpy = spyOn(oauth, "startLoginFlow").mockImplementation(async () => ({
+      url: "https://auth.openai.com/codex/device",
+      instructions: "Enter code: ABCD-EFGH",
+      deviceCode: "ABCD-EFGH",
+    }));
+    const openSpy = spyOn(openUrlModule, "openUrl").mockImplementation(() => {});
+    try {
+      const req = new Request("http://localhost/api/codex-auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device: true }),
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+      const data = await resp!.json() as { deviceCode?: string; url?: string; flowId?: string };
+
+      expect(data.deviceCode).toBe("ABCD-EFGH");
+      expect(data.url).toBe("https://auth.openai.com/codex/device");
+      expect(data.flowId).toBeTruthy();
+      // The verification page belongs on the user's other device, not on the host.
+      expect(openSpy).not.toHaveBeenCalled();
+      expect(startSpy.mock.calls[0]?.[1]).toMatchObject({ flow: "device" });
+    } finally {
+      startSpy.mockRestore();
+      openSpy.mockRestore();
+    }
+  });
+
+  test("the device poll budget covers the 15-minute grant", async () => {
+    // The budget is a loop bound with no observable output, so a regression to
+    // the 5-minute browser budget would pass every behavioral test above.
+    const source = await Bun.file(new URL("../src/codex/auth-api.ts", import.meta.url)).text();
+    const budget = /const pollAttempts = useDeviceFlow \? (\d+) : (\d+);/.exec(source);
+    expect(budget).toBeTruthy();
+    // 900s is the grant; the extra margin covers post-grant settlement, so an
+    // exactly-900s budget (450 attempts) must fail this.
+    expect(Number(budget?.[1]) * 2).toBeGreaterThanOrEqual(960);
+    expect(budget?.[2]).toBe("150");
+  });
+
   test("Codex OAuth login responses project raw provider errors", async () => {
     const oauth = await import("../src/oauth");
     const startSpy = spyOn(oauth, "startLoginFlow").mockImplementation(async () => {

@@ -63,6 +63,7 @@ export default function AddCodexAccountModal({
             error={ui.error}
             onIdChange={value => dispatch({ type: "set-id", id: value })}
             onStartOAuth={() => { void startOAuth(ui.id); }}
+            onStartDeviceOAuth={() => { void startOAuth(ui.id, { device: true }); }}
             onClose={closeModal}
           />
         )}
@@ -70,6 +71,8 @@ export default function AddCodexAccountModal({
           <AddCodexAccountWaitingStep
             reauthAccountId={reauthAccountId}
             authUrl={ui.authUrl}
+            deviceCode={ui.deviceCode}
+            instructions={ui.instructions}
             manualCode={ui.manualCode}
             manualCodeBusy={manualCodeBusy}
             manualCodeWaiting={manualCodeWaiting}
@@ -77,6 +80,7 @@ export default function AddCodexAccountModal({
             statusTone={ui.statusTone}
             flowId={ui.flowId}
             error={ui.error}
+            onSwitchToDevice={() => { void startOAuth(ui.id, { device: true }); }}
             onManualCodeChange={value => dispatch({ type: "set-manual-code", manualCode: value })}
             onSubmitManualCode={() => { void submitManualCode(); }}
             onClose={closeModal}

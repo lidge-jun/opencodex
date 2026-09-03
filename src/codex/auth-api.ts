@@ -2167,7 +2167,15 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/login" && req.method === "POST") {
-    const body = (await req.json().catch(() => ({}))) as { id?: string; reauth?: boolean; openBrowser?: unknown };
+    const body = (await req.json().catch(() => ({}))) as {
+      id?: string;
+      reauth?: boolean;
+      openBrowser?: unknown;
+      device?: unknown;
+    };
+    // Device mode: no local browser, no loopback listener. The only way to add
+    // an account to a headless hub (#3366).
+    const useDeviceFlow = body.device === true;
     const requestedAccountId = body.id?.trim();
     const reauth = body.reauth === true;
     if (requestedAccountId && !isValidCodexAccountId(requestedAccountId)) {
@@ -2197,13 +2205,20 @@ export async function handleCodexAuthAPI(
     codexAuthLoginState.set(flowId, loginOwner);
     try {
       const { startLoginFlow, getLoginStatus, publicOAuthAuthenticationErrorMessage } = await import("../oauth");
-      const result = await startLoginFlow("chatgpt", { forceLogin: true });
+      const result = await startLoginFlow("chatgpt", {
+        forceLogin: true,
+        ...(useDeviceFlow ? { flow: "device" as const } : {}),
+      });
 
       // Open the browser server-side (same pattern as /api/oauth/login in management-api.ts).
       // The GUI's window.open is popup-blocked because it runs after an await, not a direct click.
       // Both login routes share one resolver so this surface cannot drift from the other.
       const { shouldOpenBrowserForLogin } = await import("../oauth/open-browser-choice");
-      if (result.url && shouldOpenBrowserForLogin(body.openBrowser, runtimeConfig)) {
+      // A device flow's URL is a verification page the user opens on ANOTHER
+      // machine. Opening it on the hub host is useless at best, and on a
+      // headless host it fails. `deviceCode` is the same signal the generic
+      // OAuth login route uses to make this decision.
+      if (result.url && !result.deviceCode && shouldOpenBrowserForLogin(body.openBrowser, runtimeConfig)) {
         const { openUrl } = await import("../lib/open-url");
         openUrl(result.url);
       }
@@ -2211,7 +2226,14 @@ export async function handleCodexAuthAPI(
       (async () => {
         try {
           let completed = false;
-          for (let i = 0; i < 150; i++) {
+          // The device grant lives 15 minutes and the whole point is that the
+          // user walks to another device to enter the code. A 5-minute server
+          // budget would kill the flow at minute five while the grant is still
+          // valid. The extra 30 attempts past 450 are settlement margin: a user
+          // who authorizes in the final seconds still needs the token exchange
+          // and credential write to land before this loop gives up.
+          const pollAttempts = useDeviceFlow ? 480 : 150;
+          for (let i = 0; i < pollAttempts; i++) {
             await new Promise(r => setTimeout(r, 2000));
             const st = getLoginStatus("chatgpt");
             if (st.done && st.loggedIn) {
@@ -2437,7 +2459,15 @@ export async function handleCodexAuthAPI(
       })();
 
       setCodexLoginState(flowId, { status: "pending" });
-      return jsonResponse({ ok: true, flowId, url: result.url, instructions: result.instructions });
+      return jsonResponse({
+        ok: true,
+        flowId,
+        url: result.url,
+        instructions: result.instructions,
+        // Dropped before #3366: every device-code surface renders this field,
+        // so withholding it left the GUI and CLI with no code to show.
+        ...(result.deviceCode ? { deviceCode: result.deviceCode } : {}),
+      });
     } catch (e) {
       if (codexAuthLoginState.get(flowId) === loginOwner) codexAuthLoginState.delete(flowId);
       const msg = e instanceof Error ? e.message : String(e);
