@@ -14,6 +14,8 @@ import { createSseInspector } from "../src/server/relay";
 import { handleOauthAccountRoutes } from "../src/server/management/oauth-account-routes";
 import {
   clearAccountQuotaCache,
+  clearProviderQuotaCache,
+  fetchProviderQuotaReports,
   getCachedProviderAccountQuota,
   recordPassiveAccountQuota,
   resetProviderQuotaReconcileStateForTests,
@@ -71,11 +73,15 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   writeMuseAccount();
   clearAccountQuotaCache();
+  // The provider-level report cache (5-minute TTL, module-wide) survives across tests in
+  // this file and would hand one test the previous test's row.
+  clearProviderQuotaCache();
   resetProviderQuotaReconcileStateForTests();
 });
 
 afterEach(() => {
   clearAccountQuotaCache();
+  clearProviderQuotaCache();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (testDir) removeTreeWithRetry(testDir);
@@ -199,5 +205,65 @@ describe("GET /api/oauth/accounts?quota=1 for a passive provider", () => {
     const { status, body } = await getAccounts("provider=meta-muse");
     expect(status).toBe(200);
     expect(body.accounts?.[0]?.quota).toBeUndefined();
+  });
+});
+
+describe("provider-level quota row for a passive provider", () => {
+  test("carries the active account's observation with its observation time", async () => {
+    const observedAt = Date.now() - 12 * 60_000;
+    recordPassiveAccountQuota("meta-muse", ACCOUNT_ID, { fiveHourPercent: 21, weeklyPercent: 8, updatedAt: observedAt }, captureConfigGeneration());
+
+    const response = await fetchProviderQuotaReports(museConfig(), true);
+    const report = response.reports.find(row => row.provider === "meta-muse");
+
+    expect(report?.quota?.fiveHourPercent).toBe(21);
+    expect(report?.quota?.weeklyPercent).toBe(8);
+    expect(report?.source).toBe("meta-muse:subscription-observation");
+    // The observation time IS the report time; both GUI surfaces render it as the age.
+    expect(report?.updatedAt).toBe(observedAt);
+  });
+
+  /*
+   * The defining constraint of a passive provider: reading the provider row must never
+   * contact upstream, even when the GUI's refresh button passes refresh=1. Stubbing
+   * fetch to throw proves no code path reaches the network.
+   */
+  test("reads the row without any network call, including under refresh=1", async () => {
+    recordPassiveAccountQuota("meta-muse", ACCOUNT_ID, { fiveHourPercent: 33, updatedAt: Date.now() }, captureConfigGeneration());
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (() => Promise.reject(new Error("upstream contact forbidden for a passive provider"))) as typeof fetch;
+    try {
+      const response = await fetchProviderQuotaReports(museConfig(), true);
+      const report = response.reports.find(row => row.provider === "meta-muse");
+      expect(report?.quota?.fiveHourPercent).toBe(33);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("no observation means no row, not an empty one", async () => {
+    const response = await fetchProviderQuotaReports(museConfig(), true);
+    expect(response.reports.find(row => row.provider === "meta-muse")).toBeUndefined();
+  });
+
+  /*
+   * The provider row answers for the account IN USE, like fetchAnthropicQuota and
+   * fetchKiroQuota do. A fresher observation on an inactive account must not leak into
+   * the row the user reads as "my current usage".
+   */
+  test("never promotes an inactive account's observation", async () => {
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      "meta-muse": {
+        activeAccountId: ACCOUNT_ID,
+        accounts: [
+          { id: ACCOUNT_ID, credential: { access: "LLM|1|k", refresh: "LLM|1|k", expires: 9999999999999, email: "muse@example.com", accountId: "muse-1" } },
+          { id: "acct-muse-2", credential: { access: "LLM|2|k", refresh: "LLM|2|k", expires: 9999999999999, email: "two@example.com", accountId: "muse-2" } },
+        ],
+      },
+    }), { mode: 0o600 });
+    recordPassiveAccountQuota("meta-muse", "acct-muse-2", { fiveHourPercent: 77, updatedAt: Date.now() }, captureConfigGeneration());
+
+    const response = await fetchProviderQuotaReports(museConfig(), true);
+    expect(response.reports.find(row => row.provider === "meta-muse")).toBeUndefined();
   });
 });

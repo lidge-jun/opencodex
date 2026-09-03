@@ -1409,6 +1409,27 @@ async function fetchKiroQuota(provider: string): Promise<ProviderQuotaReport | n
   return report(provider, "kiro:usage-limits", snapshot.quota);
 }
 
+/**
+ * Provider-level row for a passive provider: the ACTIVE account's last observed
+ * subscription windows, the same shape `fetchAnthropicQuota` and `fetchKiroQuota`
+ * return.
+ *
+ * Cache-only. A dashboard load or `ocx account refresh` must never spend an inference
+ * turn, so `forceRefresh` does not exist on this path — there is nothing to refresh.
+ * `report.updatedAt` is the observation time, which is what both GUI surfaces render
+ * as the relative age of the row.
+ */
+async function fetchPassiveProviderQuota(provider: string): Promise<ProviderQuotaReport | null> {
+  const activeId = getAccountSet(provider)?.activeAccountId;
+  if (!activeId) return null;
+  // Idempotent; without it a proxy restart shows nothing until the next streaming turn
+  // even though the last observation is on disk.
+  hydrateAccountQuotaCache();
+  const entry = accountQuotaCache.get(accountCacheKey(provider, activeId));
+  if (!entry?.quota) return null;
+  return report(provider, `${provider}:subscription-observation`, entry.quota);
+}
+
 // ---------------------------------------------------------------------------
 // Per-account quota (multiauth)
 // ---------------------------------------------------------------------------
@@ -2371,6 +2392,9 @@ async function maybeFetchProviderQuota(
     if (provider.authMode === "oauth" && name === "cursor") return fetchCursorQuota(name);
     if (provider.authMode === "oauth" && name === "google-antigravity") return fetchAntigravityQuota(name, provider);
     if (provider.authMode === "oauth" && name === "kiro") return fetchKiroQuota(name);
+    // Passive providers (meta-muse): Meta publishes no quota endpoint, so there is no
+    // probe to run — the row is the active account's last in-band observation.
+    if (provider.authMode === "oauth" && hasPassiveAccountQuota(name)) return fetchPassiveProviderQuota(name);
     // Kimi Code `/usages` accepts OAuth or coding-plan API keys, but only on the canonical
     // host and only for real key auth — forward/local modes carry no credential of ours.
     if (provider.authMode === "oauth" && name === "kimi") return fetchKimiQuota(name, provider);

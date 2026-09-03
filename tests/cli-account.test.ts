@@ -53,6 +53,8 @@ let activeReadFailure: { status: number; error: string } | null = null;
 let oauthListFailure: { provider: string; status: number; error: string } | null = null;
 let keyListFailure: { provider: string; status: number; error: string } | null = null;
 let codexRefreshFailure: MockFailure | null = null;
+/** When set, the provider-quotas stub includes this row as a passive Muse observation. */
+let museProviderQuotaReport: Record<string, unknown> | null = null;
 let autoSwitchUpdateFailure: MockFailure | null = null;
 let deleteFailure: MockFailure | null = null;
 let postDeleteReadFailure: MockFailure | null = null;
@@ -203,13 +205,16 @@ async function mockManagementApi(req: Request): Promise<Response> {
   if (req.method === "GET" && url.pathname === "/api/provider-quotas") {
     return json({
       generatedAt: Date.now(),
-      reports: [{
-        provider: "anthropic",
-        label: "Anthropic",
-        source: "anthropic:usage",
-        quota: { fiveHourPercent: 31, fiveHourResetAt: 1_800_000_000, updatedAt: 1_700_000_000 },
-        updatedAt: 1_700_000_000,
-      }],
+      reports: [
+        {
+          provider: "anthropic",
+          label: "Anthropic",
+          source: "anthropic:usage",
+          quota: { fiveHourPercent: 31, fiveHourResetAt: 1_800_000_000, updatedAt: 1_700_000_000 },
+          updatedAt: 1_700_000_000,
+        },
+        ...(museProviderQuotaReport ? [museProviderQuotaReport] : []),
+      ],
     });
   }
 
@@ -417,6 +422,7 @@ beforeEach(() => {
   oauthListFailure = null;
   keyListFailure = null;
   codexRefreshFailure = null;
+  museProviderQuotaReport = null;
   autoSwitchUpdateFailure = null;
   deleteFailure = null;
   postDeleteReadFailure = null;
@@ -783,6 +789,25 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(human.stdout).toContain("reports usage only during a streaming response");
     expect(human.stdout).toContain("nothing to refresh");
     expect(human.stdout).not.toContain("no quota report available");
+  });
+
+  /*
+   * Once the active account has an observation, the same refresh prints it -- still with
+   * zero upstream calls, because the row comes from the passive cache, not a probe.
+   */
+  test("19c: refresh meta-muse prints the cached observation when one exists", async () => {
+    museProviderQuotaReport = {
+      provider: "meta-muse",
+      label: "Meta Muse Code (CLI credential)",
+      source: "meta-muse:subscription-observation",
+      quota: { fiveHourPercent: 21, fiveHourResetAt: 1_800_000_000, updatedAt: 1_700_000_000 },
+      updatedAt: 1_700_000_000,
+    };
+    const human = await run(["refresh", "meta-muse"]);
+
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain("5h 21%");
+    expect(human.stdout).not.toContain("nothing to refresh");
   });
 
   test("20: auto-switch on, off, threshold and status use the exact contracts", async () => {
