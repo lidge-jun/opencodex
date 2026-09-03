@@ -41,6 +41,30 @@ function repeatedHistory(times: number): OcxMessage[] {
   return messages;
 }
 
+function repeatedToolHistory(times: number): OcxMessage[] {
+  const messages: OcxMessage[] = [{ role: "user", content: "熟悉一下当前项目", timestamp: 1 }];
+  for (let i = 0; i < times; i++) {
+    const callId = `call_${i}`;
+    messages.push({
+      role: "assistant",
+      content: [
+        { type: "text", text: REPEAT },
+        { type: "toolCall", id: callId, name: "exec_command", arguments: { cmd: `echo ${i}` } },
+      ],
+      timestamp: 2 + i * 2,
+    });
+    messages.push({
+      role: "toolResult",
+      toolCallId: callId,
+      toolName: "exec_command",
+      content: `result ${i}`,
+      isError: false,
+      timestamp: 3 + i * 2,
+    });
+  }
+  return messages;
+}
+
 function encode(messages: OcxMessage[], modelId = "grok-4.6-high") {
   return encodeCursorRunRequest({
     modelId,
@@ -71,6 +95,16 @@ describe("cursor external-replay repetition breaker (devlog 260826 gap-9)", () =
     expect(texts.filter(text => text.includes("Take a DIFFERENT action now"))).toHaveLength(0);
   });
 
+  test("repeated assistant narration across tool-result cycles still trips the breaker", () => {
+    const bytes = encode(repeatedToolHistory(4));
+    const texts = rootTexts(bytes);
+    const repeats = texts.filter(text => text.startsWith(REPEAT));
+    expect(repeats).toHaveLength(1);
+    expect(repeats[0]).toContain("4 times in a row");
+    expect(texts.filter(text => text.startsWith("[Tool Result]"))).toHaveLength(4);
+    expect(texts.filter(text => text.includes("Take a DIFFERENT action now"))).toHaveLength(1);
+  });
+
   test("distinct assistant entries stay untouched", () => {
     const messages: OcxMessage[] = [
       { role: "user", content: "hi", timestamp: 1 },
@@ -94,5 +128,45 @@ describe("cursor external-replay repetition breaker (devlog 260826 gap-9)", () =
     ] as OcxMessage[];
     const texts = rootTexts(encode(messages));
     expect(texts.filter(text => text === REPEAT)).toHaveLength(2);
+  });
+
+  test("empty user boundaries still reset repetition tracking", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "go", timestamp: 1 },
+      { role: "assistant", content: REPEAT, timestamp: 2 },
+      { role: "user", content: "   ", timestamp: 3 },
+      { role: "assistant", content: REPEAT, timestamp: 4 },
+      { role: "user", content: "final", timestamp: 5 },
+    ] as OcxMessage[];
+    const texts = rootTexts(encode(messages));
+    expect(texts.filter(text => text === REPEAT)).toHaveLength(2);
+  });
+
+  test("three identical tool calls with changing narration trigger a strategy change", () => {
+    const messages: OcxMessage[] = [{ role: "user", content: "find the i18n bug", timestamp: 1 }];
+    for (let i = 0; i < 3; i++) {
+      const callId = `view_${i}`;
+      messages.push({
+        role: "assistant",
+        content: [
+          { type: "text", text: `investigation step ${i}` },
+          { type: "toolCall", id: callId, name: "view_image", arguments: { path: "C:\\tmp\\same.png" } },
+        ],
+        timestamp: 2 + i * 2,
+      });
+      messages.push({
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "view_image",
+        content: `viewed image ${i}`,
+        isError: false,
+        timestamp: 3 + i * 2,
+      });
+    }
+
+    const texts = rootTexts(encode(messages));
+    expect(texts.filter(text => text.startsWith("investigation step"))).toHaveLength(3);
+    expect(texts.filter(text => text.startsWith("[Tool Result]"))).toHaveLength(3);
+    expect(texts.filter(text => text.includes("same tool call repeated 3 times"))).toHaveLength(1);
   });
 });
