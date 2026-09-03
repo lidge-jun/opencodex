@@ -78,3 +78,13 @@ C. Proxy-side only (no config change) — impossible: the client never contacts 
 - The proxy's `loopbackRouteAllowed` (`src/server/index.ts:819`) allows WS upgrades on `/v1/realtime` and
   `/v1/live` only, NOT `/v1/live/{callId}`; a directly spawned app-server on the unauthenticated loopback
   listener would still 404 the sideband. Add the keyed paths for WS upgrades (020).
+
+## Audit notes (Sol reviewer, PASS)
+
+- `experimental_realtime_ws_base_url` redirects the sideband AND the standalone realtime WebSocket; it does
+  NOT redirect WebRTC call-create (that follows `openai_base_url`; `experimental_realtime_webrtc_call_base_url`
+  is the separate call-create override and stays un-injected).
+- codex-rs snapshots sideband auth headers before call-create; both legs carry the same app identity.
+- The app-server public Webrtc transport carries only `sdp` (`app-server-protocol/src/protocol/v2/realtime.rs:275`);
+  no client-side field can redirect the sideband, so the config key is the only lever.
+- With the override, the exact sideband URL is `ws://127.0.0.1:<port>/v1/live/{callId}` (methods.rs:1084/1129/1166).
