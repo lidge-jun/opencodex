@@ -14,7 +14,7 @@ Depends on: 010-080 all landed on dev.
    deletion set. Expected members: `dash.subtitle`, `dash.activeProviders`,
    `dash.availableModels`, `dash.workspace.*`, `dash.version`, `dash.uptime`, `dash.multiAgent*`,
    `dash.shadowCall*`, `dash.delegation*`, `sidebar.star*`, `integrations.subtitle`,
-   `integrations.summary.lastChange`, `usage.card.activeDays`, `usage.subtitle`,
+   `integrations.summary.lastChange`, `usage.card.activeDays`,
    `startup.backToDashboard`, `logs.subtitle`, `pws.dashboard.subtitle`, `models.orderHint`
    (if the tooltip reuses it, it stays).
 2. Delete each from all 9 locale files (they are flat objects; `sed` per key is fine).

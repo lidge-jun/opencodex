@@ -16,9 +16,10 @@ Depends on: nothing.
   scoped inside the `useEffect` (Usage.tsx:390-398); hoist it to a `useCallback` at component
   scope (reads `heatmapRef.current`) so both the effect and `<details onToggle={pinRight}>` call
   it. A closed details has zero width, so the effect's first run is a no-op; onToggle pins after open.
-- L815 subtitle: delete the `<p>`; render a focusable `Tooltip` ⓘ button (existing `Tooltip`
-  wrapping `<button className="btn btn-ghost btn-sm" aria-label={t("usage.subtitle")}>`) beside
-  the 커버리지 card label — the 002 a11y rule, not a `title`.
+- L815 subtitle: delete the `<p>`; render `<Tooltip content={t("usage.subtitle")} side="top"><IconInfo aria-hidden/></Tooltip>`
+  beside the 커버리지 card label. `Tooltip` (ui.tsx:323-365) already renders its OWN focusable
+  `<button>` trigger around `children` (round-3 blocker 3: do not nest a button), so the child
+  is the icon only. `usage.subtitle` is therefore STILL CONSUMED — not an orphan.
 
 ### MODIFY gui/src/styles.css
 
@@ -26,7 +27,7 @@ Depends on: nothing.
 
 ### MODIFY gui/src/i18n/*.ts
 
-- `usage.card.activeDays`, `usage.subtitle` → orphan (delete in 090). No new keys.
+- `usage.card.activeDays` → orphan (delete in 090). `usage.subtitle` stays (Tooltip content). No new keys.
 
 ### Tests
 

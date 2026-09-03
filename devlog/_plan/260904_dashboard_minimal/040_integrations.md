@@ -42,8 +42,7 @@ Depends on: nothing.
 
 ### Tests
 
-- MODIFY gui/tests/integrations-surfaces.test.tsx (asserts the tab strip): update to primary
-  + details; add: navigating to `#integrations/hermes` (uninstalled fixture) sets `moreOpen`
+- MODIFY gui/tests/integrations-surfaces.test.tsx (asserts the tab strip): update to one tablist with hidden secondary tabs + external more-button; add: navigating to `#integrations/hermes` (uninstalled fixture) sets `moreOpen`
   and selects the tab; the more-button is disabled while that tab is selected.
 - NEW gui/tests/integrations-minimal.test.tsx: overview with 3 installed + 5 uninstalled
   fixtures renders 3 cards in the grid and `details.integration-cards-more` summary "…(5)";

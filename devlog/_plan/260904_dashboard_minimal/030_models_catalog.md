@@ -22,9 +22,13 @@ single owner when this phase moves Models' copy there).
    row (audit blocker 4: the endpoint is `/api/v2`. Models.tsx:888-931 reads/writes it, and
    Subagents.tsx:38-90 ALREADY loads `/api/v2` into `ultraMode` and writes it via
    `saveUltraMode(patch)` PUT `/api/v2`. NO new hook: the radiogroup in SubagentDelegationSection
-   receives `multiAgentMode` + `onModeChange={(mode) => saveUltraMode({ multiAgentMode: mode })}`
-   from Subagents.tsx; `loadUltraMode` must also keep `data.multiAgentMode` in state (today it
-   only derives `multiAgentV2Enabled`). Models.tsx KEEPS `v2`, `v2Busy`, `loadV2` and the `/api/v2` writer (round-2 blocker 3:
+   receives `ultraMode.multiAgentMode` (added to `UltraModeState` in 020) +
+   `onModeChange={(mode) => saveUltraMode({ multiAgentMode: mode })}` from Subagents.tsx.
+   Contract change IN THIS PHASE (round-3 blocker 2): `use-subagent-delegation.ts:29-31`
+   `UltraModePatch` becomes `{ multiAgentModeHintText?: string | null; multiAgentMode?: "v1" | "default" | "v2" }`
+   (both optional; the server route already accepts partial bodies — Models.tsx:888-931 PUTs
+   `{ multiAgentMode }` alone today). Existing `saveUltraMode({ multiAgentModeHintText })`
+   callers are unchanged. Models.tsx KEEPS `v2`, `v2Busy`, `loadV2` and the `/api/v2` writer (round-2 blocker 3:
    keep-native-ChatGPT-on-v1 L998 and the thread controls L1006-1051 still write it); only the
    radiogroup JSX (L1603-1633) and `setMultiAgentMode` (L930) leave Models. The effort-cap
    section was already rehomed to Subagents in 020 (EffortCapSection).)

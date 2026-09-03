@@ -87,7 +87,10 @@ RESOLVED (audit blocker 3) from dashboard-overview-sections.tsx:
   `gui/src/components/subagents-workspace/EffortCapSection.tsx` (props: apiBase; owns the
   `/api/effort-caps` state that use-dashboard-data.ts holds today: effortCap, subagentEffortCap,
   effortCapSaving, setters) and mount it in Subagents.tsx below SubagentDelegationSection,
-  gated by `ultraMode.multiAgentMode !== "v1"` (Subagents already loads `/api/v2`).
+  gated by `ultraMode.multiAgentMode !== "v1"`. Contract change IN THIS PHASE (round-3 blocker 2):
+  `gui/src/pages/use-subagent-delegation.ts:23-27` `UltraModeState` gains
+  `multiAgentMode: "v1" | "default" | "v2"`; `Subagents.tsx:53-60` `loadUltraMode` sets it from
+  `data.multiAgentMode ?? "default"`. (`UltraModePatch` is widened in 030 when the switch arrives.)
 - `DashboardInjectionPanel` (L120, `.dash-delegation-summary`, `dash.injectionLabel`) = the
   서브에이전트 위임 card → DELETE (Subagents owns 먼저 부를 모델).
 - `DashboardMaintenancePanel` (L162) = 모델 동기화 + update dialog → KEEP.
@@ -132,6 +135,13 @@ Final panels.tsx body:
   dashboard-sync-feedback.test.tsx, vision-sidecar-dashboard.test.tsx: run them at B; those
   that import the deleted sections are rewritten or deleted (grouping helper may move with
   Models if still used there).
+- NEW gui/tests/startup-autostart-rehome.test.tsx (happy-dom, fetch stub): Startup renders the
+  autostart switch from `/api/settings.codexAutoStart`; clicking PUTs `/api/settings` with the
+  flipped value; Dashboard no longer renders `dash.codexAutoStart`.
+- NEW gui/tests/subagents-effort-cap-rehome.test.tsx: Subagents with `/api/v2` → multiAgentMode
+  "default" renders EffortCapSection reading `/api/effort-caps`; changing a cap PUTs
+  `/api/effort-caps`; with multiAgentMode "v1" the section is absent; Dashboard renders no
+  `dash.effortCapLabel`.
 - NEW gui/tests/dashboard-minimal.test.tsx (happy-dom): mount Dashboard with a stub
   `/api/*`; assert no `role="tablist"`, no text "reasoning_effort", stat-row has 3 `.stat`,
   `details.dash-sidecars` is closed by default and opens on click revealing the web-search

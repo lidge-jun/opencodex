@@ -58,9 +58,10 @@ DECISION (audit blocker 3): `Select` (gui/src/ui.tsx:96-112) has no `trigger` pr
 none. Keep the existing `<Select … placement="right" portal={false}>` inside
 `.lang-toggle.lang-toggle--icon`; CSS sizes the trigger to a 28px orb and hides its text/chevron
 children (`.lang-toggle--icon .select-trigger { width:28px; height:28px; padding:0; border-radius:50% }`,
-`.lang-toggle--icon .select-trigger > :not(svg) { display:none }` — confirm the trigger's child
-markup in ui.tsx at B and target exactly those). The sibling `<IconGlobe aria-hidden/>` is
-absolutely positioned over the trigger with `pointer-events:none`. The `trigger={…}` line in the
+`.lang-toggle--icon .select-trigger > span, .lang-toggle--icon .select-trigger > svg { display:none }`
+— the trigger's children are exactly one `<span>` (label) and one `<IconChevron>` svg (ui.tsx:305-306),
+so both are hidden (round-3 blocker 1: `:not(svg)` kept the chevron). The sibling
+`<IconGlobe aria-hidden/>` is absolutely positioned over the now-empty trigger with `pointer-events:none`. The `trigger={…}` line in the
 After snippet is NOT written; read it as "existing Select, icon-sized by CSS".
 
 ### MODIFY gui/src/components/sidebar-github-row.tsx
@@ -71,10 +72,10 @@ After snippet is NOT written; read it as "existing Select, icon-sized by CSS".
   `starOverride`, `starring`, `starPoll`, `STAR_POLL_MS`, `StarState`/`StarStatus` and the
   button JSX (sidebar-github-row.tsx L54-99, L134-145) verbatim into
   `export function GithubStarButton({ apiBase })` rendering a `.btn.btn-ghost.btn-sm` with the
-  same labels. Mount it inside the update dialog JSX in `gui/src/pages/dashboard-dialogs.tsx` (L24-52), which
-  renders only while `updateOpen`; the component and its `useKeyedClientResource` poll therefore
-  exist only while the dialog is open (unmount cancels). Props stay `{ apiBase }`; the
-  conditional is the dialog's existing mount, not a prop. Consent rule unchanged: still a human click.
+  same labels. Mount it in `gui/src/pages/dashboard-dialogs.tsx` inside the `<dialog>` card as
+  `{updateOpen && <GithubStarButton apiBase={apiBase} />}` — EXPLICIT conditional (round-3
+  blocker 1: the dialog element is always mounted and only toggles `display`, L24-33), so
+  closing unmounts the component and cancels its `useKeyedClientResource` poll. Consent rule unchanged: still a human click.
 - The GitHub link becomes an icon orb: `<a className="sidebar-orb" href={REPO_URL} target="_blank" rel="noreferrer" aria-label={t("common.github")} title={t("common.github")}><IconGithub/></a>`.
 - Update orb unchanged (dot when `updateAvailable`).
 - Wrapper: `<>{link}{update}</>` — the row container is now App's `.sidebar-foot-row`.

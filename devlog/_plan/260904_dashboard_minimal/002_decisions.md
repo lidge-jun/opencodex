@@ -77,9 +77,9 @@ work-phase that lands it. Votes: number of reviewers proposing remove/collapse/d
 |---|---|---|---|
 | wp1 | 010_sidebar_footer.md | Sidebar footer icon row (lang/theme/GitHub/update), remove star orb + action label | — |
 | wp2 | 020_dashboard_home.md | Dashboard: remove clone tabs + redirects, remove duplicated settings (autostart rehomed to Startup, effort cap rehomed to Subagents, both in this phase), collapse sidecars + memory, stat row trim | — |
-| wp3 | 030_models_catalog.md | Models: remove head orb, subtitle→tooltip, advanced disclosure, per-provider ⋯ menu, move v2 switch to Subagents | 020 |
+| wp3 | 030_models_catalog.md | Models: remove head orb, subtitle→tooltip, advanced disclosure, per-provider ⋯ disclosure, move v2 switch to Subagents | 020 |
 | wp4 | 040_integrations.md | Integrations: tab overflow, uninstalled disclosure, summary trim, subtitle | — |
-| wp5 | 050_codex_set.md | Codex 설정 account cards: ⋯ menu, priority-on-demand, ID tooltip, strategy tooltip, empty card | — |
+| wp5 | 050_codex_set.md | Codex 설정 account cards: ⋯ disclosure, priority-on-demand, ID tooltip, strategy tooltip, empty card | — |
 | wp6 | 060_usage.md | Usage: 활동일, heatmap details, subtitle tooltip, cost row weight | — |
 | wp7 | 070_startup.md | Startup: hero line, remove back button, recovery details, subtitle line | 020 (autostart row already rehomed there) |
 | wp8 | 080_page_polish.md | Providers / Logs / Subagents / Combos / Routing small items (#40-49) | 030 (Subagents disclosure) |
