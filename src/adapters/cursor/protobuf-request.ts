@@ -306,7 +306,9 @@ function rootPromptMessages(
     entry: RootBlobCandidate;
     length: number;
   }>();
+  const toolCallCounts = new Map<string, number>();
   let maxRunLength = 1;
+  let maxToolCallCount = 1;
   const pushDeduped = (
     payload: { role: string; content: [{ type: "text"; text: string }] },
     role: RootBlobCandidate["role"],
@@ -337,12 +339,13 @@ function rootPromptMessages(
     const message = messages[i];
     if (!message) continue;
     if (message.role === "user" || message.role === "developer") {
+      replayRuns.clear();
+      toolCallCounts.clear();
       const text = historyContentText(message).trim();
       // Cursor root replay expects OpenAI-style content parts for historical user messages.
       // A bare string survives blob hydration but external workers reject the completed replay
       // before tokenization (`usedTokens: 0`, then invalid_argument).
       if (text.length > 0) {
-        replayRuns.clear();
         entries.push(rootBlobCandidate({
           role: "user",
           content: [{ type: "text", text }],
@@ -359,6 +362,20 @@ function rootPromptMessages(
           { messageIndex: i },
           text,
         );
+      }
+      if (externalModel && Array.isArray(message.content)) {
+        const callsInMessage = new Set<string>();
+        for (const part of message.content) {
+          if (part.type !== "toolCall") continue;
+          const args = serializeToolCallArguments(part.arguments);
+          if (args === undefined) continue;
+          callsInMessage.add(JSON.stringify([namespacedToolName(part.namespace, part.name), args]));
+        }
+        for (const call of callsInMessage) {
+          const count = (toolCallCounts.get(call) ?? 0) + 1;
+          toolCallCounts.set(call, count);
+          if (count > maxToolCallCount) maxToolCallCount = count;
+        }
       }
       // Assistant tool CALLS are NOT replayed as a separate visible "[Tool Call]" entry: a model
        // few-shot-mimics that marker and emits later tool calls as inert text (363-B guard in
@@ -380,7 +397,12 @@ function rootPromptMessages(
     }
   }
   // Severe repetition: tell the model ONCE, imperatively, to change strategy.
-  if (externalModel && maxRunLength >= 3) {
+  if (externalModel && maxToolCallCount >= 3) {
+    entries.push(rootBlobCandidate({
+      role: "user",
+      content: [{ type: "text", text: `[context note] The transcript above contains the same tool call repeated ${maxToolCallCount} times in this user turn. Repeating it again is a failure. Take a DIFFERENT action now, or state plainly what is blocking progress.` }],
+    }, "user", {}));
+  } else if (externalModel && maxRunLength >= 3) {
     entries.push(rootBlobCandidate({
       role: "user",
       content: [{ type: "text", text: `[context note] The transcript above contains the same output repeated ${maxRunLength} times in a row. Repeating it again is a failure. Take a DIFFERENT action now, or state plainly what is blocking progress.` }],

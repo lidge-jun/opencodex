@@ -129,4 +129,44 @@ describe("cursor external-replay repetition breaker (devlog 260826 gap-9)", () =
     const texts = rootTexts(encode(messages));
     expect(texts.filter(text => text === REPEAT)).toHaveLength(2);
   });
+
+  test("empty user boundaries still reset repetition tracking", () => {
+    const messages: OcxMessage[] = [
+      { role: "user", content: "go", timestamp: 1 },
+      { role: "assistant", content: REPEAT, timestamp: 2 },
+      { role: "user", content: "   ", timestamp: 3 },
+      { role: "assistant", content: REPEAT, timestamp: 4 },
+      { role: "user", content: "final", timestamp: 5 },
+    ] as OcxMessage[];
+    const texts = rootTexts(encode(messages));
+    expect(texts.filter(text => text === REPEAT)).toHaveLength(2);
+  });
+
+  test("three identical tool calls with changing narration trigger a strategy change", () => {
+    const messages: OcxMessage[] = [{ role: "user", content: "find the i18n bug", timestamp: 1 }];
+    for (let i = 0; i < 3; i++) {
+      const callId = `view_${i}`;
+      messages.push({
+        role: "assistant",
+        content: [
+          { type: "text", text: `investigation step ${i}` },
+          { type: "toolCall", id: callId, name: "view_image", arguments: { path: "C:\\tmp\\same.png" } },
+        ],
+        timestamp: 2 + i * 2,
+      });
+      messages.push({
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "view_image",
+        content: `viewed image ${i}`,
+        isError: false,
+        timestamp: 3 + i * 2,
+      });
+    }
+
+    const texts = rootTexts(encode(messages));
+    expect(texts.filter(text => text.startsWith("investigation step"))).toHaveLength(3);
+    expect(texts.filter(text => text.startsWith("[Tool Result]"))).toHaveLength(3);
+    expect(texts.filter(text => text.includes("same tool call repeated 3 times"))).toHaveLength(1);
+  });
 });
