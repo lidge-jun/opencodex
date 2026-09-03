@@ -2046,12 +2046,22 @@ table.logs-table {
 .logs-table col.logs-col-duration { width: 8%; }
 .log-col-rate { min-width: 7ch; white-space: nowrap; }
 .log-col-cost { min-width: 10ch; white-space: nowrap; }
+/* table-layout: fixed sizes the columns but does not clip them: a cell whose content is wider
+   than its <col> paints straight over the neighbour (seen as "US$0.1401claude-fable-5-1" and a
+   "reasoning_effort=high" caption sitting under the provider name). Clip at the cell so an
+   overlong value truncates inside its own column instead. */
+.logs-table tbody td { overflow: hidden; }
+.log-reasoning-cell { overflow-wrap: anywhere; }
 .log-status-cell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: var(--space-0-5); min-width: 7ch; line-height: var(--leading-tight); }
 .log-detail-btn {
   background: none; border: none; padding: 0; cursor: pointer;
   color: var(--accent-hover); font: inherit; font-size: var(--text-caption); text-decoration: underline;
-  white-space: nowrap;
+  /* Wraps rather than clips: with the cell now clipping overflow, a nowrap label such as
+     zh-TW's 檢視詳細資料 would lose its tail in the 8% status column. */
+  white-space: normal;
+  text-align: left;
 }
+.log-detail-btn:focus-visible { outline-offset: -2px; }
 
 /* Logs page layout rhythm — keep spacing in CSS so virtualized rows don't flood inline px. */
 .logs-auto-refresh {
