@@ -7,6 +7,7 @@ Thanks for helping with opencodex.
 - Public user docs live in [`docs-site/`](./docs-site)
 - Current maintainer invariants live in [`structure/`](./structure)
 - Maintainer roles and merge policy live in [`MAINTAINERS.md`](./MAINTAINERS.md)
+- Attribution for work landed through a maintainer carry lives in [`CREDITS.md`](./CREDITS.md)
 - Historical investigations live in [`docs/`](./docs)
 
 ## Branches

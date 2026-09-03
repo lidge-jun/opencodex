@@ -320,6 +320,10 @@ bun run test
 
 See **[Contributing](./CONTRIBUTING.md)**.
 
+Contributor work that landed through a maintainer carry or reimplementation,
+where the commit does not name its original author, is recorded in
+**[CREDITS.md](./CREDITS.md)**.
+
 ## Disclaimer
 
 opencodex is an independent, community-maintained project and is **not affiliated with or endorsed by OpenAI, Anthropic, or any other provider**.
