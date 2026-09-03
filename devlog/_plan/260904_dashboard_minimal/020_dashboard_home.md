@@ -90,7 +90,9 @@ RESOLVED (audit blocker 3) from dashboard-overview-sections.tsx:
   gated by `ultraMode.multiAgentMode !== "v1"`. Contract change IN THIS PHASE (round-3 blocker 2):
   `gui/src/pages/use-subagent-delegation.ts:23-27` `UltraModeState` gains
   `multiAgentMode: "v1" | "default" | "v2"`; `Subagents.tsx:53-60` `loadUltraMode` sets it from
-  `data.multiAgentMode ?? "default"`. (`UltraModePatch` is widened in 030 when the switch arrives.)
+  `data.multiAgentMode ?? "default"`; the initial state literal at `Subagents.tsx:28` and the
+  fixture at `gui/tests/multi-agent-guidance.test.tsx:68` both gain `multiAgentMode: "default"`
+  (round-4 blocker 2: required field, so every constructor site is listed). (`UltraModePatch` is widened in 030 when the switch arrives.)
 - `DashboardInjectionPanel` (L120, `.dash-delegation-summary`, `dash.injectionLabel`) = the
   서브에이전트 위임 card → DELETE (Subagents owns 먼저 부를 모델).
 - `DashboardMaintenancePanel` (L162) = 모델 동기화 + update dialog → KEEP.

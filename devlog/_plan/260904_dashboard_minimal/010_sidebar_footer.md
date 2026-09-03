@@ -73,7 +73,7 @@ After snippet is NOT written; read it as "existing Select, icon-sized by CSS".
   button JSX (sidebar-github-row.tsx L54-99, L134-145) verbatim into
   `export function GithubStarButton({ apiBase })` rendering a `.btn.btn-ghost.btn-sm` with the
   same labels. Mount it in `gui/src/pages/dashboard-dialogs.tsx` inside the `<dialog>` card as
-  `{updateOpen && <GithubStarButton apiBase={apiBase} />}` — EXPLICIT conditional (round-3
+  `{updateOpen && <GithubStarButton apiBase={d.apiBase} />}` (`DashboardDialogs` receives the `Dash` bag as `d`, dashboard-dialogs.tsx:12-22, and does not destructure `apiBase`; `d.apiBase` is the existing field) — EXPLICIT conditional (round-3
   blocker 1: the dialog element is always mounted and only toggles `display`, L24-33), so
   closing unmounts the component and cancels its `useKeyedClientResource` poll. Consent rule unchanged: still a human click.
 - The GitHub link becomes an icon orb: `<a className="sidebar-orb" href={REPO_URL} target="_blank" rel="noreferrer" aria-label={t("common.github")} title={t("common.github")}><IconGithub/></a>`.

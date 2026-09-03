@@ -16,10 +16,12 @@ Depends on: nothing.
   scoped inside the `useEffect` (Usage.tsx:390-398); hoist it to a `useCallback` at component
   scope (reads `heatmapRef.current`) so both the effect and `<details onToggle={pinRight}>` call
   it. A closed details has zero width, so the effect's first run is a no-op; onToggle pins after open.
-- L815 subtitle: delete the `<p>`; render `<Tooltip content={t("usage.subtitle")} side="top"><IconInfo aria-hidden/></Tooltip>`
+- L815 subtitle: delete the `<p>`; render `<Tooltip content={t("usage.subtitle")} side="top"><IconInfo aria-hidden/><span className="sr-only">{t("usage.subtitleAria")}</span></Tooltip>`
   beside the 커버리지 card label. `Tooltip` (ui.tsx:323-365) already renders its OWN focusable
-  `<button>` trigger around `children` (round-3 blocker 3: do not nest a button), so the child
-  is the icon only. `usage.subtitle` is therefore STILL CONSUMED — not an orphan.
+  `<button>` trigger around `children` and sets no `aria-label` (round-4 blocker 3), so the
+  accessible name comes from the visually-hidden span: NEW key `usage.subtitleAria`
+  ("How usage is counted" / "사용량 집계 방식") in all nine locales. The existing `.sr-only`
+  class is used by AccountPriorityControl.tsx:59. `usage.subtitle` is therefore STILL CONSUMED — not an orphan.
 
 ### MODIFY gui/src/styles.css
 
@@ -27,13 +29,13 @@ Depends on: nothing.
 
 ### MODIFY gui/src/i18n/*.ts
 
-- `usage.card.activeDays` → orphan (delete in 090). `usage.subtitle` stays (Tooltip content). No new keys.
+- `usage.card.activeDays` → orphan (delete in 090). `usage.subtitle` stays (Tooltip content). NEW `usage.subtitleAria` in all nine locales.
 
 ### Tests
 
 - MODIFY gui/tests/usage*.test.ts* asserting 6 cards or the subtitle (`rg -n 'activeDays|usage.subtitle' gui/tests`).
 - NEW gui/tests/usage-minimal.test.tsx: 5 stat cards; heatmap inside a closed `details` for
-  30d; inline bars for 7d; a focusable ⓘ button whose aria-label is the old subtitle exists beside 커버리지.
+  30d; inline bars for 7d; a focusable ⓘ button whose accessible name is `usage.subtitleAria` exists beside 커버리지 and shows `usage.subtitle` on focus.
 
 ## Verifiers
 

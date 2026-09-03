@@ -1,4 +1,4 @@
-# 030 — WP3: Models catalog — one advanced disclosure, per-provider ⋯ menu
+# 030 — WP3: Models catalog — one advanced disclosure, per-provider ⋯ disclosure
 
 Depends on: 020 (dashboard copy of the v1/base/v2 switch is gone, so Subagents becomes the
 single owner when this phase moves Models' copy there).
@@ -79,4 +79,4 @@ single owner when this phase moves Models' copy there).
 
 ## Bypass fields
 
-E2 · CI gates · `--no-verify` · residual: details-based menu is not a roving-tabindex menu · "early warning".
+E2 · CI gates · `--no-verify` · residual: the ⋯ is a labelled disclosure, not a menu role · "early warning".
