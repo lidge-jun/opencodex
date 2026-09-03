@@ -105,6 +105,11 @@ function fixtureConfig(): OcxConfig {
         authMode: "key",
         apiKey: RAW_SENTINEL,
       },
+      "meta-muse": {
+        adapter: "openai-responses",
+        baseUrl: "https://api.meta.ai/v1",
+        authMode: "oauth",
+      },
       ollama: {
         adapter: "openai-chat",
         baseUrl: "http://127.0.0.1:11434/v1",
@@ -763,6 +768,21 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(requests.filter(request =>
       request.path === "/api/provider-quotas" && request.search === "?refresh=1"
     )).toHaveLength(4);
+  });
+
+  /*
+   * A passively observed quota has nothing to probe, so the generic "no quota report
+   * available" line describes a failure that never happened. The refresh must stay
+   * probe-free -- obtaining a fresh Muse value would mean spending an inference turn --
+   * so only the message changes.
+   */
+  test("19b: refresh meta-muse explains that nothing is probed instead of reporting a failure", async () => {
+    const human = await run(["refresh", "meta-muse"]);
+
+    expect(human.code).toBe(0);
+    expect(human.stdout).toContain("reports usage only during a streaming response");
+    expect(human.stdout).toContain("nothing to refresh");
+    expect(human.stdout).not.toContain("no quota report available");
   });
 
   test("20: auto-switch on, off, threshold and status use the exact contracts", async () => {
