@@ -147,6 +147,32 @@ describe("meta-muse credential import", () => {
     await expect(loginMetaMuse({ signal: ac.signal }, deps({ fetchImpl: failing }))).rejects.toThrow();
   });
 
+  /*
+   * `security` can raise an interactive approval prompt that nobody answers on a headless
+   * or locked machine. That read happens BEFORE the validation timeout is created, so
+   * without its own deadline the login would hang with no bound at all.
+   */
+  test("a blocked Keychain read fails instead of hanging", async () => {
+    const started = Date.now();
+    await expect(loginMetaMuse({}, deps({
+      // Mimics the real reader's contract: it resolves null once its deadline fires.
+      readKeychain: async () => null,
+    }))).rejects.toThrow(/within 5s/);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  test("the caller's abort signal is handed to the Keychain reader", async () => {
+    const ac = new AbortController();
+    let received: AbortSignal | undefined;
+    await loginMetaMuse({ signal: ac.signal }, deps({
+      readKeychain: async (signal) => {
+        received = signal;
+        return JSON.stringify({ api_key: CANARY });
+      },
+    }));
+    expect(received).toBe(ac.signal);
+  });
+
   for (const [label, over] of [
     ["a non-darwin platform", { platform: "linux" }],
     ["no credential file", { readPointer: async () => null }],

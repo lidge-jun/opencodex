@@ -247,6 +247,15 @@ function scanFile(file: string): Finding[] {
   return scanText(file, readFileSync(file, "utf-8"));
 }
 
+/**
+ * Finding kinds whose matched text is itself a secret.
+ *
+ * A home path or an email is context a reviewer needs in the failure message. A bearer
+ * token or an API key is the very thing the scan exists to keep out of a readable
+ * artifact, so the report names where it is instead of what it is.
+ */
+const REDACTED_FINDING_KINDS = new Set(["bearer-token", "token-looking", "meta-api-key"]);
+
 const findings = gitLsFiles()
   .filter(existsSync)
   .filter(shouldScan)
@@ -255,7 +264,13 @@ const findings = gitLsFiles()
 if (findings.length > 0) {
   console.error("Privacy scan failed:");
   for (const finding of findings) {
-    console.error(`${finding.file}:${finding.line} ${finding.kind}: ${finding.value}`);
+    // A credential finding must not be echoed: this output goes to stderr and into CI
+    // logs, so printing the match would copy a leaked secret from one place it should
+    // not be into another — and CI logs are far more widely readable than a diff.
+    // The location and kind are enough to find it; the value is one `git show` away
+    // for whoever is fixing it.
+    const shown = REDACTED_FINDING_KINDS.has(finding.kind) ? "<redacted>" : finding.value;
+    console.error(`${finding.file}:${finding.line} ${finding.kind}: ${shown}`);
   }
   process.exit(1);
 }

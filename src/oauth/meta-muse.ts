@@ -32,6 +32,7 @@ const KEYCHAIN_SERVICE = "ai.meta.dev.credentials";
 const KEYCHAIN_ACCOUNT = "meta";
 const MODELS_URL = "https://api.meta.ai/v1/models";
 const VALIDATE_TIMEOUT_MS = 10_000;
+const KEYCHAIN_TIMEOUT_MS = 5_000;
 
 /**
  * Shown BEFORE any credential is read.
@@ -62,7 +63,7 @@ interface MusePointer {
 export interface MuseImportDeps {
   platform?: string;
   readPointer?: () => Promise<string | null>;
-  readKeychain?: () => Promise<string | null>;
+  readKeychain?: (signal?: AbortSignal) => Promise<string | null>;
   fetchImpl?: typeof fetch;
 }
 
@@ -74,18 +75,39 @@ async function defaultReadPointer(): Promise<string | null> {
   }
 }
 
-async function defaultReadKeychain(): Promise<string | null> {
+/**
+ * `security` can block indefinitely — the Keychain may raise an interactive approval
+ * prompt, and on a headless or locked machine nobody answers it. Without a deadline the
+ * login would hang before the validation timeout below is even created, so the bound
+ * lives here rather than only around the fetch.
+ */
+async function defaultReadKeychain(signal?: AbortSignal): Promise<string | null> {
+  const deadline = signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(KEYCHAIN_TIMEOUT_MS)])
+    : AbortSignal.timeout(KEYCHAIN_TIMEOUT_MS);
+  let proc: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
   try {
-    const proc = Bun.spawn(
+    proc = Bun.spawn(
       ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", KEYCHAIN_ACCOUNT, "-w"],
       { stdout: "pipe", stderr: "pipe" },
     );
-    const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    const child = proc;
+    const finished = Promise.all([new Response(child.stdout).text(), child.exited]);
+    const timedOut = new Promise<null>((resolve) => {
+      if (deadline.aborted) { resolve(null); return; }
+      deadline.addEventListener("abort", () => resolve(null), { once: true });
+    });
+    const settled = await Promise.race([finished, timedOut]);
+    if (settled === null) return null;
+    const [out, code] = settled;
     if (code !== 0) return null;
     const trimmed = out.trim();
     return trimmed.length > 0 ? trimmed : null;
   } catch {
     return null;
+  } finally {
+    // A prompt still on screen keeps the child alive after the race resolves.
+    if (proc && proc.exitCode === null) { try { proc.kill(); } catch { /* already gone */ } }
   }
 }
 
@@ -141,10 +163,10 @@ export async function loginMetaMuse(
     );
   }
 
-  const secretRaw = await (deps.readKeychain ?? defaultReadKeychain)();
+  const secretRaw = await (deps.readKeychain ?? defaultReadKeychain)(ctrl.signal);
   if (secretRaw === null) {
     throw new Error(
-      "Could not read the Muse Code credential from the macOS Keychain. Approve the Keychain prompt, or run `muse login` again.",
+      "Could not read the Muse Code credential from the macOS Keychain within 5s. Approve the Keychain prompt, or run `muse login` again.",
     );
   }
 
