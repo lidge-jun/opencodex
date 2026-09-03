@@ -1979,12 +1979,12 @@ function normalizeImageGenClientTools(body: unknown): unknown {
  * carries a tool the upstream model 400s on. No-op (returns the original reference) when nothing
  * matches, keeping the common path allocation-free.
  */
-function stripUnsupportedHostedTools(body: unknown): unknown {
+function stripUnsupportedHostedTools(body: unknown, provider: Pick<OcxProviderConfig, "baseUrl">): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.tools)) return body;
   const model = typeof body.model === "string" ? body.model : "";
   const tools = body.tools.filter(t => {
     const type = isPlainObject(t) && typeof t.type === "string" ? t.type : undefined;
-    return !type || !isHostedToolUnsupportedForModel(model, type);
+    return !type || !isHostedToolUnsupportedForModel(model, type, provider.baseUrl);
   });
   return tools.length === body.tools.length ? body : { ...body, tools };
 }
@@ -2390,6 +2390,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                       stripEncryptedContent: threadServingIdentityChanged,
                     },
                   ),
+                  provider,
                 ),
               ),
             ),
