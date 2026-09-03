@@ -820,6 +820,14 @@ export interface OcxComboConfig {
   strategy?: OcxComboStrategy;
   /** Successful requests retained on one RR selection batch. Default 1; range 1..100. */
   stickyLimit?: number;
+  /**
+   * Optional per-target cooldown used only when the upstream response has no Retry-After or Codex reset signal.
+   * Unset uses the upstream fallback (5 s for request-rate 429 codes 1302/1305, otherwise 60 s);
+   * an explicit value overrides that fallback. Range 1..600000.
+   */
+  cooldownMs?: number;
+  /** Maximum wait for an eligible target cooldown to expire before failing closed. Default 0; range 0..600000, per selection attempt. */
+  waitForCooldownMs?: number;
   /** Used when the client omits reasoning.effort. null/omitted leaves the target default unchanged. */
   defaultEffort?: OcxComboDefaultEffort | null;
   /**

@@ -1581,6 +1581,104 @@ describe("server combo failover 030 activation matrix", () => {
     expect(bHits).toBe(2);
   });
 
+  test("waits in the hop-level path when later targets are already cooling", async () => {
+    const t0 = Date.parse("2026-07-18T00:00:00.000Z");
+    Date.now = () => t0;
+    let aHits = 0;
+    let bHits = 0;
+    let cHits = 0;
+    const a = serve(() => {
+      aHits += 1;
+      return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    });
+    const b = serve(() => {
+      bHits += 1;
+      return bHits === 1
+        ? Response.json({ error: { message: "rate limited" } }, { status: 429 })
+        : chatSuccess("first cooled target recovered", "m2");
+    });
+    const c = serve(() => {
+      cHits += 1;
+      return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    });
+    const providers = {
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+      c: provider("openai-chat", baseUrl(c), "key-c"),
+    };
+    const cooldown = { cooldownMs: 200, waitForCooldownMs: 1_000 };
+
+    // The prior request only includes B and C, so it cools those targets while A remains
+    // eligible for the fresh request below.
+    const prior = await post(comboConfig(providers, [
+      { provider: "b", model: "m2" },
+      { provider: "c", model: "m3" },
+    ], cooldown));
+    expect(prior.status).toBe(429);
+    await prior.text();
+    expect([aHits, bHits, cHits]).toEqual([0, 1, 1]);
+
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+      const fresh = await post(comboConfig(providers, [
+        { provider: "a", model: "m1" },
+        { provider: "b", model: "m2" },
+        { provider: "c", model: "m3" },
+      ], cooldown));
+      expect(fresh.status).toBe(200);
+      expect(await fresh.text()).toContain("first cooled target recovered");
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    expect([aHits, bHits, cHits]).toEqual([1, 2, 1]);
+    expect(warnings
+      .filter(args => String(args[0]).includes("all targets cooling, waiting"))
+      .map(args => args[0]))
+      .toEqual(["[combo] free: all targets cooling, waiting 200ms for b/m2"]);
+  });
+
+  test("returns immediate 503 when all targets cool and the wait budget is unset", async () => {
+    const t0 = Date.parse("2026-07-18T00:00:00.000Z");
+    Date.now = () => t0;
+    let aHits = 0;
+    let bHits = 0;
+    let cHits = 0;
+    const a = serve(() => {
+      aHits += 1;
+      return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    });
+    const b = serve(() => {
+      bHits += 1;
+      return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    });
+    const c = serve(() => {
+      cHits += 1;
+      return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+      c: provider("openai-chat", baseUrl(c), "key-c"),
+    }, [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+      { provider: "c", model: "m3" },
+    ], { cooldownMs: 200 });
+
+    const exhausted = await post(config);
+    expect(exhausted.status).toBe(429);
+    await exhausted.text();
+    expect([aHits, bHits, cHits]).toEqual([1, 1, 1]);
+
+    const unavailable = await post(config);
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.text()).toContain("No available targets for combo: free");
+    expect([aHits, bHits, cHits]).toEqual([1, 1, 1]);
+  });
+
   test("disabled image input rejects the request before any combo target is called", async () => {
     let hits = 0;
     const a = serve(() => {

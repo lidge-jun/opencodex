@@ -1,7 +1,13 @@
 import type { OcxComboTarget, OcxConfig } from "../types";
 import { getCachedProviderQuota } from "../providers/quota-routing-cache";
 import type { ProviderQuota } from "../providers/quota-types";
-import { coolComboTarget, isComboTargetInCooldown, type ComboFailureCooldownScope } from "./failover";
+import { sleepWithAbort } from "../lib/upstream-retry";
+import {
+  coolComboTarget,
+  earliestComboCooldown,
+  isComboTargetInCooldown,
+  type ComboFailureCooldownScope,
+} from "./failover";
 import { quotaResetRemainingMs } from "./reset-window";
 import { getCombo, resolveComboId, targetKey } from "./types";
 import type { NormalizedComboConfig } from "./types";
@@ -274,7 +280,9 @@ export function advanceComboAfterFailure(
   pick: ComboPick,
   options: {
     retryAfter?: string | null;
+    resetAt?: unknown | unknown[];
     now?: number;
+    cooldownMs?: number;
     eligible?: (target: Required<OcxComboTarget>) => boolean;
     cooldownScope?: ComboFailureCooldownScope;
     status?: number;
@@ -290,6 +298,7 @@ export function advanceComboAfterFailure(
   for (const target of cooldownTargets) {
     coolComboTarget(pick.comboId, target, {
       ...options,
+      cooldownMs: options.cooldownMs ?? combo?.cooldownMs,
       writerGeneration: pick.writerGeneration,
     });
   }
@@ -298,6 +307,60 @@ export function advanceComboAfterFailure(
     now: options.now,
     eligible: target => !isComboTargetInCooldown(pick.comboId, target, options.now)
       && (options.eligible?.(target) ?? true),
+  });
+}
+
+export async function pickComboTargetWithWait(
+  config: OcxConfig,
+  comboId: string,
+  options: {
+    exclude?: Iterable<string>;
+    eligible?: (target: Required<OcxComboTarget>) => boolean;
+    waitForCooldownMs: number;
+    abortSignal?: AbortSignal;
+    now?: number;
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  },
+): Promise<ComboPick | null> {
+  const now = options.now ?? Date.now();
+  const excluded = new Set(options.exclude ?? []);
+  const customEligible = options.eligible;
+  const eligible = (target: Required<OcxComboTarget>): boolean =>
+    !isComboTargetInCooldown(comboId, target, now)
+    && (customEligible?.(target) ?? true);
+  const pick = pickComboTarget(config, comboId, { exclude: excluded, eligible });
+  if (pick || options.waitForCooldownMs <= 0 || options.abortSignal?.aborted) return pick;
+  const combo = getCombo(config, comboId);
+  if (!combo) throw new UnknownComboError(comboId);
+  const waitingTargets = combo.targets.filter(target =>
+    targetProviderIsUsable(config, target)
+    && !cachedProviderQuotaIsExhausted(getCachedProviderQuota(target.provider, now), now)
+    && !excluded.has(targetKey(target))
+    && isComboTargetInCooldown(comboId, target, now)
+    && (customEligible?.(target) ?? true),
+  );
+  const earliest = earliestComboCooldown(comboId, waitingTargets, now);
+  if (earliest === undefined) return null;
+  const delay = earliest.expiry - now;
+  if (delay > options.waitForCooldownMs) return null;
+  // The expiry computation above is the single source of truth for the wait budget.
+  // Its target preserves configured order for ties.
+  const target = earliest.target;
+  console.warn(
+    `[combo] ${comboId}: all targets cooling, waiting ${delay}ms for ${targetKey(target)}`,
+  );
+  try {
+    await (options.sleep ?? sleepWithAbort)(delay, options.abortSignal);
+  } catch (error) {
+    if (options.abortSignal?.aborted) return null;
+    throw error;
+  }
+  if (options.abortSignal?.aborted) return null;
+  return pickComboTarget(config, comboId, {
+    exclude: excluded,
+    eligible: targetCandidate =>
+      !isComboTargetInCooldown(comboId, targetCandidate, now + delay)
+      && (customEligible?.(targetCandidate) ?? true),
   });
 }
 

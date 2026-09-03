@@ -201,13 +201,29 @@ Combo failures are divided into **hop** failures and **terminal** failures.
 | Client cancellation (499), `origin_rejected`, cyber-policy refusal, context overflow, or invalid request | Stop and return the error; another target would not make the request valid. |
 | Any other unclassified error | Stop and return the error. |
 
-A hopped target enters cooldown for 60 seconds by default. If the upstream response includes a
-valid `Retry-After` value, opencodex uses it instead. Numeric seconds and HTTP-date values are
-accepted, and every cooldown is capped at 10 minutes.
+When `cooldownMs` is unset, a hopped target uses an upstream fallback: 5 seconds for request-rate
+429s with upstream code `1302` or `1305`, and 60 seconds otherwise. When it is set, `cooldownMs`
+applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including those
+request-rate 429s. Numeric `Retry-After` seconds and HTTP-date values are accepted, and every
+cooldown is capped at 10 minutes. The precedence is, from strongest to weakest, explicit
+`Retry-After` → Codex reset headers (`x-codex-primary-reset-at`, `x-codex-secondary-reset-at`, or
+`x-codex-tertiary-reset-at`) → the combo's `cooldownMs` (when set) → the 5-second request-rate
+fallback for upstream rate-limit codes `1302`/`1305` → the 60-second default. A valid immediate
+`Retry-After: 0` remains an immediate upstream directive rather than being replaced by a configured
+cooldown.
 
 The current request never retries the same attempted target. Later requests skip it until its
-cooldown expires. If no eligible target remains, the proxy returns HTTP 503 with
-`error.code = "combo_unavailable"`.
+cooldown expires. A `Retry-After` HTTP-date that is already in the past is also preserved as an
+immediate upstream directive, just like `Retry-After: 0`. Set `waitForCooldownMs` to allow a later
+request to wait for the earliest eligible target cooldown, up to that cap on each selection attempt,
+and then make one fresh selection. A request may therefore wait up to `hops × waitForCooldownMs`
+across multiple failover hops. The default is `0`, which fails closed immediately with HTTP 503 when
+every eligible target is cooling; that `combo_unavailable` 503 carries a `Retry-After` header equal
+to the earliest remaining cooldown, rounded up to whole seconds. Waits are not jittered, so
+synchronized wake-ups are possible. An aborted request cancels this wait and returns the normal
+`client_cancelled` response; it does not dispatch a backup target after cancellation. A combo target
+cooldown is process-local per-combo state and is separate from the account-level Codex quota cooldown
+used by native account routing.
 
 :::note
 Failover is intentionally bounded. It helps with target-specific availability, authentication,
@@ -321,7 +337,9 @@ combos, and its target picker excludes disabled models and nested combos.
 Each target also shows a live quota badge: **Available**, **Out of quota**, or **Quota unknown**. Save and
 Create are disabled only when every enabled target has fresh, complete evidence that its quota is exhausted.
 Missing, stale, malformed, or incomplete aggregate evidence stays unknown and never locks a control. Polling
-continues while the workspace is visible, so recovery automatically restores the action.
+continues while the workspace is visible, so recovery automatically restores the action. The dashboard
+editor does not yet expose `cooldownMs` or `waitForCooldownMs`; use the configuration file or management
+API until the follow-up UI work lands.
 
 ### CLI
 
@@ -345,7 +363,12 @@ model alias and a non-empty display name. `create` and `update` are aliases for 
 Headless clients use `GET`, `PUT`, and `DELETE` on `/api/combos`. `GET` lists normalized combo
 definitions, `PUT` creates or replaces one (and can rename one), and `DELETE` takes the id query
 parameter. Authentication and request/response details are in the
-[Management API reference](/reference/management-api/).
+[Management API reference](/reference/management-api/). When a `PUT` body omits `cooldownMs`
+or `waitForCooldownMs`, the API preserves the value already stored for that combo; send an explicit
+value to change it. An explicit `cooldownMs` (even `60000`) is persisted as-is because it overrides
+the request-rate fallback. A stored `cooldownMs` can only be removed by editing the configuration file;
+`waitForCooldownMs` resets to its default when a `PUT` explicitly sends `0`, because the sparse
+serializer omits that default. Omission preserves both values and the dashboard does not expose them yet.
 
 For the complete persisted configuration, see [Configuration](/reference/configuration/).
 
@@ -376,6 +399,8 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `targets[].weight` | No | `1` | Integer from 1 to 10,000. Used by round-robin and random; ignored by failover, least-used, and reset-window. |
 | `strategy` | No | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, or `"reset-window"`. |
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. Applies only to round-robin. |
+| `cooldownMs` | No | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Integer from 1 to 600000. When set, applies as the per-target cooldown whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. |
+| `waitForCooldownMs` | No | `0` | Integer from 0 to 600000. Maximum time to wait for the earliest eligible cooling target before returning `combo_unavailable`; abort cancels the wait. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; applied only when the caller omits effort and the target advertises support. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. Metadata only; dispatch is unchanged. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
@@ -395,8 +420,9 @@ running opencodex instance that receives model requests.
 
 Every target is currently ineligible: for example, its provider is disabled, it is cooling down,
 it has already been attempted for this request, or an encrypted v2 task excludes it. Check target
-provider state and recent upstream errors. For cooldowns, wait for the 60-second default or the
-upstream `Retry-After` period (never more than 10 minutes), then retry.
+provider state and recent upstream errors. For cooldowns, wait for the configured value or the
+upstream fallback (5 seconds for request-rate codes `1302`/`1305`, otherwise 60 seconds; never more
+than 10 minutes), then retry.
 
 ### Why was my alias rejected?
 

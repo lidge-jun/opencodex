@@ -274,6 +274,80 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT preserves explicit cooldown knobs and omits sparse defaults", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const explicit = await comboApi(config, "PUT", "/api/combos", {
+        id: "timed",
+        combo: {
+          cooldownMs: 5_000,
+          waitForCooldownMs: 15_000,
+          targets: [{ provider: "a", model: "m1" }],
+        },
+      });
+      expect(explicit?.status).toBe(200);
+      const explicitBody = await responseJson(explicit);
+      expect(explicitBody.combo).toMatchObject({ cooldownMs: 5_000, waitForCooldownMs: 15_000 });
+      const listedExplicit = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      expect((listedExplicit.combos as Array<Record<string, unknown>>).find(row => row.id === "timed"))
+        .toMatchObject({ cooldownMs: 5_000, waitForCooldownMs: 15_000 });
+
+      const explicitDefault = await comboApi(config, "PUT", "/api/combos", {
+        id: "default-timed",
+        combo: {
+          cooldownMs: 60_000,
+          targets: [{ provider: "a", model: "m1" }],
+        },
+      });
+      expect(explicitDefault?.status).toBe(200);
+      expect((await responseJson(explicitDefault)).combo).toMatchObject({ cooldownMs: 60_000 });
+      expect(config.combos?.["default-timed"]?.cooldownMs).toBe(60_000);
+      const listedDefault = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      expect((listedDefault.combos as Array<Record<string, unknown>>).find(row => row.id === "default-timed"))
+        .toMatchObject({ cooldownMs: 60_000 });
+
+      // Dashboard-shaped updates omit controls it does not render; the server must preserve
+      // the already persisted values instead of replacing them with sparse defaults.
+      const dashboardUpdate = await comboApi(config, "PUT", "/api/combos", {
+        id: "timed",
+        combo: { targets: [{ provider: "a", model: "m1" }] },
+      });
+      expect(dashboardUpdate?.status).toBe(200);
+      const afterDashboardUpdate = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      expect((afterDashboardUpdate.combos as Array<Record<string, unknown>>).find(row => row.id === "timed"))
+        .toMatchObject({ cooldownMs: 5_000, waitForCooldownMs: 15_000 });
+
+      const sparse = await comboApi(config, "PUT", "/api/combos", {
+        id: "plain",
+        combo: { targets: [{ provider: "a", model: "m1" }] },
+      });
+      expect(sparse?.status).toBe(200);
+      const listedSparse = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      const plain = (listedSparse.combos as Array<Record<string, unknown>>).find(row => row.id === "plain");
+      expect(plain).toBeDefined();
+      expect(plain).not.toHaveProperty("cooldownMs");
+      expect(plain).not.toHaveProperty("waitForCooldownMs");
+      expect(config.combos?.plain).not.toHaveProperty("cooldownMs");
+      expect(config.combos?.plain).not.toHaveProperty("waitForCooldownMs");
+    });
+  });
+
+  test("PUT rejects missing and null combo values with the legacy object error", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig();
+      saveConfig(config);
+      const before = readFileSync(getConfigPath(), "utf8");
+      for (const body of [{ id: "x" }, { id: "x", combo: null }]) {
+        const response = await comboApi(config, "PUT", "/api/combos", body);
+        expect(response?.status).toBe(400);
+        expect(await responseJson(response)).toEqual({ error: "combo must be an object" });
+      }
+      expect(config).toEqual(baseConfig());
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
+    });
+  });
+
   test("PUT persists explicit imageInput disabled", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });
