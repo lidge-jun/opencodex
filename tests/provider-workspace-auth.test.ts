@@ -153,7 +153,13 @@ describe("workspace account integration seam", () => {
     ]);
     expect(page).toContain("onReauth:");
     expect(page).toContain("onCancelLogin: cancelLoginOAuth");
-    expect(page).toContain("loginOAuth(provider, true, accountId)");
+    // Reauth reaches login through the ToS-warning gate rather than calling loginOAuth
+    // directly: a high-risk provider (anthropic, google-antigravity, meta-muse) must show
+    // its warning before a REauthentication too, not only before the first login.
+    // `requestLoginOAuth` is the warning-aware entry point and forwards the same
+    // (provider, addAccount, accountId) triple.
+    expect(page).toContain("requestLoginOAuth(provider, true, accountId)");
+    expect(page).toContain("void loginOAuth(pending.provider, pending.addAccount, pending.accountId)");
     expect(page).toContain("accountId: reauthTargetId, reauth: true");
     expect(page).toContain("prov.reauthIdentityMismatch");
     expect(page).toContain("oauthLoginGenerationRef");
