@@ -3,34 +3,29 @@
  *
  * This was a dashboard card. It only means something once multi-agent mode is on, and
  * it is a delegation setting, so it lives with the other delegation settings on the
- * Subagents page. Self-contained: it owns its fetch and save.
+ * Subagents page. The read goes through the shared client-resource layer; a save is an
+ * optimistic override until the server answers.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { useKeyedClientResource } from "../../client-resource";
 import { useT } from "../../i18n/shared";
 import { Select } from "../../ui";
 import { EFFORT_CAP_LEVELS, requireJson } from "../../pages/dashboard-shared";
 
 type Caps = { effortCap: string; subagentEffortCap: string };
 
+async function readCaps(apiBase: string, signal: AbortSignal): Promise<Caps> {
+  const res = await fetch(`${apiBase}/api/effort-caps`, { signal });
+  const data = await requireJson<{ effortCap?: string | null; subagentEffortCap?: string | null }>(res);
+  return { effortCap: data.effortCap ?? "", subagentEffortCap: data.subagentEffortCap ?? "" };
+}
+
 export function EffortCapSection({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const [caps, setCaps] = useState<Caps>({ effortCap: "", subagentEffortCap: "" });
+  const read = useKeyedClientResource(`effort-caps:${apiBase}`, [apiBase], (signal) => readCaps(apiBase, signal));
+  const [override, setOverride] = useState<Caps | null>(null);
   const [saving, setSaving] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    (async () => {
-      try {
-        const res = await fetch(`${apiBase}/api/effort-caps`, { signal: controller.signal });
-        const data = await requireJson<{ effortCap?: string | null; subagentEffortCap?: string | null }>(res);
-        if (controller.signal.aborted) return;
-        setCaps({ effortCap: data.effortCap ?? "", subagentEffortCap: data.subagentEffortCap ?? "" });
-        setLoaded(true);
-      } catch { /* leave the selects empty; a save still round-trips */ }
-    })();
-    return () => controller.abort();
-  }, [apiBase]);
+  const caps: Caps = override ?? read.data ?? { effortCap: "", subagentEffortCap: "" };
 
   const save = useCallback(async (patch: { effortCap?: string | null; subagentEffortCap?: string | null }) => {
     if (saving) return;
@@ -42,7 +37,7 @@ export function EffortCapSection({ apiBase }: { apiBase: string }) {
         body: JSON.stringify(patch),
       });
       const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
-      setCaps({ effortCap: data.effortCap ?? "", subagentEffortCap: data.subagentEffortCap ?? "" });
+      setOverride({ effortCap: data.effortCap ?? "", subagentEffortCap: data.subagentEffortCap ?? "" });
     } catch { /* ignore */ }
     finally { setSaving(false); }
   }, [apiBase, saving]);
@@ -53,7 +48,7 @@ export function EffortCapSection({ apiBase }: { apiBase: string }) {
   ];
 
   return (
-    <section className="panel swi-effort-caps" aria-busy={!loaded || undefined}>
+    <section className="panel swi-effort-caps" aria-busy={read.data === undefined || undefined}>
       <div className="setting-row">
         <div className="setting-label">
           <span className="title">{t("dash.effortCapLabel")}</span>
