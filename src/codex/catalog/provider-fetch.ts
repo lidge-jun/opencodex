@@ -32,7 +32,7 @@ import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
-import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
+import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import {
   captureFastPolicyAuthority,
@@ -863,6 +863,57 @@ interface ComboCatalogMemberFallback {
 }
 
 /**
+ * Ladder advertised for a combo member whose vendor metadata says it reasons but
+ * carries no explicit ladder (Claude, Grok). Codex needs a non-empty ladder to show
+ * the effort control; the routed adapters clamp to the real upstream top rung.
+ */
+const ROUTED_COMBO_MEMBER_REASONING_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Vendor-table lookup tolerant of point releases and date pins. Configured combo
+ * targets often name a variant the table does not carry (`claude-fable-5-1`,
+ * `claude-opus-4-5-20251101`); the base family row still describes its modality
+ * and reasoning capability, so fall back to it before giving up.
+ */
+function comboMemberVendorMetadata(provider: string, modelId: string): ModelMetadata | undefined {
+  const exact = getModelMetadataCaseInsensitive(provider, modelId);
+  if (exact) return exact;
+  let candidate = modelId.replace(/\[[^\]]*\]$/, "");
+  while (true) {
+    const trimmed = candidate.replace(/-\d+$/, "");
+    if (trimmed === candidate || !trimmed.includes("-")) return undefined;
+    const hit = getModelMetadataCaseInsensitive(provider, trimmed);
+    if (hit) return hit;
+    candidate = trimmed;
+  }
+}
+
+/**
+ * Combo members are usually thin discovery rows (id + context window). Without a
+ * capability source the combo intersection collapses to text-only / no effort ladder,
+ * and the Codex app then refuses image attachments and hides the effort picker for
+ * every Claude combo. The generated vendor table knows both, so use it as the
+ * last-resort fallback when the caller supplied none.
+ */
+function vendorMetadataComboFallback(target: { provider: string; model: string }): ComboCatalogMemberFallback | undefined {
+  const metadataProvider = resolveMetadataProvider(target.provider);
+  const metadata = metadataProvider ? comboMemberVendorMetadata(metadataProvider, target.model) : undefined;
+  if (!metadata) return undefined;
+  return {
+    ...(typeof metadata.contextWindow === "number" && metadata.contextWindow > 0
+      ? { contextWindow: metadata.contextWindow }
+      : {}),
+    ...(typeof metadata.maxTokens === "number" && metadata.maxTokens > 0
+      ? { maxInputTokens: metadata.maxTokens }
+      : {}),
+    ...(Array.isArray(metadata.input) && metadata.input.length > 0
+      ? { inputModalities: [...metadata.input] }
+      : {}),
+    ...(metadata.reasoning === true ? { reasoningEfforts: [...ROUTED_COMBO_MEMBER_REASONING_EFFORTS] } : {}),
+  };
+}
+
+/**
  * Resolve a combo target to a catalog member for derivation.
  * Prefer discovery metadata; when the target is missing from the gather map or
  * lacks a positive contextWindow, synthesize from the (registry-enriched)
@@ -877,11 +928,12 @@ export function resolveComboCatalogMember(
   memberByKey: ReadonlyMap<string, CatalogModel>,
   providers: ReadonlyMap<string, OcxProviderConfig>,
   contextCap?: number,
-  fallback?: ComboCatalogMemberFallback,
+  callerFallback?: ComboCatalogMemberFallback,
   metadataModelIdCaseFold?: boolean,
 ): CatalogModel | undefined {
   const existing = memberByKey.get(targetKey(target));
   const prov = providers.get(target.provider);
+  const fallback = callerFallback ?? vendorMetadataComboFallback(target);
   // Disabled providers never contribute members — even a complete discovery row
   // is unusable for catalog derivation while the provider is off.
   if (prov?.disabled === true) return undefined;

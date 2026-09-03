@@ -349,6 +349,10 @@ export type ProviderConfigSeed = Pick<
 // always on, per the official models overview and pricing page (platform.claude.com).
 const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
 const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
+// Every current Claude family accepts at least 64k output tokens (Haiku 4.5 / Sonnet 4.x
+// through Opus 5 and Fable 5). Anthropic caps max_tokens per model server-side, so a
+// larger request never over-allocates; it only stops the 8192 truncation.
+const ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
 
 // 260814 GLM-5.3 is registered pre-emptively alongside 5.2 everywhere 5.2 appears. Z.AI's
 // devpack "How to Switch Models" page (docs.z.ai/devpack/latest-model) lists glm-5.3 and
@@ -1314,6 +1318,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     note: "Log in with your Claude account",
     models: [...ANTHROPIC_MODELS],
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    // Codex omits max_output_tokens; without a provider budget the Anthropic adapter
+    // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
+    defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     defaultModel: "claude-sonnet-5",
   },
   {
@@ -1330,6 +1337,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     models: [...ANTHROPIC_MODELS],
     liveModels: true,
     modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     defaultModel: "claude-sonnet-5",
   },
   {

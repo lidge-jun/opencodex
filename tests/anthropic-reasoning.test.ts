@@ -281,6 +281,20 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.max_tokens as number).toBe(64000);
   });
 
+  test("configured provider output budget replaces the 8192 default when the caller omits max_output_tokens", async () => {
+    const budgeted = { ...provider, defaultMaxOutputTokens: 64_000, modelMaxOutputTokens: { "claude-fable-5": 32_000 } };
+    // No reasoning: the configured budget is the wire max_tokens.
+    expect((await bodyOf(parsed("none", {}, "claude-opus-5"), budgeted)).max_tokens).toBe(64_000);
+    expect((await bodyOf(parsed("none", {}, "claude-fable-5"), budgeted)).max_tokens).toBe(32_000);
+    // Adaptive thinking: the budget still wins over the headroom-derived ceiling.
+    expect((await bodyOf(parsed("max", {}, "claude-opus-5"), budgeted)).max_tokens).toBe(64_000);
+    // Budget thinking on an older family keeps max_tokens above the thinking budget.
+    const legacy = await bodyOf(parsed("high", {}, "claude-haiku-4-5"), budgeted);
+    expect(legacy.max_tokens as number).toBeGreaterThan((legacy.thinking as { budget_tokens: number }).budget_tokens);
+    // An explicit caller limit still wins over the configured budget.
+    expect((await bodyOf(parsed("none", { maxOutputTokens: 512 }, "claude-opus-5"), budgeted)).max_tokens).toBe(512);
+  });
+
   test.each([
     ["high", 24_576],
     ["xhigh", 32_768],

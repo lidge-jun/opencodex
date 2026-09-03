@@ -1551,6 +1551,46 @@ describe("combo catalog capability intersection", () => {
     )).toBeUndefined();
   });
 
+  test("resolveComboCatalogMember restores vendor image and effort capabilities for thin Claude rows", () => {
+    const providers = new Map([["anthropic", {
+      adapter: "anthropic" as const,
+      baseUrl: "https://api.anthropic.com",
+    }]]);
+    // A discovery row that only carries id + window (the live Anthropic /models shape).
+    expect(resolveComboCatalogMember(
+      { provider: "anthropic", model: "claude-opus-5" },
+      new Map([["anthropic/claude-opus-5", { provider: "anthropic", id: "claude-opus-5", contextWindow: 1_000_000 }]]),
+      providers,
+    )).toMatchObject({
+      contextWindow: 1_000_000,
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    });
+    // Point-release ids fall back to their family row in the vendor table.
+    expect(resolveComboCatalogMember(
+      { provider: "anthropic", model: "claude-fable-5-1" },
+      new Map([["anthropic/claude-fable-5-1", { provider: "anthropic", id: "claude-fable-5-1", contextWindow: 1_000_000 }]]),
+      providers,
+    )).toMatchObject({
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    });
+    // An explicit caller fallback still wins over the vendor table.
+    expect(resolveComboCatalogMember(
+      { provider: "anthropic", model: "claude-opus-5" },
+      new Map([["anthropic/claude-opus-5", { provider: "anthropic", id: "claude-opus-5", contextWindow: 1_000_000 }]]),
+      providers,
+      undefined,
+      { inputModalities: ["text"], reasoningEfforts: [] },
+    )).toMatchObject({ inputModalities: ["text"], reasoningEfforts: [] });
+    // Unknown ids keep their unknown ladder rather than inventing one.
+    expect(resolveComboCatalogMember(
+      { provider: "a", model: "ghost" },
+      new Map(),
+      new Map([["a", { adapter: "openai-chat" as const, baseUrl: "https://a.example/v1" }]]),
+    )).not.toHaveProperty("reasoningEfforts");
+  });
+
   test("still omits combos when synthesis cannot recover hard failures", async () => {
     const config: OcxConfig = {
       port: 10100,
