@@ -53,7 +53,7 @@ describe("page polish", () => {
     expect(combos).toContain("{combos.length > 0 && (\n        <div className=\"cwi-search-row\">");
   });
 
-  test("Routing: dry-run only with a draft; analytics only with profiles", () => {
+  test("Routing: dry-run only with a selected profile; analytics only with profiles", () => {
     // Gate on a SELECTED existing profile: startCreate() also makes a draft, and a disabled
     // dry-run form during creation is exactly the dead weight this removes.
     expect(routing).toContain("{selected && (\n      <div className=\"panel\"");
