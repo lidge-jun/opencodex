@@ -427,3 +427,124 @@ export async function fetchWithTransientRetry(
     opts.onSendsConsumed?.(sent);
   }
 }
+
+/**
+ * Refetch an upstream request ONCE after a mid-stream socket reset that
+ * happened before the caller consumed any response bytes.
+ *
+ * `fetchWithResetRetry` / `fetchWithTransientRetry` only cover pre-stream
+ * failures — `fetch()` rejecting before response headers. Once headers arrive
+ * and the caller starts reading the SSE body, a mid-stream reset (Cloudflare
+ * closing an idle keep-alive connection while Bun's pool reuses the half-closed
+ * socket) surfaces as a ReadableStream read() rejection, outside every
+ * pre-stream retry wrapper. The turn then dies with a terminal
+ * `response.failed / upstream_reset` even though nothing was relayed to the
+ * client.
+ *
+ * This helper closes that gap for the one case where a replay is provably safe:
+ * zero bytes consumed and no protocol terminal seen. `doFetch` must be
+ * replay-safe (string body, same contract as {@link ReplayableFetch}); the
+ * replacement send goes out with the connection-reset recovery init
+ * (`Connection: close` + `keepalive: false`) so the fresh connection never
+ * reuses the pooled half-closed socket. Exactly one replacement send, no
+ * backoff — the pre-stream layers already spent their retry budget reaching
+ * the first headers.
+ *
+ * Returns null (and the caller keeps its existing fail-closed tail) when the
+ * error is not a reset shape, the caller signal is aborted, the refetch itself
+ * throws, or the replacement has no body. Callers must not retry the returned
+ * response's body.
+ */
+export async function refetchOnZeroOutputReset(
+  doFetch: ReplayableFetch,
+  err: unknown,
+  opts: ResetRetryOptions = {},
+): Promise<Response | null> {
+  if (!isConnectionResetError(err)) return null;
+  if (opts.abortSignal?.aborted) return null;
+  let replacement: Response;
+  try {
+    replacement = await doFetch("connection-reset");
+  } catch (retryErr) {
+    console.warn(
+      `[upstream-retry] zero-output reset${opts.label ? ` (${opts.label})` : ""} — refetch failed: ${
+        retryErr instanceof Error ? retryErr.message : String(retryErr)
+      }`,
+    );
+    return null;
+  }
+  if (!replacement.body) {
+    console.warn(
+      `[upstream-retry] zero-output reset${opts.label ? ` (${opts.label})` : ""} — refetch returned no body, keeping original failure`,
+    );
+    try {
+      replacement.arrayBuffer().catch(() => {});
+    } catch { /* body already unusable; original failure stands */ }
+    return null;
+  }
+  console.warn(
+    `[upstream-retry] zero-output reset${opts.label ? ` (${opts.label})` : ""} — refetched on a fresh connection`,
+  );
+  return replacement;
+}
+
+/**
+ * Wrap an upstream SSE body so a mid-stream socket reset before the first byte
+ * is consumed transparently swaps in ONE refetched body (see
+ * {@link refetchOnZeroOutputReset}). Everything downstream — tee inspection
+ * branches, eager or pull relays, SSE parsers — reads the wrapped stream and
+ * never observes the first upstream send dying, so no relay needs changes.
+ *
+ * The gate is deliberately narrow: only a read() rejection matching
+ * {@link isConnectionResetError}, with zero bytes read so far, a live caller
+ * signal, and a single swap per wrapped stream. Partial-output failures, clean
+ * EOF, non-reset errors, and a failed or empty refetch all propagate the
+ * ORIGINAL error untouched, preserving every existing fail-closed tail
+ * (replaying after emitted tool calls would duplicate side effects).
+ */
+export function wrapWithZeroOutputRefetch(
+  body: ReadableStream<Uint8Array>,
+  doFetch: ReplayableFetch,
+  opts: ResetRetryOptions = {},
+): ReadableStream<Uint8Array> {
+  let reader = body.getReader();
+  let bytesRead = 0;
+  let retried = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      for (;;) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            return;
+          }
+          bytesRead += value.byteLength;
+          controller.enqueue(value);
+          return;
+        } catch (err) {
+          if (!retried && bytesRead === 0 && !opts.abortSignal?.aborted) {
+            retried = true;
+            const replacement = await refetchOnZeroOutputReset(doFetch, err, opts);
+            if (replacement?.body) {
+              try {
+                reader.cancel().catch(() => {});
+              } catch { /* broken reader; the refetch won */ }
+              reader = replacement.body.getReader();
+              continue;
+            }
+          }
+          try {
+            controller.error(err);
+          } catch { /* already torn down */ }
+          return;
+        }
+      }
+    },
+    cancel(reason) {
+      try {
+        reader.cancel(reason).catch(() => {});
+      } catch { /* already torn down */ }
+    },
+  });
+}
