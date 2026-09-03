@@ -12,9 +12,13 @@ Depends on: nothing.
   usage-cost-value` so the number is not the loudest element in the section.
 - L400-415 heatmap section: wrap in
   `<details className="panel usage-heatmap-details"><summary className="panel-title">{t("usage.section.heatmap")}</summary>…</details>`
-  for `range !== "7d"`; the 7d `WeekDayBars` stays inline (it is small). The
-  `ResizeObserver` pin-right effect must run on open: add `onToggle={() => pinRight()}`.
-- L815 subtitle: delete the `<p>`; put the text on the 커버리지 card's `title`.
+  for `range !== "7d"`; the 7d `WeekDayBars` stays inline (it is small). `pinRight` is
+  scoped inside the `useEffect` (Usage.tsx:390-398); hoist it to a `useCallback` at component
+  scope (reads `heatmapRef.current`) so both the effect and `<details onToggle={pinRight}>` call
+  it. A closed details has zero width, so the effect's first run is a no-op; onToggle pins after open.
+- L815 subtitle: delete the `<p>`; render a focusable `Tooltip` ⓘ button (existing `Tooltip`
+  wrapping `<button className="btn btn-ghost btn-sm" aria-label={t("usage.subtitle")}>`) beside
+  the 커버리지 card label — the 002 a11y rule, not a `title`.
 
 ### MODIFY gui/src/styles.css
 
@@ -28,7 +32,7 @@ Depends on: nothing.
 
 - MODIFY gui/tests/usage*.test.ts* asserting 6 cards or the subtitle (`rg -n 'activeDays|usage.subtitle' gui/tests`).
 - NEW gui/tests/usage-minimal.test.tsx: 5 stat cards; heatmap inside a closed `details` for
-  30d; inline bars for 7d; coverage card has a `title`.
+  30d; inline bars for 7d; a focusable ⓘ button whose aria-label is the old subtitle exists beside 커버리지.
 
 ## Verifiers
 

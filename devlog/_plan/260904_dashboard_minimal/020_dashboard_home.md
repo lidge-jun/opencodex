@@ -81,9 +81,13 @@ if (rawHash === "dashboard/models") return { page: "models", replaceTo: "models"
 <MemoryObservabilityCard …/>
 ```
 RESOLVED (audit blocker 3) from dashboard-overview-sections.tsx:
-- `DashboardEffortCapPanel` (L37): effort-cap card, rendered only when maMode !== v1. `maMode`
-  state leaves with this phase, so the panel goes with the v1/base/v2 switch to Subagents in
-  030; until then the cap stays editable via Models' existing v2 row (no gap).
+- `DashboardEffortCapPanel` (L37): effort-cap card (GET/PUT `/api/effort-caps`, L65-114), rendered
+  only when maMode !== v1. It is REHOMED IN THIS PHASE, not deferred (round-2 blocker 2: Models'
+  v2 row is `/api/v2`, not an equivalent). Extract the card body + its fetch/save into NEW
+  `gui/src/components/subagents-workspace/EffortCapSection.tsx` (props: apiBase; owns the
+  `/api/effort-caps` state that use-dashboard-data.ts holds today: effortCap, subagentEffortCap,
+  effortCapSaving, setters) and mount it in Subagents.tsx below SubagentDelegationSection,
+  gated by `ultraMode.multiAgentMode !== "v1"` (Subagents already loads `/api/v2`).
 - `DashboardInjectionPanel` (L120, `.dash-delegation-summary`, `dash.injectionLabel`) = the
   서브에이전트 위임 card → DELETE (Subagents owns 먼저 부를 모델).
 - `DashboardMaintenancePanel` (L162) = 모델 동기화 + update dialog → KEEP.

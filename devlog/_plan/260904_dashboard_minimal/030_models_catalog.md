@@ -24,9 +24,10 @@ single owner when this phase moves Models' copy there).
    `saveUltraMode(patch)` PUT `/api/v2`. NO new hook: the radiogroup in SubagentDelegationSection
    receives `multiAgentMode` + `onModeChange={(mode) => saveUltraMode({ multiAgentMode: mode })}`
    from Subagents.tsx; `loadUltraMode` must also keep `data.multiAgentMode` in state (today it
-   only derives `multiAgentV2Enabled`). Models.tsx drops `v2`, `v2Busy`, `setMultiAgentMode` and
-   its `/api/v2` write; keep the read only if another Models control reads `v2.enabled` (rg at B).
-   The effort-cap card removed from the dashboard in 020 lands here too, bound to the same save path.)
+   only derives `multiAgentV2Enabled`). Models.tsx KEEPS `v2`, `v2Busy`, `loadV2` and the `/api/v2` writer (round-2 blocker 3:
+   keep-native-ChatGPT-on-v1 L998 and the thread controls L1006-1051 still write it); only the
+   radiogroup JSX (L1603-1633) and `setMultiAgentMode` (L930) leave Models. The effort-cap
+   section was already rehomed to Subagents in 020 (EffortCapSection).)
 4. Order hint (L1752-1755 `.models-order-hint`): delete the row; add
    `title={t("models.orderHint")}` to the `.models-collapse-controls` wrapper and an ⓘ
    Tooltip after 모두 펼치기.
@@ -70,7 +71,7 @@ single owner when this phase moves Models' copy there).
 
 - ko 1440 #models: interactive count 135 → ≤ 60 with all groups expanded; ≤ 30 collapsed.
 - Subagents page shows the v1/base/v2 radiogroup; Models does not; Dashboard does not.
-- PUT to `/api/codex/v2` still fires from the Subagents control (render test with fetch stub).
+- PUT to `/api/v2` with `{ multiAgentMode }` fires from the Subagents control (render test with fetch stub).
 
 ## Bypass fields
 

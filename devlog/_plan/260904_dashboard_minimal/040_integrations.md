@@ -20,7 +20,9 @@ Depends on: nothing.
   (`clients`, `installedFileClients`) and its resource hook; move the hook call to
   Integrations.tsx and pass `clients` down as a prop to the overview (keeps one fetch).
 - Direct hashes (`#integrations/omp`) still resolve: `mounted`/`tab` logic unchanged; when
-  `tab` is a secondary id, open the details on mount.
+  `tab` is a secondary id, `moreOpen` is forced true (see DECIDED above). Collapsing while a
+  secondary tab is selected: the button is disabled (`disabled={isSecondary(tab)}`) so the
+  selected tab can never be hidden; it re-enables once the user picks a primary tab.
 
 ### MODIFY gui/src/pages/integrations/IntegrationsOverview.tsx
 
@@ -41,8 +43,8 @@ Depends on: nothing.
 ### Tests
 
 - MODIFY gui/tests/integrations-surfaces.test.tsx (asserts the tab strip): update to primary
-  + details; add: navigating to `#integrations/hermes` (uninstalled fixture) opens the details
-  and selects the tab.
+  + details; add: navigating to `#integrations/hermes` (uninstalled fixture) sets `moreOpen`
+  and selects the tab; the more-button is disabled while that tab is selected.
 - NEW gui/tests/integrations-minimal.test.tsx: overview with 3 installed + 5 uninstalled
   fixtures renders 3 cards in the grid and `details.integration-cards-more` summary "…(5)";
   no 마지막 변경 cell.
@@ -54,7 +56,7 @@ Depends on: nothing.
 ## Accept criteria
 
 - ko 1440 #integrations: tab strip fits one row for this machine (10 detected); interactive
-  count 86 → ≤ 45 with details closed.
+  count 86 → ≤ 45 with secondary tabs hidden.
 - `#integrations/aside` deep link still lands on the Aside panel.
 
 ## Bypass fields

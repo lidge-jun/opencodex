@@ -71,8 +71,10 @@ After snippet is NOT written; read it as "existing Select, icon-sized by CSS".
   `starOverride`, `starring`, `starPoll`, `STAR_POLL_MS`, `StarState`/`StarStatus` and the
   button JSX (sidebar-github-row.tsx L54-99, L134-145) verbatim into
   `export function GithubStarButton({ apiBase })` rendering a `.btn.btn-ghost.btn-sm` with the
-  same labels. Mount it in `gui/src/pages/dashboard-dialogs.tsx` update dialog footer (L24-52
-  region). One dialog, one poll, only while open. Consent rule unchanged: still a human click.
+  same labels. Mount it inside the update dialog JSX in `gui/src/pages/dashboard-dialogs.tsx` (L24-52), which
+  renders only while `updateOpen`; the component and its `useKeyedClientResource` poll therefore
+  exist only while the dialog is open (unmount cancels). Props stay `{ apiBase }`; the
+  conditional is the dialog's existing mount, not a prop. Consent rule unchanged: still a human click.
 - The GitHub link becomes an icon orb: `<a className="sidebar-orb" href={REPO_URL} target="_blank" rel="noreferrer" aria-label={t("common.github")} title={t("common.github")}><IconGithub/></a>`.
 - Update orb unchanged (dot when `updateAvailable`).
 - Wrapper: `<>{link}{update}</>` — the row container is now App's `.sidebar-foot-row`.
@@ -108,6 +110,10 @@ After snippet is NOT written; read it as "existing Select, icon-sized by CSS".
 - NEW gui/tests/sidebar-footer-minimal.test.ts: source oracle — App.tsx contains no
   `sidebar-action-label`, sidebar-github-row.tsx contains no `IconStar` and no
   `/api/github/star`; i18n en has `sidebar.preferences`.
+- NEW gui/tests/github-star-button.test.tsx (happy-dom): with a fetch stub, opening the update
+  dialog renders GithubStarButton; GET `/api/github/star` fires once on mount; clicking POSTs
+  `/api/github/star` and the label flips to `sidebar.starred` on `{ok:true}`; closing the dialog
+  unmounts it (no further GETs after advancing fake timers).
 - Render test (happy-dom, pattern from `i18n-language-switch.test.tsx`): mount App, assert
   the footer has exactly 4 preference orbs and 2-3 action orbs, each with non-empty
   `aria-label`; language change through the Select still flips `document.documentElement.lang`.

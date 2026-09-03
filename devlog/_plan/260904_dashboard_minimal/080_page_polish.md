@@ -32,9 +32,12 @@ v1/base/v2 switch).
 - Empty state DECIDED (audit blocker 3): ComboWorkspace.tsx:52-53 `selected` is null when
   `combos.length === 0`; the detail panel (combo-workspace-detail-panel.tsx:218+) renders a tab
   strip + form for that case. Change: when `combos.length === 0 && localBaseline === null` render
-  `<EmptyState title={t("cws.emptyTitle")}><button className="btn btn-primary" onClick={handleAdd}>{t("cws.add")}</button></EmptyState>`
-  instead of the detail panel; the rail's 콤보 추가 (L108) is hidden in that state so there is
-  exactly one CTA. `cws.emptyTitle` is a NEW key.
+  `<EmptyState title={t("cws.emptyTitle")}><button className="btn btn-primary" onClick={onAdd}>{t("cws.add")}</button></EmptyState>`
+  instead of the detail panel. `onAdd` (the modal opener), NOT `handleAdd`: ComboWorkspace.tsx:91-98
+  `handleAdd` short-circuits to focusing `#cwi-edit-id` while `creatingFirstCombo`, and the add
+  modal is suppressed in that state (L229-230); both branches are DELETED in this phase so the
+  first combo is created through the same modal as every later one. The rail's 콤보 추가 (L108)
+  is hidden while `combos.length === 0` so there is exactly one CTA. `cws.emptyTitle` is a NEW key.
 
 ### Routing — MODIFY gui/src/pages/RoutingProfiles.tsx L1010-1100
 

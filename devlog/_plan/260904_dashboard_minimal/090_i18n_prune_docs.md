@@ -25,7 +25,7 @@ Depends on: 010-080 all landed on dev.
    L59-62 ("Dashboard sections are addressable … `#dashboard/providers` and `#dashboard/models`
    open the other two") → "`#dashboard` is the overview; older `#dashboard/providers` and
    `#dashboard/models` bookmarks redirect to `#providers` and `#models`." Same paragraph in the
-   7 locale copies `docs-site/src/content/docs/{ko,ja,zh,zh-tw,de,fr,ru}/guides/web-dashboard.md`
+   7 locale copies `docs-site/src/content/docs/{fr,ja,ko,ru,tr,zh-cn,zh-tw}/guides/web-dashboard.md` (verified by `ls`; there is no de or zh copy)
    (ko: L53; list with `ls docs-site/src/content/docs/*/guides/web-dashboard.md`). Also grep each
    for star/별표, "Available models"/"사용 가능한 모델", "Active providers", and the Models
    controls-row wording and rewrite to the post-030/040 surface. Per-locale before/after is

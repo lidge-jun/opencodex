@@ -16,9 +16,9 @@ work-phase that lands it. Votes: number of reviewers proposing remove/collapse/d
 | 3 | Dashboard: 서브에이전트 위임 card (dashboard-overview-sections.tsx:127) | 3/3 | REMOVE; owner = Subagents | 020 |
 | 4 | Dashboard: 쉐도우 호출 가로채기 panel (dashboard-overview-sections.tsx:626) | 3/3 | REMOVE; owner = Models controls row | 020 |
 | 5 | Dashboard: 웹 검색 / 비전 사이드카 cards (dashboard-overview-sections.tsx:509,549) | 3/3 | COLLAPSE both into one `<details>` "사이드카" (closed by default) on the dashboard | 020 |
-| 6 | Dashboard: Codex 실행 시 opencodex 시작 card (dashboard-overview-sections.tsx:487) | 3/3 | REMOVE from dashboard; owner = Startup (`startup.preference` row) — add the toggle there | 020 |
+| 6 | Dashboard: Codex 실행 시 opencodex 시작 card (dashboard-overview-sections.tsx:487) | 3/3 | MOVE to Startup 보호 상태 상세 panel atomically (hook `useCodexAutostart`) | 020 |
 | 7 | Dashboard: 메모리 관찰 4-stat block (MemoryObservabilityCard.tsx:451) | 3/3 | COLLAPSE the stat row into the existing `<details>`; keep pressure bar, in-flight, restart | 020 |
-| 8 | Dashboard: 버전 / 가동 시간 / 토큰(30일)+커버리지 stat cards | 2/3 | KEEP status + 프로바이더 + 토큰(30일); DROP 버전 (in brand chip) and 가동 시간 → tooltip on status | 020 |
+| 8 | Dashboard: 버전 / 가동 시간 / 토큰(30일)+커버리지 stat cards | 2/3 | KEEP status + 프로바이더 + 토큰(30일); DROP the 버전 and 가동 시간 cards; both render as a visible sub-line on the status card | 020 |
 | 9 | Dashboard subtitle (Dashboard.tsx:80) | 3/3 | REMOVE | 020 |
 | 10 | Sidebar GitHub star orb (sidebar-github-row.tsx:136) | 3/3 | REMOVE from chrome; the star action stays reachable in the update dialog (DashboardDialogs) | 010 |
 | 11 | Sidebar GitHub link row + update orb (sidebar-github-row.tsx:131,147) | 3/3 | COLLAPSE into one footer icon row: GitHub link icon + update icon (dot only when available); no text label | 010 |
@@ -27,36 +27,36 @@ work-phase that lands it. Votes: number of reviewers proposing remove/collapse/d
 | 14 | Sidebar version chip | 1/3 | KEEP (R2/R3) | — |
 | 15 | Sidebar nav rows | 1/3 | KEEP all 9 (R2/R3; route moves are out of scope) | — |
 | 16 | Models page-head Codex-restart orb (Models.tsx:2207) | 1/3 (R3) | REMOVE (sidebar orb + stale banner remain) | 030 |
-| 17 | Models catalog subtitle (Models.tsx:2226 SUBTITLE_TKEY.catalog) | 3/3 | COLLAPSE: subtitle → ⓘ tooltip next to the tab strip; combos/routing subtitles → keep only in empty state | 030 |
+| 17 | Models catalog subtitle (Models.tsx:2226 SUBTITLE_TKEY.catalog) | 3/3 | COLLAPSE: subtitle → focusable `Tooltip` trigger (ⓘ button) next to the tab strip; combos/routing subtitles → keep only in empty state | 030 |
 | 18 | Models global controls: 새 모델 정책 / 별칭 / 쉐도우 / v1-base-v2 / 기본 창-상한 + paragraph (Models.tsx:1580-1750) | 3/3 | COLLAPSE into one `<details className="models-advanced">` "고급" (closed by default); the v1/base/v2 row moves to Subagents (see #2) | 030 |
-| 19 | Models 피커 순서 paragraph (Models.tsx:1752) | 3/3 | COLLAPSE → tooltip on the 모두 접기/펼치기 row | 030 |
-| 20 | Models per-provider header control wall (6 controls × N) | 2/3 | COLLAPSE 기본 별칭 사용 / 커스텀 모델 추가 / 기본 창-상한 / 사용자 지정 창 into a per-provider "⋯" menu; keep edit + 모두 켜기/끄기 inline | 030 |
+| 19 | Models 피커 순서 paragraph (Models.tsx:1752) | 3/3 | COLLAPSE → focusable `Tooltip` trigger (ⓘ button) after 모두 펼치기 | 030 |
+| 20 | Models per-provider header control wall (6 controls × N) | 2/3 | COLLAPSE 기본 별칭 사용 / 커스텀 모델 추가 / 기본 창-상한 / 사용자 지정 창 into a per-provider "⋯" labelled disclosure (inline reveal, not a menu); keep edit + 모두 켜기/끄기 inline | 030 |
 | 21 | Integrations 18-tab strip (Integrations.tsx:142) | 3/3 | COLLAPSE: strip shows 개요 + API 키 + detected/applied clients; uninstalled clients under a "더보기 ▾" overflow; hashes keep working | 040 |
 | 22 | Integrations subtitle (Integrations.tsx:133) | 3/3 | REMOVE | 040 |
 | 23 | Integrations cards for uninstalled clients | 3/3 | COLLAPSE below a "설치되지 않음 (N)" disclosure; applied/stale/conflict cards stay | 040 |
 | 24 | Integrations 마지막 변경 cell | 2/3 | REMOVE from summary (복원 센터 shows chronology) | 040 |
 | 25 | Integrations 모두 해제 | 1/3 | KEEP (R2/R3: bulk rollback is safety) | — |
 | 26 | Codex 설정: 선택 순서 select ×N (AccountPriorityControl.tsx) | 3/3 | COLLAPSE: render the select only when value ≠ default OR the card is expanded; hint already sr-only | 050 |
-| 27 | Codex 설정: 별칭 편집 + ✕ per card | 2/3 | COLLAPSE into a per-card "⋯" menu; 이 계정을 다음에 사용 / 일시 중지 stay inline | 050 |
-| 28 | Codex 설정: truncated account ID line | 2/3 | COLLAPSE → title tooltip on the email (copyable via the ⋯ menu "ID 복사") | 050 |
-| 29 | Codex 설정: 로테이션 전략 three desc lines (AccountPoolStrategyControls.tsx:71) | 2/3 | COLLAPSE lines 2-3 into a ⓘ tooltip; keep strategyDesc | 050 |
+| 27 | Codex 설정: 별칭 편집 + ✕ per card | 2/3 | COLLAPSE into a per-card "⋯" labelled disclosure; 이 계정을 다음에 사용 / 일시 중지 stay inline | 050 |
+| 28 | Codex 설정: truncated account ID line | 2/3 | MOVE into the ⋯ disclosure as a visible mono line + "ID 복사" button | 050 |
+| 29 | Codex 설정: 로테이션 전략 three desc lines (AccountPoolStrategyControls.tsx:71) | 2/3 | COLLAPSE lines 2-3 behind a focusable `Tooltip` ⓘ button; keep strategyDesc | 050 |
 | 30 | Codex 설정: empty OpenAI 계정 모드 card | 1/3 (R2) | REMOVE when it has no badges/body | 050 |
 | 31 | Usage 활동일 card (Usage.tsx:300) | 3/3 | REMOVE | 060 |
 | 32 | Usage 요청/측정됨 pair | 1/3 | KEEP (coverage story needs both) | — |
 | 33 | Usage cost row (Usage.tsx:302) | 2/3 | KEEP the number + disclaimer (R2: a number without its caveat is worse); DEMOTE font to text-control | 060 |
 | 34 | Usage heatmap (Usage.tsx:400) | 3/3 | COLLAPSE into `<details>` "일별 활동" (closed by default); 7d bars unchanged | 060 |
-| 35 | Usage subtitle | 2/3 | COLLAPSE → tooltip on the 커버리지 card | 060 |
+| 35 | Usage subtitle | 2/3 | COLLAPSE → focusable `Tooltip` ⓘ button beside the 커버리지 card label | 060 |
 | 36 | Startup 3 stat cards (startup-sections.tsx:59) | 2/3 | COLLAPSE into a single line under the hero ("로컬 프록시 · 백그라운드 서비스 · 자동 시작 켜짐") | 070 |
 | 37 | Startup 대시보드로 돌아가기 (Startup.tsx:325) | 2/3 | REMOVE | 070 |
 | 38 | Startup 복구 방법 (Startup.tsx:411) | 3/3 | COLLAPSE into `<details>`, open when not protected | 070 |
-| 39 | Startup subtitle | 2/3 | COLLAPSE → tooltip on the title | 070 |
+| 39 | Startup subtitle | 2/3 | MOVE into the hero card as a visible `.muted` line | 070 |
 | 40 | Providers 프로바이더 개요 subtitle (ProviderOverviewDashboard.tsx:98) | 3/3 | REMOVE | 080 |
 | 41 | Providers 3 summary cards | 1/3 | KEEP (R1/R3) | — |
 | 42 | Providers 최근 사용 list | 2/3 | COLLAPSE into `<details>` (closed) | 080 |
 | 43 | Providers "방금 전 전 확인" copy bug | R3 | FIX the ko string (double 전) | 080 |
 | 44 | Logs subtitle (Logs.tsx:596) | 3/3 | REMOVE | 080 |
 | 45 | Logs 10 columns → column picker | 1/3 | DEFER (Logs just reworked in #3367) | — |
-| 46 | Subagents spawn_agent hint (SubagentsWorkspace.tsx:97) | 3/3 | COLLAPSE → ⓘ tooltip | 080 |
+| 46 | Subagents spawn_agent hint (SubagentsWorkspace.tsx:97) | 3/3 | COLLAPSE → focusable `Tooltip` ⓘ button on the 5/5 counter | 080 |
 | 47 | Subagents 일 나누는 방법 / 울트라 모드 (SubagentDelegationSection.tsx:116,133) | 2/3 | COLLAPSE into `<details>` "고급" | 080 |
 | 48 | Combos duplicate create CTA + search on zero combos | 2/3 | REMOVE search when count 0; keep one CTA | 080 |
 | 49 | Routing dry-run card with zero profiles | 3/3 | Render only when a profile is selected | 080 |
@@ -76,12 +76,12 @@ work-phase that lands it. Votes: number of reviewers proposing remove/collapse/d
 | Phase | Doc | Scope | Depends on |
 |---|---|---|---|
 | wp1 | 010_sidebar_footer.md | Sidebar footer icon row (lang/theme/GitHub/update), remove star orb + action label | — |
-| wp2 | 020_dashboard_home.md | Dashboard: remove clone tabs + redirects, remove duplicated settings, collapse sidecars + memory, stat row trim | — (shares i18n keys with 030 for the v2 switch move; ordered first because Subagents needs the switch before Models drops it? No — 020 only removes the dashboard copy; Models' copy still exists until 030) |
+| wp2 | 020_dashboard_home.md | Dashboard: remove clone tabs + redirects, remove duplicated settings (autostart rehomed to Startup, effort cap rehomed to Subagents, both in this phase), collapse sidecars + memory, stat row trim | — |
 | wp3 | 030_models_catalog.md | Models: remove head orb, subtitle→tooltip, advanced disclosure, per-provider ⋯ menu, move v2 switch to Subagents | 020 |
 | wp4 | 040_integrations.md | Integrations: tab overflow, uninstalled disclosure, summary trim, subtitle | — |
 | wp5 | 050_codex_set.md | Codex 설정 account cards: ⋯ menu, priority-on-demand, ID tooltip, strategy tooltip, empty card | — |
 | wp6 | 060_usage.md | Usage: 활동일, heatmap details, subtitle tooltip, cost row weight | — |
-| wp7 | 070_startup.md | Startup: hero line, remove back button, recovery details, subtitle tooltip, autostart toggle row | 020 (autostart toggle moves here) |
+| wp7 | 070_startup.md | Startup: hero line, remove back button, recovery details, subtitle line | 020 (autostart row already rehomed there) |
 | wp8 | 080_page_polish.md | Providers / Logs / Subagents / Combos / Routing small items (#40-49) | 030 (Subagents disclosure) |
 | wp9 | 090_i18n_prune_docs.md | Remove orphaned i18n keys across 9 locales, docs-site dashboard pages sync | 010-080 |
 

@@ -12,7 +12,7 @@ Depends on: 020 (the Codex-autostart toggle removed from the dashboard is re-hom
 - Data note: Startup reads `/api/startup-health` (L141) and already fetches `/api/settings`
   (L133); the autostart toggle was rehomed here in 020 via `useCodexAutostart`.
 - Recovery section (`startup-sections.tsx:236-262` `startup-actions` panel): wrap the
-  `.startup-command-list` in `<details open={!protected}>` inside the panel; the panel head +
+  `.startup-command-list` in `<details open={data.status !== "protected"}>` (StartupRecoverySection receives `data: StartupHealthData`, startup-sections.tsx:217; confirm the discriminator field name at B — the hero switches on the same one) inside the panel; the panel head +
   hint stay as the summary.
 
 ### MODIFY gui/src/pages/startup-sections.tsx (L59-73)
