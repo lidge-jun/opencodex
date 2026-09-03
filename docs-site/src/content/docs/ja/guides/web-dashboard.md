@@ -61,7 +61,7 @@ bun run dev:gui
 
 ## 委任セレクターとスポーンルーティングの違い
 
-ダッシュボードの **サブエージェント委任** セレクターは `injectionModel` とオプションの `injectionEffort` を
+**サブエージェント** ページの **サブエージェント委任** セレクターは `injectionModel` とオプションの `injectionEffort` を
 保存します。選択値は OpenCodex が作成する委任ガイダンスで使われ、そのガイダンスは
 `multiAgentGuidanceEnabled` で別に制御されます。モデルを消去すると保存済み effort も消去され、
 ネイティブ既定値の同期も無効になります。

@@ -16,11 +16,10 @@ test("no i18n key is orphaned beyond the recorded baseline", () => {
   expect(fresh).toEqual([]);
 });
 
-test("the baseline only shrinks", () => {
+test("every baseline entry is still an orphan (the baseline only shrinks)", () => {
   const orphans = new Set(findOrphanKeys());
   const revived = [...KNOWN_ORPHAN_KEYS].filter(key => !orphans.has(key));
-  // A baseline entry that is no longer an orphan should be removed from the baseline so
-  // the list stays honest; this is a nudge, not a failure.
-  if (revived.length > 0) console.warn("no longer orphaned; drop from baseline:", revived.join(", "));
-  expect(true).toBe(true);
+  // A baseline entry that gained a consumer or was deleted must leave the list, otherwise
+  // the baseline drifts into a permanent exemption for keys nobody re-examined.
+  expect(revived).toEqual([]);
 });

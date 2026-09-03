@@ -16,38 +16,31 @@ const root = new URL("..", import.meta.url).pathname;
 const srcDir = join(root, "src");
 const i18nDir = join(srcDir, "i18n");
 
-/** Template-literal key families in source (`t(\`prefix${x}\`)`). Keep this list honest. */
+/**
+ * Template-literal key families in source (`t(\`prefix${x}\`)`). Every entry must be
+ * backed by a real dynamic construction; a namespace-wide entry would exempt the whole
+ * family and hide true orphans. Regenerate the evidence with:
+ *   rg -o --no-filename '\`[a-zA-Z][a-zA-Z0-9_.]*\.[a-zA-Z0-9_.]*\$\{' src -g '!i18n/**' | sort -u
+ * `lab.` is the one non-template entry: `src/i18n/lab-translations.ts` owns those keys through
+ * a `Record<LabCatalogKey, string>` typed off en.ts, so the consumer lives inside the excluded
+ * i18n directory.
+ */
 export const DYNAMIC_PREFIXES = [
-  "models.v2Mode_",
-  "models.presetMode_",
-  "startup.summary.",
-  "startup.routing.",
-  "startup.status.",
-  "logs.detail.reason.",
-  "logs.detail.estimateReason.",
-  "usage.day",
-  "integrations.tab.",
-  "integrations.state.",
-  "integrations.status.",
-  "theme.",
-  "uptime.",
-  "time.",
-  "quota.",
-  "pws.",
-  "cws.attention.",
-  "codexAuth.",
-  "accountPool.",
-  "api.",
-  "sub.",
+  "claude.authSource.",
+  "cws.err.",
+  "cws.quota.",
+  "debug.",
   "lab.",
-  "routing.",
-  "dash.mem.",
-  "dash.update",
-  "errorBoundary.",
-  "connection.",
-  "claudeDesktop.",
-  "storage.",
-  "nav.",
+  "logs.detail.source.",
+  "logs.filter.surface.",
+  "logs.tokens.",
+  "models.newPolicy_",
+  "models.presetMode_",
+  "models.reasoningEffort.",
+  "models.v2Mode_",
+  "routing.compatibility.layer.",
+  "routing.unknownEvidence.",
+  "usage.range.",
 ];
 
 function walk(dir, out = []) {

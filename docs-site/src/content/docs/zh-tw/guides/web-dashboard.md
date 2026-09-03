@@ -36,7 +36,7 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 | 區域 | 作用 |
 | --- | --- |
 | **Dashboard 摘要** | 顯示線上狀態、版本與運行時間、provider 數量和 30 天 token 總量，下方依序是重啟保護列、模型同步、摺疊的 **Sidecar** 區塊和記憶體壓力。舊的 provider/模型分頁已移除，請使用 **Providers** 和 **Models**。 |
-| **Sub-agent delegation** | 在 **Subagents** 頁面為 v1 委派 prompt 選擇原生或路由模型，並可指定 reasoning 強度。它不是逐次生成的路由器，詳見下文。 |
+| **Sub-agent delegation** | 在 **Subagents** 頁面選擇供 OpenCodex 委派指引與可選的 Codex 原生子代理預設值共用的原生/路由模型和可選 reasoning 強度。它不是逐次生成的路由器，詳見下文。 |
 | **Sidecar** | 在 Dashboard 的摺疊區塊中選擇 web-search 模型及強度，以及圖像描述模型；更改從下一次請求開始生效。 |
 | **Maintenance** | 重新同步 Codex 模型目錄，檢視專案級設定繞過警告，檢查 latest/preview 版本，並可在更新後重啟代理。 |
 | **啟動安全** | 顯示注入的 Codex 路由能否在重啟後繼續工作，並分別顯示服務、launcher shim 狀態和準確的修復命令。 |
@@ -65,13 +65,17 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 ## 委派選擇器與生成路由的區別
 
 **Subagents** 頁面的 **Sub-agent delegation** 選擇器會儲存 `injectionModel`，以及可選的
-`injectionEffort`。在 v1 turn 中，opencodex 會注入一段指引，告訴父代理呼叫 `spawn_agent` 時應
-傳入哪個精確模型和 reasoning 強度。只要選定模型，無論父代理目前使用何種 reasoning 強度，都會
-啟用這段指引；清除模型時也會清除已儲存的強度。
+`injectionEffort`。所選值會用於由 OpenCodex 編寫的委派指引，而該指引由
+`multiAgentGuidanceEnabled` 單獨控制。在符合條件的 v2 turn 中，這段指引會告訴父代理呼叫
+`spawn_agent` 時應傳入哪個精確模型和 reasoning 強度。清除模型時也會清除已儲存的強度，並關閉原生預設值同步。
+
+啟用 **用作原生 Codex 子代理預設值** 後，當 OpenCodex 管理目前的 Codex 路由時，下一次同步或重新啟動會
+把所選模型和強度套用為原生 `[agents]` 預設值；外部使用者管理的 provider 設定不會被修改。這些預設值只影響新建的 Codex 任務，該選項本身不會觸發委派。既有的使用者自有
+`[agents]` 預設值會保留而不會被覆寫，因此要求的預設值可能與 Codex 實際使用的預設值不同。
 
 :::caution
-該選擇器是面向 v1 相容介面的委派指引。在 `multi_agent_v2` 中，目前代理不會附加 v1 注入訊息，
-而且所有生成的子代理都會繼承父 session 的模型。它不是代理側的跨模型路由器。v1/base/v2 的
+兩個開關相互獨立：關閉 OpenCodex 委派指引不會關閉原生預設值同步；啟用原生預設值同步也不會
+啟用委派指引或觸發委派。兩者都不是代理側的逐次跨模型路由器。v1/base/v2 的
 權威說明見 [子代理介面](/zh-tw/guides/sub-agent-surface/)。
 :::
 
