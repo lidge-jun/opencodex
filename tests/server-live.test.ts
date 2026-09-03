@@ -492,6 +492,113 @@ test("a routed pool account's token overrides the caller bearer on the live rela
   }
 });
 
+test("call-create and its sideband join bind to the same pool account (openai/codex #35830)", async () => {
+  // Desktop v3 voice: POST /v1/live creates the WebRTC call under the proxy-selected Pool
+  // account; the sideband join must reach OpenAI under that SAME account or the call is not
+  // found (404). Both legs carry codex-rs build_session_headers (session-id + thread-id), so
+  // the pool affinity key is identical — a round-robin pool with two accounts must not hand
+  // the join to the other account.
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeLiveUpstream(captured);
+  const seenUpgradeHeaders: Headers[] = [];
+  const wsUpstream = Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        seenUpgradeHeaders.push(req.headers);
+        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
+      }
+      return new Response("not found", { status: 404 });
+    },
+    websocket: { message(ws, message) { ws.send(String(message)); } },
+  });
+  saveConfig({
+    ...forwardConfig(),
+    accountPoolStrategy: "round-robin",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    },
+    codexAccounts: [
+      { id: "pool-a", email: "a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+      { id: "pool-b", email: "b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" },
+    ],
+  } as OcxConfig);
+  for (const [id, acct] of [["pool-a", "acct-pool-a"], ["pool-b", "acct-pool-b"]] as const) {
+    saveCodexAccountCredential(id, {
+      accessToken: fakeChatGptJwt({ chatgpt_account_id: acct, email: `${id}@example.test` }),
+      refreshToken: `${id}-refresh`,
+      expiresAt: Date.now() + 3_600_000,
+      chatgptAccountId: acct,
+    });
+  }
+  const RealWebSocket = globalThis.WebSocket;
+  const wsPort = wsUpstream.port;
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target = parsed.hostname === "api.openai.com" && parsed.pathname.startsWith("/v1/live/")
+        ? `ws://127.0.0.1:${wsPort}${parsed.pathname}${parsed.search}`
+        : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+
+  const server = startServer(0);
+  try {
+    const voiceHeaders = {
+      authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+      "chatgpt-account-id": "acct-123",
+      "session-id": "sess_voice_1",
+      "thread-id": "thread_voice_1",
+    };
+    const { body, contentType } = multipartLiveBody();
+    const created = await fetch(new URL("/v1/live", server.url), {
+      method: "POST",
+      headers: { ...voiceHeaders, "content-type": contentType },
+      body,
+    });
+    expect(created.status).toBe(201);
+    expect(captured).toHaveLength(1);
+    const createAccount = captured[0].headers.get("chatgpt-account-id");
+    expect(["acct-pool-a", "acct-pool-b"]).toContain(createAccount);
+
+    // Unrelated traffic on a different thread advances round-robin in between.
+    const other = await fetch(new URL("/v1/live", server.url), {
+      method: "POST",
+      headers: { ...voiceHeaders, "session-id": "sess_other", "thread-id": "thread_other", "content-type": contentType },
+      body,
+    });
+    expect(other.status).toBe(201);
+    expect(captured[1].headers.get("chatgpt-account-id")).not.toBe(createAccount);
+
+    const wsUrl = new URL("/v1/live/rtc_test", server.url);
+    wsUrl.protocol = "ws:";
+    const client = new RealWebSocket(wsUrl.toString(), { headers: voiceHeaders } as unknown as string[]);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("sideband timeout")), 15_000);
+      client.addEventListener("open", () => client.send("hello"));
+      client.addEventListener("message", () => { clearTimeout(timer); resolve(); });
+      client.addEventListener("error", () => { clearTimeout(timer); reject(new Error("client websocket error")); });
+    });
+    client.close();
+    expect(seenUpgradeHeaders).toHaveLength(1);
+    expect(seenUpgradeHeaders[0].get("chatgpt-account-id")).toBe(createAccount);
+    expect(seenUpgradeHeaders[0].get("authorization")).toBe(captured[0].headers.get("authorization"));
+    expect(seenUpgradeHeaders[0].get("session-id")).toBe("sess_voice_1");
+    expect(seenUpgradeHeaders[0].get("thread-id")).toBe("thread_voice_1");
+  } finally {
+    globalThis.WebSocket = RealWebSocket;
+    await server.stop(true);
+    await upstream.stop(true);
+    await wsUpstream.stop(true);
+  }
+}, { timeout: 20_000 });
+
 test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectionally", async () => {
   const seenPaths: string[] = [];
   const seenUpgradeHeaders: Headers[] = [];

@@ -287,8 +287,11 @@ describe("unauthenticated loopback listener", () => {
         { method: "POST", path: "/v1/messages", body: '{"model":"x","messages":[]}' },
         { method: "POST", path: "/v1/images/generations", body: '{"prompt":"x"}' },
         { method: "GET", path: "/v1/opencodex/artifacts/x" },
-        { method: "POST", path: "/v1/live", body: "{}" },
-        { method: "POST", path: "/v1/realtime/calls", body: "{}" },
+        // Voice call-create is admitted only as POST; the keyed sideband join only as an upgrade.
+        { method: "GET", path: "/v1/live/rtc_x" },
+        { method: "GET", path: "/v1/realtime/calls/rtc_x" },
+        { method: "PUT", path: "/v1/live", body: "{}" },
+        { method: "GET", path: "/v1/realtime/calls" },
         // Allowlisted paths still reject the methods they do not serve.
         { method: "DELETE", path: "/v1/responses" },
         { method: "POST", path: "/v1/models" },
@@ -369,6 +372,39 @@ describe("unauthenticated loopback listener", () => {
       // Plain HTTP on the same paths remains outside the allowlist.
       expect((await fetch(`${base}/v1/realtime?model=m`)).status).toBe(404);
       expect((await fetch(`${base}/v1/live?model=m`)).status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("admits WebRTC voice call-create POSTs and keyed sideband upgrades (openai/codex #35830)", async () => {
+    const loopbackPort = await freePort();
+    saveConfig(baseConfig(loopbackPort));
+    const server = startServer(0);
+    const base = `http://127.0.0.1:${loopbackPort}`;
+    const upgradeHeaders = {
+      connection: "upgrade",
+      upgrade: "websocket",
+      "sec-websocket-version": "13",
+      "sec-websocket-key": Buffer.from("0123456789abcdef").toString("base64"),
+    };
+    try {
+      // Desktop v3 voice creates the WebRTC call through the provider base (POST /v1/live)
+      // and, with the injected experimental_realtime_ws_base_url, joins the sideband on the
+      // keyed path. Both must clear the allowlist; the relay's own auth answer proves it.
+      for (const path of ["/v1/live", "/v1/realtime/calls"]) {
+        const res = await fetch(`${base}${path}`, {
+          method: "POST", body: "{}", headers: { "content-type": "application/json" },
+        });
+        expect({ path, status: res.status }).not.toEqual({ path, status: 404 });
+      }
+      for (const path of ["/v1/live/rtc_x", "/v1/realtime/calls/rtc_x", "/v1/realtime?call_id=rtc_x"]) {
+        const res = await fetch(`${base}${path}`, { headers: upgradeHeaders });
+        expect({ path, status: res.status }).not.toEqual({ path, status: 404 });
+      }
+      // Plain HTTP on the keyed join paths stays rejected.
+      expect((await fetch(`${base}/v1/live/rtc_x`)).status).toBe(404);
+      expect((await fetch(`${base}/v1/realtime/calls/rtc_x`)).status).toBe(404);
     } finally {
       await server.stop(true);
     }

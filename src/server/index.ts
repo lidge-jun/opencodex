@@ -812,13 +812,21 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     if (path === "/v1/responses/compact") return req.method === "POST";
     if (path === "/v1/alpha/search") return req.method === "POST";
     if (path === "/v1/models") return req.method === "GET";
-    // Standalone realtime voice sessions (codex-rs thread/realtime/start, WebSocket
-    // transport) — a directly-spawned `codex app-server` needs these for desktop
-    // voice the same way it needs /v1/responses. WebSocket upgrades only; plain
-    // HTTP on these paths stays rejected.
-    if (path === "/v1/realtime" || path === "/v1/live") {
-      return req.headers.get("upgrade")?.toLowerCase() === "websocket";
-    }
+    // Realtime voice — a directly-spawned `codex app-server` needs these for desktop voice
+    // the same way it needs /v1/responses. Two shapes, same trust model as /v1/responses:
+    //  - standalone sessions (codex-rs thread/realtime/start, WebSocket transport):
+    //    WebSocket upgrades on the bare /v1/realtime and /v1/live paths only;
+    //  - WebRTC calls (desktop v3 voice): POST call-create on /v1/live or
+    //    /v1/realtime/calls, then the sideband join as a WebSocket upgrade on the keyed
+    //    /v1/live/{callId}, /v1/realtime/calls/{callId}, or /v1/realtime?call_id= form
+    //    (the join reaches this listener through the injected
+    //    experimental_realtime_ws_base_url; openai/codex #35830).
+    // Plain HTTP on the upgrade paths stays rejected.
+    const isWebSocketUpgrade = req.headers.get("upgrade")?.toLowerCase() === "websocket";
+    if (path === "/v1/realtime") return isWebSocketUpgrade;
+    if (path === "/v1/live") return isWebSocketUpgrade || req.method === "POST";
+    if (path === "/v1/realtime/calls") return req.method === "POST";
+    if (/^\/v1\/(?:live|realtime\/calls)\/[^/]+\/?$/.test(path)) return isWebSocketUpgrade;
     return false;
   }
 
