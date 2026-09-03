@@ -98,8 +98,10 @@ the equivalent `opencodex` forms, and direct `POST /api/keys` or `POST /api/keys
 Their one-time responses contain a new plaintext data-plane credential, and command output can
 enter the agent transcript. Ask the user to perform that step in a terminal outside the agent
 session, configure the replacement, and confirm only that it is configured plus any non-secret key
-or rotation id needed for follow-up. Never ask the user to paste the key into chat, and do not
-remove the old key before that configuration confirmation.
+or rotation id needed for follow-up. Never ask the user to paste the key into chat. Configuration
+confirmation is not approval to revoke the existing credential. Before committing an in-place
+rotation or removing an old key after a separately created replacement, identify the existing key
+id that will be revoked and obtain separate explicit user approval immediately before that command.
 
 ## Destructive verbs
 

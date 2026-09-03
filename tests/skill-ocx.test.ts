@@ -163,7 +163,7 @@ describe("the consent boundary is stated, not implied", () => {
   });
 
   const secretBearingAccessKeyCommand =
-    /\b(?:ocx|opencodex)(?:\.(?:exe|mjs))?["']?\s+(?:access\s+keys?|api-key)\s+(?:create\b|rotate\b(?!\s+(?:commit|abort)\b))/gim;
+    /\b(?:ocx|opencodex)(?:\.(?:exe|mjs))?["']?\s+(?:access\s+keys?|api-key)\s+(?:create\b|rotate\b(?!\s+(?:--json\s+)?(?:commit|abort)\b))/gim;
   const secretBearingManagementRequest =
     /(?:(?:\bPOST\b|(?:--request|-X|-Method)\s+["']?POST["']?|method\s*:\s*["']POST["'])[^\n]{0,240}\/api\/keys(?:\/rotate)?(?=$|[\s"'?#])|\/api\/keys(?:\/rotate)?(?=$|[\s"'?#])[^\n]{0,240}(?:\bPOST\b|(?:--request|-X|-Method)\s+["']?POST["']?|method\s*:\s*["']POST["']))/gim;
 
@@ -183,13 +183,20 @@ describe("the consent boundary is stated, not implied", () => {
       "ocx access key create rotated --json",
       "& ocx access keys create rotated --json",
       "opencodex api-key rotate old-id --json",
+      "ocx access key rotate --json old-id",
       "ocx access key \\\n  create rotated --json",
       "curl -X POST http://127.0.0.1:3000/api/keys",
       "Invoke-RestMethod http://127.0.0.1:3000/api/keys/rotate -Method Post",
     ]) {
       expect(secretBearingCommandsInFences("```bash\n" + command + "\n```"), command).toHaveLength(1);
     }
-    expect(secretBearingCommandsInFences("```bash\nocx access key rotate commit old-id rotation-id\n```")).toEqual([]);
+    for (const command of [
+      "ocx access key rotate commit old-id rotation-id",
+      "ocx access key rotate --json commit old-id rotation-id",
+      "ocx access key rotate --json abort old-id rotation-id",
+    ]) {
+      expect(secretBearingCommandsInFences("```bash\n" + command + "\n```"), command).toEqual([]);
+    }
     expect(secretBearingCommandsInFences("```bash\ncurl -X POST http://127.0.0.1:3000/api/keys/rotate/commit\n```")).toEqual([]);
   });
 
@@ -198,7 +205,13 @@ describe("the consent boundary is stated, not implied", () => {
       expect(secretBearingCommandsInFences(read(file)), file).toEqual([]);
     }
     const skill = readFileSync(SKILL, "utf8");
+    const recipes = read("references/03_recipes.md");
     expect(skill).toMatch(/outside the agent\s+session/);
-    expect(skill).toMatch(/do not\s+remove the old key before/);
+    expect(skill).toMatch(/configuration\s+confirmation is not approval/i);
+    expect(skill).toMatch(/separate explicit user approval/i);
+    const approvalAt = recipes.indexOf("obtain separate explicit user approval");
+    expect(approvalAt).toBeGreaterThanOrEqual(0);
+    expect(approvalAt).toBeLessThan(recipes.indexOf("ocx access key rotate commit"));
+    expect(approvalAt).toBeLessThan(recipes.indexOf("ocx access key remove"));
   });
 });

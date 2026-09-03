@@ -106,14 +106,31 @@ run either secret-returning command from an agent session, including through the
 step in a separate terminal, configure the replacement, and report only that it is configured plus
 any non-secret key or rotation id needed for follow-up. Never ask for the key itself.
 
-After the user confirms that the replacement is configured, remove the old key:
+Configuration confirmation is not approval to revoke the existing credential. After confirmation,
+identify the existing key id that will be revoked and obtain separate explicit user approval
+immediately before one of the following paths.
+
+For an in-place rotation, commit the pending replacement on the same id:
+
+```bash
+ocx access key rotate commit <id> <rotation-id> --json
+```
+
+For a separately created replacement key, remove the old id:
 
 ```bash
 ocx access key remove <old-id> --yes --json
-ocx access key list --json                    # the old id is gone; check usage on the rest
 ```
 
-Note the argument style: `remove <id>` is positional, not `--id`, and refuses without `--yes`.
+Then verify the matching result:
+
+```bash
+ocx access key list --json
+```
+
+For an in-place rotation, the same id remains and `pendingRotation` disappears. For a separately
+created replacement, the old id disappears; check usage on the remaining keys. Note the argument
+style: `remove <id>` is positional, not `--id`, and refuses without `--yes`.
 
 The list carries per-key usage, so a key whose count stops advancing is genuinely unused. The
 replacement key's plaintext is never retrievable after creation.
