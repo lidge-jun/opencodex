@@ -952,4 +952,33 @@ describe("oversized Codex create frames", () => {
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(await response.text()).toContain("response.completed");
   });
+
+  test("response.done normalization keeps unknown usage fields (#41980 parity)", async () => {
+    const usage = {
+      input_tokens: 5,
+      output_tokens: 2,
+      total_tokens: 7,
+      subscription: { window: { used_percent: 3 } },
+      future_counter_v2: true,
+    };
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({
+          type: "response.done",
+          response: { id: "r-done", status: "completed", output: [], usage },
+        }),
+      });
+      ws.emit("close", { code: 1000, reason: "normal" });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+
+    const text = await response.text();
+    const line = text.split("\n").find(l => l.startsWith("data:") && l.includes("response.completed"));
+    expect(line).toBeDefined();
+    const payload = JSON.parse(line!.slice(5).trim()) as { response: { usage: unknown } };
+    expect(payload.response.usage).toEqual(usage);
+  });
 });
