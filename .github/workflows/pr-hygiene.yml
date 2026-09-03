@@ -2,7 +2,13 @@ name: PR hygiene
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, labeled, unlabeled]
+    # `edited` is here for the carry-attribution check alone. Every other
+    # hygiene failure is about the diff, so only a push can clear it -- but the
+    # remedy this one asks for is a `Co-authored-by` trailer, which an author
+    # can add to the description without touching the branch. Without `edited`
+    # the fix would be invisible until an unrelated push, and the author would
+    # reasonably conclude the gate was broken.
+    types: [opened, reopened, synchronize, edited, labeled, unlabeled]
 
 # Trusted scripts from the PR base revision only. Patches are read through the
 # GitHub API; PR-head code is never checked out or executed.

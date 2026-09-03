@@ -22,10 +22,17 @@
  */
 
 const CARRY_VERB_RE =
-  /\b(?:re-?implement(?:s|ed|ation of)?|supersed(?:e|es|ed|ing)|carry of|carries|carried from|rebase of|adopts the design from)\b/gi;
+  /\b(?:re-?implement(?:s|ed|ing|ation of)?|supersed(?:e|es|ed|ing)|carry(?: of)?|carries|carrying|carried(?: from)?|rebase(?: of)?|rebasing|adopts the design from)\b/gi;
 
-/** Every #N in one window. */
-const REF_RE = /#(\d+)/g;
+/**
+ * Every reference in one window, keeping any owner/repo qualifier.
+ *
+ * A bare "#2797" means this repository. "other/project#2797" does not, and
+ * resolving it here would look up an unrelated pull request of the same number
+ * in this one -- comparing the trailer against the wrong person. Qualified
+ * references are captured so they can be dropped rather than misread.
+ */
+const REF_RE = /(?:([\w.-]+\/[\w.-]+))?#(\d+)/g;
 
 /**
  * The window a carry verb governs: to the end of its sentence, capped at 80
@@ -81,7 +88,11 @@ function referencedCarryNumbers(...texts) {
       const window = carryWindow(stripped, verb.index + verb[0].length);
       REF_RE.lastIndex = 0;
       let ref;
-      while ((ref = REF_RE.exec(window)) !== null) found.add(Number(ref[1]));
+      while ((ref = REF_RE.exec(window)) !== null) {
+        // A qualified reference names a pull request in another repository.
+        if (ref[1]) continue;
+        found.add(Number(ref[2]));
+      }
     }
   }
   return found;
@@ -105,17 +116,41 @@ function trailerValues(...texts) {
  * even though they are the same person. Match on any of the three identifiers
  * the referenced pull request actually carries.
  */
-function trailerNames(author, values) {
+function parseTrailer(value) {
+  const match = /^\s*(.*?)\s*<([^>]*)>\s*$/.exec(value);
+  if (match) return { name: match[1].toLowerCase(), email: match[2].toLowerCase() };
+  return { name: value.trim().toLowerCase(), email: "" };
+}
+
+/**
+ * Substring matching is not good enough here, and the failure is not exotic:
+ * an author named "Ann" would be satisfied by "Co-authored-by: Joanne
+ * <other@example.com>", and a short login can appear inside an unrelated
+ * address. A trailer credits someone only when its name or its email equals an
+ * identifier the referenced pull request actually carries.
+ */
+function trailerNames(author, trailers) {
   if (!author) return true;
-  const candidates = [
-    author.login,
-    ...(author.names || []),
-    ...(author.emails || []),
-  ]
-    .filter((value) => typeof value === "string" && value.trim() !== "")
-    .map((value) => value.toLowerCase());
-  if (candidates.length === 0) return true;
-  return values.some((value) => candidates.some((candidate) => value.includes(candidate)));
+  const names = new Set(
+    [author.login, ...(author.names || [])]
+      .filter((value) => typeof value === "string" && value.trim() !== "")
+      .map((value) => value.trim().toLowerCase()),
+  );
+  const emails = new Set(
+    (author.emails || [])
+      .filter((value) => typeof value === "string" && value.trim() !== "")
+      .map((value) => value.trim().toLowerCase()),
+  );
+  if (names.size === 0 && emails.size === 0) return true;
+  return trailers.some(
+    (trailer) =>
+      (trailer.name !== "" && names.has(trailer.name)) ||
+      (trailer.email !== "" && emails.has(trailer.email)) ||
+      // A GitHub noreply address carries the login after the numeric id,
+      // before the "@" -- that is the only identifier many trailers have.
+      (trailer.email.endsWith("@users.noreply.github.com") &&
+        names.has(trailer.email.replace(/^[^@]*?(\d+\+)?/, "").split("@")[0])),
+  );
 }
 
 /**
@@ -136,7 +171,7 @@ function assessCarryAttribution({
 
   // The squash body is assembled from the pull request body and the branch's
   // commit messages, so both are where an author can put the trailer today.
-  const values = trailerValues(body, ...commits);
+  const trailers = trailerValues(body, ...commits).map(parseTrailer);
   const uncredited = [];
 
   for (const number of referenced) {
@@ -152,7 +187,7 @@ function assessCarryAttribution({
     ) {
       continue;
     }
-    if (!trailerNames(author, values)) uncredited.push("#" + number);
+    if (!trailerNames(author, trailers)) uncredited.push("#" + number);
   }
 
   if (uncredited.length === 0) return [];

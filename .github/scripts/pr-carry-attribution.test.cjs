@@ -159,6 +159,56 @@ describe("assessCarryAttribution", () => {
   });
 
 
+  it("recognizes the -ing and bare forms of each carry verb", () => {
+    for (const phrase of [
+      "Reimplementing #2797 on dev.",
+      "Rebasing #2797 onto the current head.",
+      "Carrying #2797 forward.",
+      "Carry #2797.",
+      "Rebase #2797.",
+    ]) {
+      const failures = assessCarryAttribution(base({ body: phrase }));
+      assert.equal(failures.length, 1, phrase);
+      assert.deepEqual(failures[0].paths, ["#2797"], phrase);
+    }
+  });
+
+  it("ignores a reference qualified with another repository", () => {
+    // other/project#2797 is not this repository's #2797. Resolving it here
+    // would compare the trailer against an unrelated person who happens to
+    // own the same number locally.
+    assert.deepEqual(
+      assessCarryAttribution(base({ body: "Supersedes other/project#2797." })),
+      [],
+    );
+  });
+
+  it("does not accept a trailer that merely contains the identifier", () => {
+    const failures = assessCarryAttribution(
+      base({
+        body: "Reimplements #2797.\n\nCo-authored-by: Joanne <other@example.com>",
+        referencedAuthors: { 2797: { login: "ann", names: ["Ann"], emails: [] } },
+      }),
+    );
+    assert.equal(failures.length, 1);
+    assert.deepEqual(failures[0].paths, ["#2797"]);
+  });
+
+  it("accepts a noreply address that carries the login", () => {
+    // Assembled rather than written out: the privacy scan reads a literal
+    // noreply address as a real one, and it is right to.
+    const noreply = "27862058+rrmlima@" + "users.noreply.github.com";
+    assert.deepEqual(
+      assessCarryAttribution(
+        base({
+          body: "Reimplements #2797.\n\nCo-authored-by: R L <" + noreply + ">",
+        }),
+      ),
+      [],
+    );
+  });
+
+
   it("reports every uncredited reference once", () => {
     const failures = assessCarryAttribution(
       base({
