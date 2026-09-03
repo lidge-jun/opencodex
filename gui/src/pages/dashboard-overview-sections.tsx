@@ -474,4 +474,3 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
     </>
   );
 }
-

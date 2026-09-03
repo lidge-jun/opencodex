@@ -12,19 +12,10 @@ import {
   type ProjectCodexConfigGroup,
   type ProviderInfo,
   type SettingsData,
-  type ShadowCallData,
   type SidecarData,
   type UsageSummary30d,
 } from "./dashboard-shared";
 
-export type InjectionPoll = {
-  multiAgentGuidanceEnabled: boolean;
-  syncCodexSubagentDefaults: boolean;
-  injectionModel: string;
-  injectionEffort: string;
-  injectionEfforts: string[];
-  injectionAvailable: Array<{ provider: string; model: string; namespaced: string }>;
-};
 
 export type InjectionSelectionResponse = {
   multiAgentGuidanceEnabled?: boolean;
@@ -42,10 +33,6 @@ export function normalizeInjectionSelection(data: InjectionSelectionResponse) {
   };
 }
 
-export type EffortCapPoll = {
-  effortCap: string;
-  subagentEffortCap: string;
-};
 
 export type DashboardOverviewPoll = {
   health: HealthData | null;
@@ -53,21 +40,10 @@ export type DashboardOverviewPoll = {
   error: boolean;
 };
 
-/** Multi-agent extras — slower peers must not gate status/uptime/provider counts. */
-export type DashboardMultiAgentPoll = {
-  /** Absent when the optional endpoint failed — callers must keep prior UI state. */
-  injection: InjectionPoll | undefined;
-  effortCaps: EffortCapPoll | undefined;
-};
 
-/** Sidecar + shadow only — must not wait on /api/settings (startup-health). */
+/** Sidecar only — must not wait on /api/settings (startup-health). */
 export type DashboardSidecarPoll = {
   sidecar: SidecarData;
-  /**
-   * `null` = authoritative endpoint failure (clear UI).
-   * `undefined` = lost poll authority (epoch gate) — do not commit.
-   */
-  shadowCall: ShadowCallData | null | undefined;
 };
 
 export type DashboardSettingsPoll = {
@@ -76,17 +52,11 @@ export type DashboardSettingsPoll = {
   startupHealthSeed: SettingsData["startupHealth"] | null | undefined;
 };
 
-export type DashboardMaModePoll = {
-  maMode: "v1" | "default" | "v2";
-};
 
 export type DashboardEpochRefs = {
   settingsRequestEpochRef: { current: number };
   settingsMutationEpochRef: { current: number };
   settingsMutationInFlightRef: { current: boolean };
-  shadowCallRequestEpochRef: { current: number };
-  shadowCallMutationEpochRef: { current: number };
-  shadowCallMutationInFlightRef: { current: boolean };
 };
 
 function isAbortError(error: unknown, signal: AbortSignal): boolean {
@@ -141,62 +111,14 @@ export async function fetchDashboardUsage(apiBase: string, signal: AbortSignal):
   return requireJson<UsageSummary30d>(response);
 }
 
-/** Web-search / vision sidecar + shadow-call — config reads, typically sub-10ms. */
+/** Web-search / vision sidecar — a config read, typically sub-10ms. */
 export async function fetchDashboardSidecars(
   apiBase: string,
   signal: AbortSignal,
-  epochs: DashboardEpochRefs,
 ): Promise<DashboardSidecarPoll> {
-  // Only bump shadow epochs — settings has its own poll and must not be invalidated here.
-  const { request: shadowRequestEpoch, mutation: shadowMutationEpoch } = beginPollEpoch(
-    epochs.shadowCallRequestEpochRef,
-    epochs.shadowCallMutationEpochRef,
-  );
-
-  const [scRes, shRes] = await Promise.all([
-    fetch(`${apiBase}/api/sidecar-settings`, { signal }),
-    fetch(`${apiBase}/api/shadow-call-settings`, { signal }),
-  ]);
-
+  const scRes = await fetch(`${apiBase}/api/sidecar-settings`, { signal });
   const sidecar = await requireJson<SidecarData>(scRes);
-  let shadowCall: ShadowCallData | null | undefined = undefined;
-  try {
-    if (shRes.ok) {
-      const nextShadow = await shRes.json() as ShadowCallData;
-      if (settingsPollMayCommit(
-        { request: shadowRequestEpoch, mutation: shadowMutationEpoch },
-        {
-          request: epochs.shadowCallRequestEpochRef.current,
-          mutation: epochs.shadowCallMutationEpochRef.current,
-          mutationInFlight: epochs.shadowCallMutationInFlightRef.current,
-        },
-      )) {
-        shadowCall = nextShadow;
-      }
-    } else if (settingsPollMayCommit(
-      { request: shadowRequestEpoch, mutation: shadowMutationEpoch },
-      {
-        request: epochs.shadowCallRequestEpochRef.current,
-        mutation: epochs.shadowCallMutationEpochRef.current,
-        mutationInFlight: epochs.shadowCallMutationInFlightRef.current,
-      },
-    )) {
-      shadowCall = null;
-    }
-  } catch {
-    if (settingsPollMayCommit(
-      { request: shadowRequestEpoch, mutation: shadowMutationEpoch },
-      {
-        request: epochs.shadowCallRequestEpochRef.current,
-        mutation: epochs.shadowCallMutationEpochRef.current,
-        mutationInFlight: epochs.shadowCallMutationInFlightRef.current,
-      },
-    )) {
-      shadowCall = null;
-    }
-  }
-
-  return { sidecar, shadowCall };
+  return { sidecar };
 }
 
 /** Codex auto-start + startup-health seed — can be slower because settings embeds startup probe. */
@@ -229,25 +151,6 @@ export async function fetchDashboardSettings(
   return { settings, startupHealthSeed };
 }
 
-/** Multi-agent mode toggle only — must not wait on injection-model / effort-caps. */
-export async function fetchDashboardMaMode(
-  apiBase: string,
-  signal: AbortSignal,
-): Promise<DashboardMaModePoll> {
-  try {
-    const v2Res = await fetch(`${apiBase}/api/v2`, { signal });
-    if (!v2Res.ok) return { maMode: "default" };
-    const v2Data = await v2Res.json() as { multiAgentMode?: unknown };
-    if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2") {
-      return { maMode: v2Data.multiAgentMode };
-    }
-    return { maMode: "default" };
-  } catch (error) {
-    if (isAbortError(error, signal)) throw error;
-    return { maMode: "default" };
-  }
-}
-
 export async function fetchDashboardOverview(
   apiBase: string,
   signal: AbortSignal,
@@ -265,40 +168,3 @@ export async function fetchDashboardOverview(
   }
 }
 
-export async function fetchDashboardMultiAgent(
-  apiBase: string,
-  signal: AbortSignal,
-): Promise<DashboardMultiAgentPoll> {
-  const [imRes, ecRes] = await Promise.all([
-    fetch(`${apiBase}/api/injection-model`, { signal }).catch(() => null),
-    fetch(`${apiBase}/api/effort-caps`, { signal }).catch(() => null),
-  ]);
-
-  let injection: InjectionPoll | undefined;
-  try {
-    if (imRes?.ok) {
-      const imData = await imRes.json() as InjectionSelectionResponse & {
-        efforts?: string[];
-        available?: InjectionPoll["injectionAvailable"];
-      };
-      injection = {
-        ...normalizeInjectionSelection(imData),
-        injectionEfforts: imData.efforts ?? [],
-        injectionAvailable: imData.available ?? [],
-      };
-    }
-  } catch { /* old server / malformed — keep prior UI state */ }
-
-  let effortCaps: EffortCapPoll | undefined;
-  try {
-    if (ecRes?.ok) {
-      const ecData = await ecRes.json() as { effortCap?: string | null; subagentEffortCap?: string | null };
-      effortCaps = {
-        effortCap: ecData.effortCap ?? "",
-        subagentEffortCap: ecData.subagentEffortCap ?? "",
-      };
-    }
-  } catch { /* old server */ }
-
-  return { injection, effortCaps };
-}

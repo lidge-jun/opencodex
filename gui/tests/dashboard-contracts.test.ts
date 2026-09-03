@@ -30,7 +30,7 @@ test("Dashboard wires a single project-config diagnostics owner outside the sett
   // Overview poll must not own the diagnostics endpoint.
   const overviewFnStart = core.indexOf("export async function fetchDashboardOverview");
   expect(overviewFnStart).toBeGreaterThan(-1);
-  const overviewBody = core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"));
+  const overviewBody = core.slice(overviewFnStart);
   expect(overviewBody).not.toContain("diagnostics/project-config");
 });
 
@@ -43,9 +43,9 @@ test("Dashboard usage polling cannot delay core health and settings", async () =
   expect(overviewFnStart).toBeGreaterThan(-1);
   expect(usageFnStart).toBeGreaterThan(-1);
   expect(sidecarsFnStart).toBeGreaterThan(-1);
-  expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/usage?range=30d");
-  expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/sidecar-settings");
-  expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/shadow-call-settings");
+  expect(core.slice(overviewFnStart)).not.toContain("/api/usage?range=30d");
+  expect(core.slice(overviewFnStart)).not.toContain("/api/sidecar-settings");
+  expect(core.slice(overviewFnStart)).not.toContain("/api/shadow-call-settings");
   expect(core.slice(sidecarsFnStart)).toContain("/api/sidecar-settings");
   expect(hook).toContain("usageSummary30dResourceKey(apiBase)");
   expect(hook).toContain("dashboard-sidecars:${apiBase}");
@@ -64,7 +64,8 @@ test("Dashboard interactive controls load independently of health/providers", as
   expect(settingsFnStart).toBeGreaterThan(-1);
   const sidecarsBody = core.slice(sidecarsFnStart, settingsFnStart > sidecarsFnStart ? settingsFnStart : undefined);
   expect(sidecarsBody).toContain("/api/sidecar-settings");
-  expect(sidecarsBody).toContain("/api/shadow-call-settings");
+  // Shadow-call left the dashboard (Models owns it), so the sidecar poll no longer fetches it.
+  expect(sidecarsBody).not.toContain("/api/shadow-call-settings");
   expect(sidecarsBody).not.toContain("/api/settings");
   expect(sidecarsBody).not.toContain("/healthz");
   expect(sidecarsBody).not.toContain("/api/providers");
@@ -75,17 +76,17 @@ test("Dashboard overview status widgets do not wait on injection-model", async (
   const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
   const hook = await Bun.file(new URL("../src/pages/use-dashboard-data.ts", import.meta.url)).text();
   const overviewStart = core.indexOf("export async function fetchDashboardOverview");
-  const multiStart = core.indexOf("export async function fetchDashboardMultiAgent");
   expect(overviewStart).toBeGreaterThan(-1);
-  expect(multiStart).toBeGreaterThan(overviewStart);
-  const overviewBody = core.slice(overviewStart, multiStart);
+  // Overview is the last export in the module now that the multi-agent poller is gone.
+  const overviewBody = core.slice(overviewStart);
   expect(overviewBody).toContain("/api/system/health");
   expect(overviewBody).not.toContain("/healthz");
   expect(overviewBody).toContain("/api/providers");
   expect(overviewBody).not.toContain("/api/injection-model");
   expect(overviewBody).not.toContain("/api/v2");
   expect(overviewBody).not.toContain("/api/effort-caps");
-  expect(core.slice(multiStart)).toContain("/api/injection-model");
+  // No dashboard poller fetches injection-model any more; only the shared normalizer stays.
+  expect(core).not.toContain("/api/injection-model");
   expect(hook).toContain("dashboard-overview:${apiBase}");
   // The injection/effort-cap poll left the dashboard with the cards it fed (they live on
   // Subagents now); the overview poll must not have absorbed those endpoints.
@@ -95,24 +96,20 @@ test("Dashboard overview status widgets do not wait on injection-model", async (
   expect(hook).toContain("enabled: overviewReady");
 });
 
-test("Dashboard MA mode and sidecars do not wait on settings or injection", async () => {
+test("Dashboard sidecars do not wait on settings or injection", async () => {
   const core = await Bun.file(new URL("../src/pages/dashboard-core-poll.ts", import.meta.url)).text();
   const hook = await Bun.file(new URL("../src/pages/use-dashboard-data.ts", import.meta.url)).text();
-  const maStart = core.indexOf("export async function fetchDashboardMaMode");
+  // The v1/base/v2 switch and the injection/effort-cap cards left the dashboard (Subagents
+  // and Models own them), so their pollers are gone from the core poll module entirely.
+  expect(core).not.toContain("fetchDashboardMaMode");
+  expect(core).not.toContain("fetchDashboardMultiAgent");
   const sidecarsStart = core.indexOf("export async function fetchDashboardSidecars");
   const settingsStart = core.indexOf("export async function fetchDashboardSettings");
-  const overviewStart = core.indexOf("export async function fetchDashboardOverview");
-  expect(maStart).toBeGreaterThan(-1);
   expect(sidecarsStart).toBeGreaterThan(-1);
   expect(settingsStart).toBeGreaterThan(-1);
-  const maBody = core.slice(maStart, overviewStart > maStart ? overviewStart : undefined);
   const sidecarsBody = core.slice(sidecarsStart, settingsStart > sidecarsStart ? settingsStart : undefined);
-  expect(maBody).toContain("/api/v2");
-  expect(maBody).not.toContain("/api/injection-model");
-  expect(maBody).not.toContain("/api/settings");
   expect(sidecarsBody).toContain("/api/sidecar-settings");
   expect(sidecarsBody).not.toContain("/api/settings");
-  // The v1/base/v2 switch left the dashboard (Subagents owns it), so no MA-mode poll here.
   expect(hook).not.toContain("dashboard-ma-mode:${apiBase}");
   expect(hook).not.toContain("/api/v2");
   expect(hook).toContain("dashboard-sidecars:${apiBase}");

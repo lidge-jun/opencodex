@@ -55,11 +55,6 @@ export function readPageFromHash(hash?: string): Page {
 }
 
 /**
- * Dashboard section tabs live in the hash so refresh/bookmark/back-forward keep the
- * choice, mirroring Logs (`#logs` / `#logs/debug`). Overview is the bare `#dashboard`,
- * so it has no suffix entry here.
- */
-/**
  * The dashboard used to have Providers and Models tabs at these hashes. They were read-only
  * copies of the real pages, so the bookmarks now redirect there (see resolveAppHashChange).
  */

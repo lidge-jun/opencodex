@@ -27,7 +27,6 @@ import {
   type ProjectCodexConfigGroup,
   type ProviderInfo,
   type SettingsData,
-  type ShadowCallData,
   type SidecarData,
   type SidecarPatch,
   type SyncResult,
@@ -54,7 +53,6 @@ const STARTUP_CACHE_PREFIX = "ocx.dash.startup.v1:";
 type CachedControls = {
   settings?: SettingsData | null;
   sidecar?: SidecarData | null;
-  shadowCall?: ShadowCallData | null;
 };
 
 type CachedOverview = {
@@ -78,8 +76,6 @@ function controlsCacheKey(apiBase: string): string {
 
 export function useDashboardData(apiBase: string) {
   const { locale, t } = useI18n();
-  const [modelQuery, setModelQuery] = useState("");
-  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
   const cachedControls = useMemo(
     () => readSessionListCache<CachedControls>(controlsCacheKey(apiBase)),
     [apiBase],
@@ -104,8 +100,6 @@ export function useDashboardData(apiBase: string) {
   const [sidecar, setSidecar] = useState<SidecarData | null>(() => cachedControls?.sidecar ?? null);
   const [usage30d, setUsage30d] = useState<UsageSummary30d | null>(() => cachedUsage);
   const [sidecarSaving, setSidecarSaving] = useState(false);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const settingsSaving = false;
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -120,9 +114,6 @@ export function useDashboardData(apiBase: string) {
   const settingsRequestEpochRef = useRef(0);
   const settingsMutationEpochRef = useRef(0);
   const settingsMutationInFlightRef = useRef(false);
-  const shadowCallRequestEpochRef = useRef(0);
-  const shadowCallMutationEpochRef = useRef(0);
-  const shadowCallMutationInFlightRef = useRef(false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckData | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateJob, setUpdateJob] = useState<UpdateJob | null>(null);
@@ -148,9 +139,6 @@ export function useDashboardData(apiBase: string) {
     settingsRequestEpochRef,
     settingsMutationEpochRef,
     settingsMutationInFlightRef,
-    shadowCallRequestEpochRef,
-    shadowCallMutationEpochRef,
-    shadowCallMutationInFlightRef,
   }).current;
 
   const startupHealthPoll = useKeyedClientResource(
@@ -189,7 +177,7 @@ export function useDashboardData(apiBase: string) {
     [apiBase],
     async (signal) => {
       const startupHealthGeneration = startupHealthGenerationRef.current;
-      const data = await fetchDashboardSidecars(apiBase, signal, epochRefs);
+      const data = await fetchDashboardSidecars(apiBase, signal);
       return { ...data, startupHealthGeneration };
     },
     { pollMs: 5000 },
@@ -272,7 +260,6 @@ export function useDashboardData(apiBase: string) {
     writeSessionListCache(controlsCacheKey(apiBase), {
       ...prev,
       sidecar: data.sidecar,
-      ...(data.shadowCall !== undefined ? { shadowCall: data.shadowCall } : {}),
     });
   }, [sidecarPoll.data, apiBase]);
 
@@ -313,14 +300,12 @@ export function useDashboardData(apiBase: string) {
 
   useEffect(() => {
     if (modelsPoll.data) setModels(modelsPoll.data);
-    setModelsLoading(modelsPoll.loading);
-  }, [modelsPoll.data, modelsPoll.loading]);
+  }, [modelsPoll.data]);
   /* eslint-enable react-hooks/set-state-in-effect */
   /* oxlint-enable react/react-compiler */
 
   useEffect(() => () => {
     settingsRequestEpochRef.current += 1;
-    shadowCallRequestEpochRef.current += 1;
   }, []);
 
   const updatePoll = useKeyedClientResource(
@@ -371,17 +356,6 @@ export function useDashboardData(apiBase: string) {
   }, [updatePoll.data]);
   /* oxlint-enable react/react-compiler */
 
-  const grouped = useMemo(() => groupDashboardModels(models), [models]);
-  const filteredGroups = useMemo(() => {
-    const q = modelQuery.trim().toLowerCase();
-    if (!q) return grouped;
-    const out: Array<[string, ModelInfo[]]> = [];
-    for (const [provider, rows] of grouped) {
-      const hits = rows.filter(m => m.id.toLowerCase().includes(q) || provider.toLowerCase().includes(q));
-      if (hits.length > 0) out.push([provider, hits]);
-    }
-    return out;
-  }, [grouped, modelQuery]);
   const sidecarModels = useMemo(() => {
     // Server-computed runnable set when present (#2188); legacy union otherwise.
     // The shared SidecarSetting type admits vision's "routed", which the
@@ -441,9 +415,8 @@ export function useDashboardData(apiBase: string) {
   };
 
   // Clears the sync result/error in this hook. The dashboard toast owns its own dismissal
-  // timer but must publish the dismissal here: syncResult/syncError live above the dashboard
-  // tabs, so a component-local flag alone would let a stale result remount as a fresh toast
-  // after the Overview panel unmounts and comes back.
+  // timer but must publish the dismissal here: syncResult/syncError live in this hook, so a
+  // component-local flag alone would let a stale result remount as a fresh toast.
   const clearSyncFeedback = useCallback(() => {
     setSyncResult(null);
     setSyncError(null);
@@ -579,18 +552,16 @@ export function useDashboardData(apiBase: string) {
   return {
     apiBase,
     locale, t,
-    modelQuery, setModelQuery,
-    expandedProviders, setExpandedProviders,
     health, startupHealth, providers, models, settings, sidecar, usage30d,
     usageLoading: usagePoll.loading && !usage30d,
     healthLoading: overviewPoll.loading && !health,
-    sidecarSaving, modelsLoading, settingsSaving, syncing,
+    sidecarSaving, syncing,
     syncResult, syncError, projectConfigWarnings,
     updateOpen, updateChannel, setUpdateRestart, updateRestart, updateLoading,
     updateCheck, updateError, updateJob, reconnecting, error,
     updateTriggerRef,
     updateDialogRef,
-    filteredGroups, sidecarModels, visionModels,
+    sidecarModels, visionModels,
     saveSidecar, runSync, clearSyncFeedback,
     fetchUpdateCheck, closeUpdateDialog, openUpdateDialog, changeUpdateChannel, runUpdate,
   };
