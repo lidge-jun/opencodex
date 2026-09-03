@@ -304,6 +304,13 @@ test("a pool card folds alias/id/remove behind a ⋯ disclosure and shows the or
   expect(card.querySelector("#codex-account-priority-pool-1")).not.toBeNull();
   const copy = [...card.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === "Copy account ID")!;
   expect(copy).toBeDefined();
+  // Clicking writes the FULL id (the visible text is masked) and flips only this card's label.
+  const written: string[] = [];
+  Object.defineProperty(win.navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { written.push(text); } } });
+  await act(async () => { copy.click(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  expect(written).toEqual(["pool-1"]);
+  expect(copy.textContent?.trim()).toBe("Copied");
   const remove = card.querySelector<HTMLButtonElement>('button[aria-label^="Remove"]')!;
   expect(remove).not.toBeNull();
   await act(async () => { remove.click(); });

@@ -29,25 +29,12 @@ export function OpenAiAccountModeBanner({
     <div className="panel openai-account-mode-banner" style={{ marginBottom: 16 }}>
       <div className="row">
         <strong>{t("codexAuth.accountModeTitle")}</strong>
-        {state === null ? (
-          <span className="badge badge-accent openai-account-mode-banner__badge-slot openai-account-mode-banner__badge-slot--pending" aria-hidden="true">
-            {t("codexAuth.accountModePool")}
-          </span>
-        ) : state === "pool" ? (
+        {state === "pool" ? (
           <span className="badge badge-accent openai-account-mode-banner__badge-slot">{t("codexAuth.accountModePool")}</span>
         ) : state === "direct" ? (
           <span className="badge badge-green openai-account-mode-banner__badge-slot">{t("codexAuth.accountModeDirect")}</span>
         ) : null}
       </div>
-      {/*
-        Reserve the description line while config is still unknown so the pool
-        section below does not jump when /api/config arrives.
-      */}
-      {state === null && (
-        <p className="card-sub openai-account-mode-banner__desc openai-account-mode-banner__desc--pending" aria-hidden="true">
-          &nbsp;
-        </p>
-      )}
       {state === "pool" && (
         <p className="card-sub openai-account-mode-banner__desc">{t("codexAuth.accountModePoolDesc")}</p>
       )}
