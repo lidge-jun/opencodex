@@ -38,18 +38,18 @@ the browser or password manager's decision.
 
 | Area | What it does |
 | --- | --- |
-| **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
-| **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
-| **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
+| **Dashboard summary** | Online state, version with uptime, provider count, and 30-day token total, followed by the reboot-protection bar, model sync, a collapsed **Sidecars** disclosure, and memory pressure. The old provider and model tabs are gone; use **Providers** and **Models**. |
+| **Sub-agent delegation** | On **Subagents**: choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
+| **Sidecars** | A collapsed disclosure on the dashboard: choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
 | **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. |
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
-| **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |
+| **Codex autostart** | On **Startup**, inside the protection details: allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |
 | **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
-| **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. |
-| **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose v1/base/v2, and configure the v2 thread limit. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
+| **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list, and choose v1/base/v2 plus the v2 thread limit from the delegation section's **Advanced** disclosure. |
+| **Models** | Toggle native GPT and routed models, set provider allowlists and context caps. New-model policy, aliases, shadow-call intercept, and default window caps sit in a collapsed **Advanced** disclosure; per-provider extras (alias defaults, custom models, window caps) open from a ⋯ button on the provider header. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
 | **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
 | **Usage / Debug** | Inspect token-usage coverage and trends, or enable opt-in provider transport and usage-extraction diagnostics. |
 | **Storage** | Read-only CODEX_HOME disk breakdown (sessions, archives, DBs, attachments). Optional archived cleanup: preview the oldest N%, then quarantine to `CODEX_HOME/.trash` (default) or permanently delete behind an explicit checkbox. **Auto-cleanup policy** is opt-in and **default OFF** (`storageCleanupPolicy.enabled`); configure threshold/target/schedule/mode on the Storage page, or trigger **Run now**. Quarantined entries can be restored from the Storage page (JSONL + threads). Active sessions stay read-only. Cleanup and restore are refused while Codex holds the newest/active `state_*.sqlite` locked. |
@@ -57,11 +57,10 @@ the browser or password manager's decision.
 
 ### Linking to a section
 
-There is a single layout, so there is no layout switch to configure. Dashboard sections are
-addressable instead: `#dashboard` opens Overview, and `#dashboard/providers` and
-`#dashboard/models` open the other two. Reload, bookmark, and Back all keep the section you were
-on. **Logs** works the same way with `#logs` and `#logs/debug`. An older `#providers/workspace`
-bookmark now lands on `#providers`.
+There is a single layout, so there is no layout switch to configure. `#dashboard` is the overview;
+older `#dashboard/providers` and `#dashboard/models` bookmarks redirect to `#providers` and
+`#models`. Reload, bookmark, and Back all keep the page you were on. **Logs** has `#logs` and
+`#logs/debug`. An older `#providers/workspace` bookmark now lands on `#providers`.
 
 Cost values in **Logs** and **Usage** are API list-price equivalents calculated from reported tokens.
 They are not billing receipts or evidence of an actual charge; subscription usage or provider credits
@@ -73,7 +72,7 @@ The **Models** switches show final Codex visibility: a routed model is on only w
 
 ## Delegation picker vs spawn routing
 
-The Dashboard's **Sub-agent delegation** picker stores `injectionModel` and, optionally,
+The **Subagents** page's **Sub-agent delegation** picker stores `injectionModel` and, optionally,
 `injectionEffort`. **OpenCodex multi-agent guidance** independently controls the delegation
 instructions that use those values. On eligible v2 turns, that guidance tells the parent
 agent which exact model and reasoning effort to pass to `spawn_agent`; clearing the model also clears
@@ -173,7 +172,7 @@ visible fields, incomplete-coverage meaning, and routing boundary.
 
 ## Starring is yours to decide, not an agent's
 
-The sidebar's star button — and the one-time question `ocx start` asks in an interactive
+The star button in the update dialog (opened from the sidebar's update orb) — and the one-time question `ocx start` asks in an interactive
 terminal — goes through **your own `gh` login**. opencodex holds no GitHub token, and the
 only thing it learns is your yes or no.
 

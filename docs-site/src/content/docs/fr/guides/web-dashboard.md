@@ -40,18 +40,18 @@ gestionnaire de mots de passe.
 
 | Zone | Fonction |
 | --- | --- |
-| **Résumé du tableau de bord** | Mode multi-agent, état en ligne, version, durée de fonctionnement, nombre de fournisseurs, total de jetons sur 30 jours, fournisseurs actifs et modèles natifs/routés disponibles. |
-| **Délégation de sous-agent** | Choisissez un modèle natif ou routé et, facultativement, un effort de raisonnement partagés entre les consignes de délégation OpenCodex et l'option distincte de valeurs par défaut natives. Il ne s'agit pas d'un routeur par création de sous-agent côté proxy ; voir ci-dessous. |
-| **Services auxiliaires** | Choisissez le modèle et l'effort de recherche web, ainsi que le modèle de description visuelle. Les modifications s'appliquent à la requête suivante. |
+| **Résumé du tableau de bord** | État en ligne, version avec durée de fonctionnement, nombre de fournisseurs et total de jetons sur 30 jours, suivis de la barre de protection au redémarrage, de la synchronisation des modèles, d'une section **Services auxiliaires** repliée et de la pression mémoire. Les anciens onglets fournisseurs et modèles ont disparu ; utilisez **Fournisseurs** et **Modèles**. |
+| **Délégation de sous-agent** | Sur **Sous-agents** : choisissez un modèle natif ou routé et, facultativement, un effort de raisonnement partagés entre les consignes de délégation OpenCodex et l'option distincte de valeurs par défaut natives. Il ne s'agit pas d'un routeur par création de sous-agent côté proxy ; voir ci-dessous. |
+| **Services auxiliaires** | Section repliée du tableau de bord : choisissez le modèle et l'effort de recherche web, ainsi que le modèle de description visuelle. Les modifications s'appliquent à la requête suivante. |
 | **Maintenance** | Resynchronisez le catalogue de modèles Codex, examinez les avertissements de contournement par une configuration locale au projet, recherchez la dernière version stable ou préliminaire et lancez une mise à jour avec redémarrage facultatif du proxy. |
 | **Sécurité au démarrage** | Vérifiez si le routage Codex injecté résiste à un redémarrage, avec des états distincts pour le service et le lanceur intermédiaire, ainsi que les commandes de réparation exactes. |
 | **Zone de notification Windows** | Installez au niveau de l'utilisateur un contrôleur lancé à la connexion pour démarrer, arrêter ou redémarrer le proxy en un clic, ouvrir le tableau de bord et consulter l'état. Ce contrôleur n'est pas un service de redémarrage du proxy. |
-| **Démarrage automatique de Codex** | Autorisez un lanceur intermédiaire Codex déjà installé à exécuter `ocx ensure`. Ce commutateur n'installe ni lanceur ni service d'arrière-plan. |
+| **Démarrage automatique de Codex** | Sur **Démarrage**, dans les détails de protection : autorisez un lanceur intermédiaire Codex déjà installé à exécuter `ocx ensure`. Ce commutateur n'installe ni lanceur ni service d'arrière-plan. |
 | **Fournisseurs** | Ajoutez, modifiez, activez, désactivez ou supprimez des fournisseurs, définissez le fournisseur par défaut parmi ceux activés et gérez, lorsqu'ils sont pris en charge, les groupes de comptes OAuth et de clés API. Si le fournisseur par défaut actuel est supprimé, le premier fournisseur activé restant prend sa place ; s'il n'en reste aucun, la suppression est refusée et le fournisseur par défaut actuel est conservé. Les réglages d'un fournisseur peuvent désactiver la découverte dynamique pour les points de terminaison dont le catalogue `/models` est absent, lent ou trop volumineux. Pour les groupes OAuth Claude (Anthropic), chaque compte connecté affiche ses propres barres de limites sur 5 heures et une semaine — l'utilisation est propre à chaque identifiant. En cas d'échec d'une sonde, les dernières barres connues sont conservées et marquées indisponibles jusqu'à la prochaine actualisation réussie. |
 | **Ajouter un fournisseur** | Recherchez dans les préréglages du registre une connexion par compte, un service à clé API, un serveur local ou un point de terminaison personnalisé. |
 | **Authentification Codex** | Ajoutez des comptes ChatGPT/Codex au groupe, sélectionnez le compte de la prochaine session, actualisez les quotas sur 5 h, une semaine et 30 jours, activez ou désactivez le changement automatique selon les quotas, réglez son seuil de 1 à 100 % et configurez le basculement en cas de défaillance transitoire. |
-| **Sous-agents** | Mettez en avant jusqu'à cinq modèles natifs non qualifiés ou modèles routés avec espace de noms dans la liste des remplacements de `spawn_agent`. |
-| **Modèles** | Activez ou désactivez les modèles GPT natifs et routés, définissez les listes d'autorisation et les plafonds de contexte des fournisseurs, choisissez v1/base/v2 et configurez la limite de fils v2. Les fournisseurs configurés restent visibles sous forme de groupes sans modèle lorsque la découverte est désactivée ou ne renvoie aucune ligne. |
+| **Sous-agents** | Mettez en avant jusqu'à cinq modèles natifs non qualifiés ou modèles routés avec espace de noms dans la liste des remplacements de `spawn_agent`, et choisissez v1/base/v2 ainsi que la limite de fils v2 dans la section **Avancé** repliée de la délégation. |
+| **Modèles** | Activez ou désactivez les modèles GPT natifs et routés, définissez les listes d'autorisation et les plafonds de contexte des fournisseurs. La politique des nouveaux modèles, les alias, l'interception des appels fantômes et les plafonds de fenêtre par défaut se trouvent dans une section **Avancé** repliée ; les réglages supplémentaires par fournisseur (alias par défaut, modèles personnalisés, plafonds de fenêtre) s'ouvrent depuis le bouton ⋯ de l'en-tête du fournisseur. Les fournisseurs configurés restent visibles sous forme de groupes sans modèle lorsque la découverte est désactivée ou ne renvoie aucune ligne. |
 | **Journaux** | Actualisez automatiquement les requêtes récentes et consultez les jetons, l'effort demandé et, lorsqu'il est disponible, l'effort sortant effectif, le modèle résolu, le fournisseur, l'état, l'identifiant de requête, la durée et les détails de l'erreur. La vue détaillée inclut le champ exact de raisonnement transmis lorsque l'adaptateur en émet un. Filtrez par identifiant opaque de conversation ou de session — si le client en fournit un — afin d'obtenir le total des jetons et le coût estimé au tarif catalogue pour l'anneau de journaux actuellement chargé. |
 | **Utilisation / Débogage** | Examinez la couverture et les tendances d'utilisation des jetons, ou activez à la demande les diagnostics de transport et d'extraction de l'utilisation propres aux fournisseurs. |
 | **Stockage** | Consultez en lecture seule la répartition du disque de CODEX_HOME — sessions, archives, bases de données et pièces jointes. Pour le nettoyage facultatif des archives, prévisualisez les N % les plus anciennes, puis placez-les en quarantaine dans `CODEX_HOME/.trash` (par défaut) ou supprimez-les définitivement après avoir coché une case explicite. **La stratégie de nettoyage automatique** est facultative et **désactivée par défaut** (`storageCleanupPolicy.enabled`) ; configurez son seuil, sa cible, sa planification et son mode sur la page **Stockage**, ou lancez **Exécuter maintenant**. Les entrées mises en quarantaine peuvent être restaurées depuis cette page (JSONL et fils). Les sessions actives restent en lecture seule. Le nettoyage et la restauration sont refusés tant que Codex verrouille le fichier `state_*.sqlite` le plus récent ou actif. |
@@ -59,10 +59,10 @@ gestionnaire de mots de passe.
 
 ### Liens directs vers une section
 
-Il n'existe qu'une seule mise en page, donc aucun commutateur de disposition n'est à configurer. Les sections
-du tableau de bord possèdent plutôt leur propre adresse : `#dashboard` ouvre **Vue d'ensemble**, tandis que
-`#dashboard/providers` et `#dashboard/models` ouvrent les deux autres sections. Le rechargement, les favoris
-et le bouton **Précédent** conservent la section affichée. **Journaux** fonctionne de la même manière avec
+Il n'existe qu'une seule mise en page, donc aucun commutateur de disposition n'est à configurer.
+`#dashboard` ouvre **Vue d'ensemble** ; les anciens favoris `#dashboard/providers` et `#dashboard/models`
+redirigent vers `#providers` et `#models`. Le rechargement, les favoris
+et le bouton **Précédent** conservent la page affichée. **Journaux** fonctionne de la même manière avec
 `#logs` et `#logs/debug`. Un ancien favori `#providers/workspace` ouvre désormais `#providers`.
 
 Les coûts affichés dans **Journaux** et **Utilisation** sont des équivalents au tarif catalogue de l'API,
@@ -78,7 +78,7 @@ la liste d'autorisation du fournisseur afin que les modèles découverts ultéri
 
 ## Sélecteur de délégation et routage des créations de sous-agents
 
-Le sélecteur **Délégation de sous-agent** du tableau de bord enregistre `injectionModel` et, facultativement,
+Le sélecteur **Délégation de sous-agent** de la page **Sous-agents** enregistre `injectionModel` et, facultativement,
 `injectionEffort`. L'option **Consignes multi-agents OpenCodex** contrôle indépendamment les instructions de
 délégation qui emploient ces valeurs. Pendant les tours v2 admissibles, ces consignes indiquent à l'agent
 parent le modèle exact et l'effort de raisonnement à transmettre à `spawn_agent` ; effacer le modèle efface
@@ -139,7 +139,7 @@ pour les champs affichés, la signification d'une couverture incomplète et la l
 
 ## Mettre le dépôt en vedette relève de votre choix, pas de celui d'un agent
 
-Le bouton étoile de la barre latérale — et la question unique posée par `ocx start` dans un terminal
+Le bouton étoile de la boîte de dialogue de mise à jour (ouverte depuis le bouton de mise à jour de la barre latérale) — et la question unique posée par `ocx start` dans un terminal
 interactif — utilise **votre propre connexion `gh`**. opencodex ne détient aucun jeton GitHub et apprend
 uniquement votre réponse affirmative ou négative.
 

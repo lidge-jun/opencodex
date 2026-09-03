@@ -35,25 +35,25 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 
 | 區域 | 作用 |
 | --- | --- |
-| **Dashboard 摘要** | 顯示 multi-agent 模式、線上狀態、版本、運行時間、provider 數量、30 天 token 總量、活動 provider 和可用的原生/路由模型。 |
-| **Sub-agent delegation** | 為 v1 委派 prompt 選擇原生或路由模型，並可指定 reasoning 強度。它不是逐次生成的路由器，詳見下文。 |
-| **Sidecar** | 選擇 web-search 模型及強度，以及圖像描述模型；更改從下一次請求開始生效。 |
+| **Dashboard 摘要** | 顯示線上狀態、版本與運行時間、provider 數量和 30 天 token 總量，下方依序是重啟保護列、模型同步、摺疊的 **Sidecar** 區塊和記憶體壓力。舊的 provider/模型分頁已移除，請使用 **Providers** 和 **Models**。 |
+| **Sub-agent delegation** | 在 **Subagents** 頁面為 v1 委派 prompt 選擇原生或路由模型，並可指定 reasoning 強度。它不是逐次生成的路由器，詳見下文。 |
+| **Sidecar** | 在 Dashboard 的摺疊區塊中選擇 web-search 模型及強度，以及圖像描述模型；更改從下一次請求開始生效。 |
 | **Maintenance** | 重新同步 Codex 模型目錄，檢視專案級設定繞過警告，檢查 latest/preview 版本，並可在更新後重啟代理。 |
 | **啟動安全** | 顯示注入的 Codex 路由能否在重啟後繼續工作，並分別顯示服務、launcher shim 狀態和準確的修復命令。 |
 | **Windows 托盤** | 安裝使用者登入托盤，一鍵控制代理啟動、停止、重啟、面板和狀態。托盤不是代理重啟服務。 |
-| **Codex 自動啟動** | 允許已安裝的 Codex launcher shim 執行 `ocx ensure`。此開關不會安裝 shim 或後臺服務。 |
+| **Codex 自動啟動** | 在 **Startup** 頁面的保護狀態詳情中，允許已安裝的 Codex launcher shim 執行 `ocx ensure`。此開關不會安裝 shim 或後臺服務。 |
 | **Providers** | 新增、編輯、啟用/停用、刪除 provider，並在支援時管理 OAuth 帳號池和 API key 池。 |
 | **Add provider** | 搜尋 registry preset，選擇帳號登入、API key 服務、本機伺服器或自訂 endpoint。 |
 | **Codex Auth** | 新增 ChatGPT/Codex 池帳號，選擇下一 session 的帳號，重新整理 5h / 每週 / 30d 配額，啟用或停用配額自動切換，設定其 1–100% 閾值和臨時故障 failover。 |
-| **Subagents** | 在 `spawn_agent` override 列表中置頂最多五個原生或路由模型。 |
-| **Models** | 開關原生 GPT 與路由模型，設定 provider allowlist、上下文上限、v1/base/v2 以及 v2 thread 數量。 |
+| **Subagents** | 在 `spawn_agent` override 列表中置頂最多五個原生或路由模型，並在委派區塊的 **進階** 摺疊中選擇 v1/base/v2 和 v2 thread 數量。 |
+| **Models** | 開關原生 GPT 與路由模型，設定 provider allowlist 和上下文上限。新模型策略、別名、shadow-call 攔截和預設視窗上限位於摺疊的 **進階** 區塊；每個 provider 的附加設定（預設別名、自訂模型、視窗上限）透過 provider 標題上的 ⋯ 按鈕開啟。 |
 | **Logs** | 自動重新整理近期請求，顯示 token、請求強度、實際模型、provider、狀態、request id、耗時和錯誤詳情。 |
 | **Usage / Debug** | 檢視 token usage 覆蓋率與趨勢，或啟用可選的 provider transport 和 usage 提取診斷。 |
 | **Stop** | 優雅地停止代理和已安裝的後臺服務，恢復原生 Codex 並退出（`POST /api/stop`）。在使用工作排程器後端的 Windows 上，儀表板會拒絕並提示改用 `ocx stop`：工作結束後包裝程序仍可能重新啟動 Proxy，只有執行在 Proxy 之外的 stop 才能在還原用戶端設定前確認這個重啟視窗。被拒絕時不會做任何變更。 |
 
 ### 連結到某個部分
 
-佈局只有一種，無需切換。Dashboard 的各個部分都有自己的地址：`#dashboard` 開啟 Overview，`#dashboard/providers` 與 `#dashboard/models` 開啟另外兩個。重新整理、收藏和後退都會保留目前所在的部分。**Logs** 同理，使用 `#logs` 與 `#logs/debug`。舊的 `#providers/workspace` 書籤現在會跳轉到 `#providers`。
+佈局只有一種，無需切換。`#dashboard` 是 Overview；舊的 `#dashboard/providers` 與 `#dashboard/models` 書籤會跳轉到 `#providers` 和 `#models`。重新整理、收藏和後退都會保留目前所在的頁面。**Logs** 同理，使用 `#logs` 與 `#logs/debug`。舊的 `#providers/workspace` 書籤現在會跳轉到 `#providers`。
 
 **Logs** 和 **Usage** 中的費用是根據已報告 token 計算的 API 標價折算值，不是帳單，也不能證明
 實際發生了扣費；實際可能計入訂閱用量或消耗服務商額度。
@@ -64,7 +64,7 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 
 ## 委派選擇器與生成路由的區別
 
-Dashboard 的 **Sub-agent delegation** 選擇器會儲存 `injectionModel`，以及可選的
+**Subagents** 頁面的 **Sub-agent delegation** 選擇器會儲存 `injectionModel`，以及可選的
 `injectionEffort`。在 v1 turn 中，opencodex 會注入一段指引，告訴父代理呼叫 `spawn_agent` 時應
 傳入哪個精確模型和 reasoning 強度。只要選定模型，無論父代理目前使用何種 reasoning 強度，都會
 啟用這段指引；清除模型時也會清除已儲存的強度。
@@ -98,7 +98,7 @@ Dashboard 的 **Sub-agent delegation** 選擇器會儲存 `injectionModel`，以
 
 ## 星標是你的決定，不是 agent 的
 
-側邊欄的星標按鈕——以及 `ocx start` 在互動式終端機中詢問的一次性問題——都透過 **你自己的
+更新對話框（從側邊欄的更新按鈕開啟）中的星標按鈕——以及 `ocx start` 在互動式終端機中詢問的一次性問題——都透過 **你自己的
 `gh` 登入** 執行。opencodex 不持有任何 GitHub token，它唯一得知的是你的 yes 或 no。
 
 由於這會寫入你的 GitHub 帳號，agent 驅動的呼叫者會被拒絕，而不是被允許替你回答：

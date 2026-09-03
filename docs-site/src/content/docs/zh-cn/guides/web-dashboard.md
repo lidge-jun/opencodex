@@ -30,18 +30,18 @@ bun run dev:gui
 
 | 区域 | 作用 |
 | --- | --- |
-| **Dashboard 摘要** | 显示 multi-agent 模式、在线状态、版本、运行时间、provider 数量、30 天 token 总量、活动 provider 和可用的原生/路由模型。 |
-| **Sub-agent delegation** | 选择供 OpenCodex 委派指引与可选的 Codex 原生子代理默认值共用的原生/路由模型和可选 reasoning 强度。它不是逐次生成的路由器，详见下文。 |
-| **Sidecar** | 选择 web-search 模型及强度，以及图像描述模型；更改从下一次请求开始生效。 |
+| **Dashboard 摘要** | 显示在线状态、版本与运行时间、provider 数量和 30 天 token 总量，下方依次是重启保护栏、模型同步、折叠的 **Sidecar** 区块和内存压力。旧的 provider/模型标签页已移除，请使用 **Providers** 和 **Models**。 |
+| **Sub-agent delegation** | 在 **Subagents** 页面选择供 OpenCodex 委派指引与可选的 Codex 原生子代理默认值共用的原生/路由模型和可选 reasoning 强度。它不是逐次生成的路由器，详见下文。 |
+| **Sidecar** | 在 Dashboard 的折叠区块中选择 web-search 模型及强度，以及图像描述模型；更改从下一次请求开始生效。 |
 | **Maintenance** | 重新同步 Codex 模型目录，查看项目级配置绕过警告，检查 latest/preview 版本，并可在更新后重启代理。 |
 | **启动安全** | 显示注入的 Codex 路由能否在重启后继续工作，并分别显示服务、launcher shim 状态和准确的修复命令。 |
 | **Windows 托盘** | 安装用户登录托盘，一键控制代理启动、停止、重启、面板和状态。托盘不是代理重启服务。 |
-| **Codex 自动启动** | 允许已安装的 Codex launcher shim 运行 `ocx ensure`。此开关不会安装 shim 或后台服务。 |
+| **Codex 自动启动** | 在 **Startup** 页面的保护状态详情中，允许已安装的 Codex launcher shim 运行 `ocx ensure`。此开关不会安装 shim 或后台服务。 |
 | **Providers** | 添加、编辑、设为默认（仅已启用）、启用/禁用、删除 provider，并在支持时管理 OAuth 账号池和 API key 池。删除当前默认时，会切换到剩余的第一个已启用 provider（若存在）；否则拒绝删除并保留当前默认。Claude（Anthropic）OAuth 池中，每个已登录账号显示各自的 5 小时与周限额条（用量按凭证计）；探测失败时保留上次已知数值并标记为暂时不可用。 |
 | **Add provider** | 搜索 registry preset，选择账号登录、API key 服务、本地服务器或自定义 endpoint。 |
 | **Codex Auth** | 添加 ChatGPT/Codex 池账号，选择下一 session 的账号，刷新 5h / 每周 / 30d 配额，启用或停用配额自动切换，设置其 1–100% 阈值和临时故障 failover。 |
-| **Subagents** | 在 `spawn_agent` override 列表中置顶最多五个原生或路由模型。 |
-| **Models** | 开关原生 GPT 与路由模型，配置 provider allowlist、上下文上限、v1/base/v2 以及 v2 thread 数量。 |
+| **Subagents** | 在 `spawn_agent` override 列表中置顶最多五个原生或路由模型，并在委派区块的 **高级** 折叠中选择 v1/base/v2 和 v2 thread 数量。 |
+| **Models** | 开关原生 GPT 与路由模型，配置 provider allowlist 和上下文上限。新模型策略、别名、shadow-call 拦截和默认窗口上限位于折叠的 **高级** 区块；每个 provider 的附加设置（默认别名、自定义模型、窗口上限）通过 provider 标题上的 ⋯ 按钮打开。 |
 | **Logs** | 自动刷新近期请求，显示 token、请求强度以及（可用时）实际发送强度、实际模型、provider、状态、request id、耗时和错误详情。适配器发送 reasoning 参数时，详情中还会显示准确的 wire field。可按不透明会话/对话 ID（客户端提供时）筛选，并对当前已加载的 Logs 环形缓冲合计 token 与估算标价成本。 |
 | **Usage / Debug** | 查看 token usage 覆盖率与趋势，或启用可选的 provider transport 和 usage 提取诊断。 |
 | **Storage** | 只读查看 CODEX_HOME 磁盘占用（会话、归档、数据库、附件）。可选归档清理：预览最旧 N%，默认隔离到 `CODEX_HOME/.trash`，或勾选后永久删除。**自动清理策略**为可选且**默认关闭**（`storageCleanupPolicy.enabled`）；可在 Storage 页配置阈值/目标/计划/模式，或点「立即运行」。可在 Storage 页从隔离区恢复（JSONL + 线程）。活动会话保持只读。Codex 锁定最新/活动的 `state_*.sqlite` 时拒绝清理与恢复。 |
@@ -49,7 +49,7 @@ bun run dev:gui
 
 ### 链接到某个部分
 
-布局只有一种，无需切换。Dashboard 的各个部分都有自己的地址：`#dashboard` 打开 Overview，`#dashboard/providers` 与 `#dashboard/models` 打开另外两个。刷新、收藏和后退都会保留当前所在的部分。**Logs** 同理，使用 `#logs` 与 `#logs/debug`。旧的 `#providers/workspace` 书签现在会跳转到 `#providers`。
+布局只有一种，无需切换。`#dashboard` 是 Overview；旧的 `#dashboard/providers` 与 `#dashboard/models` 书签会跳转到 `#providers` 和 `#models`。刷新、收藏和后退都会保留当前所在的页面。**Logs** 同理，使用 `#logs` 与 `#logs/debug`。旧的 `#providers/workspace` 书签现在会跳转到 `#providers`。
 
 **Logs** 和 **Usage** 中的费用是根据已报告 token 计算的 API 标价折算值，不是账单，也不能证明
 实际发生了扣费；实际可能计入订阅用量或消耗服务商额度。
@@ -60,7 +60,7 @@ bun run dev:gui
 
 ## 委派选择器与生成路由的区别
 
-Dashboard 的 **Sub-agent delegation** 选择器会保存 `injectionModel`，以及可选的
+**Subagents** 页面的 **Sub-agent delegation** 选择器会保存 `injectionModel`，以及可选的
 `injectionEffort`。所选值会用于由 OpenCodex 编写的委派指引，而该指引由
 `multiAgentGuidanceEnabled` 单独控制。清除模型时也会清除已保存的强度，并关闭原生默认值同步。
 

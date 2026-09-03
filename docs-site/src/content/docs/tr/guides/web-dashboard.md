@@ -43,18 +43,18 @@ kararıdır.
 
 | Alan | Ne yapar |
 | --- | --- |
-| **Kontrol paneli özeti** | Çoklu ajan modu, çevrimiçi durum, sürüm, çalışma süresi, sağlayıcı sayısı, 30 günlük token toplamı, aktif sağlayıcılar ve kullanılabilir yerel/yönlendirilen modeller. |
-| **Alt ajan yetkilendirmesi** | OpenCodex yetkilendirme rehberliği ve ayrı yerel varsayılan katılımı tarafından paylaşılan yerel veya yönlendirilen bir model ve isteğe bağlı akıl yürütme çabası seçin. Bu, proxy tarafında spawn başına bir yönlendirici değildir; aşağıya bakın. |
-| **Sidecar'lar** | Web arama modelini ve çabasını artı vizyon açıklama modelini seçin. Değişiklikler bir sonraki istekte geçerli olur. |
+| **Kontrol paneli özeti** | Çevrimiçi durum, çalışma süresiyle birlikte sürüm, sağlayıcı sayısı ve 30 günlük token toplamı; ardından yeniden başlatma koruma çubuğu, model eşitleme, daraltılmış bir **Sidecar'lar** bölümü ve bellek baskısı gelir. Eski sağlayıcı ve model sekmeleri kaldırıldı; **Sağlayıcılar** ve **Modeller** sayfalarını kullanın. |
+| **Alt ajan yetkilendirmesi** | **Alt Ajanlar** sayfasında: OpenCodex yetkilendirme rehberliği ve ayrı yerel varsayılan katılımı tarafından paylaşılan yerel veya yönlendirilen bir model ve isteğe bağlı akıl yürütme çabası seçin. Bu, proxy tarafında spawn başına bir yönlendirici değildir; aşağıya bakın. |
+| **Sidecar'lar** | Kontrol panelinde daraltılmış bir bölüm: web arama modelini ve çabasını artı vizyon açıklama modelini seçin. Değişiklikler bir sonraki istekte geçerli olur. |
 | **Bakım** | Codex model kataloğunu yeniden senkronize edin, projeye özel yapılandırma atlama uyarılarını inceleyin, en son veya önizleme sürümünü kontrol edin ve isteğe bağlı proxy yeniden başlatmasıyla bir güncelleme çalıştırın. |
 | **Başlangıç güvenliği** | Ayrı servis ve başlatıcı dolgu sağlığı artı tam onarım komutlarıyla enjekte edilen Codex yönlendirmesinin yeniden başlatmada hayatta kalıp kalmadığını gösterin. |
 | **Windows sistem tepsisi** | Tek tıklamayla proxy başlatma, durdurma, yeniden başlatma, kontrol paneli erişimi ve durum için kullanıcı başına bir oturum açma tepsisi yükleyin. Tepsi bir kontrolördür, bir proxy yeniden başlatma servisi değildir. |
-| **Codex otomatik başlatma** | Zaten kurulu bir Codex başlatıcı dolgusunun `ocx ensure` çalıştırmasına izin verin. Bu anahtar bir dolgu veya arka plan servisi kurmaz. |
+| **Codex otomatik başlatma** | **Başlangıç** sayfasında, koruma ayrıntılarının içinde: zaten kurulu bir Codex başlatıcı dolgusunun `ocx ensure` çalıştırmasına izin verin. Bu anahtar bir dolgu veya arka plan servisi kurmaz. |
 | **Sağlayıcılar** | Sağlayıcıları ekleyin, düzenleyin, varsayılanı ayarlayın (yalnızca etkin sağlayıcılar), etkinleştirin/devre dışı bırakın ve kaldırın; desteklendiğinde OAuth hesap havuzlarını ve API anahtarı havuzlarını yönetin. Geçerli varsayılanı kaldırmak, bir tane varsa kalan ilk etkin sağlayıcıya geçer; aksi takdirde silme reddedilir ve geçerli varsayılan tutulur. Sağlayıcı Ayarları, eksik, yavaş veya aşırı büyük `/models` kataloglarına sahip uç noktalar için canlı model keşfini devre dışı bırakabilir. Claude (Anthropic) OAuth havuzları için oturum açmış her hesap kendi 5 saatlik ve haftalık hız sınırı çubuklarını gösterir (kullanım kimlik bilgisi başınadır); başarısız bir araştırma bilinen son çubukları tutar ve bir sonraki başarılı yenilemeye kadar bunları kullanılamaz olarak işaretler. |
 | **Sağlayıcı ekle** | Hesap girişi, API anahtarı hizmetleri, yerel sunucular veya özel bir uç nokta için kayıt defteri destekli önayarları arayın. |
 | **Codex Auth** | ChatGPT/Codex havuz hesapları ekleyin, sonraki oturum hesabını seçin, 5 saatlik / haftalık / 30 günlük kotaları yenileyin, kota otomatik geçişini etkinleştirin veya devre dışı bırakın, %1–100 eşiğini ayarlayın ve geçici arıza yük devretmesini yapılandırın. |
-| **Alt Ajanlar** | `spawn_agent` geçersiz kılma listesinde en fazla beş yalın yerel veya ad alanlı yönlendirilen modeli öne çıkarın. |
-| **Modeller** | Yerel GPT ve yönlendirilen modelleri açıp kapatın, sağlayıcı izin listelerini ve bağlam sınırlarını ayarlayın, v1/base/v2'yi seçin ve v2 iş parçacığı sınırını yapılandırın. Yapılandırılmış sağlayıcılar, keşif kapalı olduğunda veya hiçbir satır döndürmediğinde sıfır modelli gruplar olarak görünür kalır. |
+| **Alt Ajanlar** | `spawn_agent` geçersiz kılma listesinde en fazla beş yalın yerel veya ad alanlı yönlendirilen modeli öne çıkarın ve yetkilendirme bölümünün daraltılmış **Gelişmiş** kısmından v1/base/v2 ile v2 iş parçacığı sınırını seçin. |
+| **Modeller** | Yerel GPT ve yönlendirilen modelleri açıp kapatın, sağlayıcı izin listelerini ve bağlam sınırlarını ayarlayın. Yeni model politikası, takma adlar, gölge çağrı yakalama ve varsayılan pencere sınırları daraltılmış bir **Gelişmiş** bölümündedir; sağlayıcı başına ek ayarlar (varsayılan takma adlar, özel modeller, pencere sınırları) sağlayıcı başlığındaki ⋯ düğmesinden açılır. Yapılandırılmış sağlayıcılar, keşif kapalı olduğunda veya hiçbir satır döndürmediğinde sıfır modelli gruplar olarak görünür kalır. |
 | **Günlükler** | Belirteçler, talep edilen çaba ve (varsa) etkili giden çaba, çözümlenen model, sağlayıcı, durum, istek kimliği, süre ve hata ayrıntılarıyla son istekleri otomatik yenileyin. Ayrıntı görünümü, adaptör bir tane yaydığında tam akıl yürütme hat alanını içerir. Yüklenen Günlükler halkası için toplam belirteçleri ve tahmini liste fiyatı maliyetini görmek üzere donuk görüşme/oturum kimliğine göre (istemci bir tane gönderdiğinde) filtreleyin. |
 | **Kullanım / Hata Ayıklama** | Belirteç kullanımı kapsamını ve eğilimlerini inceleyin veya isteğe bağlı sağlayıcı aktarımı ve kullanım çıkarma tanılamalarını etkinleştirin. |
 | **Depolama** | Salt okunur CODEX_HOME disk dökümü (oturumlar, arşivler, DB'ler, ekler). İsteğe bağlı arşivlenmiş temizleme: en eski %N'yi önizleyin, ardından `CODEX_HOME/.trash` konumuna karantinaya alın (varsayılan) veya açık bir onay kutusu arkasında kalıcı olarak silin. **Otomatik temizleme politikası** isteğe bağlıdır ve **varsayılan olarak KAPALIDIR** (`storageCleanupPolicy.enabled`); Depolama sayfasında eşik/hedef/zamanlama/mod yapılandırın veya **Şimdi çalıştır (Run now)**'ı tetikleyin. Karantinaya alınan girdiler Depolama sayfasından geri yüklenebilir (JSONL + iş parçacıkları). Aktif oturumlar salt okunur kalır. Codex en yeni/aktif `state_*.sqlite` dosyasını kilitli tuttuğu sürece temizleme ve geri yükleme reddedilir. |
@@ -63,9 +63,9 @@ kararıdır.
 ### Bir bölüme bağlantı verme
 
 Tek bir düzen vardır, bu nedenle yapılandırılacak bir düzen anahtarı yoktur.
-Bunun yerine kontrol paneli bölümleri adreslenebilirdir: `#dashboard` Genel
-Bakış'ı açar, `#dashboard/providers` ve `#dashboard/models` diğer ikisini açar.
-Yeniden Yükle, yer imi ve Geri işlemlerinin tümü bulunduğunuz bölümü korur.
+`#dashboard` Genel Bakış'ı açar; eski `#dashboard/providers` ve `#dashboard/models`
+yer imleri `#providers` ve `#models` üzerine yönlendirilir.
+Yeniden Yükle, yer imi ve Geri işlemlerinin tümü bulunduğunuz sayfayı korur.
 **Günlükler** `#logs` ve `#logs/debug` ile aynı şekilde çalışır. Daha eski bir
 `#providers/workspace` yer imi artık `#providers` üzerine iner.
 
@@ -84,7 +84,7 @@ listesini temizler, böylece yeni keşfedilen modeller de açık olur.
 
 ## Yetkilendirme seçicisi ve spawn yönlendirmesi
 
-Kontrol Panelinin **Alt ajan yetkilendirmesi** seçicisi `injectionModel`'i ve
+**Alt Ajanlar** sayfasının **Alt ajan yetkilendirmesi** seçicisi `injectionModel`'i ve
 isteğe bağlı olarak `injectionEffort`'ı saklar. **OpenCodex çoklu ajan
 rehberliği**, bu değerleri kullanan yetkilendirme talimatlarını bağımsız olarak
 denetler. Uygun v2 turlarında bu rehberlik ana ajana `spawn_agent`'a hangi tam
@@ -196,7 +196,7 @@ bölümüne bakın.
 
 ## Yıldız vermek ajanın değil sizin kararınızdır
 
-Kenar çubuğunun yıldız düğmesi — ve etkileşimli bir terminalde `ocx start`'ın
+Güncelleme iletişim kutusundaki (kenar çubuğunun güncelleme düğmesinden açılır) yıldız düğmesi — ve etkileşimli bir terminalde `ocx start`'ın
 sorduğu tek seferlik soru — **kendi `gh` girişinizden** geçer. opencodex hiçbir
 GitHub belirteci tutmaz ve öğrendiği tek şey evet veya hayır cevabınızdır.
 
