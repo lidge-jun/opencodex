@@ -243,6 +243,15 @@ export type RunOptions = {
     }>
   >;
   /**
+   * Commit messages on the pull request branch, read by the carry-attribution
+   * assessor. The squash body is assembled from the description and these, so
+   * a `Co-authored-by` trailer can legitimately live in either.
+   *
+   * Defaults to one commit carrying the PR title, which is what a
+   * single-commit branch looks like.
+   */
+  commitMessages?: string[];
+  /**
    * GraphQL query fragments that should reject. Unlike `failOn: ["graphql"]`,
    * which fails the review-threads read, this lets a test fail a specific
    * mutation (e.g. `markPullRequestReadyForReview`) while the threads read
@@ -664,6 +673,8 @@ export async function runEnforcePrTarget(
     options.filePages ??
     (options.files && options.files.length > 0 ? [options.files] : [[]]);
   const listedFileCount = filePages.flat().length;
+  const commitMessages =
+    options.commitMessages ?? [String((options.pr as { title?: string })?.title ?? "")];
   const prInput = options.pr as Record<string, unknown>;
   if (Object.prototype.hasOwnProperty.call(prInput, "changed_files")) {
     (pr as Record<string, unknown>).changed_files = prInput.changed_files;
@@ -782,6 +793,14 @@ export async function runEnforcePrTarget(
       listFiles: (args: unknown) => {
         const page = Number((args as { page?: number })?.page ?? 1);
         return respond("pulls.listFiles", args, filePages[page - 1] ?? []);
+      },
+      listCommits: (args: unknown) => {
+        const page = Number((args as { page?: number })?.page ?? 1);
+        return respond(
+          "pulls.listCommits",
+          args,
+          page === 1 ? commitMessages.map(message => ({ commit: { message } })) : [],
+        );
       },
     },
     issues: {

@@ -901,6 +901,8 @@ describe("GitHub Actions hardening", () => {
     "require",
     "require",
     "require",
+    // pr-referenced-authors.cjs, for the carry-attribution assessor.
+    "require",
   ] as const;
 
   /** Reads every allowed-base PR performs before any enforcement writes. */
@@ -915,6 +917,9 @@ describe("GitHub Actions hardening", () => {
       "pulls.get",
       "pulls.listFiles",
       "pulls.get",
+      // The carry-attribution assessor reads the branch's commit messages: a
+      // Co-authored-by trailer can live in a commit rather than the body.
+      "pulls.listCommits",
       ...tail,
     ];
   }
@@ -930,6 +935,7 @@ describe("GitHub Actions hardening", () => {
       "pulls.get",
       "pulls.listFiles",
       "pulls.get",
+      "pulls.listCommits",
       ...tail,
     ];
   }
@@ -950,6 +956,8 @@ describe("GitHub Actions hardening", () => {
       "pulls.listFiles",
       "pulls.listFiles",
       "pulls.get",
+      "pulls.listCommits",
+      "pulls.listCommits",
       ...tail,
     ];
   }
@@ -1343,7 +1351,9 @@ describe("GitHub Actions hardening", () => {
           name !== "github.rest.repos.listPullRequestsAssociatedWithCommit" &&
           name !== "github.rest.issues.listEvents" &&
           // Hygiene reassessment reads the changed-file list; not a write.
-          name !== "github.rest.pulls.listFiles",
+          name !== "github.rest.pulls.listFiles" &&
+          // Carry attribution reads the branch's commit messages; not a write.
+          name !== "github.rest.pulls.listCommits",
       );
     expect([...new Set(restWrites)].sort()).toEqual([
       "github.rest.issues.addLabels",
@@ -5261,4 +5271,3 @@ describe("gui exhaustive-deps suppression stays scoped and effective", () => {
     expect(models).not.toContain("react-doctor-disable-next-line");
   });
 });
-

@@ -100,9 +100,10 @@ function trailerValues(...texts) {
 
 /**
  * A GitHub login is not a git identity. The scan behind CREDITS.md produced
- * eleven false positives from that assumption alone: the login terrytan95 never
- * appears in "Co-authored-by: Terry Tan <tmy1995hflc@gmail.com>". Match on any
- * of the three identifiers the referenced pull request actually carries.
+ * eleven false positives from that assumption alone: a login like "asmith92"
+ * does not appear anywhere in a trailer that reads "A. Smith <a@example.com>",
+ * even though they are the same person. Match on any of the three identifiers
+ * the referenced pull request actually carries.
  */
 function trailerNames(author, values) {
   if (!author) return true;
