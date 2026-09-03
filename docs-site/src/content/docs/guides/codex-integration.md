@@ -22,11 +22,22 @@ Codex's built-in `openai` provider id and points that provider at opencodex:
 model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # Auto-injected by opencodex
 openai_base_url = "http://127.0.0.1:10100/v1"
+# Auto-injected by opencodex
+experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"
 
 # only when fastMode is set; unset adds no [features] table
 [features]
 fast_mode = true
 ```
+
+The second key is the voice sideband override. Codex creates a WebRTC voice call through
+`openai_base_url`, but since codex 0.146 (openai/codex#35830) it joins that call's sideband
+WebSocket at `api.openai.com` directly unless `experimental_realtime_ws_base_url` redirects it. Through
+the proxy, the call is created under the Pool account opencodex selects, so a direct join under the
+app's own login fails with `realtime websocket handshake failed` (404). The injected key sends the
+join back through opencodex (`GET /v1/live/{callId}`), where the same Pool account is reused. It is
+written only on the loopback `openai_base_url` form, is removed together with it, and a user-owned
+`experimental_realtime_ws_base_url` is never overwritten.
 
 The injected `fast_mode` follows the tri-state `fastMode` setting: `true` writes `fast_mode = true`,
 `false` writes `fast_mode = false`, and unset leaves an existing `fast_mode` untouched without

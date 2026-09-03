@@ -275,6 +275,13 @@ The proxy normalizes the upstream join URL and then transparently relays text an
 both directions. Client protocol headers are preserved while upstream authentication remains
 proxy-owned.
 
+Call creation and the sideband join must run under the same OpenAI account, or the join is refused
+upstream (`404`). Both legs carry Codex's `session-id` and `thread-id` headers, and the Pool binds
+its account choice to that pair, so a join that reaches the proxy reuses the account that created
+the call. Codex only sends the join to the proxy when `experimental_realtime_ws_base_url` points at
+it; `ocx start` injects that key next to `openai_base_url` (see
+[Codex integration](/guides/codex-integration/)).
+
 ## `POST /v1/responses/compact`
 
 Compaction returns replacement history for clients that need to shorten a long Responses

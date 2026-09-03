@@ -224,6 +224,12 @@ call creation 이후 클라이언트는 다음의 지원되는 모든 inbound �
 프록시는 업스트림 join URL을 정규화한 뒤, 양방향 텍스트 및 바이너리 프레임을 투명하게 릴레이합니다. 업스트림
 인증은 프록시가 소유한 상태로 유지되며, 클라이언트 프로토콜 헤더는 보존됩니다.
 
+call creation과 sideband join은 같은 OpenAI 계정으로 이루어져야 하며, 그렇지 않으면 업스트림이 join을
+거부합니다(`404`). 두 요청 모두 Codex의 `session-id`와 `thread-id` 헤더를 실어 보내고 Pool은 계정 선택을
+그 쌍에 묶어 두므로, 프록시에 도착한 join은 통화를 만든 계정을 그대로 씁니다. Codex가 join을 프록시로 보내는
+것은 `experimental_realtime_ws_base_url`이 프록시를 가리킬 때뿐이며, `ocx start`가 이 키를
+`openai_base_url` 옆에 주입합니다([Codex 연동](/ko/guides/codex-integration/) 참고).
+
 ## `POST /v1/responses/compact`
 
 Compaction은 긴 Responses 대화를 줄여야 하는 클라이언트를 위해 대체 히스토리를 반환합니다.
