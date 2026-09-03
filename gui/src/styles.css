@@ -2369,6 +2369,9 @@ button.prov-account-row.active { cursor: default; }
     margin-inline: 18px;
     padding-inline: 0;
   }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .models-tab-panel--fill:not([hidden]) {
+    padding-inline: 0;
+  }
   /* settings rows: copy takes the full width, controls drop underneath */
   .setting-row { flex-wrap: wrap; }
   .setting-row .setting-copy { flex: 1 1 100% !important; }

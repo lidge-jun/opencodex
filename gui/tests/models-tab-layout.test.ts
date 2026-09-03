@@ -33,7 +33,8 @@ test("Models tab strips keep their full-bleed container borders aligned", async 
 
   const shellFreePanel = `${shellFreeContainer} > .models-tab-panel--fill:not([hidden])`;
   expect(effectiveDeclaration(baseStyles, shellFreePanel, "display")).toBe("block");
-  expect(effectiveDeclaration(baseStyles, shellFreePanel, "padding-inline")).toBe("36px");
+  expect(ruleBodies(baseStyles, shellFreePanel)[0]).toMatch(/padding-inline:\s*36px/);
+  expect(effectiveDeclaration(baseStyles, shellFreePanel, "padding-inline")).toBe("0");
 
   // Every Models workspace tab uses the same column width, including loading/error states
   // where the panel content itself may not have mounted yet.
