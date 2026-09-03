@@ -1,6 +1,13 @@
 # wp2 — Muse Code plan credential: CLOSED as a recorded negative
 
-**Outcome: `NOOP`. No code ships. No PR is opened.**
+> **Superseded by wp4 (`003`, `040`).** This close was correct on the evidence available
+> and its reasoning is not retracted: proving a credential works is not the same as being
+> allowed to use it. What changed is who decides. The repository owner completed the login
+> and payment on his own account and asked for this to ship behind a warning — a user
+> spending his own ToS risk, not an agent spending it for him. Read this doc as the
+> record of why an agent would not have shipped it unprompted.
+
+**Outcome at the time: `NOOP`. No code shipped from this phase.**
 
 This phase existed to answer whether a Muse Code subscription can drive opencodex. It
 can be answered without building anything, and the answer is no.

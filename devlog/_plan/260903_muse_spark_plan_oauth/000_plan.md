@@ -2,19 +2,20 @@
 
 - Date: 2026-09-03
 - Session: `01a064b2-91b5-7272-b9ef-4db66bb46921`
-- Work class: C3 — a new provider registry entry, a published-spec effort ladder, catalog metadata, and a plan-credential feasibility verdict.
-- Status: A (wp0, docs-only roadmap cycle; three audit rounds folded).
+- Work class: **C4** — wp4 raised it: a live credential read, an OAuth flow, a GUI consent gate, a privacy-scan rule, and billing metadata now move together.
+- Status: **A (wp4)**. wp0 closed; wp1 merged as `ff1ac6b8c` (#3321); wp2 closed `NOOP` and is superseded (see below); wp4 in audit.
 
 ## Loop spec
 
-- Archetype: satisfy-spec integration, with one genuinely open question (wp2) that resolved to a recorded negative rather than code.
+- Archetype: satisfy-spec integration. wp2's open question resolved to a recorded negative, then reopened under owner authorization as wp4.
 - Trigger: the user asked whether Meta's Muse Spark *plan* can be attached, after `878f75417` landed Muse Spark 1.3 through the Command Code and OpenCode Zen resellers.
-- Goal: reach Muse Spark **directly** on Meta's own endpoint, and settle — with evidence, not inference — whether a Muse Code subscription can legitimately drive a local proxy.
-- Non-goals: issuing a Meta API key, entering payment details, touching generated metadata, changing any `*-free` Zen id, retiring or redefaulting any model, altering the merged 1.3 work.
+- Goal: reach Muse Spark **directly** on Meta's own endpoint (wp1, done), and — under explicit owner authorization — reuse the Muse Code CLI credential behind a high-risk ToS warning (wp4).
+- Non-goals: touching generated metadata, changing any `*-free` Zen id, retiring or redefaulting any model, altering the merged 1.3 work, wiring Meta's session-bound console GraphQL, and the passive quota cache (that is wp5).
+- Authorization boundary: **wp1 issued no key and entered no billing detail.** wp4 exists only because the repository owner completed the Muse Code login and payment on his own account and instructed that it ship with a warning. No agent-initiated credential or billing action is in scope.
 - Verifier: the canonical gate in `030` — focused `bun test` on the touched suites, `bun run test:changed`, `bun x tsc --noEmit`, `bun run privacy:scan`, and the `docs-site` frozen-lockfile install plus build. **The repository-wide local suite is forbidden by standing user instruction**; exact-head GitHub CI is the authoritative gate.
-- Stop condition: every work-phase closed and the single implementation PR green on its exact head SHA and merged into `dev`.
+- Stop condition: every work-phase closed, and each of the three implementation PRs — wp1 (merged), wp4, wp5 — green on its exact head SHA and merged into `dev`.
 - Memory artifact: this unit folder.
-- Terminal outcomes: wp1 targets `DONE`; wp2 closed `NOOP` on a licence finding. `BLOCKED` remains available if CI or branch protection refuses for an unrelated reason.
+- Terminal outcomes: wp1 `DONE` (merged). wp2 `NOOP`, superseded by wp4. wp4 and wp5 target `DONE`. `BLOCKED` remains available if CI or branch protection refuses for an unrelated reason.
 - Escalation: each A gate dispatches one independent read-only reviewer on `gpt-5.6-sol` at high effort. Two failed correction loops on the same packet stops the phase and reports.
 
 ## Revision after the A-gate audit (round 1: FAIL, 8 blockers)
@@ -79,13 +80,34 @@ So the provider is `adapter: "openai-responses"`, not `openai-chat`. Registering
 | Phase | Doc | Delivers | PR |
 |---|---|---|---|
 | wp0 | this folder + `001`, `002` | claim ledger, feasibility research, diff-level decade docs | — |
-| wp1 | `010_wp1_direct_provider.md` | `meta-model` key provider, ladder + wire map, parity/pricing/docs updates, behavior tests | PR 1, base `dev` |
-| wp2 | `020_wp2_device_oauth.md` | **CLOSED, `NOOP`** — recorded negative, no code | none |
+| wp1 | `010_wp1_direct_provider.md` | `meta-model` key provider, ladder + wire map, parity/pricing/docs updates, behavior tests | PR 1 — **merged** as `ff1ac6b8c` (#3321) |
+| wp2 | `020_wp2_device_oauth.md` | closed `NOOP` on the evidence available at the time | none |
+| wp4 | `003` + `040_wp4_muse_oauth_provider.md` | `meta-muse` OAuth provider, import-only, behind the high-risk ToS warning | PR 2, base `dev` |
+| wp5 | `050_wp5_passive_muse_quota.md` | passive subscription-quota cache from the `response.subscription_usage` SSE event | PR 3, base `dev`, after wp4 |
 
-**One PR, no stack (`DEV-STACK-01`).** The first draft stacked wp2 on wp1 over a string
-wp1 introduced; that string is folded into wp1, and wp2 now ships no code at all. Round
-2 also caught that a "second independent PR" would still have consumed wp1's
-module-private constants — so there was never a clean independence claim to make.
+## wp4: the owner reopened wp2, and that is a different act
+
+`020` closed on the reasoning that proving a credential works is not the same as being
+allowed to use it. **That reasoning is not withdrawn.** Its reopen conditions listed only
+first-party vendor changes because they were written for the case where an *agent* would
+be making the call.
+
+The repository owner has since completed the Muse Code login and the payment setup on his
+own account and asked for this to ship with a warning. A user spending his own ToS risk
+deliberately is not the same act as an agent spending it unilaterally, and opencodex
+already models exactly that distinction — `gui/src/oauth-tos-risk.ts` carries
+`anthropic` and `google-antigravity` in `HIGH_RISK` for the same reason.
+
+Measurements that became possible only after that login are in `003`. Two of them changed
+the design: the OAuth `access_token` 401s while a sibling `api_key` works, so the
+provider ships a static key rather than a refresh loop; and Meta reports subscription
+window usage only as an SSE event on streaming turns, so no on-demand quota probe is
+possible — reading it needs a passive cache, which is wp5.
+
+**Independent PRs, no stack (`DEV-STACK-01`).** wp1 merged as `ff1ac6b8c`. wp4 and wp5
+follow as separate PRs off `dev`: wp5 depends on wp4 in time (it needs the provider to
+exist) but not in diff — it touches the streaming path and the quota cache, files wp4
+never opens — so stacking would impose a false merge order rather than aid review.
 `030` is delivery procedure, not a work-phase.
 
 ## Why wp2 closed instead of shipping
@@ -110,10 +132,12 @@ in wp1's note.
 
 - `src/providers/registry.ts` — one new entry plus its effort/window/modality constants and wire map
 - `tests/provider-registry-parity.test.ts` — the hardcoded key-provider roster
-- `src/usage/expected-prices.ts` + `tests/usage-cost.test.ts` — two price rows and the pinned count (64 → 66)
+- `src/usage/expected-prices.ts` + `tests/usage-cost.test.ts` — two `meta-model` rows in wp1 (64 → 66) and two `meta-muse` rows in wp4 (66 → 68)
 - `docs-site/` English provider table (`src/AGENTS.md:29` requires it)
 - `tests/` — a focused suite beside the existing provider tests
-- `src/oauth/` — **nothing.** wp2 closed as a negative; no OAuth code ships.
+- `src/oauth/` — `meta-muse.ts` (NEW) and one `OAUTH_PROVIDERS` entry, in wp4 only.
+- `gui/src/oauth-tos-risk.ts` + `gui/src/pages/Providers.tsx` — the high-risk warning and its reauth path (wp4).
+- `scripts/privacy-scan.ts` — a detector for the measured `LLM|` key shape (wp4).
 - `devlog/_plan/260903_muse_spark_plan_oauth/`
 
 ### OUT
@@ -128,7 +152,9 @@ in wp1's note.
 
 1. `c1` — this unit carries 000-range research plus a diff-level decade doc per implementation phase.
 2. `c2` — every registry fact traces to a published vendor statement in `001`.
-3. `c3` — no API key is issued and no billing detail is entered.
-4. `c4` — the plan-credential question is answered by working wiring or a recorded negative with the blocking evidence. **Met by `020`'s negative.**
+3. `c3` (wp1 only) — no API key is issued and no billing detail is entered by the agent; wp4 runs under the owner’s own completed login and payment, per the authorization boundary above.
+4. `c4` — the plan-credential question is answered by working wiring or a recorded negative with the blocking evidence. Met first by `020`'s negative; **re-answered by wp4** as working wiring under owner authorization.
 5. `c5` — `tsc` exits 0, focused tests pass, the full local suite is never run.
 6. `c6` — the implementation PR green at its exact head SHA and merged into `dev`.
+7. `c7` (wp4) — the `meta-muse` login imports the CLI credential, every GUI login path is gated behind the high-risk warning, both models resolve a price, and no credential value reaches a log, error, status object, or the repository.
+8. `c8` (wp5) — the `response.subscription_usage` event is parsed through `normalizePercent`/`normalizeResetAt`, cached under the account that actually served the turn, and displayed with its observation time; no path issues an inference call to refresh a quota.
