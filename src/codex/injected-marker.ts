@@ -15,6 +15,20 @@ export function isRootOpenaiBaseUrlLine(line: string): boolean {
   return /^\s*openai_base_url\s*=/.test(line);
 }
 
+/**
+ * codex-rs root key that redirects the realtime sideband WebSocket (WebRTC voice
+ * join + standalone realtime WS) without touching ordinary provider HTTP. Since
+ * openai/codex 438c9e98d (#35830) the sideband ignores the provider base URL and
+ * dials `https://api.openai.com/v1` unless this key is set, so a Pool-routed
+ * call-create and a directly-joined sideband end up on different accounts (404).
+ * Injected next to `openai_base_url` with the same value.
+ */
+export const REALTIME_WS_BASE_URL_KEY = "experimental_realtime_ws_base_url";
+
+export function isRootRealtimeWsBaseUrlLine(line: string): boolean {
+  return /^\s*experimental_realtime_ws_base_url\s*=/.test(line);
+}
+
 export function tomlStringPattern(key: string): RegExp {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const keyToken = `(?:${escaped}|"${escaped}"|'${escaped}')`;
@@ -65,16 +79,28 @@ export function providerTableString(content: string, provider: string, key: stri
  * EXACT value match against what we recorded writing: a user gateway we never wrote
  * cannot match, so restore can never delete a URL that was not ours.
  */
-export function stripJournaledOpenaiBaseUrl(content: string, injectedUrl: string | null): string {
-  if (!injectedUrl) return content;
+export function stripJournaledOpenaiBaseUrl(
+  content: string,
+  injectedUrl: string | null,
+  injectedRealtimeWsUrl: string | null = null,
+): string {
+  if (!injectedUrl && !injectedRealtimeWsUrl) return content;
   const lines = content.split(String.fromCharCode(10));
   const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
   const drop = new Set<number>();
   for (let i = 0; i < rootEnd; i++) {
     const line = lines[i]!;
-    if (!isRootOpenaiBaseUrlLine(line)) continue;
-    if (rootTomlString(line, "openai_base_url") !== injectedUrl) continue;
+    // Each key is matched against ITS OWN recorded value. The realtime override is
+    // journaled separately so a user-owned override that happens to equal the proxy
+    // URL is never mistaken for ours.
+    if (isRootOpenaiBaseUrlLine(line)) {
+      if (!injectedUrl || rootTomlString(line, "openai_base_url") !== injectedUrl) continue;
+    } else if (isRootRealtimeWsBaseUrlLine(line)) {
+      if (!injectedRealtimeWsUrl || rootTomlString(line, REALTIME_WS_BASE_URL_KEY) !== injectedRealtimeWsUrl) continue;
+    } else {
+      continue;
+    }
     drop.add(i);
     // Take an ownership marker directly above it too, so repeated cycles cannot
     // accumulate orphaned comments.

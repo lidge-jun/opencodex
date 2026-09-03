@@ -7,11 +7,13 @@ import {
   chooseCatalogPathForInjection,
   dominantEol,
   setRootOpenaiBaseUrl,
+  setRootRealtimeWsBaseUrl,
   stripInjectedOpenaiBaseUrl,
   stripOpencodexConfig,
   stripRootContextWindowOverrides,
   standaloneCodexRoutingTarget,
 } from "../src/codex/inject";
+import { stripJournaledOpenaiBaseUrl } from "../src/codex/injected-marker";
 import {
   MANAGED_AGENTS_TABLE_MARKER,
   MANAGED_SUBAGENT_DEFAULT_MARKER,
@@ -375,6 +377,91 @@ describe("Design B openai_base_url injection", () => {
 
     const userOwned = 'openai_base_url = "https://my-own-gateway.example/v1"\n\n[features]\n';
     expect(stripInjectedOpenaiBaseUrl(userOwned)).toBe(userOwned);
+  });
+
+  describe("realtime sideband override (experimental_realtime_ws_base_url)", () => {
+    const loopback = { baseUrl: "http://127.0.0.1:10100/v1", requiresAdmissionToken: false, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" } as const;
+    const base = 'model = "gpt-5.5"\n\n[features]\nfast_mode = true\n';
+
+    test("is written directly under the marker-owned openai_base_url with the same value (one marker owns both)", () => {
+      const routed = setRootOpenaiBaseUrl(base, loopback).content;
+      const { content, keptUserRealtimeWsBaseUrl } = setRootRealtimeWsBaseUrl(routed, loopback);
+      expect(keptUserRealtimeWsBaseUrl).toBe(false);
+      const lines = content.split("\n");
+      const routing = lines.indexOf('openai_base_url = "http://127.0.0.1:10100/v1"');
+      expect(routing).toBeGreaterThan(0);
+      expect(lines[routing - 1]).toContain("Auto-injected by opencodex");
+      expect(lines[routing + 1]).toBe('experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"');
+      expect(lines.indexOf("[features]")).toBeGreaterThan(routing + 1);
+      expect(content.match(/Auto-injected by opencodex/g)?.length).toBe(1);
+    });
+
+    test("re-inject is idempotent and follows a port change", () => {
+      const first = setRootRealtimeWsBaseUrl(setRootOpenaiBaseUrl(base, loopback).content, loopback).content;
+      const again = setRootRealtimeWsBaseUrl(first, loopback).content;
+      expect(again).toBe(first);
+      const moved = { ...loopback, baseUrl: "http://127.0.0.1:10190/v1" };
+      const second = setRootRealtimeWsBaseUrl(first, moved).content;
+      expect(second.match(/experimental_realtime_ws_base_url/g)?.length).toBe(1);
+      expect(second).toContain('experimental_realtime_ws_base_url = "http://127.0.0.1:10190/v1"');
+    });
+
+    test("keeps a user's own experimental_realtime_ws_base_url and injects nothing", () => {
+      const original = 'experimental_realtime_ws_base_url = "https://realtime.example/v1"\n\n[features]\n';
+      const { content, keptUserRealtimeWsBaseUrl } = setRootRealtimeWsBaseUrl(original, loopback);
+      expect(keptUserRealtimeWsBaseUrl).toBe(true);
+      expect(content).toBe(original);
+      // A user-owned key elsewhere at the root is also kept when a marker block exists.
+      const routed = setRootOpenaiBaseUrl(`${original}`, loopback).content;
+      const withRouted = setRootRealtimeWsBaseUrl(routed, loopback);
+      expect(withRouted.keptUserRealtimeWsBaseUrl).toBe(true);
+      expect(withRouted.content).toBe(routed);
+    });
+
+    test("without a marker-owned openai_base_url nothing is written", () => {
+      const { content } = setRootRealtimeWsBaseUrl(base, loopback);
+      expect(content).toBe(base);
+    });
+
+    test("strip removes both marker-owned keys and leaves the user's own override", () => {
+      const injected = setRootRealtimeWsBaseUrl(setRootOpenaiBaseUrl(base, loopback).content, loopback).content;
+      const stripped = stripInjectedOpenaiBaseUrl(injected);
+      expect(stripped).not.toContain("openai_base_url");
+      expect(stripped).not.toContain("experimental_realtime_ws_base_url");
+      expect(stripped).not.toContain("Auto-injected by opencodex");
+      expect(stripped).toContain("[features]");
+
+      const userOwned = 'experimental_realtime_ws_base_url = "https://realtime.example/v1"\n\n[features]\n';
+      expect(stripInjectedOpenaiBaseUrl(userOwned)).toBe(userOwned);
+    });
+
+    test("stripOpencodexConfig drops the sideband override together with the routing override", () => {
+      const injected = setRootRealtimeWsBaseUrl(setRootOpenaiBaseUrl(base, loopback).content, loopback).content;
+      const stripped = stripOpencodexConfig(injected);
+      expect(stripped).not.toContain("experimental_realtime_ws_base_url");
+      expect(stripped).not.toContain("openai_base_url");
+      expect(stripped).toContain("[features]");
+    });
+
+    test("an app-reserialized config (comments dropped) is still recognized by journaled value", () => {
+      // #1798: the Codex app rewrites config.toml keeping values and dropping comments.
+      const rewritten = [
+        'openai_base_url = "http://127.0.0.1:10100/v1"',
+        'experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"',
+        'model = "gpt-5.5"',
+        "",
+      ].join("\n");
+      const stripped = stripJournaledOpenaiBaseUrl(rewritten, "http://127.0.0.1:10100/v1", "http://127.0.0.1:10100/v1");
+      expect(stripped).toBe('model = "gpt-5.5"\n');
+      // A different value is not ours and must survive.
+      const foreign = 'experimental_realtime_ws_base_url = "https://realtime.example/v1"\nmodel = "gpt-5.5"\n';
+      expect(stripJournaledOpenaiBaseUrl(foreign, "http://127.0.0.1:10100/v1", "http://127.0.0.1:10100/v1")).toBe(foreign);
+      // A user-owned override that happens to EQUAL the proxy URL is not ours either when the
+      // journal recorded that we preserved it (null) — the realtime key has its own evidence.
+      expect(stripJournaledOpenaiBaseUrl(rewritten, "http://127.0.0.1:10100/v1", null)).toBe(
+        'experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"\nmodel = "gpt-5.5"\n',
+      );
+    });
   });
 
   test("stripOpencodexConfig removes the Design B form including routed root models", () => {

@@ -178,6 +178,93 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(second.match(/openai_base_url/g)?.length).toBe(1);
     expect(second.match(/Auto-injected by opencodex/g)?.length).toBe(1);
     expect(second).toBe(first);
+    // Voice sideband override rides along with the routing override (#35830 regression).
+    expect(second.match(/experimental_realtime_ws_base_url/g)?.length).toBe(1);
+    expect(second).toContain('experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"');
+  });
+
+  describe("realtime sideband override (openai/codex #35830 regression)", () => {
+    const proxyUrl = "http://127.0.0.1:10100/v1";
+
+    test("inject writes it under the marker block, journals it, and restore removes both keys", () => {
+      writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+      expect(runInject(codexHome, ocxHome).status).toBe(0);
+      const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+      expect(config).toContain(`# Auto-injected by opencodex\nopenai_base_url = "${proxyUrl}"\nexperimental_realtime_ws_base_url = "${proxyUrl}"`);
+      const journal = JSON.parse(readFileSync(join(codexHome, "opencodex-journal.json"), "utf8"));
+      expect(journal.injectedOpenaiBaseUrl).toBe(proxyUrl);
+      expect(journal.injectedRealtimeWsBaseUrl).toBe(proxyUrl);
+
+      expect(runRestore(codexHome, ocxHome).status).toBe(0);
+      const restored = readFileSync(join(codexHome, "config.toml"), "utf8");
+      expect(restored).not.toContain("openai_base_url");
+      expect(restored).not.toContain("experimental_realtime_ws_base_url");
+      expect(restored).toContain('model = "gpt-5.5"');
+    });
+
+    test("a user-owned override survives injection and restore, even when it equals the proxy URL", () => {
+      const original = [
+        `experimental_realtime_ws_base_url = "${proxyUrl}"`,
+        'model = "gpt-5.5"',
+        "",
+      ].join("\n");
+      writeFileSync(join(codexHome, "config.toml"), original, "utf8");
+      expect(runInject(codexHome, ocxHome).status).toBe(0);
+      const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+      expect(config).toContain(`openai_base_url = "${proxyUrl}"`);
+      expect(config.match(/experimental_realtime_ws_base_url/g)?.length).toBe(1);
+      const journal = JSON.parse(readFileSync(join(codexHome, "opencodex-journal.json"), "utf8"));
+      expect(journal.injectedOpenaiBaseUrl).toBe(proxyUrl);
+      expect(journal.injectedRealtimeWsBaseUrl).toBeNull();
+
+      // Simulate the Codex app reserializing config.toml (values kept, comments dropped) so
+      // restore has to rely on journaled value evidence: the routing URL is ours, the
+      // realtime override is not, even though the two strings are identical.
+      const rewritten = readFileSync(join(codexHome, "config.toml"), "utf8")
+        .split("\n").filter(line => !line.startsWith("#")).join("\n");
+      writeFileSync(join(codexHome, "config.toml"), rewritten, "utf8");
+      expect(runRestore(codexHome, ocxHome).status).toBe(0);
+      const restored = readFileSync(join(codexHome, "config.toml"), "utf8");
+      expect(restored).not.toContain("openai_base_url");
+      expect(restored).toContain(`experimental_realtime_ws_base_url = "${proxyUrl}"`);
+    });
+
+    test("an app-reserialized routed config is not mistaken for the user's native baseline on re-inject", () => {
+      writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+      expect(runInject(codexHome, ocxHome).status).toBe(0);
+      const journalPath = join(codexHome, "opencodex-journal.json");
+      const firstSnapshot = JSON.parse(readFileSync(journalPath, "utf8")).originalConfig;
+
+      const rewritten = readFileSync(join(codexHome, "config.toml"), "utf8")
+        .split("\n").filter(line => !line.startsWith("#")).join("\n");
+      writeFileSync(join(codexHome, "config.toml"), rewritten, "utf8");
+      expect(runInject(codexHome, ocxHome).status).toBe(0);
+      expect(JSON.parse(readFileSync(journalPath, "utf8")).originalConfig).toBe(firstSnapshot);
+      const config = readFileSync(join(codexHome, "config.toml"), "utf8");
+      expect(config.match(/openai_base_url/g)?.length).toBe(1);
+      expect(config.match(/experimental_realtime_ws_base_url/g)?.length).toBe(1);
+
+      expect(runRestore(codexHome, ocxHome).status).toBe(0);
+      expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe('model = "gpt-5.5"\n');
+    });
+
+    test("a user-owned openai_base_url means no realtime override is injected either", () => {
+      const original = 'openai_base_url = "https://my-own-gateway.example/v1"\nmodel = "gpt-5.5"\n';
+      writeFileSync(join(codexHome, "config.toml"), original, "utf8");
+      expect(runInject(codexHome, ocxHome).status).toBe(0);
+      expect(readFileSync(join(codexHome, "config.toml"), "utf8")).not.toContain("experimental_realtime_ws_base_url");
+    });
+
+    test("provider-table forms (non-loopback admission, authless Desktop) do not write it", () => {
+      writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+      expect(runInject(codexHome, ocxHome, JSON.stringify({ hostname: "192.168.1.20" })).status).toBe(0);
+      expect(readFileSync(join(codexHome, "config.toml"), "utf8")).not.toContain("experimental_realtime_ws_base_url");
+      expect(runRestore(codexHome, ocxHome).status).toBe(0);
+
+      writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
+      expect(runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true })).status).toBe(0);
+      expect(readFileSync(join(codexHome, "config.toml"), "utf8")).not.toContain("experimental_realtime_ws_base_url");
+    });
   });
 
   test.each([
