@@ -396,4 +396,12 @@ export interface OcxUsage {
   cacheCreationInputTokens?: number;
   reasoningOutputTokens?: number;
   estimated?: boolean;
+  /**
+   * The raw upstream usage object for Responses-shaped upstreams (openai/codex#41980 parity):
+   * codex-rs preserves the complete `response.usage` object through its own pipeline, so fields
+   * the proxy does not model (subscription metadata, future counters) must survive the bridged /
+   * rebuilt `response.completed` too. Accounting paths read only the canonical fields above; the
+   * wire rebuild merges this object's unknown keys back under the normalized values.
+   */
+  rawUsage?: Record<string, unknown>;
 }

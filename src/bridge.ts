@@ -59,6 +59,10 @@ function sseEvent(name: string, data: Record<string, unknown>): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
   // input_tokens_details / output_tokens_details are ALWAYS emitted (zero defaults):
   // strict Responses clients deserialize them as required fields — grok-build's pinned
@@ -80,7 +84,20 @@ function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
   const inputTokens = usage.contextTotalTokens !== undefined
     ? Math.max(0, usage.contextTotalTokens - usage.outputTokens)
     : usage.inputTokens;
+  // openai/codex#41980 parity: unknown upstream usage fields (subscription metadata, future
+  // counters) pass through the rebuild. Normalized values stay authoritative for the known
+  // keys (they are derived from the same raw values, so this never disagrees with upstream).
+  const raw: Record<string, unknown> = usage.rawUsage ?? {};
+  const rawInputDetails = isRecord(raw.input_tokens_details)
+    ? raw.input_tokens_details as Record<string, unknown>
+    : {} as Record<string, unknown>;
+  const rawOutputDetails = isRecord(raw.output_tokens_details)
+    ? raw.output_tokens_details as Record<string, unknown>
+    : {} as Record<string, unknown>;
   const out: Record<string, unknown> = {
+    ...Object.fromEntries(Object.entries(raw).filter(([key]) =>
+      key !== "input_tokens" && key !== "output_tokens" && key !== "total_tokens"
+      && key !== "input_tokens_details" && key !== "output_tokens_details")),
     input_tokens: inputTokens,
     output_tokens: usage.outputTokens,
     total_tokens: usage.contextTotalTokens !== undefined
@@ -90,18 +107,19 @@ function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
   // cached_tokens carries cache READS only, matching OpenAI semantics, and is always present
   // (zero default) for strict clients. Clamp to inputTokens so a provider's absolute
   // checkpoint can never report more cache reads than input.
-  const inputDetails: Record<string, number> = {
+  const inputDetails: Record<string, unknown> = {
+    ...rawInputDetails,
     cached_tokens: Math.min(usage.cachedInputTokens ?? 0, inputTokens),
   };
   if (usage.cacheCreationInputTokens !== undefined) {
-    const cacheRead = inputDetails.cached_tokens ?? 0;
+    const cacheRead = typeof inputDetails.cached_tokens === "number" ? inputDetails.cached_tokens : 0;
     inputDetails.cache_write_tokens = Math.min(
       usage.cacheCreationInputTokens,
       Math.max(0, inputTokens - cacheRead),
     );
   }
   out.input_tokens_details = inputDetails;
-  out.output_tokens_details = { reasoning_tokens: usage.reasoningOutputTokens ?? 0 };
+  out.output_tokens_details = { ...rawOutputDetails, reasoning_tokens: usage.reasoningOutputTokens ?? 0 };
   return out;
 }
 
