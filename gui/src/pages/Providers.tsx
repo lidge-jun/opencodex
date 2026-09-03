@@ -43,7 +43,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
   const [codexLoginOpen, setCodexLoginOpen] = useState(false);
   const [modelsRefreshToken, setModelsRefreshToken] = useState(0);
-  const [oauthTosPending, setOauthTosPending] = useState<{ provider: string; addAccount: boolean } | null>(null);
+  // `accountId` rides along so acknowledging the warning continues the SAME operation.
+  // Without it, a reauth that reached the modal would resume as a plain login and target
+  // the active account instead of the one the user clicked.
+  const [oauthTosPending, setOauthTosPending] = useState<
+    { provider: string; addAccount: boolean; accountId?: string } | null
+  >(null);
   /** Bumped after OAuth login so ProviderDetails switches to the Accounts tab. */
   const [accountsFocus, setAccountsFocus] = useState<{ token: number; provider: string | null }>({
     token: 0,
@@ -227,13 +232,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     refreshCodexAccount: () => codexPool.load(true),
   });
 
-  const requestLoginOAuth = (provider: string, addAccount = false) => {
+  /**
+   * The single warning-aware entry point for every OAuth login.
+   *
+   * Reauthentication used to call `loginOAuth` directly, so a user who had already logged
+   * in could refresh a high-risk credential without ever seeing the ToS modal — the map
+   * gated the first login and nothing after it.
+   */
+  const requestLoginOAuth = (provider: string, addAccount = false, accountId?: string) => {
     if (busy === provider) return;
     if (oauthTosRisk(provider)) {
-      setOauthTosPending({ provider, addAccount });
+      setOauthTosPending({ provider, addAccount, ...(accountId ? { accountId } : {}) });
       return;
     }
-    void loginOAuth(provider, addAccount);
+    void loginOAuth(provider, addAccount, accountId);
   };
 
   if (!config) {
@@ -367,7 +379,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               onLogin: requestLoginOAuth,
               onCancelLogin: cancelLoginOAuth,
               onLogout: logoutOAuth,
-              onReauth: (provider, accountId) => loginOAuth(provider, true, accountId),
+              onReauth: (provider, accountId) => requestLoginOAuth(provider, true, accountId),
               onSwitchAccount: switchAccount,
               onRemoveAccount: removeAccount,
               onRetryAccounts: async provider => { await fetchAccountSets([provider]); },
@@ -441,7 +453,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           const pending = oauthTosPending;
           if (!pending) return;
           setOauthTosPending(null);
-          void loginOAuth(pending.provider, pending.addAccount);
+          void loginOAuth(pending.provider, pending.addAccount, pending.accountId);
         }}
       />
     </>

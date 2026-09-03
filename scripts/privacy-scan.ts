@@ -184,8 +184,14 @@ function addFindingsForPattern(
   }
 }
 
-function scanFile(file: string): Finding[] {
-  const text = readFileSync(file, "utf-8");
+/**
+ * Scan already-read text.
+ *
+ * Split out of `scanFile` so a test can exercise the REAL detectors. This module runs its
+ * scan on import, so a test that cannot call a function ends up re-declaring the patterns
+ * instead — and then stays green even if a detector here is deleted.
+ */
+export function scanText(file: string, text: string): Finding[] {
   const findings: Finding[] = [];
   addFindingsForPattern(
     findings,
@@ -221,7 +227,24 @@ function scanFile(file: string): Finding[] {
     /\b(?:sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9_]{20,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,})\b/g,
     match => isAllowedTokenLooking(file, match[0]),
   );
+  /*
+   * Meta Model API keys. The pattern above does not match them: the measured shape is
+   * `LLM|<16 digits>|<27 chars>`, verified against a real key's grammar (never its value).
+   * The `meta-muse` provider imports one of these, so a leak has to be detectable here.
+   */
+  addFindingsForPattern(
+    findings,
+    file,
+    text,
+    "meta-api-key",
+    /\bLLM\|\d+\|[A-Za-z0-9_-]{10,}\b/g,
+    match => isAllowedTokenLooking(file, match[0]),
+  );
   return findings;
+}
+
+function scanFile(file: string): Finding[] {
+  return scanText(file, readFileSync(file, "utf-8"));
 }
 
 const findings = gitLsFiles()

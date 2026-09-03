@@ -297,8 +297,8 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 66 keys, including canonical Fable 5.1, Opus 5 and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(66);
+  test("16. shipped overlay membership: 68 keys, including canonical Fable 5.1, Opus 5 and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(68);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -322,6 +322,10 @@ describe("resolveMatchedPrice", () => {
       // source for the direct Meta provider.
       "meta-model/muse-spark-1.3",
       "meta-model/muse-spark-1.3-contributor",
+      // meta-muse reaches the same endpoint with the CLI credential; overlays resolve by
+      // exact provider id, so it needs its own rows or its cost column stays empty.
+      "meta-muse/muse-spark-1.3",
+      "meta-muse/muse-spark-1.3-contributor",
       "google-antigravity/gemini-3.8-flash-high",
       "google/gemini-3.8-flash",
       "google-antigravity/gemini-3.1-pro-low",

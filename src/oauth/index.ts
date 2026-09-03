@@ -39,6 +39,7 @@ import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
+import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
@@ -227,6 +228,16 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: refreshKimiToken,
     providerConfig: oauthConfig("kimi"),
     defaultModel: oauthDefaultModel("kimi"),
+  },
+  "meta-muse": {
+    login: ctrl => loginMetaMuse(ctrl),
+    refresh: refreshMetaMuseToken,
+    providerConfig: oauthConfig("meta-muse"),
+    defaultModel: oauthDefaultModel("meta-muse"),
+    // Static API key that Meta scopes to its own CLI. Never generate unattended traffic
+    // on it — same posture as anthropic, for the same reason: the vendor restricts use
+    // outside its own client, so every exchange stays attributable to a user action.
+    defaultRefreshPolicy: "disabled",
   },
   nous: {
     // Nous Portal device-grant login (RFC 8628) against portal.nousresearch.com.

@@ -9,6 +9,9 @@ describe("oauth ToS risk map", () => {
   test("flags high-risk subscription OAuth providers", () => {
     expect(oauthTosRisk("anthropic")).toBe("high");
     expect(oauthTosRisk("google-antigravity")).toBe("high");
+    // Meta restricts the Muse Code credential to its own CLI in writing, which is the
+    // documented difference between "high" and "elevated".
+    expect(oauthTosRisk("meta-muse")).toBe("high");
     expect(oauthTosRisk("Anthropic")).toBe("high");
     expect(oauthTosRisk("  anthropic  ")).toBe("high");
   });
@@ -22,6 +25,8 @@ describe("oauth ToS risk map", () => {
     expect(oauthTosRisk("xai")).toBeNull();
     expect(oauthTosRisk("kimi")).toBeNull();
     expect(oauthTosRisk("kiro")).toBeNull();
+    // The supported Meta path: the user's own key on a documented endpoint.
+    expect(oauthTosRisk("meta-model")).toBeNull();
     expect(oauthTosRisk("")).toBeNull();
     expect(oauthTosRisk("   ")).toBeNull();
   });
