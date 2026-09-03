@@ -192,11 +192,12 @@ export default function ProviderOverviewDashboard({
           )}
         </section>
 
-        <details
+        <section
           className="pws-dashboard-section pws-dashboard-section--recent"
           aria-label={t("pws.dashboard.recentlyUsed")}
           aria-busy={usageLoading || undefined}
         >
+        <details className="pws-dashboard-recent-details">
           <summary className="pws-dashboard-section-title">{t("pws.dashboard.recentlyUsed")}</summary>
           {mostUsed.length > 0 ? (
             <div className="pws-dashboard-rows">
@@ -230,6 +231,7 @@ export default function ProviderOverviewDashboard({
             <p className="muted pws-dashboard-empty">{t("pws.dashboard.noUsage")}</p>
           )}
         </details>
+        </section>
       </div>
     </div>
   );

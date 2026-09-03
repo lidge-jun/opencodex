@@ -16,7 +16,9 @@ const routing = read("../src/pages/RoutingProfiles.tsx");
 describe("page polish", () => {
   test("Providers: no overview subtitle; recent-usage folds into a details", () => {
     expect(providers).not.toContain('{t("pws.dashboard.subtitle")}');
-    expect(providers).toContain('<details\n          className="pws-dashboard-section pws-dashboard-section--recent"');
+    // The section landmark (aria-label, aria-busy) stays; the details sits inside it.
+    expect(providers).toContain('<section\n          className="pws-dashboard-section pws-dashboard-section--recent"\n          aria-label={t("pws.dashboard.recentlyUsed")}');
+    expect(providers).toContain('<details className="pws-dashboard-recent-details">');
     expect(providers).toContain('<summary className="pws-dashboard-section-title">{t("pws.dashboard.recentlyUsed")}</summary>');
   });
 
@@ -40,6 +42,8 @@ describe("page polish", () => {
     const inside = delegation.slice(at, delegation.indexOf("</details>", at));
     expect(inside).toContain('{t("dash.multiAgentGuidance")}');
     expect(inside).toContain('{t("sub.ultraMode")}');
+    // The v1/base/v2 surface switch (moved here in 030) is policy too and sits inside.
+    expect(inside).toContain('role="radiogroup" aria-label={t("models.v2Label")}');
     // The two daily decisions stay above the disclosure.
     expect(delegation.indexOf('{t("sub.delegation.model")}')).toBeLessThan(at);
     expect(delegation.indexOf('{t("dash.syncCodexSubagentDefaults")}')).toBeLessThan(at);
@@ -50,7 +54,10 @@ describe("page polish", () => {
   });
 
   test("Routing: dry-run only with a draft; analytics only with profiles", () => {
-    expect(routing).toContain("{draft && (\n      <div className=\"panel\"");
+    // Gate on a SELECTED existing profile: startCreate() also makes a draft, and a disabled
+    // dry-run form during creation is exactly the dead weight this removes.
+    expect(routing).toContain("{selected && (\n      <div className=\"panel\"");
+    expect(routing).not.toContain("{draft && (\n      <div className=\"panel\"");
     expect(routing).toContain("{profiles.length > 0 && (\n      <div className=\"panel\"");
   });
 });
