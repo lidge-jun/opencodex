@@ -169,7 +169,7 @@ commit and add exact-lookup assertions for both ids.
 
 ## NEW `tests/meta-model-api-provider.test.ts`
 
-Seven assertions, each pinning a ledger row that a future edit could silently break:
+Seven tests, each pinning a ledger row that a future edit could silently break:
 
 ```ts
 import { describe, expect, test } from "bun:test";

@@ -453,8 +453,9 @@ Two things worth knowing before you pick it. **A Muse Code subscription does not
 here:** Meta scopes that credential to the Muse Code CLI and bills any other key
 pay-as-you-go. And the Contributor tier is cheap because Meta trains on your prompts —
 roughly 92% off input, 95% off output, and 99% off cached input — so keep confidential
-material off it. The same models are also reachable through the `command-code` and
-`opencode-go` presets.
+material off it. Muse Spark is also reachable through resellers, with a narrower roster:
+`command-code` carries both tiers, while `opencode-go` serves only
+`muse-spark-1.3-contributor`.
 
 **Command Code quota.** The dashboard and `ocx account refresh` probe Command Code's
 `/alpha/billing/credits` windows (5-hour and weekly) on the canonical
