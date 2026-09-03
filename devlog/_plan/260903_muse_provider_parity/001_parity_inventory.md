@@ -59,6 +59,20 @@ when `hasHeadroomEvidence` is false) and quota-aware cooldown. wp1 arms both as 
 effect — worth knowing, because it means wp1 changes routing behaviour for a user with
 two Muse accounts, not only a display.
 
+**That side effect carries the unit's one Critical finding.** `headroomOf`
+(`account-quota-rank.ts:36`) reads `getCachedProviderAccountQuota`, which applies no
+staleness check (`quota.ts:1489` returns `entry.quota` without consulting `entry.ts`).
+Every existing caller is safe by construction — a row exists only because a probe wrote
+it, and `fetchAccountQuota` re-probes past `ACCOUNT_QUOTA_TTL_MS` (`quota.ts:1602`) — so
+freshness is an invariant of the probe path rather than a property of the cache.
+
+A passive row is the first row in this system that no probe refreshes. Feeding one to a
+routing decision would make the proxy confidently prefer an account whose measurement is
+arbitrarily old. wp1 therefore bounds the ROUTING read at one hour
+(`010` §`account-quota-rank.ts`) while leaving the DISPLAY read unbounded, because wp2
+shows the age and a human can discount it. Same number, two consumers, different
+obligations.
+
 ## C. The real gaps
 
 | # | Surface | Gap | Evidence | Disposition |

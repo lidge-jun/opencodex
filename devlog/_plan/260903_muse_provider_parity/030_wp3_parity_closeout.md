@@ -111,6 +111,16 @@ selection order to change. `001` §B and `003` §F establish the soundness: the 
 limits are per team, but subscription windows are per subscription, so two Muse accounts
 carry genuinely different headroom.
 
+It is desirable **only within the staleness bound wp1 adds**. Unbounded, it is the
+opposite: a routing preference computed from a days-old observation is worse than no
+preference, because the unranked ring at least rotates. wp1 caps the routing read at one
+hour and returns "no evidence" beyond it, which degrades to today's behaviour rather than
+to a different wrong answer (`010`, `001` §B).
+
+wp3's PR description must therefore describe the routing change **and** its bound. A
+reviewer told only "quota now steers account selection" would reasonably object; the
+bound is what makes the claim defensible.
+
 ## Verification
 
 ```bash
