@@ -23,6 +23,18 @@ test("Models tab strips keep their full-bleed container borders aligned", async 
     "padding-inline",
   )).toBe("0");
 
+  // Loading, empty, and error fallbacks do not render the workspace shell. Keep those
+  // shell-free states boxed instead of allowing the full-bleed Combos container to stretch
+  // their notice and retry controls edge to edge.
+  const shellFreeContainer = ".main-inner.main-inner--combos:not(:has(.combos-workspace-shell))";
+  expect(effectiveDeclaration(baseStyles, shellFreeContainer, "max-width")).toBe("1200px");
+  expect(effectiveDeclaration(baseStyles, shellFreeContainer, "margin")).toBe("0 auto");
+  expect(effectiveDeclaration(baseStyles, shellFreeContainer, "padding")).toBe("32px 0 64px");
+
+  const shellFreePanel = `${shellFreeContainer} > .models-tab-panel--fill:not([hidden])`;
+  expect(effectiveDeclaration(baseStyles, shellFreePanel, "display")).toBe("block");
+  expect(effectiveDeclaration(baseStyles, shellFreePanel, "padding-inline")).toBe("36px");
+
   // Every Models workspace tab uses the same column width, including loading/error states
   // where the panel content itself may not have mounted yet.
   for (const selector of [
