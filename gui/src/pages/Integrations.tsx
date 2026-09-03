@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { navigateHash, normalizeHashPath } from "../hash-routing";
 import { useT } from "../i18n/shared";
+import { useDataSurface } from "../data-surface";
 import ClientMark from "../components/ClientMark";
 import { INTEGRATION_MARKS } from "../components/integration-marks";
 import ApiKeys from "./ApiKeys";
@@ -12,6 +13,7 @@ import FileIntegrationPage, {
   type FileIntegrationClientId,
 } from "./integrations/FileIntegrationPage";
 import { FILE_CLIENTS, TABS, type IntegrationTab } from "./integrations/integration-tabs";
+import { loadIntegrationStates, type IntegrationStatus } from "./integrations/integration-api";
 
 function readIntegrationTab(hash = window.location.hash): IntegrationTab {
   const raw = normalizeHashPath(hash);
@@ -55,6 +57,35 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
   const [machineClients, setMachineClients] = useState<string[]>([]);
   const [machineSyncing, setMachineSyncing] = useState(false);
   if (tabRefs.current === null) tabRefs.current = new Map();
+
+  /*
+   * Eighteen tabs, most of them clients that are not installed on this machine, is the
+   * page's largest noise source. Tabs for uninstalled file clients hide behind one
+   * "more" button; everything the operator can actually act on stays in the strip.
+   * The state comes from the same keyed resource the overview reads, so this is not a
+   * second fetch. Until it settles every tab is primary — a strip must never flash-hide.
+   */
+  const fetchStates = useCallback(
+    async (signal: AbortSignal) => (await loadIntegrationStates(apiBase, signal)).clients,
+    [apiBase],
+  );
+  const statesResource = useDataSurface<IntegrationStatus[]>(
+    `integration-states:${apiBase}`,
+    [apiBase],
+    fetchStates,
+    { isEmpty: rows => rows.length === 0, sessionCacheKey: `ocx.integrations.states.v1:${apiBase}` },
+  );
+  const statesSettled = statesResource.state.kind !== "cold" && statesResource.state.kind !== "retrying-cold";
+  const installedFileClients = new Set((statesResource.state.data ?? []).filter(c => c.installed).map(c => c.clientId));
+  const isSecondary = (id: IntegrationTab) =>
+    statesSettled && FILE_CLIENTS.has(id as FileIntegrationClientId) && !installedFileClients.has(id as FileIntegrationClientId);
+  const secondaryCount = TABS.filter(d => isSecondary(d.id)).length;
+  const [moreOpen, setMoreOpen] = useState(false);
+  const tablistId = useId();
+  // The selected tab can never be hidden: a deep link to an uninstalled client opens the
+  // overflow, and the button is disabled while such a tab is selected.
+  const selectedIsSecondary = isSecondary(tab);
+  const showSecondary = moreOpen || selectedIsSecondary;
 
   useEffect(() => {
     if (!connected) return;
@@ -115,12 +146,16 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const index = TABS.findIndex(candidate => candidate.id === tab);
-    let nextIndex: number | null = null;
-    if (event.key === "ArrowLeft") nextIndex = (index - 1 + TABS.length) % TABS.length;
-    else if (event.key === "ArrowRight") nextIndex = (index + 1) % TABS.length;
-    else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = TABS.length - 1;
-    if (nextIndex === null) return;
+    // Arrows walk the VISIBLE tabs only; a hidden tab is not a stop.
+    const visible = TABS.map((d, i) => ({ d, i })).filter(({ d }) => showSecondary || !isSecondary(d.id));
+    const pos = visible.findIndex(({ i }) => i === index);
+    let nextPos: number | null = null;
+    if (event.key === "ArrowLeft") nextPos = (pos - 1 + visible.length) % visible.length;
+    else if (event.key === "ArrowRight") nextPos = (pos + 1) % visible.length;
+    else if (event.key === "Home") nextPos = 0;
+    else if (event.key === "End") nextPos = visible.length - 1;
+    if (nextPos === null) return;
+    const nextIndex = visible[nextPos]!.i;
     event.preventDefault();
     selectTab(TABS[nextIndex].id, true);
   };
@@ -130,7 +165,6 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
       <div className="page-head">
         <h2>{t("nav.integrations")}</h2>
       </div>
-      <p className="page-sub">{t("integrations.subtitle")}</p>
       {connected && (
         <section className="notice" aria-label={t("connection.clients.title")}>
           <strong>{t("connection.clients.title")}</strong>
@@ -139,7 +173,7 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
         </section>
       )}
 
-      <div className="page-tabs" role="tablist" aria-label={t("integrations.tabsLabel")}>
+      <div className="page-tabs" role="tablist" aria-label={t("integrations.tabsLabel")} id={tablistId}>
         {TABS.map(definition => (
           <button
             key={definition.id}
@@ -154,6 +188,7 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
             aria-controls={panelDomId(definition.id)}
             tabIndex={tab === definition.id ? 0 : -1}
             className={`page-tab${tab === definition.id ? " page-tab--active" : ""}`}
+            hidden={!showSecondary && isSecondary(definition.id)}
             onClick={() => selectTab(definition.id, true)}
             onKeyDown={handleTabKeyDown}
           >
@@ -163,6 +198,18 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
             {t(definition.labelKey)}
           </button>
         ))}
+        {secondaryCount > 0 && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm page-tabs-more"
+            aria-expanded={showSecondary}
+            aria-controls={tablistId}
+            disabled={selectedIsSecondary}
+            onClick={() => setMoreOpen(open => !open)}
+          >
+            {t(showSecondary ? "integrations.fewerClients" : "integrations.moreClients", { count: secondaryCount })}
+          </button>
+        )}
       </div>
 
       {TABS.map(definition => {

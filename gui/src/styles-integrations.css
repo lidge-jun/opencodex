@@ -23,6 +23,14 @@
    the floor in `min()` keeps the two-column intent on wide screens while letting a
    narrow one fall back to the width it actually has. */
 .integration-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 12px; list-style: none; padding: 0; margin: 14px 0; }
+/* Uninstalled clients fold behind one disclosure below the grid; the "more" button in the tab
+   strip is a plain button outside the tab semantics (aria-expanded on the tablist). */
+.integration-cards-more { margin: 4px 0 14px; }
+.integration-cards-more > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; }
+.integration-cards-more > summary::-webkit-details-marker { display: none; }
+.integration-cards-more > summary::before { content: ""; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform var(--motion-fast); }
+.integration-cards-more[open] > summary::before { transform: rotate(90deg); }
+.page-tabs .page-tabs-more { align-self: center; margin-left: 4px; }
 /*
   One full-width row, not a wide card: no grid cell, no hover border, no
   stretched title. `flex-wrap` is what keeps long German/Russian action copy

@@ -1082,3 +1082,79 @@ test("the tab strip marks every client tab and leaves the two non-client tabs ba
   // covers the app and SDK too.
   expect(codexTab.textContent).toBe("Codex");
 });
+
+/*
+ * devlog/_plan/260904_dashboard_minimal/040_integrations.md: tabs for uninstalled file
+ * clients hide behind one "more" button outside the tablist; a deep link to such a
+ * client still opens (and pins) it. Overview cards for uninstalled clients fold under
+ * a disclosure; the "last change" summary cell is gone (the rollback list has it).
+ */
+async function mountIntegrationsPage(): Promise<void> {
+  const [{ createRoot }, { LanguageProvider }, { default: Integrations }] = await Promise.all([
+    import("react-dom/client"),
+    import("../src/i18n/provider"),
+    import("../src/pages/Integrations"),
+  ]);
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><Integrations apiBase={apiBase} /></LanguageProvider>);
+  });
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 30)); });
+}
+
+test("uninstalled file-client tabs hide behind a more-button; a deep link keeps its tab visible and pins the button", async () => {
+  // Only hermes is installed; every other file client is absent.
+  stateResponse = () => json({ clients: [status({ clientId: "hermes", installed: true, state: "current" })] });
+  testWindow.location.hash = "#integrations";
+  await mountIntegrationsPage();
+
+  const tabs = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+  const visible = (id: string) => !tabs.find(t => t.id.endsWith(`-${id}`))?.hidden;
+  expect(visible("overview")).toBe(true);
+  expect(visible("hermes")).toBe(true);
+  expect(visible("omp")).toBe(false);
+  const more = container.querySelector<HTMLButtonElement>(".page-tabs-more")!;
+  expect(more).not.toBeNull();
+  expect(more.getAttribute("aria-expanded")).toBe("false");
+  expect(more.disabled).toBe(false);
+
+  await act(async () => { more.click(); });
+  expect(visible("omp")).toBe(true);
+  expect(more.getAttribute("aria-expanded")).toBe("true");
+  await act(async () => { more.click(); });
+  expect(visible("omp")).toBe(false);
+
+  // Deep link to an uninstalled client: the tab is shown and the button cannot hide it.
+  await act(async () => { root!.unmount(); });
+  root = null;
+  testWindow.location.hash = "#integrations/omp";
+  await mountIntegrationsPage();
+  const tabs2 = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+  const omp = tabs2.find(t => t.id.endsWith("-omp"))!;
+  expect(omp.hidden).toBe(false);
+  expect(omp.getAttribute("aria-selected")).toBe("true");
+  expect(container.querySelector<HTMLButtonElement>(".page-tabs-more")!.disabled).toBe(true);
+});
+
+test("overview folds uninstalled client cards under a disclosure and drops the last-change cell", async () => {
+  stateResponse = () => json({ clients: [
+    status({ clientId: "hermes", installed: true, state: "current" }),
+    status({ clientId: "omp", installed: false, state: "absent", configPath: "/tmp/home/.omp/agent/models.yml" }),
+    status({ clientId: "pi", installed: false, state: "absent", configPath: "/tmp/home/.pi/agent/models.json" }),
+  ] });
+  await mountOverview();
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 30)); });
+
+  const details = container.querySelector<HTMLDetailsElement>("details.integration-cards-more");
+  expect(details).not.toBeNull();
+  expect(details!.open).toBe(false);
+  expect(details!.querySelector("summary")!.textContent).toContain("2");
+  // The installed client is in the primary grid, not inside the disclosure.
+  const primary = container.querySelector("ul.integration-cards")!;
+  expect(primary.closest("details")).toBeNull();
+  expect(primary.textContent).toContain("Hermes");
+  expect(details!.textContent).toContain("OMP");
+  // No "last change" summary cell.
+  expect([...container.querySelectorAll(".integration-summary-label")].map(e => e.textContent))
+    .not.toContain("Last change");
+});
