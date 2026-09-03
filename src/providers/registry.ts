@@ -435,6 +435,32 @@ const OPENAI_API_GPT56_VIRTUAL_MODELS: Record<string, { wireModelId: string; rea
   "gpt-5.6-luna-pro": { wireModelId: "gpt-5.6-luna", reasoningMode: "pro" },
 };
 const OPENAI_API_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+/*
+ * Meta Model API (https://api.meta.ai/v1) — published ladder, deliberately NOT the
+ * house set. dev.meta.ai/docs/reasoning lists "none", "minimal", "low", "medium",
+ * "high", "xhigh" and then excludes "none" for this family: "not supported by Muse
+ * Spark and returns HTTP 400". "max" and "ultra" are absent from the vendor's list
+ * entirely, so appending one by family resemblance would invent a wire value.
+ *
+ * Corroborated on a second surface: an unauthenticated OpenCode Zen probe of
+ * muse-spark-1.3-contributor-free (2026-09-03) accepted minimal..xhigh, rejected
+ * max/ultra with `unknown variant`, and rejected none with "does not support none
+ * with this model".
+ */
+const META_MUSE_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh"];
+/*
+ * Identity wire map. `requestToCodexEffort` (src/reasoning-effort.ts) rewrites
+ * `minimal` to `low` unless a model-scoped wire map says otherwise, so without this
+ * the picker would advertise an effort the wire never sends — and a registry-array
+ * assertion would pass while the request body was wrong. Identity because Meta's
+ * values ARE the Codex names.
+ */
+const META_MUSE_REASONING_EFFORT_MAP: Record<string, string> = Object.fromEntries(
+  META_MUSE_REASONING_EFFORTS.map(effort => [effort, effort]),
+);
+/** Both Muse Spark 1.3 tiers publish a 1,048,576-token window (dev.meta.ai/docs/models). */
+const META_MUSE_CONTEXT_WINDOW = 1_048_576;
+const META_MUSE_MODELS = ["muse-spark-1.3", "muse-spark-1.3-contributor"];
 /**
  * Daybreak program aliases. These `-latest` ids are the stable contract: OpenAI repoints
  * them at newer snapshots over time (red -> gpt-5.6-cyber, blue -> gpt-5.6-sol as of
@@ -1447,6 +1473,44 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       ...OPENAI_DAYBREAK_REASONING_EFFORTS,
     },
     virtualModels: OPENAI_API_GPT56_VIRTUAL_MODELS,
+  },
+  /* [Decision Log]
+  - 목적과 의도: Reach Meta's Muse Spark models directly on Meta's own Model API, instead of only through the Command Code and OpenCode Zen resellers already in this registry.
+  - 기존 구현 및 제약 조건: Meta publishes both POST /v1/responses and POST /v1/chat/completions at https://api.meta.ai/v1, and no API key was issued for this change — every value here comes from the published spec (devlog/_plan/260903_muse_spark_plan_oauth/001).
+  - 검토한 주요 대안: register as openai-chat; use provider id "meta"; enable live discovery; wire the Muse Code subscription credential as OAuth.
+  - 선택한 방식: an openai-responses key provider under the id "meta-model", with a static two-model roster and no OAuth.
+  - 다른 대안 대신 이 방식을 선택한 이유: Meta calls Responses "the recommended default for new work ... OpenAI-compatible and exposes the full feature set", carrying reasoning replay and native input_image that Chat would forfeit. The id is "meta-model" because "meta" would capture the LIVE Command Code selector meta/muse-spark-1.3 at router.ts's provider-prefix branch, and would derive META_API_KEY — the Muse Code CLI's variable, not this API's MODEL_API_KEY.
+  - 장점, 단점 및 영향: users reach Muse Spark without a reseller; discovery stays off until an authenticated /v1/models payload is actually observed, so an unseen roster (Meta also serves image and voice families here) cannot leak into the picker.
+  */
+  {
+    id: "meta-model",
+    label: "Meta Model API",
+    adapter: "openai-responses",
+    baseUrl: "https://api.meta.ai/v1",
+    authKind: "key",
+    dashboardUrl: "https://dev.meta.ai/docs/authentication",
+    defaultModel: "muse-spark-1.3",
+    models: META_MUSE_MODELS,
+    // Static roster: no authenticated /v1/models payload was ever observed (the only
+    // contact was an unauthenticated GET returning 401 invalid_api_key), and Meta serves
+    // non-agent families on this same base URL. Turning discovery on would publish an
+    // unseen roster into the picker.
+    liveModels: false,
+    // A user may already own a custom provider named "meta-model" pointing elsewhere;
+    // without this, registry transport canonicalization would retarget it and send their
+    // saved key to Meta.
+    preserveCustomDestination: true,
+    modelContextWindows: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_CONTEXT_WINDOW])),
+    // text+image only. Meta also documents video, audio (degraded on 1.3), and PDF, but
+    // the catalog modality enum is text/image and over-advertising poisons the exported
+    // client config (see tests/catalog-input-modality-enum.test.ts).
+    modelInputModalities: Object.fromEntries(META_MUSE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
+    modelReasoningEfforts: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORTS])),
+    modelReasoningEffortMap: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORT_MAP])),
+    // No defaultMaxOutputTokens: Meta publishes none. The only number in its docs
+    // (131072) appears inside a third-party config sample, and the protocol pages call
+    // the real limit "model-dependent".
+    note: "Pay-as-you-go Meta Model API. Get a key at https://dev.meta.ai — a Meta developer account needs a payment method before it can serve requests, and every call is metered per token. A Muse Code subscription does NOT work here: Meta scopes that credential to the Muse Code CLI and bills any other key pay-as-you-go (dev.meta.ai/docs/muse-code/subscriptions). The Contributor tier (muse-spark-1.3-contributor) is ~92% cheaper because Meta trains on your prompts; do not send confidential material through it. Muse Spark is also reachable through the command-code and opencode-go providers.",
   },
   {
     id: "umans",

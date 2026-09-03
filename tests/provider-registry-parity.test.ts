@@ -31,7 +31,7 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
+  "anthropic-apikey", "openai-apikey", "meta-model", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
   "deepseek", "cerebras", "chutes", "deepinfra", "hyperbolic", "nscale", "vultr", "baseten", "commandcode", "sambanova", "nebius", "digitalocean", "scaleway", "featherless", "novita", "together", "fireworks", "firepass", "moonshot",
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",

@@ -88,6 +88,7 @@ const GEMINI_37_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-0
 const GEMINI_38_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-09-03); promotional rate through 2026-12-31, rises to 1.50/7.50 on 2027-01-01; cacheWrite=0: storage is billed per-hour, not per-token";
 const MINIMAX_PRICING = "https://platform.minimax.io/docs/guides/pricing-paygo";
 const OPENAI_GPT56_PRICING = "https://developers.openai.com/api/docs/pricing";
+const META_MODEL_PRICING = "https://dev.meta.ai/docs/pricing-rate-limits";
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
 // cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
@@ -145,6 +146,14 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "openai-apikey", modelId: "gpt-5.6-sol-pro", cost4: GPT56_SOL, source: `collapsed base ID ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-03", status: "verified-derived" },
   { provider: "openai-apikey", modelId: "gpt-5.6-terra-pro", cost4: GPT56_TERRA, source: `collapsed base ID ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-03", status: "verified-derived" },
   { provider: "openai-apikey", modelId: "gpt-5.6-luna-pro", cost4: GPT56_LUNA, source: `collapsed base ID ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-03", status: "verified-derived" },
+  // Meta Model API direct provider. `meta-model` has no jawcode metadata alias, so an
+  // unpriced row falls through the whole resolution chain and the Logs cost column
+  // renders nothing — these exact overlays are the only source. Both are Meta's own
+  // published list prices for Meta's own endpoint (hence "verified", not derived), and
+  // they match the figures Command Code republishes for the same two models.
+  // cacheWrite=0: Meta publishes a cached-input price but no cache-write charge.
+  { provider: "meta-model", modelId: "muse-spark-1.3", cost4: { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 }, source: `Meta Model API published price ${META_MODEL_PRICING}`, verifiedAt: "2026-09-03", status: "verified" },
+  { provider: "meta-model", modelId: "muse-spark-1.3-contributor", cost4: { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0 }, source: `Meta Model API published Contributor-tier price ${META_MODEL_PRICING}; data-sharing discount tier`, verifiedAt: "2026-09-03", status: "verified" },
   // Daybreak aliases: priced as their current snapshots (red -> gpt-5.6-cyber,
   // blue -> gpt-5.6-sol). The alias ids carry no rows of their own upstream, hence
   // verified-derived. Blue deliberately reuses GPT56_SOL rather than duplicating the tuple.

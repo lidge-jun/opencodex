@@ -343,6 +343,7 @@ free-experimentation model.
 | Vultr Serverless Inference | `https://api.vultrinference.com/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Command Code | `https://api.commandcode.ai/provider/v1` |
+| Meta Model API | `https://api.meta.ai/v1` |
 | SambaNova Cloud | `https://api.sambanova.ai/v1` |
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
@@ -436,6 +437,21 @@ account-scoped and comes from the authenticated discovery endpoint after login. 
 preset (`commandcode`) uses the active configured Bearer key for chat requests; the OAuth preset
 (`command-code`) uses the stored account bearer for authenticated discovery and chat. Create
 Provider-API keys at [Command Code Studio](https://commandcode.ai/studio/).
+
+**Meta Model API (`meta-model`).** Muse Spark on Meta's own OpenAI-compatible endpoint,
+served over `/v1/responses`. Set a `MODEL_API_KEY` from
+[the Meta developer console](https://dev.meta.ai/docs/authentication); the account needs a
+payment method before it will serve requests, and every call is metered per token. Two
+models are seeded — `meta-model/muse-spark-1.3` and `meta-model/muse-spark-1.3-contributor`
+— with the vendor's `minimal`/`low`/`medium`/`high`/`xhigh` ladder and a 1M context window.
+Discovery stays off until an authenticated roster is verified, because Meta serves image and
+voice models on the same host.
+
+Two things worth knowing before you pick it. **A Muse Code subscription does not apply
+here:** Meta scopes that credential to the Muse Code CLI and bills any other key
+pay-as-you-go. And the Contributor tier is roughly 92% cheaper because Meta trains on your
+prompts, so keep confidential material off it. The same models are also reachable through
+the `command-code` and `opencode-go` presets.
 
 **Command Code quota.** The dashboard and `ocx account refresh` probe Command Code's
 `/alpha/billing/credits` windows (5-hour and weekly) on the canonical
