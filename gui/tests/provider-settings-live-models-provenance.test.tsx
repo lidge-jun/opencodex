@@ -42,17 +42,17 @@ function provider(liveModels?: boolean): WorkspaceItem {
   } as WorkspaceItem;
 }
 
-function copilotProvider(tier?: "default" | "long_context"): WorkspaceItem {
+function copilotProvider(modelContextTiers?: Record<string, "default" | "long_context">): WorkspaceItem {
   return {
     name: "github-copilot",
     adapter: "openai-responses",
     baseUrl: "https://api.githubcopilot.com",
     authMode: "oauth",
-    ...(tier ? { modelContextTiers: { "gpt-5.6-luna": tier } } : {}),
+    ...(modelContextTiers ? { modelContextTiers } : {}),
   } as WorkspaceItem;
 }
 
-async function mountSettings(item: WorkspaceItem): Promise<{
+async function mountSettings(item: WorkspaceItem, availableModels: string[] = []): Promise<{
   root: Root;
   container: HTMLElement;
   patches: ProviderUpdatePatch[];
@@ -68,6 +68,7 @@ async function mountSettings(item: WorkspaceItem): Promise<{
       <LanguageProvider>
         <ProviderSettings
           item={item}
+          availableModels={availableModels}
           onUpdateProvider={async (_name, patch) => {
             patches.push(patch);
             return { ok: true };
@@ -128,9 +129,8 @@ test("changing an explicit false to true sends an explicit liveModels choice", a
 });
 
 test("changing Copilot's context tier sends a provider patch", async () => {
-  const { root, container, patches } = await mountSettings(copilotProvider());
-  const select = [...container.querySelectorAll<HTMLSelectElement>("select")]
-    .find(candidate => candidate.querySelector('option[value="long_context"]'));
+  const { root, container, patches } = await mountSettings(copilotProvider(), ["gpt-5.6-luna"]);
+  const select = container.querySelector<HTMLSelectElement>('select[data-model-id="gpt-5.6-luna"]');
   expect(select).toBeTruthy();
 
   await act(async () => {
@@ -143,6 +143,42 @@ test("changing Copilot's context tier sends a provider patch", async () => {
   expect(patches).toHaveLength(1);
   expect(patches[0]).toMatchObject({
     modelContextTiers: { "gpt-5.6-luna": "long_context" },
+  });
+  await act(async () => { root.unmount(); });
+});
+
+test("renders a context tier control for every detected or configured Copilot model", async () => {
+  const { root, container } = await mountSettings(
+    copilotProvider({ "gpt-5.6-luna": "long_context", "gpt-5.5": "default" }),
+    ["gpt-5.6-luna", "gpt-5.5", "claude-opus-4.7"],
+  );
+  const selects = [...container.querySelectorAll<HTMLSelectElement>("select[data-model-id]")];
+
+  expect(selects.map(select => select.dataset.modelId)).toEqual(["claude-opus-4.7", "gpt-5.5", "gpt-5.6-luna"]);
+  expect(selects.find(select => select.dataset.modelId === "gpt-5.6-luna")?.value).toBe("long_context");
+  expect(selects.find(select => select.dataset.modelId === "gpt-5.5")?.value).toBe("default");
+  expect(selects.find(select => select.dataset.modelId === "claude-opus-4.7")?.value).toBe("default");
+  await act(async () => { root.unmount(); });
+});
+
+test("changing a non-Luna Copilot model preserves the other per-model tier entries", async () => {
+  const { root, container, patches } = await mountSettings(
+    copilotProvider({ "gpt-5.6-luna": "long_context" }),
+    ["gpt-5.6-luna", "claude-opus-4.7"],
+  );
+  const select = container.querySelector<HTMLSelectElement>('select[data-model-id="claude-opus-4.7"]');
+  expect(select).toBeTruthy();
+
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
+      .set!.call(select, "long_context");
+    select!.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+  await save(container);
+
+  expect(patches[0]?.modelContextTiers).toEqual({
+    "claude-opus-4.7": "long_context",
+    "gpt-5.6-luna": "long_context",
   });
   await act(async () => { root.unmount(); });
 });

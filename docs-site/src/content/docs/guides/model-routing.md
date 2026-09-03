@@ -99,10 +99,21 @@ Routing and catalog visibility are separate controls:
   actual limit.
 - GitHub Copilot models that expose a long-context tier can opt in through
   `providers.github-copilot.modelContextTiers.<model> = "long_context"` (or the Providers
-  settings UI). For example, `gpt-5.6-luna` advertises the one-million-token tier and carries
+  settings UI, which lists every detected or configured Copilot model and stores the choice per
+  exact model id). For example, `gpt-5.6-luna` advertises the one-million-token tier and carries
   `contextTier: "long_context"` upstream. OpenCodex applies the existing provider cap afterwards,
   so a `400000` cap produces a 400,000-token Codex catalog window. The `"default"` tier preserves
-  the model's normal live context metadata; unsupported models should remain on that tier.
+  the model's normal live context metadata; `"long_context"` is meaningful only for models whose
+  upstream Copilot tier supports it.
+
+GitHub documents this as a generic Copilot context control rather than a Luna-only field:
+the [Copilot CLI command reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
+defines `default` and `long_context` for tiered-pricing models, and the [Copilot SDK session
+configuration](https://github.com/github/copilot-sdk/blob/main/nodejs/src/types.ts) describes
+the same values for models that support them. The [supported models
+reference](https://docs.github.com/en/copilot/reference/ai-models/supported-models) is the
+source of truth for which currently listed models expose extended capabilities; model
+availability and eligibility can change independently of OpenCodex.
 
 ```json
 {
