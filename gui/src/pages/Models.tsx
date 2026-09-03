@@ -1603,10 +1603,11 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const savePickerOrder = async () => {
     if (pickerBusy || pickerMode === "custom") return;
     setPickerBusy(true);
+    const bounded = createBoundedFetch(15_000);
     try {
       let usage: ModelPickerUsage[] = [];
       if (pickerMode === "most-used") {
-        const usageResponse = await fetch(`${apiBase}/api/usage?range=all&surface=all`);
+        const usageResponse = await fetch(`${apiBase}/api/usage?range=all&surface=all`, { signal: bounded.signal });
         const usageData = await readJsonOrThrow<{ models?: ModelPickerUsage[] }>(usageResponse, t("models.pickerOrder.usageFailed"));
         usage = usageData?.models ?? [];
       }
@@ -1615,6 +1616,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pickerOrder: order }),
+        signal: bounded.signal,
       });
       const data = await readJsonOrThrow<{ pickerOrder?: string[] }>(response, t("models.saveFailed"));
       const saved = data?.pickerOrder ?? order ?? [];
@@ -1628,6 +1630,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     } catch (error) {
       publishFeedback(false, error instanceof Error && error.message ? error.message : t("models.networkError"));
     } finally {
+      bounded.clear();
       setPickerBusy(false);
     }
   };

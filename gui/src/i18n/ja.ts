@@ -2273,7 +2273,7 @@ export const ja: Record<TKey, string> = {
   "models.pickerOrder.default": "デフォルト",
   "models.pickerOrder.alphabetical": "モデル名で A–Z",
   "models.pickerOrder.provider": "プロバイダー別",
-  "models.pickerOrder.mostUsed": "最も使用",
+  "models.pickerOrder.mostUsed": "使用頻度順",
   "models.pickerOrder.custom": "カスタム順序（設定）",
   "models.pickerOrder.apply": "適用",
   "models.pickerOrder.applying": "適用中…",

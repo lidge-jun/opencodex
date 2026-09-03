@@ -669,8 +669,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     });
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
-    let body: { models?: unknown; pickerOrder?: unknown };
-    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    let rawBody: unknown;
+    try { rawBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (rawBody === null || typeof rawBody !== "object" || Array.isArray(rawBody)) {
+      return jsonResponse({ error: "JSON body must be an object" }, 400);
+    }
+    const body = rawBody as { models?: unknown; pickerOrder?: unknown };
     if (body.models === undefined && body.pickerOrder === undefined) {
       return jsonResponse({ error: "models or pickerOrder is required" }, 400);
     }
@@ -682,12 +686,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         return jsonResponse({ error: "models must be an array of strings" }, 400);
       }
       chosen = body.models.slice(0, 5);
-      config.subagentModels = chosen;
     }
 
+    let pickerOrder: string[] | null | undefined;
     if (body.pickerOrder !== undefined) {
       if (body.pickerOrder === null || (Array.isArray(body.pickerOrder) && body.pickerOrder.length === 0)) {
-        deleteConfigTopLevelKey(config, "modelPickerOrder");
+        pickerOrder = null;
       } else {
         if (!Array.isArray(body.pickerOrder) || body.pickerOrder.some(model => typeof model !== "string" || model.trim() === "")) {
           return jsonResponse({ error: "pickerOrder must be an array of non-empty routed model ids, or null" }, 400);
@@ -697,13 +701,16 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const visibleRouted = new Set(models
           .filter(m => ![...disabled].some(stored => stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)))
           .map(catalogModelSlug));
-        const pickerOrder = body.pickerOrder.map(model => model.trim());
+        pickerOrder = body.pickerOrder.map(model => model.trim());
         if (new Set(pickerOrder).size !== pickerOrder.length || pickerOrder.some(model => !visibleRouted.has(model))) {
           return jsonResponse({ error: "pickerOrder must contain each visible routed model at most once" }, 400);
         }
-        config.modelPickerOrder = pickerOrder;
       }
     }
+
+    if (updatesRoster) config.subagentModels = chosen;
+    if (pickerOrder === null) deleteConfigTopLevelKey(config, "modelPickerOrder");
+    else if (pickerOrder !== undefined) config.modelPickerOrder = pickerOrder;
 
     (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     const catalogRefresh = await convergeCodexCatalog();

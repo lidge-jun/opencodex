@@ -103,5 +103,31 @@ describe("/api/subagent-models roster retention", () => {
 
     expect(invalid?.status).toBe(400);
     expect(config.modelPickerOrder).toEqual(["beta/second", "alpha/first"]);
+
+    const mixedInvalid = await handleManagementAPI(new Request(url, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ models: ["alpha/first"], pickerOrder: ["not-visible/model"] }),
+    }), url, config, deps);
+
+    expect(mixedInvalid?.status).toBe(400);
+    expect(config.subagentModels).toEqual(["gpt-5.6-luna"]);
+    expect(config.modelPickerOrder).toEqual(["beta/second", "alpha/first"]);
+  });
+
+  test("rejects non-object update bodies without changing the roster", async () => {
+    const config = makeConfig({ subagentModels: ["gpt-5.6-luna"] });
+    const url = new URL("http://localhost/api/subagent-models");
+
+    for (const body of ["null", "[]", "1", '"models"']) {
+      const response = await handleManagementAPI(new Request(url, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body,
+      }), url, config);
+
+      expect(response?.status).toBe(400);
+      expect(config.subagentModels).toEqual(["gpt-5.6-luna"]);
+    }
   });
 });
