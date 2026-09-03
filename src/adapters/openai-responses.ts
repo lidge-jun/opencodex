@@ -1980,13 +1980,40 @@ function normalizeImageGenClientTools(body: unknown): unknown {
  * matches, keeping the common path allocation-free.
  */
 function stripUnsupportedHostedTools(body: unknown, provider: Pick<OcxProviderConfig, "baseUrl">): unknown {
-  if (!isPlainObject(body) || !Array.isArray(body.tools)) return body;
+  if (!isPlainObject(body)) return body;
   const model = typeof body.model === "string" ? body.model : "";
-  const tools = body.tools.filter(t => {
-    const type = isPlainObject(t) && typeof t.type === "string" ? t.type : undefined;
-    return !type || !isHostedToolUnsupportedForModel(model, type, provider.baseUrl);
-  });
-  return tools.length === body.tools.length ? body : { ...body, tools };
+  const filterTools = (tools: unknown[]): unknown[] => {
+    const filtered = tools.filter(t => {
+      const type = isPlainObject(t) && typeof t.type === "string" ? t.type : undefined;
+      return !type || !isHostedToolUnsupportedForModel(model, type, provider.baseUrl);
+    });
+    return filtered.length === tools.length ? tools : filtered;
+  };
+
+  let next: Record<string, unknown> = body;
+  let changed = false;
+  if (Array.isArray(body.tools)) {
+    const tools = filterTools(body.tools);
+    if (tools !== body.tools) {
+      next = { ...next, tools };
+      changed = true;
+    }
+  }
+  if (Array.isArray(body.input)) {
+    let inputChanged = false;
+    const input = body.input.map(item => {
+      if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) return item;
+      const tools = filterTools(item.tools);
+      if (tools === item.tools) return item;
+      inputChanged = true;
+      return { ...item, tools };
+    });
+    if (inputChanged) {
+      next = { ...next, input };
+      changed = true;
+    }
+  }
+  return changed ? next : body;
 }
 
 /**

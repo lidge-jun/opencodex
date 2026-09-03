@@ -68,6 +68,18 @@ describe("OpenCode Go Grok 4.6 Responses compatibility", () => {
     expect(body.tools).toEqual([functionTool]);
   });
 
+  test("drops hosted search from an additional_tools-only request", () => {
+    const functionTool = { type: "function", name: "lookup", parameters: { type: "object" } };
+    const body = build("grok-4.6", {
+      input: [{
+        type: "additional_tools",
+        tools: [{ type: "web_search_preview" }, functionTool],
+      }],
+    });
+
+    expect(body.input).toEqual([{ type: "additional_tools", tools: [functionTool] }]);
+  });
+
   test("preserves hosted search for another model on OpenCode Go", () => {
     const webSearch = { type: "web_search", search_context_size: "medium" };
     const body = build("gpt-5.6-luna", { tools: [webSearch] });
