@@ -372,7 +372,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .lang-toggle .select-dropdown { background: var(--glass-rail); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
 /* Clear the sidebar's 14px padding + 1px border so the menu's left edge sits in the
    main pane instead of straddling the divider (trigger ends at the content edge). */
-.lang-toggle .select-dropdown-beside { top: auto; bottom: 0; left: calc(100% + 20px); right: auto; min-width: 10rem; max-height: min(60vh, 20rem); overflow-y: auto; }
+/* The trigger is a 28px orb now, so "beside" would land inside the rail. Open upward from
+   the orb instead (the mobile drawer already does), still bottom-anchored and height-bounded
+   so it never runs past the sidebar regardless of how many locales exist. */
+.lang-toggle .select-dropdown-beside { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; min-width: 10rem; max-height: min(60vh, 20rem); overflow-y: auto; }
 .stop-toggle { color: var(--red); }
 .stop-toggle:hover { background: var(--red-soft); color: var(--red); }
 .stop-toggle:disabled { opacity: 0.5; cursor: default; }

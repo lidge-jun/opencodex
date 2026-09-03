@@ -25,7 +25,9 @@ test("the beside-placement menu is anchored upward and height-bounded", async ()
   for (const selector of [".select-dropdown-beside", ".lang-toggle .select-dropdown-beside"]) {
     const body = ruleBody(css, selector);
     expect(`${selector}: ${body}`).not.toMatch(/top:\s*0/);
-    expect(body).toMatch(/bottom:\s*0/);
+    // Anchored to the bottom edge: either flush (`bottom: 0`, beside the trigger) or
+    // just above it (`calc(100% + …)`, the orb-sized language trigger opens upward).
+    expect(body).toMatch(/bottom:\s*(0|calc\(100% \+ \d+px\))/);
     expect(body).toMatch(/max-height:/);
     expect(body).toMatch(/overflow-y:\s*auto/);
   }
