@@ -34,22 +34,28 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
 
 describe("GitHub Copilot context tiers", () => {
   test("adds the selected tier to Responses requests", () => {
-    const request = createResponsesPassthroughAdapter(provider()).buildRequest(parsed());
+    const request = createResponsesPassthroughAdapter(provider()).buildRequest(parsed(), { providerName: "github-copilot" });
     expect(JSON.parse(request.body)).toMatchObject({ contextTier: "long_context" });
   });
 
   test("adds the selected tier to Chat Completions requests too", () => {
-    const request = createOpenAIChatAdapter(provider({ adapter: "openai-chat", apiKey: "test-key" })).buildRequest(parsed());
+    const request = createOpenAIChatAdapter(provider({ adapter: "openai-chat", apiKey: "test-key" }))
+      .buildRequest(parsed(), { providerName: "github-copilot" });
     expect(JSON.parse(request.body)).toMatchObject({ contextTier: "long_context" });
   });
 
   test("supports the explicit default tier and leaves unconfigured models untouched", () => {
     const defaultRequest = createResponsesPassthroughAdapter(provider({ modelContextTiers: { [MODEL]: "default" } }))
-      .buildRequest(parsed());
+      .buildRequest(parsed(), { providerName: "github-copilot" });
     expect(JSON.parse(defaultRequest.body)).toMatchObject({ contextTier: "default" });
 
-    const otherRequest = createResponsesPassthroughAdapter(provider()).buildRequest(parsed("gpt-5.5"));
+    const otherRequest = createResponsesPassthroughAdapter(provider()).buildRequest(parsed("gpt-5.5"), { providerName: "github-copilot" });
     expect(JSON.parse(otherRequest.body)).not.toHaveProperty("contextTier");
+  });
+
+  test("does not inject the Copilot tier into another provider", () => {
+    const request = createResponsesPassthroughAdapter(provider()).buildRequest(parsed(), { providerName: "openai" });
+    expect(JSON.parse(request.body)).not.toHaveProperty("contextTier");
   });
 
   test("raises long-context catalog metadata before applying the provider cap", () => {

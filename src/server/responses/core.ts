@@ -1256,6 +1256,7 @@ async function retryCodexPoolOnAlternateAccount(
   });
   const request = await retryAdapter.buildRequest(parsed, {
     headers: retryHeaders,
+    providerName: route.providerName,
     translatorBudget: options.translatorBudget,
   });
   recordAdapterReasoning(logCtx, request);
@@ -3751,7 +3752,11 @@ async function handleResponsesInner(
     const providerExecutedCallTypes = new Set<ProviderExecutedCallType>();
     let request: Awaited<ReturnType<typeof adapter.buildRequest>>;
     try {
-      request = await adapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
+      request = await adapter.buildRequest(parsed, {
+        headers: selectedForwardHeaders,
+        providerName: route.providerName,
+        translatorBudget,
+      });
     } catch (error) {
       releaseCodexAuthContextProbeLease(authCtx);
       // A tool catalog this proxy cannot lower onto one wire namespace is a client input error, and
@@ -4152,6 +4157,7 @@ async function handleResponsesInner(
       try {
         request = await retryAdapter.buildRequest(parsed, {
           headers: selectedForwardHeaders,
+          providerName: route.providerName,
           translatorBudget,
         });
         refreshRoutedNamespaceToolAliases(request);
@@ -4263,6 +4269,7 @@ async function handleResponsesInner(
       try {
         request = await replayAdapter.buildRequest(parsed, {
           headers: selectedForwardHeaders,
+          providerName: route.providerName,
           translatorBudget,
         });
         refreshRoutedNamespaceToolAliases(request);
@@ -4370,6 +4377,7 @@ async function handleResponsesInner(
       try {
         request = await refreshedAdapter.buildRequest(parsed, {
           headers: selectedForwardHeaders,
+          providerName: route.providerName,
           translatorBudget,
         });
         refreshRoutedNamespaceToolAliases(request);
@@ -5324,6 +5332,7 @@ async function handleResponsesInner(
       parsed, adapter,
       incomingMeta: {
         headers: selectedForwardHeaders,
+        providerName: route.providerName,
         abortSignal: options.abortSignal,
         translatorBudget,
         providerFetch: routedProviderFetch,
@@ -5782,7 +5791,11 @@ async function handleResponsesInner(
   const remainingTransientSendBudget = (budget: number): number =>
     Math.max(1, budget - transientSendsUsed);
   try {
-    initialRequest = await activeAdapter.buildRequest(parsed, { headers: selectedForwardHeaders, translatorBudget });
+    initialRequest = await activeAdapter.buildRequest(parsed, {
+      headers: selectedForwardHeaders,
+      providerName: route.providerName,
+      translatorBudget,
+    });
     refreshRoutedNamespaceToolAliases(initialRequest);
     recordAdapterReasoning(logCtx, initialRequest);
     recordAdapterTier(logCtx, initialRequest);
@@ -5909,6 +5922,7 @@ async function handleResponsesInner(
         try {
           retryRequest = await activeAdapter.buildRequest(parsed, {
             headers: selectedForwardHeaders,
+            providerName: route.providerName,
             translatorBudget,
             ...(imageTierBias > 0 ? { imageTierBias } : {}),
           });
@@ -6351,6 +6365,7 @@ async function handleResponsesInner(
         try {
           continuationRequest = await activeAdapter.buildRequest(nextParsed, {
             headers: selectedForwardHeaders,
+            providerName: route.providerName,
             translatorBudget,
             ...(imageTierBias > 0 ? { imageTierBias } : {}),
           });

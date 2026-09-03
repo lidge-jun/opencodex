@@ -20,7 +20,9 @@ export function applyGithubCopilotContextTier(
   body: unknown,
   provider: OcxProviderConfig,
   modelId: string,
+  providerName?: string,
 ): unknown {
+  if (providerName !== "github-copilot") return body;
   const tier = configuredGithubCopilotContextTier(provider, modelId);
   if (!tier || !body || typeof body !== "object" || Array.isArray(body)) return body;
   return { ...(body as Record<string, unknown>), contextTier: tier };
