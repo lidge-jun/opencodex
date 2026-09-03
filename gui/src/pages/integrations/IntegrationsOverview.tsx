@@ -336,7 +336,8 @@ export default function IntegrationsOverview({
   const counts = countOverviewRows(rows);
   // Installed (or applied, or not a file client at all) rows are the grid; the rest fold.
   const presentRows = rows.filter(row => row.installed || row.applied || row.status === null);
-  const absentRows = rows.filter(row => !presentRows.includes(row));
+  const presentIds = new Set(presentRows.map(row => row.id));
+  const absentRows = rows.filter(row => !presentIds.has(row.id));
   const renderCard = (row: (typeof rows)[number]) => (
     <OverviewCard
       key={row.id}
