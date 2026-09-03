@@ -119,7 +119,17 @@ jobs:
           # leaves the branch check passing, so the job would recreate the branch and then
           # fail on `gh pr create` with "already exists" — turning a successful release red
           # for a repair that was already queued.
-          open_prs="$(gh pr list --base dev --head "${branch}" --state open --json number --jq 'length')"
+          # Apply the repository owner and branch filter on the server. Filtering a
+          # paginated `gh pr list` result locally can miss this repository's pull request
+          # when newer same-named fork pull requests fill the fetched page.
+          open_prs="$(
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls" \
+              -f state=open \
+              -f base=dev \
+              -f "head=${GITHUB_REPOSITORY_OWNER}:${branch}" \
+              -F per_page=1 \
+              --jq 'length'
+          )"
           if [ "${open_prs}" != "0" ]; then
             echo "::notice::a bump pull request for ${branch} is already open; nothing to do"
             exit 0

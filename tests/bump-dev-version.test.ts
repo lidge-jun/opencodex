@@ -17,6 +17,7 @@ import { decideDevVersion } from "../scripts/bump-dev-version";
 // which bun cannot open, so every CLI case exited 1 before reaching the code under test —
 // and the malformed-input case read that same load failure as a correct rejection.
 const CLI = fileURLToPath(new URL("../scripts/bump-dev-version.ts", import.meta.url));
+const WORKFLOW = fileURLToPath(new URL("../.github/workflows/dev-version-bump.yml", import.meta.url));
 
 function runCli(...args: string[]) {
   const proc = Bun.spawnSync([process.execPath, CLI, ...args]);
@@ -41,6 +42,20 @@ function tempPackageJson(version: string): string {
 }
 
 describe("dev version bump rule", () => {
+  test("the idempotency check filters the repository-owned head before pagination", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const block = workflow.match(/open_prs="\$\(([\s\S]*?)\n\s*\)"/)?.[1];
+    expect(block).toBeDefined();
+    expect(block).toContain('gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls"');
+    expect(block).toContain("-f state=open");
+    expect(block).toContain("-f base=dev");
+    expect(block).toContain('-f "head=${GITHUB_REPOSITORY_OWNER}:${branch}"');
+    expect(block).toContain("-F per_page=1");
+    expect(block).toContain("--jq 'length'");
+    expect(block).not.toContain("gh pr list");
+    expect(block).not.toContain("isCrossRepository");
+  });
+
   test("a stable release moves dev to the next minor", () => {
     // e4a85d134 (2.33.0 -> 2.34.0) and 076ad3036 (2.34.0 -> 2.35.0).
     expect(decideDevVersion("2.36.0", "2.36.0")).toMatchObject({ changed: true, version: "2.37.0" });
