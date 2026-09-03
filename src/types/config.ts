@@ -409,6 +409,8 @@ export interface OcxConfig {
    * when every routed row is listed (see opencodex_spawn_priority / effectiveSubagentRoster).
    */
   modelPickerOrder?: string[];
+  /** The saved UI choice that produced modelPickerOrder; omitted for default or a manual order. */
+  modelPickerOrderMode?: "alphabetical" | "provider" | "most-used";
   /**
    * Priority-ordered fallback models for spawned sub-agents. When the requested
    * model is quota-exhausted or recently failed, opencodex rewrites the child

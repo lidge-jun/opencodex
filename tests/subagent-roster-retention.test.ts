@@ -88,12 +88,14 @@ describe("/api/subagent-models roster retention", () => {
     const save = await handleManagementAPI(new Request(url, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ pickerOrder: ["beta/second", "alpha/first"] }),
+      body: JSON.stringify({ pickerOrder: ["beta/second", "alpha/first"], pickerOrderMode: "most-used" }),
     }), url, config, deps);
 
     expect(save?.status).toBe(200);
     expect(config.subagentModels).toEqual(["gpt-5.6-luna"]);
     expect(config.modelPickerOrder).toEqual(["beta/second", "alpha/first"]);
+    expect(config.modelPickerOrderMode).toBe("most-used");
+    expect((await save!.json() as { pickerOrderMode?: string | null }).pickerOrderMode).toBe("most-used");
 
     const invalid = await handleManagementAPI(new Request(url, {
       method: "PUT",
@@ -113,6 +115,15 @@ describe("/api/subagent-models roster retention", () => {
     expect(mixedInvalid?.status).toBe(400);
     expect(config.subagentModels).toEqual(["gpt-5.6-luna"]);
     expect(config.modelPickerOrder).toEqual(["beta/second", "alpha/first"]);
+
+    const reset = await handleManagementAPI(new Request(url, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pickerOrder: null, pickerOrderMode: null }),
+    }), url, config, deps);
+    expect(reset?.status).toBe(200);
+    expect(config).not.toHaveProperty("modelPickerOrder");
+    expect(config).not.toHaveProperty("modelPickerOrderMode");
   });
 
   test("rejects non-object update bodies without changing the roster", async () => {

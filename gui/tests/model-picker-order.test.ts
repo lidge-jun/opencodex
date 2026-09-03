@@ -27,3 +27,7 @@ test("recognizes default and deterministic saved order", () => {
   expect(modelPickerOrderMode(models, ["alpha/alpha", "alpha/zeta", "zeta/beta"])).toBe("provider");
   expect(modelPickerOrderMode(models, ["zeta/beta", "alpha/alpha", "alpha/zeta"])).toBe("custom");
 });
+
+test("restores a saved most-used snapshot without refetching usage", () => {
+  expect(modelPickerOrderMode(models, ["alpha/zeta", "zeta/beta", "alpha/alpha"], "most-used")).toBe("most-used");
+});

@@ -4,8 +4,10 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   resetHardenedStateForTests,
+  setAsyncIcaclsRunnerForTests,
   setIcaclsRunnerForTests,
 } from "../src/lib/windows-secret-acl";
+import { flushConfigDirHardeningForTests } from "../src/config/paths";
 import {
   getAccountCredential,
   getAccountSet,
@@ -30,6 +32,7 @@ import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-oauth-store-multi-test");
 let previousOpencodexHome: string | undefined;
+const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 
 const cred = (over: Partial<OAuthCredentials> = {}): OAuthCredentials => ({
   access: "access-1",
@@ -45,16 +48,14 @@ describe("multi-account auth store", () => {
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     resetHardenedStateForTests();
-    setIcaclsRunnerForTests(() => ({
-      success: true,
-      exitCode: 0,
-      timedOut: false,
-      stdout: "",
-    }));
+    setIcaclsRunnerForTests(() => ICACLS_OK);
+    setAsyncIcaclsRunnerForTests(async () => ICACLS_OK);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await flushConfigDirHardeningForTests();
     setIcaclsRunnerForTests(null);
+    setAsyncIcaclsRunnerForTests(null);
     resetHardenedStateForTests();
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;

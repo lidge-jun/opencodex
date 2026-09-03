@@ -81,6 +81,10 @@ let grokApplyFlight: { startedAt: number; promise: Promise<unknown>; bytes: numb
 let grokApplyHighWaterBytes = 0;
 let grokApplyTestHooks: { now?: () => number; run?: () => Promise<unknown> } | null = null;
 
+function isModelPickerOrderMode(value: unknown): value is NonNullable<OcxConfig["modelPickerOrderMode"]> {
+  return value === "alphabetical" || value === "provider" || value === "most-used";
+}
+
 class GrokApplyBusyError extends Error {}
 
 /**
@@ -665,6 +669,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       // priority through opencodex_spawn_priority.
       pickerAvailable: visibleRouted,
       pickerOrder: config.modelPickerOrder ?? [],
+      pickerOrderMode: config.modelPickerOrderMode ?? null,
       catalogState,
     });
   }
@@ -674,7 +679,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (rawBody === null || typeof rawBody !== "object" || Array.isArray(rawBody)) {
       return jsonResponse({ error: "JSON body must be an object" }, 400);
     }
-    const body = rawBody as { models?: unknown; pickerOrder?: unknown };
+    const body = rawBody as { models?: unknown; pickerOrder?: unknown; pickerOrderMode?: unknown };
     if (body.models === undefined && body.pickerOrder === undefined) {
       return jsonResponse({ error: "models or pickerOrder is required" }, 400);
     }
@@ -708,9 +713,23 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
     }
 
+    let pickerOrderMode: NonNullable<OcxConfig["modelPickerOrderMode"]> | null | undefined;
+    if (body.pickerOrderMode !== undefined) {
+      if (body.pickerOrder === undefined) return jsonResponse({ error: "pickerOrderMode requires pickerOrder" }, 400);
+      if (body.pickerOrderMode === null) pickerOrderMode = null;
+      else if (isModelPickerOrderMode(body.pickerOrderMode)) pickerOrderMode = body.pickerOrderMode;
+      else return jsonResponse({ error: "pickerOrderMode must be alphabetical, provider, most-used, or null" }, 400);
+    }
+
     if (updatesRoster) config.subagentModels = chosen;
-    if (pickerOrder === null) deleteConfigTopLevelKey(config, "modelPickerOrder");
-    else if (pickerOrder !== undefined) config.modelPickerOrder = pickerOrder;
+    if (pickerOrder === null) {
+      deleteConfigTopLevelKey(config, "modelPickerOrder");
+      deleteConfigTopLevelKey(config, "modelPickerOrderMode");
+    } else if (pickerOrder !== undefined) {
+      config.modelPickerOrder = pickerOrder;
+      if (pickerOrderMode === undefined || pickerOrderMode === null) deleteConfigTopLevelKey(config, "modelPickerOrderMode");
+      else config.modelPickerOrderMode = pickerOrderMode;
+    }
 
     (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     const catalogRefresh = await convergeCodexCatalog();
@@ -718,7 +737,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       await syncClaudeAgentDefsBestEffort();
       await autoApplyDesktopBestEffort();
     }
-    return jsonResponse({ ok: true, applied: chosen, pickerOrder: config.modelPickerOrder ?? [], catalogRefresh });
+    return jsonResponse({ ok: true, applied: chosen, pickerOrder: config.modelPickerOrder ?? [], pickerOrderMode: config.modelPickerOrderMode ?? null, catalogRefresh });
   }
 
   // Priority-ordered subagent model fallback chain for quota-aware spawn routing.

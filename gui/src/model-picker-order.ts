@@ -1,4 +1,5 @@
 export type ModelPickerOrderMode = "default" | "alphabetical" | "provider" | "most-used" | "custom";
+export type SavedModelPickerOrderMode = Exclude<ModelPickerOrderMode, "default" | "custom">;
 
 export interface ModelPickerUsage {
   provider: string;
@@ -52,10 +53,15 @@ export function modelPickerOrder(
   return unique.toSorted((a, b) => (requests.get(b) ?? 0) - (requests.get(a) ?? 0) || compareProviderAndModel(a, b));
 }
 
-export function modelPickerOrderMode(models: readonly string[], saved: readonly string[]): ModelPickerOrderMode {
+export function modelPickerOrderMode(
+  models: readonly string[],
+  saved: readonly string[],
+  savedMode?: SavedModelPickerOrderMode | null,
+): ModelPickerOrderMode {
   if (saved.length === 0) return "default";
   const normalized = [...new Set(saved)];
   if (normalized.length !== models.length || normalized.some(model => !models.includes(model))) return "custom";
+  if (savedMode) return savedMode;
   for (const mode of ["alphabetical", "provider"] as const) {
     const expected = modelPickerOrder(mode, models);
     if (expected?.every((model, index) => model === normalized[index])) return mode;
