@@ -420,8 +420,11 @@ running opencodex instance that receives model requests.
 
 Every target is currently ineligible: for example, its provider is disabled, it is cooling down,
 it has already been attempted for this request, or an encrypted v2 task excludes it. Check target
-provider state and recent upstream errors. For cooldowns, follow an observed `Retry-After` value first; Codex reset headers also take precedence over `cooldownMs`.
-If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies when it is unset (5 seconds for request-rate codes `1302`/`1305`, otherwise 60 seconds); every cooldown is capped at 10 minutes.
+provider state and recent upstream errors. For cooldowns, follow an observed `Retry-After` value first;
+Codex reset headers also take precedence over `cooldownMs`.
+If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies
+when it is unset (5 seconds for request-rate codes `1302`/`1305`, otherwise 60 seconds); every cooldown is
+capped at 10 minutes.
 
 ### Why was my alias rejected?
 
