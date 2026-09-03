@@ -816,6 +816,7 @@ export const ko: Record<TKey, string> = {
 
   // usage page
   "usage.title": "사용량",
+  "usage.subtitleAria": "사용량 집계 방식",
   "usage.subtitle": "프록시의 로컬 토큰 집계입니다. 누락된 사용량은 0으로 표시하지 않습니다.",
   "usage.loading": "사용량 데이터를 불러오는 중…",
   "usage.empty": "아직 기록된 사용량이 없습니다. 프록시로 요청을 보내면 여기에 표시됩니다.",

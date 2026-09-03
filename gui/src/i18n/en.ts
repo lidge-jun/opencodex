@@ -831,6 +831,7 @@ export const en = {
 
   // usage page
   "usage.title": "Usage",
+  "usage.subtitleAria": "How usage is counted",
   "usage.subtitle": "Local token accounting from your proxy. Missing usage is never shown as zero.",
   "usage.loading": "Loading usage data…",
   "usage.empty": "No usage recorded yet. Send a request through the proxy to see activity here.",

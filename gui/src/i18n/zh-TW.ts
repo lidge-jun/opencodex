@@ -643,6 +643,7 @@ export const zhTW: Record<TKey, string> = {
   "debug.noLines.usage": "用量提取已開啟但尚未捕獲任何內容。請透過 Codex 傳送請求，隨後會顯示在此處。",
   "debug.noLines.injection": "注入日誌已開啟但尚未捕獲任何內容。它紀錄協作和子代理回合中的多代理指導注入與 effort-cap 決策。",
   "usage.title": "用量",
+  "usage.subtitleAria": "用量的統計方式",
   "usage.subtitle": "代理本地的 Token 用量統計。缺失的用量不會顯示為零。",
   "usage.loading": "正在載入用量資料…",
   "usage.empty": "尚無用量紀錄。透過代理傳送請求後將在此顯示。",

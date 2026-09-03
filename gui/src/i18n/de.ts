@@ -794,6 +794,7 @@ export const de: Record<TKey, string> = {
   "debug.noLines.usage": "Nutzungserfassung ist an, aber es wurde noch nichts erfasst. Sende einen Chat/eine Anfrage über Codex, dann erscheint es hier.",
   "debug.noLines.injection": "Injektions-Log ist an, aber es wurde noch nichts erfasst. Es erfasst Multi-Agent-Guidance-Injektion und Effort-Cap-Entscheidungen bei Collab- und Sub-Agent-Turns.",
   "usage.title": "Nutzung",
+  "usage.subtitleAria": "So wird die Nutzung gezählt",
   "usage.subtitle": "Lokale Token-Buchhaltung deines Proxys. Fehlende Nutzung wird nie als Null angezeigt.",
   "usage.loading": "Lade Nutzungsdaten…",
   "usage.empty": "Noch keine Nutzung erfasst. Sende eine Anfrage über den Proxy, um Aktivität hier zu sehen.",

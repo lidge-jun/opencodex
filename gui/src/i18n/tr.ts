@@ -822,6 +822,7 @@ export const tr: Record<TKey, string> = {
 
   // usage page
   "usage.title": "Kullanım",
+  "usage.subtitleAria": "Kullanım nasıl sayılır",
   "usage.subtitle": "Proxy'nizden yerel jeton muhasebesi.",
   "usage.loading": "Kullanım verileri yükleniyor…",
   "usage.empty": "Henüz kullanım kaydedilmedi.",

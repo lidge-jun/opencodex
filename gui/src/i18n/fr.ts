@@ -808,6 +808,7 @@ export const fr: Record<TKey, string> = {
   "debug.noLines.usage": "L’extraction de l’utilisation est activée, mais rien n’a encore été capturé. Envoyez une conversation ou une requête par Codex pour qu’elle apparaisse ici.",
   "debug.noLines.injection": "Le journal des injections est activé, mais rien n’a encore été capturé. Il consigne l’injection des directives multi-agents et les décisions de plafonnement du niveau lors des tours collab et des sous-agents.",
   "usage.title": "Utilisation",
+  "usage.subtitleAria": "Comment l’utilisation est comptée",
   "usage.subtitle": "Comptabilisation locale des jetons par votre proxy. Une utilisation manquante n’est jamais affichée comme nulle.",
   "usage.loading": "Chargement des données d’utilisation…",
   "usage.empty": "Aucune utilisation enregistrée pour le moment. Envoyez une requête par le proxy pour voir l’activité ici.",

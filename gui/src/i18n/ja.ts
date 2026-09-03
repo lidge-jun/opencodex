@@ -774,6 +774,7 @@ export const ja: Record<TKey, string> = {
 
   // usage page
   "usage.title": "使用量",
+  "usage.subtitleAria": "使用量の集計方法",
   "usage.subtitle": "プロキシからのローカルトークン会計です。欠損した使用量はゼロとして表示されることはありません。",
   "usage.loading": "使用量データを読み込み中…",
   "usage.empty": "まだ使用量が記録されていません。プロキシ経由でリクエストを送信するとここにアクティビティが表示されます。",

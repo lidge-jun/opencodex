@@ -2440,6 +2440,14 @@ button.prov-account-row.active { cursor: default; }
 }
 
 .usage-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 8px; }
+.usage-cards-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@container (max-width: 1100px) { .usage-cards-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+/* Year heatmap behind a disclosure for 30d; the summary reads as the panel title. */
+.usage-heatmap-details > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 8px; }
+.usage-heatmap-details > summary::-webkit-details-marker { display: none; }
+.usage-heatmap-details > summary::before { content: ""; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform var(--motion-fast); }
+.usage-heatmap-details[open] > summary::before { transform: rotate(90deg); }
+.usage-heatmap-details[open] > summary { margin-bottom: 10px; }
 .usage-cards .stat-value { font-size: var(--text-title); font-weight: var(--weight-semibold); margin-top: 4px; }
 /* Top-align with Storage: centering against the taller filter chips dropped the "Usage" title. */
 .usage-head { flex-wrap: wrap; align-items: flex-start; }

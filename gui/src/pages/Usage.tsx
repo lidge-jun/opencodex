@@ -4,7 +4,8 @@ import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
-import { EmptyState, Notice } from "../ui";
+import { EmptyState, Notice, Tooltip } from "../ui";
+import { IconInfo } from "../icons";
 import { modelLabel } from "../model-display";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
@@ -272,18 +273,21 @@ function UsageFilters({
 
 function UsageSummaryCards({
   summary,
-  activeDays,
   locale,
   t,
 }: {
   summary: UsageSummaryTotals;
-  activeDays: number;
   locale: Locale;
   t: TFn;
 }) {
   return (
     <>
-    <div className="usage-cards usage-cards-3x2" role="group" aria-label={t("usage.title")}>
+    {/*
+      Five cards. "Active days" was the sixth — on a 7/30-day range with a heatmap below it
+      said nothing the range did not. The page's counting caveat rides on the coverage
+      card as a focusable info button rather than a paragraph above everything.
+    */}
+    <div className="usage-cards usage-cards-5" role="group" aria-label={t("usage.title")}>
       <div className="stat"><div className="muted">{t("usage.card.requests")}</div><div className="stat-value">{summary.requests}</div></div>
       <div className="stat"><div className="muted">{t("usage.card.measured")}</div><div className="stat-value">{summary.measuredRequests}</div></div>
       <div className="stat"><div className="muted">{t("usage.card.totalTokens")}</div><div className="stat-value">{formatTokens(summary.totalTokens, locale)}</div></div>
@@ -296,13 +300,21 @@ function UsageSummaryCards({
           </div>
         )}
       </div>
-      <div className="stat"><div className="muted">{t("usage.card.coverage")}</div><div className="stat-value">{formatPct(summary.coverageRatio)}</div></div>
-      <div className="stat"><div className="muted">{t("usage.card.activeDays")}</div><div className="stat-value">{activeDays}</div></div>
+      <div className="stat">
+        <div className="muted" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          {t("usage.card.coverage")}
+          <Tooltip content={t("usage.subtitle")} side="top" maxWidth={360}>
+            <IconInfo width={13} height={13} aria-hidden="true" />
+            <span className="sr-only">{t("usage.subtitleAria")}</span>
+          </Tooltip>
+        </div>
+        <div className="stat-value">{formatPct(summary.coverageRatio)}</div>
+      </div>
     </div>
       {summary.estimatedCostUsd !== undefined && (
         <div className="usage-cost-row" role="note">
           <span className="muted">{t("usage.cost.total")}</span>
-          <span className="stat-value mono usage-cost-value">
+          <span className="mono text-control usage-cost-value">
             {formatUsdEstimate(summary.estimatedCostUsd, locale)}
           </span>
           <span className="muted text-caption">{t("usage.cost.disclaimer")}</span>
@@ -387,22 +399,40 @@ function UsageHeatmapPanel({
   const heatmapRef = useRef<HTMLDivElement | null>(null);
   const [hoverCell, setHoverCell] = useState<{ weekIndex: number; dayIndex: number; x: number; y: number } | null>(null);
 
+  // Component-scoped so both the effect and the details' onToggle can call it: a closed
+  // details has zero width, so the effect's run is a no-op until the user opens it.
+  const pinRight = useCallback(() => {
+    const element = heatmapRef.current;
+    if (element) element.scrollLeft = element.scrollWidth;
+  }, []);
+
   useEffect(() => {
     const element = heatmapRef.current;
     if (!element) return;
-    const pinRight = () => { element.scrollLeft = element.scrollWidth; };
     pinRight();
     const observer = new ResizeObserver(pinRight);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [heatmap, range]);
+  }, [heatmap, range, pinRight]);
 
-  return (
-    <section className="panel" style={{ marginTop: 16 }} aria-labelledby="usage-heatmap-title">
-      <h3 id="usage-heatmap-title" className="panel-title">{t("usage.section.heatmap")}</h3>
-      {range === "7d" ? (
+  if (range === "7d") {
+    return (
+      <section className="panel" style={{ marginTop: 16 }} aria-labelledby="usage-heatmap-title">
+        <h3 id="usage-heatmap-title" className="panel-title">{t("usage.section.heatmap")}</h3>
         <WeekDayBars weekBars={weekBars} locale={locale} t={t} />
-      ) : (
+      </section>
+    );
+  }
+
+  /*
+    The year heatmap is GitHub-style chrome for a 30-day range: mostly empty and tall. It
+    stays available behind a closed disclosure; the seven-day bars above are small enough
+    to keep inline.
+  */
+  return (
+    <details className="panel usage-heatmap-details" style={{ marginTop: 16 }} onToggle={pinRight}>
+      <summary className="panel-title" id="usage-heatmap-title">{t("usage.section.heatmap")}</summary>
+      {(
         <div className="heatmap" ref={heatmapRef} role="img" aria-labelledby="usage-heatmap-title">
           <div className="heatmap-months" style={{ gridTemplateColumns: `28px repeat(${heatmap.weeks.length}, calc(var(--hm-cell) + var(--hm-gap)))` }}>
             <span className="heatmap-day-spacer" />
@@ -453,7 +483,7 @@ function UsageHeatmapPanel({
           </div>
         </div>
       )}
-    </section>
+    </details>
   );
 }
 
@@ -654,7 +684,6 @@ function UsageWorkspaceBody({
   data,
   heatmap,
   weekBars,
-  activeDays,
   filteredModels,
   modelQuery,
   onModelQuery,
@@ -666,7 +695,6 @@ function UsageWorkspaceBody({
   data: UsageResponse | null;
   heatmap: ReturnType<typeof buildHeatmap>;
   weekBars: UsageDay[];
-  activeDays: number;
   filteredModels: UsageModel[];
   modelQuery: string;
   onModelQuery: (query: string) => void;
@@ -683,7 +711,7 @@ function UsageWorkspaceBody({
       meta: data ? `${data.summary.requests}` : "—",
       body: data ? (
         <>
-          <UsageSummaryCards summary={data.summary} activeDays={activeDays} locale={locale} t={t} />
+          <UsageSummaryCards summary={data.summary} locale={locale} t={t} />
           <UsageHeatmapPanel range={range} heatmap={heatmap} weekBars={weekBars} locale={locale} t={t} />
         </>
       ) : null,
@@ -788,7 +816,6 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
 
   const heatmap = useMemo(() => buildHeatmap(data?.days ?? []), [data?.days]);
   const weekBars = useMemo(() => lastSevenDays(data?.days ?? []), [data?.days]);
-  const activeDays = useMemo(() => (data?.days ?? []).filter(d => d.requests > 0).length, [data?.days]);
   const filteredModels = useMemo(() => {
     const q = modelQuery.trim().toLowerCase();
     const models = data?.models ?? [];
@@ -812,7 +839,6 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
         <h2 id="usage-page-title">{t("usage.title")}</h2>
         <UsageFilters surface={surface} range={range} onSurface={setSurface} onRange={setRange} t={t} />
       </div>
-      <p className="page-sub">{t("usage.subtitle")}</p>
       {/*
         Only shown when connected. Naming the source is a two-plane concept: it answers
         "which store served these numbers", and that question only exists once there are
@@ -864,7 +890,6 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             data={data}
             heatmap={heatmap}
             weekBars={weekBars}
-            activeDays={activeDays}
             filteredModels={filteredModels}
             modelQuery={modelQuery}
             onModelQuery={setModelQuery}

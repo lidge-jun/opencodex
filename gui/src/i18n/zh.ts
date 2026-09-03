@@ -809,6 +809,7 @@ export const zh: Record<TKey, string> = {
 
   // usage page
   "usage.title": "用量",
+  "usage.subtitleAria": "用量的统计方式",
   "usage.subtitle": "代理本地的 Token 用量统计。缺失的用量不会显示为零。",
   "usage.loading": "正在加载用量数据…",
   "usage.empty": "尚无用量记录。通过代理发送请求后将在此显示。",
