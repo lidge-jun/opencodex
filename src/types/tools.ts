@@ -32,6 +32,17 @@ export function namespacedToolName(namespace: string | undefined, name: string):
 }
 
 /**
+ * Dotted alias of a namespaced tool's wire name. Some routed providers (observed: muse-spark
+ * via opencode-go) echo a namespaced tool call as "<namespace>.<name>" instead of the flattened
+ * "<namespace>__<name>" form. It names the same tool identity+�u���T never a new grant"��y��y� so the
+ * undeclared-tool guard and the tool bridge maps accept it wherever the wire name is accepted
+ * (mirroring the second entry of `toolChoiceAliases`). See #3402.
+ */
+export function dottedToolName(namespace: string | undefined, name: string): string {
+  return namespace ? `${namespace}.${name}` : name;
+}
+
+/**
  * Codex unified-exec name normalization.
  *
  * Codex's code-mode shell tool is declared as `exec` (a freeform custom tool whose own
@@ -75,7 +86,7 @@ export function normalizeDeclaredToolName(
 
 export function toolChoiceAliases(tool: Pick<OcxTool, "namespace" | "name">): string[] {
   const wireName = namespacedToolName(tool.namespace, tool.name);
-  return tool.namespace ? [wireName, `${tool.namespace}.${tool.name}`] : [wireName];
+  return tool.namespace ? [wireName, dottedToolName(tool.namespace, tool.name)] : [wireName];
 }
 
 function sameToolIdentity(

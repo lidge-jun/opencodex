@@ -187,15 +187,16 @@ describe("Responses parser", () => {
     let maps = buildToolBridgeMaps(parsed);
     expect([...maps.toolNsMap]).toEqual([
       ["mcp__tools__safe", { namespace: "mcp__tools", name: "safe" }],
+      ["mcp__tools.safe", { namespace: "mcp__tools", name: "safe" }],
     ]);
-    expect([...maps.declaredToolNames]).toEqual(["mcp__tools__safe", "apply_patch"]);
+    expect([...maps.declaredToolNames]).toEqual(["mcp__tools__safe", "mcp__tools.safe", "apply_patch"]);
     expect([...maps.freeformToolNames]).toEqual(["apply_patch"]);
     expect([...maps.toolSearchToolNames]).toEqual([]);
 
     parsed.options.toolChoice = { allowedTools: ["mcp__tools__safe"], mode: "required" };
     maps = buildToolBridgeMaps(parsed);
-    expect([...maps.toolNsMap.keys()]).toEqual(["mcp__tools__safe"]);
-    expect([...maps.declaredToolNames]).toEqual(["mcp__tools__safe"]);
+    expect([...maps.toolNsMap.keys()]).toEqual(["mcp__tools__safe", "mcp__tools.safe"]);
+    expect([...maps.declaredToolNames]).toEqual(["mcp__tools__safe", "mcp__tools.safe"]);
     expect([...maps.freeformToolNames]).toEqual([]);
 
     parsed.options.toolChoice = { name: "tool_search" };
@@ -232,9 +233,10 @@ describe("Responses parser", () => {
     let maps = buildToolBridgeMaps(parsed);
     expect([...maps.toolNsMap]).toEqual([
       ["mcp__functions__exec", { namespace: "mcp__functions", name: "exec", freeform: true }],
+      ["mcp__functions.exec", { namespace: "mcp__functions", name: "exec", freeform: true }],
       ["exec", { namespace: "mcp__functions", name: "exec", freeform: true }],
     ]);
-    expect([...maps.declaredToolNames]).toEqual(["mcp__functions__exec", "exec"]);
+    expect([...maps.declaredToolNames]).toEqual(["mcp__functions__exec", "mcp__functions.exec", "exec"]);
     expect([...maps.freeformToolNames]).toEqual(["exec"]);
 
     const bridged = buildResponseJSON([
@@ -254,7 +256,7 @@ describe("Responses parser", () => {
 
     parsed.options.toolChoice = { name: "exec" };
     maps = buildToolBridgeMaps(parsed);
-    expect([...maps.toolNsMap.keys()]).toEqual(["mcp__functions__exec", "exec"]);
+    expect([...maps.toolNsMap.keys()]).toEqual(["mcp__functions__exec", "mcp__functions.exec", "exec"]);
 
     expect(() => parseRequest({
       model: "claude-opus-5",

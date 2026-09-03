@@ -1,5 +1,6 @@
 import {
   CODE_MODE_EXEC_TOOL_NAME,
+  dottedToolName,
   namespacedToolName,
   normalizeDeclaredToolName,
 } from "../types";
@@ -93,6 +94,10 @@ function addWireToolName(names: Set<string>, tool: unknown, namespace?: string):
     return;
   }
   names.add(namespacedToolName(namespace, name));
+  // Some routed providers echo the flattened wire name with a dot (`ns.name`, observed with
+  // muse-spark via opencode-go) instead of `ns__name`. It is the same tool identity, so register
+  // the dotted spelling too �w^~)�t mirroring `toolChoiceAliases` (#3402).
+  names.add(dottedToolName(namespace, name));
   // `exec` is the one name that also switches on nested-helper normalization, so a bare alias
   // for a namespaced MCP tool would silently authorize `exec_command`/`shell_command`/
   // `apply_patch` the request never declared. Every other inner name keeps the bare alias.
@@ -293,7 +298,10 @@ function undeclaredNameInItem(
   if (typeof item.namespace === "string") {
     // Namespaced calls are matched by their full wire name only — never legacy-normalize
     // them, or an undeclared namespaced `exec_command` could slip through as bare `exec`.
+    // Both flattened spellings (`ns__name` and the dotted `ns.name` some providers echo,
+    // #3402) name the same tool identity.
     if (declared.has(namespacedToolName(item.namespace, name))) return undefined;
+    if (declared.has(dottedToolName(item.namespace, name))) return undefined;
     return name;
   }
   const effectiveName = normalizeDeclaredToolName(name, declared);

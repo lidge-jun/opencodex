@@ -28,7 +28,7 @@ import {
 } from "../../combos";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
-import { modelInList, namespacedToolName, toolChoiceToolPredicate } from "../../types";
+import { dottedToolName, modelInList, namespacedToolName, toolChoiceToolPredicate } from "../../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
@@ -133,6 +133,14 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
     if (t.namespace) {
       budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([wireName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
       toolNsMap.set(wireName, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
+      // Dotted echo alias (`ns.name`, #3402): same tool identity as the flattened wire name,
+      // so a provider that echoes the dotted spelling still restores against this entry.
+      const dottedName = dottedToolName(t.namespace, t.name);
+      budget?.chargeRetained(new TextEncoder().encode(dottedName).byteLength, { kind: "retained_collectors" });
+      declaredToolNames.add(dottedName);
+      budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([dottedName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
+      toolNsMap.set(dottedName, { namespace: t.namespace, name: t.name, ...(t.freeform ? { freeform: true } : {}) });
+      if (t.parameters && typeof t.parameters === "object") toolParameterSchemas.set(dottedName, t.parameters);
     }
     if (t.freeform) {
       budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });

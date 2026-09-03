@@ -90,9 +90,10 @@ describe("collectDeclaredWireToolNames", () => {
       ],
     });
 
-    // Namespaced MCP tools are reachable under either coordinate system, so both are accepted.
+    // Namespaced MCP tools are reachable under every coordinate system (`ns__name`, the bare
+    // name, and the dotted `ns.name` some providers echo), so all are accepted.
     expect([...names].sort()).toEqual(
-      ["apply_patch", "create_issue", "exec", "linear__create_issue"],
+      ["apply_patch", "create_issue", "exec", "linear.create_issue", "linear__create_issue"],
     );
   });
 
@@ -104,7 +105,7 @@ describe("collectDeclaredWireToolNames", () => {
       tools: [{ type: "namespace", name: "mcp", tools: [{ type: "function", name: "exec" }] }],
     });
 
-    expect([...names]).toEqual(["mcp__exec"]);
+    expect([...names]).toEqual(["mcp__exec", "mcp.exec"]);
   });
 
   test("keeps exec bare in Codex's reserved functions namespace", () => {
@@ -129,7 +130,7 @@ describe("collectDeclaredWireToolNames", () => {
       ],
     });
 
-    expect([...names].sort()).toEqual(["exec", "mcp__exec"]);
+    expect([...names].sort()).toEqual(["exec", "mcp.exec", "mcp__exec"]);
   });
 
   test("reads tools carried inside input as an additional_tools item", () => {
@@ -332,6 +333,36 @@ describe("undeclared tool call guard", () => {
     });
 
     expect(await relay(upstream, ["linear__create_issue"])).toBe(upstream);
+  });
+
+  test("accepts a namespaced call echoed in dotted form", async () => {
+    // muse-spark via opencode-go echoes `default.apply_patch` for the declared
+    // `default__apply_patch` tool (#3402). The dotted spelling is the same tool identity.
+    const outbound = {
+      tools: [{ type: "namespace", name: "default", tools: [{ type: "custom", name: "apply_patch" }] }],
+    };
+    const upstream = sse("response.output_item.added", {
+      output_index: 0,
+      item: { type: "custom_tool_call", id: "ctc_1", call_id: "call_1", name: "default.apply_patch", input: "" },
+    });
+
+    expect(await relay(upstream, collectDeclaredWireToolNames(outbound))).toBe(upstream);
+  });
+
+  test("accepts an explicit-namespace call when only the dotted spelling was declared", async () => {
+    const upstream = sse("response.output_item.added", {
+      output_index: 0,
+      item: {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "create_issue",
+        namespace: "linear",
+        arguments: "{}",
+      },
+    });
+
+    expect(await relay(upstream, ["linear.create_issue"])).toBe(upstream);
   });
 
   test("never blocks apply_patch when the request really declared it", async () => {
