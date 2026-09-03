@@ -1,5 +1,16 @@
 #!/usr/bin/env bun
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
+
+try {
+  process.cwd();
+} catch {
+  try {
+    process.chdir(homedir());
+  } catch {
+    /* best-effort */
+  }
+}
 import { currentExternalCodexModelProvider, restoreNativeCodex, restoreNativeCodexAsync, shouldInjectApiAuthHeader } from "../codex/inject";
 import { stripGrokConfig } from "../grok/inject";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../update/stop-contract.mjs";

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { isatty } from "node:tty";
 import { spawnSync } from "node:child_process";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
@@ -167,7 +168,7 @@ function printAgentDeferral(): void {
  */
 export async function maybeShowStarPrompt(): Promise<void> {
   try {
-    if (process.env.OCX_SERVICE || !process.stdin.isTTY || !process.stdout.isTTY) return;
+    if (process.env.OCX_SERVICE || !isatty(0) || !isatty(1)) return;
     const dir = getConfigDir();
     const marker = join(dir, MARKER);
     if (existsSync(marker)) return;

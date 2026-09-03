@@ -33,6 +33,13 @@ import {
 } from "../src/update/codex-cli-update-launch-policy.mjs";
 
 const PKG = "@bitkyc08/opencodex";
+try {
+  process.cwd();
+} catch {
+  try {
+    process.chdir(homedir());
+  } catch {}
+}
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const cliPath = join(here, "..", "src", "cli", "index.ts");
