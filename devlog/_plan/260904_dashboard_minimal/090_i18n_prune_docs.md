@@ -12,8 +12,8 @@ Depends on: 010-080 all landed on dev.
    `logs.detail.reason.` — keep any key whose prefix appears in a template literal). Script it
    as `gui/scripts/find-orphan-keys.mjs` (NEW, ~40 lines) and run it; the output list is the
    deletion set. Expected members: `dash.subtitle`, `dash.activeProviders`,
-   `dash.availableModels`, `dash.workspace.*`, `dash.version`, `dash.uptime`, `dash.multiAgent*`,
-   `dash.shadowCall*`, `dash.delegation*`, `sidebar.star*`, `integrations.subtitle`,
+   `dash.availableModels`, `dash.workspace.*`, `dash.version`, `dash.uptime`, `dash.multiAgent` (label only; `dash.multiAgentGuidance*` stays: SubagentDelegationSection.tsx:118-126 consumes it; `sidebar.star*` stays: GithubStarButton consumes it),
+   `dash.shadowCall*`, `dash.delegation*`, `integrations.subtitle`,
    `integrations.summary.lastChange`, `usage.card.activeDays`,
    `startup.backToDashboard`, `logs.subtitle`, `pws.dashboard.subtitle`, `models.orderHint`
    (if the tooltip reuses it, it stays).
