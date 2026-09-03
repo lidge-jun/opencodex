@@ -41,6 +41,30 @@ function repeatedHistory(times: number): OcxMessage[] {
   return messages;
 }
 
+function repeatedToolHistory(times: number): OcxMessage[] {
+  const messages: OcxMessage[] = [{ role: "user", content: "熟悉一下当前项目", timestamp: 1 }];
+  for (let i = 0; i < times; i++) {
+    const callId = `call_${i}`;
+    messages.push({
+      role: "assistant",
+      content: [
+        { type: "text", text: REPEAT },
+        { type: "toolCall", id: callId, name: "exec_command", arguments: { cmd: `echo ${i}` } },
+      ],
+      timestamp: 2 + i * 2,
+    });
+    messages.push({
+      role: "toolResult",
+      toolCallId: callId,
+      toolName: "exec_command",
+      content: `result ${i}`,
+      isError: false,
+      timestamp: 3 + i * 2,
+    });
+  }
+  return messages;
+}
+
 function encode(messages: OcxMessage[], modelId = "grok-4.6-high") {
   return encodeCursorRunRequest({
     modelId,
@@ -69,6 +93,16 @@ describe("cursor external-replay repetition breaker (devlog 260826 gap-9)", () =
     const texts = rootTexts(encode(repeatedHistory(2)));
     expect(texts.filter(text => text.includes("2 times in a row"))).toHaveLength(1);
     expect(texts.filter(text => text.includes("Take a DIFFERENT action now"))).toHaveLength(0);
+  });
+
+  test("repeated assistant narration across tool-result cycles still trips the breaker", () => {
+    const bytes = encode(repeatedToolHistory(4));
+    const texts = rootTexts(bytes);
+    const repeats = texts.filter(text => text.startsWith(REPEAT));
+    expect(repeats).toHaveLength(1);
+    expect(repeats[0]).toContain("4 times in a row");
+    expect(texts.filter(text => text.startsWith("[Tool Result]"))).toHaveLength(4);
+    expect(texts.filter(text => text.includes("Take a DIFFERENT action now"))).toHaveLength(1);
   });
 
   test("distinct assistant entries stay untouched", () => {

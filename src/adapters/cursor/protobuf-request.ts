@@ -298,38 +298,38 @@ function rootPromptMessages(
   // Repetition breaker (devlog 260826 gap-9): external full-replay flattens history to text,
   // so N identical assistant/tool-result rounds replay as N identical lines and PRIME the model
   // to emit the same line again (self-reinforcing loop: S2a 180x, identical-probe repetition).
-  // Collapse consecutive duplicates into one entry + a count marker, and count collapses so a
-  // strategy-change note can be appended when the pattern is severe.
-  let lastReplayText: string | undefined;
-  let lastReplayEntry: RootBlobCandidate | undefined;
-  let collapsedRepeats = 0;
+  // Collapse consecutive same-role duplicates within one user turn into one entry + a count marker.
+  // Track assistant narration separately from tool results so a real narration→tool→result cycle
+  // cannot reset the breaker before the next identical narration arrives.
+  const replayRuns = new Map<RootBlobCandidate["role"], {
+    text: string;
+    entry: RootBlobCandidate;
+    length: number;
+  }>();
   let maxRunLength = 1;
-  let currentRun = 1;
   const pushDeduped = (
     payload: { role: string; content: [{ type: "text"; text: string }] },
     role: RootBlobCandidate["role"],
     opts: { messageIndex: number; text?: string },
     normalized: string,
   ): void => {
-    if (externalModel && lastReplayText !== undefined && normalized === lastReplayText && lastReplayEntry) {
-      collapsedRepeats++;
-      currentRun++;
-      if (currentRun > maxRunLength) maxRunLength = currentRun;
-      const marked = `${normalized}\n[note: this exact output was produced ${currentRun} times in a row]`;
+    const previous = replayRuns.get(role);
+    if (externalModel && previous?.text === normalized) {
+      const runLength = previous.length + 1;
+      if (runLength > maxRunLength) maxRunLength = runLength;
+      const marked = `${normalized}\n[note: this exact output was produced ${runLength} times in a row]`;
       const replacement = rootBlobCandidate(
         { role: payload.role, content: [{ type: "text", text: marked }] },
         role,
-        opts,
+        { ...opts, messageIndex: previous.entry.messageIndex ?? opts.messageIndex },
       );
-      entries[entries.indexOf(lastReplayEntry)] = replacement;
-      lastReplayEntry = replacement;
+      entries[entries.indexOf(previous.entry)] = replacement;
+      replayRuns.set(role, { text: normalized, entry: replacement, length: runLength });
       return;
     }
-    currentRun = 1;
     const entry = rootBlobCandidate(payload, role, opts);
     entries.push(entry);
-    lastReplayText = normalized;
-    lastReplayEntry = entry;
+    replayRuns.set(role, { text: normalized, entry, length: 1 });
   };
 
   for (let i = 0; i < messages.length; i++) {
@@ -342,9 +342,7 @@ function rootPromptMessages(
       // A bare string survives blob hydration but external workers reject the completed replay
       // before tokenization (`usedTokens: 0`, then invalid_argument).
       if (text.length > 0) {
-        lastReplayText = undefined;
-        lastReplayEntry = undefined;
-        currentRun = 1;
+        replayRuns.clear();
         entries.push(rootBlobCandidate({
           role: "user",
           content: [{ type: "text", text }],
