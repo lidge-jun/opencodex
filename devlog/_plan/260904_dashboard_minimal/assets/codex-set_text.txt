@@ -30,7 +30,7 @@ OpenAI 계정 모드
 이 계정을 다음에 사용
 일시 중지
 앱 로그인
-k***1@gmail.com · pro
+<email> · pro
 선택 순서
 기본 (0)
 숫자가 클수록 먼저 사용됩니다. 위에 있는 계정이 모두 소진되거나 사용할 수 없을 때에만 더 낮은 숫자로 넘어갑니다.
@@ -41,13 +41,13 @@ k***1@gmail.com · pro
 26%
 계정 풀
 추가
-s***1@gmail.com
+<email>
 pro
 1
 이 계정을 다음에 사용
 일시 중지
 별칭 편집
-s***1@gmail.com · pro · ID: account-…8327
+<email> · pro · ID: account-<id>
 선택 순서
 기본 (0)
 숫자가 클수록 먼저 사용됩니다. 위에 있는 계정이 모두 소진되거나 사용할 수 없을 때에만 더 낮은 숫자로 넘어갑니다.
@@ -56,13 +56,13 @@ s***1@gmail.com · pro · ID: account-…8327
 9월 7일
 11:28
 26%
-j***3@gmail.com
+<email>
 team
 1
 이 계정을 다음에 사용
 일시 중지
 별칭 편집
-j***3@gmail.com · team · ID: account-…9695
+<email> · team · ID: account-<id>
 선택 순서
 기본 (0)
 숫자가 클수록 먼저 사용됩니다. 위에 있는 계정이 모두 소진되거나 사용할 수 없을 때에만 더 낮은 숫자로 넘어갑니다.
@@ -76,14 +76,14 @@ j***3@gmail.com · team · ID: account-…9695
 9월 8일
 01:13
 6%
-b***3@gmail.com
+<email>
 go
 0
 선택됨
 이 계정을 다음에 사용
 일시 중지
 별칭 편집
-b***3@gmail.com · go · ID: account-…1118
+<email> · go · ID: account-<id>
 선택 순서
 기본 (0)
 숫자가 클수록 먼저 사용됩니다. 위에 있는 계정이 모두 소진되거나 사용할 수 없을 때에만 더 낮은 숫자로 넘어갑니다.
@@ -92,13 +92,13 @@ b***3@gmail.com · go · ID: account-…1118
 10월 1일
 08:49
 0%
-s***i@neuralarcade.ai
+<email>
 pro
 1
 이 계정을 다음에 사용
 일시 중지
 별칭 편집
-s***i@neuralarcade.ai · pro · ID: account-…7142
+<email> · pro · ID: account-<id>
 선택 순서
 기본 (0)
 숫자가 클수록 먼저 사용됩니다. 위에 있는 계정이 모두 소진되거나 사용할 수 없을 때에만 더 낮은 숫자로 넘어갑니다.
