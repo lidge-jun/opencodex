@@ -2013,6 +2013,22 @@ function stripUnsupportedHostedTools(body: unknown, provider: Pick<OcxProviderCo
       changed = true;
     }
   }
+
+  const toolChoice = next.tool_choice;
+  if (isPlainObject(toolChoice) && toolChoice.type === "allowed_tools" && Array.isArray(toolChoice.tools)) {
+    const tools = filterTools(toolChoice.tools);
+    if (tools !== toolChoice.tools) {
+      next = { ...next, tool_choice: tools.length > 0 ? { ...toolChoice, tools } : "none" };
+      changed = true;
+    }
+  } else if (
+    isPlainObject(toolChoice)
+    && typeof toolChoice.type === "string"
+    && isHostedToolUnsupportedForModel(model, toolChoice.type, provider.baseUrl)
+  ) {
+    next = { ...next, tool_choice: "none" };
+    changed = true;
+  }
   return changed ? next : body;
 }
 
