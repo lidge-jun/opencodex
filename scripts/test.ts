@@ -400,6 +400,10 @@ async function runTestLane(
     [TEST_RUN_ID_ENV]: runId,
     [TEST_RUN_LOCK_PATH_ENV]: inheritedLock?.lockPath,
     [TEST_RUN_LOCK_TOKEN_ENV]: inheritedLock?.ownerToken,
+    // Lanes run many files in parallel, so a test that shortened a PRODUCT timing budget
+    // (not its own test timeout) needs headroom for process startup on a busy machine.
+    // See tests/helpers/ci-watchdog.ts `isolationBudgetMs`.
+    OCX_TEST_FULL_SUITE: "1",
   });
   const startedAt = Date.now();
   let interrupted: NodeJS.Signals | null = null;

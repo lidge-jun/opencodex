@@ -58,7 +58,7 @@ import { minimalFabricChildEnv, setFabricProducerIsolationLimitsForTests } from 
 import { taskSubjectApplicableToRequirements } from "../src/lab/projection/verification";
 import { createHostIssuedFabricPatchExecutor } from "../src/lib/fabric-task-host";
 import type { TrustedFabricPatchExecutor } from "../src/lab/fabric/types";
-import { watchdogMs } from "./helpers/ci-watchdog";
+import { isolationBudgetMs, watchdogMs } from "./helpers/ci-watchdog";
 import {
   fabricCorrectPatchExecutor,
   fabricMockRoute,
@@ -87,9 +87,27 @@ async function terminateChildWithin(child: Bun.Subprocess): Promise<boolean> {
 }
 
 const CREDENTIAL_CANARY = "credential-canary-abcdefghijklmnopqrstuvwxyz1234567890";
+/*
+ * Shortened so a hung producer fails in about a second instead of the product's 30 s / 5 s.
+ *
+ * The budgets are scaled under load. They start counting when the parent spawns a Bun
+ * CHILD, and spawning one while the rest of the suite saturates the CPU can exceed 750 ms
+ * on its own — the child is then killed for inactivity before running a line, and the
+ * assertion sees `inactivity_timeout` or `blocked` instead of the outcome it set up.
+ * Deterministic under contention, not random: eight parallel runs of this file reproduced
+ * five failures each while a lone run passes 49/49.
+ */
+const FAST_FABRIC_INACTIVITY_MS = isolationBudgetMs(750);
 const FAST_FABRIC_ISOLATION = Object.freeze({
-  totalTimeoutMs: 2_000,
-  inactivityTimeoutMs: 750,
+  /*
+   * The total budget must stay a fixed MULTIPLE of the inactivity budget, not a fixed
+   * number. `fabricActivityPatchExecutor` deliberately sleeps 40% of the inactivity
+   * budget three times to prove that activity resets the deadline — so the run needs
+   * ~1.2x inactivity to finish, and pinning the total at 2 s while inactivity scales up
+   * would starve exactly the test that exercises the scaling.
+   */
+  totalTimeoutMs: Math.max(2_000, Math.round(FAST_FABRIC_INACTIVITY_MS * 2.5)),
+  inactivityTimeoutMs: FAST_FABRIC_INACTIVITY_MS,
 });
 
 const HOMES: string[] = [];
