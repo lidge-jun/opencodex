@@ -123,10 +123,11 @@ export function isSourceBuildVersion(v: string): boolean {
 }
 
 /** The interactive/TTY + install-method gate shared with the star prompt. */
-function interactiveGuardOk(): boolean {
+export function interactiveGuardOk(): boolean {
   try {
     return !(process.env.OCX_SERVICE || !isatty(0) || !isatty(1));
   } catch {
+    /* best-effort */
     return false;
   }
 }

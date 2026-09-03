@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   getUpgradeVersionForPopup,
+  interactiveGuardOk,
   isNewer,
   isSourceBuildVersion,
   readVersionCache,
@@ -133,6 +134,18 @@ describe("cli wiring", () => {
     expect(portIndex).toBeGreaterThan(-1);
     expect(promptIndex).toBeLessThan(portIndex);
     expect(promptIndex).toBeLessThan(serverIndex);
+  });
+
+  test("interactiveGuardOk safely evaluates without throwing when cwd is unlinked", () => {
+    const origCwd = process.cwd();
+    const tempDir = mkdtempSync(join(tmpdir(), "ocx-unlinked-cwd-"));
+    process.chdir(tempDir);
+    removeTreeWithRetry(tempDir);
+    try {
+      expect(typeof interactiveGuardOk()).toBe("boolean");
+    } finally {
+      try { process.chdir(origCwd); } catch { /* best-effort */ }
+    }
   });
 
   test("hidden __refresh-version subcommand is wired", async () => {

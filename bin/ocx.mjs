@@ -38,7 +38,9 @@ try {
 } catch {
   try {
     process.chdir(homedir());
-  } catch {}
+  } catch {
+    /* best-effort */
+  }
 }
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
