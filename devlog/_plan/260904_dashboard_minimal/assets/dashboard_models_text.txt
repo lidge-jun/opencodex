@@ -1,0 +1,42 @@
+opencodex
+v2.42.0
+대시보드
+Codex 설정
+프로바이더
+모델
+서브에이전트
+로그&디버그
+사용량
+저장소
+연동
+한국어
+시스템
+프록시
+GitHub
+대시보드
+
+로컬 opencodex 프록시와 프로바이더, 그리고 Codex로 라우팅되는 모델의 실시간 상태입니다.
+
+개요
+활성 프로바이더
+사용 가능한 모델
+사용 가능한 모델
+96
+Anthropic Claude
+13
+Cursor
+40
+Google Antigravity
+7
+Kimi
+9
+Lidge
+1
+Muse Code
+2
+OpenAI (Codex login)
+7
+OpenCode Free
+9
+xAI Grok
+8

@@ -1,0 +1,425 @@
+opencodex
+v2.42.0
+대시보드
+Codex 설정
+프로바이더
+모델
+서브에이전트
+로그&디버그
+사용량
+저장소
+연동
+한국어
+시스템
+프록시
+GitHub
+로그&디버그
+자동 새로고침
+로그
+디버그
+
+로컬 opencodex 프록시를 거친 최근 요청입니다. 최신순.
+
+표면
+전체
+Claude
+Codex
+Grok
+가로챈 헬퍼만
+대화
+모델
+시간	토큰	tok/s	~$	모델	추론 강도	프로바이더	상태	요청	소요 시간
+
+2026. 9. 4.
+오전 1:44:55
+	
+37.6만
+c 37.5만
+	23.9	약 US$0.1233	
+k3[1m]
+	
+high
+reasoning_effort=high
+	Kimi	
+200
+상세보기
+	
+ocx-6911ee1ea81fafd776faea80362db066
+	22500ms
+
+2026. 9. 4.
+오전 1:45:07
+	
+30.2만
+c 30.1만
+w 626
+	83.2	약 US$0.1118	
+claude-fable-5-1
+	
+high
+	Anthropic Claude	
+200
+상세보기
+	
+ocx-30f494d499b7262c7a380ca30e4fbd26
+	6900ms
+
+2026. 9. 4.
+오전 1:45:06
+	
+9.3만
+c 8.1만
+	36.3	약 US$0.1044	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-18a158710a383bc7e1c0ffd863af57e0
+	6333ms
+
+2026. 9. 4.
+오전 1:44:58
+	
+8.2만
+c 7.7만
+	37.7	약 US$0.0682	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-580a3282939be78166a8f838cdc2adef
+	7566ms
+
+2026. 9. 4.
+오전 1:44:53
+	
+7.7만
+c 7.4만
+	34.1	약 US$0.0582	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-b90ea8f6328ee50214e2564cd8ca88cf
+	5429ms
+
+2026. 9. 4.
+오전 1:44:21
+	
+37.6만
+c 37.3만
+	24.5	약 US$0.1303	
+k3[1m]
+	
+high
+reasoning_effort=high
+	Kimi	
+200
+상세보기
+	
+ocx-ad5123ab098f605baff623a6384d07f0
+	32904ms
+
+2026. 9. 4.
+오전 1:44:47
+	
+7.5만
+c 7.3만
+	32.8	약 US$0.0472	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-d068d7a7725f801d192bd09cc541392e
+	5698ms
+
+2026. 9. 4.
+오전 1:44:37
+	
+30.2만
+c 28.3만
+w 1.8만
+	63.7	약 US$0.3371	
+claude-fable-5-1
+	
+high
+	Anthropic Claude	
+200
+상세보기
+	
+ocx-555838039f421c3a2ee797f55a83bd8d
+	14187ms
+
+2026. 9. 4.
+오전 1:44:20
+	
+13.6만
+	9.0	약 US$0.2736	
+grok-4.6
+	
+high
+reasoning_effort=high
+	xAI Grok	
+200
+상세보기
+	
+ocx-041ab155bd347cc2420844ab34bab725
+	31000ms
+
+2026. 9. 4.
+오전 1:44:33
+	
+12.3만
+c 12.2만
+	47.0	약 US$0.0837	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-6598f1236217e2c5b87ade3b005eb95c
+	13712ms
+
+2026. 9. 4.
+오전 1:44:39
+	
+7.4만
+c 6.8만
+	40.2	약 US$0.0701	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-eb23f84cb6113fcbd2dcb658a58e60a1
+	7889ms
+
+2026. 9. 4.
+오전 1:44:33
+	
+6.9만
+c 6.1만
+	34.7	약 US$0.0737	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-f956cfb8d20c0b130b2a73f4d6138c61
+	5969ms
+
+2026. 9. 4.
+오전 1:41:27
+	
+22.7만
+c 20.5만
+	53.8	약 US$0.4651	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-38df259bf529696880baab8045bcdafc
+	190239ms
+
+2026. 9. 4.
+오전 1:44:26
+	
+6.1만
+c 5.5만
+	40.4	약 US$0.0686	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-44dfd4e7aba688c641521838c389148b
+	6585ms
+
+2026. 9. 4.
+오전 1:44:21
+	
+12.2만
+c 9.4만
+	44.6	약 US$0.2019	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-0891d2369df2f0b331107d9a08f3e46d
+	11760ms
+
+2026. 9. 4.
+오전 1:44:26
+	
+28.4만
+c 28.3만
+w 322
+	32.9	약 US$0.0788	
+claude-fable-5-1
+	
+high
+	Anthropic Claude	
+200
+상세보기
+	
+ocx-4a742f56bfc688c30629b797afef353a
+	2428ms
+
+2026. 9. 4.
+오전 1:44:18
+	
+5.5만
+c 5.4만
+	38.2	약 US$0.0386	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-760aa18797bf2188f8f250ca3aeafd10
+	7506ms
+
+2026. 9. 4.
+오전 1:44:17
+	
+15.8만
+c 15.3만
+w 3764
+	56.2	약 US$0.1089	
+claude-opus-5
+	
+high
+	Anthropic Claude	
+200
+상세보기
+	
+ocx-8342f0af832e94bdcab5a1a5ff8fcb5c
+	6170ms
+
+2026. 9. 4.
+오전 1:43:46
+	
+37.4만
+c 37.2만
+	23.1	약 US$0.1263	
+k3[1m]
+	
+high
+reasoning_effort=high
+	Kimi	
+200
+상세보기
+	
+ocx-5d537e4bd727c92e0fcb79927752b609
+	35081ms
+
+2026. 9. 4.
+오전 1:44:13
+	
+12.3만
+c 12.1만
+	36.6	약 US$0.0788	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-79c39d63269db9e84255898e8ea430d5
+	7057ms
+
+2026. 9. 4.
+오전 1:43:53
+	
+12.9만
+c 12.3만
+	9.6	약 US$0.0741	
+grok-4.6
+	
+high
+reasoning_effort=high
+	xAI Grok	
+200
+상세보기
+	
+ocx-7b057b63f89af62d683a3c5dbc59d62e
+	26562ms
+
+2026. 9. 4.
+오전 1:44:11
+	
+5.5만
+c 4.5만
+	24.6	약 US$0.0742	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-9941898d08022add80e70a657a073304
+	7146ms
+
+2026. 9. 4.
+오전 1:44:07
+	
+15.4만
+c 15.3만
+w 253
+	88.5	약 US$0.0977	
+claude-opus-5
+	
+high
+	Anthropic Claude	
+200
+상세보기
+	
+ocx-a65529911ee077c45ad458f9d33b4513
+	8811ms
+
+2026. 9. 4.
+오전 1:44:06
+	
+12.2만
+c 12만
+	35.8	약 US$0.0754	
+gpt-5.6-sol
+	
+medium
+	Openai P3b640f	
+200
+상세보기
+	
+ocx-8fdeaeb96af5249fabb4effce6e9c69c
+	7449ms
+

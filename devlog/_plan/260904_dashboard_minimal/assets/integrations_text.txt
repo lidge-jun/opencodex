@@ -1,0 +1,163 @@
+opencodex
+v2.42.0
+대시보드
+Codex 설정
+프로바이더
+모델
+서브에이전트
+로그&디버그
+사용량
+저장소
+연동
+한국어
+시스템
+프록시
+GitHub
+연동
+
+클라이언트를 opencodex에 연결하고 자격 증명과 설정 복원을 관리합니다.
+
+개요
+API 키
+Codex
+Claude
+Grok Build
+Cursor
+OpenCode
+Pi
+OMP
+Hermes
+OpenClaw
+Kimi Code
+Gajae Code
+DSH
+MiniMax Code
+ZCode
+Prime Agent
+Aside
+감지된 클라이언트
+10
+설정된 클라이언트
+6
+업데이트 필요
+2
+마지막 변경
+9/3/2026, 7:09:00 PM
+모두 해제…
+클라이언트
+API 키
+
+발급된 키 없음
+
+키 관리
+
+적용하면 먼저 백업을 보관한 뒤 opencodex 제공자 블록 하나만 씁니다. 해제는 그 블록만 제거하며 보관된 스냅샷으로 복원할 수 있습니다.
+
+Codex
+적용됨
+
+Codex 요청이 이 프록시를 지납니다
+
+설정
+Claude
+적용됨
+
+자동 (Claude 인증 감지)
+
+설정
+Claude Desktop
+적용됨
+
+Desktop이 이 프로필로 실행됩니다
+
+설정
+Grok Build
+적용됨
+
+모델 17개 연결됨
+
+설정
+Cursor
+미적용
+
+Private Inference 설치됨, 아직 요청 없음
+
+설정
+OpenCode
+미적용
+
+/Users/jun/.config/opencode/opencode.json
+
+설정
+Pi
+미적용
+
+/Users/jun/.pi/agent/models.json
+
+설정
+OMP
+미설치
+
+/Users/jun/.omp/agent/models.yml
+
+설정
+Hermes
+미설치
+
+/Users/jun/.hermes/config.yaml
+
+설정
+OpenClaw
+미설치
+
+/Users/jun/.openclaw/openclaw.json
+
+설정
+Kimi Code
+미설치
+
+/Users/jun/.kimi-code/config.toml
+
+설정
+Gajae Code
+미적용
+
+/Users/jun/.gjc/agent/models.yml
+
+설정
+DSH
+미설치
+
+/Users/jun/.dsh/settings.yaml
+
+설정
+MiniMax Code
+미설치
+
+/Users/jun/.minimax/config.yaml
+
+설정
+ZCode
+업데이트 필요
+
+/Users/jun/.zcode/v2/config.json
+
+설정
+Prime Agent
+미설치
+
+/Users/jun/.prime/agent/models.json
+
+설정
+Aside
+업데이트 필요
+
+/Users/jun/.aside/u/0/models.json
+
+설정
+복원 센터
+적용
+aside
+9/3/2026, 7:09:00 PM
+되돌리기
+이전 작업
