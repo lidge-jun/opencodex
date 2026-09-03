@@ -11,7 +11,7 @@
 - Trigger: the user asked whether Meta's Muse Spark *plan* can be attached, after `878f75417` landed Muse Spark 1.3 through the Command Code and OpenCode Zen resellers.
 - Goal: reach Muse Spark **directly** on Meta's own endpoint, and settle — with evidence, not inference — whether a Muse Code subscription can legitimately drive a local proxy.
 - Non-goals: issuing a Meta API key, entering payment details, touching generated metadata, changing any `*-free` Zen id, retiring or redefaulting any model, altering the merged 1.3 work.
-- Verifier: focused `bun test <file>` on touched suites plus `bun x tsc --noEmit`. **The repository-wide local suite is forbidden by standing user instruction**; exact-head GitHub CI is the authoritative gate.
+- Verifier: the canonical gate in `030` — focused `bun test` on the touched suites, `bun run test:changed`, `bun x tsc --noEmit`, `bun run privacy:scan`, and the `docs-site` frozen-lockfile install plus build. **The repository-wide local suite is forbidden by standing user instruction**; exact-head GitHub CI is the authoritative gate.
 - Stop condition: every work-phase closed and the single implementation PR green on its exact head SHA and merged into `dev`.
 - Memory artifact: this unit folder.
 - Terminal outcomes: wp1 targets `DONE`; wp2 closed `NOOP` on a licence finding. `BLOCKED` remains available if CI or branch protection refuses for an unrelated reason.

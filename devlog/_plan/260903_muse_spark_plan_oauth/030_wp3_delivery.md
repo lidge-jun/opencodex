@@ -29,9 +29,19 @@ about. Branch from the current `origin/dev` tip; `dev` moved during the audit ro
 
 ## Verification budget
 
-`bun test tests/meta-model-api-provider.test.ts tests/provider-registry-parity.test.ts tests/usage-cost.test.ts`,
-then `bun run test:changed`, then `bun x tsc --noEmit` and `bun run privacy:scan` (the
-change ships credential guidance).
+The canonical gate for this unit, in order:
+
+```bash
+bun test tests/meta-model-api-provider.test.ts tests/provider-registry-parity.test.ts tests/usage-cost.test.ts
+bun run test:changed
+bun x tsc --noEmit
+bun run privacy:scan
+cd docs-site && bun install --frozen-lockfile && bun run build
+```
+
+The last line applies because the touch set includes `docs-site/`;
+`docs-site/AGENTS.md` treats that build as the documentation gate. `privacy:scan` runs
+because the change ships credential guidance.
 
 `test:changed` is required rather than optional: `src/AGENTS.md:26` calls for it once a
 touch set is broader than one file, and this one spans the registry, the price overlays,

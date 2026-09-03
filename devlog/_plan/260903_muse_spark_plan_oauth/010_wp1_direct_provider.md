@@ -169,7 +169,7 @@ commit and add exact-lookup assertions for both ids.
 
 ## NEW `tests/meta-model-api-provider.test.ts`
 
-Six assertions, each pinning a ledger row that a future edit could silently break:
+Seven assertions, each pinning a ledger row that a future edit could silently break:
 
 ```ts
 import { describe, expect, test } from "bun:test";
@@ -259,6 +259,14 @@ locales are left alone rather than machine-guessed.
 `bun run test:changed` (`src/AGENTS.md:26` requires it once the touch set is broader
 than one file; it is import-graph-scoped, not the forbidden repository-wide suite), then
 `bun x tsc --noEmit` and `bun run privacy:scan` (this change ships credential guidance).
+
+Because the touch set includes `docs-site/`, `docs-site/AGENTS.md` additionally requires
+the site build — "do not claim documentation validation passed unless this build
+completes successfully":
+
+```bash
+cd docs-site && bun install --frozen-lockfile && bun run build
+```
 
 Branch from the current `origin/dev` tip, not from a remembered SHA: `dev` moved during
 the audit rounds.

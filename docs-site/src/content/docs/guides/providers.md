@@ -439,8 +439,10 @@ preset (`commandcode`) uses the active configured Bearer key for chat requests; 
 Provider-API keys at [Command Code Studio](https://commandcode.ai/studio/).
 
 **Meta Model API (`meta-model`).** Muse Spark on Meta's own OpenAI-compatible endpoint,
-served over `/v1/responses`. Set a `MODEL_API_KEY` from
-[the Meta developer console](https://dev.meta.ai/docs/authentication); the account needs a
+served over `/v1/responses`. Create a key in
+[the Meta developer console](https://dev.meta.ai/docs/authentication) — Meta calls this
+variable `MODEL_API_KEY`, but opencodex derives the env var from the provider id, so
+export it as **`META_MODEL_API_KEY`** (or paste it during `ocx init`). The account needs a
 payment method before it will serve requests, and every call is metered per token. Two
 models are seeded — `meta-model/muse-spark-1.3` and `meta-model/muse-spark-1.3-contributor`
 — with the vendor's `minimal`/`low`/`medium`/`high`/`xhigh` ladder and a 1M context window.
@@ -449,9 +451,10 @@ voice models on the same host.
 
 Two things worth knowing before you pick it. **A Muse Code subscription does not apply
 here:** Meta scopes that credential to the Muse Code CLI and bills any other key
-pay-as-you-go. And the Contributor tier is roughly 92% cheaper because Meta trains on your
-prompts, so keep confidential material off it. The same models are also reachable through
-the `command-code` and `opencode-go` presets.
+pay-as-you-go. And the Contributor tier is cheap because Meta trains on your prompts —
+roughly 92% off input, 95% off output, and 99% off cached input — so keep confidential
+material off it. The same models are also reachable through the `command-code` and
+`opencode-go` presets.
 
 **Command Code quota.** The dashboard and `ocx account refresh` probe Command Code's
 `/alpha/billing/credits` windows (5-hour and weekly) on the canonical

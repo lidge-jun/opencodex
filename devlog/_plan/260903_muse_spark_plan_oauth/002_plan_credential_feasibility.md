@@ -105,9 +105,15 @@ observation above.
 ## The licence question is the whole answer
 
 `/docs/muse-code/subscriptions` says the subscription credential is "for use with Muse
-Code only", and a credential obtained by `muse login` is that credential. Mechanism and
-entitlement are separable questions, and only entitlement decides whether anything
-ships. The vendor has answered it.
+Code only". Whether the artifact `muse login` stores **is** that credential was never
+measured — no login completed — so the link is inferred from Meta's own description of
+the CLI onboarding, not proven here. It does not need to be proven: `muse login` is the
+Muse Code CLI's own sign-in, so any credential it yields is at best that credential and
+at worst something with even less claim to third-party use. Either way the restriction
+binds.
+
+Mechanism and entitlement are separable questions, and only entitlement decides whether
+anything ships. The vendor has answered it.
 
 `src/oauth/index.ts` already carries the adjacent precedent on Anthropic —
 `defaultRefreshPolicy: "disabled"`, with a comment recording that the vendor

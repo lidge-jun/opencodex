@@ -1510,7 +1510,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // No defaultMaxOutputTokens: Meta publishes none. The only number in its docs
     // (131072) appears inside a third-party config sample, and the protocol pages call
     // the real limit "model-dependent".
-    note: "Pay-as-you-go Meta Model API. Get a key at https://dev.meta.ai — a Meta developer account needs a payment method before it can serve requests, and every call is metered per token. A Muse Code subscription does NOT work here: Meta scopes that credential to the Muse Code CLI and bills any other key pay-as-you-go (dev.meta.ai/docs/muse-code/subscriptions). The Contributor tier (muse-spark-1.3-contributor) is ~92% cheaper because Meta trains on your prompts; do not send confidential material through it. Muse Spark is also reachable through the command-code and opencode-go providers.",
+    // Meta names its variable MODEL_API_KEY, but the env var opencodex reads is derived
+    // from the provider id (META_MODEL_API_KEY). Saying only Meta's name would send a
+    // user to export a variable this proxy never reads.
+    note: "Pay-as-you-go Meta Model API. Get a key at https://dev.meta.ai (Meta calls it MODEL_API_KEY; export it here as META_MODEL_API_KEY) — a Meta developer account needs a payment method before it can serve requests, and every call is metered per token. A Muse Code subscription does NOT work here: Meta scopes that credential to the Muse Code CLI and bills any other key pay-as-you-go (dev.meta.ai/docs/muse-code/subscriptions). The Contributor tier (muse-spark-1.3-contributor) is cheap because Meta trains on your prompts — about 92% off input, 95% off output, 99% off cached input; do not send confidential material through it. Muse Spark is also reachable through the command-code and opencode-go providers.",
   },
   {
     id: "umans",
