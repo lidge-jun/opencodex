@@ -445,23 +445,13 @@ function setRootOpenaiBaseUrlForTarget(
 }
 
 /**
- * True when line `index` is inside the marker-owned root block: the line right after the
- * marker, or the line right after a marker-owned `openai_base_url`. One marker owns both
- * routing keys so the "exactly one marker" invariant the rest of injection relies on holds.
- */
-function markerOwnedRootLine(lines: string[], index: number): boolean {
-  if (index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER)) return true;
-  return index > 1
-    && isRootOpenaiBaseUrlLine(lines[index - 1])
-    && lines[index - 2].includes(OCX_SECTION_MARKER);
-}
-
-/**
  * Companion to `setRootOpenaiBaseUrlForTarget` for the realtime sideband override. Same
- * ownership rule: a marker-owned line is rewritten in place, a user's own line (not in the
- * marker block) is kept and nothing is injected. Placement: directly after the marker-owned
- * `openai_base_url` so the marker owns both keys as one block. Only ever called on the
- * Design B (loopback) path right after the routing override was written — the legacy
+ * ownership rule, applied per key: the line is ours only when the marker sits directly
+ * above it; a user's own line (no marker above it) is kept and nothing is injected. The
+ * key gets its OWN marker line rather than sharing the routing override's, so a user line
+ * that happens to sit right under our `openai_base_url` is never mistaken for ours.
+ * Placement: directly after the marker-owned `openai_base_url` pair. Only ever called on
+ * the Design B (loopback) path right after the routing override was written — the legacy
  * provider-table form needs the admission-token header, which the sideband cannot carry.
  */
 export function setRootRealtimeWsBaseUrl(
@@ -474,14 +464,15 @@ export function setRootRealtimeWsBaseUrl(
   const key = buildRealtimeWsBaseUrlLine(validateCodexRoutingTarget(target));
   for (let index = 0; index < rootEnd; index += 1) {
     if (!isRootRealtimeWsBaseUrlLine(lines[index])) continue;
-    if (!markerOwnedRootLine(lines, index)) return { content, keptUserRealtimeWsBaseUrl: true };
+    const markerOwned = index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER);
+    if (!markerOwned) return { content, keptUserRealtimeWsBaseUrl: true };
     lines[index] = key;
     return { content: lines.join("\n"), keptUserRealtimeWsBaseUrl: false };
   }
   for (let index = 0; index < rootEnd; index += 1) {
     if (!isRootOpenaiBaseUrlLine(lines[index])) continue;
     if (!(index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER))) continue;
-    lines.splice(index + 1, 0, key);
+    lines.splice(index + 1, 0, OCX_SECTION_MARKER, key);
     return { content: lines.join("\n"), keptUserRealtimeWsBaseUrl: false };
   }
   // No marker-owned routing override to attach to: the override has no owner, so inject nothing.
@@ -492,8 +483,7 @@ export function setRootRealtimeWsBaseUrl(
  * Remove the marker-owned root `openai_base_url` (marker line + the key line right after it).
  * A user's own root override (no marker) survives; an orphaned marker with no key line after
  * it is dropped too so repeated strip/inject cycles cannot accumulate marker comments.
- * The `experimental_realtime_ws_base_url` companion directly under that pair is part of the
- * same owned block and goes with it.
+ * A marker-owned `experimental_realtime_ws_base_url` pair is removed by the same rule.
  */
 export function stripInjectedOpenaiBaseUrl(content: string): string {
   const lines = content.split("\n");
@@ -502,10 +492,9 @@ export function stripInjectedOpenaiBaseUrl(content: string): string {
   const drop = new Set<number>();
   for (let i = 0; i < rootEnd; i++) {
     if (!lines[i].includes(OCX_SECTION_MARKER)) continue;
-    if (i + 1 < rootEnd && isRootOpenaiBaseUrlLine(lines[i + 1])) {
+    if (i + 1 < rootEnd && (isRootOpenaiBaseUrlLine(lines[i + 1]) || isRootRealtimeWsBaseUrlLine(lines[i + 1]))) {
       drop.add(i);
       drop.add(i + 1);
-      if (i + 2 < rootEnd && isRootRealtimeWsBaseUrlLine(lines[i + 2])) drop.add(i + 2);
     } else if (i + 1 >= rootEnd || lines[i + 1].trim() === "") {
       drop.add(i); // orphaned marker at root
     }
@@ -1003,6 +992,16 @@ export async function injectCodexConfig(
   // Design B form FIRST: removeOcxSection also keys on the marker line, so a root-level
   // marker + openai_base_url pair must be gone before it scans or it would swallow root keys.
   content = stripInjectedOpenaiBaseUrl(content);
+  // #1798: after a Codex app rewrite the markers are gone but the values we recorded writing
+  // are still ours. Consume them by value here, BEFORE the routing form is chosen, so a
+  // Design B -> provider-table transition (hostname change, authless opt-in) cannot leave our
+  // own root URLs behind as if they were the user's, and so re-inject never journals them as
+  // not-ours (which would make them unrestorable).
+  content = stripJournaledOpenaiBaseUrl(
+    content,
+    journaledInjectedOpenaiBaseUrl(),
+    journaledInjectedRealtimeWsBaseUrl(),
+  );
   if (hasOcxProviderTable(content)) {
     content = removeOcxSection(content);
   }
@@ -1040,14 +1039,6 @@ export async function injectCodexConfig(
     // Design B (loopback): a single root override; codex keeps its native `openai` provider id
     // so thread history is never remapped. Any legacy form was already stripped above.
     content = stripInjectedOpenaiBaseUrl(content); // normalize before idempotent re-insert
-    // #1798: after a Codex app rewrite the marker is gone but the values we recorded writing
-    // are still ours. Consume them by value so re-inject does not mistake our own routing
-    // for a user override (and then journal it as not-ours, making it unrestorable).
-    content = stripJournaledOpenaiBaseUrl(
-      content,
-      journaledInjectedOpenaiBaseUrl(),
-      journaledInjectedRealtimeWsBaseUrl(),
-    );
     const result = setRootOpenaiBaseUrlForTarget(content, routingTarget);
     content = result.content;
     keptUserBaseUrl = result.keptUserBaseUrl;

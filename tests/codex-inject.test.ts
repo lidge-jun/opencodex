@@ -383,7 +383,7 @@ describe("Design B openai_base_url injection", () => {
     const loopback = { baseUrl: "http://127.0.0.1:10100/v1", requiresAdmissionToken: false, tokenEnv: "OPENCODEX_API_AUTH_TOKEN" } as const;
     const base = 'model = "gpt-5.5"\n\n[features]\nfast_mode = true\n';
 
-    test("is written directly under the marker-owned openai_base_url with the same value (one marker owns both)", () => {
+    test("is written as its own marker-owned pair directly under the routing pair, with the same value", () => {
       const routed = setRootOpenaiBaseUrl(base, loopback).content;
       const { content, keptUserRealtimeWsBaseUrl } = setRootRealtimeWsBaseUrl(routed, loopback);
       expect(keptUserRealtimeWsBaseUrl).toBe(false);
@@ -391,9 +391,51 @@ describe("Design B openai_base_url injection", () => {
       const routing = lines.indexOf('openai_base_url = "http://127.0.0.1:10100/v1"');
       expect(routing).toBeGreaterThan(0);
       expect(lines[routing - 1]).toContain("Auto-injected by opencodex");
-      expect(lines[routing + 1]).toBe('experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"');
-      expect(lines.indexOf("[features]")).toBeGreaterThan(routing + 1);
-      expect(content.match(/Auto-injected by opencodex/g)?.length).toBe(1);
+      expect(lines[routing + 1]).toContain("Auto-injected by opencodex");
+      expect(lines[routing + 2]).toBe('experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"');
+      expect(lines.indexOf("[features]")).toBeGreaterThan(routing + 2);
+      expect(content.match(/Auto-injected by opencodex/g)?.length).toBe(2);
+    });
+
+    test("a pre-upgrade block where the user's own realtime line sits right under our routing pair is left alone", () => {
+      // Older injections wrote only marker + openai_base_url. A user who added the realtime
+      // key by hand directly beneath must keep it: ownership is per marker, never by adjacency.
+      const original = [
+        "# Auto-injected by opencodex",
+        'openai_base_url = "http://127.0.0.1:10100/v1"',
+        'experimental_realtime_ws_base_url = "https://realtime.example/v1"',
+        "",
+        "[features]",
+        "",
+      ].join("\n");
+      const { content, keptUserRealtimeWsBaseUrl } = setRootRealtimeWsBaseUrl(original, loopback);
+      expect(keptUserRealtimeWsBaseUrl).toBe(true);
+      expect(content).toBe(original);
+      const stripped = stripInjectedOpenaiBaseUrl(original);
+      expect(stripped).not.toContain("openai_base_url");
+      expect(stripped).toContain('experimental_realtime_ws_base_url = "https://realtime.example/v1"');
+    });
+
+    test("an orphaned marker + realtime pair (routing line removed by hand) is stripped, not accumulated", () => {
+      const orphan = [
+        'model = "gpt-5.5"',
+        "# Auto-injected by opencodex",
+        'experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"',
+        "",
+        "# Auto-injected by opencodex",
+        "[model_providers.opencodex]",
+        'name = "OpenCodex Proxy"',
+        'base_url = "http://127.0.0.1:10100/v1"',
+        "",
+        "[features]",
+        "fast_mode = true",
+        "",
+      ].join("\n");
+      const stripped = stripOpencodexConfig(orphan);
+      expect(stripped).not.toContain("experimental_realtime_ws_base_url");
+      expect(stripped).not.toContain("opencodex");
+      expect(stripped).toContain('model = "gpt-5.5"');
+      expect(stripped).toContain("fast_mode = true");
     });
 
     test("re-inject is idempotent and follows a port change", () => {
