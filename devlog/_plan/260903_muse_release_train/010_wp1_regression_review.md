@@ -31,8 +31,21 @@ Three questions decide whether this release is safe to publish:
    read. Verify the redaction covers the error paths, not just the happy path.
 2. **Can the ToS warning be bypassed?** The provider is deliberately marked
    unsupported; the warning is the only thing standing between a user and an
-   unauthorized use of their Muse Code subscription. A silent import would be
-   an `UNSAFE` terminal outcome for this unit.
+   unauthorized use of their Muse Code subscription.
+
+   The verdict rule, so a later reader reaches the same decision this unit
+   did. A bypass is `UNSAFE` and blocks the release when it is EITHER of:
+
+   - a **new** bypass introduced by a commit in this delta, or
+   - any path that **discloses the credential** (a log line, an error body, a
+     serialized config field).
+
+   A bypass is **accepted** only when all three hold: it predates the delta,
+   it applies identically to the other `HIGH_RISK` providers rather than
+   singling out `meta-muse`, and it is recorded in `050_followups.md` with
+   the file:line evidence. That is exactly one case here — the client-side-only
+   acknowledgement on `POST /api/oauth/login` — and `005` §1 is why it
+   qualifies. Anything that does not meet all three is `UNSAFE`.
 3. **Does Muse Spark 1.3 leak into a provider that cannot serve it?** #3317
    added 1.3 on the 1.2 spec across the resellers; the registry must not
    advertise 1.3 on a provider whose upstream roster lacks it.

@@ -19,7 +19,27 @@ each step keeps its own gate. Steps 0 and 4 were added after audit round 1
    own duplicate check (`release.yml:303`) fires only after dispatch and never
    checks channel ordering, so skipping this means learning about a collision
    from a failed publish with the bump already pushed.
-   `npm view @bitkyc08/opencodex versions --json` plus `gh release view`.
+
+   Four checks, each of which must FAIL THE STEP rather than merely print. A
+   command that only retrieves data is not a gate:
+
+   ```bash
+   V=2.41.0-preview.YYYYMMDD
+   # 1. the exact version is unpublished
+   npm view "@bitkyc08/opencodex@$V" version 2>/dev/null && { echo "published"; exit 1; }
+   # 2. no git tag
+   git ls-remote --tags origin "refs/tags/v$V" | grep -q . && { echo "tag exists"; exit 1; }
+   # 3. no GitHub release
+   gh release view "v$V" >/dev/null 2>&1 && { echo "release exists"; exit 1; }
+   # 4. it moves the CHANNEL forward
+   npm view @bitkyc08/opencodex dist-tags --json   # compare against .preview
+   ```
+
+   Check 4 is the one with no automated equivalent anywhere in the workflow:
+   `release.yml` will happily publish a version that moves `preview`
+   BACKWARDS, because its only duplicate check is exact-version equality. Read
+   the current `preview` tag and confirm the new version sorts after it under
+   semver.
 1. Open a promotion PR from a branch **pinned to the reviewed SHA** (not the
    moving `dev` ref) into `preview`, and merge it with admin. `preview` is
    protected by a ruleset requiring a reviewed pull request, so promotion is by
