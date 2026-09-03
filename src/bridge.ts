@@ -88,8 +88,12 @@ function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
   // counters) pass through the rebuild. Normalized values stay authoritative for the known
   // keys (they are derived from the same raw values, so this never disagrees with upstream).
   const raw: Record<string, unknown> = usage.rawUsage ?? {};
+  // cache_write_tokens is a KNOWN key: it is emitted only from the validated normalized
+  // value below, never copied through raw (an unknown-shaped value must not leak into the
+  // normalized contract).
   const rawInputDetails = isRecord(raw.input_tokens_details)
-    ? raw.input_tokens_details as Record<string, unknown>
+    ? Object.fromEntries(Object.entries(raw.input_tokens_details as Record<string, unknown>)
+      .filter(([key]) => key !== "cache_write_tokens"))
     : {} as Record<string, unknown>;
   const rawOutputDetails = isRecord(raw.output_tokens_details)
     ? raw.output_tokens_details as Record<string, unknown>

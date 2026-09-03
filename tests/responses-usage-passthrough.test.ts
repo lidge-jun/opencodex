@@ -130,4 +130,32 @@ describe("raw usage passthrough (openai/codex#41980 parity)", () => {
     expect(usage.subscription).toEqual({ window: { used_percent: 12 } });
     expect(usage.future_counter_v2).toBe("wire-value");
   });
+
+  test("an unknown-shaped known key never leaks through the raw spread", () => {
+    const json = buildResponseJSON([
+      { type: "text_delta", text: "hi" },
+      { type: "done", endTurn: true, usage: {
+        inputTokens: 3, outputTokens: 2, totalTokens: 5, cachedInputTokens: 1,
+        rawUsage: {
+          input_tokens: 3, output_tokens: 2, total_tokens: 5,
+          extra: true,
+          input_tokens_details: { cached_tokens: 1, cache_write_tokens: "not-a-number", audio_tokens: 7 },
+        },
+      } },
+    ], "gpt-live");
+    const usage = json.usage as Record<string, unknown>;
+    expect(usage.extra).toBe(true);
+    expect(usage.input_tokens_details).toEqual({ audio_tokens: 7, cached_tokens: 1 });
+  });
+
+  test("empty-completion retry merge keeps the content attempt's raw usage", async () => {
+    const { mergeUsage } = await import("../src/server/responses/empty-completion-guard");
+    const first = { inputTokens: 0, outputTokens: 0, rawUsage: { marker: "first" } };
+    const second = { inputTokens: 3, outputTokens: 2, rawUsage: { subscription: { window: { used_percent: 9 } } } };
+    const merged = mergeUsage(first, second);
+    expect(merged?.rawUsage).toEqual(second.rawUsage);
+    expect(mergeUsage(second, undefined)?.rawUsage).toEqual(second.rawUsage);
+    expect(mergeUsage(first, undefined)?.rawUsage).toEqual(first.rawUsage);
+    expect(mergeUsage({ inputTokens: 1, outputTokens: 1 }, { inputTokens: 1, outputTokens: 1 })?.rawUsage).toBeUndefined();
+  });
 });

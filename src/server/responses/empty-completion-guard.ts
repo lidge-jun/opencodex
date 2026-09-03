@@ -176,6 +176,9 @@ export function mergeUsage(
   const contextTotalTokens = second.contextTotalTokens ?? first.contextTotalTokens;
   const inputTokens = first.inputTokens + second.inputTokens;
   const outputTokens = first.outputTokens + second.outputTokens;
+  // The attempt that produced the content owns the raw wire usage (openai/codex#41980);
+  // an empty first attempt may still be the only one that saw it.
+  const rawUsage = second.rawUsage ?? first.rawUsage;
   return {
     inputTokens,
     outputTokens,
@@ -186,6 +189,7 @@ export function mergeUsage(
     ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(first.estimated || second.estimated ? { estimated: true } : {}),
+    ...(rawUsage !== undefined ? { rawUsage } : {}),
   };
 }
 

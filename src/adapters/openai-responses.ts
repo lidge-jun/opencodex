@@ -2406,7 +2406,26 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
               reservation.commitRetained();
               budget.releaseRetained(previousBytes, { kind: "retained_collectors" });
             }
-            usage = usageFromResponsesPayload(payload.response);
+            {
+              const nextUsage = usageFromResponsesPayload(payload.response);
+              // The attached raw usage object can be event-sized (unknown keys carry arbitrary
+              // values); it stays reachable until the terminal yields, so charge it like the
+              // adjacent retained collectors or it would defeat the per-request memory cap.
+              const previousRawBytes = usage?.rawUsage === undefined ? 0
+                : budgetEncoder.encode(JSON.stringify(usage.rawUsage)).byteLength;
+              const nextRawBytes = nextUsage?.rawUsage === undefined ? 0
+                : budgetEncoder.encode(JSON.stringify(nextUsage.rawUsage)).byteLength;
+              if (nextRawBytes > 0) {
+                const reservation = budget.reserveTransient(nextRawBytes, { kind: "retained_collectors" });
+                usage = nextUsage;
+                reservation.commitRetained();
+              } else {
+                usage = nextUsage;
+              }
+              if (previousRawBytes > 0) {
+                budget.releaseRetained(previousRawBytes, { kind: "retained_collectors" });
+              }
+            }
             break;
         }
       }
@@ -2414,7 +2433,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // completed snapshot so text is never double-counted.
       const text = snapshot || doneText || deltas;
       if (text) yield { type: "text_delta", text };
-      budget.releaseRetained(budgetEncoder.encode(deltas).byteLength + budgetEncoder.encode(doneText).byteLength + budgetEncoder.encode(snapshot).byteLength, { kind: "retained_collectors" });
+      budget.releaseRetained(
+        budgetEncoder.encode(deltas).byteLength
+          + budgetEncoder.encode(doneText).byteLength
+          + budgetEncoder.encode(snapshot).byteLength
+          + (usage?.rawUsage === undefined ? 0 : budgetEncoder.encode(JSON.stringify(usage.rawUsage)).byteLength),
+        { kind: "retained_collectors" },
+      );
       yield {
         type: "done",
         ...(usage ? { usage } : {}),
