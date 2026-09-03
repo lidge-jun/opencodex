@@ -74,9 +74,10 @@
   },
   "overrides": {
     "@hono/node-server": "2.1.0",
-    "fast-uri": "^3.1.5",
+    "fast-uri": "^3.1.7",
     "hono": "4.13.1",
-    "ip-address": "^10.4.0"
+    "ip-address": "^10.4.0",
+    "qs": "^6.16.0"
   },
   "keywords": [
     "codex",
