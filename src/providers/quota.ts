@@ -1505,6 +1505,71 @@ export function setCachedProviderAccountQuotaForTests(
   accountQuotaCache.set(key, { ts: Date.now(), quota });
 }
 
+/**
+ * Providers whose per-account quota is OBSERVED in-band, never probed.
+ *
+ * Deliberately separate from `supportsPerAccountQuota` rather than folded into it. That
+ * predicate gates `fetchAccountQuota`, whose fallback branch sends any
+ * non-Kiro/non-Antigravity bearer to Anthropic's usage endpoint — so adding `meta-muse`
+ * there without a dedicated branch would ship a Meta credential to Anthropic. And even
+ * with a branch it would be the wrong predicate: it means "this provider can be probed",
+ * and Meta publishes no quota endpoint to probe.
+ */
+export function hasPassiveAccountQuota(provider: string): boolean {
+  return provider === "meta-muse";
+}
+
+/**
+ * Record a quota observed in-band on a streaming turn.
+ *
+ * The CALLER captures `writerGeneration` when it resolves the serving credential, not
+ * this function at write time. A streaming turn is a long await, and a generation
+ * captured immediately before the write cannot see a config or account change that
+ * happened EARLIER in the same turn — which is exactly the case the fence exists for.
+ */
+export function recordPassiveAccountQuota(
+  provider: string,
+  accountId: string,
+  quota: ProviderQuota,
+  writerGeneration: number,
+): void {
+  if (!hasPassiveAccountQuota(provider) || !accountId) return;
+  const key = accountCacheKey(provider, accountId);
+  if (!mayCommitAccountQuotaKey(key, writerGeneration)) return;
+  accountQuotaCache.set(key, { ts: Date.now(), quota });
+  // Persisted so a restart keeps the last observation: with no probe to re-establish it,
+  // a forgotten row stays forgotten until the user happens to run another streaming turn.
+  persistAccountQuotaCache();
+  // sweepExpiredOnWrite is deliberately NOT called. Existing probe writers call it
+  // because they run on a poll; this runs on the request path, where a state sweep does
+  // not belong. Passive rows are still reclaimed by generation reconciliation
+  // (reconcileProviderAccountQuotaRows) and by the disk reader's age bound.
+}
+
+/**
+ * Cache-only per-account rows for a passive provider. Never probes, never refreshes.
+ *
+ * An account with no observation is OMITTED rather than returned with `quota: null` and
+ * `unavailable`: that pair means "a probe was attempted and failed", and no probe was
+ * ever attempted here. A user who has not yet run a streaming turn simply has no
+ * measurement, which is not an error state.
+ */
+export function readPassiveProviderAccountQuotas(provider: string): ProviderAccountQuota[] {
+  if (!hasPassiveAccountQuota(provider)) return [];
+  // Idempotent, and otherwise only reached from probe paths a passive provider never
+  // enters — without it a restart shows nothing until the next streaming turn, even
+  // though the row is sitting on disk.
+  hydrateAccountQuotaCache();
+  const set = getAccountSet(provider);
+  if (!set) return [];
+  const rows: ProviderAccountQuota[] = [];
+  for (const account of set.accounts) {
+    const entry = accountQuotaCache.get(accountCacheKey(provider, account.id));
+    if (entry?.quota) rows.push({ accountId: account.id, quota: entry.quota });
+  }
+  return rows;
+}
+
 export function sweepExpiredProviderAccountQuotaRows(now = Date.now()): number {
   let removed = 0;
   for (const [key, entry] of accountQuotaCache) {

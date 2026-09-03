@@ -10,7 +10,7 @@
  * categories answer the only question rotation asks — "which of these is most likely to
  * serve the retry" — and within the healthy group a simple headroom sort is enough.
  */
-import { getCachedProviderAccountQuota } from "../providers/quota";
+import { getCachedProviderAccountQuota, hasPassiveAccountQuota } from "../providers/quota";
 import { getKiroAccountExhaustion } from "../providers/kiro-usage";
 
 /** Lower sorts earlier. Unknown sits between measured-healthy and measured-empty. */
@@ -28,6 +28,24 @@ interface Ranked {
 }
 
 /**
+ * How old a PASSIVELY observed quota may be and still steer routing.
+ *
+ * A probed row is fresh by construction: it exists only because a probe wrote it, and
+ * `fetchAccountQuota` re-probes once `ACCOUNT_QUOTA_TTL_MS` has passed. So no caller has
+ * ever needed an explicit age check, and `getCachedProviderAccountQuota` does not apply
+ * one.
+ *
+ * A passive row breaks that invariant — nothing re-probes it, so it can be hours or days
+ * old. Routing on such a reading is worse than routing on none: the unranked ring at
+ * least rotates, while a stale ranking sends every first attempt to an account that may
+ * have been spent since. The bound is longer than the probe TTL (an hour-old reading of
+ * a five-hour window is still informative) and far shorter than the six-hour disk
+ * horizon, which exists to preserve a value for DISPLAY — where the age is shown to the
+ * user and no automatic decision rides on it.
+ */
+const PASSIVE_HEADROOM_MAX_AGE_MS = 60 * 60_000;
+
+/**
  * Remaining headroom across every window the provider reports.
  *
  * The minimum wins: an account at 5% of its five-hour window is unusable right now even if
@@ -36,6 +54,9 @@ interface Ranked {
 function headroomOf(provider: string, accountId: string): number | null {
   const quota = getCachedProviderAccountQuota(provider, accountId);
   if (!quota) return null;
+  // Null, not a low rank: this must reproduce "no evidence" so a stale roster degrades to
+  // the unranked ring rather than to a differently wrong answer.
+  if (hasPassiveAccountQuota(provider) && Date.now() - quota.updatedAt > PASSIVE_HEADROOM_MAX_AGE_MS) return null;
   const percents = [
     quota.fiveHourPercent,
     quota.weeklyPercent,
