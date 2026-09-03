@@ -405,6 +405,12 @@ describe("unauthenticated loopback listener", () => {
       // Plain HTTP on the keyed join paths stays rejected.
       expect((await fetch(`${base}/v1/live/rtc_x`)).status).toBe(404);
       expect((await fetch(`${base}/v1/realtime/calls/rtc_x`)).status).toBe(404);
+      // A malformed escape in the call id is a JSON 404, not a 500.
+      for (const path of ["/v1/live/%ZZ", "/v1/realtime/calls/%ZZ"]) {
+        const res = await fetch(`${base}${path}`, { headers: upgradeHeaders });
+        expect({ path, status: res.status }).toEqual({ path, status: 404 });
+        expect(res.headers.get("content-type")).toContain("application/json");
+      }
     } finally {
       await server.stop(true);
     }

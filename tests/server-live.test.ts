@@ -1006,6 +1006,14 @@ test("parseLiveSidebandTarget recognizes standalone realtime sessions", async ()
   ).toBeNull();
   // Bare /v1/realtime/calls is the call-create HTTP path, not a WS target.
   expect(parseLiveSidebandTarget("/v1/realtime/calls", new URLSearchParams(), "")).toBeNull();
+  // A malformed percent escape in a keyed join must read as "no target" (JSON 404), never
+  // let decodeURIComponent throw out of the router as a 500.
+  expect(parseLiveSidebandTarget("/v1/live/%ZZ", new URLSearchParams(), "")).toBeNull();
+  expect(parseLiveSidebandTarget("/v1/realtime/calls/%ZZ", new URLSearchParams(), "")).toBeNull();
+  expect(parseLiveSidebandTarget("/v1/live/rtc%5Fok", new URLSearchParams(), "")).toEqual({
+    style: "frameless-path",
+    callId: "rtc_ok",
+  });
   // Valid join shapes keep working.
   expect(
     parseLiveSidebandTarget("/v1/realtime", new URLSearchParams("call_id=rtc_2"), "call_id=rtc_2"),

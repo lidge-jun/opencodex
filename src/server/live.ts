@@ -148,6 +148,20 @@ function clientProtocolHeaders(reqHeaders: Headers): Record<string, string> {
 const LIVE_CALL_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
 /**
+ * Decode one path-segment call id. A malformed percent escape (`%ZZ`) makes
+ * `decodeURIComponent` throw; that must read as "not a sideband target" (JSON 404),
+ * never escape the router as a 500.
+ */
+function decodeLiveCallId(segment: string): string | null {
+  try {
+    const callId = decodeURIComponent(segment);
+    return LIVE_CALL_ID_RE.test(callId) ? callId : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Credential-shaped query keys never forwarded upstream on a standalone realtime
  * relay. Auth on the upstream socket is proxy-owned (headers resolved by
  * `resolveLiveRelay`); a caller that puts `access_token=`/`api_key=`/... in the
@@ -238,8 +252,8 @@ function httpsToWss(httpUrl: string): string {
 export function parseLiveSidebandTarget(pathname: string, searchParams: URLSearchParams, rawQuery = ""): LiveSidebandTarget | null {
   const liveMatch = pathname.match(/^\/v1\/live\/([^/]+)\/?$/);
   if (liveMatch) {
-    const callId = decodeURIComponent(liveMatch[1]!);
-    if (!LIVE_CALL_ID_RE.test(callId)) return null;
+    const callId = decodeLiveCallId(liveMatch[1]!);
+    if (!callId) return null;
     return { style: "frameless-path", callId };
   }
   // Standalone Frameless session (no call-create): `GET /v1/live?model=`.
@@ -248,8 +262,8 @@ export function parseLiveSidebandTarget(pathname: string, searchParams: URLSearc
   }
   const callsMatch = pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/?$/);
   if (callsMatch) {
-    const callId = decodeURIComponent(callsMatch[1]!);
-    if (!LIVE_CALL_ID_RE.test(callId)) return null;
+    const callId = decodeLiveCallId(callsMatch[1]!);
+    if (!callId) return null;
     return { style: "realtime-calls-path", callId };
   }
   if (pathname === "/v1/realtime" || pathname === "/v1/realtime/") {
