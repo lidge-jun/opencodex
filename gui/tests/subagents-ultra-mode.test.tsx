@@ -173,3 +173,50 @@ test("a save refresh from an old API server cannot overwrite a newer server", as
   expect(ultraSwitch().disabled).toBe(true);
   expect(ultraSwitch().getAttribute("aria-pressed")).toBe("false");
 });
+
+test("clicking a surface mode on Subagents PUTs /api/v2 with multiAgentMode and re-reads it", async () => {
+  // Server starts in v1; after the PUT the re-read returns the new mode, and the radiogroup
+  // must follow the server, not the click.
+  v2Responses = [{ ok: true, body: { enabled: false, multiAgentMode: "v1", multiAgentModeHintText: null } }];
+  let serverMode: "v1" | "default" | "v2" = "v1";
+  const previousFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (url: string, init?: RequestInit) => {
+      requests.push({ url: String(url), init });
+      const path = new URL(String(url), "http://localhost/").pathname;
+      if (path === "/api/v2") {
+        if (init?.method === "PUT") {
+          const body = JSON.parse(String(init.body)) as { multiAgentMode?: typeof serverMode };
+          if (body.multiAgentMode) serverMode = body.multiAgentMode;
+          return response({ ok: true });
+        }
+        return response({ enabled: false, multiAgentMode: serverMode, multiAgentModeHintText: null });
+      }
+      return (previousFetch as typeof fetch)(url, init);
+    },
+  });
+
+  root = createRoot(container);
+  await act(async () => {
+    root!.render(<LanguageProvider><Subagents apiBase="http://localhost" /></LanguageProvider>);
+  });
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 30)); });
+
+  const group = container.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Sub-agent mode"]')
+    ?? [...container.querySelectorAll<HTMLElement>('[role="radiogroup"]')].find(g => g.querySelector('[role="radio"]'));
+  expect(group).toBeDefined();
+  const radios = [...group!.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+  expect(radios.map(r => r.getAttribute("aria-checked"))).toEqual(["true", "false", "false"]);
+
+  await act(async () => { radios[2]!.click(); });
+  await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 30)); });
+
+  const put = requests.find(r => r.init?.method === "PUT" && r.url.endsWith("/api/v2"));
+  expect(put).toBeDefined();
+  expect(JSON.parse(String(put!.init!.body))).toEqual({ multiAgentMode: "v2" });
+  // The follow-up GET landed and the radiogroup reflects the server.
+  const gets = requests.filter(r => (r.init?.method ?? "GET") === "GET" && r.url.endsWith("/api/v2"));
+  expect(gets.length).toBeGreaterThanOrEqual(2);
+  expect(radios.map(r => r.getAttribute("aria-checked"))).toEqual(["false", "false", "true"]);
+});
