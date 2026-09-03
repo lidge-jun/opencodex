@@ -24,6 +24,8 @@ export type UltraModeState = {
   enabled: boolean;
   hintText: string | null;
   multiAgentV2Enabled: boolean;
+  /** The raw multi-agent mode; the effort-cap section is only meaningful outside v1. */
+  multiAgentMode: "v1" | "default" | "v2";
 };
 
 export type UltraModePatch = {

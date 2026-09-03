@@ -288,6 +288,7 @@ export const ko: Record<TKey, string> = {
   "dash.searchReasoning": "서치 추론 강도",
   "dash.visionModel": "비전 사이드카 모델",
   "dash.visionModelHint": "텍스트 전용 라우팅 모델에 이미지를 설명하는 데 사용되는 모델입니다. ChatGPT 로그인 필요.",
+  "dash.sidecars": "사이드카",
   "dash.webSearchSidecar": "웹 검색 사이드카",
   "dash.webSearchSidecarHint": "라우팅 모델의 웹 검색에 쓸 백엔드와 모델을 고릅니다.",
   "dash.webSearchStream": "응답 실시간 스트리밍",

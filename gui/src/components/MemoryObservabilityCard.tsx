@@ -448,7 +448,13 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
         t={t}
       />
 
-      <div className="stat-row mem-stats">
+      {/* Everything numeric is collapsed by default: the pressure bar above is the headline; four byte
+          counts refreshing every few seconds are diagnosis, not a decision. */}
+      <details style={{ marginTop: 10 }}>
+        <summary className="muted text-label" style={{ cursor: "pointer", padding: "2px 2px" }}>{t("dash.mem.details")}</summary>
+        <div className="muted text-control" style={{ margin: "8px 0 0" }}>{t("dash.mem.hint")}</div>
+
+        <div className="stat-row mem-stats" style={{ marginTop: 10 }}>
         <Stat label={t("dash.mem.rss")} value={data ? formatBytes(data.rss, locale) : "—"} />
         {/* heapUsed can exceed heapTotal on Bun (external buffers are counted in
             used but not in the JS-object arena), so a "used / total" label reads
@@ -466,10 +472,6 @@ export default function MemoryObservabilityCard({ apiBase }: { apiBase: string }
         />
       </div>
 
-      {/* Secondary diagnostics collapsed by default: only the headline stats stay visible. */}
-      <details style={{ marginTop: 10 }}>
-        <summary className="muted text-label" style={{ cursor: "pointer", padding: "2px 2px" }}>{t("dash.mem.details")}</summary>
-        <div className="muted text-control" style={{ margin: "8px 0 0" }}>{t("dash.mem.hint")}</div>
 
         <div className="muted text-label" style={{ margin: "14px 0 6px" }}>{t("dash.mem.runtime")}</div>
         <div className="stat-row">

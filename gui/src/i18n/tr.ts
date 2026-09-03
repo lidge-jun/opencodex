@@ -294,6 +294,7 @@ export const tr: Record<TKey, string> = {
   "dash.searchReasoning": "Arama akıl yürütme çabası",
   "dash.visionModel": "Görsel yan araç modeli",
   "dash.visionModelHint": "Salt metin yönlendirilen modeller için görselleri tanımlamakta kullanılan model. ChatGPT girişi gerektirir.",
+  "dash.sidecars": "Yan araçlar",
   "dash.webSearchSidecar": "Web arama yan aracı (sidecar)",
   "dash.webSearchSidecarHint": "Yönlendirilen modellerde web araması için kullanılan arka ucu ve modeli seçin.",
   "dash.webSearchStream": "Yanıtları canlı akıt",

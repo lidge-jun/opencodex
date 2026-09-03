@@ -139,7 +139,10 @@ test("a superseded settings response cannot overwrite newer Startup cache", asyn
   expect(refresh).toBeDefined();
   await act(async () => { refresh?.click(); });
   await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 20)); });
-  expect(settingsCalls).toBe(2);
+  // Three reads of /api/settings: the page fetch on mount, the autostart toggle's own read
+  // on mount (rehomed here from the dashboard; it has no other data source), and the
+  // page fetch again on refresh. The first one is the deliberately stalled response.
+  expect(settingsCalls).toBe(3);
   expect(testWindow.sessionStorage.getItem(CACHE_KEY)).toContain("fresh");
 
   await act(async () => {

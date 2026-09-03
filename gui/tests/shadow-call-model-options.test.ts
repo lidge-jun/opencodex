@@ -54,12 +54,13 @@ test("shadow-call options do not append a fallback for an empty current value", 
   expect(shadowCallModelOptions(models, "")).toHaveLength(models.length);
 });
 
-test("both shadow-call selects use the canonical option helper", async () => {
+test("the shadow-call select uses the canonical option helper, and only Models renders one", async () => {
   const [overview, modelsPage] = await Promise.all([
     Bun.file(new URL("../src/pages/dashboard-overview-sections.tsx", import.meta.url)).text(),
     Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text(),
   ]);
 
-  expect(overview).toContain("shadowCallModelOptions(models, shadowCall?.model, shadowCall?.sourceModels)");
+  // The dashboard copy was a second editor for one server value; Models is the one home.
+  expect(overview).not.toContain("shadowCallModelOptions(");
   expect(modelsPage).toMatch(/shadowCallModelOptions\(\s*models\.filter\(model => activeNamespaced\.has\(model\.namespaced\)\),\s*shadowCall\?\.model,\s*shadowCall\?\.sourceModels,/);
 });

@@ -25,7 +25,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   /** Sync guard: state-only `busy` can miss clicks before the disabled re-render commits. */
   const saveInFlight = useRef(false);
   const delegation = useSubagentDelegation(apiBase);
-  const [ultraMode, setUltraMode] = useState<UltraModeState>({ enabled: false, hintText: null, multiAgentV2Enabled: false });
+  const [ultraMode, setUltraMode] = useState<UltraModeState>({ enabled: false, hintText: null, multiAgentV2Enabled: false, multiAgentMode: "default" });
   const [ultraSaving, setUltraSaving] = useState(false);
   const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
   const ultraLoadGeneration = useRef(0);
@@ -57,6 +57,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       // `default` surface still preserves upstream V1 pins (for example luna),
       // so only an explicitly forced V2 catalog is an effective surface here.
       multiAgentV2Enabled: data.enabled === true && data.multiAgentMode === "v2",
+      multiAgentMode: data.multiAgentMode ?? "default",
     });
     return true;
   }, [apiBase, t]);
@@ -208,6 +209,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {state.showError && <Notice tone="err">{t("sub.loadFail")}</Notice>}
       <SubagentsWorkspace
+        apiBase={apiBase}
         available={available}
         chosen={chosen}
         busy={busy}

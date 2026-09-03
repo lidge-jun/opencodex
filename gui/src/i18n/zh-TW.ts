@@ -186,6 +186,7 @@ export const zhTW: Record<TKey, string> = {
   "dash.searchReasoning": "搜尋推理強度",
   "dash.visionModel": "視覺附屬模型",
   "dash.visionModelHint": "為純文字路由模型描述圖像的模型。需要 ChatGPT 登入。",
+  "dash.sidecars": "側車",
   "dash.webSearchSidecar": "網頁搜尋附屬服務",
   "dash.webSearchSidecarHint": "選擇路由模型進行網頁搜尋時使用的後端和模型。",
   "dash.webSearchStream": "即時串流輸出回答",

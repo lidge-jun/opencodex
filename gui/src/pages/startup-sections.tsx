@@ -81,6 +81,7 @@ export function StartupDetailsSection({
   installBusy,
   installResult,
   onInstall,
+  autostart,
 }: {
   data: StartupHealthData;
   failed: boolean;
@@ -88,6 +89,8 @@ export function StartupDetailsSection({
   installBusy: StartupInstallAction | null;
   installResult: { kind: "success" | "error"; action: StartupInstallAction; repair?: boolean; detail?: string } | null;
   onInstall: (action: StartupInstallAction, opts?: { repair?: boolean }) => void;
+  /** The launcher-shim autostart preference; rehomed here from the dashboard. */
+  autostart?: { enabled: boolean | null; saving: boolean; toggle: () => void };
 }) {
   const { t } = useI18n();
   // Repair only rewrites stale assets — conflict/disabled need uninstall/reinstall, not repair.
@@ -143,6 +146,23 @@ export function StartupDetailsSection({
           )}
         </div>
       </div>
+      {autostart && (
+        <div className="startup-detail-row">
+          <div><strong>{t("dash.codexAutoStart")}</strong><span>{t("dash.codexAutoStartHint")}</span></div>
+          <div className="startup-detail-actions">
+            <button
+              type="button"
+              className={`switch ${autostart.enabled ?? true ? "on" : ""}`}
+              onClick={autostart.toggle}
+              disabled={autostart.enabled === null || autostart.saving}
+              aria-label={t("dash.codexAutoStart")}
+              aria-pressed={autostart.enabled ?? true}
+            >
+              <span className="knob" />
+            </button>
+          </div>
+        </div>
+      )}
       {installResult && (
         <div className={`notice ${installResult.kind === "success" ? "notice-ok" : "notice-warn"} startup-action-notice`} role="status" aria-live="polite">
           {installResult.kind === "success"

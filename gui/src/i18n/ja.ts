@@ -293,6 +293,7 @@ export const ja: Record<TKey, string> = {
   "dash.searchReasoning": "検索の推論負荷",
   "dash.visionModel": "ビジョンサイドカーモデル",
   "dash.visionModelHint": "テキスト専用ルーティングモデルで画像を説明するために使うモデル。ChatGPT ログインが必要です。",
+  "dash.sidecars": "サイドカー",
   "dash.webSearchSidecar": "ウェブ検索サイドカー",
   "dash.webSearchSidecarHint": "ルーティングモデルでウェブ検索に使うバックエンドとモデルを選択します。",
   "dash.webSearchStream": "回答をライブ配信",

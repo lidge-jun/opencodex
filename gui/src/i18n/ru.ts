@@ -293,6 +293,7 @@ export const ru: Record<TKey, string> = {
   "dash.searchReasoning": "Уровень рассуждений для поиска",
   "dash.visionModel": "Модель сайдкара для изображений",
   "dash.visionModelHint": "Модель, которая описывает изображения для маршрутизируемых моделей, работающих только с текстом. Требуется вход в аккаунт ChatGPT.",
+  "dash.sidecars": "Сайдкары",
   "dash.webSearchSidecar": "Сайдкар веб-поиска",
   "dash.webSearchSidecarHint": "Выберите бэкенд и модель, используемые для веб-поиска на маршрутизируемых моделях.",
   "dash.webSearchStream": "Стримить ответы вживую",

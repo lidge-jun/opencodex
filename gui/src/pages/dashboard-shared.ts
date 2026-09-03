@@ -10,8 +10,6 @@ import type { TKey } from "../i18n/shared";
 import type { StartupHealthStatus } from "../startup-health-ui";
 import { shadowSourceModelList } from "./shadow-call-source";
 
-export type DashboardSection = "overview" | "providers" | "models";
-
 /**
  * `#dashboard/update` is the sidebar's action deep link. It is not a tab, so it resolves
  * to Overview (where the maintenance panel lives) and separately asks the dashboard to
@@ -19,21 +17,9 @@ export type DashboardSection = "overview" | "providers" | "models";
  */
 export const DASHBOARD_UPDATE_HASH = "dashboard/update";
 
-export function readDashboardSectionFromHash(): DashboardSection {
-  const raw = window.location.hash.replace(/^#\/?/, "");
-  if (raw === "dashboard/providers") return "providers";
-  if (raw === "dashboard/models") return "models";
-  return "overview";
-}
-
 /** True while the location hash is the sidebar update deep link. */
 export function hashRequestsUpdateDialog(): boolean {
   return window.location.hash.replace(/^#\/?/, "") === DASHBOARD_UPDATE_HASH;
-}
-
-/** Overview is the bare `#dashboard`; the other sections carry a suffix. */
-export function dashboardHashForSection(section: DashboardSection): string {
-  return section === "overview" ? "dashboard" : `dashboard/${section}`;
 }
 
 /** Like readJsonOrThrow, but rejects empty/204 bodies that would otherwise yield undefined. */

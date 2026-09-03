@@ -296,6 +296,7 @@ export const en = {
   "dash.searchReasoning": "Search reasoning effort",
   "dash.visionModel": "Vision sidecar model",
   "dash.visionModelHint": "Model used to describe images for text-only routed models. Requires ChatGPT login.",
+  "dash.sidecars": "Sidecars",
   "dash.webSearchSidecar": "Web search sidecar",
   "dash.webSearchSidecarHint": "Choose the backend and model used for web search on routed models.",
   "dash.webSearchStream": "Stream answers live",

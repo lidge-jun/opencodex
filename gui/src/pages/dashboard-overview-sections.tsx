@@ -1,20 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { IconAlert, IconCheck, IconChevron, IconInfo, IconRefresh, IconX } from "../icons";
+import { IconAlert, IconCheck, IconChevron, IconRefresh, IconX } from "../icons";
 import { Trans } from "../i18n/provider";
 import type { TFn } from "../i18n/shared";
 import { Select } from "../ui";
 import { computeSelectMenuStyle } from "../select-position";
-import { formatNamespacedModelId } from "../provider-icons";
-import { navigateHash } from "../hash-routing";
 import {
   clampVisionReasoningToLadder,
-  EFFORT_CAP_LEVELS,
   parsePositiveInteger,
   parseVisionTimeoutMs,
-  requireJson,
   type SidecarPatch,
-  shadowCallModelOptions,
   webSearchSidecarSelectionForModel,
   updateJobLabel,
   visionEnabledPatch,
@@ -29,135 +24,9 @@ import {
   VISION_TIMEOUT_MS_MAX,
   VISION_TIMEOUT_MS_MIN,
 } from "./dashboard-shared";
-import { shadowSourceModelBadge } from "./shadow-call-source";
 import type { useDashboardData } from "./use-dashboard-data";
 
 type Dash = ReturnType<typeof useDashboardData>;
-
-export function DashboardEffortCapPanel({ apiBase, d }: { apiBase: string; d: Dash }) {
-  const {
-    t, maMode, maModeResolved,
-    effortCapHelpTriggerRef, effortCapHelpOpen, setEffortCapHelpOpen,
-    effortCap, subagentEffortCap, effortCapSaving, setEffortCap, setSubagentEffortCap, setEffortCapSaving,
-  } = d;
-
-  if (!maModeResolved || maMode === "v1") return null;
-
-  return (
-    <div className="panel">
-      <div className="injection-head">
-        <span className="injection-label" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          {t("dash.effortCapLabel")}
-          <button
-            ref={effortCapHelpTriggerRef}
-            type="button"
-            className="btn btn-ghost btn-sm"
-            style={{ width: 22, height: 22, minWidth: 22, padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
-            onClick={() => setEffortCapHelpOpen(open => !open)}
-            aria-label={t("dash.effortCapLabel")}
-            aria-expanded={effortCapHelpOpen}
-            aria-haspopup="dialog"
-            aria-controls="effort-cap-help-dialog"
-          >
-            <IconInfo width={13} height={13} aria-hidden="true" />
-          </button>
-        </span>
-        <Select
-          value={effortCap}
-          options={[
-            { value: "", label: t("dash.effortCapNone") },
-            ...EFFORT_CAP_LEVELS.map(e => ({ value: e, label: e })),
-          ]}
-          onChange={async (v) => {
-            if (effortCapSaving) return;
-            setEffortCapSaving(true);
-            try {
-              const res = await fetch(`${apiBase}/api/effort-caps`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ effortCap: v || null }),
-              });
-              const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
-              setEffortCap(data.effortCap ?? "");
-              setSubagentEffortCap(data.subagentEffortCap ?? "");
-            } catch { /* ignore */ }
-            finally { setEffortCapSaving(false); }
-          }}
-          disabled={effortCapSaving}
-          label={t("dash.effortCapLabel")}
-          align="right"
-        />
-        <Select
-          value={subagentEffortCap}
-          options={[
-            { value: "", label: t("dash.effortCapNone") },
-            ...EFFORT_CAP_LEVELS.map(e => ({ value: e, label: e })),
-          ]}
-          onChange={async (v) => {
-            if (effortCapSaving) return;
-            setEffortCapSaving(true);
-            try {
-              const res = await fetch(`${apiBase}/api/effort-caps`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ subagentEffortCap: v || null }),
-              });
-              const data = await requireJson<{ ok: boolean; effortCap?: string | null; subagentEffortCap?: string | null }>(res);
-              setEffortCap(data.effortCap ?? "");
-              setSubagentEffortCap(data.subagentEffortCap ?? "");
-            } catch { /* ignore */ }
-            finally { setEffortCapSaving(false); }
-          }}
-          disabled={effortCapSaving}
-          label={t("dash.subagentEffortCapLabel")}
-          align="right"
-        />
-      </div>
-    </div>
-  );
-}
-
-export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
-  const {
-    t, injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
-    saveInjection,
-  } = d;
-
-  return (
-    <div className="panel dash-delegation-summary">
-      <div className="font-semibold">{t("dash.injectionLabel")}</div>
-      <div className="dash-delegation-controls">
-        <Select
-          value={injectionModel}
-          options={[
-            { value: "", label: t("dash.injectionNone") },
-            ...injectionAvailable.map(m => ({ value: m.namespaced, label: formatNamespacedModelId(`${m.provider}/${m.model}`, t) })),
-          ]}
-          onChange={(v) => { void saveInjection({ model: v || null, effort: injectionEffort || null }); }}
-          disabled={injectionSaving}
-          label={t("dash.injectionLabel")}
-          align="right"
-        />
-        {injectionModel && injectionEfforts.length > 0 && (
-          <Select
-            value={injectionEffort}
-            options={[
-              { value: "", label: t("dash.injectionEffortNone") },
-              ...injectionEfforts.map(e => ({ value: e, label: e })),
-            ]}
-            onChange={(v) => { void saveInjection({ model: injectionModel || null, effort: v || null }); }}
-            disabled={injectionSaving}
-            label={t("dash.injectionEffortLabel")}
-            align="right"
-          />
-        )}
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigateHash("#subagents")}>
-          {t("dash.injectionManage")}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 export function DashboardMaintenancePanel({ d }: { d: Dash }) {
   const {
@@ -436,9 +305,8 @@ function VisionAdvancedPopover({ t, open, triggerRef, onClose, maxValue, maxInva
 
 export function DashboardSidecarPanels({ d }: { d: Dash }) {
   const {
-    t, settings, settingsSaving, toggleCodexAutoStart,
+    t,
     sidecar, sidecarSaving, sidecarModels, visionModels, models, saveSidecar,
-    shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
   const visionEnabled = sidecar?.vision.enabled !== false;
   const visionModel = visionEnabled ? (sidecar?.vision.model ?? "gpt-5.4-mini") : "";
@@ -484,25 +352,6 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
 
   return (
     <>
-      <div className="panel">
-        <div className="spread">
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="font-semibold">{t("dash.codexAutoStart")}</div>
-            <div className="muted setting-hint">{t("dash.codexAutoStartHint")}</div>
-          </div>
-          <button
-            type="button"
-            className={`switch ${settings?.codexAutoStart ?? true ? "on" : ""}`}
-            onClick={toggleCodexAutoStart}
-            disabled={!settings || settingsSaving}
-            aria-label={t("dash.codexAutoStart")}
-            aria-pressed={settings?.codexAutoStart ?? true}
-          >
-            <span className="knob" />
-          </button>
-        </div>
-      </div>
-
       <div className="dash-sidecar-grid">
         {/* Both sidecar cards wear the DashboardInjectionPanel shell: the PANEL is
             the flex row, copy left, controls right. */}
@@ -622,48 +471,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
           )}
           </div>
         </div>
-
-      <div className="panel" aria-busy={!shadowCall || undefined}>
-        <div className="spread" style={{ alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span className="font-semibold">{t("dash.shadowCallIntercept")}</span>
-            <button
-              ref={shadowCallHelpTriggerRef}
-              type="button"
-              className="btn btn-ghost btn-sm"
-              style={{ width: 22, height: 22, minWidth: 22, padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
-              onClick={() => setShadowCallHelpOpen(open => !open)}
-              aria-label={t("dash.shadowCallIntercept")}
-              aria-expanded={shadowCallHelpOpen}
-              aria-haspopup="dialog"
-              aria-controls="shadow-call-help-dialog"
-            >
-              <IconInfo width={13} height={13} aria-hidden="true" />
-            </button>
-            <code className="muted text-caption">{`⚠ ${shadowSourceModelBadge(shadowCall?.sourceModels)}`}</code>
-          </div>
-          <div className="setting-controls" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button
-              type="button"
-              className={`switch ${shadowCall?.enabled ? "on" : ""}`}
-              onClick={() => saveShadowCall({ enabled: !shadowCall?.enabled })}
-              disabled={!shadowCall || shadowCallSaving}
-              aria-label={t("dash.shadowCallIntercept")}
-              aria-pressed={shadowCall?.enabled ?? false}
-            >
-              <span className="knob" />
-            </button>
-            <Select
-              value={shadowCall?.model ?? ""}
-              options={shadowCallModelOptions(models, shadowCall?.model, shadowCall?.sourceModels).map(option => option.value === "" ? option : { ...option, label: formatNamespacedModelId(option.value, t) })}
-              onChange={v => { void saveShadowCall({ model: v }); }}
-              disabled={!shadowCall || shadowCallSaving || !shadowCall?.enabled}
-              label={t("dash.shadowCallModel")}
-              align="right"
-            />
-          </div>
-        </div>
-      </div>
     </>
   );
 }
+

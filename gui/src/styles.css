@@ -958,7 +958,19 @@ a.btn, a.btn:hover { text-decoration: none; }
 
 .dash-overview-head .stat-row {
   margin-bottom: 0;
+  /* Three cards (status, providers, tokens) since the version, uptime and subagent-mode
+     cards left; six columns would leave half the row empty. */
+  grid-template-columns: repeat(3, 1fr);
 }
+
+/* Sidecar routing settings: closed by default so the first viewport is proxy state. The
+   summary reads as a card title; the two sidecar cards render inside once opened. */
+.dash-sidecars > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+.dash-sidecars > summary::-webkit-details-marker { display: none; }
+.dash-sidecars > summary::before { content: ""; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform var(--motion-fast); }
+.dash-sidecars[open] > summary::before { transform: rotate(90deg); }
+.dash-sidecars[open] > summary { margin-bottom: 12px; }
+.dash-sidecars .dash-sidecar-grid .panel { box-shadow: none; }
 
 .dash-overview-head .startup-health-bar,
 .dash-overview-head .startup-health-bar--pending {

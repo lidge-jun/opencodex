@@ -87,7 +87,11 @@ test("Dashboard overview status widgets do not wait on injection-model", async (
   expect(overviewBody).not.toContain("/api/effort-caps");
   expect(core.slice(multiStart)).toContain("/api/injection-model");
   expect(hook).toContain("dashboard-overview:${apiBase}");
-  expect(hook).toContain("dashboard-multi-agent:${apiBase}");
+  // The injection/effort-cap poll left the dashboard with the cards it fed (they live on
+  // Subagents now); the overview poll must not have absorbed those endpoints.
+  expect(hook).not.toContain("dashboard-multi-agent:${apiBase}");
+  expect(hook).not.toContain("/api/injection-model");
+  expect(hook).not.toContain("/api/effort-caps");
   expect(hook).toContain("enabled: overviewReady");
 });
 
@@ -108,7 +112,9 @@ test("Dashboard MA mode and sidecars do not wait on settings or injection", asyn
   expect(maBody).not.toContain("/api/settings");
   expect(sidecarsBody).toContain("/api/sidecar-settings");
   expect(sidecarsBody).not.toContain("/api/settings");
-  expect(hook).toContain("dashboard-ma-mode:${apiBase}");
+  // The v1/base/v2 switch left the dashboard (Subagents owns it), so no MA-mode poll here.
+  expect(hook).not.toContain("dashboard-ma-mode:${apiBase}");
+  expect(hook).not.toContain("/api/v2");
   expect(hook).toContain("dashboard-sidecars:${apiBase}");
   expect(hook).toContain("dashboard-settings:${apiBase}");
   expect(hook).not.toContain("dashboard-controls:${apiBase}");
@@ -117,7 +123,9 @@ test("Dashboard MA mode and sidecars do not wait on settings or injection", asyn
 test("Dashboard workspace pane is a labelled section, not a nested main landmark", async () => {
   const src = await Bun.file(new URL("../src/pages/Dashboard.tsx", import.meta.url)).text();
   expect(src).toContain("dashboard-workspace-main");
-  expect(src).toContain("dash.workspace.sections");
+  // No tabs any more: the two read-only clones of Providers/Models are gone.
+  expect(src).not.toContain("role=\"tablist\"");
+  expect(src).not.toContain("dash.workspace.sections");
   expect(src).not.toMatch(/<main\b[^>]*dashboard-workspace-main/);
   expect(src).toMatch(/<(section)\b[^>]*dashboard-workspace-main/);
 });
@@ -138,7 +146,8 @@ test("native Codex subagent defaults stay separate from OpenCodex guidance", asy
   expect(en["dash.syncCodexSubagentDefaultsHint"]).toMatch(/\boff\b/i);
   expect(en["dash.syncCodexSubagentDefaultsHint"]).toMatch(/\[agents\][^.]*\b(left alone|preserved|not overwritten|untouched)\b/i);
   expect(en["dash.multiAgentGuidanceHint"]).not.toContain("proactive");
-  expect(head).toContain("models.v2Mode_");
+  // The v1/base/v2 radiogroup is not on the dashboard head any more (owner: Subagents/Models).
+  expect(head).not.toContain("models.v2Mode_");
 });
 
 test("injection writes consume the server's model-clear normalization", () => {

@@ -174,6 +174,8 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // untranslated `~$`); the templates are pure placeholders on purpose.
   "logs.cost.approximate",
   "logs.cost.lowerBound",
+  // "Sidecars" is the same word in French.
+  "dash.sidecars",
 ]);
 
 function placeholders(value: string): string[] {

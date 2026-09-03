@@ -27,9 +27,12 @@ import { modelLabel } from "../../model-display";
 import { SectionTabs } from "../section-tabs";
 import { sectionAnchorId } from "../../section-anchors";
 import SubagentDelegationSection from "./SubagentDelegationSection";
+import { EffortCapSection } from "./EffortCapSection";
 import type { DelegationPatch, DelegationModelOption, UltraModePatch, UltraModeState } from "../../pages/use-subagent-delegation";
 
 export interface SubagentsWorkspaceProps {
+  /** Needed by sections that own their own fetch (effort caps). */
+  apiBase?: string;
   available: string[];
   chosen: string[];
   busy?: boolean;
@@ -56,6 +59,7 @@ export interface SubagentsWorkspaceProps {
 export const FEATURED_MAX = 5;
 
 export default function SubagentsWorkspace({
+  apiBase,
   available,
   chosen,
   busy = false,
@@ -235,6 +239,13 @@ export default function SubagentsWorkspace({
             ultraLoadFailed={delegation.ultraLoadFailed}
             onUltraModeRetry={delegation.onUltraModeRetry}
           />
+          {/*
+            Effort caps only apply outside v1 (there are no ultra-mode turns to cap), which
+            is the same condition the dashboard used before this card moved here.
+          */}
+          {apiBase && delegation.ultraMode.multiAgentMode !== "v1" && (
+            <EffortCapSection apiBase={apiBase} />
+          )}
         </section>
       </div>
     </div>

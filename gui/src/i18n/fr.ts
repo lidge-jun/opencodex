@@ -286,6 +286,7 @@ export const fr: Record<TKey, string> = {
   "dash.searchReasoning": "Effort de raisonnement pour la recherche",
   "dash.visionModel": "Modèle auxiliaire de vision",
   "dash.visionModelHint": "Modèle utilisé pour décrire les images aux modèles routés en mode texte uniquement. Nécessite une connexion à ChatGPT.",
+  "dash.sidecars": "Sidecars",
   "dash.webSearchSidecar": "Service auxiliaire de recherche Web",
   "dash.webSearchSidecarHint": "Choisissez le moteur et le modèle utilisés pour la recherche Web sur les modèles routés.",
   "dash.webSearchStream": "Diffuser les réponses en direct",

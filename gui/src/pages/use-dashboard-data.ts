@@ -11,21 +11,17 @@ import {
   type StartupHealthStatus,
 } from "../startup-health-ui";
 import {
-  fetchDashboardMaMode,
   fetchDashboardModels,
-  fetchDashboardMultiAgent,
   fetchDashboardOverview,
   fetchDashboardSettings,
   fetchDashboardSidecars,
   fetchDashboardUsage,
   fetchProjectConfigDiagnostics,
   fetchStartupHealth,
-  normalizeInjectionSelection,
   type DashboardEpochRefs,
 } from "./dashboard-core-poll";
 import { usageSummary30dResourceKey } from "../usage-summary-resource";
 import {
-  type DashboardSection,
   type HealthData,
   type ModelInfo,
   type ProjectCodexConfigGroup,
@@ -44,7 +40,6 @@ import {
   defaultUpdateChannel,
   hashRequestsUpdateDialog,
   mergeSidecarSetting,
-  readDashboardSectionFromHash,
   requireJson,
   webSearchModelOptionsForPicker,
   visionModelOptions,
@@ -55,7 +50,6 @@ const CONTROLS_CACHE_PREFIX = "ocx.dash.controls.v1:";
 const OVERVIEW_CACHE_PREFIX = "ocx.dash.overview.v1:";
 const USAGE_CACHE_PREFIX = "ocx.dash.usage30d.v1:";
 const STARTUP_CACHE_PREFIX = "ocx.dash.startup.v1:";
-const MA_MODE_CACHE_PREFIX = "ocx.dash.maMode.v1:";
 
 type CachedControls = {
   settings?: SettingsData | null;
@@ -67,8 +61,6 @@ type CachedOverview = {
   health: HealthData;
   providers: ProviderInfo[];
 };
-
-type MaMode = "v1" | "default" | "v2";
 
 export function groupDashboardModels(models: ModelInfo[]): Array<[string, ModelInfo[]]> {
   const groups = new Map<string, ModelInfo[]>();
@@ -86,8 +78,6 @@ function controlsCacheKey(apiBase: string): string {
 
 export function useDashboardData(apiBase: string) {
   const { locale, t } = useI18n();
-  // The hash is the source of truth for the active section (#dashboard, …).
-  const [selectedSection, setSelectedSection] = useState<DashboardSection>(readDashboardSectionFromHash);
   const [modelQuery, setModelQuery] = useState("");
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
   const cachedControls = useMemo(
@@ -106,39 +96,17 @@ export function useDashboardData(apiBase: string) {
     const cached = readSessionListCache<StartupHealthStatus>(`${STARTUP_CACHE_PREFIX}${apiBase}`);
     return cached === "error" ? null : cached;
   }, [apiBase]);
-  const cachedMaMode = useMemo(
-    () => readSessionListCache<MaMode>(`${MA_MODE_CACHE_PREFIX}${apiBase}`),
-    [apiBase],
-  );
   const [health, setHealth] = useState<HealthData | null>(() => cachedOverview?.health ?? null);
   const [startupHealth, setStartupHealth] = useState<StartupHealthStatus | null>(() => cachedStartup);
   const [providers, setProviders] = useState<ProviderInfo[]>(() => cachedOverview?.providers ?? []);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [settings, setSettings] = useState<SettingsData | null>(() => cachedControls?.settings ?? null);
   const [sidecar, setSidecar] = useState<SidecarData | null>(() => cachedControls?.sidecar ?? null);
-  const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(() => cachedControls?.shadowCall ?? null);
   const [usage30d, setUsage30d] = useState<UsageSummary30d | null>(() => cachedUsage);
   const [sidecarSaving, setSidecarSaving] = useState(false);
-  const [shadowCallSaving, setShadowCallSaving] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
-  const [settingsSaving, setSettingsSaving] = useState(false);
+  const settingsSaving = false;
   const [syncing, setSyncing] = useState(false);
-  const [maMode, setMaMode] = useState<MaMode>(() => cachedMaMode ?? "default");
- const [maBusy, setMaBusy] = useState(false);
-  const [maError, setMaError] = useState<string | null>(null);
- const [maHelpOpen, setMaHelpOpen] = useState(false);
-  const [effortCapHelpOpen, setEffortCapHelpOpen] = useState(false);
-  const [shadowCallHelpOpen, setShadowCallHelpOpen] = useState(false);
-  const [injectionModel, setInjectionModel] = useState<string>("");
-  const [injectionEffort, setInjectionEffort] = useState<string>("");
-  const [injectionEfforts, setInjectionEfforts] = useState<string[]>([]);
-  const [injectionAvailable, setInjectionAvailable] = useState<Array<{ provider: string; model: string; namespaced: string }>>([]);
-  const [injectionSaving, setInjectionSaving] = useState(false);
-  const [multiAgentGuidanceEnabled, setMultiAgentGuidanceEnabled] = useState(true);
-  const [syncCodexSubagentDefaults, setSyncCodexSubagentDefaults] = useState(false);
-  const [effortCap, setEffortCap] = useState<string>("");
-  const [subagentEffortCap, setSubagentEffortCap] = useState<string>("");
-  const [effortCapSaving, setEffortCapSaving] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [projectConfigWarnings, setProjectConfigWarnings] = useState<ProjectCodexConfigGroup[]>([]);
@@ -160,20 +128,9 @@ export function useDashboardData(apiBase: string) {
   const [updateJob, setUpdateJob] = useState<UpdateJob | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState(false);
-  const effortCapHelpTriggerRef = useRef<HTMLButtonElement>(null);
   const updateTriggerRef = useRef<HTMLButtonElement>(null);
-  const maHelpTriggerRef = useRef<HTMLButtonElement>(null);
-  const shadowCallHelpTriggerRef = useRef<HTMLButtonElement>(null);
-  const effortCapHelpDialogRef = useModalDialog(effortCapHelpOpen, effortCapHelpTriggerRef);
   const updateDialogRef = useModalDialog(updateOpen, updateTriggerRef);
-  const maHelpDialogRef = useModalDialog(maHelpOpen, maHelpTriggerRef);
-  const shadowCallHelpDialogRef = useModalDialog(shadowCallHelpOpen, shadowCallHelpTriggerRef);
 
-  useEffect(() => {
-    const onHash = () => setSelectedSection(readDashboardSectionFromHash());
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
 
 
   useEffect(() => () => {
@@ -226,13 +183,6 @@ export function useDashboardData(apiBase: string) {
   );
   const overviewReady = health !== null || overviewPoll.data !== undefined;
 
-  // Preferences that are just config — never gate on overview or injection.
-  const maModePoll = useKeyedClientResource(
-    `dashboard-ma-mode:${apiBase}`,
-    [apiBase],
-    (signal) => fetchDashboardMaMode(apiBase, signal),
-    { pollMs: 5000 },
-  );
 
   const sidecarPoll = useKeyedClientResource(
     `dashboard-sidecars:${apiBase}`,
@@ -256,13 +206,6 @@ export function useDashboardData(apiBase: string) {
     { pollMs: 5000 },
   );
 
-  // Wave 2: heavier peers start after overview commits (or session seed) to cut contention.
-  const multiAgentPoll = useKeyedClientResource(
-    `dashboard-multi-agent:${apiBase}`,
-    [apiBase],
-    (signal) => fetchDashboardMultiAgent(apiBase, signal),
-    { pollMs: 5000, enabled: overviewReady },
-  );
 
   const usagePoll = useKeyedClientResource(
     usageSummary30dResourceKey(apiBase),
@@ -318,38 +261,13 @@ export function useDashboardData(apiBase: string) {
     setError(data.error);
   }, [overviewPoll.data, apiBase]);
 
-  useEffect(() => {
-    if (maModePoll.data === undefined) return;
-    setMaMode(maModePoll.data.maMode);
-    writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, maModePoll.data.maMode);
-  }, [maModePoll.data, apiBase]);
 
-  // Derived — avoids setState-on-prop-change for the resolved flag. Cache / poll / optimistic
-  // save (which writes the same cache key) all count as resolved for MA UI.
-  const maModeResolved = maModePoll.data !== undefined || cachedMaMode !== null;
 
-  useEffect(() => {
-    const data = multiAgentPoll.data;
-    if (!data) return;
-    if (data.injection) {
-      setMultiAgentGuidanceEnabled(data.injection.multiAgentGuidanceEnabled);
-      setSyncCodexSubagentDefaults(data.injection.syncCodexSubagentDefaults);
-      setInjectionModel(data.injection.injectionModel);
-      setInjectionEffort(data.injection.injectionEffort);
-      setInjectionEfforts(data.injection.injectionEfforts);
-      setInjectionAvailable(data.injection.injectionAvailable);
-    }
-    if (data.effortCaps) {
-      setEffortCap(data.effortCaps.effortCap);
-      setSubagentEffortCap(data.effortCaps.subagentEffortCap);
-    }
-  }, [multiAgentPoll.data]);
 
   useEffect(() => {
     const data = sidecarPoll.data;
     if (!data) return;
     setSidecar(data.sidecar);
-    if (data.shadowCall !== undefined) setShadowCall(data.shadowCall);
     const prev = readSessionListCache<CachedControls>(controlsCacheKey(apiBase)) ?? {};
     writeSessionListCache(controlsCacheKey(apiBase), {
       ...prev,
@@ -522,115 +440,6 @@ export function useDashboardData(apiBase: string) {
     }
   };
 
-  async function saveShadowCall(patch: Partial<ShadowCallData>) {
-    if (!shadowCall || shadowCallSaving) return;
-    const previous = shadowCall;
-    const updated = { ...shadowCall, ...patch };
-    setShadowCallSaving(true);
-    shadowCallMutationInFlightRef.current = true;
-    setShadowCall(updated);
-    try {
-      const res = await fetch(`${apiBase}/api/shadow-call-settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) throw new Error("shadow-call save failed");
-      shadowCallMutationEpochRef.current += 1;
-    } catch {
-      setShadowCall(previous);
-    } finally {
-      shadowCallMutationInFlightRef.current = false;
-      setShadowCallSaving(false);
-    }
-  }
-
- const switchMaMode = async (mode: "v1" | "default" | "v2") => {
-   if (maBusy || maMode === mode) return;
-   setMaBusy(true);
-    setMaError(null);
-   try {
-     const r = await fetch(`${apiBase}/api/v2`, {
-       method: "PUT",
-       headers: { "Content-Type": "application/json" },
-       body: JSON.stringify({ multiAgentMode: mode }),
-     });
-     if (r.ok) {
-       setMaMode(mode);
-       writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, mode);
-      } else {
-        let message = t("dash.maSwitchFailed", { status: String(r.status) });
-        try {
-          const body = await r.json() as { error?: string; message?: string };
-          message = (typeof body.error === "string" && body.error) || (typeof body.message === "string" && body.message) || message;
-        } catch { /* non-JSON error body */ }
-        setMaError(message);
-     }
-    } catch (e) {
-      setMaError(e instanceof Error ? e.message : t("dash.maNetworkError"));
-    }
-   finally { setMaBusy(false); }
- };
-
-  const saveInjection = async (patch: {
-    multiAgentGuidanceEnabled?: boolean;
-    syncCodexSubagentDefaults?: boolean;
-    model?: string | null;
-    effort?: string | null;
-  }) => {
-    if (injectionSaving) return;
-    setInjectionSaving(true);
-    try {
-      const res = await fetch(`${apiBase}/api/injection-model`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) throw new Error("injection save failed");
-      const getRes = await fetch(`${apiBase}/api/injection-model`);
-      const data = await requireJson<{
-        multiAgentGuidanceEnabled?: boolean;
-        syncCodexSubagentDefaults?: boolean;
-        model?: string | null;
-        effort?: string | null;
-        efforts?: string[];
-        available?: Array<{ provider: string; model: string; namespaced: string }>;
-      }>(getRes);
-      const normalized = normalizeInjectionSelection(data);
-      setMultiAgentGuidanceEnabled(normalized.multiAgentGuidanceEnabled);
-      setSyncCodexSubagentDefaults(normalized.syncCodexSubagentDefaults);
-      setInjectionModel(normalized.injectionModel);
-      setInjectionEffort(normalized.injectionEffort);
-      if (Array.isArray(data.efforts)) setInjectionEfforts(data.efforts);
-      if (Array.isArray(data.available)) setInjectionAvailable(data.available);
-    } catch { /* keep the last committed UI state */ }
-    finally { setInjectionSaving(false); }
-  };
-
-  const toggleCodexAutoStart = async () => {
-    if (!settings || settingsSaving) return;
-    const next = !settings.codexAutoStart;
-    setSettingsSaving(true);
-    settingsMutationInFlightRef.current = true;
-    setSettings({ ...settings, codexAutoStart: next });
-    try {
-      const res = await fetch(`${apiBase}/api/settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ codexAutoStart: next }),
-      });
-      const data = await requireJson<{ codexAutoStart: boolean; startupHealth?: SettingsData["startupHealth"] }>(res, "save failed");
-      settingsMutationEpochRef.current += 1;
-      setSettings(prev => prev ? { ...prev, codexAutoStart: data.codexAutoStart, startupHealth: data.startupHealth ?? prev.startupHealth } : prev);
-    } catch {
-      setSettings(prev => prev ? { ...prev, codexAutoStart: !next } : prev);
-      setError(true);
-    } finally {
-      settingsMutationInFlightRef.current = false;
-      setSettingsSaving(false);
-    }
-  };
-
   // Clears the sync result/error in this hook. The dashboard toast owns its own dismissal
   // timer but must publish the dismissal here: syncResult/syncError live above the dashboard
   // tabs, so a component-local flag alone would let a stale result remount as a fresh toast
@@ -770,26 +579,19 @@ export function useDashboardData(apiBase: string) {
   return {
     apiBase,
     locale, t,
-    selectedSection, setSelectedSection,
     modelQuery, setModelQuery,
     expandedProviders, setExpandedProviders,
-    health, startupHealth, providers, models, settings, sidecar, shadowCall, usage30d,
+    health, startupHealth, providers, models, settings, sidecar, usage30d,
     usageLoading: usagePoll.loading && !usage30d,
     healthLoading: overviewPoll.loading && !health,
-    sidecarSaving, shadowCallSaving, modelsLoading, settingsSaving, syncing,
-   maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,
-    maError,
-   effortCapHelpOpen, setEffortCapHelpOpen, shadowCallHelpOpen, setShadowCallHelpOpen,
-    injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
-    multiAgentGuidanceEnabled, syncCodexSubagentDefaults, saveInjection,
-    effortCap, subagentEffortCap, effortCapSaving, setEffortCap, setSubagentEffortCap, setEffortCapSaving,
+    sidecarSaving, modelsLoading, settingsSaving, syncing,
     syncResult, syncError, projectConfigWarnings,
     updateOpen, updateChannel, setUpdateRestart, updateRestart, updateLoading,
     updateCheck, updateError, updateJob, reconnecting, error,
-    effortCapHelpTriggerRef, updateTriggerRef, maHelpTriggerRef, shadowCallHelpTriggerRef,
-    effortCapHelpDialogRef, updateDialogRef, maHelpDialogRef, shadowCallHelpDialogRef,
+    updateTriggerRef,
+    updateDialogRef,
     filteredGroups, sidecarModels, visionModels,
-    saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, runSync, clearSyncFeedback,
+    saveSidecar, runSync, clearSyncFeedback,
     fetchUpdateCheck, closeUpdateDialog, openUpdateDialog, changeUpdateChannel, runUpdate,
   };
 }

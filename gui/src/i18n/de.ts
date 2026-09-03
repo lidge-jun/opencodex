@@ -284,6 +284,7 @@ export const de: Record<TKey, string> = {
   "dash.searchReasoning": "Such-Reasoning-Aufwand",
   "dash.visionModel": "Vision-Sidecar-Modell",
   "dash.visionModelHint": "Modell zur Beschreibung von Bildern für nur-Text-Routen. Erfordert ChatGPT-Login.",
+  "dash.sidecars": "Sidecars",
   "dash.webSearchSidecar": "Websuche-Sidecar",
   "dash.webSearchSidecarHint": "Backend und Modell für die Websuche gerouteter Modelle auswählen.",
   "dash.webSearchStream": "Antworten live streamen",

@@ -1,5 +1,5 @@
-import { IconAlert, IconInfo } from "../icons";
-import { type TKey, useT } from "../i18n/shared";
+import { IconAlert } from "../icons";
+import { useT } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
 import { formatUptime } from "../formatUptime";
 import { navigateHash } from "../hash-routing";
@@ -16,68 +16,29 @@ export function DashboardOverviewHead({
   healthLoading,
   startupHealth,
   projectConfigWarnings,
-  maMode,
-  maBusy,
-  maHelpTriggerRef,
- maHelpOpen,
- setMaHelpOpen,
- switchMaMode,
-  maError,
-}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "usageLoading" | "healthLoading" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode" | "maError">) {
- const t = useT();
+}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "usageLoading" | "healthLoading" | "startupHealth" | "projectConfigWarnings">) {
+  const t = useT();
   const online = health?.status === "ok";
 
   return (
     <>
       <div className="dash-overview-head">
+        {/*
+          Three cards: reachability, capacity, volume. Version and uptime used to be cards
+          of their own; they are diagnosis facts, not decisions, so they ride as the status
+          card's sub-line (visible, not a title attribute). The subagent v1/base/v2 switch
+          that opened this row is a Subagents setting and lives there now.
+        */}
         <div className="stat-row">
-          <div className="stat">
-            <div className="label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              {t("dash.multiAgent")}
-              <button
-                ref={maHelpTriggerRef}
-                type="button"
-                className="btn btn-ghost btn-sm"
-                style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
-                onClick={() => setMaHelpOpen(true)}
-                aria-label={t("dash.multiAgent")}
-                aria-haspopup="dialog"
-                aria-controls="multi-agent-help-dialog"
-                aria-expanded={maHelpOpen}
-              >
-                <IconInfo width={14} height={14} aria-hidden="true" />
-              </button>
-            </div>
-            <div className="value" style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <div role="radiogroup" aria-label={t("dash.multiAgent")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
-                {(["v1", "default", "v2"] as const).map(mode => (
-                  <button
-                    key={mode}
-                    type="button"
-                    role="radio"
-                    aria-checked={maMode === mode}
-                    className={`btn btn-sm text-caption${maMode === mode ? " btn-primary" : " btn-ghost"}`}
-                    style={{ borderRadius: "var(--radius-pill)", minWidth: 36, padding: "5px 10px", border: "none", background: maMode === mode ? undefined : "transparent", color: maMode === mode ? undefined : "var(--muted)" }}
-                    disabled={maBusy}
-                    onClick={() => void switchMaMode(mode)}
-                  >{t(`models.v2Mode_${mode}` as TKey)}</button>
-                ))}
-             </div>
-           </div>
-            {maError && (
-              <div role="alert" className="text-caption" style={{ color: "var(--red)", marginTop: 4, textAlign: "center", maxWidth: 280, wordBreak: "break-word" }}>
-                {maError}
-              </div>
-            )}
-         </div>
-         <div className="stat" aria-busy={healthLoading || undefined}>
-           <div className="label">{t("dash.status")}</div>
+          <div className="stat" aria-busy={healthLoading || undefined}>
+            <div className="label">{t("dash.status")}</div>
             <div className="value" style={{ display: "flex", alignItems: "center", gap: 9, color: online ? "var(--green)" : "var(--red)" }}>
               <span className={`dot ${online ? "dot-green" : "dot-red"}`} />{online ? t("dash.online") : t("dash.offline")}
             </div>
+            <div className="muted text-label dash-stat-coverage mono">
+              {health ? `v${health.version} · ${formatUptime(health.uptime, locale)}` : "\u00a0"}
+            </div>
           </div>
-          <div className="stat" aria-busy={healthLoading || undefined}><div className="label">{t("dash.version")}</div><div className="value mono">{health?.version ?? "—"}</div></div>
-          <div className="stat" aria-busy={healthLoading || undefined}><div className="label">{t("dash.uptime")}</div><div className="value mono">{health ? formatUptime(health.uptime, locale) : "—"}</div></div>
           <div className="stat" aria-busy={healthLoading || undefined}><div className="label">{t("dash.providers")}</div><div className="value">{providers.length}</div></div>
           <div className="stat" aria-busy={usageLoading || undefined}>
             <div className="label">{t("dash.tokens30d")}</div>

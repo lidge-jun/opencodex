@@ -69,7 +69,8 @@ describe("route resolution", () => {
 
   test("registered sub-hashes survive; unknown ones are normalised away", () => {
     expect(resolveAppHashChange("logs/debug").replaceTo).toBeNull();
-    expect(resolveAppHashChange("dashboard/models").replaceTo).toBeNull();
+    // The dashboard's Models tab is gone; its bookmark redirects to the real page.
+    expect(resolveAppHashChange("dashboard/models")).toEqual({ page: "models", replaceTo: "models" });
     expect(resolveAppHashChange("providers/nope").replaceTo).toBe("providers");
     expect(resolveAppHashChange("models/nope").replaceTo).toBe("models");
   });
