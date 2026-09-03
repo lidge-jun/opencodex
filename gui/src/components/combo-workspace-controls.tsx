@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ComboEffort, ComboStrategy, ComboTarget, ProviderQuotaStates } from "../combo-workspace-data";
 import { comboImagesSupported } from "../combo-capabilities";
-import { COMBO_EFFORTS, COMBO_STRATEGY_LABEL_KEYS, newComboTarget } from "../combo-workspace-data";
+import { COMBO_EFFORTS, COMBO_STRATEGIES, COMBO_STRATEGY_LABEL_KEYS, newComboTarget } from "../combo-workspace-data";
 import { IconArrowDown, IconArrowUp, IconGrip, IconPlus, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
 import { Switch } from "../ui";
@@ -21,10 +21,7 @@ export function StrategySeg({
   const t = useT();
   return (
     <div className="cwi-strategy-seg" role="radiogroup" aria-label={t("cws.strategy")}>
-      {([
-        ["failover", "cws.strategy.failover"],
-        ["round-robin", "cws.strategy.roundRobin"],
-      ] as const).map(([id, key]) => (
+      {COMBO_STRATEGIES.map((id) => (
         <button
           key={id}
           type="button"
@@ -34,20 +31,9 @@ export function StrategySeg({
           disabled={disabled}
           onClick={() => onChange(id)}
         >
-          {t(key)}
+          {t(COMBO_STRATEGY_LABEL_KEYS[id])}
         </button>
       ))}
-      {value !== "failover" && value !== "round-robin" ? (
-        <button
-          type="button"
-          role="radio"
-          aria-checked={true}
-          className="btn btn-sm btn-primary"
-          disabled
-        >
-          {t(COMBO_STRATEGY_LABEL_KEYS[value])}
-        </button>
-      ) : null}
     </div>
   );
 }
