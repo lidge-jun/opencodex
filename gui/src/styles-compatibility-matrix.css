@@ -3,7 +3,16 @@
    Namespace: lab-matrix-
    ============================================================================ */
 
-.main-inner:has(.lab-page) {
+/*
+  Scoped to the VISIBLE compatibility panel by id, not to `.lab-page`: the lab renders no
+  `.lab-page` while it is loading (skeleton), so a `:has(.lab-page)` test dropped the width
+  to 980px during load and snapped to 1200px afterwards — the tab's size was not fixed. It
+  also matched from any tab once the lab had been opened (panels stay mounted), leaking the
+  width across tabs. `#models-panel-compatibility:not([hidden])` is true only while this is
+  the active tab, so the width is held steady across load/error and never leaks. Matches the
+  catalog and routing rules in styles-models-workspace.css.
+*/
+.main-inner:has(#models-panel-compatibility:not([hidden])) {
   max-width: 1200px;
   box-sizing: border-box;
 }

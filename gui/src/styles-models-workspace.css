@@ -8,14 +8,29 @@
 /*
   The catalog wants a wider column than the 980px default.
 
-  Scoped to a VISIBLE catalog panel, not merely a present one: panels mount lazily and
-  then stay mounted so drafts survive a tab hop, so a bare `:has(.models-workspace-shell)`
-  keeps matching after the catalog has been opened once. Routing would then render at
-  980px on a direct visit and 1200px afterwards — a width that depends on browsing
-  history. No surface renders the shell outside a tabpanel any more, so the old
-  direct-child arm is gone with the standalone pages it served.
+  Scoped to the VISIBLE catalog panel by its id: `#models-panel-catalog:not([hidden])` is
+  true only while catalog is the active tab (an inactive panel carries `hidden`), so this
+  never leaks onto another tab even though panels stay mounted after their first visit.
+
+  It deliberately does NOT also require `.models-workspace-shell`: the shell is absent
+  while the catalog is loading (skeleton) or after a cold failure (error notice), so gating
+  on it dropped the width back to 980px in those states and snapped it to 1200px only once
+  data arrived — the catalog tab's size was not fixed. The panel-id test alone holds the
+  width steady across load, empty, and error, matching the routing rule below.
 */
-.main-inner:has(#models-panel-catalog:not([hidden]) .models-workspace-shell) {
+.main-inner:has(#models-panel-catalog:not([hidden])) {
+  max-width: 1200px;
+}
+
+/*
+  Routing shares the catalog/compatibility 1200px column so hopping between the Models
+  tabs never resizes the page. Scoped to the VISIBLE routing panel for the same reason
+  the catalog rule is: panels stay mounted after their first visit, so an unscoped `:has`
+  would leak this width onto whatever tab is open. Without this rule routing fell back to
+  the 980px `.main-inner` default — a visible width jump on every hop to it, and one that
+  only appeared once the compatibility tab's own `:has(.lab-page)` had leaked 1200px in.
+*/
+.main-inner:has(#models-panel-routing:not([hidden])) {
   max-width: 1200px;
 }
 
