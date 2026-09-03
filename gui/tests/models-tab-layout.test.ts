@@ -29,12 +29,22 @@ test("Models tab strips keep their full-bleed container borders aligned", async 
   const shellFreeContainer = ".main-inner.main-inner--combos:not(:has(.combos-workspace-shell))";
   expect(effectiveDeclaration(baseStyles, shellFreeContainer, "max-width")).toBe("1200px");
   expect(effectiveDeclaration(baseStyles, shellFreeContainer, "margin")).toBe("0 auto");
-  expect(effectiveDeclaration(baseStyles, shellFreeContainer, "padding")).toBe("32px 0 64px");
+  expect(ruleBodies(baseStyles, shellFreeContainer)[0]).toMatch(/padding:\s*32px 0 64px/);
+  expect(effectiveDeclaration(baseStyles, shellFreeContainer, "padding")).toBe("22px 18px 48px");
 
   const shellFreePanel = `${shellFreeContainer} > .models-tab-panel--fill:not([hidden])`;
   expect(effectiveDeclaration(baseStyles, shellFreePanel, "display")).toBe("block");
   expect(ruleBodies(baseStyles, shellFreePanel)[0]).toMatch(/padding-inline:\s*36px/);
   expect(effectiveDeclaration(baseStyles, shellFreePanel, "padding-inline")).toBe("0");
+
+  for (const selector of [
+    `${shellFreeContainer} > .page-head`,
+    `${shellFreeContainer} > .page-tabs`,
+    `${shellFreeContainer} > .page-sub`,
+  ]) {
+    expect(effectiveDeclaration(baseStyles, selector, "padding-inline")).toBe("0");
+  }
+  expect(effectiveDeclaration(baseStyles, `${shellFreeContainer} > .page-tabs`, "margin-inline")).toBe("0");
 
   // Every Models workspace tab uses the same column width, including loading/error states
   // where the panel content itself may not have mounted yet.
