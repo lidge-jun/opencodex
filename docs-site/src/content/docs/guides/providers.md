@@ -472,9 +472,13 @@ OpenCodex's auth store (`~/.opencodex/auth.json`, mode 0600) like every other OA
 credential. The dashboard shows a Terms-of-Service warning before the first login and
 before any reauthentication — the same treatment Anthropic and Google Antigravity get.
 
-Meta reports subscription window usage inside streaming responses, but OpenCodex does not
-yet read or display it, and there is no endpoint to query it on demand, so this provider
-shows no quota. Rate limits apply per team, not per key.
+Meta reports subscription window usage inside streaming responses, and OpenCodex reads it
+from there. The account row shows the last observed 5-hour and weekly windows with how old
+that reading is — Meta publishes no endpoint to query them on demand, so a value is only
+refreshed by another streaming turn through this provider, and a turn that goes through
+request translation rather than passthrough reports none. An account that has not yet
+served a streaming turn simply shows no quota, which is not an error. Rate limits apply
+per team, not per key.
 
 For a supported setup, use `meta-model` above with your own key.
 

@@ -75,8 +75,12 @@ describe("meta-muse registry entry", () => {
     expect(note).toContain("auth store");
     // The env-var trap: Meta calls it MODEL_API_KEY, opencodex reads META_MODEL_API_KEY.
     expect(note).toContain("META_MODEL_API_KEY");
-    // Must not promise quota display that only wp5 delivers.
-    expect(note).toContain("does not yet read or display it");
+    // The quota sentence must stay true in both directions: it now claims a reading,
+    // so it must also say why that reading can be old and where it is absent.
+    expect(note).toContain("shows the last observed value with its age");
+    expect(note).toContain("no endpoint to query them on demand");
+    expect(note).toContain("translated (non-passthrough) turns report none");
+    expect(note).not.toContain("does not yet read or display it");
   });
 
   test("never generates unattended traffic on a vendor-restricted credential", () => {
