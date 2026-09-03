@@ -140,16 +140,32 @@ describe("Cursor inbound stream-health watchdog (T04)", () => {
       stream.on("error", () => {});
       stream.respond({ ":status": 200, "content-type": "application/connect+proto" });
       stream.write(Buffer.from(textDeltaFrame("hi")));
+      // 40ms, not 100ms.
+      //
+      // The silence clock below is 400ms, so a 100ms ping left a margin of four
+      // ticks: miss three in a row and the SILENCE watchdog fires first, which
+      // is a different error and a green-looking bug report. That is exactly what
+      // happened on the v2.41.0 macOS runner -- the assertion wanted
+      // "heartbeat-only" and got "no inbound frames for 1s before turnEnded".
+      //
+      // Nothing about the behaviour under test needs a slow ping: the point is
+      // that heartbeats reset the silence clock and do NOT reset the
+      // heartbeat-only clock. A tighter interval tests the same two clocks with
+      // ten ticks of margin instead of four.
       const ping = setInterval(() => {
         try {
           stream.write(Buffer.from(heartbeatFrame()));
           stream.write(Buffer.from(checkpointFrame()));
         } catch { clearInterval(ping); }
-      }, 100);
+      }, 40);
       stream.on("close", () => clearInterval(ping));
     }, async baseUrl => {
       const { failure } = await drain(baseUrl, { streamSilenceFailMs: 400, streamHeartbeatOnlyFailMs: 900 });
       expect(failure).toBeDefined();
+      // Assert on the message, and say which watchdog won when the wrong one does.
+      // A bare toContain here reported only the expected substring, which reads as
+      // "the heartbeat-only watchdog is broken" when the real story is that the
+      // silence watchdog fired first on a loaded runner.
       expect(failure!.message).toContain("heartbeat-only");
     });
   }, 15_000);
