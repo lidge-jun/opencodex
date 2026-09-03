@@ -526,7 +526,7 @@ export const de: Record<TKey, string> = {
   "models.setAllHint": "Schaltet das Standardfenster {value} für alle gerouteten Anbieter ein. Fehlen context_window / context_length, wird dieser Wert das tatsächliche Codex-Fenster. Für ein einzelnes Modell nutzen Sie «Eigene Fenster» in derselben Zeile. Native Anbieter bleiben unberührt.",
   "models.collapseAll": "Alle einklappen",
   "models.expandAll": "Alle ausklappen",
-  "models.orderHint": "Reihenfolge in der Modellauswahl: Subagents-Auswahl (in der festgelegten Reihenfolge) → übrige geroutete Modelle alphabetisch nach Anbieter, dann Modell-ID → native Modelle. Sichtbarkeitsschalter filtern nur; sie ändern diese Reihenfolge nicht.",
+  "models.orderHint": "Reihenfolge in der Modellauswahl: Gilt für geroutete Modelle in der Hauptauswahl von Codex. Sichtbarkeitsschalter filtern nur; sie ändern diese Reihenfolge nicht.",
   "models.custom": "Benutzerdefiniert…",
   "models.customApply": "Anwenden",
   "models.customPlaceholder": "Tokens (z. B. 420000)",

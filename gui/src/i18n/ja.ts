@@ -534,7 +534,7 @@ export const ja: Record<TKey, string> = {
   "models.setAllHint": "すべてのルーティング済みプロバイダーに {value} のデフォルトウィンドウをオンにします。中継が context_window / context_length を返さない場合、この値が実際の Codex ウィンドウになります。1 モデルだけ手で書くときは同じ行の「カスタムウィンドウ」を使います。ネイティブプロバイダーには影響しません。",
   "models.collapseAll": "すべて折りたたむ",
   "models.expandAll": "すべて展開",
-  "models.orderHint": "ピッカーの順序: サブエージェントの選択(選択順) → 残りのルーティングモデルはプロバイダー別、次にモデル ID 別のアルファベット順 → ネイティブモデル。表示切り替えはモデルをフィルタするだけで、この順序は変更しません。",
+  "models.orderHint": "モデルピッカーの順序: Codex のメインモデルピッカー内のルーティングモデルに適用されます。表示切り替えはモデルをフィルタするだけで、この順序は変更しません。",
   "models.custom": "カスタム…",
   "models.customApply": "適用",
   "models.customPlaceholder": "トークン (例: 420000)",

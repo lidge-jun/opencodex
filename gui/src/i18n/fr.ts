@@ -535,7 +535,7 @@ export const fr: Record<TKey, string> = {
   "models.setAllHint": "Active la fenêtre par défaut {value} pour chaque fournisseur routé. Si un relais omet context_window / context_length, cette valeur devient la fenêtre Codex réelle. Pour un seul modèle, utilisez « Fenêtres perso » sur la même ligne. Les fournisseurs natifs ne sont pas affectés.",
   "models.collapseAll": "Tout réduire",
   "models.expandAll": "Tout développer",
-  "models.orderHint": "Ordre du sélecteur : choix des sous-agents (dans l’ordre sélectionné) → autres modèles routés, classés par ordre alphabétique du fournisseur puis par ID de modèle → modèles natifs. Les options de visibilité ne font que filtrer les modèles ; elles ne modifient pas cet ordre.",
+  "models.orderHint": "Ordre du sélecteur de modèles : s’applique aux modèles routés dans le sélecteur principal de Codex. Les options de visibilité ne font que filtrer les modèles ; elles ne modifient pas cet ordre.",
   "models.custom": "Personnalisé…",
   "models.customApply": "Appliquer",
   "models.customPlaceholder": "Jetons (p. ex. 420000)",

@@ -534,7 +534,7 @@ export const zh: Record<TKey, string> = {
   "models.setAllHint": "给所有已路由提供方打开 {value} 默认窗口。中转站没报 context_window / context_length 时，这个值就是 Codex 实际窗口。要给单个模型手写，用同一行上的「自定义窗口」。原生提供方不受影响。",
   "models.collapseAll": "全部折叠",
   "models.expandAll": "全部展开",
-  "models.orderHint": "选择器顺序：Subagents 中的选择（按所选顺序）→ 其余已路由模型（依次按提供方、模型 ID 字母排序）→ 原生模型。可见性开关仅用于筛选，不会改变此顺序。",
+  "models.orderHint": "模型选择器顺序：适用于 Codex 主模型选择器中的已路由模型。可见性开关仅用于筛选，不会改变此顺序。",
   "models.custom": "自定义…",
   "models.customApply": "应用",
   "models.customPlaceholder": "令牌 (例如 420000)",

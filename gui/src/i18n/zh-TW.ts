@@ -407,7 +407,7 @@ export const zhTW: Record<TKey, string> = {
   "models.setAllHint": "為所有已路由供應商打開 {value} 預設視窗。中繼站沒回報 context_window / context_length 時，這個值就是 Codex 實際視窗。要幫單一模型手寫，用同一列上的「自訂視窗」。原生供應商不受影響。",
   "models.collapseAll": "全部摺疊",
   "models.expandAll": "全部展開",
-  "models.orderHint": "選擇器順序：Subagents 中的選擇（按所選順序）→ 其餘已路由模型（依次按供應商、模型 ID 字母排序）→ 原生模型。可見性開關僅用於篩選，不會改變此順序。",
+  "models.orderHint": "模型選擇器順序：適用於 Codex 主模型選擇器中的已路由模型。可見性開關僅用於篩選，不會改變此順序。",
   "models.custom": "自訂…",
   "models.customApply": "套用",
   "models.customPlaceholder": "tokens (例如 420000)",

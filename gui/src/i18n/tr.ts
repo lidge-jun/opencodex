@@ -541,7 +541,7 @@ export const tr: Record<TKey, string> = {
   "models.setAllHint": "Her yönlendirilen sağlayıcıda {value} varsayılan pencereyi açar. Röle context_window / context_length vermezse bu değer gerçek Codex penceresi olur. Tek bir modeli elle yazmak için aynı satırdaki «Özel pencereler»i kullanın.",
   "models.collapseAll": "Tümünü daralt",
   "models.expandAll": "Tümünü genişlet",
-  "models.orderHint": "Seçici sırası: Alt ajan seçimleri → kalan modeller.",
+  "models.orderHint": "Model seçici sırası: Codex ana model seçicisindeki yönlendirilmiş modellere uygulanır. Görünürlük anahtarları yalnızca modelleri filtreler; bu sırayı değiştirmez.",
   "models.custom": "Özel…",
   "models.customApply": "Uygula",
   "models.customPlaceholder": "Jetonlar (örn. 420000)",

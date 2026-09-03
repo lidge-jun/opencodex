@@ -536,7 +536,7 @@ export const ko: Record<TKey, string> = {
   "models.setAllHint": "라우팅된 모든 프로바이더에 {value} 기본 창을 켭니다. 중계가 context_window / context_length 를 주지 않으면 이 값이 실제 Codex 창이 됩니다. 모델 하나만 손으로 쓰려면 같은 줄의 「사용자 지정 창」을 쓰세요. 네이티브 프로바이더는 영향을 받지 않습니다.",
   "models.collapseAll": "모두 접기",
   "models.expandAll": "모두 펼치기",
-  "models.orderHint": "피커 순서: Subagents에서 지정한 순서 → 나머지 라우팅 모델(프로바이더, 모델 ID 순 알파벳 정렬) → 네이티브 모델. 노출 토글은 모델을 필터링할 뿐 이 순서를 바꾸지 않습니다.",
+  "models.orderHint": "모델 피커 순서: Codex 기본 모델 피커의 라우팅 모델에 적용됩니다. 노출 토글은 모델을 필터링할 뿐 이 순서를 바꾸지 않습니다.",
   "models.custom": "직접 입력…",
   "models.customApply": "적용",
   "models.customPlaceholder": "토큰 (예: 420000)",

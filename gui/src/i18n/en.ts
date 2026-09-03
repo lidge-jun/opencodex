@@ -550,7 +550,7 @@ export const en = {
   "models.setAllHint": "Turn on the {value} default window for every routed provider. Relays that omit context_window / context_length get this as the actual Codex window. Use Custom windows on a provider row to set one model by hand. Native providers are unaffected.",
   "models.collapseAll": "Collapse all",
   "models.expandAll": "Expand all",
-  "models.orderHint": "Picker order: Subagents picks (in the selected order) → remaining routed models alphabetically by provider, then model ID → native models. Visibility switches only filter models; they do not change this order.",
+  "models.orderHint": "Model picker order: applies to routed models in Codex's main model picker. Visibility switches only filter models; they do not change this order.",
   "models.custom": "Custom…",
   "models.customApply": "Apply",
   "models.customPlaceholder": "Tokens (e.g. 420000)",
