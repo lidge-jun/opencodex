@@ -77,6 +77,12 @@ export function rankAccountsByHeadroom(provider: string, ring: readonly string[]
   if (ring.length < 2) return [...ring];
 
   let sawEvidence = false;
+  // Same rule as hasHeadroomEvidence: a passive provider's partial roster must not rank
+  // at all. The failover path calls this directly (selectFailoverAccount), so the guard
+  // cannot live only in the pre-dispatch predicate.
+  if (hasPassiveAccountQuota(provider) && !ring.every(id => headroomOf(provider, id) !== null)) {
+    return [...ring];
+  }
   const ranked: Ranked[] = ring.map((id, index) => {
     // A provider-declared exhaustion verdict outranks the percentage: an account may sit at
     // 100% and still be servable when overage is enabled, and the verdict knows that.
@@ -105,6 +111,18 @@ export function rankAccountsByHeadroom(provider: string, ring: readonly string[]
  * can decline to act on a roster it knows nothing about.
  */
 export function hasHeadroomEvidence(provider: string, ids: readonly string[]): boolean {
+  // A PASSIVE provider needs evidence for EVERY candidate, not any one of them.
+  //
+  // A probe fills the whole roster in one pass (fetchProviderAccountQuotas), so "any"
+  // and "every" coincide there. An observation arrives one account at a time, so the
+  // normal passive state is "one measured, N unknown" -- and RANK_UNKNOWN (1) sorts
+  // AFTER RANK_HEALTHY (0), including behind a measured row sitting at 100% with zero
+  // headroom. Accepting partial evidence would therefore redirect the first attempt
+  // AWAY from an unmeasured account and TOWARD the one account known to be spent, which
+  // is the exact inversion of what ranking is for.
+  if (hasPassiveAccountQuota(provider)) {
+    return ids.length > 0 && ids.every(id => headroomOf(provider, id) !== null);
+  }
   return ids.some(id =>
     headroomOf(provider, id) !== null
     || (provider === "kiro" && getKiroAccountExhaustion(`${provider}\u0000${id}`) !== null));

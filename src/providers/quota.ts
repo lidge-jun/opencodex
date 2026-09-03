@@ -1536,6 +1536,13 @@ export function recordPassiveAccountQuota(
   if (!hasPassiveAccountQuota(provider) || !accountId) return;
   const key = accountCacheKey(provider, accountId);
   if (!mayCommitAccountQuotaKey(key, writerGeneration)) return;
+  // Hydrate BEFORE writing, not only on the read path. `persistAccountQuotaCache`
+  // serializes the whole in-memory map, so a passive write that lands before anything
+  // has read the cache would persist this one row and erase every other provider's
+  // saved row -- and `diskHydrated` would then stop any later reader from recovering
+  // them. A probe writer cannot hit this because its own read hydrates first; an
+  // observation arrives unprompted, so it must hydrate itself.
+  hydrateAccountQuotaCache();
   accountQuotaCache.set(key, { ts: Date.now(), quota });
   // Persisted so a restart keeps the last observation: with no probe to re-establish it,
   // a forgotten row stays forgotten until the user happens to run another streaming turn.
