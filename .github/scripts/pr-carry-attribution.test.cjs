@@ -120,6 +120,35 @@ describe("assessCarryAttribution", () => {
     );
   });
 
+  it("ignores carry language after an unclosed HTML comment", () => {
+    // GitHub renders nothing after an unterminated `<!--`, so neither does the
+    // gate. The closing-delimiter-only pattern used to match nothing here and
+    // leave the whole tail in the scanned text, which is the divergence CodeQL
+    // flagged on #3342: enforced text and rendered text stopped agreeing.
+    assert.deepEqual(
+      assessCarryAttribution(
+        base({
+          body: ["This is an ordinary fix.", "", "<!-- supersedes #2797"].join("\n"),
+        }),
+      ),
+      [],
+    );
+  });
+
+  it("still reads carry language that follows a CLOSED comment", () => {
+    // The guard above must not swallow the rest of the body wholesale: a
+    // properly closed comment ends at its own `-->`, and a real claim after it
+    // is still a claim.
+    assert.equal(
+      assessCarryAttribution(
+        base({
+          body: ["<!-- a note -->", "", "Supersedes #2797."].join("\n"),
+        }),
+      ).length,
+      1,
+    );
+  });
+
   it("passes an ordinary pull request with no carry language", () => {
     assert.deepEqual(
       assessCarryAttribution(base({ body: "Closes #2797." })),

@@ -56,7 +56,23 @@ const TRAILER_RE = /^[ \t]*co-authored-by:[ \t]*(.+)$/gim;
 
 const FENCED_CODE_RE = /^[ \t]*(\u0060{3,}|~{3,})[\s\S]*?^[ \t]*\1[ \t]*$/gm;
 const INLINE_CODE_RE = /\u0060[^\u0060\n]*\u0060/g;
-const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+/**
+ * HTML comments, which GitHub never renders.
+ *
+ * The `(?:-->|$)` alternative is load-bearing and matches `pr-quality.cjs`: an
+ * UNCLOSED comment runs to the end of the text, because that is what GitHub
+ * does with it. Without the alternative, `<!--` with no terminator matched
+ * nothing, so everything after it stayed in the scanned text while GitHub
+ * rendered none of it — an author could write a carry claim that the gate reads
+ * and no human ever sees, or bury one the gate misses in text that renders.
+ * Either direction is a divergence between what is enforced and what is shown.
+ *
+ * CodeQL flagged the same shape as `js/incomplete-multi-character-sanitization`
+ * on #3342. The alert's own framing (HTML element injection) does not apply —
+ * this output is matched by regex, never rendered — but the underlying
+ * observation, that the strip is incomplete, is correct for this gate's purpose.
+ */
+const HTML_COMMENT_RE = /<!--[\s\S]*?(?:-->|$)/g;
 
 /**
  * Carry language inside a fenced block, an inline span, or an HTML comment is
