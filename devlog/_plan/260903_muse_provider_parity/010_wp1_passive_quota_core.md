@@ -193,6 +193,66 @@ the row does not carry it.
 refresh for every provider, and a 400 would surface an error for an action that is simply
 a no-op here.
 
+## MODIFY `src/oauth/account-quota-rank.ts` — A-gate amendment
+
+**Blocker found at the audit gate, folded here.** `headroomOf` (`:36`) reads
+`getCachedProviderAccountQuota` and applies **no staleness bound**:
+
+```ts
+// src/providers/quota.ts:1489
+export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
+  const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  return entry?.quota ?? null;   // no ts check
+}
+```
+
+For every provider that exists today this is safe by construction: a row is only written by
+a probe, and `fetchAccountQuota` re-probes once `ACCOUNT_QUOTA_TTL_MS` (10 minutes,
+`quota-wire.ts:22`) has passed, so a row consulted for routing is at most that old.
+**The passive path breaks that invariant.** Nothing re-probes, and `001` §G established
+that account-quota rows are not swept on the TTL tick, so a Muse row can be hours or days
+old in memory and up to six hours old after a restart.
+
+Left unfixed, `preferredInitialAccount` (`generic-account-failover.ts:281`) would send the
+first attempt of every turn to whichever account looked best whenever it was last
+observed — plausibly the one that has since been exhausted. That is worse than the
+current unranked behaviour, because it is confidently wrong rather than uninformed.
+
+```ts
+/**
+ * How old a PASSIVELY observed quota may be and still steer routing.
+ *
+ * A probed row is implicitly fresh: fetchAccountQuota re-probes after
+ * ACCOUNT_QUOTA_TTL_MS. A passive row has no such refresh, so the bound is explicit
+ * here. It is deliberately longer than the probe TTL — an hour-old reading of a
+ * five-hour window is still informative — and deliberately far shorter than the
+ * six-hour disk horizon, which exists to preserve a value for DISPLAY, where the age is
+ * shown to the user and no automatic decision rides on it.
+ */
+const PASSIVE_HEADROOM_MAX_AGE_MS = 60 * 60_000;
+```
+
+In `headroomOf`, immediately after the null check:
+
+```ts
+  if (hasPassiveAccountQuota(provider) && Date.now() - quota.updatedAt > PASSIVE_HEADROOM_MAX_AGE_MS) return null;
+```
+
+Returning `null` is the correct shape, not a zero or a low rank: it reproduces "no
+evidence", which `rankAccountsByHeadroom` (`:71`) and `hasHeadroomEvidence` (`:87`)
+already handle by leaving the ring untouched. The stale-row case therefore degrades to
+exactly today's behaviour rather than to a different wrong answer.
+
+The display path is deliberately **not** bounded this way. wp2 shows the age, so an old
+number is labelled rather than hidden — the user can judge it, and a routing algorithm
+cannot.
+
+Added tests in `tests/muse-passive-quota-cache.test.ts`:
+
+- a passive row younger than the bound produces headroom; one older produces `null`
+- `hasHeadroomEvidence` is false for a roster whose only rows are stale
+- an `anthropic` row of the same age is unaffected (the bound is passive-only)
+
 ## Tests
 
 `tests/muse-subscription-usage.test.ts` — parser, fixture-driven:
