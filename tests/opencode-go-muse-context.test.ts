@@ -14,6 +14,7 @@ import { providerConfigSeed } from "../src/providers/derive";
 import type { OcxProviderConfig } from "../src/types";
 
 const MUSE_MODEL = "muse-spark-1.2-contributor";
+const MUSE_13_MODEL = "muse-spark-1.3-contributor";
 const MUSE_CONTEXT = 1_048_576;
 
 /** Seeded OpenCode Go provider config for the Muse Spark context assertions. */
@@ -47,6 +48,21 @@ describe("OpenCode Go Muse Spark context window", () => {
     const prov = opencodeGo();
     const hinted = applyProviderConfigHints("opencode-go", prov, {
       id: MUSE_MODEL,
+      provider: "opencode-go",
+    });
+    expect(hinted.contextWindow).toBe(MUSE_CONTEXT);
+  });
+
+  // 1.3 is the same-shaped successor on the same Zen Go roster. Without its own
+  // entry it would fall back to the 128k unknown-window default — the same
+  // regression these tests exist to prevent for 1.2.
+  test("Muse Spark 1.3 Contributor declares and exposes the same 1M window", () => {
+    const entry = PROVIDER_REGISTRY.find(e => e.id === "opencode-go");
+    expect(entry?.modelContextWindows?.[MUSE_13_MODEL]).toBe(MUSE_CONTEXT);
+    const prov = opencodeGo();
+    expect(prov.modelContextWindows?.[MUSE_13_MODEL]).toBe(MUSE_CONTEXT);
+    const hinted = applyProviderConfigHints("opencode-go", prov, {
+      id: MUSE_13_MODEL,
       provider: "opencode-go",
     });
     expect(hinted.contextWindow).toBe(MUSE_CONTEXT);

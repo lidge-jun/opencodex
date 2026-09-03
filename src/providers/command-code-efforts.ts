@@ -103,6 +103,21 @@ const COMMAND_CODE_MODEL_EFFORTS = {
   // 2026-08-13: direct upstream POST with low/medium/high/xhigh/max all 200,
   // ultra 400; reasoningTokens differentiated 114..253; proxy previously stripped
   // the field so effort changes had no effect).
+  //
+  // 1.3 shipped 2026-09-02 as the same-shaped successor to 1.2 (Command Code
+  // publishes meta/muse-spark-1.3 and meta/muse-spark-1.3-contributor alongside
+  // the 1.2 pair, and Zen serves muse-spark-1.3-contributor over the same
+  // /responses wire). It carries the 1.2 ladder because it IS the 1.2 spec: the
+  // upstream ladder statement is per-family, and a narrower guess here would
+  // strip an effort the gateway accepts. Additive — 1.2 and 1.1 stay live.
+  "meta/muse-spark-1.3": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    profileUrl: "https://commandcode.ai/models/meta-muse-spark-1.3",
+  },
+  "meta/muse-spark-1.3-contributor": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    profileUrl: "https://commandcode.ai/models/meta-muse-spark-1.3-contributor",
+  },
   "meta/muse-spark-1.2": {
     efforts: ["low", "medium", "high", "xhigh", "max"],
     profileUrl: "https://commandcode.ai/models/meta-muse-spark-1.2",

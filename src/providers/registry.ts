@@ -552,6 +552,8 @@ const COMMAND_CODE_IMAGE_MODELS = [
   "gpt-5.6-sol",
   "MiniMaxAI/MiniMax-M3",
   "moonshotai/Kimi-K3",
+  "meta/muse-spark-1.3",
+  "meta/muse-spark-1.3-contributor",
   "meta/muse-spark-1.2",
   "meta/muse-spark-1.2-contributor",
 ] as const;
@@ -1487,25 +1489,33 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     - 다른 대안 대신 이 방식을 선택한 이유: OpenCode Go documents sibling models on Chat or Anthropic endpoints, and an exact registry default preserves both those routes and explicit opt-out precedence.
     - 장점, 단점 및 영향: Each listed model reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
     */
-    modelWireDefaults: { "gpt-5.6-luna": "openai-responses", "muse-spark-1.2-contributor": "openai-responses" },
+    modelWireDefaults: {
+      "gpt-5.6-luna": "openai-responses",
+      "muse-spark-1.3-contributor": "openai-responses",
+      "muse-spark-1.2-contributor": "openai-responses",
+    },
     modelContextWindows: {
       "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
       // The DeepSeek vision preview id is metadata-only here: the Go roster is
       // discovered live, so it applies the moment the gateway serves the id.
       [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576,
-      // Muse Spark 1.2 Contributor serves a 1,048,576-token (1M) context window over
+      // Muse Spark Contributor serves a 1,048,576-token (1M) context window over
       // /responses on Zen Go, matching its 1.1 sibling (Meta developer docs, verified 2026-08-28).
       // Without this declaration the catalog falls back to 128k, capping real usable context.
+      // 1.3 ships the same window as 1.2 and is served from the same Zen Go roster.
+      "muse-spark-1.3-contributor": 1_048_576,
       "muse-spark-1.2-contributor": 1_048_576,
     },
     modelInputModalities: {
       "kimi-k3": ["text", "image"],
       // Experimental DeepSeek vision preview — expected to merge into deepseek-v4-flash later.
       [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
-      // Muse Spark 1.2 Contributor is natively multimodal on Zen Go: it accepts input_image
+      // Muse Spark Contributor is natively multimodal on Zen Go: it accepts input_image
       // parts over /responses (probed 2026-08-26). Without this declaration the catalog
       // advertises it text-only and the Codex app blocks image attachments client-side with
       // "This model does not support image inputs" before the request ever reaches the proxy.
+      // 1.3 is the same-shaped successor and Command Code documents it as multimodal.
+      "muse-spark-1.3-contributor": ["text", "image"],
       "muse-spark-1.2-contributor": ["text", "image"],
     },
     modelReasoningEfforts: {

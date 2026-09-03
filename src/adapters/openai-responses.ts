@@ -1966,6 +1966,18 @@ export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
 }
 
 /**
+ * Muse Spark ids whose Responses gateway refuses `search_content_types` on a plain
+ * `web_search` tool. Membership, not equality: 1.3 shipped 2026-09-02 as the
+ * same-shaped successor to 1.2 on the same Zen wire, and an equality check would
+ * have let a Codex-emitted `web_search` + `search_content_types` body reach the
+ * gateway and come back 400 for every request the moment 1.3 was selected.
+ */
+const MUSE_SPARK_WEB_SEARCH_STRICT_MODELS = new Set([
+  "muse-spark-1.3-contributor",
+  "muse-spark-1.2-contributor",
+]);
+
+/**
  * OpenCode Zen / Go Muse Spark Responses gateway refuses `search_content_types`
  * on a plain `web_search` tool (400) but accepts it on `web_search_preview`; a
  * plain `web_search` is also accepted. Probed directly against the gateway on
@@ -1976,7 +1988,8 @@ export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
  */
 function stripMuseSparkUnsupportedWebSearchFields(body: unknown, modelId: unknown): unknown {
   if (!isPlainObject(body)) return body;
-  if (typeof modelId !== "string" || modelId.trim().toLowerCase() !== "muse-spark-1.2-contributor") return body;
+  if (typeof modelId !== "string") return body;
+  if (!MUSE_SPARK_WEB_SEARCH_STRICT_MODELS.has(modelId.trim().toLowerCase())) return body;
 
   const rewriteTools = (tools: unknown[]): { tools: unknown[]; changed: boolean } => {
     let changed = false;

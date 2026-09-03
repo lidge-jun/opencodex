@@ -121,6 +121,8 @@ describe("Command Code provider", () => {
       "gpt-5.6-sol",
       "MiniMaxAI/MiniMax-M3",
       "moonshotai/Kimi-K3",
+      "meta/muse-spark-1.3",
+      "meta/muse-spark-1.3-contributor",
       "meta/muse-spark-1.2",
       "meta/muse-spark-1.2-contributor",
     ];
@@ -382,6 +384,13 @@ describe("Command Code provider", () => {
     // variant all 200, ultra 400). The proxy previously stripped the field;
     // this covers the actual forwarding behavior.
     expect(commandCodeReasoningEfforts("meta/muse-spark-1.2-contributor")).toEqual(
+      ["low", "medium", "high", "xhigh", "max"],
+    );
+    // 1.3 shipped as the same-shaped successor and carries the identical ladder.
+    expect(commandCodeReasoningEfforts("meta/muse-spark-1.3-contributor")).toEqual(
+      ["low", "medium", "high", "xhigh", "max"],
+    );
+    expect(commandCodeReasoningEfforts("meta/muse-spark-1.3")).toEqual(
       ["low", "medium", "high", "xhigh", "max"],
     );
     expect(commandCodeReasoningEfforts("meta/muse-spark-1.2")).toEqual(

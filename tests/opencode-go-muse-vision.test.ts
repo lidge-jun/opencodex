@@ -15,6 +15,7 @@ import { providerConfigSeed } from "../src/providers/derive";
 import type { OcxProviderConfig } from "../src/types";
 
 const MUSE_MODEL = "muse-spark-1.2-contributor";
+const MUSE_13_MODEL = "muse-spark-1.3-contributor";
 
 /** Seeded OpenCode Go provider config for the Muse Spark vision assertions. */
 function opencodeGo(): OcxProviderConfig {
@@ -70,6 +71,27 @@ describe("OpenCode Go Muse Spark image input (#vision)", () => {
     const hinted = applyProviderConfigHints("opencode-go", prov, {
       id: MUSE_MODEL,
       provider: "opencode-go",
+    });
+    expect(hinted.inputModalities).toEqual(["text", "image"]);
+  });
+
+  // 1.3 shipped 2026-09-02 on the same Zen Go roster with the same spec as 1.2.
+  // Zen publishes no modality metadata, so without its own declaration the newer
+  // model would regress to the exact text-only block 1.2 was fixed for.
+  test("Muse Spark 1.3 Contributor carries the same text+image declaration", () => {
+    const entry = PROVIDER_REGISTRY.find(e => e.id === "opencode-go");
+    expect(entry?.modelInputModalities?.[MUSE_13_MODEL]).toEqual(["text", "image"]);
+    const prov = opencodeGo();
+    expect(prov.modelInputModalities?.[MUSE_13_MODEL]).toEqual(["text", "image"]);
+    expect(prov.noVisionModels ?? []).not.toContain(MUSE_13_MODEL);
+  });
+
+  test("1.3's configured declaration overrides a text-only discovered row", () => {
+    const prov = opencodeGo();
+    const hinted = applyProviderConfigHints("opencode-go", prov, {
+      id: MUSE_13_MODEL,
+      provider: "opencode-go",
+      inputModalities: ["text"],
     });
     expect(hinted.inputModalities).toEqual(["text", "image"]);
   });
