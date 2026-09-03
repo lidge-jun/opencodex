@@ -25,6 +25,12 @@ export interface KiroOAuthMetadata {
   authType?: KiroCredentialAuthType;
 }
 
+/** Account-scoped WorkBuddy headers required by the console proxy. */
+export interface WorkBuddyOAuthMetadata {
+  domain?: string;
+  enterpriseId?: string;
+}
+
 export type OAuthCredentials = {
   refresh: string;
   access: string;
@@ -42,6 +48,8 @@ export type OAuthCredentials = {
   apiBaseUrl?: string;
   /** Never returned by management APIs; persisted only inside the protected auth-store boundary. */
   kiro?: KiroOAuthMetadata;
+  /** WorkBuddy console proxy routing headers (domain / enterprise tenant). */
+  workbuddy?: WorkBuddyOAuthMetadata;
 };
 
 /** One logged-in account inside a provider's account set (multiauth). */
