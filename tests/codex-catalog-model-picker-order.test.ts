@@ -3,10 +3,11 @@ import {
   buildCatalogEntriesFromObservedState,
   effectiveSubagentRoster,
   MAX_SPAWN_AGENT_MODEL_OVERRIDES,
+  SPAWN_PRIORITY_FIELD,
 } from "../src/codex/catalog/sync";
 import type { CatalogModel } from "../src/types";
 
-// #1649: config.modelPickerOrder assigns a deterministic priority band to non-featured routed
+// #1649: config.modelPickerOrder assigns a deterministic priority band to routed
 // rows so a catalog with more than 5 routed models keeps a stable picker order across rebuilds,
 // independent of the 5-slot subagentModels spawn_agent cap.
 
@@ -93,16 +94,27 @@ describe("modelPickerOrder (#1649)", () => {
     expect(p["jd-claude/sonnet-5"]).toBe(5);
   });
 
-  test("featured rows keep their top priority ahead of the picker-order band", () => {
-    const p = build({
+  test("picker order can move a featured routed row without changing the subagent roster", () => {
+    const entries = buildCatalogEntriesFromObservedState({
+      template: template() as never,
+      gptSlugs: [],
+      goModels,
       featured: ["jd-claude/sonnet-5"],
-      modelPickerOrder: ["tyler/deepseek-v4-pro", "jd-chat/kimi-k3"],
+      modelPickerOrder: ["tyler/deepseek-v4-pro", "jd-claude/sonnet-5", "jd-chat/kimi-k3"],
+      wsEnabled: false,
+      multiAgentMode: "default",
+      exactComboSlugs: new Set(),
+      accountSelectors: [],
+      suppressedBareNativeSlugs: new Set(),
+      disabledNativeAccountSlugs: new Set(),
+      multiAgentV2Enabled: false,
     });
-    // Featured wins outright (priority 0).
-    expect(p["jd-claude/sonnet-5"]).toBe(0);
-    // Picker-order rows come after the featured band.
-    expect(p["tyler/deepseek-v4-pro"]).toBeGreaterThan(p["jd-claude/sonnet-5"]);
-    expect(p["tyler/deepseek-v4-pro"]).toBeLessThan(p["jd-chat/kimi-k3"]);
+    const featured = entries.find(entry => (entry as Record<string, unknown>).slug === "jd-claude/sonnet-5") as Record<string, unknown>;
+    // The picker sees the configured ordering, including this featured routed row.
+    expect(featured.priority).toBeGreaterThanOrEqual(1000);
+    expect(featured[SPAWN_PRIORITY_FIELD]).toBe(0);
+    // The feature remains the first spawn_agent candidate by its preserved natural priority.
+    expect(effectiveSubagentRoster([], "default", entries).candidates[0]?.model).toBe("jd-claude/sonnet-5");
   });
 
   // Regression for the review on #1666: modelPickerOrder must not change spawn_agent candidate
@@ -146,7 +158,7 @@ describe("modelPickerOrder (#1649)", () => {
 
   // Documents the scope boundary raised in review: modelPickerOrder targets routed
   // <provider>/<model> rows only. A bare native slug listed here must NOT reorder its native
-  // passthrough row (native ordering goes through subagentModels).
+  // passthrough row.
   test("a bare native slug in modelPickerOrder does not reorder its native row", () => {
     const entries = buildCatalogEntriesFromObservedState({
       template: template() as never,

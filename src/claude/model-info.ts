@@ -15,7 +15,7 @@
  *  - created_at is a fixed constant; max_input_tokens is authoritative-or-null;
  *    max_tokens is always null (no authoritative output limit exists proxy-side).
  */
-import { catalogModelEfforts, nativeEffortClamp, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
+import { catalogModelEfforts, nativeEffortClamp, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, orderForModelPicker, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
 import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
 import { cursorFastIdFor } from "../adapters/cursor/catalog";
 import { desktop3pAlias } from "./desktop-3p";
@@ -111,6 +111,7 @@ export function buildAnthropicModelInfos(
   aliasForRoute: (provider: string, modelId: string) => string = desktop3pAlias,
   nativeContextCap?: NativeContextLimitsInput,
   fastMode?: boolean,
+  modelPickerOrder?: readonly string[],
 ): AnthropicModelInfo[] {
   const out: AnthropicModelInfo[] = [];
   const seen = new Set<string>();
@@ -152,7 +153,7 @@ export function buildAnthropicModelInfos(
     out.push(info);
     push1mVariant(info, nativeWindow, nativeMaxInput);
   }
-  for (const m of routedModels) {
+  for (const m of orderForModelPicker(routedModels, modelPickerOrder)) {
     // Global Fast has no toggle on this surface, so the fast identity is what gets listed —
     // a client here can only pick a listed id. Limited to the readable CLI style: Desktop 3P
     // ids are hashed from the model name, so rewriting them would strand a saved selection.
