@@ -1949,7 +1949,6 @@ dialog.modal-overlay::backdrop {
 .codex-account-priority-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
 .codex-account-priority .select-trigger { max-width: 100%; padding: 4px 9px; font-size: var(--text-label); }
 
-.startup-page-sub { margin-bottom: 0; }
 .startup-page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .startup-runtime-notice-slot {
   margin-bottom: 12px;
@@ -2001,8 +2000,12 @@ dialog.modal-overlay::backdrop {
 .startup-hero-icon svg { width: 21px; height: 21px; }
 .startup-hero-copy h3 { margin: 10px 0 4px; font-size: var(--text-title); }
 .startup-hero-copy p { margin: 0; color: var(--muted); line-height: var(--leading-body); max-width: var(--prose-measure); }
-.startup-state-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
-.startup-state-grid .value { font-size: var(--text-subtitle); }
+.startup-state-line { margin: 8px 0 0; font-size: var(--text-control); }
+.startup-recovery-details > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+.startup-recovery-details > summary::-webkit-details-marker { display: none; }
+.startup-recovery-details > summary::before { content: ""; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform var(--motion-fast); }
+.startup-recovery-details[open] > summary::before { transform: rotate(90deg); }
+.startup-recovery-details[open] > summary { margin-bottom: 8px; }
 .startup-details, .startup-actions { margin-bottom: 16px; }
 .startup-actions .panel-head > svg { width: 18px; height: 18px; flex: 0 0 auto; }
 .startup-detail-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--border-soft); }
@@ -2020,7 +2023,6 @@ dialog.modal-overlay::backdrop {
 .startup-command-row code { color: var(--muted); font-size: var(--text-label); overflow-wrap: anywhere; }
 .startup-action-notice { margin: 14px 0 0; }
 @media (max-width: 700px) {
-  .startup-state-grid { grid-template-columns: 1fr; }
   .startup-command-row { align-items: flex-start; }
   .startup-detail-row { align-items: flex-start; }
   .startup-detail-row > .startup-detail-actions { flex-direction: column; align-items: flex-end; }
