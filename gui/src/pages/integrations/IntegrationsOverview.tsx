@@ -46,6 +46,15 @@ const GROK_DISABLE_COPY: ConsequenceCopy = {
   confirmKey: "integrations.dialog.grok.confirm",
 };
 
+const CODEX_DISABLE_COPY: ConsequenceCopy = {
+  titleKey: "integrations.dialog.codex.title",
+  changesKey: "integrations.dialog.codex.changes",
+  breakageKey: "integrations.dialog.codex.breakage",
+  undoKey: "integrations.dialog.codex.undo",
+  sideEffectKey: "integrations.dialog.codex.sideEffect",
+  confirmKey: "integrations.dialog.codex.confirm",
+};
+
 const DESKTOP_DISABLE_COPY: ConsequenceCopy = {
   titleKey: "integrations.dialog.desktop.title",
   changesKey: "integrations.dialog.desktop.changes",
@@ -92,7 +101,7 @@ function OverviewCard({
   const detail = row.detail ?? (row.detailKey ? t(row.detailKey, row.detailVars ?? undefined) : null);
   const toggleBlocked = row.toggleBlocked !== null
     && (row.applied || row.toggleBlocked.reason === "orphaned_marker");
-  const blockedText = toggleBlocked && row.toggleBlocked && (row.toggle === "claude" || row.toggle === "grok")
+  const blockedText = toggleBlocked && row.toggleBlocked && (row.toggle === "claude" || row.toggle === "grok" || row.toggle === "codex")
     ? describeRefusal(t, new NativeApiError(409, {
         error: "native integration change refused",
         code: "native_integration_refused",
@@ -101,6 +110,7 @@ function OverviewCard({
         message: row.toggleBlocked.message,
       }), undefined, row.togglePath ?? undefined)
     : null;
+  const toggleOn = row.toggleOn ?? row.applied;
   return (
     <li className="integration-card" data-client={row.id}>
       <div className="integration-card-head">
@@ -131,7 +141,7 @@ function OverviewCard({
         {row.toggle && onToggle && (
           <div className="integration-toggle-control">
             <Switch
-              on={row.toggleOn ?? row.applied}
+              on={toggleOn}
               onClick={onToggle}
               // Unknown is an unsettled native read; conflict/unsafe and an
               // advisory refusal must all be resolved before mutation.
@@ -141,7 +151,7 @@ function OverviewCard({
                 || row.state === "unsafe"
                 || toggleBlocked
                 || pending}
-              label={row.applied
+              label={toggleOn
                 ? t("integrations.action.disable")
                 : t("integrations.action.apply")}
             />
@@ -440,6 +450,7 @@ export default function IntegrationsOverview({
 
   const refreshNativeDetails = () => {
     nativeResource.refresh();
+    codexResource.refresh();
     claudeResource.refresh();
     grokResource.refresh();
   };
@@ -492,7 +503,7 @@ export default function IntegrationsOverview({
       void toggleCard(row, next);
       return;
     }
-    // Grok and Desktop disables edit another program's file.
+    // Codex, Grok, and Desktop disables edit another program's file.
     const activeElement = document.activeElement;
     restoreFocusRef.current = activeElement?.tagName === "BUTTON"
       ? activeElement as HTMLButtonElement
@@ -667,7 +678,14 @@ export default function IntegrationsOverview({
       )}
       {pendingToggle && (
         <ConsequenceDialog
-          copy={{ ...(pendingToggle.toggle === "claude-desktop" ? DESKTOP_DISABLE_COPY : GROK_DISABLE_COPY), vars: { path: pendingToggle.togglePath ?? "" } }}
+          copy={{
+            ...(pendingToggle.toggle === "claude-desktop"
+              ? DESKTOP_DISABLE_COPY
+              : pendingToggle.id === "codex"
+                ? CODEX_DISABLE_COPY
+                : GROK_DISABLE_COPY),
+            vars: { path: pendingToggle.togglePath ?? "" },
+          }}
           onClose={() => setPendingToggle(null)}
           onConfirm={async () => {
             await toggleCard(pendingToggle, false);

@@ -53,6 +53,8 @@ type JournalRow = {
 let stateResponse: () => Response;
 let journalRows: JournalRow[];
 let putResponse: () => Response;
+let codexRoutingResponse: () => Response;
+let codexDesiredEnabled = true;
 /**
  * The overview also reads Codex routing, API keys, Claude Code, Claude Desktop
  * and the Grok fence. Default answers keep every existing test's card grid
@@ -101,6 +103,8 @@ beforeEach(() => {
   apiBase = `http://ocx-test-${mountCount}.invalid`;
   stateResponse = () => json(status());
   putResponse = () => json({ ok: true, clientId: "hermes", changed: true, state: "absent", message: "disabled" });
+  codexRoutingResponse = () => json({ routingInjected: false, status: "native", recommendedCommand: null });
+  codexDesiredEnabled = true;
   failExtraSources = false;
 
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -115,7 +119,7 @@ beforeEach(() => {
     if (url.includes("/api/startup-health")) {
       return failExtraSources
         ? json({ error: "nope" }, 500)
-        : json({ routingInjected: false, status: "native", recommendedCommand: null });
+        : codexRoutingResponse();
     }
     if (url.includes("/api/keys")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ keys: [] });
@@ -125,15 +129,41 @@ beforeEach(() => {
         ? json({ error: "nope" }, 500)
         : json({ desiredEnabled: true, installed: true, observedKind: "standard", applied: false, stale: false, activeProfile: null, appliedAt: null });
     }
-    if (url.includes("/api/native-integrations")) {
-      return json({ clients: [{
-        clientId: "claude-desktop",
-        state: "absent",
-        installed: true,
-        configPath: "/tmp/desktop",
-        desiredEnabled: true,
-        disableBlocked: null,
-      }] });
+    if (method === "PUT" && url.endsWith("/api/native-integrations/codex")) {
+      const body = init?.body ? JSON.parse(String(init.body)) as { enabled?: unknown } : {};
+      codexDesiredEnabled = body.enabled === true;
+      codexRoutingResponse = () => json({
+        routingInjected: codexDesiredEnabled,
+        status: "native",
+        recommendedCommand: null,
+      });
+      return json({
+        ok: true,
+        clientId: "codex",
+        changed: true,
+        state: codexDesiredEnabled ? "current" : "absent",
+        message: codexDesiredEnabled ? "enabled" : "disabled",
+        desiredEnabled: codexDesiredEnabled,
+      });
+    }
+    if (method === "GET" && url.includes("/api/native-integrations")) {
+      return failExtraSources
+        ? json({ error: "nope" }, 500)
+        : json({ clients: [{
+          clientId: "codex",
+          state: codexDesiredEnabled ? "current" : "absent",
+          installed: true,
+          configPath: "/tmp/codex/config.toml",
+          desiredEnabled: codexDesiredEnabled,
+          disableBlocked: null,
+        }, {
+          clientId: "claude-desktop",
+          state: "absent",
+          installed: true,
+          configPath: "/tmp/desktop",
+          desiredEnabled: true,
+          disableBlocked: null,
+        }] });
     }
     if (url.includes("/api/claude-code")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ enabled: false });
@@ -881,6 +911,40 @@ test("every reachable client gets a card, not just the file six", async () => {
   ) as unknown as HTMLButtonElement | null;
   await act(async () => { desktopLink!.click(); });
   expect(testWindow.location.hash).toBe("#integrations/claude/desktop");
+});
+
+test("Codex disable uses Codex consequences and refreshes observed routing", async () => {
+  codexRoutingResponse = () => json({ routingInjected: true, status: "native", recommendedCommand: null });
+  await mountOverview();
+
+  const sw = switchFor("codex");
+  expect(sw?.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => { sw!.click(); });
+
+  // Opening the consequence gate must not mutate anything, and it must name
+  // the Codex file and the effects of restoring native Codex.
+  expect(requests.some(request => request.method === "PUT")).toBe(false);
+  const dialog = container.querySelector(".integration-consequence-dialog")!;
+  expect(dialog.textContent).toContain("Disable the Codex integration?");
+  expect(dialog.textContent).toContain("/tmp/codex/config.toml");
+  expect(dialog.textContent).toContain("/v1/responses");
+  expect(dialog.textContent).not.toContain("Grok Build");
+
+  const confirm = Array.from(dialog.querySelectorAll("button")).find(
+    button => (button.textContent ?? "").trim() === "Disable",
+  ) as HTMLButtonElement;
+  await act(async () => { confirm.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 50)); });
+
+  const put = requests.find(request => request.method === "PUT");
+  expect(put?.url).toContain("/api/native-integrations/codex");
+  expect(put?.body).toEqual({ enabled: false });
+  // The mock changes startup-health only after the mutation. This assertion
+  // therefore proves the Codex observed resource, not merely the native toggle,
+  // was refreshed.
+  expect(switchFor("codex")?.getAttribute("aria-pressed")).toBe("false");
+  expect(container.querySelector(".integration-card[data-client='codex'] .badge")
+    ?.getAttribute("data-integration-state")).toBe("absent");
 });
 
 test("a source that cannot be read is unknown, never 'not applied'", async () => {
