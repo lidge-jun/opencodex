@@ -199,6 +199,9 @@ jobs:
             } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-hygiene.cjs"),
             );
+            const { resolveReferencedAuthors } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-referenced-authors.cjs"),
+            );
             const {
               parseGateState,
               gateStateMarker,
@@ -659,6 +662,20 @@ jobs:
             // clear while those checks fail. Re-assess here from the same
             // trusted scripts so the gate cannot race ahead of hygiene.
             const labelNames = (pr.labels ?? []).map(label => label.name);
+            // Same inputs the hygiene workflow feeds the carry-attribution
+            // assessor. Both gates must reach the same verdict or Ready can
+            // clear while hygiene is still red.
+            const carryCommits = await github.paginate(
+              github.rest.pulls.listCommits,
+              { owner, repo, pull_number, per_page: 100 }
+            );
+            const carryCommitMessages = carryCommits.map(
+              entry => entry.commit?.message ?? ""
+            );
+            const carryReferencedAuthors = await resolveReferencedAuthors({
+              github, owner, repo, core,
+              texts: [pr.title ?? "", pr.body ?? "", ...carryCommitMessages],
+            });
             failures = [
               ...failures,
               ...collectDeterministicHygieneFailures({
@@ -667,6 +684,11 @@ jobs:
                 authorHasPushPermission:
                   !permissionLookupFailed &&
                   authorHasPushPermission(authorPermission),
+                prAuthorLogin: pr.user?.login ?? "",
+                title: pr.title ?? "",
+                body: pr.body ?? "",
+                commits: carryCommitMessages,
+                referencedAuthors: carryReferencedAuthors,
               }),
             ];
 

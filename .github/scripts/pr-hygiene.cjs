@@ -1,6 +1,7 @@
 "use strict";
 
 const { assessSponsoredSurface } = require("./pr-sponsored-surface.cjs");
+const { assessCarryAttribution } = require("./pr-carry-attribution.cjs");
 
 const GENERATED_PREFIXES = [
   "gui/dist/",
@@ -239,6 +240,8 @@ const HYGIENE_FAILURE_HINTS = {
     "An empty catch block was added. Handle, report, or deliberately propagate the error.",
   unsponsored_surface:
     "This changes an authentication, workflow, release-automation, or dependency surface. `MAINTAINERS.md` requires security review for these; ask a maintainer to apply `maintainer-sponsored` once they have reviewed it.",
+  missing_coauthor_credit:
+    "This pull request says it reimplements, supersedes, carries, or rebases another author's pull request, but no `Co-authored-by` trailer names that author. Prose in a commit body is not read by anything; the trailer is what GitHub counts. Add it to the description or a commit, or obtain `attribution-approved`.",
 };
 
 /**
@@ -253,6 +256,7 @@ const HYGIENE_GATE_LABELS = [
   "suppression-approved",
   "generated-change-approved",
   "dependency-change-approved",
+  "attribution-approved",
 ];
 
 /**
@@ -263,6 +267,11 @@ function collectDeterministicHygieneFailures({
   files = [],
   labels = [],
   authorHasPushPermission = false,
+  prAuthorLogin = "",
+  title = "",
+  body = "",
+  commits = [],
+  referencedAuthors = {},
 }) {
   // Renames must keep the source path: moving a restricted file to a
   // non-restricted destination must not drop the sponsorship requirement.
@@ -280,6 +289,16 @@ function collectDeterministicHygieneFailures({
       authorHasPushPermission,
       changedFiles,
       labels,
+    }),
+    // Reads the pull request's text rather than its diff: a carry declares
+    // itself in prose, and the trailer it needs lives in the same place.
+    ...assessCarryAttribution({
+      prAuthorLogin,
+      title,
+      body,
+      commits,
+      labels,
+      referencedAuthors,
     }),
   ];
 }

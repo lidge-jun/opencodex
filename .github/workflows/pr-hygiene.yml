@@ -58,6 +58,9 @@ jobs:
             const { authorHasPushPermission } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-quality.cjs"),
             );
+            const { resolveReferencedAuthors } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-referenced-authors.cjs"),
+            );
             const {
               GATE_MARKER,
               HYGIENE_MARKER,
@@ -76,6 +79,7 @@ jobs:
               "suppression-approved": ["5319e7", "Maintainer approved a new type or lint suppression"],
               "generated-change-approved": ["5319e7", "Maintainer approved committed generated output"],
               "dependency-change-approved": ["5319e7", "Maintainer approved exceptional dependency or lockfile handling"],
+              "attribution-approved": ["5319e7", "Maintainer approved a carry whose original author is not named in a trailer"],
               "maintainer-sponsored": ["5319e7", "Maintainer sponsors this change to an auth, workflow, release, or dependency surface"],
             };
 
@@ -108,6 +112,7 @@ jobs:
                 "suppression-approved",
                 "generated-change-approved",
                 "dependency-change-approved",
+                "attribution-approved",
               ]) {
                 if (labels.has(name)) {
                   await github.rest.issues.removeLabel({
@@ -138,12 +143,30 @@ jobs:
                 `Could not look up collaborator permission: ${error.message}`,
               );
             }
+            // The squash body is assembled from the description and the
+            // branch's commit messages, so a carry's trailer can live in
+            // either. Read both, and resolve the authors of whatever the text
+            // says it carries.
+            const prCommits = await github.paginate(github.rest.pulls.listCommits, {
+              owner, repo, pull_number, per_page: 100,
+            });
+            const commitMessages = prCommits.map((entry) => entry.commit?.message ?? "");
+            const referencedAuthors = await resolveReferencedAuthors({
+              github, owner, repo, core,
+              texts: [pr.title ?? "", pr.body ?? "", ...commitMessages],
+            });
+
             const failures = collectDeterministicHygieneFailures({
               files,
               labels: [...labels],
               authorHasPushPermission:
                 !permissionLookupFailed &&
                 authorHasPushPermission(authorPermission),
+              prAuthorLogin: pr.user?.login ?? "",
+              title: pr.title ?? "",
+              body: pr.body ?? "",
+              commits: commitMessages,
+              referencedAuthors,
             });
 
             async function setBlocked(blocked) {
