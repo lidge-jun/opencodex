@@ -30,7 +30,7 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/ke
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderQuotaReports, supportsPerAccountQuota } from "../../providers/quota";
+import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQuotas, fetchProviderQuotaReports, hasPassiveAccountQuota, readPassiveProviderAccountQuotas, supportsPerAccountQuota } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import {
@@ -282,11 +282,18 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // account can show its own 5h/weekly bars (not just the active one). Opt-in via ?quota=1
     // so the plain account list stays a cheap local read; ?refresh=1 bypasses the TTL.
     const wantQuota = url.searchParams.get("quota") === "1" && supportsPerAccountQuota(provider);
-    if (!wantQuota) return jsonResponse(projectAccounts());
+    // Meta publishes no quota endpoint: its usage is observed in-band on streaming turns
+    // and read back from the cache here. `?refresh=1` is accepted and ignored on this
+    // path rather than rejected -- the GUI sends it for every provider on a manual
+    // refresh, and a 400 would report an error for what is simply a no-op.
+    const passiveQuota = url.searchParams.get("quota") === "1" && hasPassiveAccountQuota(provider);
+    if (!wantQuota && !passiveQuota) return jsonResponse(projectAccounts());
     const forceRefresh = url.searchParams.get("refresh") === "1";
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.
-    const rows = await fetchProviderAccountQuotas(provider, forceRefresh);
+    const rows = passiveQuota
+      ? readPassiveProviderAccountQuotas(provider)
+      : await fetchProviderAccountQuotas(provider, forceRefresh);
     const byId = new Map(rows.map(row => [row.accountId, row]));
     const projected = projectAccounts();
     return jsonResponse({

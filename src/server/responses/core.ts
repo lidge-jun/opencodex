@@ -219,6 +219,9 @@ import {
   waitForProviderRequestSlot,
 } from "../../providers/request-pacing";
 import { slugsEquivalent } from "../../providers/slug-codec";
+import { isMuseSubscriptionUsagePayload, parseMuseSubscriptionUsage } from "../../providers/muse-subscription-usage";
+import { hasPassiveAccountQuota, recordPassiveAccountQuota } from "../../providers/quota";
+import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -3309,6 +3312,13 @@ async function handleResponsesInner(
   let genericFailoverAccountId: string | null = null;
   let genericFailovers = 0;
   /**
+   * Config generation captured where the serving credential is RESOLVED, not where the
+   * quota is written. A streaming turn is a long await, so a generation captured at write
+   * time cannot see a config or account change that happened earlier in the same turn —
+   * the case the fence exists for. Stays 0 for every provider without a passive quota.
+   */
+  let passiveQuotaWriterGeneration = 0;
+  /**
    * Apply a rotated account's FULL credential snapshot to the live route (#2568d).
    *
    * One helper for all three rotation sites on purpose. Each site used to inline the same four
@@ -3442,6 +3452,10 @@ async function handleResponsesInner(
         // whichever account is active by the time the response comes back (#2568).
         if (isGenericFailoverProvider(route.providerName, route.provider)) {
           genericFailoverAccountId = resolved.accountId;
+        }
+        // Captured beside the account it fences, so the two can never disagree.
+        if (hasPassiveAccountQuota(route.providerName)) {
+          passiveQuotaWriterGeneration = captureConfigGeneration();
         }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
@@ -3888,7 +3902,27 @@ async function handleResponsesInner(
     // check sees nothing undeclared, and the refused turn enters continuation state anyway. So the
     // rejection is sticky for the whole turn, set from every parsed payload on the inspection side.
     let inspectionSawUndeclaredTool = false;
+    const passiveQuotaObserved = hasPassiveAccountQuota(route.providerName)
+      && route.provider.authMode === "oauth";
     const noteInspectedPayload = (payload: unknown) => {
+      // Meta reports subscription usage ONLY as an in-stream event; there is no endpoint
+      // to poll (003 §E probed 17 paths, all 404). Observed here rather than behind a
+      // dedicated inspector handler because onParsedPayload already reaches every
+      // passthrough shape -- eager relay and both tee consumers -- through this one
+      // function.
+      //
+      // Placed BEFORE the undeclared-tool early return below, which is load-bearing: that
+      // guard latches for the rest of the turn once it fires, and a turn that tripped it
+      // still legitimately reports usage.
+      if (passiveQuotaObserved && isMuseSubscriptionUsagePayload(payload)) {
+        const quota = parseMuseSubscriptionUsage(payload);
+        // Read at EVENT time, not at handler construction: failover rebinds this, and the
+        // quota belongs to the account that actually served the turn.
+        const servingAccountId = genericFailoverAccountId;
+        if (quota && servingAccountId) {
+          recordPassiveAccountQuota(route.providerName, servingAccountId, quota, passiveQuotaWriterGeneration);
+        }
+      }
       // Gated on the same flag as the guard itself: with no readable catalog (or a forward-auth
       // provider) every name looks undeclared, and flipping this would stop recording continuation
       // state for exactly the passthrough traffic the guard deliberately stands down for.
