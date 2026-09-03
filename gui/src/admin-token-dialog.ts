@@ -54,7 +54,6 @@ export function promptForAdminToken(
     username.name = "username";
     username.autocomplete = "username";
     username.value = ADMIN_TOKEN_USERNAME;
-    username.readOnly = true;
     accountField.append(accountLabel, username);
 
     const tokenField = document.createElement("div");

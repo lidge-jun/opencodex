@@ -42,7 +42,7 @@ test("renders stable password-manager-compatible sign-in fields", async () => {
   expect(username?.id).toBe("opencodex-admin-token-dialog-username");
   expect(form?.querySelector(`label[for="${username?.id}"]`)?.textContent).toBe("Account");
   expect(username?.autocomplete).toBe("username");
-  expect(username?.readOnly).toBe(true);
+  expect(username?.readOnly).toBe(false);
   expect(username?.value).toBe("OpenCodex");
   expect(password?.id).toBe("opencodex-admin-token-dialog-password");
   expect(form?.querySelector(`label[for="${password?.id}"]`)?.textContent).toBe("Admin token");
