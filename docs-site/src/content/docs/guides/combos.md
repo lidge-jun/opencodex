@@ -219,7 +219,7 @@ request to wait for the earliest eligible target cooldown, up to that cap on eac
 and then make one fresh selection. A request may therefore wait up to `hops × waitForCooldownMs`
 across multiple failover hops. The default is `0`, which fails closed immediately with HTTP 503 when
 every eligible target is cooling; that `combo_unavailable` 503 carries a `Retry-After` header equal
-to the earliest remaining cooldown, rounded up to whole seconds. Waits are not jittered, so
+to the earliest remaining cooldown, rounded up to whole seconds with a minimum of 1. Waits are not jittered, so
 synchronized wake-ups are possible. An aborted request cancels this wait and returns the normal
 `client_cancelled` response; it does not dispatch a backup target after cancellation. A combo target
 cooldown is process-local per-combo state and is separate from the account-level Codex quota cooldown
