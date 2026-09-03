@@ -19,22 +19,24 @@ const i18nDir = join(srcDir, "i18n");
 /**
  * Template-literal key families in source (`t(\`prefix${x}\`)`). Every entry must be
  * backed by a real dynamic construction; a namespace-wide entry would exempt the whole
- * family and hide true orphans. Regenerate the evidence with:
+ * family and hide true orphans. Where the interpolated set is a closed literal union in
+ * source, list the concrete keys instead of the prefix (`models.newPolicy_` builds only
+ * `off` and `on`; `inherit` is a genuine orphan). Regenerate the evidence with:
  *   rg -o --no-filename '\`[a-zA-Z][a-zA-Z0-9_.]*\.[a-zA-Z0-9_.]*\$\{' src -g '!i18n/**' | sort -u
- * `lab.` is the one non-template entry: `src/i18n/lab-translations.ts` owns those keys through
- * a `Record<LabCatalogKey, string>` typed off en.ts, so the consumer lives inside the excluded
- * i18n directory.
+ * `src/i18n/lab-translations.ts` mirrors the `lab.*` namespace in a typed Record, but a
+ * translation is not a consumer: Lab keys the UI renders appear literally in
+ * CompatibilityMatrix.tsx, so `lab.` is not exempted.
  */
 export const DYNAMIC_PREFIXES = [
   "claude.authSource.",
   "cws.err.",
   "cws.quota.",
   "debug.",
-  "lab.",
   "logs.detail.source.",
   "logs.filter.surface.",
   "logs.tokens.",
-  "models.newPolicy_",
+  "models.newPolicy_off",
+  "models.newPolicy_on",
   "models.presetMode_",
   "models.reasoningEffort.",
   "models.v2Mode_",

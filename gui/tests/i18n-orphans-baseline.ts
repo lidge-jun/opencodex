@@ -155,6 +155,8 @@ export const KNOWN_ORPHAN_KEYS: ReadonlySet<string> = new Set([
   "grok.colModel",
   "grok.colAlias",
   "grok.colContext",
+  "lab.title",
+  "lab.subtitle",
+  "models.newPolicy_inherit",
   "usage.source.local",
 ]);
-
