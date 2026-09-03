@@ -332,14 +332,27 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   ...CURSOR_REAL_ID_EXCEPTIONS,
 ]);
 
-/** Picker labels for every seeded row, for providers.cursor.modelDisplayNames. */
+/**
+ * Picker labels for providers.cursor.modelDisplayNames.
+ *
+ * Only labels that carry Cursor's own product name ("Cursor Grok 4.6") are published. Every
+ * other row keeps the routed `cursor/<id>` slug that the rest of the picker uses, so a Cursor
+ * row reads like its siblings from other providers instead of an unprefixed marketing name.
+ * #3222 labeled every row and that dropped the `cursor/` prefix from the picker.
+ */
 export function cursorModelDisplayNames(): Record<string, string> {
-  return Object.fromEntries([
+  const labels: (readonly [string, string])[] = [
     ...CURSOR_ROUTER_MODEL_IDS.map(id => [id, CURSOR_ROUTER_DISPLAY_NAMES[id] ?? id] as const),
     ...cursorUmbrellaRows().map(row => [row.id, row.displayName] as const),
     ...CURSOR_PRODUCT_MODELS.map(model => [model.id, model.displayName] as const),
     ...CURSOR_REAL_ID_EXCEPTIONS.map(model => [model.id, model.displayName] as const),
-  ]);
+  ];
+  return Object.fromEntries(labels.filter(([, label]) => isCursorBrandedLabel(label)));
+}
+
+/** A label Cursor itself brands with its name, e.g. "Cursor Grok 4.6". */
+export function isCursorBrandedLabel(label: string): boolean {
+  return /^cursor\b/i.test(label.trim());
 }
 
 export function cursorModelIds(models: readonly CursorModelInfo[] = CURSOR_STATIC_MODELS): string[] {

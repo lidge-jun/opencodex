@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cursorModelDisplayNames } from "../src/adapters/cursor/discovery";
+import { cursorModelDisplayNames, CURSOR_STATIC_MODELS, isCursorBrandedLabel } from "../src/adapters/cursor/discovery";
 import { cursorUmbrellaRows } from "../src/adapters/cursor/catalog";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
@@ -7,11 +7,13 @@ import { configuredModelDisplayName } from "../src/codex/catalog/provider-fetch"
 import type { OcxProviderConfig } from "../src/types";
 
 /**
- * The Codex picker showed raw slugs (`cursor/kimi-k3`) because `routedDisplayName`
- * (codex/catalog/sync.ts) passes a routed slug through unchanged, and nothing carried
- * Cursor's labels into `providers.cursor.modelDisplayNames` — the registry entry type had
- * no such field. These assert the full registry -> config -> catalog-hint path, not just
- * that a label table exists (devlog 260902_cursor_unified_identity).
+ * `routedDisplayName` (codex/catalog/sync.ts) passes a routed slug through unchanged, so a
+ * Cursor row reads `cursor/kimi-k3` like every other provider's rows. #3222 labeled every
+ * seeded row and the picker lost its `cursor/` prefix, which made Cursor rows
+ * indistinguishable from the same model under another provider. Only labels that carry
+ * Cursor's own brand ("Cursor Grok 4.6") are published; the rest keep the routed slug.
+ * These assert the full registry -> config -> catalog-hint path, not just that a label
+ * table exists.
  */
 describe("cursor picker labels reach the catalog", () => {
   const cursorEntry = () => {
@@ -20,24 +22,33 @@ describe("cursor picker labels reach the catalog", () => {
     return entry;
   };
 
-  test("the registry entry carries a label for every seeded row", () => {
+  test("the registry entry labels only Cursor-branded rows", () => {
     const labels = cursorModelDisplayNames();
     expect(cursorEntry().modelDisplayNames).toEqual(labels);
-    for (const row of cursorUmbrellaRows()) {
-      expect(labels[row.id]).toBe(row.displayName);
+    const seededIds = new Set(CURSOR_STATIC_MODELS.map(model => model.id));
+    for (const [id, label] of Object.entries(labels)) {
+      expect(seededIds.has(id)).toBe(true);
+      expect(isCursorBrandedLabel(label)).toBe(true);
     }
-    // The label is a human name, never the id echoed back.
-    expect(labels["kimi-k3"]).toBe("Kimi K3");
+    for (const row of cursorUmbrellaRows()) {
+      if (isCursorBrandedLabel(row.displayName)) expect(labels[row.id]).toBe(row.displayName);
+      else expect(labels).not.toHaveProperty(row.id);
+    }
+    // Cursor's own product name stays; a third-party model keeps its `cursor/<id>` slug.
     expect(labels["grok-4.6"]).toBe("Cursor Grok 4.6");
-    expect(labels["claude-opus-5"]).toBe("Claude Opus 5");
-    expect(labels.auto).toBe("Auto");
+    expect(labels["grok-4.5"]).toBe("Cursor Grok 4.5");
+    expect(labels).not.toHaveProperty("kimi-k3");
+    expect(labels).not.toHaveProperty("claude-opus-5");
+    expect(labels).not.toHaveProperty("auto");
+    expect(labels).not.toHaveProperty("composer-2.5");
   });
 
-  test("a fresh seed exposes the labels through configuredModelDisplayName", () => {
+  test("a fresh seed exposes only the branded labels through configuredModelDisplayName", () => {
     const seeded = providerConfigSeed(cursorEntry());
-    expect(configuredModelDisplayName(seeded, "kimi-k3")).toBe("Kimi K3");
-    expect(configuredModelDisplayName(seeded, "claude-4-sonnet-1m")).toBe("Claude Sonnet 4 (1M)");
-    expect(configuredModelDisplayName(seeded, "composer-2.5-fast")).toBe("Composer 2.5 Fast");
+    expect(configuredModelDisplayName(seeded, "grok-4.6")).toBe("Cursor Grok 4.6");
+    expect(configuredModelDisplayName(seeded, "kimi-k3")).toBeUndefined();
+    expect(configuredModelDisplayName(seeded, "claude-4-sonnet-1m")).toBeUndefined();
+    expect(configuredModelDisplayName(seeded, "composer-2.5-fast")).toBeUndefined();
   });
 
   test("enrich backfills an existing install per model, preserving operator renames", () => {
@@ -49,7 +60,8 @@ describe("cursor picker labels reach the catalog", () => {
     enrichProviderFromRegistry("cursor", existing);
     // Operator value survives...
     expect(configuredModelDisplayName(existing, "kimi-k3")).toBe("My K3");
-    // ...while every other row still gains its label instead of staying unlabeled.
+    // ...the branded row gains its label, and an unbranded row stays on its routed slug.
     expect(configuredModelDisplayName(existing, "grok-4.6")).toBe("Cursor Grok 4.6");
+    expect(configuredModelDisplayName(existing, "claude-opus-5")).toBeUndefined();
   });
 });
