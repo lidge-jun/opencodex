@@ -124,7 +124,7 @@ Recent request log rows, filterable by provider, model, conversation, and status
 | `--conversation` | string | Restrict to one conversation id (`--conversationId` is accepted too). |
 | `--status` | string | An exact code (429) or a class (5xx). |
 | `--limit` | number | Row cap; defaults to 200. |
-| `--follow` | boolean | Stream new rows as JSONL; implies --jsonl. |
+| `--follow` | boolean | Poll for new rows; add --jsonl to emit JSONL. |
 | `--json` | boolean | Emit the server payload as JSON. |
 | `--jsonl` | boolean | Emit one row per line. |
 
