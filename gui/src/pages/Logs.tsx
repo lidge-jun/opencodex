@@ -818,12 +818,10 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                     </span>
                   </td>
-                  <td className="mono log-reasoning-cell" title={reasoningWire}>
-                    <span className="logs-stack-start">
-                      <span>{effortLabel(log)}</span>
-                      {reasoningWire && <span className="muted text-caption leading-tight">{reasoningWire}</span>}
-                    </span>
-                  </td>
+                  {/* The wire field (reasoning_effort=high) stays in the title and the detail
+                      dialog; as a second line it repeated the label and, in mono, outgrew the
+                      9% column and painted over the provider cell. */}
+                  <td className="mono log-reasoning-cell" title={reasoningWire}>{effortLabel(log)}</td>
                   <td className="muted">{formatProviderDisplayName(log.provider, t)}</td>
                   <td>
                     <span className="log-status-cell">

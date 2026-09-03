@@ -471,8 +471,11 @@ test("Logs: attempt details render exact reasoning wire values without legacy pl
   await flushMicrotasks();
   const overviewReasoning = container.querySelector<HTMLElement>(".log-reasoning-cell");
   expect(overviewReasoning?.textContent).toContain("max → high");
-  expect(overviewReasoning?.textContent).toContain("reasoning_effort=high");
   expect(overviewReasoning?.textContent).not.toContain("max → high → high");
+  // The wire field left the table cell (it repeated the label and overflowed the column);
+  // it stays on the cell title and in the attempt rows below.
+  expect(overviewReasoning?.textContent).not.toContain("reasoning_effort=high");
+  expect(overviewReasoning?.getAttribute("title")).toBe("reasoning_effort=high");
   await act(async () => {
     container.querySelector<HTMLButtonElement>(".log-detail-btn")!.click();
   });

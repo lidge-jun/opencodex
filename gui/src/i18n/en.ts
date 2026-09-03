@@ -696,7 +696,7 @@ export const en = {
   "logs.conversation.totals": "{requests} requests · {tokens} tokens · {cost}",
   "logs.conversation.scope": "Totals cover the currently loaded Logs ring only.",
   "logs.conversation.excluded": "({unpriced} unpriced, {unmetered} unmetered excluded from ~$)",
-  "logs.cost.approximate": "~{amount}",
+  "logs.cost.approximate": "{amount}",
   "logs.cost.lowerBound": "≥{amount}",
   "logs.cost.unavailable": "—",
   "logs.detail.conversation": "Conversation",

@@ -57,14 +57,21 @@ export function formatCreditDateTime(iso: string, locale?: string): string {
   return cachedDateFormatter(locale, CREDIT_DATE_TIME_OPTIONS).format(date);
 }
 
-/** Format a USD cost estimate for display. Returns "—" when unavailable. */
-export function formatEstimatedUsdValue(value: number, locale?: string): string {
+const USD_ESTIMATE_FORMAT = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  currencyDisplay: "narrowSymbol",
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4,
+});
+
+/**
+ * Format a USD cost estimate for display. Returns "—" when unavailable.
+ * The amount is a fixed `$1.2345` regardless of locale: the Logs column header and the CLI
+ * usage report both print `~$`, and `Intl` under ko/zh renders `US$`, which read as a
+ * different unit. The locale parameter is kept so callers stay source-compatible.
+ */
+export function formatEstimatedUsdValue(value: number, _locale?: string): string {
   if (!Number.isFinite(value) || value < 0) return "\u2014";
-  const formatted = cachedNumberFormat(locale, {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 4,
-  }).format(value);
-  return `~${formatted}`;
+  return `~${USD_ESTIMATE_FORMAT.format(value)}`;
 }

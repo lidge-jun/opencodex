@@ -19,12 +19,13 @@ describe("Logs priority lower-bound formatting", () => {
     expect(formatEstimatedUsdValue(1.6, en, "en-US", true)).toBe("≥$1.6000");
   });
 
-  test("keeps ordinary standard-price estimates unchanged", () => {
-    expect(formatEstimatedUsdValue(1.6, en, "en-US", false)).toBe("~$1.6000");
+  test("renders ordinary standard-price estimates as a bare dollar amount", () => {
+    expect(formatEstimatedUsdValue(1.6, en, "en-US", false)).toBe("$1.6000");
   });
 
-  test("uses locale-aware USD placement and separators", () => {
-    expect(formatEstimatedUsdValue(1.6, de, "de-DE", false)).toBe("ca. 1,6000\u00a0$");
+  test("keeps the fixed dollar shape under a non-English locale", () => {
+    expect(formatEstimatedUsdValue(1.6, de, "de-DE", false)).toBe("$1.6000");
+    expect(formatEstimatedUsdValue(1.6, de, "de-DE", true)).toBe("≥$1.6000");
   });
 });
 
@@ -37,7 +38,7 @@ describe("Logs table cost formatting", () => {
     expect(formatEstimatedUsd({
       kind: "value",
       estimate: { cost: { total: 1.6 } },
-    }, en, "en-US")).toBe("~$1.6000");
+    }, en, "en-US")).toBe("$1.6000");
     expect(formatEstimatedUsd({ kind: "unavailable" }, en, "en-US")).toBe("—");
     expect(formatEstimatedUsdValue(Number.NaN, en, "en-US")).toBe("—");
   });
