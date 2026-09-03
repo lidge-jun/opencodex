@@ -2028,6 +2028,16 @@ function stripUnsupportedHostedTools(body: unknown, provider: Pick<OcxProviderCo
   ) {
     next = { ...next, tool_choice: "none" };
     changed = true;
+  } else if (changed && toolChoice === "required") {
+    const hasDeclaredTools = (Array.isArray(next.tools) && next.tools.length > 0)
+      || (Array.isArray(next.input) && next.input.some(item =>
+        isPlainObject(item)
+        && item.type === "additional_tools"
+        && Array.isArray(item.tools)
+        && item.tools.length > 0));
+    if (!hasDeclaredTools) {
+      next = { ...next, tool_choice: "none" };
+    }
   }
   return changed ? next : body;
 }

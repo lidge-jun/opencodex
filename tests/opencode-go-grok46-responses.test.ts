@@ -109,6 +109,16 @@ describe("OpenCode Go Grok 4.6 Responses compatibility", () => {
     });
   });
 
+  test("disables required mode when every declared tool is removed", () => {
+    const body = build("grok-4.6", {
+      tools: [{ type: "web_search" }],
+      tool_choice: "required",
+    });
+
+    expect(body.tools).toEqual([]);
+    expect(body.tool_choice).toBe("none");
+  });
+
   test("preserves hosted search for another model on OpenCode Go", () => {
     const webSearch = { type: "web_search", search_context_size: "medium" };
     const body = build("gpt-5.6-luna", { tools: [webSearch] });
