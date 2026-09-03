@@ -526,6 +526,9 @@ export default function ProviderAuthPanel({
                             t={t}
                             layout="stacked"
                             pending={account.quota == null}
+                            {...(item.name === "meta-muse" && account.quota
+                              ? { observedAt: account.quota.updatedAt }
+                              : {})}
                           />
                         )}
                       </div>

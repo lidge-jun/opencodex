@@ -59,6 +59,8 @@
 .pwi-auth-acct--active .pwi-auth-row--active { background: none; }
 .pwi-auth-acct-quota { padding: 0 8px 8px 26px; }
 .pwi-auth-acct-quota-stale { margin: 4px 0 0; font-size: 0.85em; }
+/* Observation age for a passively reported quota (meta-muse). Sits above the bars. */
+.quota-observed { margin: 0 0 4px; font-size: 0.85em; }
 .pwi-auth-row-main  {
   appearance: none; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
   padding: 2px; border: 0; background: transparent; color: inherit; text-align: left;
