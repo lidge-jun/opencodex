@@ -2,6 +2,8 @@
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 
+// Best-effort recovery for runtime execution and spawned children if launched
+// from an unlinked/deleted working directory (runs after hoisted ESM module imports).
 try {
   process.cwd();
 } catch {

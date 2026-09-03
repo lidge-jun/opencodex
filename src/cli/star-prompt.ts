@@ -168,7 +168,13 @@ function printAgentDeferral(): void {
  */
 export async function maybeShowStarPrompt(): Promise<void> {
   try {
-    if (process.env.OCX_SERVICE || !isatty(0) || !isatty(1)) return;
+    let isTty = false;
+    try {
+      isTty = isatty(0) && isatty(1);
+    } catch {
+      /* best-effort */
+    }
+    if (process.env.OCX_SERVICE || !isTty) return;
     const dir = getConfigDir();
     const marker = join(dir, MARKER);
     if (existsSync(marker)) return;
