@@ -68,13 +68,16 @@ test("v2 setting writes adopt the response instead of a no-op refetch", () => {
   expect(helper).not.toContain("void loadV2()");
 });
 
-test("both v2 surface setters route through the shared writer", () => {
+test("the keep-native setter routes through the shared writer; the mode switch left for Subagents", () => {
   const setters = modelsSource.slice(
-    modelsSource.indexOf("const setMultiAgentMode"),
+    modelsSource.indexOf("const setKeepNativeChatGptOnV1"),
     modelsSource.indexOf("const putV2Threads"),
   );
 
-  expect(setters).toContain("putV2Setting({ multiAgentMode: mode })");
   expect(setters).toContain("putV2Setting({ keepNativeChatGptOnV1: next })");
   expect(setters).not.toContain("void loadV2()");
+  // The v1/base/v2 radiogroup is a delegation setting and lives on Subagents now
+  // (030): Models no longer owns a multiAgentMode writer.
+  expect(modelsSource).not.toContain("const setMultiAgentMode");
+  expect(modelsSource).not.toContain("putV2Setting({ multiAgentMode: mode })");
 });

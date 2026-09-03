@@ -29,7 +29,9 @@ export type UltraModeState = {
 };
 
 export type UltraModePatch = {
-  multiAgentModeHintText: string | null;
+  multiAgentModeHintText?: string | null;
+  /** The v1/base/v2 switch; moved here from Models (030) so delegation settings have one home. */
+  multiAgentMode?: "v1" | "default" | "v2";
 };
 
 type DelegationResponse = {

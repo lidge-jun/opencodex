@@ -8,7 +8,6 @@
 import { describe, expect, test } from "bun:test";
 import { fetchCodexAppServerState } from "../src/codex-app-server-state";
 
-const BANNER_SRC = await Bun.file(new URL("../src/components/codex-stale-banner.tsx", import.meta.url)).text();
 const MODELS_SRC = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
 const APP_TSX_SRC = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
 
@@ -120,11 +119,17 @@ describe("Models page wiring", () => {
     expect(src.indexOf("<CodexStaleBanner")).toBeLessThan(src.indexOf("<ModelsTabStrip"));
   });
 
-  test("the action is not inside the tablist", () => {
+  test("no restart action inside the tablist, and none in the page head either", () => {
     // Every child of ModelsTabStrip is role="tab"; a mutation button there breaks
-    // the ARIA contract.
-    const head = src.slice(src.indexOf('className="page-head"'), src.indexOf("<ModelsTabStrip"));
-    expect(head).toContain("page-head-actions");
+    // the ARIA contract. The page-head orb was a third copy of the restart (sidebar
+    // orb + banner button remain), so the head now carries only the title and its
+    // info tooltip.
+    const headStart = src.indexOf('className="page-head"');
+    const head = src.slice(headStart, src.indexOf("<CodexStaleBanner", headStart));
+    expect(head).not.toContain("page-head-actions");
+    expect(head).not.toContain("handleCodexRestart");
+    const strip = src.slice(src.indexOf("<ModelsTabStrip"), src.indexOf("<ModelsTabStrip") + 200);
+    expect(strip).not.toContain("handleCodexRestart");
   });
 });
 

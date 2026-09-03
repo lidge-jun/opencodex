@@ -1195,6 +1195,20 @@ select.input { appearance: none; }
   flex: 0 0 auto;
   line-height: normal;
 }
+/* Catalog-wide policy lives behind one disclosure; per-provider rarely-used actions behind a
+   ⋯ disclosure in the header row. Both are native details: keyboard and aria-expanded come
+   free, and the revealed controls stay inline (DOM tab order), so neither claims a menu role. */
+.models-advanced { margin: 0 0 12px; }
+.models-advanced > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; }
+.models-advanced > summary::-webkit-details-marker { display: none; }
+.models-advanced > summary::before { content: ""; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform var(--motion-fast); }
+.models-advanced[open] > summary::before { transform: rotate(90deg); }
+.models-advanced[open] > summary { margin-bottom: 8px; }
+.models-group-more { display: inline-flex; align-items: center; }
+.models-group-more > summary { list-style: none; cursor: pointer; min-width: 28px; justify-content: center; }
+.models-group-more > summary::-webkit-details-marker { display: none; }
+.models-group-more-body { flex-wrap: wrap; gap: 8px; }
+.models-group-more[open] { flex-wrap: wrap; }
 .switch.switch-labeled::before {
   content: "";
   width: 34px;

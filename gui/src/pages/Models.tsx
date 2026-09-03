@@ -4,7 +4,7 @@ import type { AppServerStateOutcome } from "../codex-app-server-state";
 import { useCodexRestart } from "../use-codex-restart";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Switch, Notice, EmptyState, Select, Tooltip } from "../ui";
-import { IconChevron, IconBoxes, IconInfo, IconCheck, IconAlert, IconRefresh, IconPencil } from "../icons";
+import { IconChevron, IconBoxes, IconInfo, IconCheck, IconAlert, IconPencil } from "../icons";
 import { useT } from "../i18n/shared";
 import type { TFn, TKey } from "../i18n/shared";
 import { modelLabel } from "../model-display";
@@ -255,13 +255,12 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const [aliases, setAliases] = useState<AliasView>({ providers: {}, models: {}, defaults: { global: false, providers: {} } });
   const [showAliases, setShowAliases] = useState(false);
   const [presetBusy, setPresetBusy] = useState<string | null>(null);
-  const [v2Loading, setV2Loading] = useState(true);
+  const [, setV2Loading] = useState(true);
   const [v2Busy, setV2Busy] = useState(false);
   const [v2Note, setV2Note] = useState("");
   const v2BusyRef = useRef(false);
   const [threadsCustom, setThreadsCustom] = useState("");
   const [showThreadsCustom, setShowThreadsCustom] = useState(false);
-  const [v2HelpOpen, setV2HelpOpen] = useState(false);
   const [customModalOpen, setCustomModalOpen] = useState(false);
 
   const reloadAliases = useCallback(async (signal?: AbortSignal) => {
@@ -683,6 +682,11 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
    * panels report theirs up once mounted, and a tab that has never been opened has
    * nothing truthful to say.
    */
+  // Combos/routing show their onboarding sentence only while the workspace is empty; the
+  // compatibility tab keeps its one line (it is a caveat, not onboarding).
+  const tabIsEmpty = tab === "combos" ? comboCount === 0
+    : tab === "routing" ? routingCount === 0
+    : true;
   const tabMeta = useMemo(() => ({
     catalog: catalogCountReady
       ? t("models.active", { active: effectiveVisibleCount, total: models.length })
@@ -926,10 +930,6 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     }
   };
 
-  const setMultiAgentMode = async (mode: "v1" | "default" | "v2") => {
-    if (!v2 || v2.multiAgentMode === mode) return;
-    await putV2Setting({ multiAgentMode: mode });
-  };
 
 
   /**
@@ -1246,6 +1246,14 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           </button>
            <div className="row models-provider-actions">
              <button type="button" className="btn btn-ghost btn-sm models-alias-edit" aria-label={t("models.editProviderAlias")} title={t("models.editProviderAlias")} onClick={() => void saveProviderAlias(provider)}><IconPencil style={{ width: 14, height: 14 }} /></button>
+             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
+            <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
+            {/* Rarely used per-provider actions (aliases, custom model, presets, context
+                cap) fold into a labelled disclosure so the header row reads as
+                identity + on/off instead of a six-control wall. */}
+            <details className="models-group-more">
+              <summary className="btn btn-ghost btn-sm text-caption" aria-label={t("models.groupMore")} title={t("models.groupMore")}>⋯</summary>
+              <div className="row models-group-more-body">
             <Switch
               on={aliases.defaults.providers[provider] ?? aliases.defaults.global}
               onClick={() => void setDefaultAliases(!(aliases.defaults.providers[provider] ?? aliases.defaults.global), provider)}
@@ -1339,8 +1347,6 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                  </>
                );
              })()}
-             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
-            <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
             <div className="models-cap-cluster">
               {/* The label names the FUNCTION. It used to be `models.capValue` -
                   "기본 128k" - which is a value masquerading as a name: even a
@@ -1412,6 +1418,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                 aria-haspopup="dialog"
               >{t("models.contextSettings")}</button>
             </div>
+              </div>
+            </details>
           </div>
         </div>
         {!isCollapsed && (
@@ -1600,38 +1608,6 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           </div>
         </div>
 
-        {(v2Loading || v2) && (
-          <div className="models-v2-mode-row row">
-            <span className="muted text-control">{t("models.v2Label")}</span>
-            <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
-              {(["v1", "default", "v2"] as const).map(mode => (
-                <button
-                  key={mode}
-                  type="button"
-                  role="radio"
-                  aria-checked={(v2?.multiAgentMode ?? "default") === mode}
-                  className={`btn btn-sm${(v2?.multiAgentMode ?? "default") === mode ? " btn-primary" : " btn-ghost"}`}
-                  style={{ background: (v2?.multiAgentMode ?? "default") === mode ? undefined : "transparent", color: (v2?.multiAgentMode ?? "default") === mode ? undefined : "var(--muted)" }}
-                  disabled={!v2 || v2Busy}
-                  onClick={() => void setMultiAgentMode(mode)}
-                >
-                  {t(`models.v2Mode_${mode}` as TKey)}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              style={{ width: 24, height: 24, minWidth: 24, flex: "0 0 24px", padding: 0, borderRadius: "var(--radius-pill)", color: "var(--muted)" }}
-              disabled={!v2}
-              onClick={() => setV2HelpOpen(true)}
-              aria-label={t("models.v2Label")}
-              aria-haspopup="dialog"
-            >
-              <IconInfo width={14} height={14} aria-hidden="true" />
-            </button>
-          </div>
-        )}
         {v2 && v2.multiAgentMode === "v2" && (
           <div className="models-v2-keep-native-row">
             <div className="models-v2-keep-native">
@@ -1749,15 +1725,15 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         );
       })()}
 
-      <div className="row muted text-label leading-body models-order-hint">
-        <IconInfo width={15} height={15} aria-hidden="true" />
-        <span>{t("models.orderHint")}</span>
-      </div>
     </>
   );
 
   const collapseControls = (
     <div className="row models-collapse-controls">
+      <Tooltip content={t("models.orderHint")} side="top" maxWidth={360}>
+        <IconInfo width={14} height={14} aria-hidden="true" />
+        <span className="sr-only">{t("models.orderHintAria")}</span>
+      </Tooltip>
       <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(true)} disabled={busy}>
         <IconChevron width={12} height={12} aria-hidden="true" /> {t("models.collapseAll")}
       </button>
@@ -1779,27 +1755,6 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
 
   const modalsBlock = (
     <>
-      {v2HelpOpen && (
-        <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={t("models.v2Label")} onClick={() => setV2HelpOpen(false)} onKeyDown={e => { if (e.key === "Escape") setV2HelpOpen(false); }}>
-          <div className="modal-card" onClick={e => e.stopPropagation()}>
-            <div className="modal-head">
-              <h3>{t("models.v2Label")}</h3>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setV2HelpOpen(false)} aria-label={t("common.close")}>&times;</button>
-            </div>
-            <div className="modal-desc leading-relaxed" style={{ whiteSpace: "pre-line" }}>
-              {t("models.v2Help")}
-            </div>
-            <div className="models-help-link">
-              <a className="text-control" href="https://opencodex.me/guides/sub-agent-surface/" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
-                {t("models.v2DocsLink")}
-              </a>
-            </div>
-            <div className="modal-actions">
-              <button type="button" className="btn btn-primary" onClick={() => setV2HelpOpen(false)}>{t("common.ok")}</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {contextModalProvider && (
         <div
@@ -2170,7 +2125,15 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           </div>
         </aside>
         <section className="models-workspace-main" aria-label={t("models.workspace.mainAria")}>
-          {controlsBlock}
+          {/*
+            Catalog-wide policy (new-model default, aliases, shadow-call, context cap) is
+            set once and rarely revisited; it used to be a wall of switches above the list.
+            One closed disclosure keeps every control reachable and the list first.
+          */}
+          <details className="models-advanced">
+            <summary className="muted text-label">{t("models.advanced")}</summary>
+            {controlsBlock}
+          </details>
           {collapseControls}
           {showAliases && (
             <div className="card" aria-label={t("models.aliasesTable")}>
@@ -2203,14 +2166,15 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     <>
       <div className="page-head">
         <h2>{t("nav.models")}</h2>
-        <div className="page-head-actions">
-          <button type="button" className="sidebar-orb"
-            onClick={() => { void handleCodexRestart(); }} disabled={codexRestarting}
-            aria-label={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}
-            title={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}>
-            <IconRefresh />
-          </button>
-        </div>
+        {/*
+          The catalog's four-line explanation (cache semantics, hidden ids still resolve) is
+          reference, not a decision; it lives on a focusable info button instead of above
+          the controls. Other tabs keep a one-line subtitle only in their empty state.
+        */}
+        <Tooltip content={t("models.subtitle")} side="bottom" maxWidth={420}>
+          <IconInfo width={14} height={14} aria-hidden="true" />
+          <span className="sr-only">{t("models.subtitleAria")}</span>
+        </Tooltip>
       </div>
       <CodexStaleBanner
         state={appServerState}
@@ -2223,7 +2187,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         thing the user can only ever see one of — and the catalog's five-line copy was
         pushing the full-height Combos workspace off the viewport.
       */}
-      <p className="page-sub">{t(SUBTITLE_TKEY[tab])}</p>
+      {tab !== "catalog" && tabIsEmpty && <p className="page-sub">{t(SUBTITLE_TKEY[tab])}</p>}
 
       {/*
         Panels mount lazily and then stay mounted, hidden — a half-typed combo draft
