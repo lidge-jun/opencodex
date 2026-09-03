@@ -30,7 +30,7 @@
 .integration-cards-more > summary::-webkit-details-marker { display: none; }
 .integration-cards-more > summary::before { content: ""; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform var(--motion-fast); }
 .integration-cards-more[open] > summary::before { transform: rotate(90deg); }
-.page-tabs .page-tabs-more { align-self: center; margin-left: 4px; }
+.page-tabs-more { margin: -8px 0 14px; }
 /*
   One full-width row, not a wide card: no grid cell, no hover border, no
   stretched title. `flex-wrap` is what keeps long German/Russian action copy
