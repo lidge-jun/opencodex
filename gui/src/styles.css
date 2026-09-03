@@ -450,6 +450,46 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 }
 .main-inner.main-inner--combos > .page-sub { margin-bottom: 10px; }
 
+/* Keep the Models tab strip border aligned with its tab buttons in the full-bleed layout. */
+.main-inner.main-inner--combos > .page-tabs {
+  margin-inline: 36px;
+  padding-inline: 0;
+}
+
+/*
+  Full-bleed is for the combos WORKSPACE grid only. Its loading and error fallbacks render
+  no `.combos-workspace-shell` (Combos.tsx returns a bare skeleton or an error notice), yet
+  `main-inner--combos` is applied on tab selection alone — so with no workspace to fill, the
+  lone subtitle/notice/retry stretched edge to edge (padding:0, max-width:none, flex column)
+  while every sibling Models tab stayed boxed. That is the "콤보만 영역이 이상해짐" report.
+
+  When no workspace shell is present, drop the full-bleed and box the page like the other
+  tabs: reset the container, its chrome inset, and the fill panel back to normal flow.
+*/
+/*
+  Each rule below is a SINGLE selector on purpose. Vite's Rolldown CSS minifier corrupts a
+  comma-separated selector list whose selectors carry `:not(:has(...))` — it emits a stray
+  `)` before the block and the browser then drops the whole rule. A single `:not(:has())`
+  selector minifies correctly, so the chrome inset is handled without a list: the container
+  drops its own horizontal padding and the page chrome keeps the 36px inline padding it
+  already gets above (`.main-inner--combos > .page-head` etc.), which the panel matches.
+*/
+.main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 0 64px;
+  min-height: 0;
+  height: auto;
+  overflow: visible;
+  display: block;
+}
+.main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .models-tab-panel--fill:not([hidden]) {
+  flex: 0 1 auto;
+  height: auto;
+  display: block;
+  padding-inline: 36px;
+}
+
 /* ---- page header ---- */
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
 .page-head h2 { font-size: var(--text-title); }
@@ -2006,22 +2046,12 @@ table.logs-table {
 .logs-table col.logs-col-duration { width: 8%; }
 .log-col-rate { min-width: 7ch; white-space: nowrap; }
 .log-col-cost { min-width: 10ch; white-space: nowrap; }
-/* table-layout: fixed sizes the columns but does not clip them: a cell whose content is wider
-   than its <col> paints straight over the neighbour (seen as "US$0.1401claude-fable-5-1" and a
-   "reasoning_effort=high" caption sitting under the provider name). Clip at the cell so an
-   overlong value truncates inside its own column instead. */
-.logs-table tbody td { overflow: hidden; }
-.log-reasoning-cell { overflow-wrap: anywhere; }
 .log-status-cell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: var(--space-0-5); min-width: 7ch; line-height: var(--leading-tight); }
 .log-detail-btn {
   background: none; border: none; padding: 0; cursor: pointer;
   color: var(--accent-hover); font: inherit; font-size: var(--text-caption); text-decoration: underline;
-  /* Wraps rather than clips: with the cell now clipping overflow, a nowrap label such as
-     zh-TW's 檢視詳細資料 would lose its tail in the 8% status column. */
-  white-space: normal;
-  text-align: left;
+  white-space: nowrap;
 }
-.log-detail-btn:focus-visible { outline-offset: -2px; }
 
 /* Logs page layout rhythm — keep spacing in CSS so virtualized rows don't flood inline px. */
 .logs-auto-refresh {
@@ -2335,6 +2365,28 @@ button.prov-account-row.active { cursor: default; }
   .main-inner.main-inner--combos > .page-head,
   .main-inner.main-inner--combos > .page-tabs,
   .main-inner.main-inner--combos > .page-sub { padding-inline: 18px; }
+  .main-inner.main-inner--combos > .page-tabs {
+    margin-inline: 18px;
+    padding-inline: 0;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .models-tab-panel--fill:not([hidden]) {
+    padding-inline: 0;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) {
+    padding: 22px 18px 48px;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .page-head {
+    padding-inline: 0;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .page-tabs {
+    padding-inline: 0;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .page-sub {
+    padding-inline: 0;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .page-tabs {
+    margin-inline: 0;
+  }
   /* settings rows: copy takes the full width, controls drop underneath */
   .setting-row { flex-wrap: wrap; }
   .setting-row .setting-copy { flex: 1 1 100% !important; }
