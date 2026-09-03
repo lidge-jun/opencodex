@@ -98,7 +98,6 @@ export default function ProviderOverviewDashboard({
       <div className="pws-dashboard-header">
         <div className="pws-dashboard-header-text">
           <h2 className="pws-dashboard-title">{t("pws.dashboard.title")}</h2>
-          <p className="muted pws-dashboard-subtitle">{t("pws.dashboard.subtitle")}</p>
         </div>
         {onEditConfig && (
           <button type="button" className="btn btn-ghost btn-sm" onClick={onEditConfig}>
@@ -193,12 +192,12 @@ export default function ProviderOverviewDashboard({
           )}
         </section>
 
-        <section
+        <details
           className="pws-dashboard-section pws-dashboard-section--recent"
           aria-label={t("pws.dashboard.recentlyUsed")}
           aria-busy={usageLoading || undefined}
         >
-          <h3 className="pws-dashboard-section-title">{t("pws.dashboard.recentlyUsed")}</h3>
+          <summary className="pws-dashboard-section-title">{t("pws.dashboard.recentlyUsed")}</summary>
           {mostUsed.length > 0 ? (
             <div className="pws-dashboard-rows">
               {mostUsed.map(provider => (
@@ -230,7 +229,7 @@ export default function ProviderOverviewDashboard({
           ) : (
             <p className="muted pws-dashboard-empty">{t("pws.dashboard.noUsage")}</p>
           )}
-        </section>
+        </details>
       </div>
     </div>
   );

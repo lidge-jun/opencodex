@@ -494,6 +494,8 @@ export const zhTW: Record<TKey, string> = {
   "models.selectedCount": "已選 {n} 個",
   "sub.subtitle": "Codex 的 {cmd} 僅將優先順序最高的前 5 個模型作為覆蓋項公開。在此最多選擇 5 個 — 原生 gpt 或已路由模型 — opencodex 會設定它們的目錄優先順序，使其正好排在前面。其他模型仍可按確切名稱呼叫；此設定僅控制顯示項。",
   "sub.featured": "精選",
+  "sub.advanced": "進階",
+  "sub.orderHintAria": "此順序的用途",
   "sub.orderHint": "此處所選並顯示的順序決定 Codex 模型選擇器頂部第 1–5 位，以及 {cmd} 的預設模型候選。",
   "sub.noneSelected": "未選擇 — 請從下方列表選擇。",
   "sub.models": "模型",

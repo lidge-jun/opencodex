@@ -58,7 +58,7 @@ work-phase that lands it. Votes: number of reviewers proposing remove/collapse/d
 | 45 | Logs 10 columns → column picker | 1/3 | DEFER (Logs just reworked in #3367) | — |
 | 46 | Subagents spawn_agent hint (SubagentsWorkspace.tsx:97) | 3/3 | COLLAPSE → focusable `Tooltip` ⓘ button on the 5/5 counter | 080 |
 | 47 | Subagents 일 나누는 방법 / 울트라 모드 (SubagentDelegationSection.tsx:116,133) | 2/3 | COLLAPSE into `<details>` "고급" | 080 |
-| 48 | Combos duplicate create CTA + search on zero combos | 2/3 | REMOVE search when count 0; keep one CTA | 080 |
+| 48 | Combos duplicate create CTA + search on zero combos | 2/3 | REMOVE search when count 0. The inline first-combo editor STAYS (deviation at wp8 B: four existing tests pin it as a deliberate flow — draft survives a tab switch, Create gates on exhausted targets, confirmation — same rule as #29) | 080 |
 | 49 | Routing dry-run card with zero profiles | 3/3 | Render only when a profile is selected | 080 |
 | 50 | Storage subtitle | 2/3 keep | KEEP (safety promise) | — |
 | 51 | Compatibility second verdicts table | 1/3 | DEFER (Lab surface; opt-in) | — |

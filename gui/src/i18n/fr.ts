@@ -624,6 +624,8 @@ export const fr: Record<TKey, string> = {
   "models.selectedCount": "{n} sélectionnés",
   "sub.subtitle": "La commande {cmd} de Codex ne présente que les 5 premiers modèles (par priorité) comme remplacements. Choisissez-en jusqu’à 5 ici — natifs gpt ou routés — et opencodex définit leur priorité dans le catalogue pour qu’ils apparaissent en tête. Tout autre modèle reste accessible par son nom exact ; ceci contrôle uniquement ce qui est affiché.",
   "sub.featured": "À la une",
+  "sub.advanced": "Avancé",
+  "sub.orderHintAria": "Comment cet ordre est utilisé",
   "sub.orderHint": "L’ordre affiché ici détermine les positions 1 à 5 en haut du sélecteur de modèles Codex et les modèles candidats par défaut pour {cmd}.",
   "sub.noneSelected": "Aucun modèle sélectionné — faites votre choix dans la liste ci-dessous.",
   "sub.models": "Modèles",

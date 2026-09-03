@@ -155,6 +155,12 @@ export default function SubagentDelegationSection({
         </button>
       </div>
 
+      {/*
+        Prompt-injection guidance, ultra mode and its editor are policy tuning, not daily
+        decisions: one closed disclosure keeps them reachable under the two settings that are.
+      */}
+      <details className="swi-advanced">
+        <summary className="muted text-label">{t("sub.advanced")}</summary>
       <div className="swi-delegation-row">
         <div className="setting-copy">
           <div className="font-semibold">{t("dash.multiAgentGuidance")}</div>
@@ -209,6 +215,7 @@ export default function SubagentDelegationSection({
           />
         </div>
       )}
+      </details>
     </div>
   );
 }

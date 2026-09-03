@@ -614,6 +614,8 @@ export const de: Record<TKey, string> = {
   "models.selectedCount": "{n} ausgewählt",
   "sub.subtitle": "Codex {cmd} bewirbt nur die ersten 5 Modelle (nach Priorität) als Overrides. Wähle hier bis zu 5 — natives gpt oder geroutet — und opencodex setzt ihre Katalog-Priorität, sodass genau diese führen. Jedes andere Modell bleibt über seinen exakten Namen aufrufbar; dies steuert nur die Anzeige.",
   "sub.featured": "Empfohlen",
+  "sub.advanced": "Erweitert",
+  "sub.orderHintAria": "Wie diese Reihenfolge verwendet wird",
   "sub.orderHint": "Die hier gewählte und angezeigte Reihenfolge bestimmt die Plätze 1–5 oben in der Codex-Modellauswahl und die Standard-Modellkandidaten für {cmd}.",
   "sub.noneSelected": "Nichts ausgewählt — wähle aus der Liste unten.",
   "sub.models": "Modelle",

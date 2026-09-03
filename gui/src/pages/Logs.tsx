@@ -593,7 +593,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         aria-labelledby="logs-tab-logs"
         hidden={tab !== "logs"}
       >
-      <p className="page-sub">{t("logs.subtitle")}</p>
 
       <div className="logs-toolbar">
         <span className="muted text-control">{t("logs.filter.surface.label")}</span>
