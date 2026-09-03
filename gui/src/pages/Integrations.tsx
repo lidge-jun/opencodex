@@ -198,19 +198,19 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
             {t(definition.labelKey)}
           </button>
         ))}
-        {secondaryCount > 0 && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm page-tabs-more"
-            aria-expanded={showSecondary}
-            aria-controls={tablistId}
-            disabled={selectedIsSecondary}
-            onClick={() => setMoreOpen(open => !open)}
-          >
-            {t(showSecondary ? "integrations.fewerClients" : "integrations.moreClients", { count: secondaryCount })}
-          </button>
-        )}
       </div>
+      {secondaryCount > 0 && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm page-tabs-more"
+          aria-expanded={showSecondary}
+          aria-controls={tablistId}
+          disabled={selectedIsSecondary}
+          onClick={() => setMoreOpen(open => !open)}
+        >
+          {t(showSecondary ? "integrations.fewerClients" : "integrations.moreClients", { count: secondaryCount })}
+        </button>
+      )}
 
       {TABS.map(definition => {
         if (!mounted.has(definition.id)) return null;
@@ -224,7 +224,7 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
             hidden={!active}
           >
             {definition.id === "overview" && (
-              <IntegrationsOverview apiBase={apiBase} active={active} />
+              <IntegrationsOverview apiBase={apiBase} active={active} statesResource={statesResource} />
             )}
             {definition.id === "keys" && <ApiKeys apiBase={apiBase} active={active} />}
             {definition.id === "codex" && (

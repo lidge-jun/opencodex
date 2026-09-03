@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useDataSurface } from "../../data-surface";
+import { useDataSurface, type DataSurfaceResource } from "../../data-surface";
 import { DataSurfaceSkeleton } from "../../components/data-surface";
 import { navigateHash } from "../../hash-routing";
 import { useT } from "../../i18n/shared";
@@ -169,9 +169,16 @@ function OverviewCard({
 export default function IntegrationsOverview({
   apiBase,
   active = true,
+  statesResource,
 }: {
   apiBase: string;
   active?: boolean;
+  /**
+   * The file-client state list, owned by the Integrations page (it also drives which
+   * tabs are primary). Lifted rather than subscribed twice so there is exactly one
+   * owner of the fetch regardless of tab timing.
+   */
+  statesResource: DataSurfaceResource<IntegrationStatus[]>;
 }) {
   const t = useT();
   const [bulkPending, setBulkPending] = useState(false);
@@ -191,10 +198,6 @@ export default function IntegrationsOverview({
     if (trigger.isConnected) trigger.focus();
   }, [pendingToggle]);
 
-  const fetchStates = useCallback(
-    async (signal: AbortSignal) => (await loadIntegrationStates(apiBase, signal)).clients,
-    [apiBase],
-  );
   const fetchHistory = useCallback(
     async (signal: AbortSignal) => (await loadIntegrationJournal(apiBase, undefined, signal)).operations,
     [apiBase],
@@ -235,12 +238,6 @@ export default function IntegrationsOverview({
     [apiBase],
   );
 
-  const statesResource = useDataSurface<IntegrationStatus[]>(
-    `integration-states:${apiBase}`,
-    [apiBase],
-    fetchStates,
-    { isEmpty: rows => rows.length === 0, enabled: active, sessionCacheKey: `ocx.integrations.states.v1:${apiBase}` },
-  );
   const historyResource = useDataSurface<IntegrationJournalRow[]>(
     `integration-journal-all:${apiBase}`,
     [apiBase],

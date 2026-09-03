@@ -503,16 +503,28 @@ test("a hidden panel makes no request at all", async () => {
 });
 
 async function mountOverview(): Promise<void> {
-  const [{ createRoot }, { LanguageProvider }, { default: IntegrationsOverview }] = await Promise.all([
+  const [{ createRoot }, { LanguageProvider }, { default: IntegrationsOverview }, { useDataSurface }, { loadIntegrationStates }] = await Promise.all([
     import("react-dom/client"),
     import("../src/i18n/provider"),
     import("../src/pages/integrations/IntegrationsOverview"),
+    import("../src/data-surface"),
+    import("../src/pages/integrations/integration-api"),
   ]);
+  // The page owns the states resource and hands it down (040); mirror that here.
+  function OverviewHost() {
+    const statesResource = useDataSurface(
+      `integration-states:${apiBase}`,
+      [apiBase],
+      async (signal: AbortSignal) => (await loadIntegrationStates(apiBase, signal)).clients,
+      { isEmpty: rows => rows.length === 0 },
+    );
+    return <IntegrationsOverview apiBase={apiBase} active statesResource={statesResource} />;
+  }
   await act(async () => {
     root = createRoot(container);
     root.render(
       <LanguageProvider>
-        <IntegrationsOverview apiBase={apiBase} active />
+        <OverviewHost />
       </LanguageProvider>,
     );
   });
@@ -1115,8 +1127,29 @@ test("uninstalled file-client tabs hide behind a more-button; a deep link keeps 
   expect(visible("omp")).toBe(false);
   const more = container.querySelector<HTMLButtonElement>(".page-tabs-more")!;
   expect(more).not.toBeNull();
+  // External to the tablist: a non-tab child would break the tab semantics.
+  expect(more.closest('[role="tablist"]')).toBeNull();
+  expect(more.getAttribute("aria-controls")).toBe(container.querySelector('[role="tablist"]')!.id);
   expect(more.getAttribute("aria-expanded")).toBe("false");
   expect(more.disabled).toBe(false);
+  // One owner of the states fetch: the page subscribes and hands the resource down.
+  expect(requests.filter(r => r.url.endsWith("/api/client-integrations") && r.method === "GET")).toHaveLength(1);
+  // Keyboard walks visible tabs only: from the last visible primary tab, ArrowRight wraps
+  // to overview instead of landing on a hidden client.
+  const visibleTabs = tabs.filter(t => !t.hidden);
+  const last = visibleTabs[visibleTabs.length - 1]!;
+  await act(async () => { last.click(); });
+  await act(async () => {
+    last.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  });
+  expect(testWindow.location.hash).toBe("#integrations");
+  await act(async () => {
+    tabs[0]!.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key: "End", bubbles: true }));
+  });
+  // End lands on the last VISIBLE tab (hermes, the one installed file client), never on
+  // one of the hidden clients that come after it in TABS order.
+  expect(testWindow.location.hash).toBe("#integrations/hermes");
+  expect(last.id.endsWith("-hermes")).toBe(true);
 
   await act(async () => { more.click(); });
   expect(visible("omp")).toBe(true);
