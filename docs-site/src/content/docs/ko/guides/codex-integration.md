@@ -26,11 +26,13 @@ fast_mode = true
 
 두 번째 키는 음성 sideband 오버라이드입니다. Codex는 WebRTC 음성 통화를 `openai_base_url`로 만들지만,
 codex 0.146(openai/codex#35830)부터는 `experimental_realtime_ws_base_url`이 없으면 그 통화의 sideband
-WebSocket을 `api.openai.com`에 직접 붙입니다. 프록시를 거치면 통화는 opencodex가 고른 Pool 계정으로
+WebSocket을 `api.openai.com`에 직접 붙입니다. Pool 모드에서는 통화가 opencodex가 고른 계정으로
 만들어지므로, 앱 자체 로그인으로 직접 붙는 join은 `realtime websocket handshake failed`(404)로
-실패합니다. 주입된 키는 join을 다시 opencodex(`GET /v1/live/{callId}`)로 보내고, 거기서 같은 Pool
-계정이 재사용됩니다. 이 키는 loopback `openai_base_url` 형태에서만 쓰이고, 그 키와 함께 제거되며,
-사용자가 직접 적은 `experimental_realtime_ws_base_url`은 덮어쓰지 않습니다.
+실패합니다. 주입된 키는 join을 다시 opencodex(`GET /v1/live/{callId}`)로 보내고, Pool은 그
+session/thread 쌍에 묶어 둔 계정(프로세스 로컬 바인딩)을 그대로 씁니다. Direct 모드는 두 요청 모두
+호출자의 현재 bearer를 쓰므로, 이 키는 join을 프록시 경로에 붙잡아 두는 역할만 합니다. 이 키는
+loopback `openai_base_url` 형태에서만 쓰이고, 그 키와 함께 제거되며, 사용자가 직접 적은
+`experimental_realtime_ws_base_url`은 덮어쓰지 않습니다.
 
 주입되는 `fast_mode`는 3-상태 `fastMode` 설정을 따릅니다. `true`면 `fast_mode = true`를 쓰고,
 `false`면 `fast_mode = false`를 쓰며, 설정하지 않으면 기존 `fast_mode`를 그대로 두고
