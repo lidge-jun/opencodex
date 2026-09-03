@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { effectiveDeclaration, withoutComments } from "./helpers/css-declarations";
+import { effectiveDeclaration, ruleBodies, withoutComments } from "./helpers/css-declarations";
 
 async function readStylesheet(path: string): Promise<string> {
   return withoutComments(await Bun.file(new URL(path, import.meta.url)).text());
@@ -12,16 +12,16 @@ test("Models tab strips keep their full-bleed container borders aligned", async 
 
   // The Combos workspace removes the outer container padding. Replacing the tab strip's
   // padding with an equal inline margin keeps its border aligned with the tab buttons.
+  const tabStripSelector = ".main-inner.main-inner--combos > .page-tabs";
+  const tabStripBodies = ruleBodies(baseStyles, tabStripSelector);
+  expect(tabStripBodies[0]).toMatch(/margin-inline:\s*36px/);
+  expect(effectiveDeclaration(baseStyles, tabStripSelector, "margin-inline")).toBe("18px");
   expect(effectiveDeclaration(
     baseStyles,
-    ".main-inner.main-inner--combos > .page-tabs",
-    "margin-inline",
-  )).toBe("36px");
-  expect(effectiveDeclaration(
-    baseStyles,
-    ".main-inner.main-inner--combos > .page-tabs",
+    tabStripSelector,
     "padding-inline",
   )).toBe("0");
+  expect(tabStripBodies.at(-1)).toMatch(/padding-inline:\s*0/);
 
   // Loading, empty, and error fallbacks do not render the workspace shell. Keep those
   // shell-free states boxed instead of allowing the full-bleed Combos container to stretch

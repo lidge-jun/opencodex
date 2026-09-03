@@ -2365,6 +2365,10 @@ button.prov-account-row.active { cursor: default; }
   .main-inner.main-inner--combos > .page-head,
   .main-inner.main-inner--combos > .page-tabs,
   .main-inner.main-inner--combos > .page-sub { padding-inline: 18px; }
+  .main-inner.main-inner--combos > .page-tabs {
+    margin-inline: 18px;
+    padding-inline: 0;
+  }
   /* settings rows: copy takes the full width, controls drop underneath */
   .setting-row { flex-wrap: wrap; }
   .setting-row .setting-copy { flex: 1 1 100% !important; }
