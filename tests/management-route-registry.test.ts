@@ -135,8 +135,8 @@ describe("management route registry reconciliation", () => {
       "  return null;",
       "}",
     ].join("\n");
-    writeFileSync(tmp, source);
     try {
+      writeFileSync(tmp, source);
       const { unresolved } = distinctRoutes(scanRoutes(tmp));
       expect(unresolved.map(r => r.path)).toEqual(["/api/probe/unknowable"]);
       expect(unresolved[0]?.method).toBeNull();
