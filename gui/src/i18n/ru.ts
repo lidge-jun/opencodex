@@ -1644,6 +1644,8 @@ export const ru: Record<TKey, string> = {
   "codexAuth.mainAccount": "Основной аккаунт",
   "codexAuth.logLabel": "Метка журнала",
   "codexAuth.codexApp": "Codex App",
+  "codexAuth.moreActions": "Показать дополнительные действия",
+  "codexAuth.copyId": "Скопировать ID аккаунта",
   "codexAuth.appLogin": "Вход через приложение",
   "codexAuth.accountPool": "Пул аккаунтов",
   "codexAuth.accountModeTitle": "Режим аккаунта OpenAI",

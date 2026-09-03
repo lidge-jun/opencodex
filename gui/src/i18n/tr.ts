@@ -1651,6 +1651,8 @@ export const tr: Record<TKey, string> = {
   "codexAuth.mainAccount": "Ana Hesap",
   "codexAuth.logLabel": "Günlük etiketi",
   "codexAuth.codexApp": "Codex Uygulaması",
+  "codexAuth.moreActions": "Daha fazla işlem göster",
+  "codexAuth.copyId": "Hesap kimliğini kopyala",
   "codexAuth.appLogin": "Uygulama girişi",
   "codexAuth.accountPool": "Hesap Havuzu",
   "codexAuth.accountModeTitle": "OpenAI hesap modu",

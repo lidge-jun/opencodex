@@ -1593,6 +1593,8 @@ export const ja: Record<TKey, string> = {
   "codexAuth.mainAccount": "メインアカウント",
   "codexAuth.logLabel": "ログラベル",
   "codexAuth.codexApp": "Codex App",
+  "codexAuth.moreActions": "その他の操作を表示",
+  "codexAuth.copyId": "アカウント ID をコピー",
   "codexAuth.appLogin": "アプリログイン",
   "codexAuth.accountPool": "アカウントプール",
   "codexAuth.accountModeTitle": "OpenAI アカウントモード",

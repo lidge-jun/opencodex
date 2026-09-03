@@ -1273,6 +1273,8 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.mainAccount": "主帳號",
   "codexAuth.codexApp": "Codex App",
   "codexAuth.logLabel": "日誌標籤",
+  "codexAuth.moreActions": "顯示更多操作",
+  "codexAuth.copyId": "複製帳戶 ID",
   "codexAuth.appLogin": "應用登入",
   "codexAuth.accountPool": "帳號池",
   "codexAuth.accountModeTitle": "OpenAI 帳號模式",

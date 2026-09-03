@@ -1159,6 +1159,8 @@ export const de: Record<TKey, string> = {
   "codexAuth.mainAccount": "Hauptkonto",
   "codexAuth.logLabel": "Log-Kennung",
   "codexAuth.codexApp": "Codex App",
+  "codexAuth.moreActions": "Weitere Aktionen anzeigen",
+  "codexAuth.copyId": "Konto-ID kopieren",
   "codexAuth.appLogin": "App-Login",
   "codexAuth.accountPool": "Kontopool",
   "codexAuth.accountModeTitle": "OpenAI-Kontomodus",

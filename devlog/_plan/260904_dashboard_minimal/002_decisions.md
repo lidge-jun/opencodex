@@ -39,7 +39,7 @@ work-phase that lands it. Votes: number of reviewers proposing remove/collapse/d
 | 26 | Codex 설정: 선택 순서 select ×N (AccountPriorityControl.tsx) | 3/3 | COLLAPSE: render the select only when value ≠ default OR the card is expanded; hint already sr-only | 050 |
 | 27 | Codex 설정: 별칭 편집 + ✕ per card | 2/3 | COLLAPSE into a per-card "⋯" labelled disclosure; 이 계정을 다음에 사용 / 일시 중지 stay inline | 050 |
 | 28 | Codex 설정: truncated account ID line | 2/3 | MOVE into the ⋯ disclosure as a visible mono line + "ID 복사" button | 050 |
-| 29 | Codex 설정: 로테이션 전략 three desc lines (AccountPoolStrategyControls.tsx:71) | 2/3 | COLLAPSE lines 2-3 behind a focusable `Tooltip` ⓘ button; keep strategyDesc | 050 |
+| 29 | Codex 설정: 로테이션 전략 three desc lines (AccountPoolStrategyControls.tsx:71) | 2/3 | KEEP (deviation at wp5 B: six existing tests pin both lines as a visible safety property — the affinity/rebinding answer — and the component comment records that as deliberate; a 2/3 vote does not outrank a tested product decision) | — |
 | 30 | Codex 설정: empty OpenAI 계정 모드 card | 1/3 (R2) | REMOVE when it has no badges/body | 050 |
 | 31 | Usage 활동일 card (Usage.tsx:300) | 3/3 | REMOVE | 060 |
 | 32 | Usage 요청/측정됨 pair | 1/3 | KEEP (coverage story needs both) | — |

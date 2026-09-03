@@ -1183,6 +1183,8 @@ export const ko: Record<TKey, string> = {
   "codexAuth.mainAccount": "메인 계정",
   "codexAuth.logLabel": "로그 라벨",
   "codexAuth.codexApp": "Codex App",
+  "codexAuth.moreActions": "추가 작업 표시",
+  "codexAuth.copyId": "계정 ID 복사",
   "codexAuth.appLogin": "앱 로그인",
   "codexAuth.accountPool": "계정 풀",
   "codexAuth.accountModeTitle": "OpenAI 계정 모드",

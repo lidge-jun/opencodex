@@ -136,6 +136,8 @@ export function CodexAccountPoolMainCard({
       </div>
       <div className="codex-account-identity">
         <div className="codex-account-identity-copy">{main?.email || t("codexAuth.appLogin")}{main?.plan ? ` · ${main.plan}` : ""}</div>
+        {/* The main card keeps its order select inline: it is one control, not one per pool row,
+            and the main card has no ⋯ disclosure to fold it into. */}
         {main && (
           <AccountPriorityControl
             value={mainSwitchEntry.priority}

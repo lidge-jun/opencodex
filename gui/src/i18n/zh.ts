@@ -1176,6 +1176,8 @@ export const zh: Record<TKey, string> = {
   "codexAuth.mainAccount": "主账号",
   "codexAuth.logLabel": "日志标签",
   "codexAuth.codexApp": "Codex App",
+  "codexAuth.moreActions": "显示更多操作",
+  "codexAuth.copyId": "复制账户 ID",
   "codexAuth.appLogin": "应用登录",
   "codexAuth.accountPool": "账号池",
   "codexAuth.accountModeTitle": "OpenAI 账户模式",

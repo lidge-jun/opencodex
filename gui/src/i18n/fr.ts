@@ -1633,6 +1633,8 @@ export const fr: Record<TKey, string> = {
   "codexAuth.mainAccount": "Compte principal",
   "codexAuth.logLabel": "Libellé du journal",
   "codexAuth.codexApp": "Application Codex",
+  "codexAuth.moreActions": "Afficher plus d’actions",
+  "codexAuth.copyId": "Copier l’ID du compte",
   "codexAuth.appLogin": "Connexion à l’application",
   "codexAuth.accountPool": "Groupe de comptes",
   "codexAuth.accountModeTitle": "Mode de compte OpenAI",

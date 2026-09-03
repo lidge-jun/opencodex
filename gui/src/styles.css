@@ -1937,6 +1937,12 @@ dialog.modal-overlay::backdrop {
 .codex-pool-strategy-card .card-sub { padding: 0; }
 /* Inline selection-order row on an account card: label and trigger share one line, and the
    trigger is scaled down to the card's hint text so it reads as part of the card, not a form. */
+/* Per-account ⋯: a labelled disclosure in the action row (no menu role). Its body sits on its
+   own line under the actions so the revealed controls keep DOM tab order. */
+.codex-account-more { display: inline-flex; flex-wrap: wrap; align-items: center; }
+.codex-account-more > summary { list-style: none; cursor: pointer; min-width: 28px; justify-content: center; }
+.codex-account-more > summary::-webkit-details-marker { display: none; }
+.codex-account-more-body { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; padding-top: 6px; }
 .codex-account-identity { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px 6px; min-width: 0; }
 .codex-account-identity-copy { font-size: var(--text-label); line-height: var(--leading-body); color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
 .codex-account-priority { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0; min-width: 0; flex: 0 0 auto; }

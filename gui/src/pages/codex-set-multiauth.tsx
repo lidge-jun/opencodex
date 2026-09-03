@@ -22,6 +22,9 @@ export function OpenAiAccountModeBanner({
   onEnable: () => void;
 }) {
   const t = useT();
+  // Nothing is known yet: an empty titled card is a blank slab that later jumps when
+  // /api/config arrives. Render nothing and let the pool section own the space.
+  if (state === null) return null;
   return (
     <div className="panel openai-account-mode-banner" style={{ marginBottom: 16 }}>
       <div className="row">
