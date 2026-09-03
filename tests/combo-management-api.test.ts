@@ -289,6 +289,11 @@ describe("combo management API", () => {
       expect(explicit?.status).toBe(200);
       const explicitBody = await responseJson(explicit);
       expect(explicitBody.combo).toMatchObject({ cooldownMs: 5_000, waitForCooldownMs: 15_000 });
+      const persistedExplicit = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persistedExplicit.combos?.timed).toMatchObject({
+        cooldownMs: 5_000,
+        waitForCooldownMs: 15_000,
+      });
       const listedExplicit = await responseJson(await comboApi(config, "GET", "/api/combos"));
       expect((listedExplicit.combos as Array<Record<string, unknown>>).find(row => row.id === "timed"))
         .toMatchObject({ cooldownMs: 5_000, waitForCooldownMs: 15_000 });
@@ -303,6 +308,9 @@ describe("combo management API", () => {
       expect(explicitDefault?.status).toBe(200);
       expect((await responseJson(explicitDefault)).combo).toMatchObject({ cooldownMs: 60_000 });
       expect(config.combos?.["default-timed"]?.cooldownMs).toBe(60_000);
+      const persistedExplicitDefault = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persistedExplicitDefault.combos?.["default-timed"]).toMatchObject({ cooldownMs: 60_000 });
+      expect(persistedExplicitDefault.combos?.["default-timed"]).not.toHaveProperty("waitForCooldownMs");
       const listedDefault = await responseJson(await comboApi(config, "GET", "/api/combos"));
       expect((listedDefault.combos as Array<Record<string, unknown>>).find(row => row.id === "default-timed"))
         .toMatchObject({ cooldownMs: 60_000 });
@@ -314,6 +322,11 @@ describe("combo management API", () => {
         combo: { targets: [{ provider: "a", model: "m1" }] },
       });
       expect(dashboardUpdate?.status).toBe(200);
+      const persistedAfterDashboardUpdate = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persistedAfterDashboardUpdate.combos?.timed).toMatchObject({
+        cooldownMs: 5_000,
+        waitForCooldownMs: 15_000,
+      });
       const afterDashboardUpdate = await responseJson(await comboApi(config, "GET", "/api/combos"));
       expect((afterDashboardUpdate.combos as Array<Record<string, unknown>>).find(row => row.id === "timed"))
         .toMatchObject({ cooldownMs: 5_000, waitForCooldownMs: 15_000 });
@@ -328,6 +341,11 @@ describe("combo management API", () => {
       expect(plain).toBeDefined();
       expect(plain).not.toHaveProperty("cooldownMs");
       expect(plain).not.toHaveProperty("waitForCooldownMs");
+      const persistedSparse = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      const persistedPlain = persistedSparse.combos?.plain;
+      expect(persistedPlain).toBeDefined();
+      expect(persistedPlain).not.toHaveProperty("cooldownMs");
+      expect(persistedPlain).not.toHaveProperty("waitForCooldownMs");
       expect(config.combos?.plain).not.toHaveProperty("cooldownMs");
       expect(config.combos?.plain).not.toHaveProperty("waitForCooldownMs");
     });
