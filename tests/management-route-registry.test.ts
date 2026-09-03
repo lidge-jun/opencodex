@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MANAGEMENT_ROUTES } from "../src/server/management/route-registry";
@@ -122,7 +123,8 @@ describe("management route registry reconciliation", () => {
     // Drives the fail-loud path red on purpose: without this, a scanner that silently
     // defaulted to GET would satisfy every other test in this file while producing a
     // route table nobody could trust.
-    const tmp = join(repoRoot, ".tmp-scanner-probe.ts");
+    const tempDir = mkdtempSync(join(tmpdir(), "ocx-route-scanner-"));
+    const tmp = join(tempDir, "scanner-probe.ts");
     const source = [
       "export async function handleProbe(ctx: any): Promise<Response | null> {",
       "  const { url, req } = ctx;",
@@ -133,13 +135,13 @@ describe("management route registry reconciliation", () => {
       "  return null;",
       "}",
     ].join("\n");
-    require("node:fs").writeFileSync(tmp, source);
+    writeFileSync(tmp, source);
     try {
       const { unresolved } = distinctRoutes(scanRoutes(tmp));
       expect(unresolved.map(r => r.path)).toEqual(["/api/probe/unknowable"]);
       expect(unresolved[0]?.method).toBeNull();
     } finally {
-      require("node:fs").rmSync(tmp, { force: true });
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
