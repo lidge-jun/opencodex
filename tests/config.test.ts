@@ -2770,6 +2770,13 @@ describe("config.ts – Windows ACL hardening integration", () => {
     expect(readFileSync(occupiedTemp, "utf8")).toBe("pre-existing");
   });
 
+  test("sync and async secret temp writers use Bun-portable exclusive creation", async () => {
+    // Bun on Windows misinterpreted the equivalent numeric O_* combination as
+    // ENOENT. Keep both writers on the portable exclusive-write spelling.
+    const source = await Bun.file(new URL("../src/config/atomic-write.ts", import.meta.url)).text();
+    expect(source.match(/openSync\(path, \"wx\", 0o600\)/g)).toHaveLength(2);
+  });
+
   test("Windows ACL hardening completes before secret temp bytes are observable", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
