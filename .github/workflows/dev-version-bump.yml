@@ -55,17 +55,27 @@ jobs:
       # Open the pull request.
       pull-requests: write
     steps:
-      - name: Checkout dev
+      # Keep every executable file in the privileged job pinned to the audited
+      # release revision. The later dev checkout is input data only: none of its
+      # actions, dependencies, scripts, or tests run with this job's token.
+      - name: Checkout trusted automation
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: dev
+          ref: ${{ github.sha }}
           # Tags are load-bearing, not decoration: the freeness gate below is a bun
           # test that reads the local tag set, and release-version-line.test.ts
           # returns EARLY on an empty set. A shallow checkout would make that gate
           # silently vacuous instead of failing loudly.
           fetch-depth: 0
-          # Do NOT set persist-credentials: false here as the read-only workflows do.
-          # This job has to push its bump branch.
+          persist-credentials: false
+
+      - name: Checkout dev as data
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: dev
+          path: dev-tree
+          fetch-depth: 0
+          persist-credentials: false
 
       # The repository-owned composite action, not a hand-pinned setup-bun SHA: it
       # resolves the Bun version from package.json so the runtime SOT stays in one
@@ -108,7 +118,7 @@ jobs:
           RELEASED_VERSION: ${{ steps.target.outputs.version }}
         run: |
           set -euo pipefail
-          bun scripts/bump-dev-version.ts "${RELEASED_VERSION}" package.json
+          bun scripts/bump-dev-version.ts "${RELEASED_VERSION}" dev-tree/package.json
 
       - name: Prove the intended version is not already released
         if: ${{ steps.target.outputs.mode == 'pre-move' }}
@@ -133,10 +143,14 @@ jobs:
         # of the tag set, so it is settled here by the detector that already owns the
         # question. If this fails, no pull request is opened and the job goes red asking
         # for a human decision - which is the correct outcome, not a fallback.
-        run: bun test tests/ci-workflows/release-version-line.test.ts
+        run: |
+          # Exercise the trusted detector against the candidate package metadata.
+          cp dev-tree/package.json package.json
+          bun test tests/ci-workflows/release-version-line.test.ts
 
       - name: Open the bump pull request
         if: ${{ steps.decide.outputs.changed == 'true' }}
+        working-directory: dev-tree
         env:
           GH_TOKEN: ${{ github.token }}
           MODE: ${{ steps.target.outputs.mode }}
@@ -217,7 +231,7 @@ jobs:
             git checkout -B "${branch}" "origin/${branch}"
             # The diff above proved every other file matches the merge base with dev, so this is
             # the merge base's checker reading the branch's four committed version sources.
-            bun scripts/release-version-sources.ts check "${NEXT_VERSION}" || {
+            bun ../scripts/release-version-sources.ts check "${NEXT_VERSION}" --root . || {
               echo "::error::${branch} does not carry ${NEXT_VERSION} in every version source"
               exit 1
             }
@@ -225,13 +239,19 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git checkout -b "${branch}"
-            bun scripts/release-version-sources.ts check "${NEXT_VERSION}" || {
+            # The trusted checkout's checker reads this tree's four version sources.
+            bun ../scripts/release-version-sources.ts check "${NEXT_VERSION}" --root . || {
               echo "::error::the bump did not move every version source to ${NEXT_VERSION}"
               exit 1
             }
             git add -- package.json desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
             git commit -m "${subject}"
-            git push origin "${branch}"
+            # Supply the write credential only to this trusted push invocation. In
+            # particular, never persist it in the dev checkout while dev-controlled
+            # files could execute.
+            auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" 
+              push origin "${branch}"
           fi
 
           gh pr create \

@@ -635,7 +635,9 @@ describe("GitHub Actions hardening", () => {
     expect(targetFreeness?.env?.INTENDED).toBe("${{ steps.target.outputs.version }}");
     expect(targetFreeness?.run).toContain("git fetch --force --tags origin");
     expect(targetFreeness?.run).toContain('npm view "@bitkyc08/opencodex@${INTENDED#v}" version');
-    expect(chosenFreeness?.run).toBe("bun test tests/ci-workflows/release-version-line.test.ts");
+    // The trusted detector runs against the bumped metadata copied out of the dev tree.
+    expect(chosenFreeness?.run).toContain("cp dev-tree/package.json package.json");
+    expect(chosenFreeness?.run).toContain("bun test tests/ci-workflows/release-version-line.test.ts");
     expect(openPr?.env).toMatchObject({
       MODE: "${{ steps.target.outputs.mode }}",
       TARGET_VERSION: "${{ steps.target.outputs.version }}",
@@ -754,6 +756,26 @@ describe("GitHub Actions hardening", () => {
       .toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+
+    // The post-release bump has write authority, but dev is a mutable integration
+    // branch rather than the audited release input. Executable automation must stay
+    // on the exact caller SHA, and checkout credentials must remain absent until the
+    // final trusted push invocation.
+    const bumpWorkflow = await readText(".github/workflows/dev-version-bump.yml");
+    expect(bumpWorkflow).toContain("- name: Checkout trusted automation");
+    expect(bumpWorkflow).toContain("ref: ${{ github.sha }}");
+    expect(bumpWorkflow).toContain("- name: Checkout dev as data");
+    expect(bumpWorkflow).toContain("path: dev-tree");
+    expect(count(bumpWorkflow, "persist-credentials: false")).toBe(2);
+    expect(bumpWorkflow).toContain(
+      'bun scripts/bump-dev-version.ts "${RELEASED_VERSION}" dev-tree/package.json',
+    );
+    expect(bumpWorkflow).toContain("cp dev-tree/package.json package.json");
+    expect(bumpWorkflow).toContain("working-directory: dev-tree");
+    expect(bumpWorkflow).toContain('git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}"');
+    // Version-source checks run the trusted checkout's script against the dev tree;
+    // executing dev-tree's own copy would hand the bump job's token to mutable input.
+    expect(count(bumpWorkflow, "bun ../scripts/release-version-sources.ts check")).toBe(2);
 
     // Workflow-dispatch inputs must reach shell code via env, never by direct
     // interpolation into run: source (script-injection hardening).
