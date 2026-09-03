@@ -25,6 +25,7 @@ export const tr: Record<TKey, string> = {
   "sidebar.starFailed": "gh üzerinden yıldız verilemedi. Bunun yerine GitHub açılıyor.",
   "sidebar.updateAvailable": "Güncelleme mevcut: {version}",
   "sidebar.checkUpdate": "Güncellemeleri kontrol et",
+  "sidebar.preferences": "Tercihler",
   "common.save": "Kaydet",
   "common.saving": "Kaydediliyor…",
   "common.cancel": "İptal",

@@ -93,6 +93,7 @@ export const ja: Record<TKey, string> = {
   "sidebar.starFailed": "gh でスターを付けられませんでした。代わりに GitHub を開きます。",
   "sidebar.updateAvailable": "更新あり: {version}",
   "sidebar.checkUpdate": "更新を確認",
+  "sidebar.preferences": "環境設定",
   "common.save": "保存",
   "common.saving": "保存中…",
   "common.cancel": "キャンセル",

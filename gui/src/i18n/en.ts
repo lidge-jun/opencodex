@@ -26,6 +26,7 @@ export const en = {
   "sidebar.starFailed": "Could not star through gh. Opening GitHub instead.",
   "sidebar.updateAvailable": "Update available: {version}",
   "sidebar.checkUpdate": "Check for updates",
+  "sidebar.preferences": "Preferences",
   "common.save": "Save",
   "common.saving": "Saving…",
   "common.cancel": "Cancel",

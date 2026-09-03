@@ -23,6 +23,7 @@ export const fr: Record<TKey, string> = {
   "sidebar.starFailed": "Impossible d’ajouter une étoile avec gh. Ouverture de GitHub à la place.",
   "sidebar.updateAvailable": "Mise à jour disponible : {version}",
   "sidebar.checkUpdate": "Rechercher des mises à jour",
+  "sidebar.preferences": "Préférences",
   "common.save": "Enregistrer",
   "common.saving": "Enregistrement…",
   "common.cancel": "Annuler",

@@ -93,6 +93,7 @@ export const de: Record<TKey, string> = {
   "sidebar.starFailed": "Markieren über gh fehlgeschlagen. GitHub wird stattdessen geöffnet.",
   "sidebar.updateAvailable": "Update verfügbar: {version}",
   "sidebar.checkUpdate": "Nach Updates suchen",
+  "sidebar.preferences": "Einstellungen",
   "common.save": "Speichern",
   "common.saving": "Speichern…",
   "common.cancel": "Abbrechen",

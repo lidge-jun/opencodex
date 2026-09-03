@@ -93,6 +93,7 @@ export const ko: Record<TKey, string> = {
   "sidebar.starFailed": "gh로 스타를 누르지 못했습니다. GitHub를 대신 엽니다.",
   "sidebar.updateAvailable": "업데이트 있음: {version}",
   "sidebar.checkUpdate": "업데이트 확인",
+  "sidebar.preferences": "환경설정",
   "common.save": "저장",
   "common.saving": "저장 중…",
   "common.cancel": "취소",

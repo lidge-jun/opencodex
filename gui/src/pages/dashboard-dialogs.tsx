@@ -1,5 +1,6 @@
 import { IconAlert, IconRefresh, IconX } from "../icons";
 import { EmptyState, Select } from "../ui";
+import { GithubStarButton } from "../components/github-star-button";
 import {
   updateReasonLabel,
   type UpdateChannel,
@@ -122,6 +123,12 @@ export function DashboardDialogs(d: Dash) {
             </div>
           )}
           <div className="modal-actions">
+            {/*
+              Mounted only while the dialog is open (the <dialog> itself is always in the
+              tree and only toggles display), so the star poll runs only while the user is
+              looking at the project's own screen.
+            */}
+            {updateOpen && <GithubStarButton apiBase={d.apiBase} />}
             <button type="button" className="btn btn-ghost" onClick={closeUpdateDialog}>{t("common.cancel")}</button>
             <button
               type="button"

@@ -50,14 +50,11 @@ test("the orphaned sidebar switch styles are gone", async () => {
   expect(css).not.toContain(".nav-entry-claude .switch");
 });
 
-test("the foot's four rows share one text column and one trailing inset", async () => {
+test("the foot is two orb rows: preferences/links, then runtime actions", async () => {
   /*
-   * The foot stacks lang, theme, proxy and GitHub two pixels apart, so any row that
-   * measures itself differently is visible as a step in the stack. All four shipped
-   * out of line at once: the proxy label sat 25px left of its neighbours because it
-   * has no icon to clear, its row was 8.5px taller because it padded around 28px orbs
-   * the others do not have, and the GitHub orbs hung 10px further out because that row
-   * was the only one with no trailing inset.
+   * The foot used to stack five labelled rows (lang, theme, proxy label, GitHub link,
+   * star/update) that together outweighed the nine navigation entries above them. It is
+   * now two rows of 28px orbs with no text; each orb keeps aria-label + title.
    */
   const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
   const rule = (selector: string) => {
@@ -66,31 +63,26 @@ test("the foot's four rows share one text column and one trailing inset", async 
     return css.slice(at, css.indexOf("}", at));
   };
 
-  // The column every label sits in, owned by the rows that carry an icon.
-  for (const selector of [".lang-toggle", ".theme-toggle", ".sidebar-link"]) {
-    expect(rule(selector)).toContain("padding: 8px 10px");
-    expect(rule(selector)).toContain("gap: 9px");
+  expect(rule(".sidebar-foot-row")).toContain("gap: 4px");
+  expect(rule(".sidebar-foot-row")).toContain("padding: 4px 10px");
+  // The language Select is orb-sized and its own value/chevron are hidden.
+  expect(rule(".lang-toggle .select-trigger")).toContain("width: 28px");
+  expect(css).toContain(".lang-toggle .select-trigger > span, .lang-toggle .select-trigger > svg { display: none; }");
+
+  // The old labelled rows and the sidebar star orb are gone from CSS and JSX alike.
+  for (const gone of [".theme-toggle {", ".sidebar-action-label {", ".sidebar-action-row {", ".sidebar-github-row {", ".sidebar-orb--starred {"]) {
+    expect(css).not.toContain(gone);
   }
+  expect(src).not.toContain("sidebar-action-label");
+  expect(src).not.toContain('className="theme-toggle"');
+  expect(src.match(/className="sidebar-foot-row"/g)?.length).toBe(2);
 
-  // The proxy label has no icon, so it clears that gutter itself. Holding the block
-  // padding on the label rather than the row is what keeps the row's height tied to
-  // its text, like its neighbours, instead of to the taller orbs beside it.
-  expect(rule(".sidebar-action-label")).toContain("padding: 8px 10px 8px calc(10px + 16px + 9px)");
-
-  /*
-   * Reject block padding on the row in every spelling, not just the shorthand it
-   * shipped with: `padding: 8px 0`, or a lone `padding-top`, would hand the 28px orbs
-   * back control of the row height and still slip past a check for the exact original
-   * string. `padding-right` survives both patterns — "padding" is followed by "-",
-   * never by a colon.
-   */
-  const proxyRow = rule(".sidebar-action-row");
-  expect(proxyRow).not.toMatch(/padding\s*:/);
-  expect(proxyRow).not.toMatch(/padding-(top|bottom|block)/);
-
-  // Trailing controls stop on the same inset as the lang chevron above them.
-  expect(proxyRow).toContain("padding-right: 10px");
-  expect(rule(".sidebar-github-row")).toContain("padding-right: 10px");
+  // Star moved into the update dialog; the sidebar row only links and updates.
+  const row = await Bun.file(new URL("../src/components/sidebar-github-row.tsx", import.meta.url)).text();
+  expect(row).not.toContain("IconStar");
+  expect(row).not.toContain("/api/github/star");
+  const dialogs = await Bun.file(new URL("../src/pages/dashboard-dialogs.tsx", import.meta.url)).text();
+  expect(dialogs).toContain("{updateOpen && <GithubStarButton apiBase={d.apiBase} />}");
 });
 
 test("Claude Code is still reachable, just not as a duplicate row", async () => {

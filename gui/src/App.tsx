@@ -320,25 +320,40 @@ export default function App() {
           })}
         </nav>
         <div className="sidebar-foot">
-          <div className="lang-toggle">
-            <IconGlobe aria-hidden />
-            <Select
-              value={locale}
-              options={LOCALES.map(l => ({ value: l.code, label: localeDisplayName(l.code) }))}
-              onChange={v => setLocale(v as Locale)}
-              label={t("lang.label")}
-              placement="right"
-              portal={false}
-              style={{ flex: 1, minWidth: 0, width: "100%" }}
+          {/*
+            Two rows of orbs, no text. Language, theme, GitHub and update are preferences
+            and links; stop and restart are the runtime controls. They used to be five
+            labelled rows that together outweighed the nine navigation entries above them.
+            Every orb keeps aria-label + title, so nothing is lost to assistive tech.
+          */}
+          <div className="sidebar-foot-row" role="group" aria-label={t("sidebar.preferences")}>
+            <div className="lang-toggle lang-toggle--icon">
+              <IconGlobe aria-hidden />
+              <Select
+                value={locale}
+                options={LOCALES.map(l => ({ value: l.code, label: localeDisplayName(l.code) }))}
+                onChange={v => setLocale(v as Locale)}
+                label={t("lang.label")}
+                placement="right"
+                portal={false}
+              />
+            </div>
+            <button type="button" className="sidebar-orb" onClick={cycleTheme}
+              aria-label={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`} title={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`}>
+              <ThemeIcon />
+            </button>
+            <SidebarGithubRow
+              apiBase={sharedBase}
+              onOpenUpdate={() => {
+                // The update dialog lives on the dashboard maintenance panel. Deep-link to
+                // `#dashboard/update` and let the dashboard own the check/run flow — no
+                // cross-component event bus, and the link survives a refresh.
+                setNavOpen(false);
+                navigateToPage("dashboard", "update");
+              }}
             />
           </div>
-          <button type="button" className="theme-toggle" onClick={cycleTheme}
-            aria-label={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`} title={`${t("theme.label")}: ${t(THEME_TKEY[theme])}`}>
-            <ThemeIcon /> <span className="mode">{t(THEME_TKEY[theme])}</span>
-          </button>
-          <div className="sidebar-action-row">
-            <span className="sidebar-action-label">{t("dash.actions")}</span>
-            <div className="sidebar-action-orbs">
+          <div className="sidebar-foot-row" role="group" aria-label={t("dash.actions")}>
               {targets.connected && sharedSessionReady && (
                 <button type="button" className="sidebar-orb" onClick={() => { void handleSessionLogout(); }} disabled={sessionLoggingOut}
                   aria-label={t(sessionLoggingOut ? "connection.sessionLoggingOut" : "connection.sessionLogout")}
@@ -358,18 +373,7 @@ export default function App() {
                 title={codexRestarting ? t("dash.codexRestarting") : t("dash.codexRestart")}>
                 <IconRefresh />
               </button>
-            </div>
           </div>
-          <SidebarGithubRow
-            apiBase={sharedBase}
-            onOpenUpdate={() => {
-              // The update dialog lives on the dashboard maintenance panel. Deep-link to
-              // `#dashboard/update` and let the dashboard own the check/run flow — no
-              // cross-component event bus, and the link survives a refresh.
-              setNavOpen(false);
-              navigateToPage("dashboard", "update");
-            }}
-          />
         </div>
       </aside>
 

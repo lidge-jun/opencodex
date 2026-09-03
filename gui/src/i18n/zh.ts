@@ -93,6 +93,7 @@ export const zh: Record<TKey, string> = {
   "sidebar.starFailed": "无法通过 gh 加星，改为打开 GitHub。",
   "sidebar.updateAvailable": "有可用更新：{version}",
   "sidebar.checkUpdate": "检查更新",
+  "sidebar.preferences": "偏好设置",
   "common.save": "保存",
   "common.saving": "保存中…",
   "common.cancel": "取消",

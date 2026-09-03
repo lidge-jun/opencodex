@@ -1850,6 +1850,7 @@ export const zhTW: Record<TKey, string> = {
   "sidebar.starFailed": "無法透過 gh 加星，改為開啟 GitHub。",
   "sidebar.updateAvailable": "有可用更新：{version}",
   "sidebar.checkUpdate": "檢查更新",
+  "sidebar.preferences": "偏好設定",
   "dash.mem.jsHeapArena": "arena {total}",
   "dash.mem.pressure": "相對於警告閾值",
   "dash.mem.pressureOf": "警告閾值的 {pct}%",

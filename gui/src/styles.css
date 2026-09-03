@@ -327,15 +327,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .sidebar-link:hover { background: var(--accent-soft); color: var(--text); text-decoration: none; }
 .sidebar-link svg { width: 16px; height: 16px; }
 
-/* GitHub row: the label keeps the full-width link affordance, the two circular
-   satellites (star, update) sit at the trailing edge without shrinking the label's
-   hover target. That edge is the sidebar's 10px content inset, not the rail wall, so
-   the orbs stack under the lang chevron and the proxy orbs instead of hanging 10px
-   further out than both. The update orb only exists when an update is available, so the row
-   is one or two circles wide — never a placeholder. */
-.sidebar-github-row { display: flex; align-items: center; gap: 4px; min-width: 0; padding-right: 10px; }
-.sidebar-github-link { flex: 1 1 auto; min-width: 0; }
-.sidebar-github-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .sidebar-orb {
   position: relative;
   display: inline-flex; align-items: center; justify-content: center;
@@ -347,8 +338,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .sidebar-orb svg { width: 14px; height: 14px; }
 .sidebar-orb:hover:not(:disabled) { background: var(--accent-soft); color: var(--text); border-color: var(--accent-ring); }
 .sidebar-orb:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
-/* Already starred: a settled state, not a disabled control that looks broken. */
-.sidebar-orb--starred { color: var(--amber); cursor: default; opacity: 1; }
 /* Update pending: the one blue accent in the sidebar, so a waiting release is visible
    at a glance without shouting like an error state. */
 .sidebar-orb--update {
@@ -370,37 +359,31 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   background: var(--blue); border: 1.5px solid var(--rail);
 }
 
-.lang-toggle { display: flex; align-items: center; gap: 9px; padding: 8px 10px; width: 100%; color: var(--muted); font-size: var(--text-control); border-radius: var(--radius-sm); transition: background var(--motion-fast), color var(--motion-fast); position: relative; }
-.lang-toggle:hover { background: var(--accent-soft); color: var(--text); }
-.lang-toggle svg { width: 16px; height: 16px; flex-shrink: 0; }
+/* Language: the existing Select, sized to an orb. The trigger's own children (value text and
+   chevron) are hidden and the globe icon sits over the empty trigger; the dropdown still
+   opens beside the rail. Keeps Select's keyboard model without adding a trigger prop. */
+.lang-toggle { position: relative; display: inline-flex; align-items: center; width: 28px; height: 28px; flex: 0 0 28px; }
+.lang-toggle > svg { position: absolute; left: 6px; top: 6px; width: 14px; height: 14px; pointer-events: none; color: var(--muted); }
+.lang-toggle:hover > svg { color: var(--text); }
 .lang-toggle .custom-select { width: 100%; position: static !important; }
-.lang-toggle .select-trigger { width: 100%; justify-content: space-between; border: none; background: none; color: inherit; font-size: var(--text-control); padding: 0; min-height: auto; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
-.lang-toggle .select-trigger:hover:not(:disabled) { border: none; background: none; color: inherit; box-shadow: none; }
+.lang-toggle .select-trigger { width: 28px; height: 28px; min-height: 28px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--raised); color: var(--muted); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.lang-toggle .select-trigger > span, .lang-toggle .select-trigger > svg { display: none; }
+.lang-toggle .select-trigger:hover:not(:disabled) { background: var(--accent-soft); color: var(--text); border-color: var(--accent-ring); box-shadow: none; }
 .lang-toggle .select-dropdown { background: var(--glass-rail); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur); border: 1px solid var(--border); box-shadow: var(--shadow-sm); }
 /* Clear the sidebar's 14px padding + 1px border so the menu's left edge sits in the
    main pane instead of straddling the divider (trigger ends at the content edge). */
 .lang-toggle .select-dropdown-beside { top: auto; bottom: 0; left: calc(100% + 20px); right: auto; min-width: 10rem; max-height: min(60vh, 20rem); overflow-y: auto; }
-.theme-toggle { display: flex; align-items: center; gap: 9px; padding: 8px 10px; width: 100%; text-align: left; background: none; border: none; cursor: pointer; color: var(--muted); font: inherit; font-size: var(--text-control); border-radius: var(--radius-sm); transition: background var(--motion-fast), color var(--motion-fast); }
-.theme-toggle:hover { background: var(--accent-soft); color: var(--text); }
-.theme-toggle svg { width: 16px; height: 16px; flex-shrink: 0; }
-.theme-toggle .mode { text-transform: capitalize; }
 .stop-toggle { color: var(--red); }
 .stop-toggle:hover { background: var(--red-soft); color: var(--red); }
 .stop-toggle:disabled { opacity: 0.5; cursor: default; }
-/* Proxy lifecycle actions: two circular satellites (stop, restart Codex) sharing the
-   row with a quiet label. The stop control used to be a full-width button; pairing it
-   with restart as icons keeps the foot from growing a fifth stacked row and puts the
-   destructive action next to the recovery action it is most often confused with. */
-.sidebar-action-row { display: flex; align-items: center; gap: 4px; min-width: 0; padding-right: 10px; }
-/* Left padding matches .sidebar-link, plus the 16px icon + 9px gap gutter the
-   iconless label has to clear to sit in the same text column as its neighbours.
-   Owning the block padding here (rather than on the row) keeps the row the same
-   height as the other three, which the 28px orbs would otherwise inflate. */
-.sidebar-action-label { flex: 1 1 auto; min-width: 0; padding: 8px 10px 8px calc(10px + 16px + 9px); color: var(--muted); font-size: var(--text-control); }
-.sidebar-action-orbs { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+/* Footer: two rows of 28px orbs — preferences/links, then runtime actions. The rows share
+   the sidebar's 10px content inset on both sides so the orbs line up under the nav text. */
+.sidebar-foot-row { display: flex; align-items: center; gap: 4px; padding: 4px 10px; min-width: 0; }
 .sidebar-orb--danger { color: var(--red); }
 .sidebar-orb--danger:hover:not(:disabled) { background: var(--red-soft); color: var(--red); border-color: var(--red); }
 .sidebar-orb:disabled { opacity: 0.5; cursor: default; }
+/* Starred: a settled state, not a disabled control that looks broken. */
+.github-star-button--starred { color: var(--amber); opacity: 1; cursor: default; }
 
 .main { min-width: 0; }
 .main-inner { max-width: 980px; margin: 0 auto; padding: 32px 36px 64px; container-type: inline-size; }
