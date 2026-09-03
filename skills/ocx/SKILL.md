@@ -1,6 +1,6 @@
 ---
 name: ocx
-description: Drive a running opencodex (`ocx`) proxy from the CLI — account pools, provider routing, model catalog, usage and cost attribution, request logs, access keys, storage cleanup, and the management API. Use when a task involves controlling or inspecting an opencodex proxy rather than editing the opencodex codebase. Triggers: ocx, opencodex, proxy control, account pool, pause account, pool strategy, provider routing, usage report, cost attribution, access key, request log, conversation trace, storage cleanup, management API.
+description: "Drive a running opencodex (`ocx`) proxy from the CLI — account pools, provider routing, model catalog, usage and cost attribution, request logs, access keys, storage cleanup, and the management API. Use when a task involves controlling or inspecting an opencodex proxy rather than editing the opencodex codebase. Triggers: ocx, opencodex, proxy control, account pool, pause account, pool strategy, provider routing, usage report, cost attribution, access key, request log, conversation trace, storage cleanup, management API."
 ---
 
 # Operating `ocx`
@@ -89,6 +89,17 @@ starring would be useful, say so and let the user decide.
 
 The same boundary covers the session-gated `/api/codex-prompt` writes: read them with
 `ocx inspect codex-prompt`, and leave the writes to the dashboard.
+
+## Secret-bearing commands
+
+**Do not run a command that creates an access key or starts a rotation.** This includes
+`ocx access key create`, its `access keys` and `api-key` aliases, `ocx access key rotate <id>`,
+the equivalent `opencodex` forms, and direct `POST /api/keys` or `POST /api/keys/rotate` calls.
+Their one-time responses contain a new plaintext data-plane credential, and command output can
+enter the agent transcript. Ask the user to perform that step in a terminal outside the agent
+session, configure the replacement, and confirm only that it is configured plus any non-secret key
+or rotation id needed for follow-up. Never ask the user to paste the key into chat, and do not
+remove the old key before that configuration confirmation.
 
 ## Destructive verbs
 
