@@ -23,11 +23,46 @@ const SPARSE_EVENTS = [
   { type: "response.completed", response: { id: "resp_sparse" } },
 ];
 
-function sparseSseBody(): ReadableStream<Uint8Array> {
+const EXPLICIT_EMPTY_TERMINAL_EVENTS = [
+  {
+    type: "response.output_item.done",
+    output_index: 0,
+    item: {
+      type: "message",
+      id: "msg_sparse",
+      role: "assistant",
+      status: "completed",
+      phase: "final_answer",
+      content: [{ type: "output_text", text: "hello", annotations: [] }],
+    },
+  },
+  {
+    type: "response.completed",
+    response: { id: "resp_sparse", status: "completed", output: [] },
+  },
+];
+
+const CODEX_SPARSE_TERMINAL_EVENTS = [
+  {
+    type: "response.output_item.done",
+    output_index: 0,
+    item: {
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "hello" }],
+    },
+  },
+  {
+    type: "response.completed",
+    response: { id: "resp_sparse", status: "completed" },
+  },
+];
+
+function sparseSseBody(events: readonly Record<string, unknown>[] = SPARSE_EVENTS): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       const encoder = new TextEncoder();
-      for (const event of SPARSE_EVENTS) {
+      for (const event of events) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       }
       controller.enqueue(encoder.encode("data: [DONE]\n\n"));
@@ -36,7 +71,10 @@ function sparseSseBody(): ReadableStream<Uint8Array> {
   });
 }
 
-function stubSparseGateway(origin: string): void {
+function stubSparseGateway(
+  origin: string,
+  events: readonly Record<string, unknown>[] = SPARSE_EVENTS,
+): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
@@ -44,7 +82,7 @@ function stubSparseGateway(origin: string): void {
       return Response.json({ data: [] });
     }
     if (url.origin === origin && url.pathname.endsWith("/responses")) {
-      return new Response(sparseSseBody(), {
+      return new Response(sparseSseBody(events), {
         status: 200,
         headers: { "content-type": "text/event-stream" },
       });
@@ -185,6 +223,105 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
       expect(text).not.toContain("response.content_part.added");
       expect(text).not.toContain("response.output_text.done");
       expect(text).not.toContain("response.output_item.done");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the Grok client marker alone repairs an explicit empty completed snapshot", async () => {
+    const gateway = "https://grok-sparse-terminal.example.test";
+    stubSparseGateway(gateway, EXPLICIT_EMPTY_TERMINAL_EVENTS);
+    saveConfig({
+      port: 0,
+      defaultProvider: "sparse",
+      providers: {
+        sparse: {
+          adapter: "openai-responses",
+          baseUrl: `${gateway}/v1`,
+          authMode: "key",
+          apiKey: "test-key",
+        },
+      },
+    } as OcxConfig);
+
+    const server = startServer(0);
+    try {
+      const request = (grokMarker: boolean) => originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(grokMarker ? { "x-opencodex-grok": "1" } : {}),
+        },
+        body: JSON.stringify({ model: "sparse-model", input: "hi", stream: true }),
+      });
+
+      const grokResponse = await request(true);
+      expect(grokResponse.status).toBe(200);
+      const grokText = await grokResponse.text();
+      const grokCompletedLine = grokText.split("\n")
+        .find(line => line.includes('"response.completed"'));
+      expect(grokCompletedLine).toBeDefined();
+      const grokCompleted = JSON.parse(grokCompletedLine!.replace(/^data: /, "")) as {
+        response: { output: { id: string }[] };
+      };
+      expect(grokCompleted.response.output[0]?.id).toBe("msg_sparse");
+
+      const ordinaryResponse = await request(false);
+      expect(ordinaryResponse.status).toBe(200);
+      const ordinaryText = await ordinaryResponse.text();
+      const ordinaryCompletedLine = ordinaryText.split("\n")
+        .find(line => line.includes('"response.completed"'));
+      expect(ordinaryCompletedLine).toBeDefined();
+      const ordinaryCompleted = JSON.parse(ordinaryCompletedLine!.replace(/^data: /, "")) as {
+        response: { output: unknown[] };
+      };
+      expect(ordinaryCompleted.response.output).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the Grok marker repairs Codex-style done items plus a sparse completed response", async () => {
+    const gateway = "https://grok-codex-sparse.example.test";
+    stubSparseGateway(gateway, CODEX_SPARSE_TERMINAL_EVENTS);
+    saveConfig({
+      port: 0,
+      defaultProvider: "sparse",
+      providers: {
+        sparse: {
+          adapter: "openai-responses",
+          baseUrl: `${gateway}/v1`,
+          authMode: "key",
+          apiKey: "test-key",
+        },
+      },
+    } as OcxConfig);
+
+    const server = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-opencodex-grok": "1",
+        },
+        body: JSON.stringify({ model: "sparse-model", input: "hi", stream: true }),
+      });
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      const completedLine = text.split("\n").find(line => line.includes('"response.completed"'));
+      expect(completedLine).toBeDefined();
+      const completed = JSON.parse(completedLine!.replace(/^data: /, "")) as {
+        response: { output: Array<Record<string, unknown>> };
+      };
+      expect(completed.response.output).toHaveLength(1);
+      expect(completed.response.output[0]).toMatchObject({
+        id: "msg_ocx_0",
+        type: "message",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text: "hello", annotations: [] }],
+      });
     } finally {
       await server.stop(true);
     }
