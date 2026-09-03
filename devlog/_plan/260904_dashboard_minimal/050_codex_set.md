@@ -12,8 +12,8 @@ Depends on: nothing.
   `<details className="codex-account-more"><summary aria-label={t("codexAuth.moreActions")}>⋯</summary><div className="codex-account-more-menu">{alias}{copyId}{remove}</div></details>`.
   Add a "ID 복사" button there: `navigator.clipboard.writeText(a.id)` via the existing
   `use-copy-feedback` hook.
-- Identity line (L147): `{a.email}{plan}` only; drop ` · {t("prov.accountId")}: {displayAccountId(a.id)}`
-  and put the full id on `title`.
+- Identity line (L147): `{a.email}{plan}` only; the account id moves INTO the ⋯ disclosure as a
+  visible mono line next to the "ID 복사" button (audit blocker 5: no title-only info).
 - `AccountPriorityControl` (L148-158): render only when
   `normalizeAccountPriority(a.priority) !== 0 || moreOpen` where `moreOpen` is the details'
   open state (controlled via `onToggle`). When hidden and the value is default, render
@@ -66,4 +66,4 @@ Depends on: nothing.
 
 ## Bypass fields
 
-E2 · CI gates · `--no-verify` · residual: ⋯ is a details, not a menu role · "early warning".
+E2 · CI gates · `--no-verify` · none. ⋯ is a labelled disclosure (summary aria-label "추가 작업 표시"), controls revealed inline, DOM tab order, no menu role claimed (rule shared with 030) · "early warning".

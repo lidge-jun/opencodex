@@ -19,10 +19,14 @@ single owner when this phase moves Models' copy there).
    `<details className="models-advanced"><summary className="muted text-label">{t("models.advanced")}</summary>…</details>`.
    The v1/base/v2 row (L1603-1625) is CUT from here and PASTED into
    `gui/src/components/subagents-workspace/SubagentDelegationSection.tsx` as the first setting
-   row (state: `v2`, `v2Busy`, `setMultiAgentMode` move with it — they read
-   `/api/codex/v2`; put the fetch in a small hook `useMultiAgentMode(apiBase)` in
-   `gui/src/components/subagents-workspace/use-multi-agent-mode.ts` so both pages could share
-   it if ever needed).
+   row (audit blocker 4: the endpoint is `/api/v2`. Models.tsx:888-931 reads/writes it, and
+   Subagents.tsx:38-90 ALREADY loads `/api/v2` into `ultraMode` and writes it via
+   `saveUltraMode(patch)` PUT `/api/v2`. NO new hook: the radiogroup in SubagentDelegationSection
+   receives `multiAgentMode` + `onModeChange={(mode) => saveUltraMode({ multiAgentMode: mode })}`
+   from Subagents.tsx; `loadUltraMode` must also keep `data.multiAgentMode` in state (today it
+   only derives `multiAgentV2Enabled`). Models.tsx drops `v2`, `v2Busy`, `setMultiAgentMode` and
+   its `/api/v2` write; keep the read only if another Models control reads `v2.enabled` (rg at B).
+   The effort-cap card removed from the dashboard in 020 lands here too, bound to the same save path.)
 4. Order hint (L1752-1755 `.models-order-hint`): delete the row; add
    `title={t("models.orderHint")}` to the `.models-collapse-controls` wrapper and an ⓘ
    Tooltip after 모두 펼치기.
@@ -30,8 +34,11 @@ single owner when this phase moves Models' copy there).
    `allOn/allOff` L1342, per-provider 기본 창/상한 + 사용자 지정 창): keep the edit pencil and
    모두 켜기/끄기 inline; move 기본 별칭 사용, 커스텀 모델 추가, 기본 창/상한, 사용자 지정 창 into
    a `<details className="models-group-more">` with a "⋯" summary (aria-label
-   `t("models.groupMore")`). Native `<details>` rather than a menu component: keyboard and
-   a11y come free, and there is no popover primitive in ui.tsx besides Select.
+   `t("models.groupMore")`). Semantics (audit blocker 6): this is a DISCLOSURE, not a menu, and is labelled as one:
+   `<summary aria-label={t("models.groupMore")}>` (native details exposes aria-expanded) with
+   the revealed controls laid out inline in the header row, not a floating popover. Tab order
+   is DOM order; no arrow-key/Escape model is claimed. The string reads "추가 작업 표시", never
+   "메뉴". Same rule for every ⋯ in this unit (050).
 
 ### MODIFY gui/src/styles.css
 

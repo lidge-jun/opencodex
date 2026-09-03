@@ -54,18 +54,25 @@ After:
 </div>
 ```
 
-`Select` needs a `trigger` render prop only if it does not already support an icon-only
-trigger; check `gui/src/ui.tsx` Select first. If adding it is more than ~15 lines, fall back
-to keeping the existing full-width Select inside `.lang-toggle` but with `.lang-toggle--icon`
-hiding the value text (`.select-trigger > span { display:none }`) — the dropdown still works.
+DECISION (audit blocker 3): `Select` (gui/src/ui.tsx:96-112) has no `trigger` prop and gets
+none. Keep the existing `<Select … placement="right" portal={false}>` inside
+`.lang-toggle.lang-toggle--icon`; CSS sizes the trigger to a 28px orb and hides its text/chevron
+children (`.lang-toggle--icon .select-trigger { width:28px; height:28px; padding:0; border-radius:50% }`,
+`.lang-toggle--icon .select-trigger > :not(svg) { display:none }` — confirm the trigger's child
+markup in ui.tsx at B and target exactly those). The sibling `<IconGlobe aria-hidden/>` is
+absolutely positioned over the trigger with `pointer-events:none`. The `trigger={…}` line in the
+After snippet is NOT written; read it as "existing Select, icon-sized by CSS".
 
 ### MODIFY gui/src/components/sidebar-github-row.tsx
 
 - Delete the star orb JSX (L134-145), `handleStar`, `starOverride`, `starring`, `starPoll`,
-  `STAR_POLL_MS`, `StarState`/`StarStatus` types, `IconStar` import. The star capability
-  remains reachable: `POST /api/github/star` and the dashboard update dialog are untouched
-  (AGENTS_INSTALL.md consent rule: the GUI never auto-stars; removing the button only removes
-  a prompt surface).
+  `STAR_POLL_MS`, `StarState`/`StarStatus` types, `IconStar` import. The star action is RELOCATED, not deleted (audit blocker 1: the update dialog has no star
+  control today). NEW `gui/src/components/github-star-button.tsx`: move `handleStar`,
+  `starOverride`, `starring`, `starPoll`, `STAR_POLL_MS`, `StarState`/`StarStatus` and the
+  button JSX (sidebar-github-row.tsx L54-99, L134-145) verbatim into
+  `export function GithubStarButton({ apiBase })` rendering a `.btn.btn-ghost.btn-sm` with the
+  same labels. Mount it in `gui/src/pages/dashboard-dialogs.tsx` update dialog footer (L24-52
+  region). One dialog, one poll, only while open. Consent rule unchanged: still a human click.
 - The GitHub link becomes an icon orb: `<a className="sidebar-orb" href={REPO_URL} target="_blank" rel="noreferrer" aria-label={t("common.github")} title={t("common.github")}><IconGithub/></a>`.
 - Update orb unchanged (dot when `updateAvailable`).
 - Wrapper: `<>{link}{update}</>` — the row container is now App's `.sidebar-foot-row`.

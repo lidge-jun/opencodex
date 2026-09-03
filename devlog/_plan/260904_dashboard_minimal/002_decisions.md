@@ -88,3 +88,14 @@ work-phase that lands it. Votes: number of reviewers proposing remove/collapse/d
 Each phase's C runs: typecheck, lint:gui, lint:i18n (when copy changes), focused gui tests +
 `cd gui && bun test tests`, `cd gui && bun run build`, privacy:scan, and a ko 1440 px
 before/after screenshot pair with a DOM count of visible interactive controls and text nodes.
+
+## Gate note (audit blocker 8) and a11y rule
+
+- PR-ready gate: AGENTS.md L207-209 requires `bun run typecheck` + `bun run test` before a
+  non-trivial PR is review-ready. The user forbade the repository-wide local suite for this
+  task; hosted CI `gates` + `test N/4` shards on the exact head are the equivalent. Each
+  phase's D records the CI rollup at merge and never claims a local full-suite run. This is a
+  recorded, user-authorized deviation.
+- Accessibility rule for every phase: information never moves to a `title` attribute alone;
+  it becomes a visible sub-line, a disclosure body, or a focusable `Tooltip` trigger.
+  Disclosures are labelled disclosures (aria-expanded), never called menus.

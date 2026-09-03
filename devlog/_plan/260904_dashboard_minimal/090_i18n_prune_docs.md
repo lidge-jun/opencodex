@@ -4,7 +4,10 @@ Depends on: 010-080 all landed on dev.
 
 ## Procedure
 
-1. Orphan detection: for every key in `gui/src/i18n/en.ts`, `rg -n --fixed-strings '"<key>"' gui/src --glob '!i18n/*'`
+1. Orphan detection: for every key in `gui/src/i18n/en.ts`,
+   `rg -n --fixed-strings '"<key>"' gui/src --glob '!gui/src/i18n/**'` (audit blocker 7: the glob
+   is repo-root-relative; `!i18n/*` excluded nothing). The script additionally drops any hit whose
+   path starts with `gui/src/i18n/` before counting consumers.
    (plus the `Trans k=` and `as TKey` dynamic patterns: `models.v2Mode_`, `startup.summary.`,
    `logs.detail.reason.` — keep any key whose prefix appears in a template literal). Script it
    as `gui/scripts/find-orphan-keys.mjs` (NEW, ~40 lines) and run it; the output list is the
@@ -15,12 +18,19 @@ Depends on: 010-080 all landed on dev.
    `startup.backToDashboard`, `logs.subtitle`, `pws.dashboard.subtitle`, `models.orderHint`
    (if the tooltip reuses it, it stays).
 2. Delete each from all 9 locale files (they are flat objects; `sed` per key is fine).
-3. `cd gui && bun run lint:i18n` must stay green; `gui/tests/locale-parity.test.ts` ("every locale key
-   set matches the English source") is the verifier that all nine moved together.
-4. docs-site: `rg -n -i 'dashboard|대시보드' docs-site/src/content/docs --files-with-matches`;
-   update pages that describe the dashboard tabs, the sidebar star button, the Models
-   controls row, or the Integrations tab strip. English source first, then the translated
-   locales must not contradict it (AGENTS.md docs-sync rule).
+3. The real i18n gate is `gui/tests/locale-parity.test.ts` + `bun run typecheck`
+   (`Record<TKey,string>`); `cd gui && bun run lint:i18n` is only the hardcoded-string oxlint
+   rule and proves nothing about catalog parity (audit blocker 7).
+4. docs-site file map (audit blocker 3): `docs-site/src/content/docs/guides/web-dashboard.md`
+   L59-62 ("Dashboard sections are addressable … `#dashboard/providers` and `#dashboard/models`
+   open the other two") → "`#dashboard` is the overview; older `#dashboard/providers` and
+   `#dashboard/models` bookmarks redirect to `#providers` and `#models`." Same paragraph in the
+   7 locale copies `docs-site/src/content/docs/{ko,ja,zh,zh-tw,de,fr,ru}/guides/web-dashboard.md`
+   (ko: L53; list with `ls docs-site/src/content/docs/*/guides/web-dashboard.md`). Also grep each
+   for star/별표, "Available models"/"사용 가능한 모델", "Active providers", and the Models
+   controls-row wording and rewrite to the post-030/040 surface. Per-locale before/after is
+   written at this phase's P after 010-080 landed (copy depends on what shipped); the English
+   sentence above is the source.
 
 ## Tests
 

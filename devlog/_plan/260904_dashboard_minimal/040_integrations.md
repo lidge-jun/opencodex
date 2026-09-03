@@ -8,13 +8,13 @@ Depends on: nothing.
 
 - Delete `<p className="page-sub">{t("integrations.subtitle")}</p>`.
 - Tab strip: split `TABS` into `primary` (overview, keys, + every client whose state from the
-  overview's `clients` resource is `installed || applied`) and `secondary` (rest). Render
-  primary tabs inline; render secondary under a `<details className="page-tabs-more">` whose
-  `<summary>` reads `t("integrations.moreClients", { count })`. The `role="tablist"` stays on
-  the primary strip; secondary tabs keep `role="tab"` inside the details (still one tablist by
-  `aria-owns` — or simpler: put the details INSIDE the tablist div so DOM order == a11y order).
-  Keyboard: `handleTabKeyDown` iterates `TABS` — unchanged; an arrow into a hidden tab opens
-  the details (`detailsRef.current.open = true`) before focusing.
+  overview's `clients` resource is `installed || applied`) and `secondary` (rest). DECIDED (audit blockers 3+6): ONE tablist containing ALL tabs in TABS order; secondary tabs
+  carry `hidden` while `moreOpen === false`. The disclosure control is a plain
+  `<button aria-expanded={moreOpen} aria-controls={tablistId}>` rendered AFTER the tablist
+  (outside it), text `t("integrations.moreClients", { count })`. No `<details>`, no `aria-owns`.
+  Keyboard: `handleTabKeyDown` already walks `TABS`; its next-index search skips hidden tabs
+  unless `moreOpen`. When `tab` (from the hash) is a secondary id, set `moreOpen = true` on
+  mount/hash change so the selected tab is always visible.
 - The client-state source: Integrations.tsx does not load client states today (the overview
   does). Lift `useClientStates`-equivalent one level: check `IntegrationsOverview.tsx:298`
   (`clients`, `installedFileClients`) and its resource hook; move the hook call to

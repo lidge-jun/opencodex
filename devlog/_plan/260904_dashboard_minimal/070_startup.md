@@ -4,10 +4,13 @@ Depends on: 020 (the Codex-autostart toggle removed from the dashboard is re-hom
 
 ## File change map
 
-### MODIFY gui/src/pages/Startup.tsx (L318-332, L355-420)
+### MODIFY gui/src/pages/Startup.tsx (L318-332) and gui/src/pages/startup-sections.tsx (L236-262)
 
-- Page head: delete the 대시보드로 돌아가기 button; keep 새로고침. Subtitle → `title` on the h2
-  (`<h2 title={t("startup.subtitle")}>`), delete the `<p>`.
+- Page head: delete the 대시보드로 돌아가기 button; keep 새로고침. Subtitle: delete the `<p>`; the
+  sentence becomes a visible `.muted` line inside the hero card under `startup.safeDetail`
+  (audit blocker 5: not a `title`).
+- Data note: Startup reads `/api/startup-health` (L141) and already fetches `/api/settings`
+  (L133); the autostart toggle was rehomed here in 020 via `useCodexAutostart`.
 - Recovery section (`startup-sections.tsx:236-262` `startup-actions` panel): wrap the
   `.startup-command-list` in `<details open={!protected}>` inside the panel; the panel head +
   hint stay as the summary.
@@ -16,12 +19,7 @@ Depends on: 020 (the Codex-autostart toggle removed from the dashboard is re-hom
 
 - Replace `.startup-state-grid` (three `.stat`) with one line under the hero:
   `<p className="muted startup-state-line">{t(routingKey)} · {t(PROTECTION_KEYS[data.protection])} · {t(data.autostartEnabled ? "startup.enabled" : "startup.disabled")}</p>`.
-- Add the autostart toggle row (moved from dashboard-overview-sections.tsx:485-505) as a
-  setting row in the 보호 상태 상세 panel, after the shim row: label `dash.codexAutoStart`,
-  hint `dash.codexAutoStartHint`, switch bound to `settings.codexAutoStart`. Data: Startup
-  currently reads `/api/startup`; the toggle needs `/api/settings` — reuse the dashboard's
-  `toggleCodexAutoStart` logic by extracting it to `gui/src/pages/use-codex-autostart.ts`
-  (fetch + PUT), used by Startup only after 020 removed the dashboard caller.
+- The autostart toggle row already exists here after 020 (rehomed atomically there); this phase only repositions it if the 보호 상태 상세 panel is restructured.
 
 ### MODIFY gui/src/styles.css
 

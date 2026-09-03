@@ -29,8 +29,12 @@ v1/base/v2 switch).
 ### Combos — MODIFY gui/src/components/ComboWorkspace.tsx L112-125
 
 - Render `.cwi-search-row` only when `combos.length > 0`.
-- Empty-state detail panel: verify at P whether it renders a full form (R2/R3) — if so, the
-  empty state shows one CTA (`cws.add`) and the form opens via the existing add modal.
+- Empty state DECIDED (audit blocker 3): ComboWorkspace.tsx:52-53 `selected` is null when
+  `combos.length === 0`; the detail panel (combo-workspace-detail-panel.tsx:218+) renders a tab
+  strip + form for that case. Change: when `combos.length === 0 && localBaseline === null` render
+  `<EmptyState title={t("cws.emptyTitle")}><button className="btn btn-primary" onClick={handleAdd}>{t("cws.add")}</button></EmptyState>`
+  instead of the detail panel; the rail's 콤보 추가 (L108) is hidden in that state so there is
+  exactly one CTA. `cws.emptyTitle` is a NEW key.
 
 ### Routing — MODIFY gui/src/pages/RoutingProfiles.tsx L1010-1100
 
@@ -39,7 +43,10 @@ v1/base/v2 switch).
 
 ### i18n
 
-- ADD `sub.advanced` ("Advanced" / "고급"). Orphans: `logs.subtitle`, `pws.dashboard.subtitle` → 090.
+- ADD `sub.advanced` ("Advanced" / "고급") and `cws.emptyTitle` ("No combos yet" / "아직 콤보가 없습니다")
+  to ALL NINE locale files (en, ko, ja, zh, zh-TW, de, fr, ru, tr) in the same commit; non-English
+  catalogs are `Record<TKey,string>`, so a missing key fails typecheck (audit blocker 7).
+  Orphans: `logs.subtitle`, `pws.dashboard.subtitle` → 090.
 
 ### Tests
 

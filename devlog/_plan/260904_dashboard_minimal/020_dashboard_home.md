@@ -41,8 +41,13 @@ else moves to its owning page or is removed as a duplicate.
   `MA_MODE_CACHE_PREFIX` and the dialog in dashboard-dialogs.tsx (`multi-agent-help-dialog`).
 - Remove `shadowCall*` state, refs, `saveShadowCall`, help dialog — Models owns it
   (Models.tsx:345 has its own state).
-- Remove `toggleCodexAutoStart` + `settings`/`settingsSaving` if only the autostart card used
-  them (check `DashboardMaintenancePanel` first; the model-sync card uses other fields).
+- AUTOSTART IS REHOMED IN THIS PHASE (audit blocker 2, PHASE-SPLIT-01). Extract `settings`,
+  `settingsSaving`, `toggleCodexAutoStart` from use-dashboard-data.ts into NEW
+  `gui/src/pages/use-codex-autostart.ts` (`useCodexAutostart(apiBase)` → `{ enabled, saving, toggle }`,
+  GET/PUT `/api/settings` exactly as today). Startup.tsx already fetches `/api/settings`
+  (L133-138); call the hook there and render the toggle row inside the 보호 상태 상세 panel
+  (startup-sections.tsx after the shim row): label `dash.codexAutoStart`, hint
+  `dash.codexAutoStartHint`, same `.switch` button. 070 then only restyles.
 
 ### MODIFY gui/src/app-routing.ts
 
@@ -58,8 +63,10 @@ if (rawHash === "dashboard/models") return { page: "models", replaceTo: "models"
 ### MODIFY gui/src/pages/dashboard-overview-head.tsx (L34-90)
 
 - Delete the multi-agent stat (first `.stat`, L34-64) and its props.
-- Delete the 버전 stat (L79) and the 가동 시간 stat (L80); put uptime + version into the
-  status stat's `title`: `title={`v${health?.version ?? "—"} · ${formatUptime(...)}`}`.
+- Delete the 버전 stat (L79) and the 가동 시간 stat (L80). Uptime + version stay VISIBLE (audit
+  blocker 5: no title-only info): render as the status card's sub-line in the same
+  `.muted.text-label` slot the tokens card uses for coverage (L84-88):
+  `<div className="muted text-label">v{health?.version ?? "—"} · {formatUptime(...)}</div>`.
 - Keep status, providers, tokens(30d)+coverage. `.stat-row` now has 3 cards.
 
 ### MODIFY gui/src/pages/dashboard-overview-panels.tsx
@@ -73,9 +80,21 @@ if (rawHash === "dashboard/models") return { page: "models", replaceTo: "models"
 <details className="panel dash-sidecars"><summary>{t("dash.sidecars")}</summary><DashboardSidecarPanels d={props}/></details>
 <MemoryObservabilityCard …/>
 ```
-Resolve at B by reading each panel's JSX: the names above are guesses from the file; the
-decision table (002 #3-#6) is the authority: 서브에이전트 위임 → remove; Codex 실행 시 시작 →
-remove (moves to 070); shadow-call → remove; sidecars → collapse.
+RESOLVED (audit blocker 3) from dashboard-overview-sections.tsx:
+- `DashboardEffortCapPanel` (L37): effort-cap card, rendered only when maMode !== v1. `maMode`
+  state leaves with this phase, so the panel goes with the v1/base/v2 switch to Subagents in
+  030; until then the cap stays editable via Models' existing v2 row (no gap).
+- `DashboardInjectionPanel` (L120, `.dash-delegation-summary`, `dash.injectionLabel`) = the
+  서브에이전트 위임 card → DELETE (Subagents owns 먼저 부를 모델).
+- `DashboardMaintenancePanel` (L162) = 모델 동기화 + update dialog → KEEP.
+- `DashboardSidecarPanels` (L437) = autostart + web-search + vision + shadow-call → delete the
+  autostart card and shadow-call panel here; wrap web-search + vision in details.
+Final panels.tsx body:
+```tsx
+<DashboardMaintenancePanel d={props} />
+<details className="panel dash-sidecars"><summary className="font-semibold">{t("dash.sidecars")}</summary><DashboardSidecarPanels d={props} /></details>
+<MemoryObservabilityCard apiBase={props.apiBase} />
+```
 
 ### MODIFY gui/src/pages/dashboard-overview-sections.tsx
 
