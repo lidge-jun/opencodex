@@ -333,6 +333,44 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT resets an explicit zero waitForCooldownMs to the sparse default", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+
+      const created = await comboApi(config, "PUT", "/api/combos", {
+        id: "timed",
+        combo: {
+          cooldownMs: 5_000,
+          waitForCooldownMs: 15_000,
+          targets: [{ provider: "a", model: "m1" }],
+        },
+      });
+      expect(created?.status).toBe(200);
+      expect(JSON.parse(readFileSync(getConfigPath(), "utf8"))).toMatchObject({
+        combos: { timed: { cooldownMs: 5_000, waitForCooldownMs: 15_000 } },
+      });
+
+      const reset = await comboApi(config, "PUT", "/api/combos", {
+        id: "timed",
+        combo: {
+          waitForCooldownMs: 0,
+          targets: [{ provider: "a", model: "m1" }],
+        },
+      });
+      expect(reset?.status).toBe(200);
+
+      const listed = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      const timed = (listed.combos as Array<Record<string, unknown>>).find(row => row.id === "timed");
+      expect(timed).toMatchObject({ cooldownMs: 5_000 });
+      expect(timed).not.toHaveProperty("waitForCooldownMs");
+
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persisted.combos?.timed).toMatchObject({ cooldownMs: 5_000 });
+      expect(persisted.combos?.timed).not.toHaveProperty("waitForCooldownMs");
+    });
+  });
+
   test("PUT rejects missing and null combo values with the legacy object error", async () => {
     await withTempHome(async () => {
       const config = baseConfig();
