@@ -74,6 +74,12 @@ describe("capability table is a leaf data module", () => {
     expect(CAPABILITIES.some(c => c.command[0] === "capabilities")).toBe(true);
   });
 
+  test("logs follow does not claim to imply JSONL output", () => {
+    const logs = CAPABILITIES.find(c => c.command.length === 1 && c.command[0] === "logs");
+    const follow = logs?.flags.find(flag => flag.name === "--follow");
+    expect(follow?.summary).toBe("Poll for new rows; add --jsonl to emit JSONL.");
+  });
+
   test("the check-only Codex CLI updater is declared as a local read capability", () => {
     const cap = CAPABILITIES.find(c => c.command.join(" ") === "system codex-cli-update check");
     expect(cap).toBeDefined();

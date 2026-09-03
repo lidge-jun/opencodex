@@ -6,7 +6,7 @@
  * cost the server computes was discarded before reaching the terminal. These
  * tests pin the cost down where a user can see it.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 
 import { handleObserveCommand } from "../src/cli/observe";
 import { formatUsageReport } from "../src/cli/usage-report";
@@ -220,5 +220,65 @@ describe("ocx logs --conversation", () => {
   test("a row with no conversation id does not print an empty conv= marker", async () => {
     const { out } = await run(["logs"], [{ timestamp: "t0", status: 200, provider: "xai", model: "grok-4.6" }]);
     expect(out).not.toContain("conv=");
+  });
+});
+
+describe("ocx logs --follow output contract", () => {
+  test("--follow --json names the conflict without implying that follow enables JSONL", async () => {
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+    try {
+      const code = await handleObserveCommand(
+        ["logs", "--follow", "--json"],
+        { baseUrl: "http://cli.test", fetchImpl: async () => new Response("[]") },
+      );
+      expect(code).toBe(2);
+      expect(errors.join("\n"))
+        .toContain("--follow cannot be combined with --json; use --jsonl for streaming JSONL");
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("--follow alone keeps human-readable rows", async () => {
+    const rows = [{
+      id: "row-1",
+      timestamp: "t0",
+      status: 200,
+      provider: "xai",
+      model: "grok-4.6",
+      durationMs: 12,
+      conversationId: "conv-7",
+    }];
+    const lines: string[] = [];
+    const errors: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+    const sleep = spyOn(Bun, "sleep").mockImplementation(async () => {
+      throw new Error("stop after first follow poll");
+    });
+    console.log = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+    console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+    try {
+      const code = await handleObserveCommand(
+        ["logs", "--follow"],
+        {
+          baseUrl: "http://cli.test",
+          fetchImpl: async () => new Response(JSON.stringify(rows), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        },
+      );
+      expect(code).toBe(1);
+      expect(lines).toEqual(["t0  200  xai/grok-4.6  12ms  conv=conv-7"]);
+      expect(lines[0]?.startsWith("{")).toBe(false);
+      expect(errors.join("\n")).toContain("stop after first follow poll");
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+      sleep.mockRestore();
+    }
   });
 });
