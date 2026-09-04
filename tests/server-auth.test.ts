@@ -4175,6 +4175,10 @@ describe("server local API auth", () => {
       expect((await reader.read()).done).toBe(false);
       (await source.promise).error(new Error("fixture upstream connection reset"));
       while (!(await reader.read()).done) { /* drain the synthetic failed terminal */ }
+      const deadline = Date.now() + INTERNAL_DEADLINE_MS;
+      while (!getRequestLogEntries().some(entry => entry.requestId === requestId) && Date.now() < deadline) {
+        await Bun.sleep(5);
+      }
       const logs = getRequestLogEntries().filter(entry => entry.requestId === requestId);
       expect(logs).toHaveLength(1);
       expect(logs[0]).toMatchObject({ status: 502, closeReason: "terminal", terminalStatus: "failed" });
