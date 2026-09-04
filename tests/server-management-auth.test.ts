@@ -1581,7 +1581,7 @@ describe("management and data-plane credential separation", () => {
 
 describe("codex app-server restart routes ride the management gate", () => {
   // The service itself is unit-tested with injected seams
-  // (tests/codex-app-server-restart-service.test.ts). These cases exist for one
+  // (tests/codex-integration/codex-app-server-restart-service.test.ts). These cases exist for one
   // reason: the route terminates the user's Codex app-servers, so it must be
   // unreachable without management credentials and from a foreign origin.
   test("both routes reject an unauthenticated caller and a cross-origin caller", async () => {

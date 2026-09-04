@@ -175,7 +175,7 @@
 ### Task 12: Move catalog timeout to the flaky test only
 
 **Files:**
-- Modify: `tests/codex-catalog-sync-hardening.test.ts`
+- Modify: `tests/codex-integration/codex-catalog-sync-hardening.test.ts`
 - Modify: `scripts/ci/run-bun-test-batches.sh`
 
 **Interfaces:**

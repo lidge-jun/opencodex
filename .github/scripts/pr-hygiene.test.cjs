@@ -225,7 +225,7 @@ describe("collectDeterministicHygieneFailures", () => {
     const failures = collectDeterministicHygieneFailures({
       files: [
         { filename: "src/codex/auth-api.ts", patch: "+change" },
-        { filename: "tests/codex-auth-api.test.ts", patch: "+test" },
+        { filename: "tests/codex-integration/codex-auth-api.test.ts", patch: "+test" },
       ],
       authorHasPushPermission: true,
     });

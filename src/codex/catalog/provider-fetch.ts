@@ -717,7 +717,7 @@ function configuredVerbositySupport(name: string, prov: OcxProviderConfig | unde
   // Read from the PROVIDER CONFIG, never from PROVIDER_REGISTRY. A gather flight captures its
   // registry authority up front and forbids any later registry read, so consulting the registry
   // here made a custom-destination flight fall back to "configured" instead of serving its own
-  // discovery result (tests/codex-gather-authority.test.ts). `applyVerbosityDefaults` in
+  // discovery result (tests/codex-integration/codex-gather-authority.test.ts). `applyVerbosityDefaults` in
   // providers/derive.ts materializes the registry default into the config at seed/enrich time.
   return prov.supportsVerbosity;
 }

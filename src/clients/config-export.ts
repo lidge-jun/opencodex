@@ -740,7 +740,7 @@ function outputBudgetFor(context: number): number {
  * single `audio` model takes every routed model down with it. That is not
  * hypothetical: zenmux/meta-muse-spark-1.1 advertises audio and did exactly
  * this. It is also the same defect the Codex catalog had with `video`, where
- * the app showed zero apps (tests/catalog-input-modality-enum.test.ts).
+ * the app showed zero apps (tests/codex-integration/catalog-input-modality-enum.test.ts).
  *
  * UNKNOWN and INCOMPATIBLE are different inputs, and the Codex fix could
  * conflate them safely only because its enum is wider. A model with nothing

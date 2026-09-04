@@ -33,11 +33,11 @@
 - `src/codex/catalog/provider-fetch.ts`: resolves operator display names at the shared catalog boundary.
 - `src/server/management/model-rows.ts`: exposes effective display names and their source.
 - `src/server/management/model-routes.ts`: sets and resets one provider model display name.
-- `tests/provider-config-validation.test.ts`: covers strict validator behavior.
+- `tests/providers/provider-config-validation.test.ts`: covers strict validator behavior.
 - `tests/config/config-load-degrade.test.ts`: covers safe hand edited config loading.
 - `tests/config/config-user-edits.test.ts`: covers persistence and concurrent unrelated map edits.
-- `tests/codex-catalog.test.ts`: covers label precedence and routing invariants.
-- `tests/model-display-names-management-api.test.ts`: covers read and mutation API behavior.
+- `tests/codex-integration/codex-catalog.test.ts`: covers label precedence and routing invariants.
+- `tests/codex-integration/model-display-names-management-api.test.ts`: covers read and mutation API behavior.
 - `docs-site/src/content/docs/reference/configuration/providers.md`: documents the field and exact key rules.
 - `structure/02_config-and-codex-home.md`: records the new persisted provider field.
 - `structure/03_catalog-and-subagents.md`: records display precedence at catalog assembly.
@@ -50,7 +50,7 @@
 - Modify: `src/types/provider.ts`
 - Modify: `src/config/provider-validation.ts`
 - Modify: `src/config.ts`
-- Test: `tests/provider-config-validation.test.ts`
+- Test: `tests/providers/provider-config-validation.test.ts`
 - Test: `tests/config/config-load-degrade.test.ts`
 
 **Interfaces:**
@@ -75,7 +75,7 @@ expect(modelDisplayNamesConfigError({ "grok-4.6": "Grok\n4.6" })).toContain("con
 Run:
 
 ```text
-bun test tests/provider-config-validation.test.ts
+bun test tests/providers/provider-config-validation.test.ts
 ```
 
 Expected: failure because `modelDisplayNamesConfigError` does not exist.
@@ -105,7 +105,7 @@ The validator accepts only a plain own property object, at most 2,000 entries, e
 Run:
 
 ```text
-bun test tests/provider-config-validation.test.ts
+bun test tests/providers/provider-config-validation.test.ts
 ```
 
 Expected: all tests pass.
@@ -126,7 +126,7 @@ Write a real config file fixture containing one valid and one invalid label. Ass
 Run:
 
 ```text
-bun test tests/config/config-load-degrade.test.ts tests/provider-config-validation.test.ts
+bun test tests/config/config-load-degrade.test.ts tests/providers/provider-config-validation.test.ts
 ```
 
 Expected: the candidate accepts unvalidated values or the load path does not sanitize them.
@@ -152,7 +152,7 @@ Add `sanitizeModelDisplayNamesForLoad(parsed)` before `configSchema.safeParse(pa
 Run:
 
 ```text
-bun test tests/config/config-load-degrade.test.ts tests/provider-config-validation.test.ts
+bun test tests/config/config-load-degrade.test.ts tests/providers/provider-config-validation.test.ts
 ```
 
 Expected: all tests pass with no unexpected warnings.
@@ -160,7 +160,7 @@ Expected: all tests pass with no unexpected warnings.
 - [ ] **Step 9: Commit the config contract**
 
 ```text
-git add src/types/provider.ts src/config/provider-validation.ts src/config.ts tests/provider-config-validation.test.ts tests/config/config-load-degrade.test.ts
+git add src/types/provider.ts src/config/provider-validation.ts src/config.ts tests/providers/provider-config-validation.test.ts tests/config/config-load-degrade.test.ts
 git commit -m "feat(config): add discovered model display names"
 ```
 
@@ -170,7 +170,7 @@ git commit -m "feat(config): add discovered model display names"
 
 **Files:**
 - Modify: `src/codex/catalog/provider-fetch.ts`
-- Test: `tests/codex-catalog.test.ts`
+- Test: `tests/codex-integration/codex-catalog.test.ts`
 
 **Interfaces:**
 - Consumes: `OcxProviderConfig.modelDisplayNames`
@@ -195,7 +195,7 @@ Cover exact case sensitive matching, same native ID under two providers, operato
 Run:
 
 ```text
-bun test tests/codex-catalog.test.ts
+bun test tests/codex-integration/codex-catalog.test.ts
 ```
 
 Expected: the discovered row keeps its old metadata or slug instead of the configured label.
@@ -224,7 +224,7 @@ Add `modelDisplayNames` to `providerCatalogFingerprint`, because `gatherFlightKe
 Run:
 
 ```text
-bun test tests/codex-catalog.test.ts
+bun test tests/codex-integration/codex-catalog.test.ts
 ```
 
 Expected: all catalog tests pass and routing identity stays byte equivalent.
@@ -232,7 +232,7 @@ Expected: all catalog tests pass and routing identity stays byte equivalent.
 - [ ] **Step 5: Commit catalog propagation**
 
 ```text
-git add src/codex/catalog/provider-fetch.ts tests/codex-catalog.test.ts
+git add src/codex/catalog/provider-fetch.ts tests/codex-integration/codex-catalog.test.ts
 git commit -m "feat(catalog): apply provider model display names"
 ```
 
@@ -243,7 +243,7 @@ git commit -m "feat(catalog): apply provider model display names"
 **Files:**
 - Modify: `src/server/management/model-rows.ts`
 - Modify: `src/server/management/model-routes.ts`
-- Create: `tests/model-display-names-management-api.test.ts`
+- Create: `tests/codex-integration/model-display-names-management-api.test.ts`
 
 **Interfaces:**
 - Produces: `ManagementModelRow.displayNameSource?: "operator" | "provider" | "fallback"`
@@ -261,7 +261,7 @@ Use `listManagementModelRows` with a real provider model fixture. Assert the row
 Run:
 
 ```text
-bun test tests/model-display-names-management-api.test.ts
+bun test tests/codex-integration/model-display-names-management-api.test.ts
 ```
 
 Expected: `displayNameOverride` and `displayNameSource` are absent.
@@ -282,7 +282,7 @@ Use `operator` when the exact configured map owns the ID, `provider` when `Catal
 Run:
 
 ```text
-bun test tests/model-display-names-management-api.test.ts
+bun test tests/codex-integration/model-display-names-management-api.test.ts
 ```
 
 Expected: read tests pass.
@@ -309,7 +309,7 @@ Use a persistence seam that clones the actual config snapshot. Assert final stat
 Run:
 
 ```text
-bun test tests/model-display-names-management-api.test.ts
+bun test tests/codex-integration/model-display-names-management-api.test.ts
 ```
 
 Expected: route returns `null` or 404 because it is not registered.
@@ -345,7 +345,7 @@ Do not require the model ID to exist in live discovery.
 Run:
 
 ```text
-bun test tests/model-display-names-management-api.test.ts
+bun test tests/codex-integration/model-display-names-management-api.test.ts
 ```
 
 Expected: all API tests pass.
@@ -367,7 +367,7 @@ If the first run passes, record that the existing recursive provider merge alrea
 - [ ] **Step 11: Commit the management API**
 
 ```text
-git add src/server/management/model-rows.ts src/server/management/model-routes.ts tests/model-display-names-management-api.test.ts tests/config/config-user-edits.test.ts src/config.ts
+git add src/server/management/model-rows.ts src/server/management/model-routes.ts tests/codex-integration/model-display-names-management-api.test.ts tests/config/config-user-edits.test.ts src/config.ts
 git commit -m "feat(api): manage discovered model display names"
 ```
 
@@ -441,7 +441,7 @@ Check exact ID matching, no route identity changes, no secret fields in DTOs, no
 - [ ] **Step 2: Run focused tests**
 
 ```text
-bun test tests/provider-config-validation.test.ts tests/config/config-load-degrade.test.ts tests/config/config-user-edits.test.ts tests/codex-catalog.test.ts tests/model-display-names-management-api.test.ts
+bun test tests/providers/provider-config-validation.test.ts tests/config/config-load-degrade.test.ts tests/config/config-user-edits.test.ts tests/codex-integration/codex-catalog.test.ts tests/codex-integration/model-display-names-management-api.test.ts
 ```
 
 Expected: all pass.

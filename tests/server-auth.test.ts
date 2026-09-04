@@ -3435,7 +3435,7 @@ describe("server local API auth", () => {
   // attacker-controlled bytes back to the client is precisely what #2398 stopped, so the
   // caller now gets #452's bounded status-only JSON instead of the original prefix
   // (pinned from the other side by "oversized passthrough errors become bounded
-  // status-only JSON" in tests/issue-452-empty-503.test.ts).
+  // status-only JSON" in tests/codex-integration/issue-452-empty-503.test.ts).
   //
   // The upstream's own headers still survive, which is what keeps pool-retry diagnostics
   // honest — that part is still checked below.

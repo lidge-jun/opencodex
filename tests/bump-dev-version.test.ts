@@ -156,7 +156,7 @@ describe("dev version bump rule", () => {
 
   // Skipped on Windows: `chmod 0500` is not access control there, so the write would
   // succeed and this test would fail red for a reason that has nothing to do with the
-  // behavior under test. Same guard as tests/codex-native-residue.test.ts uses for its
+  // behavior under test. Same guard as tests/codex-integration/codex-native-residue.test.ts uses for its
   // EACCES case. The POSIX runners still cover the failure path.
   const unwritableTest = process.platform === "win32" ? test.skip : test;
   unwritableTest("an unwritable target fails closed with the original intact", () => {

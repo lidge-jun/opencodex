@@ -230,7 +230,7 @@ is omitted *and* the `model`/`reasoning_effort` schema fields are removed). And 
 Codex-visible `priority` while `SPAWN_PRIORITY_FIELD` preserves the natural priority the roster
 sorts by, so a display reorder can never change candidate membership. That divergence from
 upstream's own ordering is the feature's purpose, not a defect —
-`tests/codex-catalog-model-picker-order.test.ts` pins it.
+`tests/codex-integration/codex-catalog-model-picker-order.test.ts` pins it.
 
 Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent_v2_and_history_perf/013_five_cap_v1_vs_v2.md`.
 

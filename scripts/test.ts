@@ -325,9 +325,9 @@ export function resolveBunTestArgs(
 // Paths relative to tests/. An entry moves with its file (scripts/test-layout/move.ts rewrites
 // it); the lane label, the ignore glob, and the timeout table all key on the basename.
 export const SERIAL_FULL_SUITE_FILES = [
-  "codex-shim.test.ts",
-  "cursor-native-exec-shell.test.ts",
-  "issue-452-empty-503.test.ts",
+  "codex-integration/codex-shim.test.ts",
+  "providers/cursor/cursor-native-exec-shell.test.ts",
+  "codex-integration/issue-452-empty-503.test.ts",
   "adapters/openai/openai-provider-option-e2e.test.ts",
   "release-helper.test.ts",
   "update/update-stop-first.test.ts",

@@ -209,7 +209,7 @@ EOF
 
 **Files:**
 - Modify: `src/oauth/index.ts` (`refreshAndPersistAccessToken` generic branch ~352–400)
-- Test: `tests/oauth/oauth-refresh-generic-lock.test.ts` (new; mirror patterns from `tests/xai-refresh-lock.test.ts` / `tests/oauth/oauth-refresh.test.ts`)
+- Test: `tests/oauth/oauth-refresh-generic-lock.test.ts` (new; mirror patterns from `tests/providers/xai/xai-refresh-lock.test.ts` / `tests/oauth/oauth-refresh.test.ts`)
 
 **Interfaces:**
 - Consumes: `createOAuthRefreshIntentLock`, `mergeAccountCredential`, `credentialGeneration`, `markAccountNeedsReauthIfGeneration`, `getAccountCredential`, `logOAuthEvent`
@@ -308,7 +308,7 @@ Also log `"OAuth refresh joined existing operation"` when `tokenRefreshes.get(ke
 Run:
 
 ```bash
-bun test tests/oauth/oauth-refresh-generic-lock.test.ts tests/oauth/oauth-refresh.test.ts tests/xai-refresh-lock.test.ts
+bun test tests/oauth/oauth-refresh-generic-lock.test.ts tests/oauth/oauth-refresh.test.ts tests/providers/xai/xai-refresh-lock.test.ts
 ```
 
 Expected: PASS (no regressions on xAI/Anthropic)
@@ -420,7 +420,7 @@ Set `action` strings:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `bun test tests/oauth/oauth-health.test.ts tests/codex-routing.test.ts`
+Run: `bun test tests/oauth/oauth-health.test.ts tests/codex-integration/codex-routing.test.ts`
 
 Expected: PASS
 
@@ -502,7 +502,7 @@ EOF
 
 **Files:**
 - Modify: `src/cli/doctor.ts`
-- Test: `tests/service/doctor-oauth.test.ts` (or extend `tests/doctor.test.ts`)
+- Test: `tests/service/doctor-oauth.test.ts` (or extend `tests/codex-integration/doctor.test.ts`)
 
 **Interfaces:**
 - Consumes: `collectOAuthHealthEntries`, auth store writability checks, refresh lock path helpers if exported
@@ -529,7 +529,7 @@ Add `collectOAuthDoctorChecks(): Array<{ level: "OK" | "WARN"; message: string }
 
 - [ ] **Step 4: Run tests**
 
-Run: `bun test tests/service/doctor-oauth.test.ts tests/doctor.test.ts`
+Run: `bun test tests/service/doctor-oauth.test.ts tests/codex-integration/doctor.test.ts`
 
 Expected: PASS
 
@@ -607,9 +607,9 @@ EOF
 ### Task 8: Codex metadata integrity regressions + 401 replay invariants
 
 **Files:**
-- Test: `tests/codex-metadata-integrity.test.ts` (new)
+- Test: `tests/codex-integration/codex-metadata-integrity.test.ts` (new)
 - Modify only if a real gap is found: `src/codex/auth-context.ts`, `src/adapters/openai-responses.ts`
-- Confirm existing: `tests/server-xai-oauth-401-replay.test.ts`, `tests/server-kiro-oauth-401-replay.test.ts`, `tests/codex-routing.test.ts` (policy A)
+- Confirm existing: `tests/server-xai-oauth-401-replay.test.ts`, `tests/server-kiro-oauth-401-replay.test.ts`, `tests/codex-integration/codex-routing.test.ts` (policy A)
 
 **Interfaces:**
 - Consumes: `headersForCodexAuthContext`, `FORWARD_HEADERS`
@@ -644,7 +644,7 @@ test("preserves genuine originator", () => {
 
 - [ ] **Step 2: Run tests**
 
-Run: `bun test tests/codex-metadata-integrity.test.ts`
+Run: `bun test tests/codex-integration/codex-metadata-integrity.test.ts`
 
 Expected: FAIL only if implementation gap exists; if PASS immediately, keep tests as regressions and skip code changes.
 
@@ -655,7 +655,7 @@ If fabrication or account-id mismatch is found, fix the minimal header path. Do 
 - [ ] **Step 4: Run related suite**
 
 ```bash
-bun test tests/codex-metadata-integrity.test.ts tests/codex-auth-context.test.ts tests/codex-routing.test.ts tests/session-affinity.test.ts tests/server-xai-oauth-401-replay.test.ts tests/server-kiro-oauth-401-replay.test.ts
+bun test tests/codex-integration/codex-metadata-integrity.test.ts tests/codex-integration/codex-auth-context.test.ts tests/codex-integration/codex-routing.test.ts tests/session-affinity.test.ts tests/server-xai-oauth-401-replay.test.ts tests/server-kiro-oauth-401-replay.test.ts
 ```
 
 Expected: PASS
@@ -663,7 +663,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tests/codex-metadata-integrity.test.ts src/codex/auth-context.ts src/adapters/openai-responses.ts
+git add tests/codex-integration/codex-metadata-integrity.test.ts src/codex/auth-context.ts src/adapters/openai-responses.ts
 git commit -m "$(cat <<'EOF'
 test(codex): lock metadata pass-through and non-fabrication
 
@@ -713,8 +713,8 @@ EOF
 - [ ] **Step 1: Run verification commands**
 
 ```bash
-bun test tests/lib/privacy-mask-account.test.ts tests/oauth/oauth-log.test.ts tests/oauth/oauth-refresh-generic-lock.test.ts tests/oauth/oauth-health.test.ts tests/cli/cli-status-oauth-health.test.ts tests/service/doctor-oauth.test.ts tests/oauth/oauth-accounts-api.test.ts tests/codex-metadata-integrity.test.ts
-bun test tests/oauth/oauth-refresh.test.ts tests/xai-refresh-lock.test.ts tests/codex-routing.test.ts tests/session-affinity.test.ts tests/codex-auth-context.test.ts
+bun test tests/lib/privacy-mask-account.test.ts tests/oauth/oauth-log.test.ts tests/oauth/oauth-refresh-generic-lock.test.ts tests/oauth/oauth-health.test.ts tests/cli/cli-status-oauth-health.test.ts tests/service/doctor-oauth.test.ts tests/oauth/oauth-accounts-api.test.ts tests/codex-integration/codex-metadata-integrity.test.ts
+bun test tests/oauth/oauth-refresh.test.ts tests/providers/xai/xai-refresh-lock.test.ts tests/codex-integration/codex-routing.test.ts tests/session-affinity.test.ts tests/codex-integration/codex-auth-context.test.ts
 bun run test
 bun run typecheck
 bun run lint:gui

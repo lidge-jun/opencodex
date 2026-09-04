@@ -671,7 +671,7 @@ function isAccountBoundOpenAiNativeSlug(slug: string): boolean {
  * malformed and minimal hand-written rows. It cannot distinguish a genuine upstream observation
  * from a complete row typed by hand into `$CODEX_HOME/models_cache.json`: there is no signature,
  * source identity, or server attestation to check. A full-shape forged row is accepted, and
- * `observedFullShapeRowIsAccepted` in tests/native-model-toggle.test.ts pins that so nobody
+ * `observedFullShapeRowIsAccepted` in tests/codex-integration/native-model-toggle.test.ts pins that so nobody
  * later mistakes this predicate for a security boundary.
  *
  * That is acceptable here because the file is user-owned and written by Codex itself: anyone

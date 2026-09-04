@@ -632,7 +632,7 @@ const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
  * `mimo-v2.5-free` and `longcat-2.0-free` ACCEPT images and are deliberately
  * absent. Adding them would silently replace a working image with a caption,
  * which is worse than the loud 400 this list exists to prevent — see the negative
- * assertion in tests/provider-registry-parity.test.ts.
+ * assertion in tests/providers/provider-registry-parity.test.ts.
  *
  * Zen's roster is discovered live while this list is static, so it is a dated
  * exception list, not a capability model. Re-probe before extending it.
@@ -688,7 +688,7 @@ const DEEPSEEK_FLASH_REASONING_MAP: Record<string, string> = {
 /**
  * Flash-versus-Pro classification for DeepSeek V4 model ids, including prefixed
  * (`deepseek/deepseek-v4-pro`) and suffixed (`deepseek-v4-flash-free`) forms.
- * `tests/provider-registry-parity.test.ts` enumerates every id the registry
+ * `tests/providers/provider-registry-parity.test.ts` enumerates every id the registry
  * actually passes here, so a future id this substring test would misread cannot
  * land silently.
  */
@@ -1541,7 +1541,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_CONTEXT_WINDOW])),
     // text+image only. Meta also documents video, audio (degraded on 1.3), and PDF, but
     // the catalog modality enum is text/image and over-advertising poisons the exported
-    // client config (see tests/catalog-input-modality-enum.test.ts).
+    // client config (see tests/codex-integration/catalog-input-modality-enum.test.ts).
     modelInputModalities: Object.fromEntries(META_MUSE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
     modelReasoningEfforts: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORTS])),
     modelReasoningEffortMap: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORT_MAP])),

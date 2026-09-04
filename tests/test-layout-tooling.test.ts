@@ -82,11 +82,15 @@ describe("scanEscapes", () => {
       'const c = copyFileSync(join(import.meta.dir, "helpers", "child.ts"), out);',
       'const d = join(import.meta.dir, "..");',
       'const e = fileURLToPath(new URL("../", import.meta.url));',
+      'const f = readFileSync(join(import.meta.dir, "fixtures/x.json"), "utf8");',
+      'const g = join(import.meta.dir, "helpers/child.ts");',
       'const local = join(import.meta.dir, ".tmp-x");',
     ].join("\n");
     const { source, rewrites } = rewriteMetaDirEscapes(src, 1);
-    expect(rewrites).toBe(5);
-    expect(source).toContain('import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";');
+    expect(rewrites).toBe(7);
+    expect(source).toContain('import { fixturePath, helperPath, repoPath, repoRoot } from "../helpers/repo-root";');
+    expect(source).toContain('readFileSync(fixturePath("x.json"), "utf8")');
+    expect(source).toContain('const g = helperPath("child.ts");');
     expect(source).toContain('readFileSync(repoPath("src", "cli", "index.ts"), "utf8")');
     expect(source).toContain('repoPath("src/lib/winsw.ts")');
     expect(source).toContain('copyFileSync(helperPath("child.ts"), out)');
@@ -123,6 +127,20 @@ describe("scanEscapes", () => {
     expect(out.source).toContain("const repoRoot = resolveRepoRoot();");
     expect(out.source).toContain('readFileSync(join(repoRoot, rel), "utf8")');
     expect(scanEscapes(out.source)).toEqual([]);
+
+    // A second escape in the same file must call the alias, never the local string; and a
+    // dynamic import() deep in the file must not drag the helper import to the bottom.
+    const two = 'import { join } from "node:path";\nconst repoRoot = join(import.meta.dir, "..");\nasync function f() {\n  const m = await import("../src/x");\n  return { cwd: join(import.meta.dir, "..") };\n}\n';
+    const outTwo = rewriteMetaDirEscapes(two, 1);
+    expect(outTwo.source.split("\n")[1]).toBe('import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";');
+    expect(outTwo.source).toContain("return { cwd: resolveRepoRoot() };");
+    expect(outTwo.source).not.toContain("repoRoot()");
+
+    // A file whose last line is a stray import still gets the helper in the leading block.
+    const trailing = 'import { join } from "node:path";\n\nconst r = join(import.meta.dir, "..");\nimport { X } from "../helpers/x";\n';
+    const outTrailing = rewriteMetaDirEscapes(trailing, 1).source.split("\n");
+    expect(outTrailing[1]).toBe('import { repoRoot } from "../helpers/repo-root";');
+    expect(outTrailing[outTrailing.length - 2]).toBe('import { X } from "../helpers/x";');
 
     const url = 'import { join } from "node:path";\nconst root = new URL("../../", import.meta.url);\nconst t = await Bun.file(new URL(p, root)).text();\n';
     const outUrl = rewriteMetaDirEscapes(url, 2);

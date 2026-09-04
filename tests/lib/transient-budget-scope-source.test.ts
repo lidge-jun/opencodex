@@ -16,7 +16,7 @@ const source = (relative: string): string =>
  * The continuation leg shipped on the raw policy value instead, so a request that reached it
  * received a fresh full `attempts` allowance: with `attempts: 3` an initial send that had
  * already spent its budget could still emit three more upstream sends. Runtime coverage in
- * `tests/upstream-transient-retry.test.ts` proves the helper reports and honors a remainder;
+ * `tests/providers/upstream-transient-retry.test.ts` proves the helper reports and honors a remainder;
  * it cannot prove that every call site asks for one, because a site that forgets simply
  * passes a larger number. This asserts the wiring at the source, which is the only place the
  * omission is visible.

@@ -140,7 +140,7 @@ export function rewriteSource(source: string, depth: number): string {
 
 export const LOCAL_MARKER = "// layout: local";
 
-const HELPER_NAMES = ["helperPath", "repoPath", "repoRoot"] as const;
+const HELPER_NAMES = ["fixturePath", "helperPath", "repoPath", "repoRoot"] as const;
 
 /**
  * The source with comments, templates and regex bodies blanked but string literals kept, so
@@ -186,8 +186,11 @@ export function rewriteMetaDirEscapes(source: string, depth: number): { source: 
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*,\s*/g, () => "repoPath("],
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\.\/([^"]+)"/g, m => `repoPath("${m[1]}"`],
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"helpers"\s*,\s*/g, () => "helperPath("],
-    [/\bfileURLToPath\(\s*new\s+URL\(\s*"\.\.\/"\s*,\s*import\.meta\.url\s*\)\s*\)/g, () => "repoRoot()"],
-    [/\bresolve\(\s*dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*"\.\."\s*\)/g, () => "repoRoot()"],
+    [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"helpers\/([^"]+)"/g, m => `helperPath("${m[1]}"`],
+    [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"fixtures"\s*,\s*/g, () => "fixturePath("],
+    [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"fixtures\/([^"]+)"/g, m => `fixturePath("${m[1]}"`],
+    [/\bfileURLToPath\(\s*new\s+URL\(\s*"\.\.\/"\s*,\s*import\.meta\.url\s*\)\s*\)/g, () => rootCall],
+    [/\bresolve\(\s*dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*"\.\."\s*\)/g, () => rootCall],
   ];
   const edits: Array<{ start: number; end: number; text: string }> = [];
   for (const [re, build] of rules) {
@@ -206,9 +209,9 @@ export function rewriteMetaDirEscapes(source: string, depth: number): { source: 
   }
   out += source.slice(cursor);
   const codeOut = maskNonCode(out);
-  const used = HELPER_NAMES.filter(name => new RegExp(`\\b${name}\\(`).test(codeOut)).map(name => (name === "repoRoot" && rebindsRoot ? "repoRoot as resolveRepoRoot" : name));
-  if (rebindsRoot && !used.includes("repoRoot as resolveRepoRoot")) used.push("repoRoot as resolveRepoRoot");
-  if (/\bpathToFileURL\(repoRoot\(\)/.test(codeOut) && !/\bimport\s*\{[^}]*\bpathToFileURL\b[^}]*\}\s*from\s*["']node:url["']/.test(view)) {
+  const used: string[] = HELPER_NAMES.filter(name => new RegExp(`\\b${name}\\(`).test(codeOut) && !(rebindsRoot && name === "repoRoot"));
+  if (rebindsRoot) used.push("repoRoot as resolveRepoRoot");
+  if (/\bpathToFileURL\((?:resolveRepoRoot|repoRoot)\(\)/.test(codeOut) && !/\bimport\s*\{[^}]*\bpathToFileURL\b[^}]*\}\s*from\s*["']node:url["']/.test(view)) {
     out = insertAfterImports(out, 'import { pathToFileURL } from "node:url";');
   }
   const existing = /^import\s*\{([^}]*)\}\s*from\s*(["'])([^"']*helpers\/repo-root)\2;?/m.exec(maskKeepStrings(out));
@@ -225,25 +228,34 @@ export function rewriteMetaDirEscapes(source: string, depth: number): { source: 
   return { source: out, rewrites: applied };
 }
 
-/** Insert a line after the last top-level import / export-from statement (multi-line aware). */
+/**
+ * Insert a line after the leading block of top-level import / export-from statements: the
+ * run of such statements that starts at the top of the file (comments and blank lines
+ * allowed between them). An import that appears later, after real code, is not part of that
+ * block, so the helper never lands at the bottom of a file that happens to end with an import.
+ */
 export function insertAfterImports(source: string, line: string): string {
   const tokens = tokenize(source);
   const masked = maskNonCode(source, tokens);
   let insertAt = 0;
-  for (const site of specifierSites(source, tokens)) {
-    // Walk back over the statement to its first non-blank column-0 keyword.
-    const before = masked.slice(0, site.token.start);
-    const stmtStart = Math.max(before.lastIndexOf("\nimport"), before.lastIndexOf("\nexport"), before.startsWith("import") || before.startsWith("export") ? 0 : -1);
-    if (stmtStart === -1) continue;
-    const between = masked.slice(stmtStart, site.token.start);
-    if (between.includes(";")) continue; // the keyword belongs to an earlier statement
-    // The statement ends at the first ";" or line break after the specifier, whichever is
-    // first: a semicolonless import must not swallow the next statement.
-    const semi = masked.indexOf(";", site.token.end);
-    const nl = masked.indexOf("\n", site.token.end);
-    const stop = semi !== -1 && (nl === -1 || semi < nl) ? semi : site.token.end;
+  let cursor = 0;
+  const n = masked.length;
+  while (cursor < n) {
+    // Skip blank lines (comments are already blanked in `masked`).
+    const lineEnd = masked.indexOf("\n", cursor);
+    const lineStop = lineEnd === -1 ? n : lineEnd;
+    const text = masked.slice(cursor, lineStop);
+    if (text.trim() === "") { cursor = lineStop + 1; continue; }
+    if (!/^(?:import|export)\b/.test(text) || /^(?:import|export)\s*\(/.test(text)) break;
+    // Statement ends at the first ";" or, failing that, the end of the line holding the closing quote.
+    const site = specifierSites(source, tokens).find(s => s.token.start >= cursor);
+    const specEnd = site ? site.token.end : lineStop;
+    const semi = masked.indexOf(";", specEnd);
+    const nl = masked.indexOf("\n", specEnd);
+    const stop = semi !== -1 && (nl === -1 || semi <= nl) ? semi : specEnd;
     const eol = masked.indexOf("\n", stop);
-    insertAt = Math.max(insertAt, eol === -1 ? source.length : eol + 1);
+    insertAt = eol === -1 ? n : eol + 1;
+    cursor = insertAt;
   }
   return source.slice(0, insertAt) + line + "\n" + source.slice(insertAt);
 }
@@ -307,3 +319,5 @@ export function scanEscapes(source: string): EscapeHit[] {
 export function layoutDir(): string {
   return dirname(LAYOUT_PATH);
 }
+
+

@@ -27,7 +27,7 @@
 - `src/server/responses-terminal-repair.ts` — owns SSE lifecycle tracking, bounded retained state, grace scheduling, and synthetic terminal creation.
 - `src/server/responses/core.ts` — activates the repair before existing transport-specific relay branches.
 - `tests/responses/responses-terminal-repair.test.ts` — unit state-machine and stream-race coverage.
-- `tests/deepseek-inbound-wire.test.ts` — end-to-end official DeepSeek wire and HTTP activation.
+- `tests/providers/deepseek-inbound-wire.test.ts` — end-to-end official DeepSeek wire and HTTP activation.
 - `tests/responses/ws-endpoint.test.ts` — WebSocket event parity for real and repaired terminals.
 - `structure/04_transports-and-sidecars.md` — architectural contract for the provider-scoped streaming repair.
 - `docs/superpowers/specs/2026-08-06-deepseek-responses-streaming-terminal-repair-design.md` — approved design authority; implementation must remain consistent with it.
@@ -40,8 +40,8 @@
 - Modify: `src/providers/registry.ts:150-170`
 - Modify: `src/providers/registry.ts:1143-1162`
 - Modify: `src/providers/registry.ts:1834-1842`
-- Modify: `tests/deepseek-inbound-wire.test.ts:1-175`
-- Modify: `tests/deepseek-responses-item-id-repair.test.ts`
+- Modify: `tests/providers/deepseek-inbound-wire.test.ts:1-175`
+- Modify: `tests/providers/deepseek-responses-item-id-repair.test.ts`
 
 **Interfaces:**
 - Produces: `ResponsesTerminalRepairPolicy`
@@ -74,7 +74,7 @@ test("Codex HTTP and WebSocket turns keep DeepSeek streaming upstream", async ()
 Delete or rewrite the tests whose asserted contract is specifically
 `stream:false`/bounded JSON for built-in DeepSeek. Keep the bounded-JSON helper
 coverage that is provider-neutral. In
-`tests/deepseek-responses-item-id-repair.test.ts`, retain the pure
+`tests/providers/deepseek-responses-item-id-repair.test.ts`, retain the pure
 `repairResponsesJsonItemIds()` unit test but remove the built-in-DeepSeek HTTP
 activation assertion; Task 4 replaces it with streaming repair composition.
 
@@ -83,7 +83,7 @@ activation assertion; Task 4 replaces it with streaming repair composition.
 Run:
 
 ```bash
-bun test tests/deepseek-inbound-wire.test.ts
+bun test tests/providers/deepseek-inbound-wire.test.ts
 ```
 
 Expected: compile/test failure because `providerModelResponsesTerminalRepair`
@@ -134,7 +134,7 @@ export function providerModelResponsesTerminalRepair(
 Run:
 
 ```bash
-bun test tests/deepseek-inbound-wire.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/provider-registry-parity.test.ts
+bun test tests/providers/deepseek-inbound-wire.test.ts tests/providers/deepseek-responses-item-id-repair.test.ts tests/providers/provider-registry-parity.test.ts
 ```
 
 Expected: all selected tests pass; captured HTTP and WebSocket request bodies
@@ -143,7 +143,7 @@ carry `stream:true`.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/providers/registry.ts tests/deepseek-inbound-wire.test.ts tests/deepseek-responses-item-id-repair.test.ts
+git add src/providers/registry.ts tests/providers/deepseek-inbound-wire.test.ts tests/providers/deepseek-responses-item-id-repair.test.ts
 git commit -m "fix(deepseek): restore Responses upstream streaming"
 ```
 
@@ -386,8 +386,8 @@ git commit -m "fix(responses): fail closed on unsafe terminal repair"
 **Files:**
 - Modify: `src/server/responses/core.ts:95-115`
 - Modify: `src/server/responses/core.ts:2030-2230`
-- Modify: `tests/deepseek-inbound-wire.test.ts:115-330`
-- Modify: `tests/deepseek-responses-item-id-repair.test.ts`
+- Modify: `tests/providers/deepseek-inbound-wire.test.ts:115-330`
+- Modify: `tests/providers/deepseek-responses-item-id-repair.test.ts`
 - Modify: `tests/responses/ws-endpoint.test.ts`
 
 **Interfaces:**
@@ -432,7 +432,7 @@ WebSocket handling. Assert the client receives progressive delta frames, one
 Run:
 
 ```bash
-bun test tests/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts
+bun test tests/providers/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts
 ```
 
 Expected: requests now carry `stream:true` from Task 1 but no provider-scoped
@@ -482,7 +482,7 @@ streaming resolver still returns `false`.
 Run:
 
 ```bash
-bun test tests/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts tests/responses/responses-state.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/deepseek-reasoning-replay.test.ts
+bun test tests/providers/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts tests/responses/responses-state.test.ts tests/providers/deepseek-responses-item-id-repair.test.ts tests/providers/deepseek-reasoning-replay.test.ts
 ```
 
 Expected: progressive output precedes terminal, both transports close once,
@@ -491,7 +491,7 @@ item ids are stable, and continuation state retains reasoning/function output.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/server/responses/core.ts tests/deepseek-inbound-wire.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/responses/ws-endpoint.test.ts
+git add src/server/responses/core.ts tests/providers/deepseek-inbound-wire.test.ts tests/providers/deepseek-responses-item-id-repair.test.ts tests/responses/ws-endpoint.test.ts
 git commit -m "fix(deepseek): repair terminal-less Responses streams"
 ```
 
@@ -560,7 +560,7 @@ git commit -m "docs(deepseek): describe streaming terminal repair"
 Run:
 
 ```bash
-bun test tests/responses/responses-terminal-repair.test.ts tests/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts tests/responses/sse-failed-tail.test.ts tests/relay-eager.test.ts tests/responses/responses-item-id-repair.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/deepseek-reasoning-replay.test.ts tests/responses/responses-state.test.ts
+bun test tests/responses/responses-terminal-repair.test.ts tests/providers/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts tests/responses/sse-failed-tail.test.ts tests/relay-eager.test.ts tests/responses/responses-item-id-repair.test.ts tests/providers/deepseek-responses-item-id-repair.test.ts tests/providers/deepseek-reasoning-replay.test.ts tests/responses/responses-state.test.ts
 ```
 
 Expected: 0 failures.
