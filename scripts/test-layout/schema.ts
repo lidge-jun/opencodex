@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { maskNonCode, specifierSites, tokenize } from "./tokens";
 
 /**
  * The tests/ layout map. `explicit` is the authoritative basename -> directory table; the
@@ -123,80 +124,110 @@ export function rewriteSpecifier(spec: string, depth: number): string {
   return spec;
 }
 
-const SPECIFIER_SITES: ReadonlyArray<RegExp> = [
-  // static import / export ... from "x", side-effect import "x"
-  /(\bfrom\s*)(["'])([^"']+)\2/g,
-  /(\bimport\s*)(["'])([^"']+)\2/g,
-  // dynamic import("x"), typeof import("x"), require("x"), import.meta.resolve("x")
-  /(\bimport\s*\(\s*)(["'])([^"']+)\2/g,
-  /(\brequire\s*\(\s*)(["'])([^"']+)\2/g,
-  /(\bimport\.meta\.resolve\s*\(\s*)(["'])([^"']+)\2/g,
-  // new URL("x", import.meta.url)
-  /(\bnew\s+URL\s*\(\s*)(["'])([^"']+)\2(?=\s*,\s*import\.meta\.url)/g,
-];
-
-/** Rewrite every relative specifier site in a source file for a test now `depth` below tests/. */
+/** Rewrite every relative specifier in specifier position for a test now `depth` below tests/. */
 export function rewriteSource(source: string, depth: number): string {
-  let out = source;
-  for (const site of SPECIFIER_SITES) {
-    out = out.replace(site, (whole, lead: string, quote: string, spec: string) => {
-      const next = rewriteSpecifier(spec, depth);
-      return next === spec ? whole : `${lead}${quote}${next}${quote}`;
-    });
+  const sites = specifierSites(source);
+  let out = "";
+  let cursor = 0;
+  for (const site of sites) {
+    const next = rewriteSpecifier(site.spec, depth);
+    if (next === site.spec) continue;
+    out += source.slice(cursor, site.token.start) + site.quote + next + site.quote;
+    cursor = site.token.end;
   }
-  return out;
+  return out + source.slice(cursor);
 }
 
 export const LOCAL_MARKER = "// layout: local";
 
-const REPO_ROOT_IMPORT = 'import { helperPath, repoPath, repoRoot } from "<toTests>/helpers/repo-root";';
+const HELPER_NAMES = ["helperPath", "repoPath", "repoRoot"] as const;
 
 /**
- * Rewrite `import.meta.dir`-anchored escapes into repo-root helper calls:
- *   join(import.meta.dir, "..")                    -> repoRoot()
- *   join(import.meta.dir, "..", "src", "x.ts")     -> repoPath("src", "x.ts")
- *   join(import.meta.dir, "../src/x.ts")           -> repoPath("src/x.ts")
- *   join(import.meta.dir, "helpers", "c.ts")       -> helperPath("c.ts")
- *   fileURLToPath(new URL("../", import.meta.url)) -> repoRoot()
- * Only the shapes above; anything else stays for the escape scanner. Adds the helper import
- * when a rewrite happened and the file does not already import it.
+ * The source with comments, templates and regex bodies blanked but string literals kept, so
+ * rewrite rules can read `".."` arguments while never matching inside a comment or template.
  */
-export function rewriteMetaDirEscapes(source: string, depth: number): { source: string; rewrites: number } {
-  let rewrites = 0;
-  let out = source;
-  const count = (next: string) => { if (next !== out) rewrites += 1; out = next; };
-
-  count(out.replace(/\bjoin\(\s*import\.meta\.dir\s*,\s*"\.\."\s*(,\s*)?/g, (_m, comma: string | undefined) => (comma ? "repoPath(" : "repoRoot(")));
-  count(out.replace(/\bjoin\(\s*import\.meta\.dir\s*,\s*"\.\.\/([^"]+)"/g, (_m, rest: string) => `repoPath("${rest}"`));
-  count(out.replace(/\bjoin\(\s*import\.meta\.dir\s*,\s*"helpers"\s*,\s*/g, "helperPath("));
-  count(out.replace(/\bfileURLToPath\(\s*new\s+URL\(\s*"\.\.\/"\s*,\s*import\.meta\.url\s*\)\s*\)/g, "repoRoot()"));
-
-  if (rewrites > 0 && !/helpers\/repo-root"/.test(out)) {
-    const { toTests } = anchors(depth);
-    const line = REPO_ROOT_IMPORT.replace("<toTests>", toTests);
-    const lines = out.split("\n");
-    let last = -1;
-    for (let i = 0; i < lines.length; i += 1) {
-      if (/^import\b/.test(lines[i]!) || (last >= 0 && /^\s*[\w{},*\s]+from\s+["']/.test(lines[i]!))) last = i;
-      else if (last >= 0 && lines[i]!.trim() === "") break;
-    }
-    lines.splice(last + 1, 0, line);
-    out = lines.join("\n");
+function maskKeepStrings(source: string, tokens = tokenize(source)): string {
+  let out = "";
+  for (const token of tokens) {
+    const text = source.slice(token.start, token.end);
+    out += token.kind === "code" || token.kind === "string" ? text : text.replace(/[^\n]/g, " ");
   }
-  return { source: out, rewrites };
+  return out;
 }
 
 /**
- * A path built from import.meta.dir that reaches outside the file's own directory:
- *   join(import.meta.dir, "..", ...)        join(import.meta.dir, "../src", ...)
- *   join(import.meta.dir, "helpers", ...)   resolve(import.meta.dir, "..")
- * The rewriter cannot express these (it only rewrites module specifiers and URL strings),
- * so they need a human. `new URL("../x", import.meta.url)` is NOT an escape: the rewriter
- * already re-anchored that string, and the leading "../" is what a correct rewrite looks like.
+ * Rewrite `import.meta.dir`-anchored escapes into repo-root helper calls, in code only:
+ *   join|resolve(import.meta.dir, "..")                    -> repoRoot()
+ *   join|resolve(import.meta.dir, "..", "src", "x.ts")     -> repoPath("src", "x.ts")
+ *   join|resolve(import.meta.dir, "../src/x.ts")           -> repoPath("src/x.ts")
+ *   join|resolve(import.meta.dir, "helpers", "c.ts")       -> helperPath("c.ts")
+ *   fileURLToPath(new URL("../", import.meta.url))         -> repoRoot()
+ *   resolve(dirname(fileURLToPath(import.meta.url)), "..") -> repoRoot()
+ * A file that already declares a binding named repoRoot / repoPath / helperPath is left
+ * untouched for the escape scanner (rewriting it would shadow the import). The helper import
+ * is added after the last top-level import statement.
  */
-const DIR_ESCAPE = /import\.meta\.dir\s*,\s*["'`](?:\.\.(?:["'`\/])|helpers\b|fixtures\b|src\/|gui\/|scripts\/|tests\/)/;
-/** `fileURLToPath(new URL("../", import.meta.url))` and friends: a URL used as a directory root. */
-const URL_ROOT_ESCAPE = /new\s+URL\s*\(\s*["'`](?:\.\.\/)+["'`]\s*,\s*import\.meta\.url/;
+export function rewriteMetaDirEscapes(source: string, depth: number): { source: string; rewrites: number } {
+  const tokens = tokenize(source);
+  const code = maskNonCode(source, tokens);
+  if (new RegExp(`\\b(?:const|let|var|function)\\s+(?:${HELPER_NAMES.join("|")})\\b`).test(code)) {
+    return { source, rewrites: 0 };
+  }
+  const view = maskKeepStrings(source, tokens);
+  const rules: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
+    [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*\)/g, () => "repoRoot()"],
+    [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*,\s*/g, () => "repoPath("],
+    [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\.\/([^"]+)"/g, m => `repoPath("${m[1]}"`],
+    [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"helpers"\s*,\s*/g, () => "helperPath("],
+    [/\bfileURLToPath\(\s*new\s+URL\(\s*"\.\.\/"\s*,\s*import\.meta\.url\s*\)\s*\)/g, () => "repoRoot()"],
+    [/\bresolve\(\s*dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*"\.\."\s*\)/g, () => "repoRoot()"],
+  ];
+  const edits: Array<{ start: number; end: number; text: string }> = [];
+  for (const [re, build] of rules) {
+    for (const m of view.matchAll(re)) edits.push({ start: m.index!, end: m.index! + m[0].length, text: build(m) });
+  }
+  if (edits.length === 0) return { source, rewrites: 0 };
+  edits.sort((a, b) => a.start - b.start);
+  let out = "";
+  let cursor = 0;
+  let applied = 0;
+  for (const edit of edits) {
+    if (edit.start < cursor) continue;
+    out += source.slice(cursor, edit.start) + edit.text;
+    cursor = edit.end;
+    applied += 1;
+  }
+  out += source.slice(cursor);
+  if (!/helpers\/repo-root["']/.test(maskKeepStrings(out))) {
+    const { toTests } = anchors(depth);
+    out = insertAfterImports(out, `import { ${HELPER_NAMES.join(", ")} } from "${toTests}/helpers/repo-root";`);
+  }
+  return { source: out, rewrites: applied };
+}
+
+/** Insert a line after the last top-level import / export-from statement (multi-line aware). */
+export function insertAfterImports(source: string, line: string): string {
+  const tokens = tokenize(source);
+  const masked = maskNonCode(source, tokens);
+  let insertAt = 0;
+  for (const site of specifierSites(source, tokens)) {
+    // Walk back over the statement to its first non-blank column-0 keyword.
+    const before = masked.slice(0, site.token.start);
+    const stmtStart = Math.max(before.lastIndexOf("\nimport"), before.lastIndexOf("\nexport"), before.startsWith("import") || before.startsWith("export") ? 0 : -1);
+    if (stmtStart === -1) continue;
+    const between = masked.slice(stmtStart, site.token.start);
+    if (between.includes(";")) continue; // the keyword belongs to an earlier statement
+    const semi = masked.indexOf(";", site.token.end);
+    const eol = masked.indexOf("\n", semi === -1 ? site.token.end : semi);
+    insertAt = Math.max(insertAt, eol === -1 ? source.length : eol + 1);
+  }
+  return source.slice(0, insertAt) + line + "\n" + source.slice(insertAt);
+}
+
+/** A string argument that leaves the file's directory toward the repo or the tests/ siblings. */
+const ESCAPE_ARG = /^["'](?:\.\.(?:["'\/])|helpers\b|fixtures\b|src\/|gui\/|scripts\/|tests\/)/;
+/** `new URL("../", import.meta.url)`: a URL used as a directory root, not a re-anchored specifier. */
+const URL_ROOT = /new\s+URL\s*\(\s*(["'])(?:\.\.\/)+\1\s*,\s*import\.meta\.url/;
 
 export interface EscapeHit {
   line: number;
@@ -205,20 +236,47 @@ export interface EscapeHit {
 }
 
 /**
- * Lines that use import.meta.dir / import.meta.url to leave the file's own directory. A
- * file-local use (`join(import.meta.dir, ".tmp-x")`) is not an escape. A line carrying the
- * `// layout: local` marker is reported as suppressed so reviewers can see it in the PR.
+ * Statements (code only, up to the next `;`) that combine `import.meta.dir` / `import.meta.url`
+ * with a parent-directory or tests-sibling string argument, plus template literals that
+ * interpolate `import.meta.dir` with such a path. A re-anchored `new URL("../../x",
+ * import.meta.url)` specifier is what a correct rewrite looks like and is not an escape; a bare
+ * `new URL("../", ...)` root is. File-local uses (`join(import.meta.dir, ".tmp-x")`) pass. A
+ * statement carrying `// layout: local` is reported as suppressed.
  */
 export function scanEscapes(source: string): EscapeHit[] {
-  const hits: EscapeHit[] = [];
-  source.split("\n").forEach((text, index) => {
-    if (!/import\.meta\.(dir|url)/.test(text)) return;
-    if (!DIR_ESCAPE.test(text) && !URL_ROOT_ESCAPE.test(text)) return;
-    hits.push({ line: index + 1, text, suppressed: text.includes(LOCAL_MARKER) });
-  });
-  return hits;
+  const tokens = tokenize(source);
+  const masked = maskNonCode(source, tokens);
+  const lines = source.split("\n");
+  const hits = new Map<number, EscapeHit>();
+  const lineOf = (offset: number) => source.slice(0, offset).split("\n").length;
+  const report = (start: number, end: number) => {
+    const line = lineOf(start);
+    if (hits.has(line)) return;
+    const region = source.slice(start, end);
+    const text = lines[line - 1] ?? "";
+    hits.set(line, { line, text, suppressed: region.includes(LOCAL_MARKER) || text.includes(LOCAL_MARKER) });
+  };
+  for (const m of masked.matchAll(/import\.meta\.(?:dir|url)/g)) {
+    const at = m.index!;
+    const back = Math.max(masked.lastIndexOf(";", at) + 1, masked.lastIndexOf("\n\n", at), 0);
+    const fwd = masked.indexOf(";", at);
+    const end = fwd === -1 ? source.length : fwd + 1;
+    const stmt = maskKeepStrings(source, tokens).slice(back, end);
+    const strings = tokens.filter(t => t.kind === "string" && t.start >= back && t.end <= end).map(t => source.slice(t.start, t.end));
+    const urlSpec = /new\s+URL\s*\(\s*(["'][^"']*["'])\s*,\s*import\.meta\.url/.exec(stmt)?.[1];
+    const escapes = strings.some(str => str !== urlSpec && ESCAPE_ARG.test(str));
+    if (escapes || URL_ROOT.test(stmt)) report(at, end);
+  }
+  for (const t of tokens) {
+    if (t.kind !== "template") continue;
+    const text = source.slice(t.start, t.end);
+    if (/\$\{\s*import\.meta\.dir\s*\}\/(?:\.\.|helpers\b|fixtures\b)/.test(text)) report(t.start, t.end);
+  }
+  return [...hits.values()].sort((a, b) => a.line - b.line);
 }
 
 export function layoutDir(): string {
   return dirname(LAYOUT_PATH);
 }
+
+

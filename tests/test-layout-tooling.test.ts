@@ -6,6 +6,7 @@ import { removeTreeWithRetry } from "./helpers/remove-tree";
 import { repoPath, repoRoot } from "./helpers/repo-root";
 import { listTestFiles, planMoves } from "../scripts/test-layout/plan";
 import { runMove } from "../scripts/test-layout/move";
+import { runVerify } from "../scripts/test-layout/verify";
 import {
   anchors,
   currentPath,
@@ -83,7 +84,7 @@ describe("scanEscapes", () => {
       'const local = join(import.meta.dir, ".tmp-x");',
     ].join("\n");
     const { source, rewrites } = rewriteMetaDirEscapes(src, 1);
-    expect(rewrites).toBe(4);
+    expect(rewrites).toBe(5);
     expect(source).toContain('import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";');
     expect(source).toContain('readFileSync(repoPath("src", "cli", "index.ts"), "utf8")');
     expect(source).toContain('repoPath("src/lib/winsw.ts")');
@@ -93,6 +94,55 @@ describe("scanEscapes", () => {
     expect(source).toContain('join(import.meta.dir, ".tmp-x")');
     expect(scanEscapes(source)).toEqual([]);
     expect(rewriteMetaDirEscapes(source, 1).rewrites).toBe(0);
+  });
+
+  test("rewrites never touch string, template, or comment payloads", () => {
+    const src = [
+      'import { thing } from "../src/thing";',
+      '// import { c } from "../src/comment";',
+      'const oracle = \'expect(text).toContain(\\\'await import("../grok/inject")\\\')\';',
+      'const tpl = `import { x } from "../src/tpl";`;',
+      'const plain = "from \\"../src/plain\\"";',
+      '/* join(import.meta.dir, "..", "src") */',
+      'const note = "join(import.meta.dir, \\"..\\")";',
+    ].join("\n");
+    const out = rewriteMetaDirEscapes(rewriteSource(src, 2), 2);
+    expect(out.rewrites).toBe(0);
+    const lines = out.source.split("\n");
+    expect(lines[0]).toBe('import { thing } from "../../../src/thing";');
+    expect(lines.slice(1)).toEqual(src.split("\n").slice(1));
+    expect(scanEscapes(src)).toEqual([]);
+  });
+
+  test("a file that already binds repoRoot is left for the scanner instead of being shadowed", () => {
+    const src = 'import { join } from "node:path";\nconst repoRoot = join(import.meta.dir, "..");\nconst read = (rel: string) => readFileSync(join(repoRoot, rel), "utf8");\n';
+    const out = rewriteMetaDirEscapes(src, 1);
+    expect(out.rewrites).toBe(0);
+    expect(out.source).toBe(src);
+    expect(scanEscapes(src).map(h => h.line)).toEqual([2]);
+  });
+
+  test("resolve/dirname/fileURLToPath and multi-line import blocks are handled", () => {
+    const src = [
+      'import {',
+      '  a,',
+      '',
+      '  b,',
+      '} from "../src/ab";',
+      'import { resolve, dirname } from "node:path";',
+      '',
+      'const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");',
+      'const gen = resolve(import.meta.dir, "../src/generated/x.ts");',
+    ].join("\n");
+    const out = rewriteMetaDirEscapes(rewriteSource(src, 1), 1);
+    expect(out.rewrites).toBe(2);
+    const lines = out.source.split("\n");
+    expect(lines[4]).toBe('} from "../../src/ab";');
+    expect(lines[5]).toBe('import { resolve, dirname } from "node:path";');
+    expect(lines[6]).toBe('import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";');
+    expect(out.source).toContain("const root = repoRoot();");
+    expect(out.source).toContain('const gen = repoPath("src/generated/x.ts");');
+    expect(scanEscapes(out.source)).toEqual([]);
   });
 
   test("file-local uses pass, escapes fail, the marker suppresses and is reported", () => {
@@ -106,6 +156,9 @@ describe("scanEscapes", () => {
     expect(scanEscapes('const u = new URL("../../package.json", import.meta.url);')).toEqual([]);
     expect(scanEscapes('const root = fileURLToPath(new URL("../", import.meta.url));')).toHaveLength(1);
     expect(scanEscapes('const c = join(import.meta.dir, "helpers", "child.ts");')).toHaveLength(1);
+    expect(scanEscapes('const r = resolve(\n  import.meta.dir,\n  "..",\n);')).toHaveLength(1);
+    expect(scanEscapes('const t = `${import.meta.dir}/../src/x.ts`;')).toHaveLength(1);
+    expect(scanEscapes('const u = pathToFileURL(join(import.meta.dir, "../src/lib/x.ts")).href;')).toHaveLength(1);
     expect(scanEscapes("const self = import.meta.path;")).toEqual([]);
   });
 });
@@ -216,9 +269,23 @@ describe("move end to end", () => {
 
       // Dirt outside the write set does not abort.
       writeFileSync(join(root, "src", "thing.ts"), "export const thing = 2;\n");
-      const report = runMove({ root, domains: ["server", "providers"], dryRun: false, layoutPath, log: l => logs.push(l) });
+      const dry = runMove({ root, domains: ["server", "providers"], dryRun: true, layoutPath, log: l => logs.push(l) });
+      expect(dry.exitCode).toBe(0);
+      expect(dry.manual).toEqual([]);
+      expect(Bun.spawnSync(["git", "status", "--porcelain"], { cwd: root }).stdout.toString()).toBe(" M src/thing.ts\n");
+      const report = runMove({ root, domains: ["server", "providers"], dryRun: false, layoutPath, skipVerify: true, log: l => logs.push(l) });
       expect(report.exitCode).toBe(0);
       expect(report.manual).toEqual([]);
+      const verify = runVerify({ root, domains: ["server", "providers"], layoutPath, skipTests: true, log: l => logs.push(l) });
+      expect(verify.staleLiterals).toEqual([]);
+      expect(verify.manual).toEqual([]);
+      expect(verify.ok).toBe(true);
+      // The guard's placement rule on the migrated scratch tree: nothing at root, nothing misplaced.
+      const migratedLayout = loadLayout(layoutPath);
+      for (const rel of listTestFiles(root)) {
+        const dirName = rel.slice("tests/".length, rel.lastIndexOf("/"));
+        expect(dirName).toBe(resolveTarget(migratedLayout, basename(rel))!);
+      }
 
       const serverA = readFileSync(join(root, "tests", "server", "server-a.test.ts"), "utf8");
       expect(serverA).toContain('from "../../src/thing"');

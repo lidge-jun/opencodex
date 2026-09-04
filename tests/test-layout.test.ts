@@ -25,12 +25,14 @@ describe("tests/ layout", () => {
       for (const entry of readdirSync(dir)) {
         const full = join(dir, entry);
         if (statSync(full).isDirectory()) {
-          if (entry !== "helpers" && entry !== "fixtures") walk(full);
+          walk(full);
           continue;
         }
         if (!entry.endsWith(".test.ts")) continue;
         const rel = relative(root, full).split(sep).join("/");
         const dirName = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+        // helpers/ and fixtures/ hold support files only; a *.test.ts there is misplaced.
+        if (/^(helpers|fixtures)(\/|$)/.test(dirName)) { misplaced.push(`${rel} -> not a test directory`); continue; }
         const target = resolveTarget(layout, entry);
         if (target === null) {
           if (!layout.keepAtRoot.includes(entry)) unresolved.push(rel);

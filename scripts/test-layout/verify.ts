@@ -1,12 +1,12 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { loadLayout, scanEscapes } from "./schema";
+import { LAYOUT_PATH, loadLayout, scanEscapes } from "./schema";
 import { listTestFiles, repoRootFromHere } from "./plan";
 
 /**
  * Verify one or more migrated domains:
  *   1. no stale `tests/<basename>` literal for any file in the domain remains anywhere,
- *   2. the escape scanner (same one the mover uses) reports nothing unsuppressed,
+ *   2. the escape scanner (the same one the mover uses) reports nothing unsuppressed,
  *   3. the domain has no module-resolution errors under scripts/test-layout/tsconfig.verify.json
  *      (via a temp config that extends it with absolute include paths, since `include` is
  *      replaced, not merged). Tests are not strict-typechecked by the root tsconfig and carry
@@ -19,6 +19,7 @@ export interface VerifyOptions {
   root: string;
   domains: string[];
   skipTests?: boolean;
+  layoutPath?: string;
   log?: (line: string) => void;
 }
 
@@ -32,19 +33,33 @@ export interface VerifyReport {
   ok: boolean;
 }
 
-const SWEEP_ROOTS = ["tests", "scripts", ".github", "AGENTS.md", "src", "docs-site", "structure", "bunfig.toml"];
+/**
+ * Everything that may name a test path as text. Shared with move.ts so the preflight write set
+ * and the post-move STALE check see the same files. Reference clones under devlog/_chase are
+ * gitignored and skipped by rg's own ignore handling.
+ */
+export const SWEEP_ROOTS = [
+  "tests", "scripts", ".github", "src", "gui/src", "bin", "docs-site", "structure", "devlog", "skills",
+  "AGENTS.md", "AGENTS_INSTALL.md", "MAINTAINERS.md", "CONTRIBUTING.md", "README.md", "CREDITS.md",
+  "bunfig.toml", "package.json", ".gitignore", ".npmignore",
+];
 
 function rgLiteral(root: string, literal: string): string[] {
-  const proc = Bun.spawnSync(["rg", "-l", "--fixed-strings", "--no-messages", literal, ...SWEEP_ROOTS], {
+  const roots = SWEEP_ROOTS.filter(p => existsSync(join(root, p)));
+  const proc = Bun.spawnSync(["rg", "-l", "--fixed-strings", "--no-messages", literal, ...roots], {
     cwd: root, stdout: "pipe", stderr: "pipe",
   });
+  // rg exits 1 for "no matches" and 2 for an execution error; only 0 and 1 are answers.
+  if (proc.exitCode !== 0 && proc.exitCode !== 1) {
+    throw new Error(`rg failed while sweeping for ${literal} (exit ${proc.exitCode}): ${proc.stderr.toString()}`);
+  }
   return proc.exitCode === 0 ? proc.stdout.toString().split("\n").filter(Boolean) : [];
 }
 
 export function runVerify(options: VerifyOptions): VerifyReport {
   const { root, domains } = options;
   const log = options.log ?? ((line: string) => console.log(line));
-  const layout = loadLayout();
+  loadLayout(options.layoutPath ?? LAYOUT_PATH); // validates the map is well-formed
   const files = listTestFiles(root).filter(rel => domains.some(d => rel.startsWith(`tests/${d}/`)));
 
   const staleLiterals: VerifyReport["staleLiterals"] = [];
@@ -52,12 +67,9 @@ export function runVerify(options: VerifyOptions): VerifyReport {
   const suppressed: VerifyReport["suppressed"] = [];
   for (const rel of files) {
     const literal = `tests/${basename(rel)}`;
-    for (const file of rgLiteral(root, literal)) {
-      // A hit inside a file that mentions "tests/<basename>" only as a substring of the new
-      // path (tests/server/x.test.ts contains "tests/x.test.ts"? no - it contains "server/x") is
-      // impossible, so any hit is stale by construction.
-      staleLiterals.push({ file, literal });
-    }
+    // "tests/<basename>" cannot be a substring of any "tests/<dir>/<other>" (verified over all
+    // 1061 basenames in the tooling test), so any hit is stale by construction.
+    for (const file of rgLiteral(root, literal)) staleLiterals.push({ file, literal });
     for (const hit of scanEscapes(readFileSync(join(root, rel), "utf8"))) {
       (hit.suppressed ? suppressed : manual).push({ file: rel, line: hit.line, text: hit.text.trim() });
     }
@@ -66,28 +78,33 @@ export function runVerify(options: VerifyOptions): VerifyReport {
   for (const hit of manual) log(`MANUAL ${hit.file}:${hit.line}: ${hit.text}`);
   for (const stale of staleLiterals) log(`STALE ${stale.file} still names ${stale.literal}`);
 
-  // Typecheck through a temp config with absolute paths.
-  const tmpDir = join(root, ".tmp");
-  mkdirSync(tmpDir, { recursive: true });
-  const tmpConfig = join(tmpDir, `tsconfig.verify.${process.pid}.json`);
-  const base = JSON.parse(readFileSync(join(root, "scripts", "test-layout", "tsconfig.verify.json"), "utf8")) as { include: string[] };
-  const include = [
-    ...base.include.map(entry => join(root, "scripts", "test-layout", entry)),
-    ...domains.map(d => join(root, "tests", d, "**", "*.ts")),
-  ];
-  writeFileSync(tmpConfig, JSON.stringify({ extends: join(root, "scripts", "test-layout", "tsconfig.verify.json"), include }, null, 2));
-  let typecheckExit: number;
+  const baseConfig = join(root, "scripts", "test-layout", "tsconfig.verify.json");
+  let typecheckExit = 0;
   let resolutionErrors: string[] = [];
-  try {
-    const tsc = Bun.spawnSync(["bun", "x", "tsc", "--noEmit", "-p", tmpConfig], { cwd: root, stdout: "pipe", stderr: "pipe" });
-    typecheckExit = tsc.exitCode;
-    const output = tsc.stdout.toString() + tsc.stderr.toString();
-    resolutionErrors = output.split("\n").filter(line => /error TS(2307|2306|6053|5097)\b/.test(line));
-  } finally {
-    rmSync(tmpConfig, { force: true });
+  if (existsSync(baseConfig)) {
+    const tmpDir = join(root, ".tmp");
+    mkdirSync(tmpDir, { recursive: true });
+    const tmpConfig = join(tmpDir, `tsconfig.verify.${process.pid}.json`);
+    const base = JSON.parse(readFileSync(baseConfig, "utf8")) as { include: string[] };
+    const include = [
+      ...base.include.map(entry => join(root, "scripts", "test-layout", entry)),
+      ...domains.map(d => join(root, "tests", d, "**", "*.ts")),
+    ];
+    writeFileSync(tmpConfig, JSON.stringify({ extends: baseConfig, include }, null, 2));
+    try {
+      const tsc = Bun.spawnSync(["bun", "x", "tsc", "--noEmit", "-p", tmpConfig], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      typecheckExit = tsc.exitCode;
+      const output = tsc.stdout.toString() + tsc.stderr.toString();
+      resolutionErrors = output.split("\n").filter(line => /error TS(2307|2306|6053|5097)\b/.test(line));
+    } finally {
+      rmSync(tmpConfig, { force: true });
+    }
+    for (const line of resolutionErrors) log(`RESOLVE ${line}`);
+    if (typecheckExit !== 0 && resolutionErrors.length === 0) {
+      log("typecheck reported pre-existing (non-resolution) errors; not counted against the move");
+    }
+    log(`typecheck exit ${typecheckExit}, ${resolutionErrors.length} module-resolution error(s)`);
   }
-  for (const line of resolutionErrors) log(`RESOLVE ${line}`);
-  log(`typecheck exit ${typecheckExit}, ${resolutionErrors.length} module-resolution error(s)`);
 
   let testExit = 0;
   if (!options.skipTests && domains.length > 0) {
@@ -112,3 +129,4 @@ if (import.meta.main) {
   const report = runVerify({ root: repoRootFromHere(), domains, skipTests });
   process.exit(report.ok ? 0 : 1);
 }
+
