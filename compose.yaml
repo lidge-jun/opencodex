@@ -1,0 +1,26 @@
+name: opencodex
+
+services:
+  hub:
+    image: opencodex:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    init: true
+    read_only: true
+    ports:
+      - "${OPENCODEX_PORT:-10100}:10100"
+    volumes:
+      - ocx-state:/home/bun/.opencodex
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  ocx-state:
