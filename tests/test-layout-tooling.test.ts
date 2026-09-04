@@ -139,7 +139,8 @@ describe("scanEscapes", () => {
     const lines = out.source.split("\n");
     expect(lines[4]).toBe('} from "../../src/ab";');
     expect(lines[5]).toBe('import { resolve, dirname } from "node:path";');
-    expect(lines[6]).toBe('import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";');
+    // Only the helpers the rewrite actually used are imported, so lint stays quiet.
+    expect(lines[6]).toBe('import { repoPath, repoRoot } from "../helpers/repo-root";');
     expect(out.source).toContain("const root = repoRoot();");
     expect(out.source).toContain('const gen = repoPath("src/generated/x.ts");');
     expect(scanEscapes(out.source)).toEqual([]);

@@ -200,7 +200,9 @@ export function rewriteMetaDirEscapes(source: string, depth: number): { source: 
   out += source.slice(cursor);
   if (!/helpers\/repo-root["']/.test(maskKeepStrings(out))) {
     const { toTests } = anchors(depth);
-    out = insertAfterImports(out, `import { ${HELPER_NAMES.join(", ")} } from "${toTests}/helpers/repo-root";`);
+    const codeOut = maskNonCode(out);
+    const used = HELPER_NAMES.filter(name => new RegExp(`\\b${name}\\(`).test(codeOut));
+    out = insertAfterImports(out, `import { ${used.join(", ")} } from "${toTests}/helpers/repo-root";`);
   }
   return { source: out, rewrites: applied };
 }
@@ -278,5 +280,4 @@ export function scanEscapes(source: string): EscapeHit[] {
 export function layoutDir(): string {
   return dirname(LAYOUT_PATH);
 }
-
 
