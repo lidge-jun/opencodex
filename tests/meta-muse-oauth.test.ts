@@ -180,27 +180,62 @@ describe("meta-muse credential import", () => {
   // The old refusal blamed the macOS Keychain on EVERY platform. On Windows that
   // is simply false — Meta ships no Windows CLI — and a user who believed it
   // would go looking for a credential store instead of WSL2.
-  test("the Windows refusal names WSL2 and does not blame the Keychain", async () => {
-    await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.toThrow(/WSL2/);
+  // Off darwin there is no store to import from, but Meta shows the same key in its
+  // own console — so these hosts get a paste field, not a dead end.
+  test("Windows offers a paste field pointing at Meta's console", async () => {
+    const seen: string[] = [];
+    let prompted = false;
+    const creds = await loginMetaMuse(
+      {
+        onAuth: info => { seen.push(info.instructions ?? ""); seen.push(info.url); },
+        onManualCodeInput: async () => { prompted = true; return CANARY; },
+      },
+      deps({ platform: "win32" }),
+    );
+    expect(prompted).toBe(true);
+    expect(creds.access).toBe(CANARY);
+    expect(creds.source).toBe("manual");
+    expect(seen.join(" ")).toContain("dev.meta.ai");
+  });
+
+  test("Linux offers the same paste field", async () => {
+    const creds = await loginMetaMuse(
+      { onManualCodeInput: async () => CANARY },
+      deps({ platform: "linux" }),
+    );
+    expect(creds.access).toBe(CANARY);
+    expect(creds.refresh).toBe(CANARY);
+    expect(creds.source).toBe("manual");
+  });
+
+  // The paste path must not be a weaker credential wearing the same provider id.
+  test("a pasted key still faces the grammar check and the live validation", async () => {
+    await expect(loginMetaMuse(
+      { onManualCodeInput: async () => "not-a-meta-key" },
+      deps({ platform: "win32" }),
+    )).rejects.toThrow(/expected Meta API key format/);
+
+    const denied = (async () => new Response("nope", { status: 401 })) as unknown as typeof fetch;
+    await expect(loginMetaMuse(
+      { onManualCodeInput: async () => CANARY },
+      deps({ platform: "win32", fetchImpl: denied }),
+    )).rejects.toThrow(/401/);
+  });
+
+  test("a host with no paste surface still refuses with an actionable message", async () => {
+    await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.toThrow(/dev\.meta\.ai/);
     await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.toThrow(/META_MODEL_API_KEY/);
-    await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.not.toThrow(/Keychain/);
+    await expect(loginMetaMuse({}, deps({ platform: "linux" }))).rejects.toThrow(/dev\.meta\.ai/);
   });
 
-  // WSL2 reports `linux`, so telling a Windows user to "import there" would walk
-  // them straight into the Linux refusal. Naming WSL2 is fine; promising an import
-  // from it is not.
-  test("the Windows refusal does not promise that importing under WSL2 works", async () => {
-    await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.not.toThrow(/import there/);
-    await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.toThrow(/not available/);
+  test("an empty paste refuses instead of storing a blank credential", async () => {
+    await expect(loginMetaMuse(
+      { onManualCodeInput: async () => "   " },
+      deps({ platform: "win32" }),
+    )).rejects.toThrow(/no credential to import/);
   });
 
-  test("the Linux refusal names the unmeasured storage, not the Keychain", async () => {
-    await expect(loginMetaMuse({}, deps({ platform: "linux" }))).rejects.toThrow(/not been measured/);
-    await expect(loginMetaMuse({}, deps({ platform: "linux" }))).rejects.toThrow(/META_MODEL_API_KEY/);
-    await expect(loginMetaMuse({}, deps({ platform: "linux" }))).rejects.not.toThrow(/Keychain/);
-  });
-
-  test("the consent warning still precedes an unsupported-platform refusal", async () => {
+  test("the consent warning still precedes every unsupported-platform path", async () => {
     for (const platform of ["win32", "linux"] as const) {
       const seen: string[] = [];
       await expect(
@@ -209,9 +244,10 @@ describe("meta-muse credential import", () => {
       expect(seen[0]).toContain("UNSUPPORTED");
     }
   });
-
   for (const [label, over] of [
-    ["a non-darwin platform", { platform: "linux" }],
+    // Non-darwin without a paste surface: still a refusal, and the table asserts it
+    // stays actionable rather than silently succeeding.
+    ["a non-darwin platform with no paste surface", { platform: "linux" }],
     ["no credential file", { readPointer: async () => null }],
     ["a malformed credential file", { readPointer: async () => "{not json" }],
     ["no signed-in Meta account", { readPointer: async () => JSON.stringify({ providers: {} }) }],
