@@ -70,6 +70,10 @@ With `stream: true`, the response is `text/event-stream`. The bridge emits Respo
 With `stream: false` or no `stream`, the same adapter events are collected into one Responses JSON
 object. Both forms preserve the selected model, output items, terminal status, and usage.
 
+For native HTTP/SSE passthrough, a client cancellation without an observed upstream terminal is
+logged as `499` with `closeReason: "client_cancel"` and does not penalize the account pool.
+A terminal captured during the bounded post-disconnect drain retains its actual outcome.
+
 Client-facing Responses SSE frames are limited to 4 MiB per frame, measured in raw bytes before the
 SSE block delimiter. On HTTP, an unterminated upstream frame that exceeds the limit fails closed
 with a synthetic `response.failed` event followed by `data: [DONE]`. On the Responses WebSocket

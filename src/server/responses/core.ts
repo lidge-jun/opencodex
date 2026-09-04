@@ -4922,7 +4922,10 @@ async function handleResponsesInner(
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
-        clientGoneSignal: clientGone.signal,
+        // Request abort can reject the fetch body before the response cancel hook runs.
+        clientGoneSignal: options.abortSignal
+          ? AbortSignal.any([clientGone.signal, options.abortSignal])
+          : clientGone.signal,
         drainBounds: { ms: 15_000, bytes: 32 * 1024 * 1024 },
         upstream,
         pinCompletedResponseIdToFirstSeen: githubCopilotRepairEnabled,
