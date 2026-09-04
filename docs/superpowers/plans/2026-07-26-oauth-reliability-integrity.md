@@ -502,7 +502,7 @@ EOF
 
 **Files:**
 - Modify: `src/cli/doctor.ts`
-- Test: `tests/doctor-oauth.test.ts` (or extend `tests/doctor.test.ts`)
+- Test: `tests/service/doctor-oauth.test.ts` (or extend `tests/doctor.test.ts`)
 
 **Interfaces:**
 - Consumes: `collectOAuthHealthEntries`, auth store writability checks, refresh lock path helpers if exported
@@ -519,7 +519,7 @@ Seed a temp account with `needsReauth`, run the new `collectOAuthDoctorChecks()`
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bun test tests/doctor-oauth.test.ts`
+Run: `bun test tests/service/doctor-oauth.test.ts`
 
 Expected: FAIL
 
@@ -529,14 +529,14 @@ Add `collectOAuthDoctorChecks(): Array<{ level: "OK" | "WARN"; message: string }
 
 - [ ] **Step 4: Run tests**
 
-Run: `bun test tests/doctor-oauth.test.ts tests/doctor.test.ts`
+Run: `bun test tests/service/doctor-oauth.test.ts tests/doctor.test.ts`
 
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cli/doctor.ts tests/doctor-oauth.test.ts
+git add src/cli/doctor.ts tests/service/doctor-oauth.test.ts
 git commit -m "$(cat <<'EOF'
 feat(cli): add OAuth reliability checks to ocx doctor
 
@@ -713,7 +713,7 @@ EOF
 - [ ] **Step 1: Run verification commands**
 
 ```bash
-bun test tests/privacy-mask-account.test.ts tests/oauth-log.test.ts tests/oauth-refresh-generic-lock.test.ts tests/oauth-health.test.ts tests/cli-status-oauth-health.test.ts tests/doctor-oauth.test.ts tests/oauth-accounts-api.test.ts tests/codex-metadata-integrity.test.ts
+bun test tests/privacy-mask-account.test.ts tests/oauth-log.test.ts tests/oauth-refresh-generic-lock.test.ts tests/oauth-health.test.ts tests/cli-status-oauth-health.test.ts tests/service/doctor-oauth.test.ts tests/oauth-accounts-api.test.ts tests/codex-metadata-integrity.test.ts
 bun test tests/oauth-refresh.test.ts tests/xai-refresh-lock.test.ts tests/codex-routing.test.ts tests/session-affinity.test.ts tests/codex-auth-context.test.ts
 bun run test
 bun run typecheck

@@ -215,7 +215,7 @@ describe("the default hardener is actually reached from a claim", () => {
    *
    * So this one runs a claim with the DEFAULT hardener and inspects the file it
    * left behind. On POSIX that is the mode; the Windows branch is proven
-   * separately in tests/windows-secret-acl.test.ts, where the ACL runner can be
+   * separately in tests/windows/windows-secret-acl.test.ts, where the ACL runner can be
    * observed.
    */
   test("a shared claim narrows a permissive claim database to 0600", async () => {

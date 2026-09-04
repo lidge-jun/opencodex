@@ -261,7 +261,7 @@ for (const mutator of mutators) {
     // both run write → harden → publish). Supplying `io` bypasses the real
     // implementations, so this proves hardening is REQUESTED on the temp before
     // publication — not that it restricts. The Windows NTFS ACL that does the actual
-    // restricting is exercised in tests/windows-secret-acl.test.ts, and the POSIX mode
+    // restricting is exercised in tests/windows/windows-secret-acl.test.ts, and the POSIX mode
     // below is the only half `statSync` can observe (Windows reports 0o666 whatever
     // `chmodSync` did).
     const tempEffect = effects.find(effect => effect.startsWith("temp:"));

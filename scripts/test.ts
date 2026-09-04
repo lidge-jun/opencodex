@@ -330,7 +330,7 @@ export const SERIAL_FULL_SUITE_FILES = [
   "issue-452-empty-503.test.ts",
   "openai-provider-option-e2e.test.ts",
   "release-helper.test.ts",
-  "update-stop-first.test.ts",
+  "update/update-stop-first.test.ts",
 ] as const;
 
 type SerialLaneBasename = (typeof SERIAL_FULL_SUITE_FILES)[number] extends infer P

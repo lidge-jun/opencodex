@@ -1226,5 +1226,9 @@
     "zz-ci-storage-policy-isolation.test.ts": "ci-workflows",
     "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows"
   },
-  "migrated": []
+  "migrated": [
+    "service",
+    "update",
+    "windows"
+  ]
 }

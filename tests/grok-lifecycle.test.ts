@@ -20,7 +20,7 @@ function sliceFn(source: string, start: string, end: string): string {
 
 // `src/cli/index.ts` runs its command switch on import, so the handlers cannot be called from a
 // test. Wiring assertions therefore read the source — the house pattern established by
-// tests/stale-state-purge.test.ts and tests/uninstall.test.ts.
+// tests/service/stale-state-purge.test.ts and tests/uninstall.test.ts.
 describe("Grok fence lifecycle wiring", () => {
   test("handleStart syncs the Grok fence outside the Desktop-3P try", () => {
     const startFn = sliceFn(CLI_SOURCE, "async function handleStart(", "async function handleEnsure(");
@@ -380,7 +380,7 @@ describe("POST /api/stop teardown", () => {
   test("strips the Grok fence on an accepted stop", () => {
     // The teardown moved to src/server/stop-teardown.ts so a test can call it: the route
     // schedules process.exit 200ms after answering, which made the inline version
-    // unreachable. tests/stop-deferred-teardown.test.ts proves the behaviour; this proves
+    // unreachable. tests/service/stop-deferred-teardown.test.ts proves the behaviour; this proves
     // the route still delegates to it rather than growing a second copy.
     const handler = sliceFn(MANAGEMENT_SOURCE, '"/api/stop"', "/api/codex-auth/");
     expect(handler).toContain("performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt })");
