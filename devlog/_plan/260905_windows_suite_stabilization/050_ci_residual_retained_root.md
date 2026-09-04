@@ -270,3 +270,52 @@ case reaps cleanly.
    process, no unhandled ENOENT.
 3. CI re-dispatch: windows 2/4 SUCCESS with **no** "killed N dangling processes"
    line in the log, and every case in this file under its budget with margin.
+
+---
+
+## Third CI round: all four Windows shards green
+
+Run 33926041666 (head `cfc8de963`):
+
+| shard | pass | fail | dangling |
+|---|---|---|---|
+| 1/4 | 4462 | **0** | 0 |
+| 2/4 | 4628 | **0** | 0 |
+| 3/4 | 4305 | **0** | — |
+| 4/4 | 4413 | **0** | — |
+
+The file that failed twice, on the same hosted runner class:
+
+```
+(pass) startup and CLI sync-cache … owns K            [8459.45ms]   (was 18743 / 15536 timeout)
+(pass) native restore … owns K                        [2935.56ms]
+(pass) POST /api/sync … newer convergence catalog     [7303.73ms]   (was 20140 timeout)
+(pass) POST /api/sync … newer retained catalog        [9908.46ms]
+(pass) a persisted runtime selection …                [1772.21ms]
+(pass) two processes at the post-approval seam …      [3383.29ms]
+```
+
+Every case is under `SPAWN_BUDGET_MS` with 4-5× margin, and this run happened
+to be a fast one (8.5 s where the previous run took 18.7 s for the same case).
+That spread — 8.5 to 18.7 s for identical work — is the thing the 15 s and 20 s
+budgets could never absorb, and it is why the class fix mattered more than the
+first case fix.
+
+### What was actually wrong, in one paragraph
+
+Not the product. Not the lock. The file's per-case budgets were sized from a
+~450 ms local run for work that costs 8-19 s on the hosted Windows runner, and
+its harness had no reap-before-delete ordering, so any budget miss produced a
+dangling child plus a follow-on ENOENT/unhandled-rejection that obscured the
+real message. Three commits: a budget on one case (moved the failure), then the
+class budget + child registration + a detached barrier race (fixed it).
+
+### Verification ledger for the barrier fix
+
+The unhandled-rejection claim was checked by a probe, not by reading: insert a
+5 s sleep after the barrier under a 3 s budget. Original code reports the
+timeout **plus** `Unhandled error between tests: sync exited before provider
+barrier (143)`; fixed code reports the timeout alone. Two earlier attempts at
+the fix (resolve-to-Error, catch-in-finally) still produced the unhandled error
+under that probe and were discarded before commit. The probe was removed and the
+file is 6/6 on macOS.
