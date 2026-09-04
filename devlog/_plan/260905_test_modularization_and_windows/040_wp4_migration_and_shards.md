@@ -27,7 +27,7 @@ Total moved: all 1045 root `*.test.ts` files across slices 1-6 (the slice counts
 above sum to 1045 and exclude the 16 already-nested image/video/e2e files; the
 authoritative per-PR list is `plan.ts --domain` output). Root keeps `preload.ts`,
 `fake-codex-server.ts`, `tsconfig.doctor-service-memory-contract.json`, and the
-new `test-layout.test.ts`; `images/ videos/ e2e-style/` stay where they are.
+two new guards `test-layout.test.ts` and `test-layout-tooling.test.ts`; `images/ videos/ e2e-style/` stay where they are.
 
 ## 2. Per-slice procedure (identical for PRs 1-6)
 

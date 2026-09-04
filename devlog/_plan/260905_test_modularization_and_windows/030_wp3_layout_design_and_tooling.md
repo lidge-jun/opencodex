@@ -33,8 +33,9 @@ PRs in wp4 are mechanical.
    `tsconfig.doctor-service-memory-contract.json` (ci.yml gates),
    `fake-codex-server.ts` (root support file with no current importer; kept in
    place and listed in `keepAtRoot` so the guard does not treat it as unresolved,
-   deletion is a separate decision), and `test-layout.test.ts` (new, below). All 1045 root `*.test.ts` files move in wp4; with the new guard
-   the suite is 1062 files.
+   deletion is a separate decision), and the two new guard tests `test-layout.test.ts` and `test-layout-tooling.test.ts`
+   (below). All 1045 existing root `*.test.ts` files move in wp4; with the two
+   new files the suite is 1063.
 8. Depth-aware rewriting: a file at `tests/<domain>/` reaches `tests/helpers` with
    `../helpers` and the repo root with `../..`; a file at `tests/<domain>/<sub>/`
    uses `../../helpers` and `../../..`. The rewriter computes both offsets from the
@@ -125,7 +126,7 @@ the layout test below exercises it.
 {
   "version": 1,
   "root": "tests",
-  "keepAtRoot": ["preload.ts", "fake-codex-server.ts", "tsconfig.doctor-service-memory-contract.json", "test-layout.test.ts"],
+  "keepAtRoot": ["preload.ts", "fake-codex-server.ts", "tsconfig.doctor-service-memory-contract.json", "test-layout.test.ts", "test-layout-tooling.test.ts"],
   "domains": {
     "providers": { "match": ["^(provider|providers|registry|mimo|baseten|chutes|deepinfra|nous|opencode|zai|moonshot|minimax|qwen|glm|groq|together|fireworks|openrouter|deepseek)-"], "children": {
       "cursor": ["^cursor-"], "kiro": ["^kiro-"], "xai": ["^(xai|grok)-"], "ollama": ["^ollama-"], "github-copilot": ["^github-copilot-"] } },
@@ -237,7 +238,7 @@ edits it by hand before committing.
 For a domain (or all):
 - every file in the domain resolves its imports: `bun build --no-bundle` is not
   usable for TS-only; instead `bun x tsc --noEmit -p scripts/test-layout/tsconfig.verify.json`
-  with the committed `include: ["scripts/test-layout/**/*.ts", "tests/test-layout.test.ts", "tests/helpers/**/*.ts"]`; `verify.ts --domain X` writes a temp config under `.tmp/` that `extends` it and repeats the three base entries plus `"tests/X/**/*.ts"` in its own `include` (`include` is replaced, not merged, through `extends`), runs tsc with `-p` on that file, then deletes it,
+  with the committed `include: ["../../scripts/test-layout/**/*.ts", "../../tests/test-layout.test.ts", "../../tests/test-layout-tooling.test.ts", "../../tests/helpers/**/*.ts"]` (relative to `scripts/test-layout/`); `verify.ts --domain X` writes a temp config under `.tmp/` that `extends` it and lists absolute paths (`join(repoRoot(), "scripts/test-layout/**/*.ts")`, ..., `join(repoRoot(), "tests", X, "**/*.ts")`) in its own `include` (`include` is replaced, not merged, through `extends`, and relative entries would resolve under `.tmp/`), runs tsc with `-p` on that file, then deletes it,
   `noEmit`, `skipLibCheck`, `types: ["bun-types"]`. Tests are not typechecked by
   the root tsconfig today (001 §4.A), so this catches only unresolved
   modules and gross breakage, which is exactly what a move can cause.
@@ -439,11 +440,16 @@ Plus the `bun test tests/<name>.test.ts` example becomes `bun test tests/<domain
 Table-driven, runs on the flat tree, no git side effects (operates on a
 `mkdtempSync` copy with its own `git init`):
 
-- `rewriteSpecifier`: for each of depth 1 and depth 2, each of static import,
-  `await import()`, `require()`, `import.meta.resolve()`, `new URL(..., import.meta.url)`
-  and each prefix (`./helpers/`, `../helpers/`, `../fixtures/`, `../preload`,
-  `../src/`, `../gui/`, `../scripts/`, `../bin/`, `../package.json`, `../.github/`,
-  `../skills/`, `"../"`), the expected output string; plus negative cases
+- `rewriteSpecifier`: the matrix is generated, not hand-listed: depths {1, 2} x
+  syntax forms {static named import, side-effect `import "x"`, `export ... from`,
+  `await import()`, `require()`, `import.meta.resolve()`, `new URL(..., import.meta.url)`}
+  x every prefix the implementation declares (the test imports the same
+  `REWRITE_PREFIXES` table from `schema.ts`, so a prefix added to the mover
+  without a case fails here: `./helpers/`, `../helpers/`, `./fixtures/`, `../fixtures/`,
+  `./preload`, `../preload`, `./fake-codex-server`, `../fake-codex-server`, `../src/`,
+  `../gui/`, `../scripts/`, `../bin/`, `../package.json`, `../.gitignore`, `../.github/`,
+  `../skills/`, `../docs-site/`, `../structure/`, `../devlog/`, `"../"`), each with the
+  expected output string; plus negative cases
   (`bun:test`, `node:fs`, package names, `./sibling` at depth 0) unchanged.
 - `import.meta` rewrites: each pattern in step 3 bullets 2-3 to `repoPath`/`repoRoot`/`helperPath`,
   and that the `repo-root` import is added once.
@@ -454,11 +460,15 @@ Table-driven, runs on the flat tree, no git side effects (operates on a
   (assert the tree is untouched); a dirty file outside the slice does not.
 - `resolveTarget`: explicit beats child regex beats domain regex; unknown -> `null`.
 - `currentPath`: root before `migrated`, target after.
-- Independent mapping oracle: `tests/fixtures/test-layout-expected.json` holds
-  the per-domain file counts from 001 §2.B (`providers/cursor: 63`, ...); the
-  test resolves every live `tests/**/*.test.ts` basename and asserts the
-  histogram equals the fixture. A resolver defect that moves and blesses the
-  wrong target therefore fails here, not in the guard that shares the resolver.
+- Independent mapping oracle: `tests/fixtures/test-layout-expected.json` is the
+  full basename -> target membership from 001 §2.D (1045 entries, generated once
+  from that doc, then hand-corrected alongside `explicit`). The test resolves
+  every live root and nested `*.test.ts` basename through `resolveTarget` and
+  asserts equality with the fixture entry by entry, then derives the per-domain
+  histogram from the fixture and asserts it equals 001 §2.B. A swap between two
+  domains fails the membership assertion; a resolver defect that moves and
+  blesses the wrong target therefore fails here, not in the guard that shares the
+  resolver. A new test file must be added to the fixture in the same PR.
 - End-to-end on the temp copy: seed six fake files across two domains, run
   `move` with both domains, assert paths, rewritten imports, `migrated`, and that
   `verify` passes; then assert the layout guard passes on the result.
@@ -466,7 +476,7 @@ Table-driven, runs on the flat tree, no git side effects (operates on a
 ## 4. Verification for wp3
 
 - `bun x tsc --noEmit` (root) and `bun x tsc --noEmit -p scripts/test-layout/tsconfig.verify.json`
-  (covers `scripts/test-layout/**`, `tests/test-layout.test.ts`, `tests/helpers/**`; the
+  (covers `scripts/test-layout/**`, both `tests/test-layout*.test.ts`, `tests/helpers/**`; the
   root tsconfig excludes tests, so this is the only typecheck the tooling gets).
 - `bun test tests/test-layout.test.ts tests/test-layout-tooling.test.ts tests/test-runner.test.ts tests/zz-ci-storage-policy-isolation.test.ts tests/zz-ci-api-usage-isolation.test.ts tests/repo-hygiene.test.ts tests/skill-ocx.test.ts tests/bun-runtime.test.ts tests/release-version-line.test.ts tests/ci-workflows.test.ts`
 - `bun scripts/test-layout/plan.ts` exits 0 with zero UNRESOLVED (proves the map covers 1061).
