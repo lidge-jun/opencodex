@@ -1831,8 +1831,13 @@ describe("kiro adapter — parseStream", () => {
 
     // 80 near-empty turns carry only ~160 chars of text between them, so anything beyond a
     // couple of tokens per entry can only come from a per-entry structural charge.
-    expect(perEntry).toBeGreaterThan(10);
-    expect(perEntry).toBeLessThan(60);
+    //
+    // The band is deliberately tight enough to separate the MEASURED charge from the earlier
+    // hand-fit: the wire costs 66.7 bytes per entry, which at 2.433 bytes per charged token is
+    // ~27 tokens and lands this at 28.3. The previous 12-token constant lands it at 13.2, so a
+    // revert fails here rather than passing a bound wide enough to admit both.
+    expect(perEntry).toBeGreaterThan(20);
+    expect(perEntry).toBeLessThan(40);
   });
 
   test("normalized images contribute conservative context tokens", async () => {
