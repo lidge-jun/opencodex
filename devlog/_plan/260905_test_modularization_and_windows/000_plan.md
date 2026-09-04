@@ -65,3 +65,18 @@ already bound to it; nothing else in the unit touches Windows product code.
 Windows product or CI repair; release or promotion; npm publish; reducing test
 count; editing other worktrees.
 
+## Roadmap audit record (wp0 A-gate)
+
+Reviewer: gpt-5.6-sol at effort high, read-only, same agent across rounds.
+
+| round | verdict | blockers folded |
+|---|---|---|
+| 1 | FAIL | depth-aware rewriter; typed schema + `migrated`; fixture-dir recursive scan; macOS assertion map; PR 7 dispatch proof; `git mv` dirt premise |
+| 2 | FAIL | Windows path separators in the guard; escape-aware MANUAL scan with `// layout: local`; `lane=macos-control` dispatch input so Windows is skipped |
+| 3 | FAIL | slice-atomic preflight/move/migrate/verify; behavioural tooling tests |
+| 4 | FAIL | 1063 count and second guard in `keepAtRoot`; membership oracle; tsconfig relative paths; generated rewrite matrix |
+| 5 | FAIL | 1061-entry oracle; MANUAL exit state; verify reuses the scanner; write-set cleanliness |
+| 6 | PASS | bare `import()` / `typeof import()` cases, recovery wording, keepAtRoot-at-root assertion (non-blocking, folded) |
+
+The goalplan work-phase map is unchanged by the audit: wp1 NOOP, wp2 issue,
+wp3 tooling (030), wp4 seven PRs (040), wp5 closeout (050).
