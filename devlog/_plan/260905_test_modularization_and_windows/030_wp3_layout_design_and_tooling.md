@@ -500,6 +500,30 @@ Table-driven, runs on the flat tree, no git side effects (operates on a
 
 ## 4. Verification for wp3
 
+### Implementation notes (B, 2026-09-05)
+
+What shipped differs from the sketch above in three ways the code review forced:
+
+- Rewrites are token-based (`scripts/test-layout/tokens.ts`): only string tokens
+  in specifier position are rewritten, so a test that asserts on source text
+  containing `import("../grok/inject")` keeps its expectation byte-for-byte.
+  Sixteen such payloads exist in six tests today.
+- `rewriteMetaDirEscapes` handles the six `join|resolve(import.meta.dir, ...)`
+  and `fileURLToPath(new URL("../"))` shapes and refuses a file that already
+  binds `repoRoot`/`repoPath`/`helperPath` (that file becomes MANUAL). The
+  windows slice needs zero MANUAL edits after this.
+- `move.ts` runs `verify.ts` itself after a clean move and exits 1 if it
+  fails; `--dry-run` performs the rewrite in memory and reports the same MANUAL
+  lines the real run would.
+
+Known limitation: an `import()` inside a template-literal `${...}` expression is
+not rewritten (no such shape exists in the corpus; the escape scanner still runs
+on the moved file).
+
+Review: gpt-5.6-sol/high, two rounds (FAIL with 7 blockers, then NEAR-PASS
+with 1 blocker + 3 notes), all folded. Trial: `move.ts --domain windows` moved
+20 files, 0 MANUAL, verify green (396 tests); tree reverted afterwards.
+
 - `bun x tsc --noEmit` (root) and `bun x tsc --noEmit -p scripts/test-layout/tsconfig.verify.json`
   (covers `scripts/test-layout/**`, both `tests/test-layout*.test.ts`, `tests/helpers/**`; the
   root tsconfig excludes tests, so this is the only typecheck the tooling gets).
@@ -508,4 +532,3 @@ Table-driven, runs on the flat tree, no git side effects (operates on a
 - `bun scripts/test-layout/move.ts --domain windows --dry-run` prints the 20 moves and the rewrites without touching the tree.
 - `bun run test:changed`, `bun run privacy:scan`.
 - PR to `dev`, exact-head `ci` success, admin merge, ancestry proof.
-
