@@ -46,6 +46,10 @@ import {
   resolveEffectiveUserIdentity,
 } from "../codex/user-identity";
 import { collectProjectCodexConfigWarnings, formatProjectCodexConfigWarningsForDoctor } from "../codex/project-config-warnings";
+import {
+  collectLegacyCodexConfigKeyDiagnostics,
+  formatLegacyCodexConfigKeyDiagnosticsForDoctor,
+} from "../codex/legacy-config-keys";
 import { collectStartupHealth, formatStartupRoutingDetail, startupHealthSummary } from "../codex/autostart-health";
 import {
   displayCodexRuntimePath,
@@ -1266,6 +1270,16 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     console.log("  ok     no project-local provider bypass detected");
   } else {
     for (const line of formatProjectCodexConfigWarningsForDoctor(projectWarnings)) {
+      console.log(line);
+    }
+  }
+
+  console.log("\nCodex config compatibility");
+  const legacyKeyDiagnostics = collectLegacyCodexConfigKeyDiagnostics();
+  if (legacyKeyDiagnostics.length === 0) {
+    console.log("  ok     no unsupported legacy top-level keys in the Codex config");
+  } else {
+    for (const line of formatLegacyCodexConfigKeyDiagnosticsForDoctor(legacyKeyDiagnostics)) {
       console.log(line);
     }
   }
