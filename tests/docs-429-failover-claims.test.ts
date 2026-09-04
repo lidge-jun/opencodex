@@ -59,4 +59,18 @@ describe("429 failover docs", () => {
       expect(row, `${locale} lost the 429 carve-out`).toContain("429");
     }
   });
+
+  test("the Claude Code guide does not attribute 429 failover to the pool", async () => {
+    // The guide is where an operator decides whether to enable the experimental pool at all, so
+    // a stale sentence here is the most expensive one in the docs: it sells the pool on recovery
+    // that is now unconditional. Checked in the source locale and the three that translate it.
+    for (const path of ["", "zh-tw/", "tr/", "fr/"]) {
+      const source = await Bun.file(`docs-site/src/content/docs/${path}guides/claude-code.md`).text();
+      const intro = source.slice(0, source.indexOf("anthropicAccountPool.strategy"));
+      expect(intro, `${path || "en"} guide`).toContain("429");
+      // The carve-out is always emphasised, in every locale, so a silent revert to the old
+      // one-clause sentence drops the marker.
+      expect(intro, `${path || "en"} guide lost the carve-out`).toMatch(/\*\*[^*]*\*\*/);
+    }
+  });
 });
