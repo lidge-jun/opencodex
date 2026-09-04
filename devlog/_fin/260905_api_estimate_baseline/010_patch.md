@@ -5,7 +5,13 @@ The three new policy scenarios were observed red before the table change, then g
 Typecheck/privacy/diff checks pass; docs build emits 425 pages. Direct production-estimator
 invocation returned identical native/API costs (3.25 Standard / 6.50 Fast) for the documented
 cache-heavy 300k fixture, with long-context classification and API cache-write pricing.
-Full-suite, CI and landing evidence are recorded in the associated pull request.
+Consult the associated pull request for full-suite, current-head CI and landing status;
+this implementation record does not certify that those stages have completed.
+
+Review amendment: preserve `verified-derived` and an API-reference source on native Astra/Sol
+rows, while API-key rows remain verified. Numeric API prices, Fast multipliers and long-context
+bands remain identical. Regression assertions distinguish native estimate provenance from API
+price verification, including normalized main/pool labels. No subscription billing rule returns.
 
 C2 policy correction requested by the maintainer: all built-in display estimates use API pricing, not subscription credit conversion or subscription-only exceptions. No account settings, model metadata, provider destinations, releases or live services change.
 

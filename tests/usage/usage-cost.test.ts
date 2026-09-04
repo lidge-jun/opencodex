@@ -494,11 +494,13 @@ describe("OpenAI API-reference pricing", () => {
       const base = estimateRequestCost({ provider, model, usage, usageStatus: "reported" })!;
       expect(base).not.toBeNull();
       expect(base.cost.total).toBeCloseTo(3.25, 9);
-      expect(base.price?.status).toBe("verified");
+      expect(base.price?.status).toBe(provider === "openai-apikey" ? "verified" : "verified-derived");
+      expect(base.estimated).toBe(provider !== "openai-apikey");
       expect(base.contextTier).toBe("long");
       const fast = estimateRequestCost({ provider, model, usage, usageStatus: "reported", serviceTier: { responseServiceTier: "fast" } })!;
       expect(fast.cost.total).toBeCloseTo(6.5, 9);
       expect(fast.priorityMultiplier).toBe(2);
+      expect(fast.estimated).toBe(provider !== "openai-apikey");
       const attempt = { ordinal: 1, provider, model, usage, usageStatus: "reported" as const };
       expect(estimateAttemptCost(attempt, undefined, "priority")?.cost.total).toBeCloseTo(6.5, 9);
       expect(estimateComboCost([attempt, { ...attempt, ordinal: 2 }], undefined, "priority")?.cost.total).toBeCloseTo(13, 9);
@@ -701,7 +703,7 @@ describe("priority (Fast) service tier multiplier", () => {
     const alias = estimateRequestCost({ provider: "openai", model: "gpt-daybreak-blue-latest", usageStatus: "reported", usage, serviceTier: "priority" });
     const sol = estimateRequestCost({ provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage, serviceTier: "priority" });
     expect(alias?.cost.total).toBeCloseTo(sol!.cost.total, 9);
-    expect(sol?.estimated).toBe(false);
+    expect(sol?.estimated).toBe(true);
     const api = estimateRequestCost({ provider: "openai-apikey", model: "gpt-5.6-sol", usageStatus: "reported", usage, serviceTier: "priority" });
     expect(api?.cost.total).toBeCloseTo(2.4, 9);
     expect(api?.estimated).toBe(false);

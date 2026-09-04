@@ -116,7 +116,7 @@ const QWEN38_MAX_PRICING = "https://qwen.ai/blog?id=qwen3.8 (Qwen release announ
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "openai-apikey", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: ASTRA_API_PRICING, verifiedAt: "2026-09-05", status: "verified" },
   // Display estimates use API prices for both login and API-key routes, including cache writes.
-  { provider: "openai", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: ASTRA_API_PRICING, verifiedAt: "2026-09-05", status: "verified" },
+  { provider: "openai", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: `API-reference comparison estimate: ${ASTRA_API_PRICING}`, verifiedAt: "2026-09-05", status: "verified-derived" },
   // claude-fable-5-1 now HAS a generated jawcode row, so the two Anthropic surfaces resolve
   // from it and these overlays are the fallback rather than the primary source. They stay:
   // the overlay lookup is keyed by the configured provider id, so an account-pool log label
@@ -246,8 +246,8 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
 export const VERIFIED_PRICE_OVERRIDES: readonly ExpectedPriceOverlay[] = [
   ...["openai", "openai-apikey"].map((provider): ExpectedPriceOverlay => ({
     provider, modelId: "gpt-5.6-sol", cost4: GPT56_SOL,
-    source: OPENAI_GPT56_PRICING,
-    verifiedAt: "2026-09-05", status: "verified",
+    source: provider === "openai" ? `API-reference comparison estimate: ${OPENAI_GPT56_PRICING}` : OPENAI_GPT56_PRICING,
+    verifiedAt: "2026-09-05", status: provider === "openai" ? "verified-derived" : "verified",
   })),
   {
     provider: "xai",
