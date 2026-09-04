@@ -1,19 +1,21 @@
-# 040 - wp4: stack close-out (administrative, NOT a fourth PR)
+# 040 - wp4: stack close-out (administrative, opens no PR of its own)
 
-This unit ships exactly THREE pull requests: wp1, wp2, wp3. wp4 opens no fourth
+This unit ships FOUR pull requests: the wp0 roadmap plus wp1, wp2 and wp3. wp4 opens no further
 PR and introduces no code. It is the administrative work performed ON the
 existing stack - CI triage, review responses, retargeting, and the closeout
 record - and its one artifact, `004_implementation_outcome.md`, is a devlog
 commit on the last child branch in the chain.
 
-Evidence: the three PRs from wp1, wp2, wp3.
+Evidence: #3436, #3437, #3440 and #3438.
 
 ## What this phase does
 
-1. Confirm each PR in the chain is open against the right base: wp1 on `dev`,
-   wp2 on wp1's head, wp3 on wp2's head. `enforce-target` skips the wrong-base
-   gate for children of an open PR; after a parent lands, retarget the child to
-   `dev`.
+1. Confirm each PR is open against the right base. The chain is NOT linear:
+   #3436 on `dev`, #3437 on #3436, then #3440 and #3438 BOTH on #3437 as
+   siblings. wp2 and wp3 share no files, so chaining them would have made one
+   wait on the other for nothing. `enforce-target` skips the wrong-base gate
+   for children of an open PR; retarget each child to `dev` once its parent
+   lands.
 2. Read CI on each PR. Triage any failure and fix it in the owning PR rather than
    the tip of the stack, so each commit stays independently reviewable.
 3. Answer Codex and CodeRabbit review findings on every PR in the chain.
@@ -34,8 +36,10 @@ suite from memory or from a local run that did not happen.
 
 ## Definition of done
 
-- Exactly three PRs open or landed against `dev`, each filled from
+- Four PRs open or landed, each filled from
   `.github/PULL_REQUEST_TEMPLATE.md`. No fourth PR exists.
-- CI conclusion captured per PR as goalplan evidence.
+- CI conclusion captured per PR as goalplan evidence, with any failure either
+  fixed here or PROVEN inherited by reproducing it on clean `origin/dev`.
+  "Unrelated" is a claim that needs evidence.
 - `004` written.
 - `050` lists every deliberate follow-up with its reason.
