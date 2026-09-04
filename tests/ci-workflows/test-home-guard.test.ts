@@ -304,7 +304,7 @@ const canSymlink = (() => {
    * to succeed", and the failure only reproduces when the lock throws.
    */
   test("the preload arms the guard before it can throw on the run lock", async () => {
-    const source = await Bun.file(new URL("./preload.ts", import.meta.url)).text();
+    const source = await Bun.file(new URL("../preload.ts", import.meta.url)).text();
 
     const armAt = source.indexOf('process.env.OCX_TEST_HOME_GUARD = "1"');
     const assertAt = source.indexOf("test home guard failed to arm");
