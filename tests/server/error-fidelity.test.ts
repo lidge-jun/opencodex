@@ -91,6 +91,18 @@ describe("error fidelity", () => {
       type: "insufficient_quota",
       code: "insufficient_quota",
     });
+    expect(classifyError(400, "upstream_error", "Antigravity location not supported: User location is not supported for the API use.")).toMatchObject({
+      type: "permission_error",
+      code: "location_not_supported",
+    });
+    expect(classifyError(400, "upstream_error", "User location is not supported for the API use.")).toMatchObject({
+      type: "permission_error",
+      code: "location_not_supported",
+    });
+    expect(classifyError(403, "location_not_supported", "Region is not supported")).toMatchObject({
+      type: "permission_error",
+      code: "location_not_supported",
+    });
   });
 
   test("formatErrorResponse returns OpenAI-compatible classified error envelope", async () => {

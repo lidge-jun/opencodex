@@ -127,6 +127,20 @@ function isPermissionMessage(text: string): boolean {
   );
 }
 
+export function isLocationUnsupportedMessage(text: string): boolean {
+  return (
+    text.includes("location is not supported") ||
+    text.includes("location not supported") ||
+    text.includes("unsupported location") ||
+    text.includes("region is not supported") ||
+    text.includes("unsupported region") ||
+    text.includes("country is not supported") ||
+    text.includes("not supported in your country") ||
+    text.includes("not supported in your region") ||
+    text.includes("not supported for the api use")
+  );
+}
+
 /**
  * Client cancelled / closed the turn. Matches ONLY abort phrases this codebase
  * produces — "client closed request during web-search" (src/web-search/loop.ts),
@@ -250,6 +264,12 @@ export function classifyError(status: number, type: string, message: string): Oc
     isSubscriptionGateMessage(text)
   ) {
     return { message, type: "permission_error", code: "subscription_required" };
+  }
+  if (
+    type === "location_not_supported" ||
+    isLocationUnsupportedMessage(text)
+  ) {
+    return { message, type: "permission_error", code: "location_not_supported" };
   }
   if (
     status === 403 ||

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  isGoogleLocationUnsupportedText,
   isGoogleQuotaExhaustedText,
   isQuotaExhaustedBody,
   safeAntigravityHttpErrorMessage,
@@ -85,5 +86,27 @@ describe("google error classification & quota exhaustion", () => {
       },
     });
     expect(isQuotaExhaustedBody(jsonBody)).toBe(false);
+  });
+
+  test("classifies location unsupported as location not supported instead of invalid request", () => {
+    const locationPhrases = [
+      "User location is not supported for the API use.",
+      "Location not supported in your region.",
+      "This model is not supported in your country.",
+      "Service is not supported for the api use in this location.",
+    ];
+
+    for (const phrase of locationPhrases) {
+      expect(isGoogleLocationUnsupportedText(phrase)).toBe(true);
+      const jsonBody = JSON.stringify({
+        error: {
+          code: 400,
+          status: "FAILED_PRECONDITION",
+          message: phrase,
+        },
+      });
+      expect(safeAntigravityHttpErrorMessage(400, jsonBody)).toContain("Antigravity location not supported");
+      expect(safeVertexHttpErrorMessage(400, jsonBody)).toContain("Vertex AI location not supported");
+    }
   });
 });

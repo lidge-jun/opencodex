@@ -54,11 +54,30 @@ export function isGoogleQuotaExhaustedText(text: string): boolean {
   return GOOGLE_QUOTA_EXHAUSTED_NEEDLES.some(needle => lower.includes(needle));
 }
 
+export const GOOGLE_LOCATION_UNSUPPORTED_PATTERNS = [
+  "location is not supported",
+  "location not supported",
+  "unsupported location",
+  "region is not supported",
+  "unsupported region",
+  "country is not supported",
+  "not supported in your country",
+  "not supported in your region",
+  "not supported for the api use",
+];
+
+export function isGoogleLocationUnsupportedText(text: string): boolean {
+  const lower = text.toLowerCase();
+  return GOOGLE_LOCATION_UNSUPPORTED_PATTERNS.some(needle => lower.includes(needle));
+}
 
 function classifyGoogle(label: string, status: number | undefined, enumStatus: string | undefined, text: string): string {
   const lower = `${enumStatus ?? ""} ${text}`.toLowerCase();
   const quotaExhausted = isGoogleQuotaExhaustedText(lower);
   if ((!enumStatus || enumStatus === "RESOURCE_EXHAUSTED") && quotaExhausted) return `${label} quota exhausted`;
+  if (isGoogleLocationUnsupportedText(lower)) {
+    return `${label} location not supported`;
+  }
   if (status === 429 || enumStatus === "RESOURCE_EXHAUSTED" || lower.includes("rate limit")) {
     return `${label} rate limit exceeded`;
   }

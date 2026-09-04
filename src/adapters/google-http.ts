@@ -1,5 +1,10 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
-import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
+import {
+  isGoogleLocationUnsupportedText,
+  isQuotaExhaustedBody,
+  retryableGoogleStatus,
+  safeGoogleHttpErrorMessage,
+} from "./google-errors";
 import { repairGoogleInvalidRequestBody } from "./google-wire-compiler";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import {
@@ -22,7 +27,16 @@ export interface GoogleRetryOptions {
 async function normalizeFinalGoogleError(label: string, res: Response, signal?: AbortSignal): Promise<Response> {
   return normalizeUpstreamHttpErrorResponse(res, {
     signal,
-    formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText),
+    formatMessage: payloadText => {
+      const message = safeGoogleHttpErrorMessage(label, res.status, payloadText);
+      if (isGoogleLocationUnsupportedText(payloadText)) {
+        console.warn(
+          `[opencodex] ${label} request was rejected because the client location is not supported. `
+          + "If using a proxy or VPN, verify TUN mode is enabled and check for IPv6 / direct routing leaks.",
+        );
+      }
+      return message;
+    },
   });
 }
 
