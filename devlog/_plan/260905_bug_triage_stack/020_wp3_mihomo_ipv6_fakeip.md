@@ -6,6 +6,32 @@ against the current tree at this cycle's P before implementing.
 
 ---
 
+## wp3 plan amendments (audit rounds 1–2; binding over the lane text below)
+
+Implementation shape (see the PR diff for the authoritative change):
+
+1. `src/lib/proxy-env.ts`: `effectiveProxyFor(url, env)` selects the proxy variable that
+   matches the URL scheme (`HTTPS_PROXY` for `https:`, `HTTP_PROXY` for `http:`); returns null
+   when none is set. `ALL_PROXY` is not consulted.
+2. `src/lib/provider-outbound.ts`: `allowMihomoIpv6FakeIp` is derived from that selection plus
+   `!noProxyMatches(parsed)`, and when the flag admitted the answer the request is issued with
+   an explicit `proxy:` option bound to the same selection (Bun `BunFetchRequestInit.proxy`,
+   bun-types 1.4.0 `globals.d.ts:1944`). Snapshot both before the DNS await; no direct retry
+   after a proxy failure. All other branches are unchanged.
+3. `src/lib/destination-policy.ts`: separate `allowMihomoIpv6FakeIp` option (not a relabel of
+   the `benchmark address` detail), so config-time validation in `provider-routes.ts` is untouched.
+4. Tests: `tests/providers/provider-outbound.test.ts` (scheme-matched proxy selection matrix,
+   captured `proxy` option, NO_PROXY) and `tests/routing/destination-policy-resolved.test.ts`
+   (accept under flag / reject without / literal / adjacent prefix / benchmark-only flag /
+   config-validation path).
+5. Docs: English `providers.md` §"Provider diagnostic outbound safety" (:333) and the seven
+   locale pages (ko:129 ja:129 zh-cn:129 zh-tw:103 fr:143 ru:145 tr:151).
+
+Review notes and the reviewer's transport measurements live in scratch (`.tmp/triage/`), per
+AGENTS.md §Security working notes; they are summarized publicly once the PR is merged.
+
+---
+
 1) VERDICT: FIXABLE
 
 Neither dev nor [PR #3489](https://github.com/lidge-jun/opencodex/pull/3489) fixes #3462. Implement a separate, proxy-only IPv6 fake-IP exception; do not carry #3489 as this issue’s fix.
