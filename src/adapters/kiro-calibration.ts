@@ -55,9 +55,12 @@ const MAX_FACTOR = 3;
 const SMOOTHING = 0.35;
 
 /**
- * Maximum conversations tracked. Entries are small, but the map must not grow with uptime; the
- * oldest insertion is evicted first, which for conversation ids is also the least recently
- * started.
+ * Maximum conversations tracked. Entries are small, but the map must not grow with uptime.
+ *
+ * Eviction is least-recently-USED, not oldest-inserted: `touch` re-inserts on every estimate and
+ * every observation, so an active long conversation survives an arbitrary number of short ones
+ * started after it. Insertion order would have evicted exactly the conversation most worth
+ * keeping.
  */
 const MAX_TRACKED_CONVERSATIONS = 256;
 

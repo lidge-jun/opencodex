@@ -94,6 +94,18 @@ export function promptForAdminToken(
     form.append(heading, accountField, tokenField, validationError, actions);
     dialog.append(form);
 
+    /*
+     * #3483: the notice must carry no text while it is hidden.
+     *
+     * The element is mounted up front so `role="alert"` has a stable target, and the CSS
+     * now scopes `.notice`'s `display` to `:not([hidden])`. Clearing the text alongside the
+     * `hidden` flag keeps the two halves of "there is no error" from drifting apart.
+     */
+    const setValidationError = (text: string | null): void => {
+      validationError.textContent = text ?? "";
+      validationError.hidden = text === null;
+    };
+
     const finish = (value: string | null): void => {
       if (settled) return;
       settled = true;
@@ -113,7 +125,7 @@ export function promptForAdminToken(
       }
       password.disabled = true;
       submit.disabled = true;
-      validationError.hidden = true;
+      setValidationError(null);
 
       void verifyToken(token).then((result) => {
         if (settled) return;
@@ -124,18 +136,16 @@ export function promptForAdminToken(
         password.value = "";
         password.disabled = false;
         submit.disabled = false;
-        validationError.textContent = result === "rejected"
+        setValidationError(result === "rejected"
           ? messages["auth.adminTokenRejected"]
-          : messages["auth.adminTokenUnavailable"];
-        validationError.hidden = false;
+          : messages["auth.adminTokenUnavailable"]);
         password.focus();
       }).catch(() => {
         if (settled) return;
         password.value = "";
         password.disabled = false;
         submit.disabled = false;
-        validationError.textContent = messages["auth.adminTokenUnavailable"];
-        validationError.hidden = false;
+        setValidationError(messages["auth.adminTokenUnavailable"]);
         password.focus();
       });
     });

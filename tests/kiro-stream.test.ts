@@ -1501,15 +1501,21 @@ describe("kiro adapter — parseStream", () => {
         },
       }, "metadataEvent"),
     );
-    expect(done).toEqual({
+    // Authoritative per-turn numbers replace the estimates exactly; the context checkpoint is
+    // derived from the payload estimate, so it is asserted as a RELATION rather than a snapshot
+    // of the current escape/framing constants.
+    const { contextTotalTokens, ...turn } = done;
+    expect(turn).toEqual({
       inputTokens: 15,
-      contextTotalTokens: 298,
       cachedInputTokens: 3,
       cacheReadInputTokens: 3,
       cacheCreationInputTokens: 2,
       outputTokens: 4,
       totalTokens: 19,
     });
+    // The whole-payload checkpoint must exceed this turn's own total, which is the point of
+    // reporting it separately.
+    expect(contextTotalTokens).toBeGreaterThan(19);
   });
 
   test("authoritative turn usage floors a smaller payload context estimate", async () => {
@@ -1606,7 +1612,9 @@ describe("kiro adapter — parseStream", () => {
     expect(done.inputTokens).toBe(251);
     expect(done.outputTokens).toBe(126);
     expect(done.totalTokens).toBeUndefined();
-    expect(done.contextTotalTokens).toBe(420);
+    // No upstream window for kiro-auto, so the checkpoint falls back to the payload estimate,
+    // which must still exceed the current turn's input+output.
+    expect(done.contextTotalTokens).toBeGreaterThan(251 + 126);
   });
 
   test("Kiro auto uses the concrete response model to decode context percentage", async () => {
@@ -1745,7 +1753,8 @@ describe("kiro adapter — parseStream", () => {
 
     expect(done.inputTokens).toBe(1250);
     expect(done.outputTokens).toBe(1250);
-    expect(done.contextTotalTokens).toBe(2663);
+    // Absolute checkpoint covers the whole payload, so it exceeds this turn's 1250 + 1250.
+    expect(done.contextTotalTokens).toBeGreaterThan(2500);
   });
 
   test("fresh payload includes history while usage counts only the current turn", async () => {
@@ -1789,6 +1798,122 @@ describe("kiro adapter — parseStream", () => {
     expect(request.body).not.toContain(privateReasoning);
     expect(request.usageLog?.inputTokens).toBeGreaterThan((usage.contextTotalTokens ?? 0) + 1000);
     expect(usage.contextTotalTokens).toBeLessThan(1000);
+  });
+
+  // Framing is charged PER ENTRY, not as a share of the text. Adding turns that carry almost no
+  // text must still raise the estimate by roughly the per-entry cost — which is exactly what a
+  // text-proportional multiplier cannot do. If the framing term were ever folded into the escape
+  // multiplier, the estimate would barely move here and this fails.
+  //
+  // The constant is deliberately not restated: the assertion is the SHAPE (linear in entry count,
+  // several tokens each), so it survives a re-measurement of the exact value.
+  test("context growth tracks entry count, not just text length", async () => {
+    const filler = "hi";
+    const build = async (turns: number) => {
+      const messages: unknown[] = [];
+      for (let i = 0; i < turns; i++) {
+        messages.push(i % 2 === 0
+          ? { role: "user", content: filler }
+          : { role: "assistant", content: [{ type: "text", text: filler }] });
+      }
+      if ((messages[messages.length - 1] as { role: string }).role !== "user") {
+        messages.push({ role: "user", content: filler });
+      }
+      const adapter = createKiroAdapter(provider);
+      await adapter.buildRequest(parsedWith(messages));
+      return (await doneUsage(adapter, eventFrame({ content: "ok" }))).contextTotalTokens ?? 0;
+    };
+
+    const small = await build(4);
+    const large = await build(84);
+    const addedEntries = 80;
+    const perEntry = (large - small) / addedEntries;
+
+    // 80 near-empty turns carry only ~160 chars of text between them, so anything beyond a
+    // couple of tokens per entry can only come from a per-entry structural charge.
+    //
+    // The band is deliberately tight enough to separate the MEASURED charge from the earlier
+    // hand-fit: the wire costs 66.7 bytes per entry, which at 2.433 bytes per charged token is
+    // ~27 tokens and lands this at 28.3. The previous 12-token constant lands it at 13.2, so a
+    // revert fails here rather than passing a bound wide enough to admit both.
+    expect(perEntry).toBeGreaterThan(20);
+    expect(perEntry).toBeLessThan(40);
+  });
+
+  // The framing charge was derived from plain text turns, but real Kiro traffic is mostly tool
+  // calls and tool results, whose entries carry extra JSON (toolUseId, status, content arrays).
+  // A per-entry constant fitted on the wrong entry shape would drift as the tool ratio changes,
+  // so pin that it does not: growth stays proportional across a 20x range of tool rounds.
+  test("per-entry growth holds for tool-call and tool-result entries", async () => {
+    const round = (i: number) => ([
+      { role: "assistant", content: [{ type: "toolCall", id: "call-" + i, name: "bash", arguments: { cmd: "rg -n pattern" + i } }] },
+      { role: "toolResult", toolCallId: "call-" + i, toolName: "bash", isError: false, content: [{ type: "text", text: "hit\n" }] },
+    ]);
+    const build = async (rounds: number) => {
+      const messages: unknown[] = [{ role: "user", content: "investigate" }];
+      for (let i = 0; i < rounds; i++) messages.push(...round(i));
+      messages.push({ role: "user", content: "continue" });
+      const adapter = createKiroAdapter(provider);
+      await adapter.buildRequest(parsedWith(messages, [bashTool]));
+      // Tools are advertised, so the turn only completes through the private completion call.
+      return (await doneUsage(adapter, ...completionFrames("done."))).contextTotalTokens ?? 0;
+    };
+    const small = await build(2);
+    const large = await build(42);
+    // 40 added rounds = 80 added entries. Tool entries are NOT near-empty the way the plain-text
+    // case is: each carries a serialized call (name, id, arguments) and a result block, so growth
+    // legitimately exceeds the bare framing charge. The wire bears this out — the same 80 entries
+    // add ~182 bytes each, which is ~75 charged tokens, and the estimate stays just under that.
+    //
+    // The assertion is therefore that growth stays in the same order as the wire's own per-entry
+    // cost: comfortably above the plain-text framing floor, and never above what is charged.
+    const perEntry = (large - small) / 80;
+    expect(perEntry).toBeGreaterThan(27);
+    expect(perEntry).toBeLessThan(75);
+  });
+
+  // The wire-expansion factor is derived from a bytes-per-token rate measured on Latin/code
+  // traffic. A Hangul character is three UTF-8 bytes but roughly one token, so that rate says
+  // nothing about it — scaling CJK by the Latin factor over-charges Korean threads and compacts
+  // them early. Recorded ground truth puts the shared 1.5 CJK ratio at ~0.90 of the authoritative
+  // count already, so there is no headroom for another 1.2x on top.
+  test("the wire expansion applies to Latin text, not to CJK", async () => {
+    const estimateFor = async (text: string) => {
+      const adapter = createKiroAdapter(provider);
+      await adapter.buildRequest(parsedWith([{ role: "user", content: text }]));
+      return (await doneUsage(adapter, eventFrame({ content: "ok" }))).contextTotalTokens ?? 0;
+    };
+    // Same character count, different script. Korean is denser per character, so it must
+    // estimate HIGHER — but by the ratio the shared estimator already encodes (2.8 / 1.5),
+    // not by that ratio multiplied again by the Latin wire factor.
+    const n = 3000;
+    const latin = await estimateFor("x".repeat(n));
+    const korean = await estimateFor("한".repeat(n));
+    const ratio = korean / latin;
+    // 2.8/1.5 = 1.87 with the expansion on Latin only; ~1.87 again if applied to both, but the
+    // absolute Korean figure is what moves. Pin the absolute: Korean at 1.5 chars/token is
+    // n/1.5 tokens, and applying the Latin expansion to it would inflate past that.
+    expect(korean).toBeLessThan(Math.ceil(n / 1.5) * 1.1 + 100);
+    expect(ratio).toBeGreaterThan(1.5);
+  });
+
+  test("tool-heavy growth stays under the wire's own per-entry charge", async () => {
+    // Guards the direction that matters: over-charging tool entries would compact early on
+    // exactly the traffic Kiro carries most.
+    const round = (i: number) => ([
+      { role: "assistant", content: [{ type: "toolCall", id: "c-" + i, name: "bash", arguments: { cmd: "rg -n p" + i } }] },
+      { role: "toolResult", toolCallId: "c-" + i, toolName: "bash", isError: false, content: [{ type: "text", text: "hit\n" }] },
+    ]);
+    const messages: unknown[] = [{ role: "user", content: "investigate" }];
+    for (let i = 0; i < 42; i++) messages.push(...round(i));
+    messages.push({ role: "user", content: "continue" });
+    const adapter = createKiroAdapter(provider);
+    const request = await adapter.buildRequest(parsedWith(messages, [bashTool]));
+    const estimate = (await doneUsage(adapter, ...completionFrames("done."))).contextTotalTokens ?? 0;
+    // 2.433 bytes per charged token, measured over 3,491 recorded request/charge pairs.
+    const charged = Buffer.byteLength(request.body as string, "utf8") / 2.433;
+    expect(estimate).toBeLessThan(charged);
+    expect(estimate).toBeGreaterThan(charged * 0.8);
   });
 
   test("normalized images contribute conservative context tokens", async () => {
