@@ -286,4 +286,55 @@ const canSymlink = (() => {
     expect(homedir()).toBeTruthy();
     expect(getConfigDir()).not.toBe(protectedHomeForTests());
   });
+
+  /*
+   * The preload must arm the guard BEFORE it acquires the run lock.
+   *
+   * This is not a style preference. Taking the lock resolves a user-scoped path, which on
+   * Windows spawns PowerShell for the effective SID; under four-shard load that spawn timed
+   * out, the refusal threw straight out of the preload, and every statement below it —
+   * including the arming — never ran. The worker executed its whole file unguarded, and
+   * because `src/lib/windows-elevation.ts` and `src/service.ts` refuse live elevation and
+   * machine-global Task Scheduler mutation only while armed, one such worker launched a real
+   * PowerShell process and reached real scheduler registration on the developer's machine.
+   *
+   * The ordering is the whole fix, so it is asserted on the source itself: a reader of the
+   * runtime state cannot tell "armed before the lock" from "armed after a lock that happened
+   * to succeed", and the failure only reproduces when the lock throws.
+   */
+  test("the preload arms the guard before it can throw on the run lock", async () => {
+    const source = await Bun.file(new URL("./preload.ts", import.meta.url)).text();
+
+    const armAt = source.indexOf('process.env.OCX_TEST_HOME_GUARD = "1"');
+    const assertAt = source.indexOf("test home guard failed to arm");
+    const lockAt = source.indexOf("await acquireTestRunLock(");
+    const sandboxAt = source.indexOf("createIsolatedTestEnvironment()");
+
+    expect(armAt).toBeGreaterThan(-1);
+    expect(assertAt).toBeGreaterThan(-1);
+    expect(lockAt).toBeGreaterThan(-1);
+    expect(sandboxAt).toBeGreaterThan(-1);
+
+    // sandbox -> arm -> assert -> lock. Arming before the sandbox would leave a window that
+    // is merely over-protective, but arming after the lock is the defect above.
+    expect(sandboxAt).toBeLessThan(armAt);
+    expect(armAt).toBeLessThan(assertAt);
+    expect(assertAt).toBeLessThan(lockAt);
+  });
+
+  /*
+   * And the guard has to hold for a process that never reached the lock at all, which is the
+   * state the timed-out worker was actually in.
+   */
+  test("a process that arms the guard is protected even with no lock and a real HOME", () => {
+    const { realHome } = sentinelHome();
+    const probe = runProbe(`
+      import { assertNotRealHomeUnderTest, isTestHomeGuardArmed } from "${REPO_ROOT_URL}src/lib/test-home-guard";
+      let rejected = false;
+      try { assertNotRealHomeUnderTest(${JSON.stringify(join(realHome, ".opencodex"))}); } catch { rejected = true; }
+      console.log(JSON.stringify({ armed: isTestHomeGuardArmed(), rejected }));
+    `, { OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: realHome, HOME: realHome, OPENCODEX_HOME: undefined });
+
+    expect(JSON.parse(probe.stdout.trim())).toEqual({ armed: true, rejected: true });
+  });
 });
