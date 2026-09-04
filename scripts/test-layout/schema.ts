@@ -174,7 +174,7 @@ export function rewriteMetaDirEscapes(source: string, depth: number): { source: 
   // `const repoRoot = join(import.meta.dir, "..")` is the commonest escape of all: rebind the
   // local through an aliased import instead of refusing the file. Any other local named like a
   // helper (or a function) still stops the rewrite so nothing gets shadowed.
-  const localRoot = /\bconst\s+repoRoot\s*=\s*(?:(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*\)|fileURLToPath\(\s*new\s+URL\(\s*"\.\.\/"\s*,\s*import\.meta\.url\s*\)\s*\)|resolve\(\s*dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*"\.\."\s*\))\s*;/;
+  const localRoot = /\bconst\s+repoRoot\s*=\s*(?:(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*\)|fileURLToPath\(\s*new\s+URL\(\s*"(?:\.\.\/)+"\s*,\s*import\.meta\.url\s*\)\s*\)|resolve\(\s*dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*"\.\."\s*\))\s*;/;
   const rebindsRoot = localRoot.test(view);
   const otherLocals = new RegExp(`\\b(?:const|let|var|function)\\s+(?:${HELPER_NAMES.filter(n => !(rebindsRoot && n === "repoRoot")).join("|")})\\b`);
   if (otherLocals.test(code)) return { source, rewrites: 0 };

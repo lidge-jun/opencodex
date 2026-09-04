@@ -9,7 +9,7 @@ import type { OcxConfig, OcxProviderConfig } from "../src/types";
  *
  * Before the opt-in, the pinned registry endpoint silently outranked a saved
  * baseUrl and the router emitted the discarded-baseUrl diagnostic (see
- * tests/router-discarded-baseurl-warning.test.ts). Users routing Antigravity
+ * tests/routing/router-discarded-baseurl-warning.test.ts). Users routing Antigravity
  * traffic through a local relay or region-specific proxy therefore could not
  * redirect the provider at all. These tests pin the new contract: a resolved
  * user baseUrl wins, no warning fires, and the registry endpoint remains the

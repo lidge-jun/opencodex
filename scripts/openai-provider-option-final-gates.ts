@@ -50,7 +50,7 @@ const focusedTests = [
   "tests/provider-registry-parity.test.ts",
   "tests/provider-payload.test.ts",
   "tests/codex-account-mode-state.test.ts",
-  "tests/router.test.ts",
+  "tests/routing/router.test.ts",
   "tests/codex-routing.test.ts",
   "tests/server-auth.test.ts",
   "tests/codex-catalog.test.ts",

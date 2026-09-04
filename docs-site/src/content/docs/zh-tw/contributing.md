@@ -13,7 +13,7 @@ bun run dev:proxy    # 開發模式代理 API
 bun run dev:gui      # 儀表板 dev 伺服器（另一個終端）
 bun run typecheck    # bun x tsc --noEmit
 bun run test:changed              # routine import-graph test selection
-bun test tests/router.test.ts     # routine focused test
+bun test tests/routing/router.test.ts     # routine focused test
 bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
@@ -28,7 +28,7 @@ bun run test                      # complete suite (PR-ready / explicit ask)
 ```bash
 bun run typecheck                 # 嚴格 TypeScript 檢查
 bun run test                      # 完整 tests/ suite
-bun test tests/router.test.ts     # 聚焦單個測試檔案
+bun test tests/routing/router.test.ts     # 聚焦單個測試檔案
 bun run build:gui                 # Vite GUI 建置 + package 準備
 bun run privacy:scan              # CI 使用的 credential/privacy 掃描
 bun run prepare:package           # 重新整理 package launcher/asset

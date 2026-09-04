@@ -40,7 +40,7 @@ describe("assessHygiene", () => {
   it("accepts behavior changes with tests or approved exception", () => {
     assert.deepEqual(assessHygiene({ files: [
       { filename: "src/router.ts", patch: "+change" },
-      { filename: "tests/router.test.ts", patch: "+test" },
+      { filename: "tests/routing/router.test.ts", patch: "+test" },
     ] }), []);
     assert.deepEqual(assessHygiene({
       files: [{ filename: "src/router.ts", patch: "+change" }],

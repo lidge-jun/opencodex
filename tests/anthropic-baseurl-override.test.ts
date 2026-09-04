@@ -9,7 +9,7 @@ import type { OcxConfig, OcxProviderConfig } from "../src/types";
  *
  * Before the opt-in, the pinned registry endpoint silently outranked a saved
  * baseUrl and the router emitted the discarded-baseUrl diagnostic (see
- * tests/router-discarded-baseurl-warning.test.ts, which now pins google as
+ * tests/routing/router-discarded-baseurl-warning.test.ts, which now pins google as
  * its fixture). Users routing Claude traffic through a local relay or an
  * enterprise gateway therefore could not redirect the provider at all. These
  * tests pin the new contract: a resolved user baseUrl wins, no warning fires,

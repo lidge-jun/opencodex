@@ -20,7 +20,7 @@ function sliceFn(source: string, start: string, end: string): string {
 
 // `src/cli/index.ts` runs its command switch on import, so the handlers cannot be called from a
 // test. Wiring assertions therefore read the source — the house pattern established by
-// tests/service/stale-state-purge.test.ts and tests/uninstall.test.ts.
+// tests/service/stale-state-purge.test.ts and tests/cli/uninstall.test.ts.
 describe("Grok fence lifecycle wiring", () => {
   test("handleStart syncs the Grok fence outside the Desktop-3P try", () => {
     const startFn = sliceFn(CLI_SOURCE, "async function handleStart(", "async function handleEnsure(");

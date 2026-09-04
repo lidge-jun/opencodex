@@ -13,7 +13,7 @@ bun run dev:proxy    # 開発モードのプロキシ API
 bun run dev:gui      # ダッシュボード dev サーバー(別ターミナル)
 bun run typecheck    # bun x tsc --noEmit
 bun run test:changed              # routine import-graph test selection
-bun test tests/router.test.ts     # routine focused test
+bun test tests/routing/router.test.ts     # routine focused test
 bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
@@ -29,7 +29,7 @@ bun run test                      # complete suite (PR-ready / explicit ask)
 ```bash
 bun run typecheck                 # 厳密な TypeScript 検査
 bun run test                      # tests/ の全体スイート
-bun test tests/router.test.ts     # 特定テストファイル
+bun test tests/routing/router.test.ts     # 特定テストファイル
 bun run build:gui                 # Vite GUI ビルド + パッケージ準備
 bun run privacy:scan              # CI で使う資格情報/個人情報検査
 bun run prepare:package           # パッケージランチャー/asset 更新

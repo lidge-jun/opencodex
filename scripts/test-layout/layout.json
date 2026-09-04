@@ -1227,9 +1227,13 @@
     "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows"
   },
   "migrated": [
+    "claude-integration",
+    "cli",
     "clients",
     "config",
     "lib",
+    "oauth",
+    "routing",
     "service",
     "update",
     "usage",

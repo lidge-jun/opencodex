@@ -161,7 +161,7 @@ What matters for development work: the enforcement is code, not prose —
 [`src/cli/agent-driven.ts`](./src/cli/agent-driven.ts),
 [`src/cli/star-prompt.ts`](./src/cli/star-prompt.ts), and
 [`src/server/management/sidebar-routes.ts`](./src/server/management/sidebar-routes.ts),
-covered by `tests/startup-prompt.test.ts`, `tests/agent-driven.test.ts`, and
+covered by `tests/startup-prompt.test.ts`, `tests/cli/agent-driven.test.ts`, and
 `tests/sidebar-routes.test.ts`. If you add another action that spends the user's
 identity, credits, or reputation, gate it the same way rather than relying on a
 prompt an agent can answer, and document it in `AGENTS_INSTALL.md`.

@@ -18,7 +18,7 @@ bun run dev:proxy    # geliştirme modunda proxy API
 bun run dev:gui      # kontrol paneli geliştirme sunucusu (başka bir terminalde)
 bun run typecheck    # bun x tsc --noEmit
 bun run test:changed              # routine import-graph test selection
-bun test tests/router.test.ts     # routine focused test
+bun test tests/routing/router.test.ts     # routine focused test
 bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
@@ -35,7 +35,7 @@ Yerel komutların CI ile eşleşmesi için depodaki betikleri kullanın:
 ```bash
 bun run typecheck                 # katı TypeScript denetimi
 bun run test                      # tests/ paketinin tamamı
-bun test tests/router.test.ts     # odaklanmış test dosyası
+bun test tests/routing/router.test.ts     # odaklanmış test dosyası
 bun run build:gui                 # Vite GUI derlemesi + paket hazırlığı
 bun run privacy:scan              # CI tarafından kullanılan kimlik/gizlilik taraması
 bun run prepare:package           # paket başlatıcılarını ve varlıklarını yenileme

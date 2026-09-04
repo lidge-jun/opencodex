@@ -1084,7 +1084,7 @@ describe("entitlement client version (#2886)", () => {
     // been resolved, no persisted runtime either — yet it is the path that publishes
     // account-confirmed native rows. An earlier revision of this fix skipped discovery in
     // that state, which suppressed exactly the rows the fix exists to restore
-    // (tests/claude-models-discovery.test.ts and tests/codex-catalog-sync-hardening.test.ts
+    // (tests/claude-integration/claude-models-discovery.test.ts and tests/codex-catalog-sync-hardening.test.ts
     // both failed on it). The last tier therefore has to be a real, answerable version.
     expect(resolveCodexEntitlementClientVersion(null, () => null))
       .toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);

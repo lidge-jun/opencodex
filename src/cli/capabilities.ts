@@ -11,7 +11,7 @@
  * top-level `const USAGE`, evaluated at import time, so a cycle back into this table
  * would resolve to `undefined` under ESM rather than throwing -- silently emptying the
  * usage text that `rejectArgs` hands to `CliUsageError`, in the exact error-reporting
- * surface the CLI-operability issues are about. `tests/cli-capabilities.test.ts` asserts
+ * surface the CLI-operability issues are about. `tests/cli/cli-capabilities.test.ts` asserts
  * the absence of those imports and that every rendered usage string is non-empty, so the
  * failure mode is loud instead of degraded.
  *
@@ -19,7 +19,7 @@
  * `HEAD_CAPABILITIES`. They exit in the CLI head (`root.ts`) before dispatch and have no
  * runner key, so listing them as ordinary capabilities would break the registry parity
  * assertion that every canonical entry is a direct runner. `help` is excluded from
- * `CLI_COMMANDS` deliberately -- `tests/cli-registry.test.ts` documents it as a
+ * `CLI_COMMANDS` deliberately -- `tests/cli/cli-registry.test.ts` documents it as a
  * head-handled pseudo-case -- and that decision is preserved here rather than reversed.
  */
 

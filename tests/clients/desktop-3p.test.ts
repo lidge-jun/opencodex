@@ -23,7 +23,7 @@ describe("Claude Desktop 3P models", () => {
   test("resolves the actual cross-platform Claude Desktop config library (#539)", () => {
     // Claude Desktop appends "-3p" to its userData root (app.asar `GE()`), so the
     // suffix-less path is one Desktop never reads. Branch-by-branch coverage lives in
-    // tests/claude-desktop-config-path.test.ts; this pins the public entry point.
+    // tests/claude-integration/claude-desktop-config-path.test.ts; this pins the public entry point.
     expect(resolveDesktop3pConfigLibraryPath({
       env: { OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: " /custom/library " },
       platform: "darwin",

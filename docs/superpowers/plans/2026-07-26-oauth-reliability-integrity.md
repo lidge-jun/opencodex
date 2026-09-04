@@ -119,7 +119,7 @@ EOF
 
 **Files:**
 - Create: `src/oauth/log.ts`
-- Test: `tests/oauth-log.test.ts`
+- Test: `tests/oauth/oauth-log.test.ts`
 
 **Interfaces:**
 - Consumes: `maskAccountId` from `src/lib/privacy.ts`
@@ -158,7 +158,7 @@ describe("logOAuthEvent", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bun test tests/oauth-log.test.ts`
+Run: `bun test tests/oauth/oauth-log.test.ts`
 
 Expected: FAIL — module missing
 
@@ -188,14 +188,14 @@ export function logOAuthEvent(
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `bun test tests/oauth-log.test.ts`
+Run: `bun test tests/oauth/oauth-log.test.ts`
 
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/oauth/log.ts tests/oauth-log.test.ts
+git add src/oauth/log.ts tests/oauth/oauth-log.test.ts
 git commit -m "$(cat <<'EOF'
 feat(oauth): add redacted structured OAuth event logger
 
@@ -209,7 +209,7 @@ EOF
 
 **Files:**
 - Modify: `src/oauth/index.ts` (`refreshAndPersistAccessToken` generic branch ~352–400)
-- Test: `tests/oauth-refresh-generic-lock.test.ts` (new; mirror patterns from `tests/xai-refresh-lock.test.ts` / `tests/oauth-refresh.test.ts`)
+- Test: `tests/oauth/oauth-refresh-generic-lock.test.ts` (new; mirror patterns from `tests/xai-refresh-lock.test.ts` / `tests/oauth/oauth-refresh.test.ts`)
 
 **Interfaces:**
 - Consumes: `createOAuthRefreshIntentLock`, `mergeAccountCredential`, `credentialGeneration`, `markAccountNeedsReauthIfGeneration`, `getAccountCredential`, `logOAuthEvent`
@@ -220,7 +220,7 @@ EOF
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/oauth-refresh-generic-lock.test.ts` covering at least:
+Create `tests/oauth/oauth-refresh-generic-lock.test.ts` covering at least:
 
 1. Ten concurrent `getValidAccessTokenForAccount("kimi", id)` (or another non-xAI/Anthropic provider with injectable `refresh`) trigger **one** IdP refresh; all get same access token
 2. Failed refresh clears single-flight so a later call can retry
@@ -228,7 +228,7 @@ Create `tests/oauth-refresh-generic-lock.test.ts` covering at least:
 4. Older refresh result cannot overwrite newer stored token (`mergeAccountCredential` superseded path)
 5. Rotated refresh token is persisted on disk
 
-Use the existing test helpers that point `OPENCODEX_HOME` at a temp dir and stub `OAUTH_PROVIDERS[provider].refresh` / fetch. Follow `tests/oauth-refresh.test.ts` setup patterns for auth store isolation.
+Use the existing test helpers that point `OPENCODEX_HOME` at a temp dir and stub `OAUTH_PROVIDERS[provider].refresh` / fetch. Follow `tests/oauth/oauth-refresh.test.ts` setup patterns for auth store isolation.
 
 Sketch for concurrent refresh:
 
@@ -249,7 +249,7 @@ test("ten concurrent generic refreshes share one IdP call and same credential", 
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bun test tests/oauth-refresh-generic-lock.test.ts`
+Run: `bun test tests/oauth/oauth-refresh-generic-lock.test.ts`
 
 Expected: FAIL — generic path still uses unlocked `saveAccountCredential` / can double-refresh under injected dual locks or pre-persist races (assert the specific failure your test constructs)
 
@@ -308,7 +308,7 @@ Also log `"OAuth refresh joined existing operation"` when `tokenRefreshes.get(ke
 Run:
 
 ```bash
-bun test tests/oauth-refresh-generic-lock.test.ts tests/oauth-refresh.test.ts tests/xai-refresh-lock.test.ts
+bun test tests/oauth/oauth-refresh-generic-lock.test.ts tests/oauth/oauth-refresh.test.ts tests/xai-refresh-lock.test.ts
 ```
 
 Expected: PASS (no regressions on xAI/Anthropic)
@@ -316,7 +316,7 @@ Expected: PASS (no regressions on xAI/Anthropic)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/oauth/index.ts tests/oauth-refresh-generic-lock.test.ts
+git add src/oauth/index.ts tests/oauth/oauth-refresh-generic-lock.test.ts
 git commit -m "$(cat <<'EOF'
 feat(oauth): lock and CAS generic provider token refresh
 
@@ -330,7 +330,7 @@ EOF
 
 **Files:**
 - Create: `src/oauth/health.ts`
-- Test: `tests/oauth-health.test.ts`
+- Test: `tests/oauth/oauth-health.test.ts`
 - Modify: export from `src/oauth/index.ts` if that is the public surface used by CLI
 
 **Interfaces:**
@@ -396,7 +396,7 @@ Also test `collectOAuthHealthEntries` with a temp auth store marking one account
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bun test tests/oauth-health.test.ts`
+Run: `bun test tests/oauth/oauth-health.test.ts`
 
 Expected: FAIL — module missing
 
@@ -420,14 +420,14 @@ Set `action` strings:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `bun test tests/oauth-health.test.ts tests/codex-routing.test.ts`
+Run: `bun test tests/oauth/oauth-health.test.ts tests/codex-routing.test.ts`
 
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/oauth/health.ts src/oauth/index.ts src/codex/routing.ts tests/oauth-health.test.ts
+git add src/oauth/health.ts src/oauth/index.ts src/codex/routing.ts tests/oauth/oauth-health.test.ts
 git commit -m "$(cat <<'EOF'
 feat(oauth): add shared account health projection
 
@@ -442,7 +442,7 @@ EOF
 **Files:**
 - Modify: `src/cli/index.ts` (status human printer that currently calls `oauthLoginSummary`)
 - Modify: `src/cli/status.ts` only if JSON status should gain a redacted health summary (prefer human-first; add JSON only if existing tests/docs allow a non-secret block)
-- Test: `tests/cli-status-oauth-health.test.ts`
+- Test: `tests/cli/cli-status-oauth-health.test.ts`
 
 **Interfaces:**
 - Consumes: `collectOAuthHealthEntries`, `maskAccountId`
@@ -471,7 +471,7 @@ test("formats reauthentication required", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bun test tests/cli-status-oauth-health.test.ts`
+Run: `bun test tests/cli/cli-status-oauth-health.test.ts`
 
 Expected: FAIL
 
@@ -481,14 +481,14 @@ Create `src/cli/status-oauth.ts` with `formatOAuthHealthForStatus`. Wire into `h
 
 - [ ] **Step 4: Run tests**
 
-Run: `bun test tests/cli-status-oauth-health.test.ts tests/cli-status-json.test.ts`
+Run: `bun test tests/cli/cli-status-oauth-health.test.ts tests/cli/cli-status-json.test.ts`
 
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cli/status-oauth.ts src/cli/index.ts tests/cli-status-oauth-health.test.ts
+git add src/cli/status-oauth.ts src/cli/index.ts tests/cli/cli-status-oauth-health.test.ts
 git commit -m "$(cat <<'EOF'
 feat(cli): show OAuth health in ocx status
 
@@ -553,7 +553,7 @@ EOF
 - Modify: `gui/src/components/provider-workspace/ProviderAuthPanel.tsx`
 - Modify: `gui/src/components/CodexAccountPool.tsx` (if showing Codex cooldown/reauth)
 - Possibly: `gui/src/provider-workspace/catalog.ts` / types for account DTO
-- Test: `tests/oauth-accounts-api.test.ts` (extend)
+- Test: `tests/oauth/oauth-accounts-api.test.ts` (extend)
 - Test: GUI unit/render test if the repo already has a pattern; otherwise a pure formatter test for badge labels in `gui/src/...` plus API contract test
 
 **Interfaces:**
@@ -572,7 +572,7 @@ Assert `/api/oauth/accounts?provider=...` includes `health` and redacted display
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `bun test tests/oauth-accounts-api.test.ts`
+Run: `bun test tests/oauth/oauth-accounts-api.test.ts`
 
 Expected: FAIL on missing `health`
 
@@ -585,7 +585,7 @@ Attach projected health to account DTOs. In GUI, show badge + short explanation 
 Run:
 
 ```bash
-bun test tests/oauth-accounts-api.test.ts
+bun test tests/oauth/oauth-accounts-api.test.ts
 bun run lint:gui
 ```
 
@@ -594,7 +594,7 @@ Expected: PASS / lint clean for touched files
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/server/management/oauth-account-routes.ts src/codex/auth-api.ts gui/src/components/provider-workspace/ProviderAuthPanel.tsx gui/src/components/CodexAccountPool.tsx tests/oauth-accounts-api.test.ts
+git add src/server/management/oauth-account-routes.ts src/codex/auth-api.ts gui/src/components/provider-workspace/ProviderAuthPanel.tsx gui/src/components/CodexAccountPool.tsx tests/oauth/oauth-accounts-api.test.ts
 git commit -m "$(cat <<'EOF'
 feat(gui): surface OAuth account health diagnostics
 
@@ -713,8 +713,8 @@ EOF
 - [ ] **Step 1: Run verification commands**
 
 ```bash
-bun test tests/lib/privacy-mask-account.test.ts tests/oauth-log.test.ts tests/oauth-refresh-generic-lock.test.ts tests/oauth-health.test.ts tests/cli-status-oauth-health.test.ts tests/service/doctor-oauth.test.ts tests/oauth-accounts-api.test.ts tests/codex-metadata-integrity.test.ts
-bun test tests/oauth-refresh.test.ts tests/xai-refresh-lock.test.ts tests/codex-routing.test.ts tests/session-affinity.test.ts tests/codex-auth-context.test.ts
+bun test tests/lib/privacy-mask-account.test.ts tests/oauth/oauth-log.test.ts tests/oauth/oauth-refresh-generic-lock.test.ts tests/oauth/oauth-health.test.ts tests/cli/cli-status-oauth-health.test.ts tests/service/doctor-oauth.test.ts tests/oauth/oauth-accounts-api.test.ts tests/codex-metadata-integrity.test.ts
+bun test tests/oauth/oauth-refresh.test.ts tests/xai-refresh-lock.test.ts tests/codex-routing.test.ts tests/session-affinity.test.ts tests/codex-auth-context.test.ts
 bun run test
 bun run typecheck
 bun run lint:gui
