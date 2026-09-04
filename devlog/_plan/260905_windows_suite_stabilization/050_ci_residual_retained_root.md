@@ -197,3 +197,76 @@ gate.
 
 Third commit on `codex/260905-windows-suite-stabilization`, after the two
 harness fixes. Independent of them, ordered by discovery.
+
+---
+
+## Second CI round: the budget moved the failure one case down the file
+
+Run 33923803071 (head `7dc9d622f`): windows 1/4, 3/4, 4/4 green; 2/4 red again,
+still 4627 pass / 1 fail, still this file — a different case:
+
+```
+(pass) startup and CLI sync-cache … owns K            [18743.00ms]   ← was the failure; now passes
+(pass) native restore … owns K                        [5726.56ms]
+killed 1 dangling process
+(fail) POST /api/sync … newer convergence catalog     [20140.28ms]   ← timed out at 20 s
+(pass) POST /api/sync … newer retained catalog        [11876.76ms]
+(pass) a persisted runtime selection …                [2289.08ms]
+(pass) two processes at the post-approval seam …      [5623.21ms]
+```
+
+The first case ran 18.7 s — it would have died under the old 15 s and lived
+under 45 s, so the fix did what it claimed. The convergence case is the same
+shape (a `Bun.spawn` of the management API, `:342`, plus a publisher child,
+`:288`) with a 20 s budget that this runner exceeded by 140 ms.
+
+Also notable: the shard as a whole was ~2× slower than the previous run (18.7 s
+vs 15.5 s on the first case with the SAME fixture), so the hosted runner's speed
+varies run to run and the margins in this file are all thin.
+
+## What I got wrong in the first round
+
+I budgeted the ONE case that had failed. The audit flagged "raising one case to
+45 s while its siblings stay at 20-30 s" and I answered that workload differs per
+case. That was true and beside the point: every case in this file boots the same
+kind of child on the same runner, and the sibling budgets were sized the same
+way the 15 s one was. Fixing the case instead of the class is how the failure
+moved rather than stopped.
+
+## Amendment: budget the class, and bound the children
+
+### MODIFY `tests/codex-retained-root-serialization.test.ts` — all four
+explicit budgets become `SPAWN_BUDGET_MS`
+
+| line | case | today | after |
+|---|---|---|---|
+| `:255` | startup + CLI | `SPAWN_BUDGET_MS` (done) | — |
+| `:376` | POST /api/sync ×2 (`for` loop) | 20 s | `SPAWN_BUDGET_MS` |
+| `:460` | runtime selection moved | 20 s | `SPAWN_BUDGET_MS` |
+| `:639` | post-approval seam (3 children) | 30 s | `SPAWN_BUDGET_MS` |
+
+The unspecified case at `:220` (native restore) inherits the lane's 60 s and
+is left alone.
+
+Every one of these spawns at least one real Bun child that imports the
+server, the CLI, or the convergence graph. Under `test-budget.ts` they are the
+same category — "real child process" — and the budget name says so. The
+ablation from the first round (BEGIN IMMEDIATE → BEGIN) already establishes
+that K is real for this file; the sibling cases assert on the same lock.
+
+### MODIFY — register every spawn with the sandbox
+
+The teardown from the first round only reaps children that were added to
+`sandbox.children`. `runChild` and `holdCatalogLock` register; the four
+inline `Bun.spawn` calls at `:342`, `:421`, `:489`, `:551` do not. "killed 1
+dangling process" in this run is one of them. Each gets a
+`sandbox.children.add(child)` immediately after the spawn, so a timeout in any
+case reaps cleanly.
+
+### Acceptance, amended
+
+1. macOS: file passes, `typecheck` clean.
+2. Forced 1 ms budget on the convergence case: fails cleanly, no dangling
+   process, no unhandled ENOENT.
+3. CI re-dispatch: windows 2/4 SUCCESS with **no** "killed N dangling processes"
+   line in the log, and every case in this file under its budget with margin.

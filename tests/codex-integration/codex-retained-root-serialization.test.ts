@@ -123,6 +123,27 @@ function sandboxChildEnv(sandbox: Sandbox): Record<string, string> {
   return { ...sandbox.env, ...sandbox.serviceManagerEnv };
 }
 
+/**
+ * Wait for a child to reach its barrier, failing fast with its output if it exits
+ * first. The exit branch is a REJECTING promise, so while the race is pending an
+ * early exit fails the test with the child's output. The subtlety is what happens
+ * AFTER the barrier wins: that promise stays pending, and if a per-test timeout
+ * later fires, teardown kills the child (exit 143) and the promise rejects with
+ * nobody awaiting it — Bun reports it as an "unhandled error between tests" on
+ * top of the timeout that already explained the failure (run 33923803071). The
+ * no-op catch attached up front marks that late rejection handled without
+ * changing what the race sees.
+ */
+async function raceBarrier(child: ReturnType<typeof Bun.spawn>, barrier: Promise<void>): Promise<void> {
+  const exitedEarly = child.exited.then(async exitCode => {
+    const stdout = await new Response(child.stdout).text();
+    const stderr = await new Response(child.stderr).text();
+    throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
+  });
+  exitedEarly.catch(() => undefined);
+  await Promise.race([barrier, exitedEarly]);
+}
+
 // A `bun --eval` child on a loaded windows-latest shard takes 8-11 s just to boot and
 // reach its marker (runs 33590540220 and 33605898170), so a 10 s wait was the coin flip,
 // not the child. Every caller passes a deadline that sits inside its own test budget so
@@ -347,15 +368,9 @@ for (const publisher of ["convergence", "retained"] as const) {
         const response = await handleManagementAPI(req, new URL(req.url), config);
         console.log(JSON.stringify({ status: response.status, body: await response.json() }));
       `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
+      sandbox.children.add(sync);
 
-      await Promise.race([
-        waitForPath(requested, 16_000),
-        sync.exited.then(async exitCode => {
-          const stdout = await new Response(sync.stdout).text();
-          const stderr = await new Response(sync.stderr).text();
-          throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
-        }),
-      ]);
+      await raceBarrier(sync, waitForPath(requested, 16_000));
       const published = await runPublisher(sandbox, publisher, config);
       if (published.exitCode !== 0) {
         throw new Error(`${publisher} publisher failed\nstdout=${published.stdout}\nstderr=${published.stderr}`);
@@ -374,7 +389,7 @@ for (const publisher of ["convergence", "retained"] as const) {
     } finally {
       provider.stop(true);
     }
-  }, 20_000);
+  }, SPAWN_BUDGET_MS);
 }
 
 /**
@@ -430,15 +445,9 @@ test("a persisted runtime selection moved by another process during the await bl
     const { syncCatalogModels } = await import("./src/codex/catalog/sync.ts");
     console.log(JSON.stringify(await syncCatalogModels(config)));
   `], sandbox.preloadPath)], { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" });
+  sandbox.children.add(sync);
 
-  await Promise.race([
-    waitForPath(requested, 16_000),
-    sync.exited.then(async exitCode => {
-      const stdout = await new Response(sync.stdout).text();
-      const stderr = await new Response(sync.stderr).text();
-      throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
-    }),
-  ]);
+  await raceBarrier(sync, waitForPath(requested, 16_000));
 
   // Another process selects a different Codex runtime. No catalog byte changes.
   writeFileSync(runtimeStatePath, `${JSON.stringify({
@@ -458,7 +467,7 @@ test("a persisted runtime selection moved by another process during the await bl
   expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 });
   expect(JSON.parse(stdout.trim())).toMatchObject({ catalogWritten: false });
   expect(readFileSync(catalogPath, "utf8")).toBe(initial);
-}, 20_000);
+}, SPAWN_BUDGET_MS);
 
 /**
  * The post-approval seam, raced by two real processes through a real route.
@@ -491,6 +500,7 @@ test("two processes at the post-approval management seam serialize instead of in
     const { withConfigMutationLockSync } = await import("./src/config.ts");
     withConfigMutationLockSync(() => undefined);
   `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" });
+  sandbox.children.add(warm);
   expect(await warm.exited).toBe(0);
 
   const routeScript = (marker: string) => `
@@ -553,6 +563,7 @@ test("two processes at the post-approval management seam serialize instead of in
       [process.execPath, ...withOwnedServiceHomePreload(["--eval", routeScript(marker)], sandbox.preloadPath)],
       { cwd: repoRoot, env: sandboxChildEnv(sandbox), stdout: "pipe", stderr: "pipe" },
     ));
+    for (const child of children) sandbox.children.add(child);
 
     results = await Promise.all(children.map(async child => {
       const [exitCode, stdout, stderr] = await Promise.all([
@@ -637,4 +648,4 @@ test("two processes at the post-approval management seam serialize instead of in
   const fromA = slugs.some(s => s.includes("seam-model-a"));
   const fromB = slugs.some(s => s.includes("seam-model-b"));
   expect(fromA && fromB).toBe(false);
-}, 30_000);
+}, SPAWN_BUDGET_MS);
