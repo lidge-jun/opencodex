@@ -94,4 +94,3 @@ a reachability probe, neither measured.
 - macOS import path byte-identical in behavior, including error wording.
 - No credential value reaches a log, an error, or a callback payload.
 - CI green.
-

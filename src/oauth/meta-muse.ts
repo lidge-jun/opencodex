@@ -187,7 +187,8 @@ export async function loginMetaMuse(
     const pasted = await manualKeyCredential(ctrl, reason);
     if (pasted === null) {
       throw new Error(
-        `${reason} Sign in at ${MANUAL_KEY_URL}, copy your Muse Code API key, and paste it when prompted, `
+        `${reason} This client cannot prompt for a key, so run \`ocx login meta-muse\` from the CLI `
+          + `or the dashboard and paste yours from ${MANUAL_KEY_URL}, `
           + "or use the meta-model provider with your own key (META_MODEL_API_KEY).",
       );
     }
@@ -271,7 +272,9 @@ async function validatedMetaMuseCredential(
       ? `The pasted Muse Code credential is not in the expected Meta API key format. ${retry}`
       : "The Muse Code credential is not in the expected Meta API key format. Run `muse login` again.");
   }
-  ctrl.onProgress?.("Validating the imported Meta credential…");
+  ctrl.onProgress?.(source === "manual"
+    ? "Validating the pasted Meta credential..."
+    : "Validating the imported Meta credential...");
   const fetchImpl = deps.fetchImpl ?? fetch;
   // ctrl.signal is OPTIONAL and the CLI controller supplies none: AbortSignal.any([undefined])
   // throws a TypeError, which would fail every CLI login right after the warning printed.

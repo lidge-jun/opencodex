@@ -289,6 +289,9 @@ describe("meta-muse credential import", () => {
     for (const c of cases) {
       const progress: string[] = [];
       const auth: string[] = [];
+      // Tracked separately: catching our own sentinel would let a case that
+      // unexpectedly SUCCEEDED satisfy the non-disclosure assertions vacuously.
+      let failed = false;
       let message = "";
       try {
         await loginMetaMuse(
@@ -299,10 +302,11 @@ describe("meta-muse credential import", () => {
           },
           deps({ platform: c.platform, fetchImpl: c.fetchImpl }),
         );
-        throw new Error(`${c.label} should have failed`);
       } catch (error) {
+        failed = true;
         message = String((error as Error).message) + String((error as Error).stack ?? "");
       }
+      expect(failed, `${c.label} should have failed`).toBe(true);
       expect(message).not.toContain(CANARY);
       for (const line of progress) expect(line).not.toContain(CANARY);
       for (const line of auth) expect(line).not.toContain(CANARY);
