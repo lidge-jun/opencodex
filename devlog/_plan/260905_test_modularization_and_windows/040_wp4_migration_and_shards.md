@@ -24,7 +24,7 @@ proven before it touches the oracles that pin CI.
 | 7 | `ci/macos-2way-shard` | ci.yml only | 0 | `ci-workflows.test.ts:219-245,301-306,491` pin the macOS step |
 
 Total moved: all 1045 root `*.test.ts` files across slices 1-6 (the slice counts
-above are 001 §2.B domain sizes and include the 16 already-nested files; the
+above sum to 1045 and exclude the 16 already-nested image/video/e2e files; the
 authoritative per-PR list is `plan.ts --domain` output). Root keeps `preload.ts`,
 `fake-codex-server.ts`, `tsconfig.doctor-service-memory-contract.json`, and the
 new `test-layout.test.ts`; `images/ videos/ e2e-style/` stay where they are.
@@ -37,7 +37,7 @@ for d in <domains>; do bun scripts/test-layout/move.ts --domain $d; done   # exi
 # hand-edit every MANUAL <file>:<line>; re-run verify
 bun scripts/test-layout/verify.ts --domain <each>
 # append the domains to layout.migrated in scripts/test-layout/layout.json
-bun test tests/test-layout.test.ts tests/test-runner.test.ts <the domain dirs>
+bun test tests/test-layout.test.ts <the domain dirs>   # test-runner.test.ts is inside ci-workflows/ from PR 6 on; before that name it explicitly
 bun x tsc --noEmit
 bun run test:changed          # on macmini-cf if the slice is large
 bun run privacy:scan
@@ -157,9 +157,32 @@ and in the Test step:
 ```
 
 New job `macos-control`: a copy of the pre-change `platform-macos` job with
-`name: macos control`, `if: github.event_name == 'workflow_dispatch'`, no
-matrix, unchanged 30-minute budget and the unsharded `bun test ... tests` line.
-Added to the `ci` aggregate `needs` list (a skipped result passes the allowlist).
+`name: macos control`, no matrix, unchanged 30-minute budget and the unsharded
+`bun test ... tests` line. Added to the `ci` aggregate `needs` list (a skipped
+result passes the allowlist).
+
+Dispatch inputs. Today `workflow_dispatch` runs everything including
+`platform-windows`, so a dispatch on a PR head whose Windows shards are red
+(someone else's burn-down) produces a red `ci` on that SHA. The workflow gains
+one boolean input:
+
+```diff
+-  workflow_dispatch:
++  workflow_dispatch:
++    inputs:
++      lane:
++        description: "all (default) or macos-control"
++        type: choice
++        default: all
++        options: [all, macos-control]
+```
+
+`macos-control.if`: `github.event_name == 'workflow_dispatch'`.
+`platform-windows.if` becomes
+`github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')`
+so a `lane=macos-control` dispatch skips Windows (skipped passes the aggregate)
+while a plain dispatch behaves exactly as today. `tests/ci-workflows.test.ts`
+asserts the input block and both `if` strings.
 
 `tests/ci-workflows.test.ts` edits, same commit (line numbers at `9c0e3ca80`):
 - `:100-106` timeout ownership: `platform-macos` 20, `macos-control` 30.
@@ -181,9 +204,10 @@ Added to the `ci` aggregate `needs` list (a skipped result passes the allowlist)
 PR 7 merge gate: because this PR replaces the whole-pool control that today
 runs on every push, ordinary exact-head `ci` is not enough. Before merge, push
 the PR head to an immutable `codex/ci-dispatch-<sha>` ref and run
-`gh workflow run ci.yml --ref <that ref>`; the run must show `macos 1/2`,
-`macos 2/2` and `macos control` all green (Windows shards on that dispatch are
-reported but are someone else's to fix and do not gate this PR). Record the
+`gh workflow run ci.yml --ref <that ref> -f lane=macos-control`; the run must
+show `macos 1/2`, `macos 2/2`, `macos control` green and `windows */4` skipped,
+so the aggregate `ci` on that SHA is green rather than red on someone else's
+Windows burn-down. Record the
 run id in `041`. Delete the ref afterwards.
 
 Stale comment at `ci.yml:450-452` ("5m23s, cheapest") is deleted in the same PR.
@@ -201,5 +225,6 @@ As in 030 §4 plus, for each move PR, the exact-head `ci` run must show
 `test 1/4..4/4`, `storage policy`, `api usage`, `macos` green, which is the
 proof that discovery, the batch script and the isolated jobs all still find
 the moved files.
+
 
 

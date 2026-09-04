@@ -31,9 +31,9 @@ PRs in wp4 are mechanical.
    dominate a shard.
 7. Files that stay at `tests/` root: `preload.ts` (bunfig),
    `tsconfig.doctor-service-memory-contract.json` (ci.yml gates),
-   `fake-codex-server.ts` (support, imported relatively by codex tests; moving it
-   would be a second 100-importer rewrite for no gain), and `test-layout.test.ts`
-   (new, below). All 1045 root `*.test.ts` files move in wp4; with the new guard
+   `fake-codex-server.ts` (root support file with no current importer; kept in
+   place and listed in `keepAtRoot` so the guard does not treat it as unresolved,
+   deletion is a separate decision), and `test-layout.test.ts` (new, below). All 1045 root `*.test.ts` files move in wp4; with the new guard
    the suite is 1062 files.
 8. Depth-aware rewriting: a file at `tests/<domain>/` reaches `tests/helpers` with
    `../helpers` and the repo root with `../..`; a file at `tests/<domain>/<sub>/`
@@ -125,7 +125,7 @@ the layout test below exercises it.
 {
   "version": 1,
   "root": "tests",
-  "keepAtRoot": ["preload.ts", "tsconfig.doctor-service-memory-contract.json", "test-layout.test.ts"],
+  "keepAtRoot": ["preload.ts", "fake-codex-server.ts", "tsconfig.doctor-service-memory-contract.json", "test-layout.test.ts"],
   "domains": {
     "providers": { "match": ["^(provider|providers|registry|mimo|baseten|chutes|deepinfra|nous|opencode|zai|moonshot|minimax|qwen|glm|groq|together|fireworks|openrouter|deepseek)-"], "children": {
       "cursor": ["^cursor-"], "kiro": ["^kiro-"], "xai": ["^(xai|grok)-"], "ollama": ["^ollama-"], "github-copilot": ["^github-copilot-"] } },
@@ -196,10 +196,18 @@ restricts output to one domain (the per-PR slice in wp4), `--json`.
    - `join(import.meta.dir, "helpers", X)`, `join(repoRoot, "tests", "helpers", X)`,
      `resolve(repoRoot, "tests/helpers/X")`, `join(process.cwd(), "tests", "helpers", X)`
      -> `helperPath(X)`.
-   - Any other line containing `import.meta.dir` or `import.meta.url` that the
-     rules above did not consume is printed as `MANUAL <file>:<line>` and the run
-     exits 2. The MANUAL check runs on the post-rewrite text, so nothing the
-     rewriter skipped can reach a commit silently. Known MANUAL sites from 001
+   - MANUAL scan, post-rewrite: a line containing `import.meta.dir` or
+     `import.meta.url` is flagged only when it is an *escape* from the file's own
+     directory: the same statement contains `".."` / `"../` / `"helpers/` /
+     `"fixtures/` / `"src/` / `"gui/` / `"scripts/` / `"tests/` as a string literal,
+     or a `new URL("../`. File-local uses (`join(import.meta.dir, ".tmp-x")`,
+     `import.meta.path`, self-file reads such as `tests/service.test.ts:2388-2447`,
+     `tests/doctor.test.ts:36`) are not escapes and pass. A line that is a
+     legitimate escape the rewriter cannot express (`tests/windows-tray.test.ts:493`
+     reads a source-oracle string) is accepted by a same-line trailing marker
+     `// layout: local` that a human adds after reading it; the mover prints every
+     marker it honoured so the reviewer sees them in the PR. Flagged lines print as
+     `MANUAL <file>:<line>` and the run exits 2. Known MANUAL sites from 001
      §3.E: `ci-workflows.test.ts:30-35`, `core-lab-boundary.test.ts:34`,
      `openai-provider-option-e2e.test.ts:258-272` (dynamic imports of helper
      modules), `fixture-dir-uniqueness.test.ts` (below).
@@ -221,7 +229,7 @@ edits it by hand before committing.
 For a domain (or all):
 - every file in the domain resolves its imports: `bun build --no-bundle` is not
   usable for TS-only; instead `bun x tsc --noEmit -p scripts/test-layout/tsconfig.verify.json`
-  with `include: ["scripts/test-layout/**/*.ts", "tests/test-layout.test.ts", "tests/helpers/**/*.ts", "tests/<domain>/**/*.ts"]` (the first three always; the domain glob appended per `--domain`),
+  with the committed `include: ["scripts/test-layout/**/*.ts", "tests/test-layout.test.ts", "tests/helpers/**/*.ts"]`; `verify.ts --domain X` writes a temp config under `.tmp/` that `extends` it and adds `"tests/X/**/*.ts"`, runs tsc with `-p` on that file, then deletes it,
   `noEmit`, `skipLibCheck`, `types: ["bun-types"]`. Tests are not typechecked by
   the root tsconfig today (001 §4.A), so this catches only unresolved
   modules and gross breakage, which is exactly what a move can cause.
@@ -234,7 +242,7 @@ For a domain (or all):
 ```ts
 import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { helperPath, repoPath, repoRoot } from "./helpers/repo-root";
 import { loadLayout, resolveTarget } from "../scripts/test-layout/schema";
 
@@ -259,7 +267,7 @@ describe("tests/ layout", () => {
         const full = join(dir, entry);
         if (statSync(full).isDirectory()) { if (entry !== "helpers" && entry !== "fixtures") walk(full); continue; }
         if (!entry.endsWith(".test.ts")) continue;
-        const rel = relative(root, full);
+        const rel = relative(root, full).split(sep).join("/"); // posix form on every OS
         const target = resolveTarget(layout, entry);
         if (target === null) { if (!layout.keepAtRoot.includes(entry)) unresolved.push(rel); continue; }
         const dirName = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
@@ -398,8 +406,10 @@ and pass vacuously. In wp3, before anything moves:
 +}
 ```
 
-and the two direct basename reads at `:71-77` go through `resolveTarget` so they
-follow the files. This is the one test whose invariant spans the whole tree; it
+and the two direct basename reads at `:71-77` use `currentPath(layout, basename)`
+from `schema.ts`: `resolveTarget` if that domain is in `layout.migrated`, otherwise
+the root, so the reads follow each file across slices instead of pointing at a
+directory that does not exist yet. This is the one test whose invariant spans the whole tree; it
 is proven on the flat tree in wp3 (same pass/fail set) before any move.
 
 ### MODIFY `AGENTS.md` (repository layout paragraph)
@@ -426,5 +436,6 @@ Plus the `bun test tests/<name>.test.ts` example becomes `bun test tests/<domain
 - `bun scripts/test-layout/move.ts --domain windows --dry-run` prints the 20 moves and the rewrites without touching the tree.
 - `bun run test:changed`, `bun run privacy:scan`.
 - PR to `dev`, exact-head `ci` success, admin merge, ancestry proof.
+
 
 
