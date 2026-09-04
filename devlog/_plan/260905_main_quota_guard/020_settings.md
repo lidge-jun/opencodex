@@ -44,7 +44,7 @@ MODIFY `docs-site/src/content/docs/reference/cli/providers-accounts.md` and its 
 ## Interaction copy contract
 
 Title: Block main account at 99% usage.
-Body: Stop new main-account requests when an observed usage window reaches 99%. Added accounts and other providers remain available.
+Body: Stop new main-account requests at 99% of the 5h window, or weekly usage when no 5h window exists. Monthly-only accounts use monthly usage. Added accounts and other providers remain available.
 Confirmation: While blocked, this account cannot use Luna reserve either. Keeping ordinary usage below exhaustion may prevent Reserve activation. Requests already running or outside this proxy may still consume the remainder. Disable this setting to resume normal handling; upstream limits still apply.
 No claim that Reserve grants other native models or that the Desktop picker has been unlocked.
 

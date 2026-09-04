@@ -80,6 +80,27 @@ Paused or reauthentication-required
 accounts are skipped, simultaneous 5-hour/weekly resets share one warmup, transient failures retry
 after five minutes, and account deletion removes its setting and completion markers.
 
+`codexMainAccountHardLock` is a separate opt-in local admission policy, off by default.
+It blocks newly admitted identity-matched main-account requests at 99% of the 5h/short window
+when present, otherwise the weekly window (monthly for monthly-only accounts). It does not take
+the maximum across those windows. Pool alternatives remain eligible; explicit main selection and stored Direct
+substitution do not override it. It neither pauses the account nor clears upstream cooldown/reauth
+state, and management quota refresh remains available. Passed reset timestamps and fresh lower
+readings release this policy. Missing observations are reported as unknown, not fabricated headroom.
+
+The policy reads a separately retained identity-tagged quota snapshot, so the legacy rotation
+cache's six-hour expiry does not silently release a known block. A confirmed account transition
+invalidates old evidence. Request-owned bearers are matched only against a credential and effective
+workspace already observed under native ownership; an unrelated or unmatched keyring credential
+is not attributed to stored main and introduces no physical-main read. Credential equality tags
+remain process-local and never enter disk, logs, or management DTOs.
+
+This is not a reservation of the last 1%: already-admitted, parallel, unmatched-keyring, or direct
+upstream traffic can still reach exhaustion. While blocked, main cannot use Luna reserve either.
+Keeping ordinary usage below exhaustion may prevent Reserve activation; the policy never changes
+OpenAI's Reserve grants or `ordinary_usage_allowed` response. Settings and the main-account DTO
+report enabled state separately from current `off`, `unknown`, `ready`, or `blocked` status.
+
 `codexAccountPriorities` is a persisted Pool *ordering* boundary and never an eligibility one. It maps
 an account id to an integer from -100 to 100, higher used earlier, with absence meaning 0. Selection
 narrows the already-eligible list to the highest tier that still holds an account with quota headroom

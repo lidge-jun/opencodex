@@ -29,6 +29,17 @@ Reference prefix: local `121_openai-codex/codex-rs/tui/src/chatwidget/` beneath 
 `src/codex/inject.ts:191,319` already supports the explicit `codexDesktopAuthless` loopback mode, which uses a custom provider with `requires_openai_auth=false`. Reference app-server `model-provider/src/provider.rs:401` then reports no native account requirement. Whether Desktop's Reserve picker follows this state remains unverified.
 `src/router.ts:633` accepts an explicitly configured `main/gpt-reserve` namespace, but routing acceptance is not Reserve entitlement. Static native listing omits Reserve, and unknown account-native discovery currently requires supported_in_api=true, unlike the existing Reserve-shaped test fixture. No live Reserve inference or Desktop coexistence has been proven. Do not synthesize availability or change upstream recovery flags; validate this seam before planning any compatibility implementation.
 
+## Installed Desktop source, 26.901.22334 / build 7746
+
+Read the existing application archive without extraction, installation, application writes or restart. Member offsets below are zero-based UTF-8 bytes, not source line numbers.
+
+- `webview/assets/app-initial-f1c3ba37268a.js`, offset4132166: Reserve eligibility rejects an auth method other than `chatgpt`, besides feature/plan/identity/version checks.
+- Same member, offset4133005: active Reserve requires ordinary `rate_limit.allowed=false`, a `gpt-reserve` additional limit with `allowed=true`, and `luna_reserve` banner.
+- Same member, offset4451408: account/auth projection reads `account` plus `requiresOpenaiAuth` from app-server. The reference provider's `account_state` reports no native account when `requires_openai_auth=false`.
+- `webview/assets/app-primary-b1300cb15eed.js`, offset7352039: active Reserve replaces the whole picker list with the single Reserve row; it has no per-provider exception.
+
+Source conclusion: an effective authless custom provider disables this native Reserve-only picker gate, AND disables Desktop automatic Reserve handling. No installed-client patch is necessary for that particular gate. Explicit Reserve plus routed-model coexistence still needs independently verified catalog/routing/quota compatibility. No live Reserve-entitled session was used; do not label these source checks as live success.
+
 ## Necessity and limits
 
 Do nothing/configure-only fails because the existing threshold can return to main. Reuse the existing eligibility and native-auth resolution owners. A small policy leaf is justified to share raw-window/identity logic between routing and the status DTO without importing management or Lab into core paths.

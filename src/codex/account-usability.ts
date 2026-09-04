@@ -9,6 +9,7 @@ import {
 import { hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
+import { isMainAccountHardLocked } from "./main-account-hard-lock";
 
 export interface CodexAccountUsabilityOptions {
   /** Route using cached runtime state only; the caller must reject selected main before auth. */
@@ -26,6 +27,7 @@ export function isCodexAccountUsable(
 ): boolean {
   if (options.modelEligibleAccountIds && !options.modelEligibleAccountIds.has(accountId)) return false;
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
+    if (isMainAccountHardLocked(config)) return false;
     // Startup recovery owns the physical auth/vault boundary. Never parse or select
     // native __main__ while an encrypted switch journal is pending or inconclusive.
     if (!options.nativeMainSelectionOnly && isNativeMainTrafficBlocked()) return false;

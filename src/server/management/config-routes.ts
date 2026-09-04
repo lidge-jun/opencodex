@@ -49,6 +49,7 @@ import {
   codexQuotaAutoRefreshStatus,
   runCodexQuotaAutoRefresh,
 } from "../../codex/quota-auto-refresh";
+import { getMainAccountHardLockStatus } from "../../codex/main-account-hard-lock";
 import {
   codexAccountPickerEnabled,
   initializeDefaultCodexAccountNamespaces,
@@ -322,6 +323,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // Absent means off, same convention: the GUI renders a plain switch without
       // needing to know that `undefined` and `false` mean the same thing here.
       ultraFastTier: config.ultraFastTier === true,
+      codexMainAccountHardLock: config.codexMainAccountHardLock === true,
+      mainAccountHardLock: getMainAccountHardLockStatus(config),
       // Absent means the historical auto-open, so the GUI can render the toggle
       // without having to know that `undefined` and `true` mean the same thing.
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
@@ -415,6 +418,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       oauthOpenBrowser?: unknown;
       showCodexSparkQuota?: unknown;
       ultraFastTier?: unknown;
+      codexMainAccountHardLock?: unknown;
       codexDesktopAuthless?: unknown;
     };
     if (body.codexAutoStart === undefined
@@ -425,8 +429,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.oauthOpenBrowser === undefined
       && body.showCodexSparkQuota === undefined
       && body.ultraFastTier === undefined
+      && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, or codexDesktopAuthless" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, codexMainAccountHardLock, or codexDesktopAuthless" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -446,6 +451,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.ultraFastTier !== undefined && typeof body.ultraFastTier !== "boolean") {
       return jsonResponse({ error: "ultraFastTier boolean is required" }, 400);
+    }
+    if (body.codexMainAccountHardLock !== undefined && typeof body.codexMainAccountHardLock !== "boolean") {
+      return jsonResponse({ error: "codexMainAccountHardLock boolean is required" }, 400);
     }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
@@ -498,6 +506,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasShowCodexSparkQuota: Object.hasOwn(config, "showCodexSparkQuota"),
       ultraFastTier: config.ultraFastTier,
       hasUltraFastTier: Object.hasOwn(config, "ultraFastTier"),
+      codexMainAccountHardLock: config.codexMainAccountHardLock,
+      hasCodexMainAccountHardLock: Object.hasOwn(config, "codexMainAccountHardLock"),
       codexDesktopAuthless: config.codexDesktopAuthless,
       hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
     };
@@ -534,6 +544,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // default, and a written `false` would survive as a decision nobody made.
       if (body.ultraFastTier === true) config.ultraFastTier = true;
       else if (body.ultraFastTier === false) deleteConfigTopLevelKey(config, "ultraFastTier");
+      if (body.codexMainAccountHardLock === true) config.codexMainAccountHardLock = true;
+      else if (body.codexMainAccountHardLock === false) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
       if (quotaAutoRefreshChange) {
@@ -575,6 +587,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasUltraFastTier) {
         config.ultraFastTier = previousSettings.ultraFastTier;
       } else deleteConfigTopLevelKey(config, "ultraFastTier");
+      if (previousSettings.hasCodexMainAccountHardLock) {
+        config.codexMainAccountHardLock = previousSettings.codexMainAccountHardLock;
+      } else deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
       if (previousSettings.hasCodexDesktopAuthless) {
         config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
       } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");
@@ -606,6 +621,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       catalogRefreshPending,
       showCodexSparkQuota: config.showCodexSparkQuota === true,
       codexDesktopAuthless: authlessIsEnabled,
+      codexMainAccountHardLock: config.codexMainAccountHardLock === true,
+      mainAccountHardLock: getMainAccountHardLockStatus(config),
       startupHealth: await readStartupHealth(config),
     });
   }

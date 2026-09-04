@@ -1219,6 +1219,7 @@ async function retryCodexPoolOnAlternateAccount(
       firstAuthCtx.accountId,
       firstResponse.headers,
       firstAuthCtx.writerGeneration,
+      firstAuthCtx.kind === "main-pool" ? firstAuthCtx.mainQuotaWriter : undefined,
     );
   }
   const deferFirstOutcome = shouldDeferCodexResetDerivedCooldown(
@@ -1240,7 +1241,7 @@ async function retryCodexPoolOnAlternateAccount(
   // Only a combo reset-derived outcome is deferred. Retry-After, defaults, and
   // ordinary requests must block the first account before the alternate send.
   if (!deferFirstOutcome) recordFirstOutcome();
-  const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
+  const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx, config);
   const retryProvider = applyCodexAuthContextToProvider(
     stripCodexRuntimeProviderFields(route.provider),
     retryAuthCtx,
@@ -1893,6 +1894,19 @@ async function resolveResponsesCodexAuth(
       authCtx = { kind: "main", accountId: null };
       options.onCodexAuthContextResolved?.(undefined);
     }
+    // This resolver also builds a synthetic main context for unrelated keyed routes. Only
+    // the actual Codex-forward transport consumes main quota; provider names are not proof
+    // (custom-named canonical-forward providers must retain the same protection).
+    const mainPolicyConfig = isCanonicalOpenAiForwardProvider(route.provider) ? config : undefined;
+    const headers = await materializeCodexUpstreamAuthAsync(req.headers, authCtx, {
+      config: mainPolicyConfig,
+      substituteMainCredential,
+      signal: options.abortSignal,
+      nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
+    });
+    // Awaiting even a cached materialization yields. Preserve the policy error if the live
+    // quota/config changed during that yield, before usability could mislabel it as reauth.
+    headersForCodexAuthContext(headers, authCtx, mainPolicyConfig);
     if (!isCodexAuthContextUsable(authCtx, config)) {
       releaseCodexAuthContextProbeLease(authCtx);
       return {
@@ -1903,11 +1917,7 @@ async function resolveResponsesCodexAuth(
     return {
       ok: true,
       authCtx,
-      headers: await materializeCodexUpstreamAuthAsync(req.headers, authCtx, {
-        substituteMainCredential,
-        signal: options.abortSignal,
-        nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
-      }),
+      headers,
       substituteMainCredential,
     };
   } catch (err) {
@@ -1950,6 +1960,7 @@ function isTerminalPoolRefreshFailure(error: unknown): boolean {
  */
 async function refreshPoolForwardAuth(args: {
   req: Request;
+  config: OcxConfig;
   route: RouteResult;
   authCtx: CodexAuthContext & { kind: "pool" };
   substituteMainCredential: boolean;
@@ -1958,7 +1969,7 @@ async function refreshPoolForwardAuth(args: {
   | { ok: true; authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers }
   | { ok: false; response: Response; quarantine: boolean; quarantineGeneration?: number }
 > {
-  const { req, route, authCtx, substituteMainCredential, options } = args;
+  const { req, config, route, authCtx, substituteMainCredential, options } = args;
   try {
     const refreshed = await forceRefreshCodexPoolToken(authCtx.accountId, {
       rejectedGeneration: authCtx.generation,
@@ -1996,6 +2007,7 @@ async function refreshPoolForwardAuth(args: {
       route.codexAccountMode,
     );
     const headers = await materializeCodexUpstreamAuthAsync(req.headers, refreshedAuthCtx, {
+      config,
       substituteMainCredential,
       signal: options.abortSignal,
       nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
@@ -2022,6 +2034,7 @@ async function refreshPoolForwardAuth(args: {
 
 async function refreshNativeMainForwardAuth(args: {
   req: Request;
+  config: OcxConfig;
   route: RouteResult;
   authCtx: CodexAuthContext;
   substituteMainCredential: boolean;
@@ -2030,7 +2043,7 @@ async function refreshNativeMainForwardAuth(args: {
   | { ok: true; authCtx: CodexAuthContext; provider: OcxProviderConfig; headers: Headers }
   | { ok: false; response: Response }
 > {
-  const { req, route, authCtx, substituteMainCredential, options } = args;
+  const { req, config, route, authCtx, substituteMainCredential, options } = args;
   if (authCtx.kind !== "main-pool") {
     return { ok: false, response: formatErrorResponse(401, "authentication_error", "No native main credential to refresh") };
   }
@@ -2053,6 +2066,7 @@ async function refreshNativeMainForwardAuth(args: {
       route.codexAccountMode,
     );
     const headers = await materializeCodexUpstreamAuthAsync(req.headers, refreshedAuthCtx, {
+      config,
       substituteMainCredential,
       signal: options.abortSignal,
       nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
@@ -2062,7 +2076,9 @@ async function refreshNativeMainForwardAuth(args: {
     if (options.abortSignal?.aborted || req.signal.aborted) {
       return { ok: false, response: clientCancelledResponse() };
     }
-    return { ok: false, response: nativeMainRefreshFailureResponse(error) };
+    return { ok: false, response: mapCodexAuthContextErrorToResponse(error, {
+      now: Date.now(), accountSelector: route.codexAccountNamespace,
+    }) ?? nativeMainRefreshFailureResponse(error) };
   }
 }
 
@@ -4353,10 +4369,10 @@ async function handleResponsesInner(
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
       const poolAuthCtx = authCtx.kind === "pool" ? authCtx : undefined;
       const poolReplay = poolAuthCtx
-        ? await refreshPoolForwardAuth({ req, route, authCtx: poolAuthCtx, substituteMainCredential, options })
+        ? await refreshPoolForwardAuth({ req, config, route, authCtx: poolAuthCtx, substituteMainCredential, options })
         : undefined;
       const replay = poolReplay
-        ?? await refreshNativeMainForwardAuth({ req, route, authCtx, substituteMainCredential, options });
+        ?? await refreshNativeMainForwardAuth({ req, config, route, authCtx, substituteMainCredential, options });
       if (!replay.ok) {
         // Compact already records this; core historically returned without recording,
         // so a dead grant stayed selectable and every request repeated the same doomed
@@ -4754,6 +4770,7 @@ async function handleResponsesInner(
         authCtx.accountId,
         upstreamResponse.headers,
         authCtx.writerGeneration,
+        authCtx.kind === "main-pool" ? authCtx.mainQuotaWriter : undefined,
       );
       if (terminalBodyWillRecord) {
         options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {

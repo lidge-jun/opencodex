@@ -393,6 +393,8 @@ export interface OcxConfig {
    * "no fast tier was requested".
    */
   ultraFastTier?: boolean;
+  /** Stop new identity-matched main-account requests at observed 99% usage. Default off. */
+  codexMainAccountHardLock?: boolean;
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */

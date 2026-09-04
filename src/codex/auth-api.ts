@@ -93,11 +93,13 @@ import {
   getMainAccountCredentialPresence,
   getMainAccountInfoCache,
   isMainAccountIdentityGenerationLive,
+  observeMainQuotaCredential,
   setMainAccountCredentialPresence,
   setMainAccountInfoCache,
   type MainAccountInfo,
 } from "./main-account-cache";
 export { clearMainAccountInfoCache } from "./main-account-cache";
+import { getMainAccountHardLockStatus, type MainAccountHardLockStatus } from "./main-account-hard-lock";
 import { maskEmail } from "../lib/privacy";
 import { codexWarmupFailureReason, warmCodexAccount } from "./warmup";
 export { maskEmail } from "../lib/privacy";
@@ -884,6 +886,11 @@ async function fetchMainAccountInfoWhileOwned(
   if (!forceRefresh && cached && Date.now() - cached.ts < MAIN_CACHE_TTL) {
     return { info: cached, credentialChecked: true, hasCredential: true };
   }
+  // Bind quota to the owned credential and the account actually selected by WHAM's header.
+  // A conflicting legacy token/account tuple is not evidence for the new policy.
+  const mainQuotaWriter = requestAccountId === tokens.account_id
+    ? observeMainQuotaCredential(tokens.access_token, tokens.account_id)
+    : undefined;
   try {
     const resp = await fetch("https://chatgpt.com/backend-api/wham/usage", {
       headers: { Authorization: `Bearer ${tokens.access_token}`, "ChatGPT-Account-Id": tokens.account_id },
@@ -929,7 +936,7 @@ async function fetchMainAccountInfoWhileOwned(
     // score and auto-switch the main account exactly like a pool account (Option A).
     setMainAccountPlan(result.plan);
     if (result.quota) {
-      setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, result.quota, writerGeneration);
+      setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, result.quota, writerGeneration, mainQuotaWriter);
     }
     return {
       info: result,
@@ -1037,6 +1044,7 @@ export interface CodexAuthAccountDto {
   healthSummary: string;
   healthAction?: string;
   quotaProbeSkipped?: true;
+  mainAccountHardLock?: MainAccountHardLockStatus;
 }
 
 interface FreshPoolPlanUpdate {
@@ -1708,6 +1716,7 @@ export async function listCodexAuthAccountsSnapshot(
     logLabel: "main",
     isMain: true,
     paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+    mainAccountHardLock: getMainAccountHardLockStatus(runtimeConfig),
     priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
     hasCredential: hasMainCredential,
     needsReauth: mainNeedsReauth,

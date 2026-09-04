@@ -1113,6 +1113,7 @@ const configSchema = z.object({
   // Ultra Fast is opt-in for the same reason and degrades the same way: a malformed hand
   // edit turns the tier off rather than rejecting the config that carries it.
   ultraFastTier: z.boolean().optional().catch(false),
+  codexMainAccountHardLock: z.boolean().optional().catch(false),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),
