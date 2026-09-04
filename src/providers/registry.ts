@@ -21,6 +21,20 @@ import {
 import { cursorFastCapableBases } from "../adapters/cursor/catalog";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "./command-code-efforts";
 import { isCanonicalOpenRouterTarget } from "./openrouter-routing";
+import {
+  CODEBUDDY_CN_MODELS,
+  CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS,
+  CODEBUDDY_CN_MODEL_DEFAULT_REASONING_EFFORTS,
+  CODEBUDDY_CN_MODEL_MAX_OUTPUT_TOKENS,
+  CODEBUDDY_CN_MODEL_REASONING_EFFORTS,
+  CODEBUDDY_CN_NO_VISION_MODELS,
+  CODEBUDDY_GLOBAL_MODELS,
+  CODEBUDDY_GLOBAL_MODEL_CONTEXT_WINDOWS,
+  CODEBUDDY_GLOBAL_MODEL_DEFAULT_REASONING_EFFORTS,
+  CODEBUDDY_GLOBAL_MODEL_MAX_OUTPUT_TOKENS,
+  CODEBUDDY_GLOBAL_MODEL_REASONING_EFFORTS,
+  CODEBUDDY_REASONING_EFFORTS,
+} from "./codebuddy-models";
 
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
@@ -3043,6 +3057,64 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   },
   // FREEZE 2026-07-10: no public OpenAI-compatible endpoint is documented. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "gitlab-duo", label: "GitLab Duo", baseUrl: "https://cloud.gitlab.com/ai/v1/proxy/openai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://gitlab.com/-/user_settings/personal_access_tokens" },
+  {
+    // Official CodeBuddy Code CLI provider (Tencent Cloud), GLOBAL / `public` environment.
+    // Transport is the vendor-documented headless CLI automation surface
+    // (`codebuddy -p --output-format stream-json --tools ""`) authenticated with the official
+    // `CODEBUDDY_API_KEY` (https://www.codebuddy.ai/profile/keys). It does NOT read desktop
+    // session files, import desktop bearer tokens, impersonate the desktop client, or call the
+    // private console endpoint — the approach closed in #687 and left in draft in #2244.
+    // baseUrl is the canonical region identity: the adapter fails closed if it is overridden, so a
+    // global key is never sent to the CN environment (that is the separate `codebuddy-cn` entry).
+    // v1 runs tools-disabled so Codex keeps tool ownership; this provider is text/reasoning only
+    // until the control-protocol tool bridge lands (see docs). Free/trial/promotional/subscription
+    // credits draw from the same official API-key pool. Requires the CLI: `npm i -g @tencent-ai/codebuddy-code`.
+    // GOVERNANCE: whether routing this vendor automation surface behind a proxy for a third-party
+    // agent satisfies CodeBuddy's AUP is an open question flagged for maintainer security review.
+    id: "codebuddy",
+    label: "CodeBuddy (Global)",
+    adapter: "codebuddy",
+    baseUrl: "https://www.codebuddy.ai",
+    authKind: "key",
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://www.codebuddy.ai/profile/keys",
+    defaultModel: "default-model",
+    models: CODEBUDDY_GLOBAL_MODELS,
+    liveModels: false,
+    modelContextWindows: CODEBUDDY_GLOBAL_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: CODEBUDDY_GLOBAL_MODEL_MAX_OUTPUT_TOKENS,
+    defaultMaxOutputTokens: 32_000,
+    reasoningEfforts: CODEBUDDY_REASONING_EFFORTS,
+    modelReasoningEfforts: CODEBUDDY_GLOBAL_MODEL_REASONING_EFFORTS,
+    modelDefaultReasoningEfforts: CODEBUDDY_GLOBAL_MODEL_DEFAULT_REASONING_EFFORTS,
+    note: "Official CodeBuddy Code CLI (Tencent Cloud), global/public environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy-cn. v1 disables CLI tools (--tools \"\") so Codex retains tool ownership: text/reasoning only for now. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
+  },
+  {
+    // Official CodeBuddy Code CLI provider, CHINA / `internal` environment. Identical adapter and
+    // binary as `codebuddy`; the region is fixed by the profile's CODEBUDDY_INTERNET_ENVIRONMENT
+    // and this canonical baseUrl. CN key: https://copilot.tencent.com/profile/keys. The CN model
+    // roster differs from Global (see codebuddy-models.ts) and is seeded separately (§八).
+    id: "codebuddy-cn",
+    label: "CodeBuddy (CN)",
+    adapter: "codebuddy",
+    baseUrl: "https://www.codebuddy.cn",
+    authKind: "key",
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    dashboardUrl: "https://copilot.tencent.com/profile/keys",
+    defaultModel: "default",
+    models: CODEBUDDY_CN_MODELS,
+    liveModels: false,
+    modelContextWindows: CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: CODEBUDDY_CN_MODEL_MAX_OUTPUT_TOKENS,
+    defaultMaxOutputTokens: 32_000,
+    reasoningEfforts: CODEBUDDY_REASONING_EFFORTS,
+    modelReasoningEfforts: CODEBUDDY_CN_MODEL_REASONING_EFFORTS,
+    modelDefaultReasoningEfforts: CODEBUDDY_CN_MODEL_DEFAULT_REASONING_EFFORTS,
+    noVisionModels: CODEBUDDY_CN_NO_VISION_MODELS,
+    note: "Official CodeBuddy Code CLI (Tencent Cloud), China/internal environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy (Global); credentials are never exchanged across regions. v1 disables CLI tools (--tools \"\"): text/reasoning only for now. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
+  },
 ];
 
 export function providerRegistryFastWireError(
