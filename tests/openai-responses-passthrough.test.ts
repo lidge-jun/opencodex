@@ -2304,6 +2304,37 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.input).toEqual([statefulOutput]);
   });
 
+  test("api-key mode preserves images when repairing output without call_id", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key" as const,
+      apiKey: "xai-test",
+    });
+    const image = {
+      type: "input_image",
+      image_url: "data:image/png;base64,AAAA",
+      detail: "high",
+    };
+
+    const body = JSON.parse(adapter.buildRequest({
+      ...parsedBase,
+      _rawBody: {
+        model: "grok-4.6",
+        input: [{
+          type: "function_call_output",
+          output: [{ type: "input_text", text: "screenshot" }, image],
+        }],
+      },
+    }, meta).body) as { input: Array<{ content: Record<string, unknown>[] }> };
+
+    expect(body.input[0]?.content).toEqual([
+      { type: "input_text", text: "[tool output for unknown call]" },
+      { type: "input_text", text: "screenshot" },
+      image,
+    ]);
+  });
+
   test("forward unexpanded miss converts orphan tool outputs and drops reasoning", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const body = JSON.parse(adapter.buildRequest({

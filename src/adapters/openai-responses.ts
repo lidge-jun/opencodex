@@ -906,6 +906,27 @@ function toolOutputText(output: unknown): string {
   }).filter(Boolean).join("\n");
 }
 
+/** Convert unidentified tool output to user-message content without discarding valid images. */
+function unidentifiedToolOutputContent(output: unknown): Record<string, unknown>[] {
+  const marker = "[tool output for unknown call]";
+  if (!Array.isArray(output)) {
+    return [{ type: "input_text", text: `${marker}\n${toolOutputText(output)}` }];
+  }
+
+  const content: Record<string, unknown>[] = [{ type: "input_text", text: marker }];
+  for (const part of output) {
+    if (!isPlainObject(part)) continue;
+    if (part.type === "input_image") {
+      content.push(part);
+    } else if (typeof part.text === "string") {
+      content.push({ type: "input_text", text: part.text });
+    } else if (part.type === "refusal" && typeof part.refusal === "string") {
+      content.push({ type: "input_text", text: `[refusal] ${part.refusal}` });
+    }
+  }
+  return content;
+}
+
 /** True when a Responses tool output item is present but carries no usable content. */
 function isToolOutputEmpty(output: unknown): boolean {
   if (typeof output === "string") return output.trim() === "";
@@ -959,10 +980,7 @@ function repairUnidentifiedToolOutputItems(body: unknown): unknown {
     return {
       type: "message",
       role: "user",
-      content: [{
-        type: "input_text",
-        text: `[tool output for unknown call]\n${toolOutputText(item.output)}`,
-      }],
+      content: unidentifiedToolOutputContent(item.output),
     };
   });
   return changed ? { ...body, input } : body;
