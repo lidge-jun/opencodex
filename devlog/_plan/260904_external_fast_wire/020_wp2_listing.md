@@ -153,6 +153,14 @@ const nativeDiscoveryId = (slug: string): string => idStyle === "readable"
   ? claudeCodeNativeAlias(slug)
   : aliasForRoute("native", slug);
 
+// The existing `fastModelId ?? m.id` expression at model-info.ts:159-162, lifted so the
+// collision set and the routed loop compute one value. The fastMode Cursor rewrite must be
+// reflected here, or a rewritten row would look synthetic to the collision check.
+const listedModelIdFor = (m: CatalogModel): string =>
+  fastMode === true && m.provider === "cursor" && idStyle === "readable"
+    ? cursorFastIdFor(m.id) ?? m.id
+    : m.id;
+
 const routedDiscoveryId = (m: CatalogModel, listedModelId: string): string =>
   idStyle === "readable"
     ? claudeCodeAlias(m.provider, listedModelId)
@@ -176,12 +184,10 @@ const pushFastVariant = (base: AnthropicModelInfo) => {
 };
 ```
 
-`listedModelIdFor(m)` is the existing `fastModelId ?? m.id` expression at
-`model-info.ts:162`, lifted to a helper for the same reason: the fastMode Cursor rewrite
-must be reflected in the collision set, or a rewritten row would look synthetic. Both loops
-then call these helpers for their own row ids too, so the set and the output cannot drift.
-`claudeCodeAlias` and `claudeCodeNativeAlias` are already imported at `model-info.ts:19`,
-and `aliasForRoute` is a parameter of `buildAnthropicModelInfos` (`:111`).
+Both loops call these helpers for their own row ids too, so the collision set and the
+published output cannot drift. `claudeCodeAlias` and `claudeCodeNativeAlias` are already
+imported at `model-info.ts:19`, `aliasForRoute` is a parameter of `buildAnthropicModelInfos`
+(`:111`), and `cursorFastIdFor` is already imported for the existing fastMode rewrite.
 
 ```diff
    for (const slug of nativeSlugs) {

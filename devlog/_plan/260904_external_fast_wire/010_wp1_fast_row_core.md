@@ -23,10 +23,24 @@ effort-flavoured for historical reasons; the set is not.
 
 ```ts
 // src/server/fast-row.ts
+import {
+  accountBoundNativeOpenAiSlugsBySelector,
+  shouldIncludeAccountBoundNativeOpenAi,
+  shouldIncludeNativeOpenAi,
+  visibleNativeSlugs,
+} from "../codex/catalog/metadata";
 import { fastPolicyForModel } from "../providers/service-tier";
 import type { InboundWire } from "../providers/registry";
 import type { OcxConfig } from "../types";
-import { isKnownId, knownEffortRowIds, type EffortRowKnownIds } from "./effort-row";
+import {
+  isKnownId,
+  knownEffortRowIds,
+  parseEffortRowId,
+  parseRequestEffortRowId,
+  loadDetectedCursorEffortTable,
+  type EffortRowKnownIds,
+  type ParsedEffortRowId,
+} from "./effort-row";
 
 /**
  * Terminal marker for a synthetic Fast selector. Double hyphen rather than single, because
@@ -103,7 +117,12 @@ export function fastRowBases(config: OcxConfig): Set<string> {
     for (const slug of visibleNativeSlugs(config)) bases.add(slug);
   }
   if (shouldIncludeAccountBoundNativeOpenAi(config)) {
-    for (const [selector, slugs] of accountBoundNativeOpenAiSlugsBySelector(config)) {
+    // Pass an EMPTY observed-entry list on purpose. The default argument reads the Codex
+    // models cache and catalog from disk (metadata.ts:765), which would put a file read on
+    // every parsed selector. The empty form still seeds every selector with
+    // NATIVE_OPENAI_MODELS (:773), and an observed native this unit could publish for must
+    // already be in UPSTREAM_NATIVE_ENTRIES anyway, so nothing publishable is lost.
+    for (const [selector, slugs] of accountBoundNativeOpenAiSlugsBySelector(config, [])) {
       for (const slug of slugs) bases.add(`${selector}/${slug}`);
     }
   }
@@ -111,9 +130,10 @@ export function fastRowBases(config: OcxConfig): Set<string> {
 }
 ```
 
-All three helpers are synchronous and config-only (`metadata.ts:430`, `:450`, `:763`), so
-this builds on the request path. wp2 asserts the containment direction that matters: every
-base it publishes a row for is in this set (test 10). The reverse does not hold, by design.
+All four helpers are synchronous, and with the explicit empty observed-entry list none of
+them touches the filesystem (`metadata.ts:430`, `:450`, `:763`). wp2 asserts the containment
+direction that matters: every base it publishes a row for is in this set (test 10). The
+reverse does not hold, by design.
 
 ```ts
 export interface ParsedFastRowId { baseId: string; }
@@ -187,22 +207,38 @@ export interface ParsedSyntheticRow {
  * Resolve one ingress selector against both synthetic grammars. Callers pass the id the
  * client sent and never a value another parser mutated.
  */
-export function parseSyntheticRowId(id: string, config: OcxConfig): ParsedSyntheticRow {
-  // Ordinary ids carry no marker at all; bail before building either inventory so the
-  // flags cost nothing per request for models that are not synthetic rows.
-  if (id.lastIndexOf("--") <= 0) return { fastRow: null, effortRow: null };
+export function parseSyntheticRowId(
+  id: string,
+  config: OcxConfig,
+  // Claude surfaces decode the alias before the marker is unambiguous, so they pass the
+  // decoded form for Fast while effort parsing keeps seeing the id the client sent.
+  fastSelector: string = id,
+): ParsedSyntheticRow {
+  // Fast off: delegate verbatim. Not merely equivalent - the SAME function shipped today,
+  // so an install that never enables this feature cannot observe any change at all, in
+  // behaviour or in cost. Building knownIds or touching the Cursor table here would be a
+  // regression on the existing cursorEffortRows path.
+  if (config.fastRows !== true) {
+    return { fastRow: null, effortRow: parseRequestEffortRowId(id, config) };
+  }
+  // Ordinary ids carry no marker at all; bail before building any inventory.
+  if (id.lastIndexOf("--") <= 0 && fastSelector.lastIndexOf("--") <= 0) {
+    return { fastRow: null, effortRow: null };
+  }
   const knownIds = knownEffortRowIds(config);
-  const fastRow = config.fastRows === true && id.endsWith(FAST_ROW_SUFFIX)
-    ? parseFastRowId(id, config, knownIds, fastRowBases(config))
+  const fastRow = fastSelector.endsWith(FAST_ROW_SUFFIX)
+    ? parseFastRowId(fastSelector, config, knownIds, fastRowBases(config))
     : null;
   if (fastRow) return { fastRow, effortRow: null };
-  const effortRow = parseEffortRowId(id, config, {
-    knownIds,
-    table: loadDetectedCursorEffortTable(),
-  });
+  // Cursor install detection stays behind its own flag, exactly as parseRequestEffortRowId
+  // gates it today.
+  const effortRow = config.cursorEffortRows === true
+    ? parseEffortRowId(id, config, { knownIds, table: loadDetectedCursorEffortTable() })
+    : null;
   // Composition is not supported (020 R1) and the effort parser cannot see the problem: it
   // validates the terminal effort but never that the base is real (effort-row.ts:78-95), so
-  // "x--fast--high" would otherwise resolve to the nonexistent base "x--fast".
+  // "x--fast--high" would otherwise resolve to the nonexistent base "x--fast". This rule
+  // applies only with fastRows ON, so it can never change a shipped-config outcome.
   return effortRow && effortBaseCarriesFastMarker(effortRow.baseId, knownIds)
     ? { fastRow: null, effortRow: null }
     : { fastRow: null, effortRow };
@@ -215,20 +251,15 @@ call sites migrate to the wrapper in wp3 so both grammars are resolved in one pl
 **The migration must not regress `cursorEffortRows`.** With `fastRows` off the wrapper
 reduces to today's behaviour, and the differences are deliberate and bounded:
 
-| | `parseRequestEffortRowId` today | wrapper, `fastRows` off |
-|---|---|---|
-| flag off | returns null immediately | `parseEffortRowId` returns null on the same check |
-| no `--` in id | early bail | same early bail |
-| ordinary effort row | parsed | parsed identically |
-| base ends in `--fast`, unknown | parsed as an effort row | **discarded** |
+With `fastRows` off the wrapper **delegates to `parseRequestEffortRowId` itself**, so the
+shipped path is not reimplemented and cannot drift. An earlier draft reconstructed the
+logic inline and regressed two cases the audit caught: it built the known-id inventory and
+loaded the Cursor bundle table for any id containing `--` (work the shipped early-return
+skips), and it applied the nested-marker rule unconditionally, so a `cursorEffortRows` user
+with `fastRows` off would have lost the `x--fast--high` effort row they get today.
 
-Only the last row changes, and only for an id whose base is a model that does not exist —
-today it resolves to an unroutable base and fails downstream anyway. Test 12 in wp1 pins
-the first three rows so the migration is proven behaviour-preserving rather than assumed.
-
-One ordering note: the wrapper calls `parseEffortRowId` (the pure form) rather than
-`parseRequestEffortRowId`, because it has already built `knownIds` and would otherwise
-build it twice per request.
+With `fastRows` on, the nested-marker rule is new behaviour for a new opt-in feature, which
+is the only place it is allowed to apply. Test 12 pins the delegation.
 
 `isKnownId` is module-private in `effort-row.ts:32` today. wp1 exports it there rather than
 duplicating the Set-or-predicate branch.

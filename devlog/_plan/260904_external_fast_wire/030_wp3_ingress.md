@@ -158,18 +158,29 @@ function decodeClaudeFastSelector(raw: string, cc?: OcxConfig["claudeCode"]): st
 `fastRow` is declared beside `effortRow` at `claude-messages.ts:608`, NOT inside the
 model-validation block: the passthrough guard and the post-translation tier write both
 read it, and a block-scoped `const` would not compile.
+Messages needs both selector forms at once: effort parsing must keep seeing the id the
+client sent, while Fast parsing needs the decoded one. That is what the wrapper's third
+parameter is for, so this surface migrates fully rather than calling two parsers:
 
 ```diff
      let effortRow: ParsedEffortRowId | null = null;
 +    let fastRow: ParsedFastRowId | null = null;
      ...
-     effortRow = parseRequestEffortRowId(requestedModel, config);
+-    effortRow = parseRequestEffortRowId(requestedModel, config);
++    // Decode for Fast only: the alias grammar and the fast marker share the separator, so
++    // the marker is unambiguous only once the provider half has been split off. Effort
++    // parsing keeps the raw selector, so existing behaviour is untouched.
++    ({ fastRow, effortRow } = parseSyntheticRowId(
++      requestedModel,
++      config,
++      decodeClaudeFastSelector(requestedModel, config.claudeCode),
++    ));
      if (effortRow) { anthropicBody.model = effortRow.baseId; effortOverride = effortRow.effort; }
-+    // Decode first: the alias grammar and the fast marker share the separator, so the
-+    // marker is unambiguous only once the provider half has been split off.
-+    fastRow = parseSyntheticRowId(decodeClaudeFastSelector(requestedModel, config.claudeCode), config).fastRow;
 +    if (fastRow) anthropicBody.model = fastRow.baseId;
 ```
+
+`parseSyntheticRowId` then checks the stripped base against the routable-base set, and for
+a real `p/foo--fast` the exact-id guard refuses the strip.
 
 `parseSyntheticRowId` then checks the stripped base against the routable-base set, and for
 a real `p/foo--fast` the exact-id guard refuses the strip.
@@ -210,7 +221,9 @@ returns an estimate and sends no tier:
    if (countRoute) { model = stripOneMillionMarker(countRoute); raw.model = model; }
 +  // Decode before stripping, for the same aliasing reason as /v1/messages. A token estimate
 +  // carries no tier, so only the identity is corrected here.
-+  const countFastRow = parseSyntheticRowId(decodeClaudeFastSelector(model, config.claudeCode), config).fastRow;
++  const countFastRow = parseSyntheticRowId(
++    model, config, decodeClaudeFastSelector(model, config.claudeCode),
++  ).fastRow;
 +  if (countFastRow) { model = countFastRow.baseId; raw.model = model; }
 ```
 
