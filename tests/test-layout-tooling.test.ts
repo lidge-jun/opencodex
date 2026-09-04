@@ -208,11 +208,17 @@ describe("membership oracle", () => {
 
   test("the live tree and the fixture agree entry by entry", () => {
     const live = listTestFiles(repoRoot()).map(rel => basename(rel)).filter(name => !layout.keepAtRoot.includes(name));
-    const missingFromFixture = live.filter(name => !(name in EXPECTED)).sort();
     const liveSet = new Set(live);
     const missingFromTree = Object.keys(EXPECTED).filter(name => !liveSet.has(name)).sort();
-    const wrongTarget = live.filter(name => resolveTarget(layout, name) !== EXPECTED[name]).map(name => `${name}: ${resolveTarget(layout, name)} != ${EXPECTED[name]}`).sort();
-    expect({ missingFromFixture, missingFromTree, wrongTarget }).toEqual({ missingFromFixture: [], missingFromTree: [], wrongTarget: [] });
+    // A file the fixture does not know yet (added on dev after the snapshot) is fine as long as
+    // the regex seeds place it: that is the whole point of the seeds. It is only an error when
+    // nothing resolves it, or when the map and the fixture disagree about a file both know.
+    const unresolvedNew = live.filter(name => !(name in EXPECTED) && resolveTarget(layout, name) === null).sort();
+    const wrongTarget = live
+      .filter(name => name in EXPECTED && resolveTarget(layout, name) !== EXPECTED[name])
+      .map(name => `${name}: ${resolveTarget(layout, name)} != ${EXPECTED[name]}`)
+      .sort();
+    expect({ unresolvedNew, missingFromTree, wrongTarget }).toEqual({ unresolvedNew: [], missingFromTree: [], wrongTarget: [] });
   });
 
   test("the fixture histogram never drops below the inventory in devlog 001 §2.B", () => {

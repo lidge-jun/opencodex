@@ -37,6 +37,7 @@
   "anthropic-image-normalize.test.ts": "adapters/anthropic",
   "anthropic-image-retry-e2e.test.ts": "adapters/anthropic",
   "anthropic-image-retry.test.ts": "adapters/anthropic",
+  "anthropic-pool-toggle-copy.test.ts": "adapters/anthropic",
   "anthropic-reasoning.test.ts": "adapters/anthropic",
   "anthropic-stream-hardening.test.ts": "adapters/anthropic",
   "anthropic-tail-guard.test.ts": "adapters/anthropic",
