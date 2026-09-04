@@ -149,7 +149,7 @@ sont ignorés à moins que `--all` soit présent. Avec un fournisseur, répertor
 La sortie destinée aux utilisateurs utilise `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` ; une ligne Codex sélectionnée manuellement porte la mention
 `selected`. `PRIORITY` est l'ordre de sélection Codex signé (`0` lorsqu'il n'est pas défini) et affiche `-` pour les lignes
 où l'ordre ne s'applique pas, comme les comptes OAuth et les clés API. Avec au moins deux comptes Kiro enregistrés et éligibles, par défaut une réponse 429 entraîne automatiquement une rotation vers un autre
-compte, en privilégiant celui dont l'allocation restante connue est la plus élevée ; la rotation est activée par la présence de plusieurs comptes et peut être désactivée avec `oauthAccountFailover.enabled: false` ; `ocx account login kiro` ajoute les comptes au pool un par un. Un résultat vide est toujours un succès. `--json`
+compte, en privilégiant celui dont l'allocation restante connue est la plus élevée ; la rotation est activée par la présence de plusieurs comptes et ne peut pas être désactivée — `oauthAccountFailover.enabled: false` refuse la préférence de compte avant envoi, pas la récupération après un 429 ; `ocx account login kiro` ajoute les comptes au pool un par un. Un résultat vide est toujours un succès. `--json`
 renvoie :
 
 ```text
