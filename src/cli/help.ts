@@ -27,7 +27,8 @@ export function printUsage(): void {
 
 Usage:
   ocx setup                   Interactive setup (alias: init)
-  ocx start [--port <port>]   Start the proxy server (auto-syncs models to Codex)
+  ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]
+                              Start the proxy; SOCKS5 defaults to 127.0.0.1:10808
   ocx stop                    Stop the proxy AND restore native Codex (plain codex works again)
   ocx restore                 Restore native Codex without stopping (alias: eject)
   ocx restore back            Re-point codex at the running proxy (undo restore)
@@ -95,6 +96,8 @@ Examples:
   ocx init                    Set up provider and inject into Codex
   ocx start                   Start on default port (10100)
   ocx start --port 8080       Start on custom port
+  ocx start --socks5          Outbound via SOCKS5 at 127.0.0.1:10808 (saved)
+  ocx start --socks5-off      Clear a saved SOCKS5 outbound proxy
   ocx help service            Show service command help
   ocx sync                    Sync available models to Codex`);
 }

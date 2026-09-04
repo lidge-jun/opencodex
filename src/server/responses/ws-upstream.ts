@@ -14,6 +14,7 @@
 
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { compareBunVersions } from "../../lib/bun-stream-caps";
+import { socks5ProxyFromEnv } from "../../lib/proxy-env";
 
 const CODEX_RESPONSES_HTTP_URL = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_WS_URL = "wss://chatgpt.com/backend-api/codex/responses";
@@ -135,6 +136,7 @@ export function shouldUseCodexWsUpstream(
   upstreamWebsocketConfigured = false,
 ): boolean {
   if (!bunSupportsBoundedCodexWsRelay(runtime)) return false;
+  if (socks5ProxyFromEnv()) return false;
   if (url !== CODEX_RESPONSES_HTTP_URL && !upstreamWebsocketConfigured) return false;
   if (upstreamWebsocketConfigured && !isResponsesWebsocketEligibleUrl(url)) return false;
   if ((init?.method ?? "GET").toUpperCase() !== "POST") return false;

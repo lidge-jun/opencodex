@@ -12,7 +12,7 @@ description: Listener, удалённый доступ, admission key, тайм�
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Порт, который слушает прокси. |
 | `hostname?` | `string` | `"127.0.0.1"` | Адрес bind'а. Не-loopback bind требует `OPENCODEX_API_AUTH_TOKEN`. |
-| `proxy?` | `string` | — | URL исходящего HTTP(S)-прокси или `${ENV_VAR}`. Применяется к `HTTP_PROXY` / `HTTPS_PROXY` только когда эти переменные не заданы; loopback всегда остаётся в `NO_PROXY`. |
+| `proxy?` | `string` | — | URL исходящего HTTP(S) или SOCKS5-прокси (`socks5://host:port`) или `${ENV_VAR}`. HTTP URL пишутся в `HTTP_PROXY` / `HTTPS_PROXY`, если те не заданы. SOCKS5 используют встроенный SOCKS5-туннель и также пишутся в `ALL_PROXY` (`ocx start --socks5`); унаследованные `HTTP(S)_PROXY` сбрасываются в этом процессе. Loopback всегда остаётся в `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Явно включает один идентичный повтор Responses, если в turn нет ни текста, ни tool call, включая случай, когда stream завершается до terminal event. Повтор может тарифицироваться. `OCX_EMPTY_COMPLETION_RETRY=0` отключает его без изменения config; combo и routed-compaction turn исключены. |
 | `stallTimeoutSec?` | `number` | `300` | Секунды без upstream-данных до `response.incomplete`. Минимум 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Дедлайн одной попытки DNS/TCP/TLS/final-header; он завершается до генерации тела ответа. |

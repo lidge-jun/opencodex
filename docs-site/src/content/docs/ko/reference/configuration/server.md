@@ -11,7 +11,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 프록시 수신 포트입니다. |
 | `hostname?` | `string` | `"127.0.0.1"` | 바인드 주소입니다. 루프백이 아닌 바인드에는 `OPENCODEX_API_AUTH_TOKEN`이 필요합니다. |
-| `proxy?` | `string` | — | 송신용 HTTP(S) 프록시 URL 또는 `${ENV_VAR}`입니다. 해당 변수가 비어 있을 때만 `HTTP_PROXY` / `HTTPS_PROXY`에 적용되며, 루프백은 `NO_PROXY`에 그대로 남습니다. |
+| `proxy?` | `string` | — | 송신용 HTTP(S) 또는 SOCKS5 프록시 URL(`socks5://host:port`) 또는 `${ENV_VAR}`입니다. HTTP URL은 해당 변수가 비어 있을 때 `HTTP_PROXY` / `HTTPS_PROXY`에 적용됩니다. SOCKS5 URL은 내장 SOCKS5 터널을 사용하고 `ALL_PROXY`에도 적용되며(`ocx start --socks5`), 이 프로세스에서 상속된 `HTTP(S)_PROXY`를 지웁니다. 루프백은 `NO_PROXY`에 그대로 남습니다. |
 | `emptyCompletionRetry?` | `boolean` | `false` | 텍스트나 도구 호출이 없는 Responses 턴을, 터미널 이벤트 전에 스트림이 종료된 경우를 포함해 동일한 요청으로 한 번 재시도하도록 선택합니다. 재시도에는 비용이 발생할 수 있습니다. `OCX_EMPTY_COMPLETION_RETRY=0`은 설정을 바꾸지 않고 비활성화하며, combo 및 routed-compaction turn은 제외됩니다. |
 | `stallTimeoutSec?` | `number` | `300` | 업스트림 데이터가 없을 때 `response.incomplete`가 되기까지의 초 수입니다. 최소 1입니다. |
 | `connectTimeoutMs?` | `number` | `200000` | 시도별 DNS/TCP/TLS/최종 헤더 기한입니다. 본문 생성 전에 끝납니다. |

@@ -60,6 +60,7 @@ import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { assertNotRealHomeUnderTest } from "./lib/test-home-guard";
 import { providerDestinationConfigError } from "./lib/destination-policy";
 import { redactSecretString } from "./lib/redact";
+import { configureSocks5Fetch } from "./lib/proxy-env";
 import { openRouterRoutingConfigError } from "./providers/openrouter-routing";
 import { MODEL_ALIAS_PATTERN } from "./providers/default-aliases";
 import { MODEL_DISCOVERY_MAX_MODELS } from "./providers/model-discovery-limits";
@@ -3598,11 +3599,10 @@ function warnProxyConfigDiscardOnce(kind: "proxy" | "noProxy" | "noProxyElements
 }
 
 /**
- * Mirror `config.proxy` into HTTP(S)_PROXY env vars so Bun's native fetch routes every outbound
- * provider call through the proxy — no per-callsite changes (verified: Bun honors these plus
- * NO_PROXY). User-set env vars always win; localhost/127.0.0.1 are appended to NO_PROXY so the
- * CLI's own health checks and running-proxy API calls stay direct. Call once per process entry
- * that makes outbound provider requests (server start, catalog sync).
+ * Mirror `config.proxy` into outbound-proxy env vars. HTTP(S) URLs go to
+ * HTTP_PROXY/HTTPS_PROXY when those are unset. SOCKS5 URLs go to ALL_PROXY,
+ * clear inherited HTTP(S)_PROXY, and install the explicit SOCKS5 fetch wrapper.
+ * Loopback is always merged into NO_PROXY.
  */
 export function applyProxyEnv(config: OcxConfig): void {
   applyProxyEnvWith(config);
@@ -3623,6 +3623,7 @@ export function applyProxyEnvWith(
   let proxy = typeof rawProxy === "string" ? resolveEnvValue(rawProxy) : undefined;
   if (!proxy) {
     if (rawProxy !== undefined) warnProxyConfigDiscardOnce("proxy");
+    configureSocks5Fetch();
     return;
   }
   if (proxy.trim().toLowerCase() === "auto") {
@@ -3651,8 +3652,18 @@ export function applyProxyEnvWith(
     }
   }
   if (proxy) {
-  if (!process.env.HTTP_PROXY?.trim() && !process.env.http_proxy?.trim()) process.env.HTTP_PROXY = proxy;
-  if (!process.env.HTTPS_PROXY?.trim() && !process.env.https_proxy?.trim()) process.env.HTTPS_PROXY = proxy;
+    if (/^socks/i.test(proxy.trim()) && !/^socks5h?:\/\//i.test(proxy.trim())) {
+      throw new Error("Only SOCKS5 proxy URLs are supported; use socks5://host:port");
+    }
+    if (/^socks5h?:\/\//i.test(proxy.trim())) {
+      for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"] as const) {
+        delete process.env[key];
+      }
+      process.env.ALL_PROXY = proxy;
+    } else {
+      if (!process.env.HTTP_PROXY?.trim() && !process.env.http_proxy?.trim()) process.env.HTTP_PROXY = proxy;
+      if (!process.env.HTTPS_PROXY?.trim() && !process.env.https_proxy?.trim()) process.env.HTTPS_PROXY = proxy;
+    }
   }
   const existing = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
   const entries = existing.split(",").map(s => s.trim()).filter(Boolean);
@@ -3684,6 +3695,7 @@ export function applyProxyEnvWith(
     }
   }
   process.env.NO_PROXY = entries.join(",");
+  configureSocks5Fetch();
 }
 
 function warnConfigRepaired(configPath: string, error: z.ZodError): void {

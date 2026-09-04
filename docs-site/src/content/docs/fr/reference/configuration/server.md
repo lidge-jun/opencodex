@@ -12,7 +12,7 @@ exécute des fonctionnalités d'assistance autour des demandes du fournisseur.
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Port d'écoute proxy. |
 | `hostname?` | `string` | `"127.0.0.1"` | Adresse de liaison. Les liaisons hors bouclage nécessitent `OPENCODEX_API_AUTH_TOKEN`. |
-| `proxy?` | `string` | — | URL du proxy HTTP(S) sortant ou `${ENV_VAR}`. Appliquée à `HTTP_PROXY` / `HTTPS_PROXY` uniquement lorsque ces variables ne sont pas définies ; le bouclage reste dans `NO_PROXY`. |
+| `proxy?` | `string` | — | URL du proxy HTTP(S) ou SOCKS5 sortant (`socks5://host:port`) ou `${ENV_VAR}`. Les URL HTTP s’appliquent à `HTTP_PROXY` / `HTTPS_PROXY` si elles sont vides. Les URL SOCKS5 utilisent le tunnel SOCKS5 intégré et sont aussi exposées via `ALL_PROXY` (`ocx start --socks5`); `HTTP(S)_PROXY` héritées sont effacées dans ce processus. Le bouclage reste dans `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Active une nouvelle tentative Responses identique lorsqu’une réponse ne contient ni texte ni appel d’outil. Cette tentative peut être facturée. `OCX_EMPTY_COMPLETION_RETRY=0` la désactive sans modifier la configuration ; les combinaisons et les tours de compactage routés restent exclus. |
 | `stallTimeoutSec?` | `number` | `300` | Nombre de secondes sans données en amont avant `response.incomplete`. Minimum : 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Délai maximal par tentative pour DNS/TCP/TLS et les en-têtes finaux ; il prend fin avant la génération du corps. |

@@ -59,14 +59,15 @@ the service shell at start.
 
 Provider connection tests and live model discovery share the GET-only provider outbound wrapper.
 Direct HTTP(S) resolves once and pins the validated address; HTTPS preserves the original Host/SNI
-and always verifies certificates. Proxy-configured requests stay on Bun fetch so HTTP(S)_PROXY,
-ALL_PROXY, and NO_PROXY semantics remain authoritative. The wrapper classifies successful local DNS answers, but
+and always verifies certificates. HTTP(S)-proxy requests stay on Bun fetch, while SOCKS5 requests
+use the explicit dependency-free SOCKS5 tunnel fetch. Both preserve NO_PROXY semantics. The wrapper classifies successful local DNS answers, but
 only a typed DNS-resolution failure degrades to proxy resolution; every literal, metadata, and
 resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
 
-Both paths reject redirects and expose only credential-stripped final-address guidance. This phase
-does not cover ordinary requests, streaming, retries, or per-hop redirect review on those paths.
+Both paths reject redirects and expose only credential-stripped final-address guidance. The shared
+SOCKS5 fetch also carries ordinary provider request bodies and response streams, while per-hop
+redirect review remains outside this transport boundary.
 Caller-owned `provider.fetch` executors are also deferred: they receive literal/config checks and
 redirect blocking, but cannot inherit DNS classification or peer pinning without a verified-peer
 executor contract. Main-request migration must not treat that branch as fixed-transport equivalent.
@@ -80,8 +81,9 @@ Responses-compatible streaming output.
 ### Fetch-helper import boundary
 
 `src/server/responses/fetch-helpers.ts` is a transport leaf shared by Responses, compact, and native
-Chat. Its runtime imports are limited to the Codex WebSocket transport, provider request pacing, and
-the upstream HTTP-version helper. Server, provider, and WebSocket data types remain type-only edges.
+Chat. Its runtime imports are limited to the Codex WebSocket transport, provider request pacing,
+the upstream HTTP-version helper, and the configured outbound fetch boundary. Server, provider and
+WebSocket data types remain type-only edges.
 It must not import routing, combos, OAuth, adapters, sidecars, response parsing, logging, or relay
 modules merely because those imports existed in the pre-split `responses.ts` monolith.
 

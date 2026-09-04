@@ -7,7 +7,7 @@ import {
   resolvePublicAddresses,
 } from "./destination-policy";
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
-import { outboundProxyConfigured } from "./proxy-env";
+import { configuredOutboundFetch, noProxyMatches, normalizeProxyHostname, outboundProxyConfigured } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
@@ -31,45 +31,6 @@ function pickPinnedAddress(addresses: Array<{ address: string; family: number }>
 
 function configuredProxyFor(): boolean {
   return outboundProxyConfigured();
-}
-
-function normalizeProxyHostname(hostname: string): string {
-  const normalized = hostname.trim().toLowerCase().replace(/\.+$/, "");
-  return normalized.startsWith("[") && normalized.endsWith("]")
-    ? normalized.slice(1, -1)
-    : normalized;
-}
-
-function noProxyMatches(url: URL): boolean {
-  const raw = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
-  const hostname = normalizeProxyHostname(url.hostname);
-  const port = url.port || (url.protocol === "https:" ? "443" : "80");
-  for (const rawEntry of raw.split(",")) {
-    let entry = rawEntry.trim().toLowerCase();
-    if (!entry) continue;
-    if (entry === "*") return true;
-    entry = entry.replace(/^https?:\/\//, "").split("/", 1)[0]!;
-
-    let entryHost = entry;
-    let entryPort = "";
-    const bracketed = /^\[([^\]]+)](?::(\d+))?$/.exec(entry);
-    if (bracketed) {
-      entryHost = bracketed[1]!;
-      entryPort = bracketed[2] ?? "";
-    } else if ((entry.match(/:/g)?.length ?? 0) === 1) {
-      const separator = entry.lastIndexOf(":");
-      const possiblePort = entry.slice(separator + 1);
-      if (/^\d+$/.test(possiblePort)) {
-        entryHost = entry.slice(0, separator);
-        entryPort = possiblePort;
-      }
-    }
-    if (entryPort && entryPort !== port) continue;
-    entryHost = normalizeProxyHostname(entryHost.replace(/^\*?\./, ""));
-    if (!entryHost) continue;
-    if (hostname === entryHost || hostname.endsWith(`.${entryHost}`)) return true;
-  }
-  return false;
 }
 
 let proxyBoundaryWarned = false;
@@ -165,11 +126,11 @@ async function providerOutboundRequest(
     if (!proxyConfigured) throw error;
     warnProxyBoundaryOnce();
     warnProxyDnsDegradationOnce();
-    return globalThis.fetch(url, { ...init, method, redirect: "manual" });
+    return configuredOutboundFetch(url, { ...init, method, redirect: "manual" });
   }
   if (proxyConfigured && !resolved.privateNetwork) {
     warnProxyBoundaryOnce();
-    return globalThis.fetch(url, { ...init, method, redirect: "manual" });
+    return configuredOutboundFetch(url, { ...init, method, redirect: "manual" });
   }
   if (proxyConfigured && resolved.privateNetwork && !noProxyMatches(parsed)) {
     const hostname = normalizeProxyHostname(parsed.hostname);

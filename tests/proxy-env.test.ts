@@ -1,8 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { applyProxyEnv } from "../src/config";
+import { configureSocks5Fetch } from "../src/lib/proxy-env";
 import type { OcxConfig } from "../src/types";
 
-const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "OCX_TEST_PROXY_REF", "OCX_TEST_NO_PROXY_REF"] as const;
+const PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+  "OCX_TEST_PROXY_REF",
+  "OCX_TEST_NO_PROXY_REF",
+] as const;
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -18,6 +30,7 @@ afterEach(() => {
     if (saved[key] === undefined) delete process.env[key];
     else process.env[key] = saved[key];
   }
+  configureSocks5Fetch();
 });
 
 function configWithProxy(proxy?: string, noProxy?: string | string[]): OcxConfig {
@@ -149,6 +162,23 @@ describe("applyProxyEnv", () => {
     process.env.OCX_TEST_PROXY_REF = "http://ref-proxy:9999";
     applyProxyEnv(configWithProxy("${OCX_TEST_PROXY_REF}"));
     expect(process.env.HTTP_PROXY).toBe("http://ref-proxy:9999");
+  });
+
+  test("mirrors SOCKS URLs into ALL_PROXY and leaves HTTP(S)_PROXY unset", () => {
+    applyProxyEnv(configWithProxy("socks5://127.0.0.1:10808"));
+    expect(process.env.ALL_PROXY).toBe("socks5://127.0.0.1:10808");
+    expect(process.env.HTTP_PROXY).toBeUndefined();
+    expect(process.env.HTTPS_PROXY).toBeUndefined();
+    expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1,::1,[::1]");
+  });
+
+  test("SOCKS config.proxy wins over inherited HTTP(S)_PROXY in this process", () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:10808";
+    process.env.HTTPS_PROXY = "http://127.0.0.1:10808";
+    applyProxyEnv(configWithProxy("socks5://127.0.0.1:10808"));
+    expect(process.env.ALL_PROXY).toBe("socks5://127.0.0.1:10808");
+    expect(process.env.HTTP_PROXY).toBeUndefined();
+    expect(process.env.HTTPS_PROXY).toBeUndefined();
   });
 });
 

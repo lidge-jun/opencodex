@@ -12,7 +12,7 @@ runs helper features around provider requests.
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Proxy listen port. |
 | `hostname?` | `string` | `"127.0.0.1"` | Bind address. Non-loopback binds require `OPENCODEX_API_AUTH_TOKEN`. |
-| `proxy?` | `string` | — | Outbound HTTP(S) proxy URL, `${ENV_VAR}`, or `"auto"`. Applied to `HTTP_PROXY` / `HTTPS_PROXY` only when those variables are unset; loopback remains in `NO_PROXY`. `"auto"` reads the Windows system proxy (WinINET `ProxyEnable`/`ProxyServer`, `https=` then `http=` entry) once at process start and logs the host it chose. On other platforms, or when the system proxy is off, SOCKS-only, or unreadable, it uses direct egress and says so. PAC/WPAD and live proxy changes are not followed; restart the service after changing the system proxy. |
+| `proxy?` | `string` | — | Outbound HTTP(S) or SOCKS5 proxy URL (`socks5://host:port`), `${ENV_VAR}`, or `"auto"`. HTTP URLs apply to `HTTP_PROXY` / `HTTPS_PROXY` when those are unset. SOCKS5 URLs use OpenCodex's real SOCKS5 transport and are also exposed through `ALL_PROXY` (`ocx start --socks5`); inherited `HTTP(S)_PROXY` is cleared in this process. Loopback stays in `NO_PROXY`. `"auto"` reads the Windows system proxy (WinINET `ProxyEnable`/`ProxyServer`, `https=` then `http=` entry) once at process start and logs the host it chose. On other platforms, or when the system proxy is off, SOCKS-only, or unreadable, it uses direct egress and says so. PAC/WPAD and live proxy changes are not followed; restart the service after changing the system proxy. |
 | `noProxy?` | `string \| string[]` | — | Hosts that bypass `proxy`, merged with inherited `NO_PROXY` and loopback entries. A string may use comma-separated `NO_PROXY` syntax or `${ENV_VAR}`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Opt in to one identical Responses retry when a turn has no text or tool call, including a stream that ends before a terminal event. The retry may be billable. `OCX_EMPTY_COMPLETION_RETRY=0` disables it without changing config; combo and routed-compaction turns remain excluded. |
 | `stallTimeoutSec?` | `number` | `300` | Seconds without upstream data before `response.incomplete`. Minimum 1. |
@@ -44,6 +44,14 @@ replacing an inherited `NO_PROXY`:
 ```jsonc
 { "proxy": "http://proxy.corp:8080", "noProxy": ["internal.example", "10.0.0.0/8"] }
 ```
+
+SOCKS5 (Clash mixed-port listeners included) belongs on `ALL_PROXY`, not `HTTP_PROXY`:
+
+```jsonc
+{ "proxy": "socks5://127.0.0.1:10808" }
+```
+
+`ocx start --socks5` writes that value; `ocx start --socks5-off` clears it.
 
 If an older development build changed resume-history metadata before backup support existed, run
 `ocx recover-history --legacy-openai --yes` to force native-provider recovery.

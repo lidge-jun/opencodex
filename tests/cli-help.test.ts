@@ -62,7 +62,7 @@ describe("CLI subcommand help", () => {
     expectSpawnFinished(result, "ocx help start");
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: ocx start [--port <port>]");
+    expect(result.stdout).toContain("Usage: ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]");
     expect(result.stdout).toContain("Start the proxy server and sync models to Codex.");
   });
 
@@ -348,8 +348,8 @@ describe("CLI subcommand help", () => {
   test("start rejects unknown and partially numeric port arguments", () => {
     const cases = [
       { args: ["start", "--port", "123abc"], expected: "Invalid port number" },
-      { args: ["start", "--bad"], expected: "Usage: ocx start [--port <port>]" },
-      { args: ["start", "--port", "1234", "--extra"], expected: "Usage: ocx start [--port <port>]" },
+      { args: ["start", "--bad"], expected: "Usage: ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]" },
+      { args: ["start", "--port", "1234", "--extra"], expected: "Usage: ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]" },
     ];
 
     for (const testCase of cases) {
@@ -366,7 +366,7 @@ describe("CLI subcommand help", () => {
     expectSpawnFinished(result, "ocx start --port 123abc --help");
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: ocx start [--port <port>]");
+    expect(result.stdout).toContain("Usage: ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]");
   });
 
   test("invalid service and codex-shim usage include remove alias", () => {

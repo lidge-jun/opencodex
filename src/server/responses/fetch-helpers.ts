@@ -9,6 +9,7 @@ import type { OcxProviderConfig } from "../../types";
 import type { WsData } from "../ws-bridge";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
+import { configuredOutboundFetch } from "../../lib/proxy-env";
 
 export { withUpstreamHttpVersion };
 
@@ -63,7 +64,11 @@ export function providerFetch(
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
   options: ProviderFetchOptions = {},
 ): ProviderFetch {
-  const base = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  const configuredFetch = Object.assign(
+    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => configuredOutboundFetch(input, init),
+    { preconnect: globalThis.fetch.preconnect?.bind(globalThis.fetch) },
+  ) as typeof globalThis.fetch;
+  const base = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? configuredFetch;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
     base.preconnect?.(...args);
   };

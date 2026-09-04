@@ -15,6 +15,7 @@ import {
   MAX_CODEX_WS_QUEUE_BYTES,
   shouldUseCodexWsUpstream as rawShouldUseCodexWsUpstream,
 } from "../src/server/responses/ws-upstream";
+import { configureSocks5Fetch } from "../src/lib/proxy-env";
 import type { OcxProviderConfig } from "../src/types";
 import type { OcxConfig } from "../src/types";
 
@@ -115,6 +116,18 @@ describe("shouldUseCodexWsUpstream", () => {
     expect(shouldUseCodexWsUpstream("https://api.openai.com/v1/responses", streamingInit())).toBe(false);
     // Body must be the adapter's serialized string, not a stream.
     expect(shouldUseCodexWsUpstream(CODEX_URL, { method: "POST", body: new Blob(["x"]) as unknown as string })).toBe(false);
+  });
+
+  test("uses HTTP SSE when SOCKS5 outbound transport is configured", () => {
+    const previous = process.env.ALL_PROXY;
+    process.env.ALL_PROXY = "socks5://127.0.0.1:10808";
+    try {
+      expect(rawShouldUseCodexWsUpstream(CODEX_URL, streamingInit(), BOUNDED_WS_RUNTIME)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.ALL_PROXY;
+      else process.env.ALL_PROXY = previous;
+      configureSocks5Fetch();
+    }
   });
 
   test("requires a ROOT-level stream flag, not a serialized substring", () => {

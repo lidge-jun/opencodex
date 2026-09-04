@@ -12,7 +12,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 代理监听端口。 |
 | `hostname?` | `string` | `"127.0.0.1"` | 绑定地址。非回环绑定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
-| `proxy?` | `string` | — | 出站 HTTP(S) 代理 URL，或 `${ENV_VAR}`。仅当 `HTTP_PROXY` / `HTTPS_PROXY` 未设置时才会应用；回环地址始终保留在 `NO_PROXY` 中。 |
+| `proxy?` | `string` | — | 出站 HTTP(S) 或 SOCKS5 代理 URL（`socks5://host:port`），或 `${ENV_VAR}`。HTTP URL 仅在未设置时写入 `HTTP_PROXY` / `HTTPS_PROXY`。SOCKS5 URL 使用内置的真实 SOCKS5 隧道，也会写入 `ALL_PROXY`（`ocx start --socks5`）；并清除本进程继承的 `HTTP(S)_PROXY`。回环地址始终保留在 `NO_PROXY` 中。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | 显式启用：当 Responses turn 既无文本也无工具调用时，使用相同请求重试一次，包括流在终止事件之前结束的情况。重试可能产生费用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不修改配置的情况下禁用；combo 与 routed-compaction turn 不参与。 |
 | `stallTimeoutSec?` | `number` | `300` | 在上游没有数据之前可等待的秒数，超过后返回 `response.incomplete`。最小值为 1。 |
 | `connectTimeoutMs?` | `number` | `200000` | 每次尝试的 DNS/TCP/TLS/最终响应头截止时间；它在正文生成之前结束。 |

@@ -13,7 +13,7 @@ yardımcı özellikleri nasıl çalıştıracağını kontrol eder.
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Proxy dinleme portu. |
 | `hostname?` | `string` | `"127.0.0.1"` | Bağlama adresi. Geri döngü olmayan bağlamalar `OPENCODEX_API_AUTH_TOKEN` gerektirir. |
-| `proxy?` | `string` | — | Giden HTTP(S) proxy URL'si veya `${ENV_VAR}`. Yalnızca bu değişkenler ayarlanmadığında `HTTP_PROXY` / `HTTPS_PROXY`'ye uygulanır; geri döngü `NO_PROXY` içinde kalır. |
+| `proxy?` | `string` | — | Giden HTTP(S) veya SOCKS5 proxy URL'si (`socks5://host:port`) ya da `${ENV_VAR}`. HTTP URL'leri değişkenler boşsa `HTTP_PROXY` / `HTTPS_PROXY`'ye yazılır. SOCKS5 URL'leri yerleşik gerçek SOCKS5 tünelini kullanır ve `ALL_PROXY`'ye de yazılır (`ocx start --socks5`); bu süreçte miras `HTTP(S)_PROXY` temizlenir. Geri döngü `NO_PROXY` içinde kalır. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Metin veya araç çağrısı içermeyen bir Responses tamamlamasını aynı istekle bir kez yeniden denemeyi açıkça etkinleştirir. Yeniden deneme ücretlendirilebilir. `OCX_EMPTY_COMPLETION_RETRY=0`, yapılandırmayı değiştirmeden devre dışı bırakır; combo ve routed-compaction turları hariçtir. |
 | `stallTimeoutSec?` | `number` | `300` | `response.incomplete` öncesinde yukarı akış verisi olmadan geçen saniye. Minimum 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Deneme başına DNS/TCP/TLS/nihai başlık son tarihi; gövde üretiminden önce biter. |

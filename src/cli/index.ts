@@ -51,6 +51,7 @@ import {
 import { collectStatus, unusedProxyWarningLines } from "./status";
 import { endpointsToProve, everyEndpointProvenDown, sharedTeardownAuthorized, type UninstallObservation } from "./uninstall-plan";
 import { takeFlag } from "./runtime-api";
+import { parseStartOptions, StartArgsError } from "./start-args";
 
 import {
   discoverStableProxyForRestart,
@@ -62,7 +63,8 @@ import {
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
-import { dispatchCommand , decideStartWithLiveOwner } from "./dispatch";
+import { redactUrlForLog } from "../lib/redact";
+import { dispatchCommand, decideStartWithLiveOwner } from "./dispatch";
 import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
@@ -124,21 +126,13 @@ const head = await runCli(process.argv.slice(2));
 const args = head.args;
 const command = head.command;
 
-function parsePortOption(): number | undefined {
-  if (args.length === 1) return undefined;
-  if (args.length !== 3 || args[1] !== "--port") {
-    console.error("Usage: ocx start [--port <port>]");
+function parseStartCliOptions(): ReturnType<typeof parseStartOptions> {
+  try {
+    return parseStartOptions(args.slice(1));
+  } catch (error) {
+    console.error(error instanceof StartArgsError ? error.message : String(error));
     process.exit(1);
   }
-  const portIdx = args.indexOf("--port");
-  if (portIdx === -1) return undefined;
-  const value = args[portIdx + 1];
-  const port = value && /^\d+$/.test(value) ? Number(value) : NaN;
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    console.error("Invalid port number");
-    process.exit(1);
-  }
-  return port;
 }
 
 async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
@@ -260,7 +254,26 @@ async function handleStart(options: { block?: boolean } = {}) {
   // already-broken file cannot fence /api/* closed at boot (#2696).
   const present = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (present) assertNotAdminToken(present);
-  const requestedPort = parsePortOption();
+  const startOpts = parseStartCliOptions();
+  if (startOpts.socks5 !== undefined || startOpts.socks5Off) {
+    const proxyConfig = loadConfig();
+    if (startOpts.socks5Off) {
+      if (proxyConfig.proxy && !/^socks5h?:\/\//i.test(proxyConfig.proxy.trim())) {
+        console.error("Cannot use --socks5-off: config.proxy is not a SOCKS5 URL; it was left unchanged.");
+        process.exit(1);
+      }
+      if (proxyConfig.proxy) {
+        delete proxyConfig.proxy;
+        saveConfig(proxyConfig);
+        console.log("Cleared config.proxy (outbound SOCKS5 proxy off).");
+      }
+    } else {
+      proxyConfig.proxy = startOpts.socks5!;
+      saveConfig(proxyConfig);
+      console.log(`Outbound SOCKS5: ${redactUrlForLog(startOpts.socks5!)} (saved to config.proxy)`);
+    }
+  }
+  const requestedPort = startOpts.port;
   // Always probe the configured port, even when both state files are absent. A
   // fallback-port sibling overwrites the pid/runtime records when it starts and
   // removes them on its own shutdown, so their absence proves nothing about the
