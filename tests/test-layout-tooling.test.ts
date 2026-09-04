@@ -202,6 +202,9 @@ describe("scanEscapes", () => {
     // A rewritten URL specifier is what a correct move looks like; a bare "../" root URL is not.
     expect(scanEscapes('const u = new URL("../../package.json", import.meta.url);')).toEqual([]);
     expect(scanEscapes('const root = fileURLToPath(new URL("../", import.meta.url));')).toHaveLength(1);
+    expect(scanEscapes('const root = fileURLToPath(new URL("..", import.meta.url));')).toHaveLength(1);
+    expect(rewriteMetaDirEscapes('const R = fileURLToPath(new URL("..", import.meta.url));\nconst U = new URL("..", import.meta.url).href;\n', 1).source)
+      .toContain('const R = repoRoot();\nconst U = pathToFileURL(repoRoot() + "/").href;');
     expect(scanEscapes('const c = join(import.meta.dir, "helpers", "child.ts");')).toHaveLength(1);
     expect(scanEscapes('const r = resolve(\n  import.meta.dir,\n  "..",\n);')).toHaveLength(1);
     expect(scanEscapes('const t = `${import.meta.dir}/../src/x.ts`;')).toHaveLength(1);
@@ -225,6 +228,7 @@ describe("resolver", () => {
   };
 
   test("explicit beats child regex beats domain regex; unknown is null", () => {
+    expect(resolveTarget({ ...layout, keepAtRoot: ["server-kept.test.ts"] }, "server-kept.test.ts")).toBeNull();
     expect(resolveTarget(layout, "cursor-odd.test.ts")).toBe("server");
     expect(resolveTarget(layout, "cursor-adapter.test.ts")).toBe("providers/cursor");
     expect(resolveTarget(layout, "provider-x.test.ts")).toBe("providers");
@@ -280,7 +284,12 @@ describe("membership oracle", () => {
     // (the 001 §2 "9 disagreeing files" whose name says one thing and whose imports say another).
     // Anything else is a seed pointing at the wrong domain, which would place a brand-new file
     // incorrectly on the day it is added.
-    const pinnedOverrides = new Set(["openai-responses-passthrough.test.ts"]);
+    const pinnedOverrides = new Set([
+      "openai-responses-passthrough.test.ts",
+      // Placed under routing/ by its author in #3523 (it exercises the oauth routing quorum,
+      // not the Anthropic adapter); the anthropic- seed would say otherwise.
+      "anthropic-quorum-cache.test.ts",
+    ]);
     const mismatches: string[] = [];
     let resolved = 0;
     for (const [name, target] of Object.entries(layout.explicit)) {

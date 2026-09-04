@@ -42,6 +42,8 @@ export function loadLayout(path: string = LAYOUT_PATH): Layout {
  * Explicit entries win, then child regexes, then domain regexes; first match wins.
  */
 export function resolveTarget(layout: Layout, basename: string): string | null {
+  // A keep-at-root file never resolves to a domain, whatever the seeds say about its name.
+  if (layout.keepAtRoot.includes(basename)) return null;
   const explicit = layout.explicit[basename];
   if (explicit !== undefined) return explicit;
   for (const [domain, spec] of Object.entries(layout.domains)) {
@@ -174,7 +176,7 @@ export function rewriteMetaDirEscapes(source: string, depth: number): { source: 
   // `const repoRoot = join(import.meta.dir, "..")` is the commonest escape of all: rebind the
   // local through an aliased import instead of refusing the file. Any other local named like a
   // helper (or a function) still stops the rewrite so nothing gets shadowed.
-  const localRoot = /\bconst\s+repoRoot\s*=\s*(?:(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*\)|fileURLToPath\(\s*new\s+URL\(\s*"(?:\.\.\/)+"\s*,\s*import\.meta\.url\s*\)\s*\)|resolve\(\s*dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*"\.\."\s*\))\s*;/;
+  const localRoot = /\bconst\s+repoRoot\s*=\s*(?:(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*\)|fileURLToPath\(\s*new\s+URL\(\s*"(?:\.\.\/)*\.\.\/?"\s*,\s*import\.meta\.url\s*\)\s*\)|resolve\(\s*dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*"\.\."\s*\))\s*;/;
   const rebindsRoot = localRoot.test(view);
   const otherLocals = new RegExp(`\\b(?:const|let|var|function)\\s+(?:${HELPER_NAMES.filter(n => !(rebindsRoot && n === "repoRoot")).join("|")})\\b`);
   if (otherLocals.test(code)) return { source, rewrites: 0 };
@@ -192,7 +194,9 @@ export function rewriteMetaDirEscapes(source: string, depth: number): { source: 
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"helpers\/([^"]+)"/g, m => `helperPath("${m[1]}"`],
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"fixtures"\s*,\s*/g, () => "fixturePath("],
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"fixtures\/([^"]+)"/g, m => `fixturePath("${m[1]}"`],
-    [/\bfileURLToPath\(\s*new\s+URL\(\s*"\.\.\/"\s*,\s*import\.meta\.url\s*\)\s*\)/g, () => rootCall],
+    [/\bfileURLToPath\(\s*new\s+URL\(\s*"\.\.\/?"\s*,\s*import\.meta\.url\s*\)\s*\)/g, () => rootCall],
+    // `new URL("..", import.meta.url).href` as a root URL string.
+    [/\bnew\s+URL\(\s*"\.\.\/?"\s*,\s*import\.meta\.url\s*\)\.href/g, () => `pathToFileURL(${rootCall} + "/").href`],
     [/\bresolve\(\s*dirname\(\s*fileURLToPath\(\s*import\.meta\.url\s*\)\s*\)\s*,\s*"\.\."\s*\)/g, () => rootCall],
   ];
   const edits: Array<{ start: number; end: number; text: string }> = [];
@@ -266,7 +270,7 @@ export function insertAfterImports(source: string, line: string): string {
 /** A string argument that leaves the file's directory toward the repo or the tests/ siblings. */
 const ESCAPE_ARG = /^["'](?:\.\.(?:["'\/])|helpers\b|fixtures\b|src\/|gui\/|scripts\/|tests\/)/;
 /** `new URL("../", import.meta.url)`: a URL used as a directory root, not a re-anchored specifier. */
-const URL_ROOT = /new\s+URL\s*\(\s*(["'])(?:\.\.\/)+\1\s*,\s*import\.meta\.url/;
+const URL_ROOT = /new\s+URL\s*\(\s*(["'])(?:\.\.\/)*\.\.\/?\1\s*,\s*import\.meta\.url/;
 
 export interface EscapeHit {
   line: number;
@@ -322,4 +326,3 @@ export function scanEscapes(source: string): EscapeHit[] {
 export function layoutDir(): string {
   return dirname(LAYOUT_PATH);
 }
-
