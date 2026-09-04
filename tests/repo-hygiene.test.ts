@@ -288,3 +288,32 @@ describe("test layout", () => {
     expect(duplicates).toEqual([]);
   });
 });
+
+describe("429 failover contracts stay covered", () => {
+  test("every contract test this unit shipped is still tracked", () => {
+    // A deleted test is invisible: removing it removes its assertions, so CI stays green and no
+    // reviewer sees red. That is exactly what happened to the quorum cache test -- #3516 rebased
+    // against a branch point where the file sat elsewhere and resolved the conflict by dropping
+    // it, and nothing noticed. The duplicate-basename guard could not help: one copy is not a
+    // duplicate.
+    //
+    // These four are listed by NAME rather than path so the domain reorganizations can keep
+    // moving them freely; what may not happen is a file quietly ceasing to exist. They are worth
+    // naming because each observes something nothing else does -- most sharply the quorum cache,
+    // whose subject is a performance property: the runtime behaves identically without it, so
+    // its loss would surface only as latency nobody attributes.
+    const required = [
+      "always-on-429-failover.test.ts",
+      "anthropic-quorum-cache.test.ts",
+      "generic-oauth-failover.test.ts",
+      "docs-429-failover-claims.test.ts",
+    ];
+    const tracked = new Set(
+      trackedFiles()
+        .filter((path) => path.startsWith("tests/"))
+        .map((path) => path.split("/").pop()!),
+    );
+    const missing = required.filter((name) => !tracked.has(name));
+    expect(missing).toEqual([]);
+  });
+});
