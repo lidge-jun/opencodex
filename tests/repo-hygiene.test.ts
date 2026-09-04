@@ -264,3 +264,27 @@ describe("devlog is tracked, with no submodule left behind", () => {
     expect(missing).toEqual([]);
   });
 });
+
+describe("test layout", () => {
+  test("no two test files share a basename", () => {
+    // Two reorganizations landed on the same day (#3511, #3513) and independently relocated the
+    // same file to different domain directories. Different paths, so git saw no conflict and both
+    // copies survived -- a byte-identical duplicate running its suite twice, invisible until
+    // someone listed the tree by hand.
+    //
+    // A duplicated basename is also how a real fix goes stale: an author edits one copy, CI keeps
+    // running both, and the stale one silently disagrees. Names are the only thing a human uses
+    // to find a test, so they have to be unique.
+    const byName = new Map<string, string[]>();
+    for (const path of trackedFiles()) {
+      if (!path.startsWith("tests/")) continue;
+      if (!path.endsWith(".test.ts") && !path.endsWith(".test.tsx")) continue;
+      const name = path.split("/").pop()!;
+      byName.set(name, [...(byName.get(name) ?? []), path]);
+    }
+    const duplicates = [...byName.entries()]
+      .filter(([, paths]) => paths.length > 1)
+      .map(([name, paths]) => `${name}: ${paths.join(", ")}`);
+    expect(duplicates).toEqual([]);
+  });
+});
