@@ -237,9 +237,12 @@ Exit 2 (MANUAL lines) happens after steps 2-4 have run for the whole slice and
 after `layout.migrated` has been appended, so the tree is in the post-move
 state with every automatic rewrite applied and only the flagged lines left. The
 operator edits those lines (or adds `// layout: local`) and re-runs
-`verify.ts --domain <each>`, which re-runs the same escape scanner first. There
-is no partial-move state to resume: the mover either aborts in preflight (step
-3, nothing touched) or completes every `git mv` and rewrite before reporting.
+`verify.ts --domain <each>`, which re-runs the same escape scanner first. On
+its expected paths there is no partial-move state: the mover either aborts in
+preflight (nothing touched) or completes every `git mv` and rewrite before
+reporting. A process kill or filesystem error mid-slice leaves uncommitted
+renames that `git status` shows; `git restore --staged . && git checkout -- .`
+is the documented recovery only because nothing is committed until verify passes.
 
 The rewriter is regex-based and conservative: any `import.meta.dir` use it cannot
 classify is printed as `MANUAL <file>:<line>` and the run exits 2 so the operator
@@ -290,7 +293,11 @@ describe("tests/ layout", () => {
         if (!entry.endsWith(".test.ts")) continue;
         const rel = relative(root, full).split(sep).join("/"); // posix form on every OS
         const target = resolveTarget(layout, entry);
-        if (target === null) { if (!layout.keepAtRoot.includes(entry)) unresolved.push(rel); continue; }
+        if (target === null) {
+          if (!layout.keepAtRoot.includes(entry)) unresolved.push(rel);
+          else if (rel.includes("/")) misplaced.push(`${rel} -> keepAtRoot`);
+          continue;
+        }
         const dirName = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
         if (dirName === "" && layout.migrated.includes(target.split("/")[0]!)) stragglers.push(rel);
         if (dirName !== "" && dirName !== target) misplaced.push(`${rel} -> ${target}`);
@@ -454,7 +461,7 @@ Table-driven, runs on the flat tree, no git side effects (operates on a
 
 - `rewriteSpecifier`: the matrix is generated, not hand-listed: depths {1, 2} x
   syntax forms {static named import, side-effect `import "x"`, `export ... from`,
-  `await import()`, `require()`, `import.meta.resolve()`, `new URL(..., import.meta.url)`}
+  `await import()`, bare `import()` (non-awaited), TypeScript `typeof import("x")`, `require()`, `import.meta.resolve()`, `new URL(..., import.meta.url)`}
   x every prefix the implementation declares (the test imports the same
   `REWRITE_PREFIXES` table from `schema.ts`, so a prefix added to the mover
   without a case fails here: `./helpers/`, `../helpers/`, `./fixtures/`, `../fixtures/`,
