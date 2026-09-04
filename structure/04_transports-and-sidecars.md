@@ -435,7 +435,7 @@ These are transport-fidelity guarantees, not a provider-billing guarantee.
 
 Eligible complete-input creates can retain a canonical upstream socket within
 one selected account, credential, thread and turn. Model/tier and immutable
-handshake headers must also match. Turn-state and turn-metadata headers are
+handshake headers and the selected outbound proxy must also match. Turn-state and turn-metadata headers are
 projected into their same-name per-frame metadata slots; explicit body values win.
 The pool retains at most 32 sockets, expires idle sockets after 30 seconds, and
 retires a socket after five minutes or 32 successful exchanges (after active work
@@ -644,7 +644,11 @@ the upgrade with 426 so Codex falls back to HTTP cleanly.
 
 That setting controls the client-facing upgrade only. The transparent upstream
 ChatGPT WS optimization described above is selected independently and still
-returns the same downstream SSE contract.
+returns the same downstream SSE contract. Its WSS route checks NO_PROXY first, then selects the
+first non-empty HTTPS_PROXY, https_proxy, ALL_PROXY, or all_proxy value. HTTP_PROXY alone does not
+route WSS. Unsupported or malformed selected proxy values skip the WebSocket attempt and use the
+existing SSE path immediately; they never fall through to a lower-priority proxy or direct WebSocket
+egress. HTTP/SSE fallback retains Bun fetch's own proxy rules, which do not consult ALL_PROXY.
 
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.

@@ -113,6 +113,19 @@ the raw JSON frame and its SSE envelope at 4 MiB, and closes the upstream when i
 would overflow. That overflow emits a terminal downstream `response.failed` event followed by
 `[DONE]`.
 
+The upstream WebSocket checks `NO_PROXY`/`no_proxy` first. Otherwise it uses the first non-empty
+`HTTPS_PROXY`, `https_proxy`, `ALL_PROXY`, or `all_proxy` value; `HTTP_PROXY` alone does not proxy a
+WSS connection. HTTP and HTTPS proxy URLs are passed to Bun. If the selected value is invalid or
+uses an unsupported protocol, opencodex skips the WebSocket attempt and uses HTTP/SSE instead of
+dialing the upstream directly.
+
+These rules belong to the upstream WebSocket transport, independently of the selected provider
+adapter. HTTP fetch-based Responses requests, including SSE fallback, use Bun's HTTP proxy rules
+and do not use `ALL_PROXY`. `config.proxy` fills missing `HTTP_PROXY`/`HTTPS_PROXY` values; the
+resulting scheme-specific value also takes precedence over an existing `ALL_PROXY` for WebSocket.
+For an HTTPS upstream that requires a proxy, set `HTTPS_PROXY` or `config.proxy`; `HTTP_PROXY`
+alone leaves both WSS and its HTTPS fallback without a scheme-matched proxy.
+
 Every terminal Responses usage object includes both detail objects, even when the provider did not
 report those details:
 

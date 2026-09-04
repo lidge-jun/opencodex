@@ -95,6 +95,11 @@ body and response, with narrow compatibility rewrites for routed gateways.
 `forward` uses configured static headers without relaying caller authorization; `key` uses the
 configured provider key.
 
+Adapter selection does not select the upstream transport. Eligible requests can use the
+[upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
+WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses Bun's
+HTTP proxy rules and does not inherit the WSS-specific `ALL_PROXY` fallback.
+
 Noncanonical Responses gateways receive Codex's client-executed `tool_search` declaration as a
 collision-safe public function tool. Matching request history and JSON/SSE function calls are
 translated back to the private `tool_search` lifecycle for the client. Canonical OpenAI forward
