@@ -738,14 +738,20 @@ jobs:
     needs: changes
     if: needs.changes.outputs.packaging == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 8
+    # 8 minutes was too tight for the Windows leg: dependency installation alone takes
+    # about 7 there, leaving under a minute for pack, verify, global install, and the
+    # help smoke. The job was cancelled at the wall rather than failing, so whichever
+    # step happened to be running was reported `cancelled` — observed on step 8 four
+    # times and on step 7 once, which is what made it read as a flaky global install
+    # instead of a budget that one OS cannot meet (#3441).
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         # Deliberately NOT routed to the self-hosted box. This job runs
         # `npm install -g`, which writes into the machine's global prefix and
         # would leave an `ocx` on a maintainer's personal PATH. It is an
-        # 8-minute job, so there is nothing to win by moving it.
+        # short job on Linux and macOS, so there is nothing to win by moving it.
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout
