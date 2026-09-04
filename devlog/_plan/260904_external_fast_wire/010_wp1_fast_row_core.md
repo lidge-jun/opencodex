@@ -212,6 +212,24 @@ export function parseSyntheticRowId(id: string, config: OcxConfig): ParsedSynthe
 `parseRequestFastRowId` is not introduced; the wrapper subsumes it. Existing effort-row
 call sites migrate to the wrapper in wp3 so both grammars are resolved in one place.
 
+**The migration must not regress `cursorEffortRows`.** With `fastRows` off the wrapper
+reduces to today's behaviour, and the differences are deliberate and bounded:
+
+| | `parseRequestEffortRowId` today | wrapper, `fastRows` off |
+|---|---|---|
+| flag off | returns null immediately | `parseEffortRowId` returns null on the same check |
+| no `--` in id | early bail | same early bail |
+| ordinary effort row | parsed | parsed identically |
+| base ends in `--fast`, unknown | parsed as an effort row | **discarded** |
+
+Only the last row changes, and only for an id whose base is a model that does not exist —
+today it resolves to an unroutable base and fails downstream anyway. Test 12 in wp1 pins
+the first three rows so the migration is proven behaviour-preserving rather than assumed.
+
+One ordering note: the wrapper calls `parseEffortRowId` (the pure form) rather than
+`parseRequestEffortRowId`, because it has already built `knownIds` and would otherwise
+build it twice per request.
+
 `isKnownId` is module-private in `effort-row.ts:32` today. wp1 exports it there rather than
 duplicating the Set-or-predicate branch.
 ## Publication helper
@@ -296,6 +314,10 @@ so the test cannot drift from real capability data.
 11. **Nested markers resolve to neither grammar.** `effortBaseCarriesFastMarker("x--fast")`
     is true for an unknown base and false when `x--fast` is a real known model, so
     `foo--fast--high` still works for a real `foo--fast`.
+12. **The wrapper preserves effort-row behaviour with `fastRows` off.** For a table of
+    existing selectors — flag off, no separator, ordinary `<base>--<effort>` — the
+    wrapper's `effortRow` equals `parseRequestEffortRowId`'s result exactly. This is the
+    anti-regression guard for the shipped `cursorEffortRows` feature.
 7. **Effort-row non-interference, both directions.** `parseEffortRowId("x--fast", ...)`
    returns null because `fast` is not a declared effort
    (`isDeclaredReasoningEffort("fast") === false`, `src/reasoning-effort.ts:39`), and

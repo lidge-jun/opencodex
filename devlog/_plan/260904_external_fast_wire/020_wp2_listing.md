@@ -145,20 +145,26 @@ One `discoveryId` helper computes the id for a row, and BOTH the loops and the c
 set use it, so the two can never disagree about what a real id looks like:
 
 ```ts
-// The existing per-loop id expressions, extracted verbatim so there is one definition.
-const discoveryId = (provider: string, modelId: string): string => provider === "native"
-  ? (idStyle === "readable" ? claudeCodeNativeAlias(modelId) : aliasForRoute("native", modelId))
-  : (idStyle === "readable" ? claudeCodeAlias(provider, modelId) : aliasForRoute(provider, modelId));
+// The existing per-loop id expressions, extracted so there is ONE definition. Note the
+// asymmetry, which is real and must be preserved: the readable style uses the LISTED id
+// (so a fastMode-rewritten Cursor id is reflected), while the Desktop 3P style hashes the
+// RAW m.id (model-info.ts:164-165), because a hash rewrite would strand a saved selection.
+const nativeDiscoveryId = (slug: string): string => idStyle === "readable"
+  ? claudeCodeNativeAlias(slug)
+  : aliasForRoute("native", slug);
+
+const routedDiscoveryId = (m: CatalogModel, listedModelId: string): string =>
+  idStyle === "readable"
+    ? claudeCodeAlias(m.provider, listedModelId)
+    : aliasForRoute(m.provider, m.id);
 
 // Every real id BOTH loops will emit, computed before either runs. `seen` alone is not
 // enough: it grows as the loops run, so whether a synthetic id collided with a real one
 // would depend on iteration order. With both `foo` and a real `foo--fast` in the roster,
 // the synthetic id for `foo` IS the real model's id, and whichever ran first would win.
 const realDiscoveryIds = new Set<string>([
-  ...nativeSlugs.map(slug => discoveryId("native", slug)),
-  // The routed loop's own listedModelId, so a fastMode-rewritten Cursor id is counted as
-  // the real id it will actually be published under.
-  ...routedModels.map(m => discoveryId(m.provider, listedModelIdFor(m))),
+  ...nativeSlugs.map(nativeDiscoveryId),
+  ...routedModels.map(m => routedDiscoveryId(m, listedModelIdFor(m))),
 ]);
 
 const pushFastVariant = (base: AnthropicModelInfo) => {
@@ -172,7 +178,10 @@ const pushFastVariant = (base: AnthropicModelInfo) => {
 
 `listedModelIdFor(m)` is the existing `fastModelId ?? m.id` expression at
 `model-info.ts:162`, lifted to a helper for the same reason: the fastMode Cursor rewrite
-must be reflected in the collision set, or a rewritten row would look synthetic.
+must be reflected in the collision set, or a rewritten row would look synthetic. Both loops
+then call these helpers for their own row ids too, so the set and the output cannot drift.
+`claudeCodeAlias` and `claudeCodeNativeAlias` are already imported at `model-info.ts:19`,
+and `aliasForRoute` is a parameter of `buildAnthropicModelInfos` (`:111`).
 
 ```diff
    for (const slug of nativeSlugs) {
