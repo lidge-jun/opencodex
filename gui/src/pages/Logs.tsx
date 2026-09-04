@@ -26,6 +26,7 @@ import {
   sanitizeLogEntryRouteDecision,
   validCachedRouteDecision,
 } from "./log-route-decision";
+import { mergeLogDelta, parseLogPollResponse } from "./log-poll";
 
 function logsCacheKey(apiBase: string): string {
   return `ocx.logs.list.v1:${apiBase}`;
@@ -379,6 +380,11 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const logRetryRef = useRef<{ key: string; failures: number; nextAttemptAt: number; error: unknown }>(
     { key: resourceKey, failures: 0, nextAttemptAt: 0, error: null },
   );
+  const logPollRef = useRef<{
+    key: string;
+    cursor: string | null;
+    rows: LogEntry[];
+  }>({ key: resourceKey, cursor: null, rows: cachedLogs ?? [] });
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   // The proxy's own zone, so timestamps read the same as the server's logs rather than being
   // silently shifted into the viewer's zone (#725). Fetched once: it cannot change while the
@@ -433,15 +439,40 @@ export default function Logs({ apiBase }: { apiBase: string }) {
       logRetryRef.current = retry;
     }
     if (retry.failures > 0 && Date.now() < retry.nextAttemptAt) throw retry.error;
+
+    let pollState = logPollRef.current;
+    if (pollState.key !== resourceKey) {
+      pollState = { key: resourceKey, cursor: null, rows: readSessionListCache(resourceKey) ?? [] };
+      logPollRef.current = pollState;
+    }
+
+    const currentCursor = pollState.cursor;
+    const url = currentCursor
+      ? `${apiBase}/api/logs?limit=2000&cursor=${encodeURIComponent(currentCursor)}`
+      : `${apiBase}/api/logs?limit=2000`;
+
     try {
-      const res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
+      const res = await fetch(url, { signal });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
-      const body = await res.json() as LogEntry[] | { logs?: LogEntry[] };
-      const raw = Array.isArray(body) ? body : (body.logs ?? []);
-      const next = raw.map(sanitizeLogEntryRouteDecision);
+      const body = await res.json();
+      const parsed = parseLogPollResponse<LogEntry>(body);
+      const sanitizedIncoming = parsed.rows.map(sanitizeLogEntryRouteDecision);
+
+      let nextRows: LogEntry[];
+      if (currentCursor && parsed.cursorCapable && !parsed.reset) {
+        nextRows = mergeLogDelta(pollState.rows, sanitizedIncoming, 2000);
+      } else {
+        nextRows = sanitizedIncoming;
+      }
+
+      logPollRef.current = {
+        key: resourceKey,
+        cursor: parsed.cursor,
+        rows: nextRows,
+      };
       logRetryRef.current = { key: resourceKey, failures: 0, nextAttemptAt: 0, error: null };
-      writeSessionListCache(resourceKey, next);
-      return next;
+      writeSessionListCache(resourceKey, nextRows);
+      return nextRows;
     } catch (error) {
       if (signal.aborted) throw error;
       const normalized = error ?? new Error("log request failed");
@@ -473,6 +504,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
   const fetchLogs = logsResource.refresh;
   const retryLogs = useCallback(() => {
     logRetryRef.current = { key: resourceKey, failures: 0, nextAttemptAt: 0, error: null };
+    logPollRef.current = { key: resourceKey, cursor: null, rows: logPollRef.current.rows };
     fetchLogs({ forceLoading: true });
   }, [fetchLogs, resourceKey]);
 

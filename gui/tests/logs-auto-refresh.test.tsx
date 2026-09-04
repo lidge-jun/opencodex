@@ -570,3 +570,80 @@ test("Logs: an intercepted helper row is badged and filterable", async () => {
 
   await act(async () => { root.unmount(); });
 });
+
+test("Logs: incremental cursor delta polling, delta append, empty delta, reset, and legacy fallback", async () => {
+  const calls: string[] = [];
+  let pollStep = 0;
+
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    calls.push(url);
+    if (!url.includes("/api/logs")) return new Response(null, { status: 404 });
+
+    if (pollStep === 0) {
+      // Step 0: Initial fetch -> returns initial log and cursor
+      return jsonResponse({ logs: [sampleLog], cursor: "cursor-0", reset: false });
+    }
+    if (pollStep === 1) {
+      // Step 1: Empty delta -> cursor unchanged, keep existing rows
+      return jsonResponse({ logs: [], cursor: "cursor-0", reset: false });
+    }
+    if (pollStep === 2) {
+      // Step 2: Delta with new row -> append updatedLog
+      return jsonResponse({ logs: [updatedLog], cursor: "cursor-1", reset: false });
+    }
+    if (pollStep === 3) {
+      // Step 3: Eviction / reset: true -> replaces list
+      const resetLog = { ...sampleLog, requestId: "req-reset", model: "gpt-reset" };
+      return jsonResponse({ logs: [resetLog], cursor: "cursor-reset", reset: true });
+    }
+    if (pollStep === 4) {
+      // Step 4: Legacy server returns array without cursor
+      const legacyLog = { ...sampleLog, requestId: "req-legacy", model: "gpt-legacy" };
+      return jsonResponse([legacyLog]);
+    }
+    // Step 5: Next poll after legacy response must be full request without cursor
+    return jsonResponse([sampleLog]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+
+  await flushMicrotasks();
+  expectTableLoaded(container, "gpt-test");
+  const logCalls = () => calls.filter(u => u.includes("/api/logs"));
+  expect(logCalls()[0]).toBe("http://localhost/api/logs?limit=2000");
+
+  // Advance to Step 1 (Empty delta)
+  pollStep = 1;
+  await advanceSilentRefresh(2000);
+  expect(logCalls().at(-1)).toContain("cursor=cursor-0");
+  expectTableLoaded(container, "gpt-test");
+
+  // Advance to Step 2 (Delta with updatedLog)
+  pollStep = 2;
+  await advanceSilentRefresh(2000);
+  expect(logCalls().at(-1)).toContain("cursor=cursor-0");
+  expectTableLoaded(container, "gpt-test");
+  expect(container.textContent).toContain("gpt-updated");
+
+  // Advance to Step 3 (Reset replaces whole list)
+  pollStep = 3;
+  await advanceSilentRefresh(2000);
+  expect(logCalls().at(-1)).toContain("cursor=cursor-1");
+  expectTableLoaded(container, "gpt-reset");
+  expect(container.textContent).not.toContain("gpt-updated");
+
+  // Advance to Step 4 (Legacy server response)
+  pollStep = 4;
+  await advanceSilentRefresh(2000);
+  expect(logCalls().at(-1)).toContain("cursor=cursor-reset");
+  expectTableLoaded(container, "gpt-legacy");
+
+  // Advance to Step 5 (Next poll after legacy response has no cursor)
+  pollStep = 5;
+  await advanceSilentRefresh(2000);
+  expect(logCalls().at(-1)).toBe("http://localhost/api/logs?limit=2000");
+  expectTableLoaded(container, "gpt-test");
+
+  await act(async () => { root.unmount(); });
+});

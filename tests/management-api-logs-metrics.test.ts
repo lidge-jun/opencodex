@@ -58,6 +58,68 @@ function baseEntry(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("GET /api/logs display metrics", () => {
+  test("supports cursor delta polling, empty delta, eviction reset, and invalid cursor rejection", async () => {
+    addRequestLog(baseEntry({ requestId: "req-1", timestamp: 1000, provider: "anthropic" }));
+    addRequestLog(baseEntry({ requestId: "req-2", timestamp: 2000, provider: "anthropic" }));
+
+    // Initial request returns the full window, an opaque cursor, and reset: false
+    const initUrl = new URL("http://localhost/api/logs");
+    const initRes = await handleManagementAPI(new Request(initUrl), initUrl, config);
+    expect(initRes?.status).toBe(200);
+    const initBody = await initRes!.json() as { logs: Array<{ requestId: string }>; cursor?: string; reset?: boolean; total: number };
+    expect(initBody.logs.map(r => r.requestId)).toEqual(["req-1", "req-2"]);
+    expect(typeof initBody.cursor).toBe("string");
+    expect(initBody.reset).toBe(false);
+    expect(initBody.total).toBe(2);
+
+    const cursor1 = initBody.cursor!;
+
+    // Empty delta when no new logs have been added
+    const pollUrl = new URL(`http://localhost/api/logs?cursor=${encodeURIComponent(cursor1)}`);
+    const pollRes = await handleManagementAPI(new Request(pollUrl), pollUrl, config);
+    expect(pollRes?.status).toBe(200);
+    const pollBody = await pollRes!.json() as { logs: Array<{ requestId: string }>; cursor?: string; reset?: boolean; total: number };
+    expect(pollBody.logs).toEqual([]);
+    expect(pollBody.cursor).toBe(cursor1);
+    expect(pollBody.reset).toBe(false);
+    expect(pollBody.total).toBe(2);
+
+    // Live cursor returns only new entries
+    addRequestLog(baseEntry({ requestId: "req-3", timestamp: 3000, provider: "anthropic" }));
+    const pollRes2 = await handleManagementAPI(new Request(pollUrl), pollUrl, config);
+    expect(pollRes2?.status).toBe(200);
+    const pollBody2 = await pollRes2!.json() as { logs: Array<{ requestId: string }>; cursor?: string; reset?: boolean; total: number };
+    expect(pollBody2.logs.map(r => r.requestId)).toEqual(["req-3"]);
+    expect(pollBody2.cursor).not.toBe(cursor1);
+    expect(pollBody2.reset).toBe(false);
+    expect(pollBody2.total).toBe(3);
+
+    // Filtered delta advances the raw cursor even if 0 matching rows in delta
+    const filterUrl = new URL(`http://localhost/api/logs?provider=openai&cursor=${encodeURIComponent(cursor1)}`);
+    const filterRes = await handleManagementAPI(new Request(filterUrl), filterUrl, config);
+    expect(filterRes?.status).toBe(200);
+    const filterBody = await filterRes!.json() as { logs: Array<{ requestId: string }>; cursor?: string; reset?: boolean; total: number };
+    expect(filterBody.logs).toEqual([]);
+    expect(filterBody.cursor).toBe(pollBody2.cursor);
+    expect(filterBody.total).toBe(0);
+
+    // Stale/evicted cursor returns full window with reset: true
+    const fakeCursor = Buffer.from(JSON.stringify({ v: 1, t: 999, id: "evicted-req" })).toString("base64url");
+    const staleUrl = new URL(`http://localhost/api/logs?cursor=${fakeCursor}`);
+    const staleRes = await handleManagementAPI(new Request(staleUrl), staleUrl, config);
+    expect(staleRes?.status).toBe(200);
+    const staleBody = await staleRes!.json() as { logs: Array<{ requestId: string }>; cursor?: string; reset?: boolean; total: number };
+    expect(staleBody.logs.map(r => r.requestId)).toEqual(["req-1", "req-2", "req-3"]);
+    expect(staleBody.reset).toBe(true);
+
+    // Malformed cursor fails closed with 400
+    const badUrl = new URL("http://localhost/api/logs?cursor=not-valid-cursor");
+    const badRes = await handleManagementAPI(new Request(badUrl), badUrl, config);
+    expect(badRes?.status).toBe(400);
+    const badBody = await badRes!.json();
+    expect(badBody).toEqual({ error: { code: "invalid_cursor", message: "invalid cursor" } });
+  });
+
   test("reports filtered total before limit pagination", async () => {
     addRequestLog(baseEntry({ requestId: "ok-a", provider: "anthropic", status: 200 }));
     addRequestLog(baseEntry({ requestId: "ok-b", provider: "anthropic", status: 200 }));
