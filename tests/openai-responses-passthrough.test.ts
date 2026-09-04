@@ -2350,6 +2350,14 @@ describe("OpenAI Responses passthrough sanitization", () => {
     const invalidOutputs = [
       { type: "custom_tool_call_output" },
       { type: "function_call_output", output: [{ type: "bogus", value: "not a tool-output part" }] },
+      {
+        type: "function_call_output",
+        output: [{ type: "input_image", image_url: "data:image/png;base64,AAAA", detail: ["high"] }],
+      },
+      {
+        type: "function_call_output",
+        output: [{ type: { toString: null, valueOf: null }, text: "must not coerce" }],
+      },
     ];
 
     const body = JSON.parse(adapter.buildRequest({

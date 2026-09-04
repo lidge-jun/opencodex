@@ -912,7 +912,8 @@ function isRepairableToolOutput(output: unknown): output is string | Record<stri
   if (!Array.isArray(output)) return false;
   return output.every(part => {
     if (!isPlainObject(part)) return false;
-    if (["output_text", "text", "input_text"].includes(String(part.type))) {
+    if (typeof part.type !== "string") return false;
+    if (["output_text", "text", "input_text"].includes(part.type)) {
       return typeof part.text === "string";
     }
     if (part.type === "refusal") return typeof part.refusal === "string";
@@ -920,7 +921,8 @@ function isRepairableToolOutput(output: unknown): output is string | Record<stri
     if (part.type !== "input_image") return false;
     const validSource = typeof part.image_url === "string" || typeof part.file_id === "string";
     const validDetail = part.detail === undefined
-      || ["auto", "low", "high", "original"].includes(String(part.detail));
+      || (typeof part.detail === "string"
+        && ["auto", "low", "high", "original"].includes(part.detail));
     return validSource && validDetail;
   });
 }
