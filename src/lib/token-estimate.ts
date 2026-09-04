@@ -46,10 +46,25 @@ const DEFAULT_CHARS_PER_TOKEN = 4;
  *
  * 2.8 takes the conservative end of that pair. All kiro models are text LLMs, so one Latin ratio
  * applies to the whole family.
+ *
+ * Applied ONLY to `kiro/`-prefixed ids. The measurement is Kiro's charge for Kiro's payload
+ * shape, and the id families below (`claude`, `deepseek`, `qwen`, ...) are also routed by
+ * Cursor, Anthropic direct and Antigravity, whose consumers read this same helper to size
+ * admission ceilings, `count_tokens` answers, and overflow-vs-429 classification. Widening a
+ * Kiro-derived constant to those callers would retune three unrelated subsystems from evidence
+ * that says nothing about them.
  */
 const KIRO_CHARS_PER_TOKEN = 2.8;
 
-const KIRO_MODEL_PREFIXES = ["kiro", "claude", "deepseek", "minimax", "glm", "qwen"];
+/**
+ * Ratio for the model families Kiro shares with other providers, when NOT routed through Kiro.
+ *
+ * These are code-heavy agent models, so 3.5 remains right for them; it is the value every
+ * non-Kiro consumer of this helper was calibrated against.
+ */
+const AGENT_MODEL_CHARS_PER_TOKEN = 3.5;
+
+const AGENT_MODEL_PREFIXES = ["kiro", "claude", "deepseek", "minimax", "glm", "qwen"];
 
 /**
  * Model-aware chars-per-token ratio for LATIN text. Unknown models fall back to the generic
@@ -62,7 +77,10 @@ const KIRO_MODEL_PREFIXES = ["kiro", "claude", "deepseek", "minimax", "glm", "qw
 export function charsPerToken(modelId?: string): number {
   if (!modelId) return DEFAULT_CHARS_PER_TOKEN;
   const id = modelId.toLowerCase();
-  if (KIRO_MODEL_PREFIXES.some(p => id.startsWith(p))) return KIRO_CHARS_PER_TOKEN;
+  // `estimateKiroTokens` always prefixes `kiro/`, so the Kiro-measured ratio reaches Kiro traffic
+  // and only Kiro traffic.
+  if (id.startsWith("kiro")) return KIRO_CHARS_PER_TOKEN;
+  if (AGENT_MODEL_PREFIXES.some(p => id.startsWith(p))) return AGENT_MODEL_CHARS_PER_TOKEN;
   return DEFAULT_CHARS_PER_TOKEN;
 }
 

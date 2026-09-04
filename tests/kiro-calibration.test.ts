@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { calibrateKiroEstimate, recordKiroCalibration, resetKiroCalibration } from "../src/adapters/kiro-calibration";
+import { calibrateKiroEstimate, recordKiroCalibration, rekeyKiroCalibration, resetKiroCalibration } from "../src/adapters/kiro-calibration";
 
 beforeEach(() => resetKiroCalibration());
 
@@ -15,6 +15,27 @@ describe("kiro per-conversation calibration", () => {
     const corrected = calibrateKiroEstimate("conv-a", 1000);
     expect(corrected).toBeGreaterThan(1000);
     expect(corrected).toBeLessThanOrEqual(1500);
+  });
+
+  // A first observation must be smoothed like any other: jumping straight to the observed ratio
+  // lets one cache-affected or truncated turn set the factor outright.
+  test("the first observation is smoothed, not adopted outright", () => {
+    recordKiroCalibration("conv-first", 1000, 2900);
+    const applied = calibrateKiroEstimate("conv-first", 1000);
+    expect(applied).toBeLessThan(2000);
+  });
+
+  // Kiro may answer under a different conversation id than the request was built with. Without
+  // carrying the entry across, the record would miss its raw estimate and fall back to the
+  // already-corrected value — the feedback bug the raw estimate exists to prevent.
+  test("state follows a conversation id replaced by the provider", () => {
+    calibrateKiroEstimate("conv-built", 1000);
+    rekeyKiroCalibration("conv-built", "conv-returned");
+    recordKiroCalibration("conv-returned", 4242, 1500);
+    // Learned against the raw 1000, not the bogus 4242 the caller passed.
+    const applied = calibrateKiroEstimate("conv-returned", 1000);
+    expect(applied).toBeGreaterThan(1000);
+    expect(calibrateKiroEstimate("conv-built", 1000)).toBe(1000);
   });
 
   test("repeated consistent observations converge toward the observed ratio", () => {
@@ -60,6 +81,20 @@ describe("kiro per-conversation calibration", () => {
     expect(calibrateKiroEstimate("conv-599", 1000)).toBeGreaterThan(1000);
   });
 
+  // Estimating and recording must share ONE entry. Held separately, a conversation could be
+  // refreshed in one map and evicted from the other, and the pair could retain twice the bound.
+  test("estimating refreshes recency, so an active conversation is not evicted by new ones", () => {
+    recordKiroCalibration("conv-active", 1000, 1500);
+    const learned = calibrateKiroEstimate("conv-active", 1000);
+    expect(learned).toBeGreaterThan(1000);
+    // Fill most of the budget, touching the active conversation along the way.
+    for (let i = 0; i < 200; i++) {
+      recordKiroCalibration("filler-" + i, 1000, 1500);
+      calibrateKiroEstimate("conv-active", 1000);
+    }
+    expect(calibrateKiroEstimate("conv-active", 1000)).toBe(learned);
+  });
+
   test("a conversation that was already accurate is left essentially alone", () => {
     for (let i = 0; i < 10; i++) recordKiroCalibration("conv-ok", 1000, 1000);
     expect(calibrateKiroEstimate("conv-ok", 1000)).toBe(1000);
@@ -79,7 +114,7 @@ describe("kiro per-conversation calibration", () => {
       lastRatio = applied / charged;
       recordKiroCalibration(conv, applied, charged);
     }
-    expect(lastRatio).toBeGreaterThan(0.97);
+    expect(lastRatio).toBeGreaterThan(0.95);
     expect(lastRatio).toBeLessThan(1.03);
   });
 
@@ -90,16 +125,26 @@ describe("kiro per-conversation calibration", () => {
     expect(calibrateKiroEstimate("uncharged-0", 1000)).toBeLessThanOrEqual(1500);
   });
 
-  // A retry can report twice for one turn. The second report must not be scored against the
-  // first turn's baseline, which by then describes a payload that has already grown.
-  test("a repeated report for the same turn is not re-learned from a stale baseline", () => {
+  // A turn can report twice — the bounded completion retry rebuilds and re-streams one turn.
+  // The raw estimate is CONSUMED by the first report, so the second is scored against the
+  // caller's own value instead of a baseline that no longer describes the payload in flight.
+  test("a second report for one turn is scored against the caller's value, not a consumed baseline", () => {
     calibrateKiroEstimate("conv-dup", 1000);
     recordKiroCalibration("conv-dup", 1000, 1300);
-    const afterFirst = calibrateKiroEstimate("conv-dup", 1000);
-    recordKiroCalibration("conv-dup", 1000, 1300);
-    const afterSecond = calibrateKiroEstimate("conv-dup", 1000);
-    // The second identical observation is consistent, so it must not push the factor further.
-    expect(afterSecond).toBe(afterFirst);
+    // Second metadata frame for the SAME turn: no rebuild, so no new estimate is recorded. The
+    // baseline was consumed by the first report, so 12_000/10_000 reads as its true 1.2x rather
+    // than a 12x absurdity that the plausibility cap would silently discard.
+    recordKiroCalibration("conv-dup", 10_000, 12_000);
+    const afterBoth = calibrateKiroEstimate("conv-dup", 1000);
+
+    // Compare against a conversation that saw only the first report.
+    calibrateKiroEstimate("conv-once", 1000);
+    recordKiroCalibration("conv-once", 1000, 1300);
+    const afterOne = calibrateKiroEstimate("conv-once", 1000);
+
+    // The second observation was counted, and it converged rather than jumping.
+    expect(afterBoth).toBeGreaterThan(afterOne);
+    expect(afterBoth).toBeLessThan(1300);
   });
 
   // The upstream checkpoint is the context size AFTER the response, while the estimate covers the
@@ -120,6 +165,6 @@ describe("kiro per-conversation calibration", () => {
     // Wrong: feeding the post-response checkpoint straight in learns a 3x error that never existed.
     calibrateKiroEstimate("conv-bad", requestEstimate);
     recordKiroCalibration("conv-bad", requestEstimate, checkpointAfterResponse);
-    expect(calibrateKiroEstimate("conv-bad", requestEstimate)).toBeGreaterThan(requestEstimate * 2);
+    expect(calibrateKiroEstimate("conv-bad", requestEstimate)).toBeGreaterThan(requestEstimate * 1.5);
   });
 });

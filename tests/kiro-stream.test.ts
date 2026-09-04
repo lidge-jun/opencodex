@@ -14,6 +14,7 @@ import {
 } from "../src/adapters/kiro-constants";
 import { parseKiroEvent } from "../src/adapters/kiro-events";
 import { resetKiroThrottleStateForTests } from "../src/adapters/kiro-retry";
+import { resetKiroCalibration } from "../src/adapters/kiro-calibration";
 import { buildResponseJSON } from "../src/bridge";
 import { encodeMessage } from "../src/lib/eventstream-decoder";
 import { estimateTokens } from "../src/lib/token-estimate";
@@ -452,11 +453,11 @@ describe("kiro adapter — parseStream", () => {
     const done = events.at(-1);
     expect(done?.type).toBe("done");
     const usage = done?.type === "done" ? done.usage : undefined;
-    expect(usage?.outputTokens).toBe(estimateTokens(firstText, "claude-sonnet-4.5") + estimateTokens(finalText, "claude-sonnet-4.5"));
+    expect(usage?.outputTokens).toBe(estimateTokens(firstText, "kiro/claude-sonnet-4.5") + estimateTokens(finalText, "kiro/claude-sonnet-4.5"));
     expect(usage?.contextTotalTokens).toBeGreaterThan(
       initialContextEstimate + Math.max(
-        estimateTokens(firstText, "claude-sonnet-4.5"),
-        estimateTokens(finalText, "claude-sonnet-4.5"),
+        estimateTokens(firstText, "kiro/claude-sonnet-4.5"),
+        estimateTokens(finalText, "kiro/claude-sonnet-4.5"),
       ),
     );
   });
@@ -489,13 +490,13 @@ describe("kiro adapter — parseStream", () => {
     expect(largeProgress).toBeGreaterThan(smallProgress);
     // And the extra pressure must be on the order of the extra progress, not a rounding artefact.
     expect(largeProgress - smallProgress).toBeGreaterThan(
-      estimateTokens("p".repeat(20000), "claude-sonnet-4.5"),
+      estimateTokens("p".repeat(20000), "kiro/claude-sonnet-4.5"),
     );
   });
 
   test("bounded fallback preserves definite growth after an upstream context checkpoint", async () => {
     const finalText = "f".repeat(3500);
-    const finalOutputTokens = estimateTokens(finalText, "claude-sonnet-4.5");
+    const finalOutputTokens = estimateTokens(finalText, "kiro/claude-sonnet-4.5");
     globalThis.fetch = (async () => new Response(streamOf(eventFrame({ content: finalText })))) as typeof fetch;
     const adapter = createKiroAdapter(provider);
     await adapter.buildRequest(parsedWith([{ role: "user", content: "do it" }], [bashTool]));
@@ -1620,6 +1621,46 @@ describe("kiro adapter — parseStream", () => {
     expect(done.contextTotalTokens).toBe(50_000);
   });
 
+  // End-to-end proof that calibration survives the adapter boundary: one full stream reports a
+  // context percentage, and the NEXT request for the same conversation is estimated higher for
+  // identical input. Unit tests cover the arithmetic; this covers the wiring.
+  //
+  // The payload is sized so the reported percentage lands within a believable multiple of our
+  // estimate. A wildly larger ratio is rejected as implausible by design — a 30x reading is a
+  // compaction or a window mismatch, not a mis-tokenized prompt — so a naive fixture proves
+  // nothing about the wiring.
+  test("a reported context percentage calibrates the next request in the same conversation", async () => {
+    resetKiroCalibration();
+    // 28k chars estimates ~11.2k tokens once framing is counted; 10% of the model window is 20k,
+    // a believable 1.8x under-read rather than a compaction-sized outlier that the plausibility
+    // guard would rightly discard.
+    const messages = [{ role: "user", content: "x".repeat(28_000) }];
+    // A conversation is only the SAME conversation when the continuation id is carried: a fresh
+    // request mints a random one (stableConversationId), which is precisely why calibration is
+    // keyed on it rather than on the adapter instance.
+    const conversationId = "11111111-2222-3333-4444-555555555555";
+    const sameConversation = () => ({
+      ...parsedWith(messages),
+      _providerContinuation: { kiro: { conversationId } },
+    });
+
+    const first = createKiroAdapter(provider);
+    await first.buildRequest(sameConversation());
+    const done = await doneUsage(first, eventFrame({ content: "ok" }), eventFrame({ contextUsagePercentage: 10 }));
+    expect(done.contextTotalTokens ?? 0).toBeGreaterThan(0);
+
+    const second = createKiroAdapter(provider);
+    await second.buildRequest(sameConversation());
+    const after = await doneUsage(second, eventFrame({ content: "ok" }));
+
+    resetKiroCalibration();
+    const uncalibrated = createKiroAdapter(provider);
+    await uncalibrated.buildRequest(sameConversation());
+    const baseline = await doneUsage(uncalibrated, eventFrame({ content: "ok" }));
+
+    expect(after.contextTotalTokens ?? 0).toBeGreaterThan(baseline.contextTotalTokens ?? 0);
+  });
+
   test("Kiro GPT routes use the Kiro token ratio without context percentage", async () => {
     const adapter = createKiroAdapter(provider);
     await adapter.buildRequest(parsedWith([{ role: "user", content: "x".repeat(3500) }], undefined, "gpt-5.6-sol"));
@@ -1652,7 +1693,9 @@ describe("kiro adapter — parseStream", () => {
     const longUsage = await doneUsage(longAdapter, eventFrame({ content: "ok" }));
     expect(longBody.length).toBeGreaterThan(shortBody.length + 10_000);
     expect(longUsage.inputTokens).toBe(shortUsage.inputTokens);
-    expect(longUsage.inputTokens).toBe(estimateTokens(latest, "claude-sonnet-4.5"));
+    // The adapter estimates through the kiro-prefixed id, which carries the Kiro-measured ratio;
+    // the bare id is a different provider's route and keeps the shared agent ratio.
+    expect(longUsage.inputTokens).toBe(estimateTokens(latest, "kiro/claude-sonnet-4.5"));
     expect(longUsage.contextTotalTokens).toBeGreaterThan(shortUsage.contextTotalTokens ?? 0);
   });
 
@@ -1697,7 +1740,7 @@ describe("kiro adapter — parseStream", () => {
     const request = await adapter.buildRequest(parsedWith(messages));
     const usage = await doneUsage(adapter, eventFrame({ content: "ok" }));
 
-    expect(usage.inputTokens).toBe(estimateTokens(latest, "claude-sonnet-4.5"));
+    expect(usage.inputTokens).toBe(estimateTokens(latest, "kiro/claude-sonnet-4.5"));
     expect(request.usageLog?.estimated).toBe(true);
     expect(request.usageLog?.inputTokens).toBeGreaterThan(usage.inputTokens + 4000);
     // Both estimates cover the whole conversation, but they are built for different consumers and
@@ -1728,7 +1771,7 @@ describe("kiro adapter — parseStream", () => {
     expect(resumedBody.length).toBe(freshBody.length);
     expect(cs.history).toHaveLength(4);
     expect(cs.currentMessage.userInputMessage.content).toBe(latest);
-    expect(resumedUsage.inputTokens).toBe(estimateTokens(latest, "claude-sonnet-4.5"));
+    expect(resumedUsage.inputTokens).toBe(estimateTokens(latest, "kiro/claude-sonnet-4.5"));
   });
 
   test("tool-result follow-up counts new tool output without re-counting prior assistant tool args", async () => {
