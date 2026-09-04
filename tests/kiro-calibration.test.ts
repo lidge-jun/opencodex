@@ -87,12 +87,16 @@ describe("kiro per-conversation calibration", () => {
     recordKiroCalibration("conv-active", 1000, 1500);
     const learned = calibrateKiroEstimate("conv-active", 1000);
     expect(learned).toBeGreaterThan(1000);
-    // Fill most of the budget, touching the active conversation along the way.
-    for (let i = 0; i < 200; i++) {
+    // Push PAST the 256-entry cap so eviction actually runs; touching the active conversation
+    // each round must keep it alive. A filler count under the cap would pass without eviction
+    // ever being exercised.
+    for (let i = 0; i < 400; i++) {
       recordKiroCalibration("filler-" + i, 1000, 1500);
       calibrateKiroEstimate("conv-active", 1000);
     }
     expect(calibrateKiroEstimate("conv-active", 1000)).toBe(learned);
+    // ...while an untouched conversation from the same era is gone.
+    expect(calibrateKiroEstimate("filler-0", 1000)).toBe(1000);
   });
 
   test("a conversation that was already accurate is left essentially alone", () => {
