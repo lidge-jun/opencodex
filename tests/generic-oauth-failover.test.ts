@@ -303,6 +303,40 @@ describe("sidecar on429 wiring", () => {
     expect(coreSource.indexOf("apiKey: snapshot.accessToken")).toBeGreaterThan(helperStart);
   });
 
+  test("every 429 recovery loop carries all three rotators (#3495 follow-up)", () => {
+    // This unit found the same defect twice: the streaming loop grew generic OAuth rotation and
+    // the continuation loop did not, and the sidecar hook grew generic rotation while Anthropic
+    // stayed excluded. Both times a loop shipped with a SUBSET of the rotators, and both times
+    // nothing failed -- the gap is invisible unless you diff the loops against each other.
+    //
+    // A rotator set is the contract: any site that recovers a 429 by swapping a credential must
+    // be able to swap ALL of them, or some provider's rate limit is terminal there while the
+    // identical limit recovers one loop over.
+    const rotators = {
+      key: /hasKeyPoolFailover\(/g,
+      anthropic: /rotateAnthropicAccountOn429\(/g,
+      generic: /rotateGenericOAuthAccountOn429\(/g,
+    };
+    const counts = Object.fromEntries(
+      Object.entries(rotators).map(([name, re]) => [name, (coreSource.match(re) ?? []).length]),
+    );
+
+    // The counts differ by rotator because the recovery sites differ, and each number is a
+    // statement about which providers can recover where:
+    //
+    //   generic  = 4: streaming loop, continuation loop, sidecar hook, runTurn preflight.
+    //   anthropic = 3: the same, MINUS runTurn -- that path is Cursor-only (cursor.ts is the
+    //                  sole adapter implementing runTurn), so Anthropic cannot reach it.
+    //   key       = 2: hasKeyPoolFailover guards only the two response loops; the sidecar
+    //                  reaches the key pool through rotateProviderTransportOn429 instead.
+    //
+    // Adding a fifth recovery site means deciding, deliberately, which rotators it needs and
+    // updating the matching number. That decision is the thing this test exists to force.
+    expect(counts.generic).toBe(4);
+    expect(counts.anthropic).toBe(3);
+    expect(counts.key).toBe(2);
+  });
+
   test("the helper fails closed rather than pairing a new bearer with an old identity", () => {
     const start = coreSource.indexOf("const applyFailoverSnapshot =");
     expect(start).toBeGreaterThan(-1);
