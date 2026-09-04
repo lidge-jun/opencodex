@@ -35,24 +35,31 @@ export interface VerifyReport {
 
 /**
  * Everything that may name a test path as text. Shared with move.ts so the preflight write set
- * and the post-move STALE check see the same files. Reference clones under devlog/_chase are
- * gitignored and skipped by rg's own ignore handling.
+ * and the post-move STALE check see the same files. `devlog/_fin` is history: it records where
+ * a file lived when the unit closed and is deliberately not rewritten. Open `devlog/_plan` units
+ * are live documents and are.
  */
 export const SWEEP_ROOTS = [
-  "tests", "scripts", ".github", "src", "gui/src", "gui/tests", "bin", "docs", "docs-site", "structure", "devlog", "skills",
+  "tests", "scripts", ".github", "src", "gui/src", "gui/tests", "bin", "docs", "docs-site", "structure", "devlog/_plan", "skills",
   "AGENTS.md", "AGENTS_INSTALL.md", "MAINTAINERS.md", "CONTRIBUTING.md", "README.md", "CREDITS.md",
   "bunfig.toml", "package.json", ".gitignore", ".npmignore",
 ];
 // dist/ is a build output (gitignored) and is rebuilt from src; it is deliberately not swept.
 
-function rgLiteral(root: string, literal: string): string[] {
+/**
+ * Tracked files under SWEEP_ROOTS that contain `literal` as text. Uses `git grep` so the sweep
+ * needs nothing beyond git (the Linux CI runners do not ship ripgrep) and honours the index:
+ * gitignored reference clones and build output are never scanned.
+ */
+export function filesNaming(root: string, literal: string): string[] {
   const roots = SWEEP_ROOTS.filter(p => existsSync(join(root, p)));
-  const proc = Bun.spawnSync(["rg", "-l", "--fixed-strings", "--no-messages", literal, ...roots], {
+  if (roots.length === 0) return [];
+  const proc = Bun.spawnSync(["git", "grep", "-l", "--fixed-strings", "-e", literal, "--", ...roots], {
     cwd: root, stdout: "pipe", stderr: "pipe",
   });
-  // rg exits 1 for "no matches" and 2 for an execution error; only 0 and 1 are answers.
+  // git grep exits 1 for "no matches"; anything above that is an execution error.
   if (proc.exitCode !== 0 && proc.exitCode !== 1) {
-    throw new Error(`rg failed while sweeping for ${literal} (exit ${proc.exitCode}): ${proc.stderr.toString()}`);
+    throw new Error(`git grep failed while sweeping for ${literal} (exit ${proc.exitCode}): ${proc.stderr.toString()}`);
   }
   return proc.exitCode === 0 ? proc.stdout.toString().split("\n").filter(Boolean) : [];
 }
@@ -70,7 +77,7 @@ export function runVerify(options: VerifyOptions): VerifyReport {
     const literal = `tests/${basename(rel)}`;
     // "tests/<basename>" cannot be a substring of any "tests/<dir>/<other>" (verified over all
     // 1061 basenames in the tooling test), so any hit is stale by construction.
-    for (const file of rgLiteral(root, literal)) staleLiterals.push({ file, literal });
+    for (const file of filesNaming(root, literal)) staleLiterals.push({ file, literal });
     for (const hit of scanEscapes(readFileSync(join(root, rel), "utf8"))) {
       (hit.suppressed ? suppressed : manual).push({ file: rel, line: hit.line, text: hit.text.trim() });
     }

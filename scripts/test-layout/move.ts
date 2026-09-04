@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { LAYOUT_PATH, loadLayout, rewriteMetaDirEscapes, rewriteSource, scanEscapes, type Layout } from "./schema";
 import { planMoves, repoRootFromHere, type Move } from "./plan";
-import { SWEEP_ROOTS, runVerify } from "./verify";
+import { filesNaming, runVerify } from "./verify";
 
 /**
  * Move one slice of test files into their domain directories.
@@ -46,17 +46,6 @@ function defaultGit(root: string) {
   };
 }
 
-function rgFilesNaming(root: string, literal: string): string[] {
-  const roots = SWEEP_ROOTS.filter(p => existsSync(join(root, p)));
-  const proc = Bun.spawnSync(["rg", "-l", "--fixed-strings", "--no-messages", literal, ...roots], {
-    cwd: root, stdout: "pipe", stderr: "pipe",
-  });
-  if (proc.exitCode !== 0 && proc.exitCode !== 1) {
-    throw new Error(`rg failed while sweeping for ${literal} (exit ${proc.exitCode}): ${proc.stderr.toString()}`);
-  }
-  return proc.exitCode === 0 ? proc.stdout.toString().split("\n").filter(Boolean) : [];
-}
-
 function serialLaneFiles(root: string): string[] {
   const path = join(root, SERIAL_LANE_SOURCE);
   if (!existsSync(path)) return [];
@@ -97,7 +86,7 @@ export function runMove(options: MoveOptions): MoveReport {
   // Preflight: the complete write set.
   const literalTargets = new Map<string, string[]>();
   for (const move of moves) {
-    for (const file of rgFilesNaming(root, move.from)) {
+    for (const file of filesNaming(root, move.from)) {
       if (file === move.from) continue;
       const list = literalTargets.get(file) ?? [];
       list.push(move.from);
@@ -203,4 +192,3 @@ if (import.meta.main) {
     process.exit(1);
   }
 }
-
