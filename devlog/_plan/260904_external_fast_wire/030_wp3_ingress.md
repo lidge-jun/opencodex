@@ -28,6 +28,22 @@ fast from the mutated id — which made `x--fast--high` fire both dimensions whi
 `x--high--fast` fired neither, and made Responses disagree with Chat and Messages about the
 same string.
 
+### Nested markers, at every ingress
+
+Composition is not supported (020 R1), and the effort parser cannot detect the problem on
+its own: it validates the terminal effort but never checks that the base is real
+(`effort-row.ts:78-95`), so `x--fast--high` would otherwise resolve to base `x--fast` with
+effort `high` — a model that does not exist. Each ingress therefore discards an effort row
+whose base still carries the marker, using wp1's guard:
+
+```ts
+if (effortRow && effortBaseCarriesFastMarker(effortRow.baseId, knownIds)) effortRow = null;
+```
+
+The known-id argument is what keeps a real model named `foo--fast` able to publish and
+resolve its own `foo--fast--high` effort row. Test 14 asserts both orders behave the same
+on all five surfaces.
+
 ## `/v1/responses`
 
 Two insertion points. The combo pre-dispatch at `core.ts:2726` runs before
@@ -113,22 +129,49 @@ uses `--` as its own separator. A real model named `foo--fast` therefore arrives
 `knownEffortRowIds()` holds routed ids, not Claude aliases (`effort-row.ts:44`), so it
 cannot defend the raw form.
 
-The alias is decoded by `resolveInboundModel` (`src/claude/inbound.ts:59`), which is called
-inside `anthropicToResponsesTranslation` at `inbound.ts:500` — after the point where the
-effort row parses. wp3 therefore decodes explicitly, before parsing, and leaves the
-inbound body's own model resolution to run as it always has:
+The alias is decoded by `resolveInboundModel` (`src/claude/inbound.ts:59`, already imported
+at `claude-messages.ts:13`), which normally runs inside `anthropicToResponsesTranslation`
+at `inbound.ts:500` — after the effort row parses. wp3 decodes explicitly, before parsing.
+
+A Desktop 3P alias needs one more step: it is a HASH, and the registry maps only the
+unsuffixed hash (`desktop-3p.ts:273`) through an exact lookup (`:316`). So
+`resolveInboundModel("<hash>--fast")` returns its input unchanged, and the base check then
+fails. Decoding tries the exact form first, and only then treats the marker as synthetic:
+
+```ts
+/**
+ * Decode a Claude selector that may carry the fast marker. The exact form is tried first,
+ * so a real model whose alias genuinely ends in the marker keeps winning; only then is the
+ * marker treated as synthetic and the bare base decoded. Desktop 3P aliases are hashes
+ * registered WITHOUT the marker, so an exact lookup can never resolve a synthetic one.
+ */
+function decodeClaudeFastSelector(raw: string, cc?: OcxClaudeCodeConfig): string {
+  const exact = resolveInboundModel(raw, cc);
+  if (exact !== raw || !raw.endsWith("--fast")) return exact;
+  const bare = raw.slice(0, -"--fast".length);
+  const decodedBase = resolveInboundModel(bare, cc);
+  return decodedBase === bare ? exact : `${decodedBase}--fast`;
+}
+```
+
+`fastRow` is declared beside `effortRow` at `claude-messages.ts:608`, NOT inside the
+model-validation block: the passthrough guard and the post-translation tier write both
+read it, and a block-scoped `const` would not compile.
 
 ```diff
+     let effortRow: ParsedEffortRowId | null = null;
++    let fastRow: ParsedFastRowId | null = null;
+     ...
      effortRow = parseRequestEffortRowId(requestedModel, config);
      if (effortRow) { anthropicBody.model = effortRow.baseId; effortOverride = effortRow.effort; }
-+    // Decode first: the alias grammar and the fast marker share "--", so the marker is only
-+    // unambiguous once the provider half has been split off.
-+    const decoded = resolveInboundModel(requestedModel, config.claudeCode);
-+    const fastRow = parseRequestFastRowId(decoded, config);
++    // Decode first: the alias grammar and the fast marker share the separator, so the
++    // marker is unambiguous only once the provider half has been split off.
++    fastRow = parseRequestFastRowId(decodeClaudeFastSelector(requestedModel, config.claudeCode), config);
 +    if (fastRow) anthropicBody.model = fastRow.baseId;
 ```
 
-`parseRequestFastRowId` then checks the stripped base against the routed inventory, where
+`parseRequestFastRowId` then checks the stripped base against the routable-base set, and for
+a real `p/foo--fast` the exact-id guard refuses the strip.
 `p/foo--fast` is present and the strip is refused.
 
 The Anthropic translator carries no `service_tier` — `claude/inbound.ts:500` builds its body
@@ -166,7 +209,7 @@ returns an estimate and sends no tier:
    if (countRoute) { model = stripOneMillionMarker(countRoute); raw.model = model; }
 +  // Decode before stripping, for the same aliasing reason as /v1/messages. A token estimate
 +  // carries no tier, so only the identity is corrected here.
-+  const countFastRow = parseRequestFastRowId(resolveInboundModel(model, config.claudeCode), config);
++  const countFastRow = parseRequestFastRowId(decodeClaudeFastSelector(model, config.claudeCode), config);
 +  if (countFastRow) { model = countFastRow.baseId; raw.model = model; }
 ```
 
@@ -226,12 +269,18 @@ Each test drives one conditional and asserts an observable effect, per
    unconditional write.
 10. **A real `foo--fast` model routes to ITSELF** on every ingress, including through its
     Claude alias. This is the alias-collision regression.
-11. **`a--high--fast` resolves** when `a--high` is a real model — the row wp2 published is
-    the row wp3 accepts.
+11. **`a--high--fast` resolves** when `a--high` is routable — the row wp2 published is the
+    row wp3 accepts.
+12. **A bare native round-trips on a DEFAULT config.** `gpt-5.6-sol--fast` reaches the
+    adapter as `gpt-5.6-sol` with the tier, with no `models` list configured. The
+    known-id-based draft failed this.
+13. **Desktop 3P round-trips.** A hashed Claude alias plus the marker decodes to its base
+    model on both Messages and `count_tokens`.
+14. **Nested markers resolve to neither grammar,** in both orders, identically on all five
+    surfaces: `x--fast--high` must NOT reach the effort grammar with base `x--fast`.
 
 ## Verification
 
 `bun test tests/fast-row-ingress.test.ts tests/fast-row-listing.test.ts tests/fast-row.test.ts`,
 `bun test tests/core-lab-boundary.test.ts` (mandatory: a protected root was touched),
 `bun run typecheck`, `bun run privacy:scan` (request-path change). No full suite.
-

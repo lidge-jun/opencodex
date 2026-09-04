@@ -142,9 +142,16 @@ pseudo-provider explicitly, since `config.providers.native` does not exist:
 One helper serves both loops, alongside the existing `push1mVariant`:
 
 ```ts
+// Every real discovery id, computed BEFORE the loops. `seen` alone is not enough: it grows
+// as the loops run, so whether a synthetic id collided with a real one would depend on
+// iteration order. With both `foo` and a real `foo--fast` in the roster, the synthetic
+// alias for `foo` IS the real model's alias, and whichever ran first would win the row.
+const realDiscoveryIds = new Set<string>(/* every id both loops will emit */);
+
 const pushFastVariant = (base: AnthropicModelInfo) => {
-  const fastId = `${id}--fast`;
-  if (seen.has(fastId)) return;
+  const fastId = `${base.id}--fast`;
+  // A real model always wins its own id.
+  if (realDiscoveryIds.has(fastId) || seen.has(fastId)) return;
   seen.add(fastId);
   out.push({ ...base, id: fastId, display_name: `${base.display_name} · Fast` });
 };
@@ -198,4 +205,3 @@ row strands nothing, because the original id keeps existing.
 R1 — effort and fast do not compose (`<base>--high--fast` is not published). Fixing it needs
 a combined codec and a two-marker parser; deferred until someone asks for a specific effort
 at Fast, since the base row's default effort already reaches Fast.
-

@@ -54,20 +54,33 @@ export function fastRowEligible(
 }
 ```
 
-## Parsing, and why there is no composite guard
+## Parsing: two questions, not one
 
-The first draft carried a `hasCompositeRowMarkers()` helper meant to reject ids bearing both
-a fast and an effort marker. Audit round 2 killed it, and the reasoning is worth keeping
-because it is the argument for the design that replaced it.
+Three drafts died here, and the reason is the design.
 
-The helper was asymmetric: it tested `endsWith("--fast")` then looked one segment left, so
-`x--high--fast` was caught while `x--fast--high` sailed past. Worse, it was blind to real
-models: an eligible base legitimately named `a--high` publishes `a--high--fast`, and the
-guard would have suppressed parsing of a row this very unit published.
+The first used a suffix-shape guard (`hasCompositeRowMarkers`). It was asymmetric — it
+caught `x--high--fast` but not `x--fast--high` — and it suppressed `a--high--fast`, a row this
+unit itself publishes when `a--high` is a real model.
 
-The correct arbiter already exists. A fast row is valid **iff stripping the marker leaves a
-base this proxy can actually route**, and `knownEffortRowIds()` answers exactly that. So
-parsing validates the base instead of pattern-matching the composite:
+The second required the stripped base to be in `knownEffortRowIds()`. That set answers
+"which exact ids defeat the synthetic grammar"; it does NOT answer "which bases are
+routable". Native slugs prove the gap: the `openai` registry entry declares no `models`
+list (`registry.ts:1128`) and the default provider config declares none either
+(`config.ts:3552`), because bare natives route through a family-pattern rule instead
+(`isBareOpenAiFamilyModel`, `router.ts:529`). So `gpt-5.6-sol` — the flagship Fast model —
+is absent from that set, and the second draft would have published `gpt-5.6-sol--fast` and
+then refused to parse it. A row nothing can select is worse than no row.
+
+The two questions stay separate:
+
+| Question | Source | Used for |
+|---|---|---|
+| Which exact ids beat the grammar? | `knownEffortRowIds(config)` | refusing to strip a real `x--fast` |
+| Which bases may carry a fast row? | `fastRowBases(config)` (new) | validating the strip |
+
+`fastRowBases()` is built by the same enumeration wp2 publishes from — every visible native
+slug (bare and account-qualified) plus every routed public id — so publication and parsing
+read one source and cannot drift. Test 9 asserts that invariant directly.
 
 ```ts
 export interface ParsedFastRowId { baseId: string; }
@@ -75,7 +88,8 @@ export interface ParsedFastRowId { baseId: string; }
 export function parseFastRowId(
   id: string,
   config: Pick<OcxConfig, "fastRows">,
-  knownIds?: EffortRowKnownIds,
+  knownIds: EffortRowKnownIds | undefined,
+  routableBases: EffortRowKnownIds | undefined,
 ): ParsedFastRowId | null {
   if (config.fastRows !== true) return null;
   if (!id.endsWith(FAST_ROW_SUFFIX)) return null;
@@ -84,30 +98,59 @@ export function parseFastRowId(
   if (isKnownId(knownIds, id)) return null;
   const baseId = id.slice(0, -FAST_ROW_SUFFIX.length);
   if (baseId.length === 0) return null;
-  // The base must be a model we can route. This is what makes the grammar safe without a
-  // composite guard: "a--high--fast" resolves because "a--high" is known, and
-  // "x--fast--high" is never mistaken for a fast row because it does not end in the marker
-  // - the effort parser sees base "x--fast", finds it unknown, and declines too.
-  return isKnownId(knownIds, baseId) ? { baseId } : null;
-}
-
-/** Parse one ingress selector against the current config. */
-export function parseRequestFastRowId(id: string, config: OcxConfig): ParsedFastRowId | null {
-  if (config.fastRows !== true) return null;
-  // Ordinary ids do not carry the marker; bail before building the known-id inventory so
-  // the flag costs nothing per request for models that are not fast rows.
-  if (!id.endsWith(FAST_ROW_SUFFIX)) return null;
-  return parseFastRowId(id, config, knownEffortRowIds(config));
+  // The base must be one this proxy actually publishes a fast row FOR. Not the known-id
+  // set: that omits bare natives, which route by family pattern rather than a declared
+  // models list, and they are the models Fast matters most for.
+  return isKnownId(routableBases, baseId) ? { baseId } : null;
 }
 ```
 
-Requiring a known base is a real tightening over the effort-row grammar, which accepts any
-stem. It is affordable here because a fast row is only ever published for a model that
-resolved a Fast policy, and a policy cannot resolve for a model the router does not know.
+## Reverse-order composites
 
-`isKnownId` is module-private in `effort-row.ts:32` today. wp1 exports it there rather
-than duplicating the Set-or-predicate branch.
+`x--fast--high` does not end in the marker, so the fast parser never sees it. An earlier draft
+claimed the effort parser would then decline it too. That was wrong: `parseEffortRowId`
+validates the terminal effort and the Cursor ladder but never checks that the base is real
+(`effort-row.ts:78-95`), so it returns base `x--fast` with effort `high`.
 
+That is pre-existing effort-row behaviour and this unit does not change it. What this unit
+must not do is let a FAST marker be consumed as part of an effort row's base. One guard,
+applied where the grammars meet:
+
+```ts
+/**
+ * True when an effort-row base still carries a fast marker, i.e. the selector nested the
+ * two grammars. Composition is not supported (020 R1), so such an id resolves to neither
+ * rather than silently to whichever parser ran first.
+ *
+ * Guarded by the known-id check so a real model named "foo--fast" keeps its legitimate
+ * "foo--fast--high" effort row.
+ */
+export function effortBaseCarriesFastMarker(
+  baseId: string,
+  knownIds: EffortRowKnownIds | undefined,
+): boolean {
+  return baseId.endsWith(FAST_ROW_SUFFIX) && !isKnownId(knownIds, baseId);
+}
+```
+
+wp3 applies it at each ingress: when the effort parser returns a base for which this holds,
+the selector is treated as unrecognized. Both marker orders then behave identically on all
+five surfaces.
+
+## Request-time entry points
+
+```ts
+export function parseRequestFastRowId(id: string, config: OcxConfig): ParsedFastRowId | null {
+  if (config.fastRows !== true) return null;
+  // Ordinary ids do not carry the marker; bail before building either inventory so the
+  // flag costs nothing per request for models that are not fast rows.
+  if (!id.endsWith(FAST_ROW_SUFFIX)) return null;
+  return parseFastRowId(id, config, knownEffortRowIds(config), fastRowBases(config));
+}
+```
+
+`isKnownId` is module-private in `effort-row.ts:32` today. wp1 exports it there rather than
+duplicating the Set-or-predicate branch.
 ## Publication helper
 
 ```ts
@@ -176,9 +219,20 @@ so the test cannot drift from real capability data.
    duplicate.
 5. **An unknown base is refused.** `parseFastRowId("nonexistent--fast")` returns null even
    with the flag on.
-6. **A base that itself ends in an effort marker still works.** A known model `a--high`
+6. **A base that itself ends in an effort marker still works.** A routable `a--high`
    yields a parsable `a--high--fast`. This is the audit-round-2 regression: the discarded
    composite guard failed it.
+9. **A bare native round-trips.** `gpt-5.6-sol--fast` parses back to `gpt-5.6-sol` on a
+   DEFAULT config, with no `models` list configured. This is the audit-round-3 regression:
+   the known-id-based draft failed it, because bare natives route by family pattern and
+   appear in no declared models list. Assert the account-qualified form too.
+10. **Publication and parsing share one source.** For a fixture config, every id
+    `fastRowBases(config)` reports is parsable, and every fast row wp2 would publish has
+    its base in that set. This is the anti-drift invariant; it fails if either side grows
+    a case the other lacks.
+11. **Nested markers resolve to neither grammar.** `effortBaseCarriesFastMarker("x--fast")`
+    is true for an unknown base and false when `x--fast` is a real known model, so
+    `foo--fast--high` still works for a real `foo--fast`.
 7. **Effort-row non-interference, both directions.** `parseEffortRowId("x--fast", ...)`
    returns null because `fast` is not a declared effort
    (`isDeclaredReasoningEffort("fast") === false`, `src/reasoning-effort.ts:39`), and
@@ -192,4 +246,3 @@ so the test cannot drift from real capability data.
 
 `bun test tests/fast-row.test.ts`, `bun test tests/config.test.ts`, `bun run typecheck`.
 No repository-wide suite.
-
