@@ -178,11 +178,14 @@ export function rewriteMetaDirEscapes(source: string, depth: number): { source: 
   const rebindsRoot = localRoot.test(view);
   const otherLocals = new RegExp(`\\b(?:const|let|var|function)\\s+(?:${HELPER_NAMES.filter(n => !(rebindsRoot && n === "repoRoot")).join("|")})\\b`);
   if (otherLocals.test(code)) return { source, rewrites: 0 };
+  // When the file keeps a local string named repoRoot, the other rules must not emit a call
+  // to repoRoot() (that would call the string); they use the alias the rebind imports.
+  const rootCall = rebindsRoot ? "resolveRepoRoot()" : "repoRoot()";
   const rules: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
     [new RegExp(localRoot.source, "g"), () => "const repoRoot = resolveRepoRoot();"],
     // `const root = new URL("../../", import.meta.url)` -> a file URL of the repository root.
-    [/\bconst\s+root\s*=\s*new\s+URL\(\s*"(?:\.\.\/)+"\s*,\s*import\.meta\.url\s*\)\s*;/g, () => 'const root = pathToFileURL(repoRoot() + "/");'],
-    [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*\)/g, () => "repoRoot()"],
+    [/\bconst\s+root\s*=\s*new\s+URL\(\s*"(?:\.\.\/)+"\s*,\s*import\.meta\.url\s*\)\s*;/g, () => `const root = pathToFileURL(${rootCall} + "/");`],
+    [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*\)/g, () => rootCall],
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\."\s*,\s*/g, () => "repoPath("],
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"\.\.\/([^"]+)"/g, m => `repoPath("${m[1]}"`],
     [/\b(?:join|resolve)\(\s*import\.meta\.dir\s*,\s*"helpers"\s*,\s*/g, () => "helperPath("],
@@ -319,5 +322,4 @@ export function scanEscapes(source: string): EscapeHit[] {
 export function layoutDir(): string {
   return dirname(LAYOUT_PATH);
 }
-
 
