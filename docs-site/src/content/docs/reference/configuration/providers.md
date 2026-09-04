@@ -93,12 +93,11 @@ The [API price table](https://developers.openai.com/api/docs/pricing) reprices t
 above 272k, counting cached tokens toward the threshold. Fast and long-context rates combine;
 this also applies to the published GPT-5.6 API rows and their Pro virtual selections.
 
-[Codex/ChatGPT pricing](https://learn.chatgpt.com/docs/pricing) is separate: Astra and GPT-5.6
-Fast consume **2.5x** Standard credits, versus **2x** for the API. The inspected native rate card
-does not publish a separate 272k band; that does **not** mean tokens after 272k are free.
-OpenCodex does not import the API's long-context surcharge into native Astra. Its native dollar
-display is an **API-equivalent estimate**, including an estimated cache-write rate, not a credit
-conversion or invoice. Credit purchase prices depend on the plan or agreement.
+All built-in dollar estimates use **API-reference prices**, including Codex-login routes.
+Astra and GPT-5.6 therefore use the same API base/cache rates, **2x Fast** multiplier, and
+published long-context bands on `openai` and `openai-apikey`. The two Daybreak Blue selectors
+follow the Sol API reference. These are comparison estimates, not invoices or credit-balance
+predictions. Explicit provider/model price overrides still take precedence.
 
 ## Provider entries (`OcxProviderConfig`)
 
