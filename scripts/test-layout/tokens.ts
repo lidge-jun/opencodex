@@ -133,7 +133,9 @@ export interface SpecifierSite {
   quote: string;
 }
 
-const SPECIFIER_LEAD = /(?:\bfrom|\bimport|\bimport\s*\(|\brequire\s*\(|\bimport\.meta\.resolve\s*\(|\bnew\s+URL\s*\()\s*$/;
+// `mock.module("x", ...)` (bun:test) names a module the same way an import does: the string must
+// re-anchor with the file or the mock silently stops intercepting.
+const SPECIFIER_LEAD = /(?:\bfrom|\bimport|\bimport\s*\(|\brequire\s*\(|\bimport\.meta\.resolve\s*\(|\bnew\s+URL\s*\(|\bmock\.module\s*\()\s*$/;
 
 /** String tokens that sit in a module-specifier position. */
 export function specifierSites(source: string, tokens: Token[] = tokenize(source)): SpecifierSite[] {

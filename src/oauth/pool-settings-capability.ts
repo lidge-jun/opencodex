@@ -6,8 +6,13 @@ import type { OcxProviderConfig } from "../types";
  *
  * `codex` and `anthropic` keep their own routes and storage untouched. `generic` is every
  * other OAuth provider the generic failover module admits; its settings persist on
- * `providers.<name>.oauthAccountFailover`. Settings stored for a generic provider are a
- * declared contract the selector can consume in a later slice; today they change nothing.
+ * `providers.<name>.oauthAccountFailover`.
+ *
+ * `strategy` and `autoSwitchThreshold` are still a declared contract the selector does not
+ * consume — that is what `inert` reports. `enabled` is NOT inert any more: an explicit
+ * `false` refuses the pre-dispatch account preference (`preferredInitialAccount`). What it can
+ * no longer do is refuse reactive 429 rotation, which activates on account presence and is not
+ * disableable.
  */
 export type PoolSettingsKind = "codex" | "anthropic" | "generic";
 
@@ -37,7 +42,14 @@ export interface GenericPoolSettingsDto {
   enabled: boolean | null;
   strategy: GenericPoolStrategy | null;
   autoSwitchThreshold: number | null;
-  /** Slice-1 marker: persisted, not yet consumed by the selector. */
+  /**
+   * Slice-1 marker for `strategy` and `autoSwitchThreshold` only: persisted, not yet consumed
+   * by the selector.
+   *
+   * It deliberately does NOT describe `enabled`, which governs the pre-dispatch preference.
+   * Widening it to the whole DTO would tell a dashboard that `enabled` changes nothing, which
+   * has been false since reactive and proactive activation were split.
+   */
   inert: true;
 }
 
@@ -52,4 +64,3 @@ export function genericPoolSettingsDto(name: string, provider: OcxProviderConfig
     inert: true,
   };
 }
-

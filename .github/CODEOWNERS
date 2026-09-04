@@ -37,7 +37,7 @@
 # These four files carry every user's request path, including users of no optional
 # subsystem. Optional subsystems (Compatibility Lab and anything added later) register
 # into core-owned slots at activation instead of being imported here; the invariant is
-# enforced by tests/core-lab-boundary.test.ts and designed in
+# enforced by tests/lab/core-lab-boundary.test.ts and designed in
 # devlog/_fin/260814_lab_core_decoupling/.
 # Last-match-wins: this block must stay below /src/server/ to take effect.
 /src/router.ts @lidge-jun

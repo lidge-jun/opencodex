@@ -2,6 +2,9 @@
 
 Work-phase `wp3`. Criterion `c-5`. Evidence, not a landed fix.
 
+> Superseded in part: carry-forward item 1 below was subsequently fixed in
+> PR #3507 (`663fdbb0a`). The rest of this document stands as written.
+
 A full Windows suite was already running on `desktop-c795oh4` when this unit
 started (`/c/ocxwin/repo` at `00834d710`, shards `base-1..4`). It was read-only
 evidence for this unit and was not disturbed. A second run on Bun `1.4.0`
@@ -68,15 +71,44 @@ in that surface, and each needs its own reproduction on Windows before a fix is
 more than a guess — the `base` run's evidence is contaminated by the guard
 cascade, so a fix written against it would be written against an artifact.
 
-The honest carry-forward is three separate units:
+The honest carry-forward was three separate units. The first is now closed.
 
-1. Arm `OCX_TEST_HOME_GUARD` before `acquireTestRunLock`, or make the SID lookup
-   fail closed instead of proceeding unguarded. Highest value: it is a safety
-   defect, not just a flake.
-2. Diagnose `multi-account auth store` on Windows.
+1. ~~Arm `OCX_TEST_HOME_GUARD` before `acquireTestRunLock`~~ — **done** in PR
+   [#3507](https://github.com/lidge-jun/opencodex/pull/3507), merged `663fdbb0a`.
+   The preload now runs sandbox → arm + assert → lock. Two regressions guard it:
+   a source-order assertion (nothing else can see this — with a lock that happens
+   to succeed the runtime state is identical either way) and a probe proving an
+   armed process with a real `HOME` and no lock still refuses the protected home.
+   Stashing the reorder was verified to turn the first one red. The order was
+   re-confirmed on `desktop-c795oh4` itself, read-only, without contending with
+   the suite running there: `sandbox 1414, arm 2969, assert 3228, lock 4168`.
+2. Diagnose `multi-account auth store` on Windows — 22 of the surviving 25.
 3. Decide whether `keep-native-v1` should assert on parsed argv rather than the
    raw ComSpec string.
 
 Issue #3320 (non-ASCII account names misclassifying a valid scheduler task) is
 adjacent to (1) — both are Windows identity handling — but it is `needs-info`
 and was not reproduced here, so it stays open.
+
+## Why the guard fix was worth doing on its own
+
+It is tempting to read "161 of 179 failures" as a noise-reduction win and stop
+there. The number is the least interesting part.
+
+Those 161 were the *visible* consequence. The invisible one is that
+`src/lib/windows-elevation.ts` and `src/service.ts` refuse live elevation and
+machine-global Task Scheduler mutation ONLY while the guard is armed. A worker
+that lost the guard did not merely fail loudly — it silently gained the ability
+to do the things those refusals exist to prevent, and two suites took it:
+a real PowerShell process at pid 18144, and real scheduler registration.
+
+So the failure mode was inverted from how it looked. The 161 red tests were the
+alarm, not the damage; the damage was in the handful that went green by doing
+something to the developer's machine. A run that had been slightly luckier with
+its SID lookup would have shown fewer failures and done the same writes.
+
+That is also why the regression asserts source ORDER rather than runtime state.
+When the lock succeeds — which is almost always — an armed-after-lock preload
+and an armed-before-lock preload produce byte-identical environments. There is
+no runtime observation that separates them except on the exact runs where it
+already went wrong.

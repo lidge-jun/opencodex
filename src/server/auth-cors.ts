@@ -62,7 +62,7 @@ export function isLoopbackRequestHost(value: string | null): boolean {
   // Scope of that guarantee: it holds for Hosts `parseHttpHost` can parse. An unparseable
   // Host still returns true above — pre-existing behavior, not browser-reachable (a browser
   // composes Host from its own connection), and pinned by a characterization test in
-  // tests/server-loopback-host-gate.test.ts. Tightening it is separate work.
+  // tests/server/server-loopback-host-gate.test.ts. Tightening it is separate work.
   return isLoopbackHostname(parsed.hostname);
 }
 

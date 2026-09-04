@@ -362,8 +362,8 @@ Native passthrough SSE has TWO shapes, selected per request in
   including the #44 late-terminal semantics.
 
 The two-shape contract is mirror-commented in `src/server/index.ts`; the real
-`core.ts` gate is source-invariant-tested by `tests/passthrough-abort.test.ts`,
-and the platform matrix lives in `tests/bun-stream-caps.test.ts`. Keep all three
+`core.ts` gate is source-invariant-tested by `tests/responses/passthrough-abort.test.ts`,
+and the platform matrix lives in `tests/lib/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
 
 Canonical ChatGPT forward streaming has one transport-specific exception. A
@@ -590,7 +590,7 @@ sentinel, and live probes (2026-08-07) confirm the stream closes on the terminal
 terminal-output boundary (`src/server/relay.ts`) cuts the stream at that event and synthesizes
 `[DONE]` itself, so DeepSeek streams live again; the registry knob remains as a one-line
 rollback for upstreams that regress, kept suite-reachable by a synthetic-registry fixture in
-`tests/deepseek-inbound-wire.test.ts`.
+`tests/providers/deepseek-inbound-wire.test.ts`.
 Synthesized output is capped at 10,000 items across HTTP and WebSocket reframing. HTTP frames are
 encoded incrementally, so bounded upstream JSON cannot expand into an unbounded event array or SSE string.
 

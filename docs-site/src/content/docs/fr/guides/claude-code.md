@@ -13,7 +13,7 @@ Vous pouvez vous connecter à plusieurs comptes Claude via le tableau de bord de
 ajouter un compte). Par défaut, chaque requête utilise uniquement le compte **actif**.
 
 Un groupe de comptes Claude **expérimental et facultatif** (`anthropicAccountPool.enabled`) ajoute l'affinité de
-session et le basculement en cas de délai de récupération 429 entre ces comptes OAuth. Pour les **nouvelles**
+session et la sélection des nouvelles sessions basée sur l'usage entre ces comptes OAuth. Il ne contrôle **pas** le basculement sur 429 : dès que deux comptes utilisables sont enregistrés, une requête limitée bascule vers un autre compte que l'option soit activée ou non, et cela ne peut pas être désactivé. Pour les **nouvelles**
 sessions uniquement, `anthropicAccountPool.strategy` sélectionne un compte éligible : `quota` (par défaut)
 choisit la plus faible utilisation connue dans la fenêtre configurée par `anthropicAccountPool.quotaWindow`
 (`five-hour` par défaut, `weekly` ou `max-utilization`) lorsqu'elle dépasse `autoSwitchThreshold` ; `round-robin`

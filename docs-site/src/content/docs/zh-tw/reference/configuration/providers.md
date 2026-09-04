@@ -131,7 +131,7 @@ API-key 供應商可持有字面值金鑰或環境參考。OAuth 供應商使用
 
 | Key | 型別 | 預設值 | 說明 |
 | --- | --- | --- | --- |
-| `anthropicAccountPool.enabled?` | `boolean` | `false` | 啟用 sticky 親和性與 429 冷卻容錯移轉。 |
+| `anthropicAccountPool.enabled?` | `boolean` | `false` | 啟用 sticky 工作階段親和性與依用量的新工作階段選擇。**429 容錯移轉不由此開關控制**：只要儲存了兩個以上可用帳號就會生效，與其他多憑證供應商一致，且無法關閉。 |
 | `anthropicAccountPool.autoSwitchThreshold?` | `number` | `80` | 對於新 session，當目前帳號達到此閾值時，選擇設定視窗中最低的已知快取用量。`0` 停用配額挑選。 |
 | `anthropicAccountPool.strategy?` | `"quota" \| "round-robin" \| "fill-first"` | `"quota"` | 新 session 策略；`quota` 依 `quotaWindow` 指定的視窗（預設為 5 小時列）為帳號排序，`fill-first` 也在同一視窗中判定其排空閾值。 |
 | `anthropicAccountPool.quotaWindow?` | `"five-hour" \| "weekly" \| "max-utilization"` | `"five-hour"` | 使用量型帳號選擇所採用、由供應商回報並快取的用量列。`five-hour` 保留原有行為。`weekly` 使用每週用量列，並在仍有其他可用帳號時略過 5 小時用量已用盡的帳號；若沒有其他帳號，則退回使用這些帳號。`max-utilization` 使用已知值中的最高值，因此每週用量尚未取得時仍可使用 5 小時用量；兩者都未知時，帳號遵循 unknown 用量排序。已知用量排在 unknown 之前，但若所有可用帳號都是 unknown，仍會依可用順序選出一個。完成前述較低 5 小時用量的同分判定後，完全相同時也保留可用順序。不會主動重新平衡健康且已有 affinity 的 session。在分配新 session 與符合條件的 429 替代後進行路由復原時，`quota` 直接依此視窗排序可用候選帳號；`fill-first` 依此視窗的門檻與用盡規則按穩定順序前進；`round-robin` 忽略此設定。冷卻狀態、容錯移轉上限與重新驗證資格仍是獨立的本機狀態。每個帳號的每週用量只有在 dashboard 的供應商頁面完成查詢後才可得知。 |

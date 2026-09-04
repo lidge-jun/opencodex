@@ -7,6 +7,8 @@ Work-phase `wp4`. All three PRs merged to `dev` with admin authority.
 | [#3491](https://github.com/lidge-jun/opencodex/pull/3491) | `85e42117c` | #3483 empty red notice (CSS cascade) |
 | [#3496](https://github.com/lidge-jun/opencodex/pull/3496) | `3e65218ba` | never prompt a local dashboard |
 | [#3493](https://github.com/lidge-jun/opencodex/pull/3493) | `8b961b198` | #3353 dialog guidance + docs anchor |
+| [#3504](https://github.com/lidge-jun/opencodex/pull/3504) | `2fb11f4a0` | this devlog unit |
+| [#3507](https://github.com/lidge-jun/opencodex/pull/3507) | `663fdbb0a` | preload arms the guard before the run lock |
 
 Ancestry proven for each: `git fetch origin dev` then
 `git merge-base --is-ancestor <sha> FETCH_HEAD` exit 0.

@@ -36,7 +36,7 @@ export function baseProviderLabel(provider: string): string {
  * It lives here rather than in `account-label.ts` because it needs `baseProviderLabel`, and this
  * module already imports from that one -- the reverse direction would be an import cycle. This
  * file stays Lab-clean, which matters because `core.ts` is one of the three files
- * `tests/core-lab-boundary.test.ts` guards.
+ * `tests/lab/core-lab-boundary.test.ts` guards.
  */
 export function stampOAuthAccountLabel(
   logCtx: { accountLogLabel?: string },

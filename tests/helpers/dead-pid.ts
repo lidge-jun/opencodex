@@ -11,7 +11,7 @@
  * That is not hypothetical. On the macOS host where this helper was written, pid
  * 4242 was `liveactivitiesd`, and every suite that assumed it dead failed at once:
  * `periodic reclaim frees abandoned temps`, both `doctor reclaim wiring` cases and
- * both `status reports stale process records` cases. `tests/responses-state.test.ts`
+ * both `status reports stale process records` cases. `tests/responses/responses-state.test.ts`
  * already probed for a free pid inline, with a comment naming this exact hazard;
  * this helper is that probe, shared instead of copied.
  *

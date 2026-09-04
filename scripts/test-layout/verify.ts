@@ -35,12 +35,12 @@ export interface VerifyReport {
 
 /**
  * Everything that may name a test path as text. Shared with move.ts so the preflight write set
- * and the post-move STALE check see the same files. `devlog/_fin` is history: it records where
- * a file lived when the unit closed and is deliberately not rewritten. Open `devlog/_plan` units
- * are live documents and are.
+ * and the post-move STALE check see the same files. `devlog/` is deliberately absent: a unit
+ * records where a file lived when it was written, and rewriting 59 old plan documents per slice
+ * (measured on the first slice) buries the real diff without changing what any tool reads.
  */
 export const SWEEP_ROOTS = [
-  "tests", "scripts", ".github", "src", "gui/src", "gui/tests", "bin", "docs", "docs-site", "structure", "devlog/_plan", "skills",
+  "tests", "scripts", ".github", "src", "gui/src", "gui/tests", "bin", "docs", "docs-site", "structure", "skills",
   "AGENTS.md", "AGENTS_INSTALL.md", "MAINTAINERS.md", "CONTRIBUTING.md", "README.md", "CREDITS.md",
   "bunfig.toml", "package.json", ".gitignore", ".npmignore",
 ];

@@ -33,7 +33,7 @@ export function isConnectedRuntime(): boolean {
  *
  * The role is the wrong predicate, and it was tried first: `standalone` + `hostname:
  * "0.0.0.0"` is an operator who deliberately exposed the dashboard and MUST type the admin
- * token (tests/server-management-auth.test.ts, "a non-loopback binding never issues a GUI
+ * token (tests/server/server-management-auth.test.ts, "a non-loopback binding never issues a GUI
  * session from a forged loopback Host"), while a `hub` on loopback still mints its own
  * session. Gating on `role === "hub"` would have hidden the prompt from exactly the
  * operator who needs it.

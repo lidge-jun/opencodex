@@ -70,10 +70,7 @@ export {
 export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   "gpt-5.3-codex-spark",
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-  // Preemptive leak-based registration: no shipped codex-rs catalog carries it, so without this
-  // entry an install WITH a live catalog would drop the row that native-models.ts deliberately
-  // ungated. Listing it here keeps the bare slug reachable so a request actually dispatches and
-  // reports the upstream status.
+  // The shipped pin also backfills older installed Codex catalogs that predate Astra.
   NATIVE_GPT6_ASTRA_MODEL,
 ];
 
@@ -671,7 +668,7 @@ function isAccountBoundOpenAiNativeSlug(slug: string): boolean {
  * malformed and minimal hand-written rows. It cannot distinguish a genuine upstream observation
  * from a complete row typed by hand into `$CODEX_HOME/models_cache.json`: there is no signature,
  * source identity, or server attestation to check. A full-shape forged row is accepted, and
- * `observedFullShapeRowIsAccepted` in tests/native-model-toggle.test.ts pins that so nobody
+ * `observedFullShapeRowIsAccepted` in tests/codex-integration/native-model-toggle.test.ts pins that so nobody
  * later mistakes this predicate for a security boundary.
  *
  * That is acceptable here because the file is user-owned and written by Codex itself: anyone

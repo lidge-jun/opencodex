@@ -35,6 +35,7 @@ import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREA
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
+import { NATIVE_GPT6_ASTRA_MODEL } from "./native-models";
 
 export function legacyCatalogBackupPath(): string {
   return join(getConfigDir(), "catalog-backup.json");
@@ -385,6 +386,16 @@ function retainOnlyUltraFastTier(entry: RawEntry): void {
 }
 
 export function normalizeServiceTiers(entry: RawEntry): RawEntry {
+  // Repair only the old built-in Astra speed copy on persisted native/account rows.
+  // A custom description (and every other field) remains user-owned.
+  const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry) ?? entry.slug;
+  if (nativeSlug === NATIVE_GPT6_ASTRA_MODEL && Array.isArray(entry.service_tiers)) {
+    entry.service_tiers = entry.service_tiers.map(tier =>
+      tier && typeof tier === "object" && tier.id === "priority"
+        && tier.description === "1.5x speed, increased usage"
+        ? { ...tier, description: "2x speed, increased usage" } : tier,
+    );
+  }
   // Strip service tiers for models that do not actually support the Fast tier.
   if (typeof entry.slug === "string" && NO_FAST_TIER_NATIVE_SLUGS.has(entry.slug)) {
     delete entry.service_tier;
@@ -699,6 +710,7 @@ export function normalizeRoutedCatalogEntry(
   delete entry.tool_mode;
   applyRoutedCodexToolMode(entry, toolMode);
   delete entry.multi_agent_version;
+  delete entry.multi_agent_reasoning_effort;
   delete entry.use_responses_lite;
   delete entry.supports_websockets;
   /*

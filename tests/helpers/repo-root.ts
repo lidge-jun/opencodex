@@ -38,3 +38,8 @@ export function repoPath(...segments: string[]): string {
 export function helperPath(name: string): string {
   return join(repoRoot(), "tests", "helpers", name);
 }
+
+/** Absolute path of a file under tests/fixtures. */
+export function fixturePath(...segments: string[]): string {
+  return join(repoRoot(), "tests", "fixtures", ...segments);
+}
