@@ -175,3 +175,10 @@ Risk: explicit security review is warranted under [MAINTAINERS.md:60](/Users/jun
 - Stable-launcher parity does **not** satisfy automatic repair/request refusal during an already-running version mismatch. That remains a separate product decision.
 - Actual mise shim selection under launchd’s login-shell environment needs a macOS smoke check; no live service or real upgrade was exercised.
 - Read-only investigation only: no files, Git state, GitHub comments, service state or tests were changed/run.
+
+Audit round 1 fold (GO-WITH-FIXES, 1 blocker): `serviceStatusReport()` (:4243) compares the live
+job against `buildServiceShellCommand(entry.bun, entry.cli, installedServiceListenPort())` too —
+same fix as `launchdStart`: one helper `expectedLaunchdCommand(port)` that reads
+`readServiceInstallState()?.launcherPath` and returns the launcher command when present, else the
+Bun+CLI pair (never rediscovering PATH at start/status). `launchdStart` also gets the installed port.
+
