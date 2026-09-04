@@ -55,3 +55,8 @@ Links
 
 Issue URL in `cxc loop meet-criterion --id c-5`.
 
+## Outcome
+
+Filed 2026-09-05 as https://github.com/lidge-jun/opencodex/issues/3497
+(`enforce-issue-quality` accepted it: all eight form headings, label
+`enhancement`). PR links are appended there as wp3/wp4 open them.
