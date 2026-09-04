@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { compareReleaseTags } from "../scripts/release-notes";
+import { repoPath, repoRoot as resolveRepoRoot } from "./helpers/repo-root";
 
-const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+const repoRoot = resolveRepoRoot();
 
 /**
  * The in-tree version must never sit BEHIND a version this repository has already
@@ -52,7 +52,7 @@ function localReleaseTags(): string[] {
 }
 
 function inTreeVersion(): string {
-  const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+  const raw = readFileSync(repoPath("package.json"), "utf8");
   const version = (JSON.parse(raw) as { version?: unknown }).version;
   if (typeof version !== "string") throw new Error("package.json has no string version");
   return version;

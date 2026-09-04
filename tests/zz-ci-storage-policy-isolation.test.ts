@@ -28,8 +28,9 @@ test("Linux shards isolate the storage API runtime family into its own gated job
   const batchHelper = await Bun.file(
     new URL("../scripts/ci/run-bun-test-batches.sh", import.meta.url),
   ).text();
-  expect(batchHelper).toContain("tests/api-storage-policy*.test.ts");
-  expect(batchHelper).toContain("tests/api-storage.test.ts");
+  // Basename-anchored so the exclusion follows the files into tests/storage/.
+  expect(batchHelper).toContain("*/api-storage-policy*.test.ts");
+  expect(batchHelper).toContain("*/api-storage.test.ts");
 
   const storageJob = workflow.jobs?.["storage-policy"];
   expect(storageJob?.["runs-on"]).toBe("ubuntu-latest");
@@ -48,7 +49,7 @@ test("Linux shards isolate the storage API runtime family into its own gated job
   ];
 
   // Extract all test file paths from the run command
-  const testPathPattern = /\.\/tests\/[a-z0-9-]+\.test\.ts/g;
+  const testPathPattern = /\.\/tests\/[a-z0-9/-]+\.test\.ts/g;
   const actualFiles = (storageRun.match(testPathPattern) || [])
     .map(path => path.slice(2)) // Remove leading "./"
     .sort();

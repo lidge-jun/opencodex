@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, statSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { repoRoot as resolveRepoRoot } from "./helpers/repo-root";
 
-const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+const repoRoot = resolveRepoRoot();
 
 /**
  * Local agent/session state must never reach a commit.
@@ -83,7 +84,7 @@ describe("repository hygiene", () => {
   });
 
   test("gitignore still declares the agent-state directories", async () => {
-    const ignore = await Bun.file(new URL("../.gitignore", import.meta.url)).text();
+    const ignore = await Bun.file(join(repoRoot, ".gitignore")).text();
 
     for (const dir of FORBIDDEN_TRACKED_DIRS) {
       expect(ignore).toContain(`${dir}/`);
@@ -123,7 +124,7 @@ describe("devlog is tracked, with no submodule left behind", () => {
   });
 
   test("no .gitmodules file remains", () => {
-    expect(existsSync(new URL("../.gitmodules", import.meta.url))).toBe(false);
+    expect(existsSync(join(repoRoot, ".gitmodules"))).toBe(false);
   });
 
   test("vendored reference clones stay untracked", () => {
@@ -199,7 +200,7 @@ describe("devlog is tracked, with no submodule left behind", () => {
 
     const offenders: string[] = [];
     for (const path of openPlans) {
-      const text = await Bun.file(new URL(`../${path}`, import.meta.url)).text();
+      const text = await Bun.file(join(repoRoot, path)).text();
       const unresolved = /NEEDS-SECURITY-REVIEW|NEEDS-CHANGES/.test(text);
       if (unresolved && SECURITY_BOUNDARY_RE.test(text)) offenders.push(path);
     }
@@ -219,7 +220,7 @@ describe("devlog is tracked, with no submodule left behind", () => {
 
     const offenders: string[] = [];
     for (const workflow of workflows) {
-      const text = await Bun.file(new URL(`../${workflow}`, import.meta.url)).text();
+      const text = await Bun.file(join(repoRoot, workflow)).text();
       // `submodules: false` is fine; anything that opts in is not.
       if (/submodules:\s*(true|recursive)/.test(text)) offenders.push(workflow);
       if (/git submodule update[^\n]*devlog/.test(text)) offenders.push(workflow);
@@ -233,8 +234,8 @@ describe("devlog is tracked, with no submodule left behind", () => {
     // the package page rendered three broken images - visible to every visitor, invisible to every
     // gate. Absolute URLs are the deliberate alternative: the GIFs total ~3.3MB and there is no
     // reason to put that in the install path of a proxy.
-    const readme = await Bun.file(new URL("../README.md", import.meta.url)).text();
-    const pkg = JSON.parse(await Bun.file(new URL("../package.json", import.meta.url)).text()) as {
+    const readme = await Bun.file(join(repoRoot, "README.md")).text();
+    const pkg = JSON.parse(await Bun.file(join(repoRoot, "package.json")).text()) as {
       files?: string[];
     };
     const shipped = pkg.files ?? [];
@@ -249,7 +250,7 @@ describe("devlog is tracked, with no submodule left behind", () => {
     // `assets/banner.png/missing.gif`, so a broken README reference could pass. Ask the
     // filesystem what each entry actually is instead of inferring it from the name.
     const shippedDirectories = shipped.filter((entry) => {
-      const path = new URL(`../${entry}`, import.meta.url);
+      const path = join(repoRoot, entry);
       return existsSync(path) && statSync(path).isDirectory();
     });
     const isShipped = (asset: string): boolean =>

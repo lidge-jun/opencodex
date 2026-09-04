@@ -28,7 +28,8 @@ test("Linux shards isolate api-usage into its own gated job", async () => {
   const batchHelper = await Bun.file(
     new URL("../scripts/ci/run-bun-test-batches.sh", import.meta.url),
   ).text();
-  expect(batchHelper).toContain("tests/api-usage.test.ts)");
+  // Basename-anchored so the exclusion follows the file into tests/usage/.
+  expect(batchHelper).toContain("*/api-usage.test.ts)");
 
   const apiUsageJob = workflow.jobs?.["api-usage"];
   expect(apiUsageJob?.["runs-on"]).toBe("ubuntu-latest");

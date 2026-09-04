@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, isRealBunBinary, bundledBunPath, durableBunPath, durableBunRuntime, reportedBunRuntimeSource, withProcessRuntimeProvenance } from "../src/lib/bun-runtime";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
+import { repoPath } from "./helpers/repo-root";
 
 // realpath the temp root: on macOS /var is a symlink to /private/var, so a path built
 // from mkdtemp compares unequal to the same path resolved through process.cwd().
@@ -242,7 +243,7 @@ describe("withProcessRuntimeProvenance (execPath relaunch paths)", () => {
       "src/update/index.ts",
     ];
     for (const relative of launchers) {
-      const text = readFileSync(join(import.meta.dir, "..", relative), "utf8");
+      const text = readFileSync(repoPath(relative), "utf8");
       const spawnCount = (text.match(/spawn\(process\.execPath/g) ?? []).length;
       const directStampCount = (text.match(/env: withProcessRuntimeProvenance\(/g) ?? []).length;
       const detachedStartStampCount = relative === "src/cli/index.ts"

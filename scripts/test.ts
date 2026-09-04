@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   acquireTestRunLock,
   resolveWrappedTestRunLockPath,
@@ -322,6 +322,8 @@ export function resolveBunTestArgs(
   return args;
 }
 
+// Paths relative to tests/. An entry moves with its file (scripts/test-layout/move.ts rewrites
+// it); the lane label, the ignore glob, and the timeout table all key on the basename.
 export const SERIAL_FULL_SUITE_FILES = [
   "codex-shim.test.ts",
   "cursor-native-exec-shell.test.ts",
@@ -331,7 +333,7 @@ export const SERIAL_FULL_SUITE_FILES = [
   "update-stop-first.test.ts",
 ] as const;
 
-const SERIAL_LANE_TIMEOUT_MS: Partial<Record<(typeof SERIAL_FULL_SUITE_FILES)[number], number>> = {
+const SERIAL_LANE_TIMEOUT_MS: Partial<Record<string, number>> = {
   // This file intentionally exercises 33 complete release-script subprocess trees.
   // It is ~90s on an idle machine and measured at ~170s under unrelated host load.
   "release-helper.test.ts": 5 * 60 * 1000,
@@ -360,15 +362,15 @@ export function resolveBunTestPlan(requested: string[], comparisonCommit?: strin
 
   const mainArgs = resolveBunTestArgs(requested, comparisonCommit);
   const rootIndex = mainArgs.lastIndexOf("./tests/");
-  const ignores = SERIAL_FULL_SUITE_FILES.flatMap(file => ["--path-ignore-patterns", `**/${file}`]);
+  const ignores = SERIAL_FULL_SUITE_FILES.flatMap(file => ["--path-ignore-patterns", `**/${basename(file)}`]);
   mainArgs.splice(rootIndex === -1 ? mainArgs.length : rootIndex, 0, ...ignores);
   const serialRequested = withoutParallelOverride(requested);
   return [
     { label: "parallel suite", args: mainArgs, timeoutMs: 15 * 60 * 1000 },
     ...SERIAL_FULL_SUITE_FILES.map(file => ({
-      label: file,
+      label: basename(file),
       args: resolveBunTestArgs(["--parallel=1", ...serialRequested, `./tests/${file}`]),
-      timeoutMs: SERIAL_LANE_TIMEOUT_MS[file] ?? 3 * 60 * 1000,
+      timeoutMs: SERIAL_LANE_TIMEOUT_MS[basename(file)] ?? 3 * 60 * 1000,
     })),
   ];
 }

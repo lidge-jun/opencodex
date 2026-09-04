@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, posix, win32 } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, win32 } from "node:path";
 import {
   changedSelectionFailure,
   createIsolatedTestEnvironment,
@@ -174,8 +174,10 @@ describe("bun test argv", () => {
     expect(plan[0]?.args).toContain("--parallel=4");
     expect(plan[0]?.args).toContain("./tests/");
     for (const file of SERIAL_FULL_SUITE_FILES) {
-      expect(plan[0]?.args).toContain(`**/${file}`);
-      expect(plan.find(lane => lane.label === file)?.args).toEqual([
+      // The ignore glob and the lane label use the basename; only the lane argv carries the
+      // path relative to tests/, so an entry can move into a domain directory.
+      expect(plan[0]?.args).toContain(`**/${basename(file)}`);
+      expect(plan.find(lane => lane.label === basename(file))?.args).toEqual([
         "--isolate",
         "--parallel=1",
         `./tests/${file}`,

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
+import { repoPath } from "./helpers/repo-root";
+import { currentPath, loadLayout } from "../scripts/test-layout/schema";
 
 /**
  * A fixed fixture directory shared by two test files is a silent flake factory.
@@ -17,7 +19,10 @@ import { join } from "node:path";
  * the path literal without renaming it. Reviewers do not reliably catch a duplicated string
  * across two large files, so assert it here instead.
  */
-const TESTS_DIR = import.meta.dir;
+// The invariant spans the whole suite, so scan the repository's tests/ root recursively rather
+// than this file's own directory: once tests live in domain directories, a directory-local scan
+// would inspect one domain and pass vacuously.
+const TESTS_DIR = repoPath("tests");
 
 /** `join(import.meta.dir, ".tmp-foo")` and the template-literal spelling of the same thing. */
 const FIXTURE_LITERAL = /import\.meta\.dir\s*,\s*(["'`])(\.tmp-[^"'`]*)\1/g;
@@ -26,9 +31,20 @@ const FIXTURE_LITERAL = /import\.meta\.dir\s*,\s*(["'`])(\.tmp-[^"'`]*)\1/g;
 const SELF = "fixture-dir-uniqueness.test.ts";
 
 function testFiles(): string[] {
-  return readdirSync(TESTS_DIR)
-    .filter(name => name.endsWith(".test.ts") && name !== SELF)
-    .sort();
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (entry.name !== "helpers" && entry.name !== "fixtures") walk(join(dir, entry.name));
+        continue;
+      }
+      if (entry.name.endsWith(".test.ts") && entry.name !== SELF) {
+        out.push(relative(TESTS_DIR, join(dir, entry.name)).split(sep).join("/"));
+      }
+    }
+  };
+  walk(TESTS_DIR);
+  return out.sort();
 }
 
 /**
@@ -71,8 +87,9 @@ describe("test fixture directories", () => {
   test("the two files behind the original flake no longer use a fixed path", () => {
     // Regression pin for the specific pair. Both now derive a per-run directory, which also
     // makes two concurrent runs of the SAME file safe — something a rename alone would miss.
+    const layout = loadLayout();
     for (const file of ["server-auth.test.ts", "management-provider-validation.test.ts"]) {
-      const source = withoutComments(readFileSync(join(TESTS_DIR, file), "utf8"));
+      const source = withoutComments(readFileSync(join(TESTS_DIR, currentPath(layout, file)), "utf8"));
       expect(source).not.toContain('join(import.meta.dir, ".tmp-server-auth-test")');
       expect(source).toContain("mkdtempSync(join(tmpdir()");
     }

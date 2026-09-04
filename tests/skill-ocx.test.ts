@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { renderManagementSurface } from "../scripts/generate-ocx-skill-surface";
 import { CAPABILITIES, HEAD_CAPABILITIES, capabilityInvocation } from "../src/cli/capabilities";
 import { CLI_COMMANDS } from "../src/cli/registry";
+import { repoPath } from "./helpers/repo-root";
 
 /**
  * wp8: the repo-owned `ocx` skill.
@@ -15,7 +16,7 @@ import { CLI_COMMANDS } from "../src/cli/registry";
  * A skill that documents a command nobody can run is worse than no skill, because an agent will
  * try it and conclude the tool is broken.
  */
-const SKILL_DIR = join(import.meta.dir, "..", "skills", "ocx");
+const SKILL_DIR = repoPath("skills", "ocx");
 const SKILL = join(SKILL_DIR, "SKILL.md");
 const REFERENCES = [
   "01_management_surface.md",
