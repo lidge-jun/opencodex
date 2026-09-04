@@ -105,7 +105,13 @@ describe("GitHub Actions hardening", () => {
     // shard mid-suite, which reports as neither pass nor fail (#2152).
     expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(25);
     expect(ci.jobs?.["keyring-smoke"]?.["timeout-minutes"]).toBe(8);
-    expect(ci.jobs?.["npm-global-smoke"]?.["timeout-minutes"]).toBe(8);
+    // Same lesson as the Windows shards above, one job later: at 8 the Windows leg
+    // spent ~7 minutes installing dependencies and was cancelled at the wall before
+    // it could pack and install. A cancellation is neither a pass nor a fail, and it
+    // landed on whichever step happened to be running — four times on the global
+    // install and once on a one-second asset check — which read as a flaky download
+    // rather than a budget one OS cannot meet (#3441).
+    expect(ci.jobs?.["npm-global-smoke"]?.["timeout-minutes"]).toBe(20);
     expect(ci.jobs?.ci?.["timeout-minutes"]).toBe(5);
     expect(ci.permissions).toEqual({ contents: "read" });
 
