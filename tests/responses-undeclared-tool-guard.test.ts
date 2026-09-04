@@ -108,6 +108,77 @@ describe("collectDeclaredWireToolNames", () => {
     expect([...names]).toEqual(["mcp__exec", "mcp.exec"]);
   });
 
+  test("withholds a dotted alias two declared identities would both claim", () => {
+    // Dots are legal in a namespace and in a name, so `{a, b.c}` and `{a.b, c}` flatten onto
+    // the same "a.b.c". Accepting it would authorize whichever identity happened to be
+    // registered last, so neither gets the alias and both keep their unambiguous `ns__name`.
+    const names = collectDeclaredWireToolNames({
+      tools: [
+        { type: "namespace", name: "a", tools: [{ type: "function", name: "b.c" }] },
+        { type: "namespace", name: "a.b", tools: [{ type: "function", name: "c" }] },
+      ],
+    });
+
+    expect(names.has("a.b.c")).toBe(false);
+    expect(names.has("a__b.c")).toBe(true);
+    expect(names.has("a.b__c")).toBe(true);
+  });
+
+  test("suppresses the ambiguous dotted alias in either declaration order", () => {
+    // The caller controls declaration order, so the outcome must not: resolve ownership across
+    // the whole catalog before registering, or the "winner" is attacker-chosen.
+    const forward = collectDeclaredWireToolNames({
+      tools: [
+        { type: "namespace", name: "a", tools: [{ type: "function", name: "b.c" }] },
+        { type: "namespace", name: "a.b", tools: [{ type: "function", name: "c" }] },
+      ],
+    });
+    const reverse = collectDeclaredWireToolNames({
+      tools: [
+        { type: "namespace", name: "a.b", tools: [{ type: "function", name: "c" }] },
+        { type: "namespace", name: "a", tools: [{ type: "function", name: "b.c" }] },
+      ],
+    });
+
+    expect([...forward].sort()).toEqual([...reverse].sort());
+    expect(forward.has("a.b.c")).toBe(false);
+  });
+
+  test("a dotted spelling never authorizes another identity's canonical wire name", () => {
+    // "x__y.z" is the canonical name of {x, "y.z"} AND the dotted spelling of {"x__y", z}.
+    // Only the first is declared, so a call for the second must still be refused: otherwise a
+    // stranger's canonical name silently grants a tool the caller never declared.
+    const declared = collectDeclaredWireToolNames({
+      tools: [{ type: "namespace", name: "x", tools: [{ type: "function", name: "y.z" }] }],
+    });
+
+    expect(declared.has("x__y.z")).toBe(true);
+    expect(
+      undeclaredToolCallNameInResponse({
+        output: [{ type: "function_call", namespace: "x__y", name: "z", call_id: "c1" }],
+      }, declared),
+    ).toBe("z");
+    // The identity that really owns that canonical name is still accepted.
+    expect(
+      undeclaredToolCallNameInResponse({
+        output: [{ type: "function_call", namespace: "x", name: "y.z", call_id: "c2" }],
+      }, declared),
+    ).toBeUndefined();
+  });
+
+  test("keeps a uniquely owned dotted alias, which is the echo #3402 reported", () => {
+    // The fix is scoped to ambiguity: an unambiguous dotted echo must still be restored, or the
+    // defect this PR exists to fix comes back.
+    const names = collectDeclaredWireToolNames({
+      tools: [
+        { type: "namespace", name: "default", tools: [{ type: "custom", name: "apply_patch" }] },
+      ],
+    });
+
+    expect(names.has("default.apply_patch")).toBe(true);
+    expect(names.has("default__apply_patch")).toBe(true);
+  });
+
   test("keeps exec bare in Codex's reserved functions namespace", () => {
     // Codex groups ordinary top-level tools here; this is not an MCP namespace and the parser
     // deliberately lowers its children without a namespace.
