@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import * as serviceModule from "../../src/service";
 import { saveConfig } from "../../src/config";
 import { windowsEnvIndirectBatchValue } from "../../src/lib/win-paths";
-import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml as buildWindowsTaskXmlProduction, buildWindowsTaskXmlDocument, deriveWindowsServiceDiagnostic, deriveWindowsServiceDiagnosticForCurrentUser, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, reportServiceServing, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy as windowsTaskRegistrationHealthyProduction } from "../../src/service";
+import { assertServiceAuthEnvironment, assertServiceEnvironmentMatchesInstall, bakedServicePathsDiagnostic, confirmServiceServing, launchdListenPort, systemdListenPort, buildPlist, buildUnit, buildWindowsLauncherVbs, buildWindowsSchtasksCreateArgs, buildWindowsSchtasksCreateArgsForXml, buildWindowsServiceScript, buildWindowsTaskXml as buildWindowsTaskXmlProduction, buildWindowsTaskXmlDocument, deriveWindowsServiceDiagnostic, deriveWindowsServiceDiagnosticForCurrentUser, expectedLaunchdCommand, installFreshWindowsSchedulerSafely, installServiceSafely, launchctlLoadFailed, launchdJobMatchesPlist, normalizeServiceSubcommand, parseServiceArgs, parseServiceInstallState, planServiceCommand, prepareServiceInstall, probeServiceInstallation, readWindowsSchedulerXmlState, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, repairService, reportServiceServing, resolveServiceListenPort, runLaunchctl, selectServiceSubcommand, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, serviceLogPath, serviceStartableFromTray, serviceStatusReport, serviceRetryCommand, serviceStatusSummary, stableLauncherEntry, systemdNeedsDaemonReload, systemdServiceInstallCleanupOps, uninstallSystemd, windowsListenPort, winswListenPort, startLaunchd, windowsTaskRegistrationHealthy as windowsTaskRegistrationHealthyProduction } from "../../src/service";
 import type { ServiceDiagnostic } from "../../src/service";
 import { definitionCarriesCredential, resolvedProxyEnv, writeServiceDefinitionFile } from "../../src/service";
 import { buildWinswXml } from "../../src/lib/winsw";
@@ -1180,6 +1180,68 @@ describe("launchd service plist", () => {
     const direct = buildUnit(resolvedProxyEnv({}), { launcher: null });
     expectTextToContainPath(direct, join("cli", "index.ts"));
     expect(direct).toContain("OCX_BUN_RUNTIME_PATH");
+  });
+
+
+  // #3464. The macOS counterpart of the systemd launcher test above: a mise/asdf upgrade replaces
+  // the versioned package directory, and a plist that named the old Bun + CLI pair keeps launchd
+  // on the stale build until someone restarts it. Naming the shim lets the next start follow it.
+  test("a stable launcher install names the launcher in the plist and bakes no versioned path (#3464)", () => {
+    const launcher = "/Users/u/.local/share/mise/shims/ocx";
+    const plist = buildPlist(resolvedProxyEnv({}), {
+      launcher,
+      runtime: { path: "/opt/opencodex/versioned/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
+    });
+
+    expect(plist).toContain(launcher);
+    expect(plist).toContain("start --port");
+    for (const forbidden of [
+      "OCX_BUN_RUNTIME_PATH",
+      "OCX_BUN_RUNTIME_SOURCE",
+      "OPENCODEX_BUN_PATH",
+      "/opt/opencodex/versioned/bun",
+      "cli/index.ts",
+    ]) expect(plist).not.toContain(forbidden);
+    // The token still comes from the file at start, never from the plist.
+    expectTextToContainPath(plist, serviceApiTokenFilePath());
+    expect(plist).toContain("OPENCODEX_API_AUTH_TOKEN");
+    // launchdListenPort reads the same "start --port N" tail from either command shape.
+    expect(launchdListenPort({ readPlist: () => plist })).toBe(resolveServiceListenPort());
+
+    // Without a launcher the plist keeps the previous shape, so source checkouts are unaffected.
+    const direct = buildPlist(resolvedProxyEnv({}), { launcher: null });
+    expectTextToContainPath(direct, join("cli", "index.ts"));
+    expect(direct).toContain("OCX_BUN_RUNTIME_PATH");
+    expect(direct).toContain("OCX_BUN_RUNTIME_SOURCE");
+  });
+
+  test("launcher mode preserves only a proof-bound Bun override, never an ambient one (#3464)", () => {
+    const launcher = "/Users/u/.local/share/mise/shims/ocx";
+    const trusted = buildPlist(resolvedProxyEnv({}), {
+      launcher,
+      runtime: { path: "/custom/bun", source: "override", overrideEnv: "OPENCODEX_BUN_PATH" },
+    });
+    expect(trusted).toContain("<key>OPENCODEX_BUN_PATH</key><string>/custom/bun</string>");
+    expect(trusted).not.toContain("OCX_BUN_RUNTIME_PATH");
+
+    const bundled = buildPlist(resolvedProxyEnv({}), {
+      launcher,
+      runtime: { path: "/custom/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
+    });
+    expect(bundled).not.toContain("OPENCODEX_BUN_PATH");
+    expect(bundled).not.toContain("/custom/bun");
+  });
+
+  test("launcher paths with shell and XML metacharacters stay quoted in the plist (#3464)", () => {
+    const launcher = "/Users/u/My Tools & Shims/it's/ocx";
+    const plist = buildPlist(resolvedProxyEnv({}), {
+      launcher,
+      runtime: { path: "/opt/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
+    });
+    // XML-escaped ampersand inside the ProgramArguments string; the shell quoting survives.
+    expect(plist).toContain("&amp;");
+    expect(plist).not.toContain("Shims/it's/ocx start");
+    expect(launchdListenPort({ readPlist: () => plist })).toBe(resolveServiceListenPort());
   });
 
   // The scenario itself, executed rather than asserted: retarget the shim the way an upgrade
@@ -3140,6 +3202,38 @@ describe("launchctl load verification", () => {
       expect(launchdJobMatchesPlist(cmd, {
         run: () => ({ ok: false, stdout: "", stderr: "Could not find service" }),
       })).toEqual({ loaded: false, matchesPlist: false });
+    });
+  });
+
+
+  // #3464. start and status compare the live job against the command the plist SHOULD carry.
+  // A launcher install carries the launcher line, so the comparison must follow the recorded
+  // install state or every healthy launcher-backed service reads as "an OLDER plist".
+  describe("expectedLaunchdCommand follows the recorded launcher", () => {
+    const entry = { bun: "/opt/opencodex/versioned/bun", cli: "/opt/opencodex/versioned/src/cli/index.ts" };
+    const base = { version: 2 as const, codexHome: "/h/.codex", opencodexHome: "/h/.opencodex", backend: "scheduler" as const };
+
+    test("a recorded launcher yields the launcher exec line at the installed port", () => {
+      const command = expectedLaunchdCommand(14001, {
+        state: { ...base, bunPath: entry.bun, cliPath: entry.cli, launcherPath: "/Users/u/.local/share/mise/shims/ocx" },
+        entry,
+      });
+      expect(command).toContain("exec '/Users/u/.local/share/mise/shims/ocx' start --port 14001");
+      expect(command).not.toContain(entry.cli);
+    });
+
+    test("v1 / legacy state without a launcher yields the Bun + CLI pair", () => {
+      const command = expectedLaunchdCommand(14001, {
+        state: { version: 1, codexHome: "/h/.codex", opencodexHome: "/h/.opencodex", bunPath: entry.bun, cliPath: entry.cli },
+        entry,
+      });
+      expect(command).toContain(`exec '${entry.bun}' '${entry.cli}' start --port 14001`);
+    });
+
+    test("missing state falls back to the Bun + CLI pair and never re-walks PATH", () => {
+      const command = expectedLaunchdCommand(14001, { state: null, entry });
+      expect(command).toContain(`exec '${entry.bun}' '${entry.cli}' start --port 14001`);
+      expect(command).not.toContain("shims/ocx");
     });
   });
 
