@@ -28,8 +28,9 @@ claim is mostly FALSE and the exceptions are concentrated:
 So this unit is not a porting sweep. After four audit rounds it is three phases,
 each its own PR in a stacked chain:
 
-- **wp1** - `meta-muse` refuses on Windows and Linux with accurate reasons
-  instead of a false macOS-Keychain one.
+- **wp1** - `meta-muse` accepts a pasted Muse Code key on Windows and Linux. The
+  key is visible in Meta's own console, so refusing those platforms reported a
+  limitation of our importer as a limitation of the platform.
 - **wp2** - a platform-support reference page, so the capabilities that stay
   macOS-only have a written answer rather than a silent dead end.
 - **wp3** - the Windows identity decode fix, the one defect proven to exist in

@@ -45,7 +45,7 @@ const CONSENT_WARNING = [
   "Meta scopes the Muse Code credential to the Muse Code CLI.",
   "Using it here is UNSUPPORTED: Meta does not authorize subscription coverage outside its own CLI,",
   "how these calls settle is not observable from the API, and you should treat every call as billable.",
-  "The imported key is copied into OpenCodex's auth store (~/.opencodex/auth.json, 0600).",
+  "The key you import or paste is copied into OpenCodex's auth store (~/.opencodex/auth.json, 0600).",
   "Supported alternative: the meta-model provider with your own key (META_MODEL_API_KEY).",
 ].join(" ");
 
@@ -136,7 +136,7 @@ const MANUAL_KEY_URL = "https://dev.meta.ai";
  */
 async function manualKeyCredential(
   ctrl: OAuthController,
-  platformLabel: string,
+  reason: string,
 ): Promise<string | null> {
   if (!ctrl.onManualCodeInput) return null;
   // Resolve the login flow first so the GUI renders its paste field; otherwise
@@ -144,8 +144,7 @@ async function manualKeyCredential(
   ctrl.onAuth?.({
     url: MANUAL_KEY_URL,
     instructions:
-      `Meta ships no Muse Code CLI for ${platformLabel}, so there is no credential to import. `
-      + `Sign in at ${MANUAL_KEY_URL}, copy your Muse Code API key, and paste it below.`,
+      `${reason} Sign in at ${MANUAL_KEY_URL}, copy your Muse Code API key, and paste it below.`,
   });
   ctrl.onProgress?.(`Paste a Muse Code API key from ${MANUAL_KEY_URL} (it starts with "LLM|").`);
   const pasted = (await ctrl.onManualCodeInput()).trim();
@@ -177,12 +176,18 @@ export async function loginMetaMuse(
   // so these hosts get a paste field instead of a dead end. The pasted key then goes
   // through the identical grammar check and live validation as an imported one.
   if (platform !== "darwin") {
-    const label = platform === "win32" ? "Windows" : "this platform";
-    const pasted = await manualKeyCredential(ctrl, label);
+    // The two platforms are unavailable for DIFFERENT reasons, and saying so matters:
+    // Meta ships no Windows build at all, while the Linux CLI exists and only its
+    // credential storage is unmeasured. Collapsing them into "no CLI here" would tell
+    // a Linux user something false about their own machine.
+    const reason = platform === "win32"
+      ? "Meta ships no native Windows Muse Code CLI, so there is no credential to import."
+      : "The Muse Code CLI runs here, but where it stores its credential has not been measured, "
+        + "so importing one is refused rather than guessed.";
+    const pasted = await manualKeyCredential(ctrl, reason);
     if (pasted === null) {
       throw new Error(
-        `Meta ships no Muse Code CLI for ${label}, so there is no credential to import. `
-          + `Sign in at ${MANUAL_KEY_URL}, copy your Muse Code API key, and paste it when prompted, `
+        `${reason} Sign in at ${MANUAL_KEY_URL}, copy your Muse Code API key, and paste it when prompted, `
           + "or use the meta-model provider with your own key (META_MODEL_API_KEY).",
       );
     }
@@ -250,16 +255,21 @@ async function validatedMetaMuseCredential(
   email: string | undefined,
   source: "local-cli" | "manual",
 ): Promise<OAuthCredentials> {
-  const origin = source === "manual" ? "pasted" : "stored";
   const retry = source === "manual"
     ? `Copy it again from ${MANUAL_KEY_URL}.`
     : "Run `muse login` again.";
   const apiKey = sanitizeApiKeyValue(candidate);
   if (!apiKey) {
-    throw new Error(`The ${origin} Muse Code credential carries no usable API key. ${retry}`);
+    // The macOS wording is preserved verbatim. Extraction is a refactor, and a refactor
+    // that quietly rewrites a user-facing error is a behavior change in disguise.
+    throw new Error(source === "manual"
+      ? `The pasted Muse Code credential carries no usable API key. ${retry}`
+      : "The Muse Code Keychain entry carries no usable API key. Run `muse login` again.");
   }
   if (!/^LLM\|\d+\|[A-Za-z0-9_-]{10,}$/.test(apiKey)) {
-    throw new Error(`The ${origin} Muse Code credential is not in the expected Meta API key format. ${retry}`);
+    throw new Error(source === "manual"
+      ? `The pasted Muse Code credential is not in the expected Meta API key format. ${retry}`
+      : "The Muse Code credential is not in the expected Meta API key format. Run `muse login` again.");
   }
   ctrl.onProgress?.("Validating the imported Meta credential…");
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -303,8 +313,22 @@ async function validatedMetaMuseCredential(
  * the slot being refreshed, so if the user ran `muse login` with a DIFFERENT account in
  * between, a re-import would silently overwrite one stored identity with another. Only an
  * explicit login may import.
+ *
+ * It also does not assert a source. `merged()` in index.ts keeps the previous source for
+ * anything that is not `local-cli`, so returning `local-cli` here would relabel a
+ * hand-pasted key as an imported one on its first refresh and misreport where the
+ * credential came from.
  */
-export async function refreshMetaMuseToken(apiKey: string): Promise<OAuthCredentials> {
+export async function refreshMetaMuseToken(
+  apiKey: string,
+  _signal?: AbortSignal,
+  credential?: OAuthCredentials,
+): Promise<OAuthCredentials> {
   if (!apiKey) throw new Error("Meta Muse Code API key missing; run `ocx login meta-muse`");
-  return { access: apiKey, refresh: apiKey, expires: Number.MAX_SAFE_INTEGER, source: "local-cli" };
+  return {
+    access: apiKey,
+    refresh: apiKey,
+    expires: Number.MAX_SAFE_INTEGER,
+    source: credential?.source === "manual" ? "manual" : "local-cli",
+  };
 }

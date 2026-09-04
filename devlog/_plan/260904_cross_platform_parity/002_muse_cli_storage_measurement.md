@@ -68,11 +68,8 @@ the secret is file-backed, the field naming the file.
 
 ## What wp1 must therefore deliver
 
-- Windows: replace the misleading macOS-Keychain refusal with an accurate one
-  that names WSL2 and the supported `META_MODEL_API_KEY` alternative. No WSL2
-  pointer read: reachability was never measured, and a refusal that tells the
-  truth is a fix while a guess is not.
-- Linux: a refusal naming the unmeasured storage rather than the Keychain. No
-  reader until a real pointer is measured.
+- Windows and Linux: a manual paste field, because the same key is visible in
+  Meta's developer console. No reader on either platform until a real pointer is
+  measured, and no WSL2 bridge: reachability was never measured either.
 - Neither platform may weaken the ToS consent warning, which is the CLI's only
   warning surface.

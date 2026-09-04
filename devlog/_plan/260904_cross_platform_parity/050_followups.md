@@ -70,7 +70,7 @@ already scoped it.
 
 ## WSL2 credential bridge for meta-muse
 
-`010` refuses on Windows with an accurate message instead of reading a WSL2
+`010` offers manual key entry on Windows instead of reading a WSL2
 pointer at `\\\\wsl$\\<distro>\\home\\<user>\\.config\\muse\\auth.json`. Doing that
 properly needs distro enumeration, Linux-user mapping, and a reachability probe,
 none of which were measured. A guess would ship an unverified credential path,

@@ -458,16 +458,21 @@ material off it. Muse Spark is also reachable through resellers, with a narrower
 `command-code` carries both tiers, while `opencode-go` serves only
 `muse-spark-1.3-contributor`.
 
-**Meta Muse Code (`meta-muse`).** If you already use the Muse Code CLI, this imports the
-API key it stored after `muse login` instead of asking you to provision a second one.
-macOS only — the CLI keeps that key in the macOS Keychain, and no other platform's
-storage has been verified. OpenCodex never launches the CLI: if no credential is present
-it tells you to run `muse login` yourself.
+**Meta Muse Code (`meta-muse`).** On macOS, if you already use the Muse Code CLI, this
+imports the API key it stored after `muse login` instead of asking you to provision a
+second one. OpenCodex never launches the CLI: if no credential is present it tells you to
+run `muse login` yourself.
+
+Elsewhere it asks you to paste the key. Meta ships no native Windows CLI, and on Linux the
+CLI exists but where it stores its credential has not been verified, so OpenCodex refuses
+to guess at a credential store and points you at [dev.meta.ai](https://dev.meta.ai)
+instead, where the same key is visible. A pasted key faces the same format check and the
+same live validation against the Model API as an imported one.
 
 **Read this before enabling it.** Meta scopes that credential to the Muse Code CLI, so
 using it here is an *unsupported* path. Meta does not authorize subscription coverage
 outside its own client, how these calls settle is not observable from the API, and you
-should treat every call as billable against your account. The imported key is copied into
+should treat every call as billable against your account. The key, imported or pasted, is copied into
 OpenCodex's auth store (`~/.opencodex/auth.json`, mode 0600) like every other OAuth
 credential. The dashboard shows a Terms-of-Service warning before the first login and
 before any reauthentication — the same treatment Anthropic and Google Antigravity get.

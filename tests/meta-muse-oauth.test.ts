@@ -274,15 +274,39 @@ describe("meta-muse credential import", () => {
    */
   test("no failure path echoes the credential", async () => {
     const denied = (async () => new Response("nope", { status: 401 })) as unknown as typeof fetch;
-    const progress: string[] = [];
-    let message = "";
-    try {
-      await loginMetaMuse({ onProgress: m => progress.push(m) }, deps({ fetchImpl: denied }));
-    } catch (error) {
-      message = String((error as Error).message) + String((error as Error).stack ?? "");
+    const torn = (async () => { throw new Error("socket hang up"); }) as unknown as typeof fetch;
+
+    // Both origins and both failure shapes. The import path alone used to stand in for
+    // "no failure path", which stopped being true once a pasted key could reach the
+    // same validator by a different route.
+    const cases = [
+      { label: "imported/rejected", platform: "darwin", fetchImpl: denied },
+      { label: "imported/unreachable", platform: "darwin", fetchImpl: torn },
+      { label: "pasted/rejected", platform: "win32", fetchImpl: denied },
+      { label: "pasted/unreachable", platform: "linux", fetchImpl: torn },
+    ] as const;
+
+    for (const c of cases) {
+      const progress: string[] = [];
+      const auth: string[] = [];
+      let message = "";
+      try {
+        await loginMetaMuse(
+          {
+            onProgress: m => progress.push(m),
+            onAuth: info => auth.push(`${info.url} ${info.instructions ?? ""}`),
+            onManualCodeInput: async () => CANARY,
+          },
+          deps({ platform: c.platform, fetchImpl: c.fetchImpl }),
+        );
+        throw new Error(`${c.label} should have failed`);
+      } catch (error) {
+        message = String((error as Error).message) + String((error as Error).stack ?? "");
+      }
+      expect(message).not.toContain(CANARY);
+      for (const line of progress) expect(line).not.toContain(CANARY);
+      for (const line of auth) expect(line).not.toContain(CANARY);
     }
-    expect(message).not.toContain(CANARY);
-    for (const line of progress) expect(line).not.toContain(CANARY);
   });
 });
 
@@ -297,5 +321,27 @@ describe("meta-muse refresh", () => {
 
   test("an empty key is refused rather than replayed", async () => {
     await expect(refreshMetaMuseToken("")).rejects.toThrow(/ocx login meta-muse/);
+  });
+
+  // merged() in index.ts keeps any source that is not "local-cli", so asserting
+  // "local-cli" here would relabel a hand-pasted key as an imported one and
+  // misreport where the credential came from.
+  test("refresh preserves a manually pasted origin", async () => {
+    const pasted = await refreshMetaMuseToken(CANARY, undefined, {
+      access: CANARY,
+      refresh: CANARY,
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "manual",
+    });
+    expect(pasted.source).toBe("manual");
+
+    const imported = await refreshMetaMuseToken(CANARY, undefined, {
+      access: CANARY,
+      refresh: CANARY,
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "local-cli",
+    });
+    expect(imported.source).toBe("local-cli");
+    expect((await refreshMetaMuseToken(CANARY)).source).toBe("local-cli");
   });
 });
