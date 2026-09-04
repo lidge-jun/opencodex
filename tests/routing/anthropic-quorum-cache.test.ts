@@ -12,8 +12,9 @@
  * still visible once it expires, and a rotation invalidates immediately rather than answering the
  * next question from a pre-failure count.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, statSync, utimesSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -29,15 +30,21 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalHome = process.env.OPENCODEX_HOME;
 let home: string;
+let readSpy: ReturnType<typeof spyOn> | undefined;
+let authReadsBefore = 0;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-quorum-cache-"));
   process.env.OPENCODEX_HOME = home;
+  // Pass-through spy (no mockImplementation): records calls, the real read still happens.
+  readSpy = spyOn(fs, "readFileSync");
   clearAnthropicAccountPoolState();
   forgetAnthropicFailoverQuorum();
 });
 
 afterEach(() => {
+  readSpy?.mockRestore();
+  readSpy = undefined;
   clearAnthropicAccountPoolState();
   forgetAnthropicFailoverQuorum();
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -59,28 +66,37 @@ async function seed(count: number, offset = 0): Promise<string[]> {
 }
 
 /**
- * Observe the store read without stubbing the module: `loadAuthStore` calls `readFileSync`,
- * which updates atime. Pinning atime into the past and checking whether it moved is a direct
- * observation of the syscall this cache exists to avoid.
+ * Observe the store read without stubbing the module: count `readFileSync` calls against
+ * THIS home's auth.json — the syscall this cache exists to avoid.
+ *
+ * The previous observer pinned atime into the past and checked whether the read moved it.
+ * On windows-latest NTFS last-access updates are disabled (fsutil DisableLastAccess = 3,
+ * measured in run 33929916059), so `readFileSync` left atime untouched: the three
+ * "invalidates immediately" cases could never see the read they assert on, and the
+ * "shares one read" case passed vacuously. The spy sees the same syscall where the
+ * platform cannot hide it. The path filter keeps refresh-intent files, lock snapshots and
+ * `peekAuthStore` out of the count; only the hardened store read can satisfy the cache.
  */
-function storePath(): string {
-  return join(home, "auth.json");
+function authReadCount(): number {
+  const target = join(home, "auth.json");
+  return (readSpy?.mock.calls ?? []).filter(([path]) => String(path) === target).length;
 }
 
 function markStoreUnread(): void {
-  const stats = statSync(storePath());
-  utimesSync(storePath(), new Date(Date.now() - 60_000), stats.mtime);
+  authReadsBefore = authReadCount();
 }
 
 function storeWasRead(): boolean {
-  return statSync(storePath()).atimeMs > Date.now() - 30_000;
+  return authReadCount() > authReadsBefore;
 }
 
 describe("Anthropic failover quorum cache", () => {
   test("a burst of requests inside the TTL window shares one store read", async () => {
     const start = Date.now();
     await seed(2);
-    // Prime the cache, then prove the next calls do not touch the file at all.
+    // Prime the cache, then prove the next calls do not touch the file at all. This asserts
+    // ZERO reads during hits, not one read per fill: a fill is getAccountSet plus up to two
+    // getAccountCredential calls through isPoolCredentialUsable, each a store read.
     expect(hasAnthropicFailoverQuorum(start)).toBe(true);
     markStoreUnread();
     for (let i = 0; i < 25; i++) expect(hasAnthropicFailoverQuorum(start + i)).toBe(true);

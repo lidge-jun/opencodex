@@ -31,7 +31,7 @@ function storeWasRead(): boolean {
 }
 ```
 
-Six cases use this observer. The three that assert `storeWasRead() === true`
+Four of the seven cases use this observer (`:87`, `:112`, `:154`, `:166`). The three that assert `storeWasRead() === true`
 ("rotation / removal / manual selection invalidate immediately") fail on
 Windows because the read leaves atime where `utimesSync` put it. The one that
 asserts `false` ("a burst shares one read") passes there **vacuously** — it
@@ -42,39 +42,97 @@ The comment on the observer says why it was chosen: "without stubbing the
 module … a direct observation of the syscall this cache exists to avoid." That
 is a good instinct on POSIX. On NTFS the syscall leaves no trace to observe.
 
-## Fix: observe the read at the store's seam, not the filesystem's
+## Fix: observe the syscall with a path-filtered spy — no `src/` change
 
-`loadAuthStoreInternal` (`src/oauth/store.ts:338`) is the single function every
-store read goes through, and it is the exact thing the cache exists to avoid
-calling. Count it.
+An earlier draft added a guarded read counter to `src/oauth/store.ts`. The audit
+rejected it, correctly: the guard only stops production from READING the
+counter, the increment itself still executes on every production store read,
+and that is process-global test instrumentation inside a credential module.
+The repository already observes filesystem calls from tests without touching
+`src/` — `tests/claude-integration/claude-system-env-auto.test.ts:76` spies on
+`node:fs` `readFileSync`. The same instrument, filtered to the one path that
+matters, is the observation the atime trick was reaching for.
 
-### MODIFY `src/oauth/store.ts`
+What the spy has to see: `hasAnthropicFailoverQuorum` → `getAccountSet` →
+`loadAuthStoreInternal` → `readFileSync(auth.json)` (`src/oauth/store.ts:344`).
+The refresh-intent reads at `:166`/`:177`, the lock snapshot at `:404` and
+`peekAuthStore` at `:383` are other files or other callers and never satisfy
+this cache, so the filter must be the exact `auth.json` path — not "any read".
+
+### MODIFY `tests/routing/anthropic-quorum-cache.test.ts` (the only file)
 
 ```ts
-+/** @internal Test-only: how many times the auth store file has been read this process. */
-+let authStoreReadCountForTests = 0;
-+export function authStoreReadCountForTestsOnly(): number {
-+  if (process.env.OCX_TEST_HOME_GUARD !== "1") {
-+    throw new Error("auth store read counter is available only under the repository test preload");
-+  }
-+  return authStoreReadCountForTests;
+-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+-import { mkdtempSync, statSync, utimesSync } from "node:fs";
++import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
++import * as fs from "node:fs";
++import { mkdtempSync } from "node:fs";
+
+ const originalHome = process.env.OPENCODEX_HOME;
+ let home: string;
++let readSpy: ReturnType<typeof spyOn> | undefined;
++let authReadsBefore = 0;
+
++/**
++ * Count readFileSync calls against THIS home's auth.json. The previous observer pinned
++ * atime and checked whether readFileSync moved it; on windows-latest NTFS last-access
++ * updates are disabled (fsutil DisableLastAccess = 3, measured in run 33929916059), so
++ * the read left atime untouched, the three "invalidates immediately" cases could never
++ * see the read they assert on, and the "shares one read" case passed vacuously. The
++ * spy observes the same syscall where the platform cannot hide it.
++ */
++function authReadCount(): number {
++  const target = join(home, "auth.json");
++  return (readSpy?.mock.calls ?? []).filter(([p]) => String(p) === target).length;
 +}
 
- function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
-   const path = getAuthStorePath();
-   hardenConfigDir();
-   hardenExistingSecret(path);
-   if (!existsSync(path)) return { store: {}, hadLegacy: false };
-+  authStoreReadCountForTests += 1;
-   try {
-     return normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8")));
+ beforeEach(() => {
+   home = mkdtempSync(join(tmpdir(), "ocx-quorum-cache-"));
+   process.env.OPENCODEX_HOME = home;
++  readSpy = spyOn(fs, "readFileSync");   // pass-through: no mockImplementation
+   clearAnthropicAccountPoolState();
+   forgetAnthropicFailoverQuorum();
+ });
+
+ afterEach(() => {
++  readSpy?.mockRestore();
++  readSpy = undefined;
+   clearAnthropicAccountPoolState();
+   …
+ });
+
+-function storePath() … markStoreUnread() … storeWasRead()   // atime versions, deleted
++function markStoreUnread(): void { authReadsBefore = authReadCount(); }
++function storeWasRead(): boolean { return authReadCount() > authReadsBefore; }
 ```
 
-The increment sits immediately before `readFileSync`, so it counts exactly the
-syscall the atime observer was trying to see. The guard follows the pattern the
-repository already uses for test-only seams (`reset-credit-operation-ledger.ts:488`,
-`reset-credit-recovery.ts:638`): it cannot be reached from production because
-only the test preload sets `OCX_TEST_HOME_GUARD`.
+Every call site of `markStoreUnread` / `storeWasRead` is unchanged; only the
+helpers' bodies move. `spyOn` without `mockImplementation` records calls and
+passes through to the real `readFileSync`, so the store behaves exactly as in
+production.
+
+The spy is installed AFTER `mkdtempSync` (which does not read) and restored in
+`afterEach` before the sandbox is removed, matching the claude-system-env
+pattern.
+
+## The "one read" oracle, stated precisely
+
+The burst case's name says "shares one store read", but a cache FILL is not one
+read: `hasAnthropicFailoverQuorum` calls `getAccountSet` (one `auth.json` read)
+and then `isPoolCredentialUsable` → `getAccountCredential` for up to two
+accounts (`src/oauth/anthropic-routing.ts:222,294,300`) — each of which goes
+through `loadAuthStore` again. So a fill is one-to-three reads.
+
+What the case actually proves — and what `markStoreUnread` AFTER the prime
+call measures — is **zero additional reads while the cache is warm**. That is
+the property that matters (the cache exists to keep reads off the request
+path), it is exactly what the original atime version was asserting, and it is
+what the spy version asserts. The case name is kept; a one-line comment in the
+test says "zero reads during hits, not one read per fill", so nobody later
+tightens it to `=== 1` and discovers the fill count the hard way.
+
+Refactoring the fill to a single read is a product change outside this
+unit's scope and is not needed to make the observation honest.
 
 ### MODIFY `tests/routing/anthropic-quorum-cache.test.ts`
 
@@ -104,30 +162,30 @@ only the test preload sets `OCX_TEST_HOME_GUARD`.
 Every call site of `markStoreUnread` / `storeWasRead` is unchanged; only the
 two helpers' bodies move. The six assertions keep their exact shape.
 
-### Why not spy on `readFileSync`
+### Why the path filter is not the fragile part
 
-A module-level spy on `node:fs` sees every read in the process — config, lock
-files, hardening probes — and the test would have to filter by path, which is
-the fragile part. The counter sits on the one function whose call count IS the
-property under test.
+The earlier draft worried that a filesystem spy "sees every read and has to
+filter by path". It does — and the path is `join(home, "auth.json")`, the same
+expression the test already used for `storePath()`. An exact-string match on a
+path this test itself created is not fragile; it is the most specific
+observation available, and it needs no seam in `src/`.
 
 ## Acceptance
 
-1. **Ablation first, on macOS**: temporarily make `hasAnthropicFailoverQuorum`
-   skip its cache (return `computeQuorum()` unconditionally). The "burst shares
-   one read" case must go red on `storeWasRead() === false` — proving the
-   counter observes what atime could not. Reverted before commit.
+1. **Ablation first, on macOS**: temporarily disable the cache-hit return at
+   `src/oauth/anthropic-routing.ts:291` (make the `if` condition `false`). The
+   burst case must go red on `storeWasRead() === false` — proving the spy sees
+   the reads atime could not. Reverted before commit; `git diff --stat` shows
+   only the test file.
 2. macOS: `bun test tests/routing/anthropic-quorum-cache.test.ts` 7/7.
-3. `bun run typecheck` clean; `bun run privacy:scan` unchanged (the counter
-   holds a number, never content).
+3. `bun run typecheck` clean. No `src/` change, so `privacy:scan` is untouched.
 4. CI dispatch on the stacked head: windows 2/4 SUCCESS, the three cases
    green in the log.
 
 ## Stack position
 
-PR 4 on top of #3550, against `codex/win-3-k-owner-budget`. Touches one
-`src/` file for a guarded test seam — the first product-side edit in this unit,
-and the guard is what keeps it out of any production path.
+PR 4 on top of #3550, against `codex/win-3-k-owner-budget`. One test file; no
+product source touched, which keeps this unit's record intact.
 
 ## Corpus
 
