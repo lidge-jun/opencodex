@@ -55,6 +55,17 @@ move. That string becomes stale. `gui/` stays out of scope (the AGENTS.md screen
 real cost for a routing fix), so 030 must record it as **known-stale copy with a follow-up**,
 not as truth-preserving.
 
+## Round 2
+
+Re-audited by the same reviewer after the amendments above. B1a, B2, B3 and B4 confirmed
+closed. B1b's *reasoning* was confirmed sound but its *code* was not implementable: the
+proposed `else if` sat behind an early `return null` and would have been dead code, with a
+naive string test still passing. Fixed in 040b by inverting the generic gate into a positive
+`else if` and deferring `return null` to a trailing `else`. Round 2 also confirmed both
+occurrence-count guards (`failoverAccountSnapshot(` and `applyFailoverSnapshot(snapshot)`)
+must move 3 -> 4, and that `oauth-account-429` is already a valid `AttemptRecoveryKind`
+(`src/usage/log.ts:52`).
+
 ## Accepted without change
 
 Audit items 3 and 6 confirmed the plan: dropping the loop flag-clause introduces no regression
