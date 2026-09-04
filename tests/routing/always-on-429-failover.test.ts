@@ -139,4 +139,21 @@ describe("proactive Anthropic routing stays opt-in", () => {
     );
     expect(picks.every(id => id === ids[0]!)).toBe(true);
   });
+  test("the rotator cannot be re-gated behind the pool flag", async () => {
+    // The original defect was ONE line at the top of rotateAnthropicAccountOn429:
+    //   if (!isAnthropicAccountPoolEnabled(config)) return null;
+    // Restoring it would strand every stock install again, and nothing else in this file would
+    // fail -- every behavioural test seeds two accounts, which satisfies the quorum either way,
+    // so they would keep passing while the feature was dead for the users who never opted in.
+    //
+    // Pin the shape instead: the flag may still appear in the rotator, but only alongside the
+    // presence check, never as a gate of its own.
+    const source = await Bun.file("src/oauth/anthropic-routing.ts").text();
+    const start = source.indexOf("export function rotateAnthropicAccountOn429");
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, source.indexOf("\n}", start));
+    const gate = body.split("\n").find(line => line.includes("isAnthropicAccountPoolEnabled"));
+    expect(gate, "the rotator no longer references the pool flag at all").toBeDefined();
+    expect(gate, "the pool flag became a gate of its own again").toContain("hasAnthropicFailoverQuorum");
+  });
 });
