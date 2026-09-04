@@ -8,7 +8,8 @@
  *
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
-import { saveConfigPreservingClaudeCode } from "../config";
+import { mutatePersistedConfig } from "../config";
+import { routedProviderConfig } from "../router";
 import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, TransientRetryPolicy } from "../types";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
@@ -187,50 +188,69 @@ export function rotateKeyOn429(
   if (!provider) return null;
   if (provider.authMode === "oauth" || provider.authMode === "forward") return null;
 
-  const pool = provider.apiKeyPool;
-  if (!pool || pool.length < 2) return null;
-
-  // Cool the key that ACTUALLY failed. Under concurrent 429s another request may already have
-  // rotated provider.apiKey — cooling the live key would punish an innocent replacement and can
-  // exhaust a 2-key pool from a single bad key. CAS semantics: callers pass the key they used.
   const failedKey = attemptedKey ?? provider.apiKey;
-  const currentEntry = pool.find(e => e.key === failedKey);
-  if (currentEntry) {
+  type Rotation =
+    | { provider: OcxProviderConfig; failedId?: string; candidateId?: string }
+    | { exhaustedCount: number; failedId?: string };
+  const outcome = mutatePersistedConfig<Rotation | null>(fresh => {
+    const freshProvider = fresh.providers[providerName];
+    if (!freshProvider || freshProvider.authMode === "oauth" || freshProvider.authMode === "forward") {
+      return { changed: false, value: null };
+    }
+    const pool = freshProvider.apiKeyPool;
+    if (!pool || pool.length < 2) return { changed: false, value: null };
+
+    // The callback can be rerun after rebasing, so identify the failed key here but
+    // defer the in-memory cooldown side effect until persistence has succeeded.
+    const failedEntry = pool.find(entry => entry.key === failedKey);
+
+    if (freshProvider.apiKey !== failedKey) {
+      const activeEntry = pool.find(entry => entry.key === freshProvider.apiKey);
+      if (activeEntry && !isKeyInCooldown(providerName, activeEntry.id, now)) {
+        return {
+          changed: false,
+          value: { provider: structuredClone(freshProvider), failedId: failedEntry?.id },
+        };
+      }
+    }
+
+    const currentIndex = failedEntry ? pool.indexOf(failedEntry) : -1;
+    const candidateCount = failedEntry ? pool.length - 1 : pool.length;
+    for (let offset = 1; offset <= candidateCount; offset += 1) {
+      const candidate = pool[(currentIndex + offset) % pool.length]!;
+      if (isKeyInCooldown(providerName, candidate.id, now)) continue;
+      freshProvider.apiKey = candidate.key;
+      return {
+        changed: true,
+        value: {
+          provider: structuredClone(freshProvider),
+          failedId: failedEntry?.id,
+          candidateId: candidate.id,
+        },
+      };
+    }
+    return { changed: false, value: { exhaustedCount: pool.length, failedId: failedEntry?.id } };
+  });
+  if (outcome.status === "unavailable" || outcome.value === null) return null;
+  if (outcome.value.failedId) {
     const cooldownMs = parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
-    keyCooldowns.set(cooldownKey(providerName, currentEntry.id), {
-      cooldownUntil: now + cooldownMs,
-    });
+    keyCooldowns.set(cooldownKey(providerName, outcome.value.failedId), { cooldownUntil: now + cooldownMs });
     sweepExpiredOnWrite(now);
   }
-
-  // Lost the race: someone already rotated away from the failed key. If the live key is healthy,
-  // retry with it as-is instead of rotating a second time.
-  if (attemptedKey !== undefined && provider.apiKey !== attemptedKey) {
-    const liveEntry = pool.find(e => e.key === provider.apiKey);
-    if (liveEntry && !isKeyInCooldown(providerName, liveEntry.id, now)) {
-      return { ...provider };
-    }
+  if ("exhaustedCount" in outcome.value) {
+    console.warn(`[key-failover] ${providerName}: all ${outcome.value.exhaustedCount} keys in cooldown; returning 429 to client`);
+    return null;
   }
 
-  // Pick the next key that is NOT in cooldown
-  const currentIndex = currentEntry ? pool.indexOf(currentEntry) : -1;
-  for (let i = 1; i < pool.length; i++) {
-    const candidate = pool[(currentIndex + i) % pool.length]!;
-    if (!isKeyInCooldown(providerName, candidate.id, now)) {
-      // Swap active key
-      provider.apiKey = candidate.key;
-      saveConfigPreservingClaudeCode(config);
-      console.warn(
-        // Log ids only — labels are user-supplied free text and could carry secret material.
-        `[key-failover] ${providerName}: 429 on key ${currentEntry?.id ?? "?"}; rotating to key ${candidate.id}`,
-      );
-      return { ...provider };
-    }
+  const committed = structuredClone(outcome.value.provider);
+  config.providers[providerName] = committed;
+  if (outcome.value.candidateId) {
+    console.warn(
+      // Log ids only — labels are user-supplied free text and could carry secret material.
+      `[key-failover] ${providerName}: 429 on key ${outcome.value.failedId ?? "?"}; rotating to key ${outcome.value.candidateId}`,
+    );
   }
-
-  // All keys in cooldown
-  console.warn(`[key-failover] ${providerName}: all ${pool.length} keys in cooldown; returning 429 to client`);
-  return null;
+  return structuredClone(committed);
 }
 
 export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {
@@ -253,13 +273,9 @@ interface RotateProviderTransportOptions {
 /**
  * Rotate a failed key and re-apply provider-specific transport metadata to the replacement.
  *
- * `routedProvider` is the request's active provider (the `routedProviderConfig` output the
- * route was built with). The result inherits it and swaps ONLY the API key: the persisted
- * config that `rotateKeyOn429` snapshots predates registry backfill, so building the retry
- * provider from that snapshot would silently drop every field the registry merged in at
- * routing time (scalar flags like `promptCacheKey`/`parallelToolCalls`, merged model
- * metadata such as `noTemperatureModels`, a pinned baseUrl). Mirrors the OAuth-401 replay
- * path in src/server/responses/core.ts, which spreads `route.provider` for the same reason.
+ * Put the authoritative committed row over request-only fields and registry backfills, then
+ * route it again so concurrent provider edits take effect without losing either kind of runtime
+ * metadata.
  */
 export function rotateProviderTransportOn429(
   config: OcxConfig,
@@ -277,7 +293,7 @@ export function rotateProviderTransportOn429(
   return rotated
     ? resolveProviderTransport(
         providerName,
-        { ...routedProvider, apiKey: rotated.apiKey },
+        routedProviderConfig(providerName, { ...routedProvider, ...rotated }),
         options.promptCacheKey,
       )
     : null;

@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import {
+  getConfigPath,
+  loadConfig,
+  mutatePersistedConfig,
+  saveConfig,
+} from "../../src/config";
 import {
   clearKeyCooldowns,
   getKeyCooldownUntil,
@@ -19,7 +25,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 let home: string;
 
 function makeConfig(provider: Partial<OcxProviderConfig>): OcxConfig {
-  return {
+  const config = {
     port: 10199,
     defaultProvider: "p",
     providers: {
@@ -30,6 +36,8 @@ function makeConfig(provider: Partial<OcxProviderConfig>): OcxConfig {
       } as OcxProviderConfig,
     },
   } as OcxConfig;
+  saveConfig(config);
+  return config;
 }
 
 function pool3(): OcxProviderConfig["apiKeyPool"] {
@@ -106,6 +114,16 @@ describe("rotateKeyOn429", () => {
     expect(rotateKeyOn429(makeConfig({}), "missing", null)).toBeNull();
   });
 
+  test("unavailable persistence does not publish a tentative cooldown", () => {
+    const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const now = 1_000_000;
+    unlinkSync(getConfigPath());
+
+    expect(rotateKeyOn429(config, "p", null, now, "key-alpha-000111222333")).toBeNull();
+    expect(getKeyCooldownUntil("p", "k1", now)).toBeNull();
+    expect(config.providers.p.apiKey).toBe("key-alpha-000111222333");
+  });
+
   test("clearKeyCooldowns scoped to a provider", () => {
     const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
     const now = 1_000_000;
@@ -131,6 +149,40 @@ describe("rotateKeyOn429", () => {
     // A REAL beta failure afterwards still rotates to gamma.
     expect(rotateKeyOn429(config, "p", null, now, "key-beta-444555666777")?.apiKey).toBe("key-gamma-888999000111");
   });
+
+  test("two stale handlers adopt one committed rotation without rotating twice", () => {
+    const first = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
+    const second = loadConfig();
+    const now = 1_000_000;
+
+    expect(rotateKeyOn429(first, "p", null, now, "key-alpha-000111222333")?.apiKey)
+      .toBe("key-beta-444555666777");
+    expect(rotateKeyOn429(second, "p", null, now, "key-alpha-000111222333")?.apiKey)
+      .toBe("key-beta-444555666777");
+    expect(second.providers.p.apiKey).toBe("key-beta-444555666777");
+    expect(getKeyCooldownUntil("p", "k2", now)).toBeNull();
+  });
+
+  test("rebases over a concurrent pool edit without resurrecting a removed key", () => {
+    const stale = makeConfig({
+      apiKey: "key-alpha-000111222333",
+      apiKeyPool: pool3(),
+      note: "stale",
+    });
+    const added = { id: "k4", key: "key-delta-222333444555", addedAt: 4 };
+    const edit = mutatePersistedConfig(fresh => {
+      fresh.providers.p.apiKeyPool = [fresh.providers.p.apiKeyPool![0]!, fresh.providers.p.apiKeyPool![2]!, added];
+      fresh.providers.p.note = "concurrent";
+      return { changed: true, value: undefined };
+    });
+    expect(edit.status).toBe("committed");
+
+    const rotated = rotateKeyOn429(stale, "p", null, 1_000_000, "key-alpha-000111222333");
+    expect(rotated?.apiKey).toBe("key-gamma-888999000111");
+    expect(rotated?.apiKeyPool?.map(entry => entry.id)).toEqual(["k1", "k3", "k4"]);
+    expect(rotated?.note).toBe("concurrent");
+    expect(stale.providers.p).toEqual(loadConfig().providers.p);
+  });
 });
 
 describe("rotateProviderTransportOn429", () => {
@@ -146,6 +198,7 @@ describe("rotateProviderTransportOn429", () => {
       baseUrl: "https://opencode.ai/zen/go/v1",
     };
     delete config.providers.p;
+    writeFileSync(getConfigPath(), `${JSON.stringify(config, null, 2)}\n`);
 
     const initial = resolveOpenCodeGoTransport(
       config.providers["opencode-go"],
@@ -177,6 +230,7 @@ describe("rotateProviderTransportOn429", () => {
       baseUrl: "https://api.kimi.com/coding/v1",
     };
     delete config.providers.p;
+    writeFileSync(getConfigPath(), `${JSON.stringify(config, null, 2)}\n`);
     expect(config.providers["kimi-code"].promptCacheKey).toBeUndefined();
 
     const parsed: OcxParsedRequest = {
@@ -200,10 +254,9 @@ describe("rotateProviderTransportOn429", () => {
     expect(retryBody.prompt_cache_key).toBe(promptCacheKey);
   });
 
-  test("inherits the routed provider's registry backfills; only the key changes", () => {
-    // The persisted config predates the registry scalar flags and merged metadata —
-    // routedProviderConfig backfilled them at request time. Rotation must not fall back
-    // to the bare persisted snapshot and silently drop them for the retried request.
+  test("inherits routed-only backfills while persisted fields stay authoritative", () => {
+    // Rotation must keep fields absent from the persisted snapshot while honoring fields
+    // that are present there; registered providers are canonicalized by routedProviderConfig.
     const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });
     const routedProvider = {
       ...config.providers.p,
@@ -220,7 +273,7 @@ describe("rotateProviderTransportOn429", () => {
     });
 
     expect(rotated?.apiKey).toBe("key-beta-444555666777");
-    expect(rotated?.baseUrl).toBe("https://registry-pinned.example/v1");
+    expect(rotated?.baseUrl).toBe("https://api.example.com/v1");
     expect(rotated?.promptCacheKey).toBe(true);
     expect(rotated?.parallelToolCalls).toBe(false);
     expect(rotated?.modelContextWindows).toEqual({ "some-model": 262_144 });
@@ -239,6 +292,8 @@ describe("rotateProviderTransportOn429", () => {
     });
     config.providers.xai = config.providers.p;
     delete config.providers.p;
+    config.defaultProvider = "xai";
+    writeFileSync(getConfigPath(), `${JSON.stringify(config, null, 2)}\n`);
 
     const rotated = rotateProviderTransportOn429(config, "xai", { ...config.providers.xai }, {
       now: 1_000_000,

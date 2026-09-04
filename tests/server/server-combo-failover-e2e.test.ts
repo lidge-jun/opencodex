@@ -37,6 +37,7 @@ import {
 } from "../../src/responses/state";
 import { clearCursorThreadContinuityForTests } from "../../src/adapters/cursor/thread-continuity";
 import { COMPACT_PROMPT, encodeCompactionSummary } from "../../src/responses/compaction";
+import { clearKeyCooldowns } from "../../src/providers/key-failover";
 
 // Full-suite Windows load: startServer + combo rename/delete management flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -138,6 +139,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   clearComboSelectionState();
   clearComboTargetCooldowns();
+  clearKeyCooldowns();
   clearCodexUpstreamHealth();
   customRunTurn = undefined;
   customFetchResponse = undefined;
@@ -169,6 +171,7 @@ afterEach(async () => {
     if (testDir) removeTreeWithRetry(testDir);
     clearComboSelectionState();
     clearComboTargetCooldowns();
+    clearKeyCooldowns();
     clearCodexUpstreamHealth();
     clearRequestLogsForTests();
   }
@@ -1355,6 +1358,7 @@ describe("server combo failover 030 activation matrix", () => {
     const config = comboConfig({
       a: provider("test-response", "https://test.invalid/v1", pool[0]!.key, { apiKeyPool: pool }),
     });
+    saveConfig(config);
     const response = await postLogged(config);
     expect(response.status).toBe(200);
     await response.text();
