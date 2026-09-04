@@ -697,6 +697,45 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect(output[0].input).not.toContain("*** Begin Patch ***");
   });
 
+  // A raw envelope submitted as the `exec` body is never valid JavaScript, so it is
+  // retargeted to the apply_patch helper instead of throwing in the isolate.
+  // See devlog/_plan/260905_apply_patch_envelope_gap.
+  test("compiles a raw patch envelope submitted as the exec body", () => {
+    const body = `*** Begin Patch ***
+*** Update File: README.md
+@@
+-old
+ new
+*** End Patch ***`;
+    const json = buildResponseJSON([
+      { type: "tool_call_start", id: "c1", name: "exec" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: body }) },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ], "model", { freeformToolNames: new Set(["exec"]) });
+
+    const output = json.output as Record<string, unknown>[];
+    expect(output[0]).toMatchObject({ type: "custom_tool_call", name: "exec" });
+    expect(output[0].input).toContain("await tools.apply_patch(");
+    // The patch is a JSON string argument, and its decorated delimiters are normalized.
+    expect(output[0].input).toContain("*** Begin Patch\\n");
+    expect(output[0].input).not.toContain("*** Begin Patch ***");
+  });
+
+  test("leaves ordinary exec JavaScript byte-identical", () => {
+    const body = "const marker = `*** Begin Patch ***`;\ntext(marker);";
+    const json = buildResponseJSON([
+      { type: "tool_call_start", id: "c1", name: "exec" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: body }) },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ], "model", { freeformToolNames: new Set(["exec"]) });
+
+    const output = json.output as Record<string, unknown>[];
+    expect(output[0]).toMatchObject({ type: "custom_tool_call", name: "exec" });
+    expect(output[0].input).toBe(body);
+  });
+
   test("preserves namespaced apply_patch payloads across streaming and buffered bridges", async () => {
     const decorated = `*** Begin Patch ***
 *** Update File: README.md

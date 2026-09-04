@@ -1,6 +1,6 @@
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { normalizeApplyPatchDelimiters } from "../responses/apply-patch-envelope";
-import { compileCodeModeHelperInput } from "../responses/code-mode-helper-compat";
+import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
 import {
   customToolItemId,
   restoreRoutedCustomCalls,
@@ -340,12 +340,17 @@ export function createRoutedCustomToolRestoreBlockRewrite(
         : openCalls.get(upstreamItemId)?.argumentsText ?? "";
       const { arguments: _arguments, ...rest } = parsed;
       const itemName = itemNames.get(upstreamItemId);
+      // Name-based alias first; otherwise a raw patch envelope submitted as the `exec` body
+      // resolves to the same apply_patch helper (devlog/_plan/260905_apply_patch_envelope_gap).
+      const helper = itemName?.aliased
+        ? itemName.name
+        : resolveCodeModeHelperName(undefined, itemName?.name ?? "", source, itemName?.namespace);
       const next = {
         ...rest,
         type: nextType,
         item_id: customToolItemId(upstreamItemId),
-        input: itemName?.aliased
-          ? compileCodeModeHelperInput(source, itemName.name)
+        input: helper
+          ? compileCodeModeHelperInput(source, helper)
           : unwrapRoutedCustomToolArguments(source, itemName?.name ?? "", itemName?.namespace),
       };
       return [replaceSseDataPayload(replaceSseEventName(block, nextType), JSON.stringify(next))];

@@ -16,9 +16,9 @@ import {
   type OcxErrorPayload,
 } from "./lib/errors";
 import { redactSecretString } from "./lib/redact";
-import { repairFreeformToolInput } from "./responses/apply-patch-envelope";
+import { mayBecomePatchEnvelope, repairFreeformToolInput } from "./responses/apply-patch-envelope";
 import { encodeCompactionSummary } from "./responses/compaction";
-import { compileCodeModeHelperInput } from "./responses/code-mode-helper-compat";
+import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "./responses/code-mode-helper-compat";
 import { isTruncatedStopReason, truncationReasonFor } from "./responses/truncated-stop-reason";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
 import { rememberReasoningForCall } from "./responses/reasoning-replay-cache";
@@ -277,9 +277,12 @@ export function bridgeToResponsesSSE(
     toolName: string,
     namespace?: string,
     codeModeHelperName?: string,
-  ): string => codeModeHelperName
-    ? compileCodeModeHelperInput(args, codeModeHelperName)
-    : repairFreeformToolInput(args, toolName, namespace);
+  ): string => {
+    const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace);
+    return helper
+      ? compileCodeModeHelperInput(args, helper)
+      : repairFreeformToolInput(args, toolName, namespace);
+  };
   // Best-effort unwrap of a PARTIAL freeform arg buffer for live input streaming
   // (`response.custom_tool_call_input.delta` — codex-rs uses it for UI preview only;
   // the completed custom_tool_call item stays authoritative). Compact `{"input":"...`
@@ -1172,7 +1175,10 @@ export function bridgeToResponsesSSE(
                   if (!FREEFORM_WRAP_PREFIX.startsWith(currentToolCall.args)) {
                     const full = freeformPartialInput(currentToolCall.args);
                     const emitted = currentToolCall.inputEmitted ?? "";
-                    if (full.startsWith(emitted) && full.length > emitted.length) {
+                    // Also hold a buffer that could still become a complete patch envelope:
+                    // at completion such a body is recompiled into an apply_patch helper call,
+                    // and streaming the envelope bytes first would be that same rewind.
+                    if (!mayBecomePatchEnvelope(full) && full.startsWith(emitted) && full.length > emitted.length) {
                       emit("response.custom_tool_call_input.delta", {
                         item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
                         delta: full.slice(emitted.length),
@@ -1666,9 +1672,12 @@ function buildResponseJSONWithBudget(
     toolName: string,
     namespace?: string,
     codeModeHelperName?: string,
-  ): string => codeModeHelperName
-    ? compileCodeModeHelperInput(args, codeModeHelperName)
-    : repairFreeformToolInput(args, toolName, namespace);
+  ): string => {
+    const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace);
+    return helper
+      ? compileCodeModeHelperInput(args, helper)
+      : repairFreeformToolInput(args, toolName, namespace);
+  };
   const parseArgsObj = (args: string): Record<string, unknown> => {
     try { const o = JSON.parse(args); return o && typeof o === "object" ? o : {}; } catch { return {}; }
   };
