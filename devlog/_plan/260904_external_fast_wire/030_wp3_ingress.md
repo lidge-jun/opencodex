@@ -28,54 +28,51 @@ fast from the mutated id — which made `x--fast--high` fire both dimensions whi
 `x--high--fast` fired neither, and made Responses disagree with Chat and Messages about the
 same string.
 
-### Nested markers, at every ingress
+### One wrapper, every ingress
 
 Composition is not supported (020 R1), and the effort parser cannot detect the problem on
-its own: it validates the terminal effort but never checks that the base is real
+its own: it validates the terminal effort but never that the base is real
 (`effort-row.ts:78-95`), so `x--fast--high` would otherwise resolve to base `x--fast` with
-effort `high` — a model that does not exist. Each ingress therefore discards an effort row
-whose base still carries the marker, using wp1's guard:
+effort `high` — a model that does not exist.
 
-```ts
-if (effortRow && effortBaseCarriesFastMarker(effortRow.baseId, knownIds)) effortRow = null;
-```
-
-The known-id argument is what keeps a real model named `foo--fast` able to publish and
-resolve its own `foo--fast--high` effort row. Test 14 asserts both orders behave the same
-on all five surfaces.
+Rather than repeat that rule at four call sites and hope they stay identical, every ingress
+calls wp1's `parseSyntheticRowId(selector, config)`, which resolves both grammars and
+returns at most one. The existing `parseRequestEffortRowId` call sites migrate to it.
 
 ## `/v1/responses`
 
 Two insertion points. The combo pre-dispatch at `core.ts:2726` runs before
 `comboIdFromRawBody`, so the rewrite happens there or a combo child is built from the
-synthetic id:
+synthetic id. The selector is captured ONCE, before either parser can mutate the body:
 
 ```diff
-     const comboEffortRow = typeof (body as { model?: unknown }).model === "string"
-       ? parseRequestEffortRowId((body as { model: string }).model, config)
-       : null;
-+    const comboFastRow = typeof (body as { model?: unknown }).model === "string"
-+      ? parseRequestFastRowId((body as { model: string }).model, config)
+-    const comboEffortRow = typeof (body as { model?: unknown }).model === "string"
+-      ? parseRequestEffortRowId((body as { model: string }).model, config)
+-      : null;
++    const comboSelector = typeof (body as { model?: unknown }).model === "string"
++      ? (body as { model: string }).model
 +      : null;
-+    if (comboFastRow) {
++    const comboRows = comboSelector === null
++      ? { fastRow: null, effortRow: null }
++      : parseSyntheticRowId(comboSelector, config);
++    const comboEffortRow = comboRows.effortRow;
++    if (comboRows.fastRow) {
 +      const raw = body as Record<string, unknown>;
-+      raw.model = comboFastRow.baseId;
++      raw.model = comboRows.fastRow.baseId;
 +      // A caller intent, not a decision: decideTier still rules on eligibility below.
 +      raw.service_tier = "priority";
 +    }
 ```
 
-The ordinary path at `core.ts:2795` captures the selector first, then updates both
+The ordinary path at `core.ts:2795` captures the selector before mutating, then updates both
 representations — the typed route reads `parsed.*` while the Responses passthrough starts
 its outbound body from `parsed._rawBody` (`openai-responses.ts:2179`):
 
 ```diff
+-    const effortRow = parseRequestEffortRowId(parsed.modelId, config);
 +    // Captured before any parser mutates it, so both grammars see the client's id.
 +    const selector = parsed.modelId;
--    const effortRow = parseRequestEffortRowId(parsed.modelId, config);
-+    const effortRow = parseRequestEffortRowId(selector, config);
-     ...
-+    const fastRow = parseRequestFastRowId(selector, config);
++    const { fastRow, effortRow } = parseSyntheticRowId(selector, config);
 +    if (fastRow) {
 +      parsed.modelId = fastRow.baseId;
 +      parsed.options.serviceTier = "priority";
@@ -90,26 +87,27 @@ Downstream is untouched: `core.ts:2109` reads `parsed.options.serviceTier` as `c
 
 **Core-lab boundary.** `src/server/responses/core.ts` is one of the four protected roots
 (`tests/core-lab-boundary.test.ts:19`). `src/server/fast-row.ts` imports only
-`providers/service-tier`, `providers/registry`, `types`, and `server/effort-row` — all
-already on this file's graph, none reaching `src/lab`. The guard must stay green without
-adjustment; if it does not, the import is wrong, not the guard.
+`providers/service-tier`, `providers/registry`, `types`, `server/effort-row`, and the
+synchronous catalog metadata helpers — all already on this file's graph, none reaching
+`src/lab`. The guard must stay green without adjustment; if it does not, the import is
+wrong, not the guard.
 
 ## `/v1/chat/completions`
 
-Same place as the effort row, before routing (`chat-completions.ts:107`):
+Same place as the effort row, before routing (`chat-completions.ts:107`). `requestedModel`
+is already captured before mutation here, which is why this surface never had the ordering
+defect:
 
 ```diff
-     const effortRow = parseRequestEffortRowId(requestedModel, config);
-     if (effortRow) chatBody.model = effortRow.baseId;
-+    const fastRow = parseRequestFastRowId(requestedModel, config);
+-    const effortRow = parseRequestEffortRowId(requestedModel, config);
+-    if (effortRow) chatBody.model = effortRow.baseId;
++    const { fastRow, effortRow } = parseSyntheticRowId(requestedModel, config);
++    if (effortRow) chatBody.model = effortRow.baseId;
 +    if (fastRow) {
 +      chatBody.model = fastRow.baseId;
 +      chatBody.service_tier = "priority";
 +    }
 ```
-
-`requestedModel` is already captured before mutation here, which is why this surface never
-had the ordering defect.
 
 Unlike the effort row, a fast row does **not** block the native-chat shortcut at
 `chat-completions.ts:139`. The effort row must, because native chat cannot carry a
@@ -144,8 +142,11 @@ fails. Decoding tries the exact form first, and only then treats the marker as s
  * so a real model whose alias genuinely ends in the marker keeps winning; only then is the
  * marker treated as synthetic and the bare base decoded. Desktop 3P aliases are hashes
  * registered WITHOUT the marker, so an exact lookup can never resolve a synthetic one.
+ *
+ * Typed as OcxConfig["claudeCode"] rather than OcxClaudeCodeConfig: claude-messages.ts
+ * imports only OcxConfig from ../types today, and this avoids widening that import.
  */
-function decodeClaudeFastSelector(raw: string, cc?: OcxClaudeCodeConfig): string {
+function decodeClaudeFastSelector(raw: string, cc?: OcxConfig["claudeCode"]): string {
   const exact = resolveInboundModel(raw, cc);
   if (exact !== raw || !raw.endsWith("--fast")) return exact;
   const bare = raw.slice(0, -"--fast".length);
@@ -166,11 +167,11 @@ read it, and a block-scoped `const` would not compile.
      if (effortRow) { anthropicBody.model = effortRow.baseId; effortOverride = effortRow.effort; }
 +    // Decode first: the alias grammar and the fast marker share the separator, so the
 +    // marker is unambiguous only once the provider half has been split off.
-+    fastRow = parseRequestFastRowId(decodeClaudeFastSelector(requestedModel, config.claudeCode), config);
++    fastRow = parseSyntheticRowId(decodeClaudeFastSelector(requestedModel, config.claudeCode), config).fastRow;
 +    if (fastRow) anthropicBody.model = fastRow.baseId;
 ```
 
-`parseRequestFastRowId` then checks the stripped base against the routable-base set, and for
+`parseSyntheticRowId` then checks the stripped base against the routable-base set, and for
 a real `p/foo--fast` the exact-id guard refuses the strip.
 `p/foo--fast` is present and the strip is refused.
 
@@ -209,7 +210,7 @@ returns an estimate and sends no tier:
    if (countRoute) { model = stripOneMillionMarker(countRoute); raw.model = model; }
 +  // Decode before stripping, for the same aliasing reason as /v1/messages. A token estimate
 +  // carries no tier, so only the identity is corrected here.
-+  const countFastRow = parseRequestFastRowId(decodeClaudeFastSelector(model, config.claudeCode), config);
++  const countFastRow = parseSyntheticRowId(decodeClaudeFastSelector(model, config.claudeCode), config).fastRow;
 +  if (countFastRow) { model = countFastRow.baseId; raw.model = model; }
 ```
 
@@ -222,7 +223,7 @@ concerns, and the audit caught them being conflated:
 **Identity** is corrected before routing, or the synthetic id fails to route at all:
 
 ```diff
-+  const compactFastRow = parseRequestFastRowId(raw.model, config);
++  const compactFastRow = parseSyntheticRowId(raw.model, config).fastRow;
 +  if (compactFastRow) raw.model = compactFastRow.baseId;
    route = routeCompactionModel(config, raw.model, evidenceFromBody(raw));
 ```

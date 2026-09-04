@@ -78,9 +78,42 @@ The two questions stay separate:
 | Which exact ids beat the grammar? | `knownEffortRowIds(config)` | refusing to strip a real `x--fast` |
 | Which bases may carry a fast row? | `fastRowBases(config)` (new) | validating the strip |
 
-`fastRowBases()` is built by the same enumeration wp2 publishes from — every visible native
-slug (bare and account-qualified) plus every routed public id — so publication and parsing
-read one source and cannot drift. Test 9 asserts that invariant directly.
+`fastRowBases()` is a synchronous SUPERSET of what wp2 publishes, deliberately — not the
+same enumeration. wp2's list depends on request-local async state: `fetchAllModels`, the
+entitlement snapshot, and the gathered catalog (`index.ts:1350`, `:1404`, `:1421`). A
+request-side parser has only `config` and cannot reproduce it.
+
+A superset is the right shape anyway. Being too permissive here costs nothing: the router
+still rejects a base it cannot serve, and the exact-id guard above still protects real
+models. Being too strict is what breaks the feature — that was the round-3 defect, where a
+published row could not be parsed. So the parser answers "could this plausibly be a base we
+publish for?" and lets routing make the final call.
+
+```ts
+/**
+ * Bases that may carry a fast row. A superset of the published set: entitlement filtering
+ * is deliberately NOT applied, because it needs an async snapshot the request path does not
+ * have, and an unavailable selector is already rejected downstream by routing.
+ */
+export function fastRowBases(config: OcxConfig): Set<string> {
+  const bases = new Set<string>(knownEffortRowIds(config));
+  // Bare natives carry no declared models list and route by family pattern, so the known-id
+  // set omits them entirely (router.ts:529). They are also the models Fast matters most for.
+  if (shouldIncludeNativeOpenAi(config)) {
+    for (const slug of visibleNativeSlugs(config)) bases.add(slug);
+  }
+  if (shouldIncludeAccountBoundNativeOpenAi(config)) {
+    for (const [selector, slugs] of accountBoundNativeOpenAiSlugsBySelector(config)) {
+      for (const slug of slugs) bases.add(`${selector}/${slug}`);
+    }
+  }
+  return bases;
+}
+```
+
+All three helpers are synchronous and config-only (`metadata.ts:430`, `:450`, `:763`), so
+this builds on the request path. wp2 asserts the containment direction that matters: every
+base it publishes a row for is in this set (test 10). The reverse does not hold, by design.
 
 ```ts
 export interface ParsedFastRowId { baseId: string; }
@@ -88,8 +121,10 @@ export interface ParsedFastRowId { baseId: string; }
 export function parseFastRowId(
   id: string,
   config: Pick<OcxConfig, "fastRows">,
-  knownIds: EffortRowKnownIds | undefined,
-  routableBases: EffortRowKnownIds | undefined,
+  // Both optional so a unit test can call the parser with neither inventory and get the
+  // flag-off / shape-only behaviour without constructing a config.
+  knownIds?: EffortRowKnownIds,
+  routableBases?: EffortRowKnownIds,
 ): ParsedFastRowId | null {
   if (config.fastRows !== true) return null;
   if (!id.endsWith(FAST_ROW_SUFFIX)) return null;
@@ -137,17 +172,45 @@ wp3 applies it at each ingress: when the effort parser returns a base for which 
 the selector is treated as unrecognized. Both marker orders then behave identically on all
 five surfaces.
 
-## Request-time entry points
+## Request-time entry point
+
+One wrapper parses BOTH grammars, so no call site can apply the nested-marker rule
+differently from another. wp3 uses only this:
 
 ```ts
-export function parseRequestFastRowId(id: string, config: OcxConfig): ParsedFastRowId | null {
-  if (config.fastRows !== true) return null;
-  // Ordinary ids do not carry the marker; bail before building either inventory so the
-  // flag costs nothing per request for models that are not fast rows.
-  if (!id.endsWith(FAST_ROW_SUFFIX)) return null;
-  return parseFastRowId(id, config, knownEffortRowIds(config), fastRowBases(config));
+export interface ParsedSyntheticRow {
+  fastRow: ParsedFastRowId | null;
+  effortRow: ParsedEffortRowId | null;
+}
+
+/**
+ * Resolve one ingress selector against both synthetic grammars. Callers pass the id the
+ * client sent and never a value another parser mutated.
+ */
+export function parseSyntheticRowId(id: string, config: OcxConfig): ParsedSyntheticRow {
+  // Ordinary ids carry no marker at all; bail before building either inventory so the
+  // flags cost nothing per request for models that are not synthetic rows.
+  if (id.lastIndexOf("--") <= 0) return { fastRow: null, effortRow: null };
+  const knownIds = knownEffortRowIds(config);
+  const fastRow = config.fastRows === true && id.endsWith(FAST_ROW_SUFFIX)
+    ? parseFastRowId(id, config, knownIds, fastRowBases(config))
+    : null;
+  if (fastRow) return { fastRow, effortRow: null };
+  const effortRow = parseEffortRowId(id, config, {
+    knownIds,
+    table: loadDetectedCursorEffortTable(),
+  });
+  // Composition is not supported (020 R1) and the effort parser cannot see the problem: it
+  // validates the terminal effort but never that the base is real (effort-row.ts:78-95), so
+  // "x--fast--high" would otherwise resolve to the nonexistent base "x--fast".
+  return effortRow && effortBaseCarriesFastMarker(effortRow.baseId, knownIds)
+    ? { fastRow: null, effortRow: null }
+    : { fastRow: null, effortRow };
 }
 ```
+
+`parseRequestFastRowId` is not introduced; the wrapper subsumes it. Existing effort-row
+call sites migrate to the wrapper in wp3 so both grammars are resolved in one place.
 
 `isKnownId` is module-private in `effort-row.ts:32` today. wp1 exports it there rather than
 duplicating the Set-or-predicate branch.
@@ -203,8 +266,8 @@ with `providerConfigSeed(getProviderRegistryEntry(...))` rather than hand-writin
 so the test cannot drift from real capability data.
 
 1. **Default off.** `parseFastRowId("x--fast", {})` returns null and
-   `expandFastRow(row, true, {})` returns the row alone. This is the path every existing
-   install runs.
+   `expandFastRow(row, true, {})` returns the row alone — both inventories are optional, so
+   this needs no config. This is the path every existing install runs.
 2. **Eligible publishes, unclassified does not.** Three fixture providers —
    `supportsServiceTier: true` on an `openai-responses` adapter (eligible), `false`
    (capability-unsupported), and absent (unclassified) — and only the first expands. This

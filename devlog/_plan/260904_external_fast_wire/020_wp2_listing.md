@@ -141,21 +141,38 @@ pseudo-provider explicitly, since `config.providers.native` does not exist:
 
 One helper serves both loops, alongside the existing `push1mVariant`:
 
+One `discoveryId` helper computes the id for a row, and BOTH the loops and the collision
+set use it, so the two can never disagree about what a real id looks like:
+
 ```ts
-// Every real discovery id, computed BEFORE the loops. `seen` alone is not enough: it grows
-// as the loops run, so whether a synthetic id collided with a real one would depend on
-// iteration order. With both `foo` and a real `foo--fast` in the roster, the synthetic
-// alias for `foo` IS the real model's alias, and whichever ran first would win the row.
-const realDiscoveryIds = new Set<string>(/* every id both loops will emit */);
+// The existing per-loop id expressions, extracted verbatim so there is one definition.
+const discoveryId = (provider: string, modelId: string): string => provider === "native"
+  ? (idStyle === "readable" ? claudeCodeNativeAlias(modelId) : aliasForRoute("native", modelId))
+  : (idStyle === "readable" ? claudeCodeAlias(provider, modelId) : aliasForRoute(provider, modelId));
+
+// Every real id BOTH loops will emit, computed before either runs. `seen` alone is not
+// enough: it grows as the loops run, so whether a synthetic id collided with a real one
+// would depend on iteration order. With both `foo` and a real `foo--fast` in the roster,
+// the synthetic id for `foo` IS the real model's id, and whichever ran first would win.
+const realDiscoveryIds = new Set<string>([
+  ...nativeSlugs.map(slug => discoveryId("native", slug)),
+  // The routed loop's own listedModelId, so a fastMode-rewritten Cursor id is counted as
+  // the real id it will actually be published under.
+  ...routedModels.map(m => discoveryId(m.provider, listedModelIdFor(m))),
+]);
 
 const pushFastVariant = (base: AnthropicModelInfo) => {
   const fastId = `${base.id}--fast`;
-  // A real model always wins its own id.
+  // A real model always wins its own id, whatever the iteration order.
   if (realDiscoveryIds.has(fastId) || seen.has(fastId)) return;
   seen.add(fastId);
   out.push({ ...base, id: fastId, display_name: `${base.display_name} · Fast` });
 };
 ```
+
+`listedModelIdFor(m)` is the existing `fastModelId ?? m.id` expression at
+`model-info.ts:162`, lifted to a helper for the same reason: the fastMode Cursor rewrite
+must be reflected in the collision set, or a rewritten row would look synthetic.
 
 ```diff
    for (const slug of nativeSlugs) {
@@ -194,6 +211,12 @@ row strands nothing, because the original id keeps existing.
 7. A native WITHOUT upstream `additional_speed_tiers` gets no row; one WITH it does.
 8. A native WITH upstream evidence but operator `supportsServiceTier: false` gets NO row.
    The metadata-only draft failed this one.
+9. **Order-independent collision.** A roster containing both `foo` and a real `foo--fast`
+   publishes the REAL model's row under that id, asserted with the roster in BOTH orders.
+   The `seen`-only draft passed one order and failed the other.
+10. **Publication is inside the parser's superset.** Every base this listing publishes a
+    fast row for is in `fastRowBases(config)`. This is the anti-drift invariant that makes
+    a published row guaranteed-parsable; it is the round-3 regression.
 
 ## Verification
 
