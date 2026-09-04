@@ -1661,6 +1661,83 @@ describe("kiro adapter — parseStream", () => {
     expect(after.contextTotalTokens ?? 0).toBeGreaterThan(baseline.contextTotalTokens ?? 0);
   });
 
+  // The negative half of the same contract: a turn that does not complete must teach nothing. A
+  // stream that fails mid-flight proves nothing about how densely its payload tokenized, and a
+  // turn that asks for the bounded completion retry is not over — it streams again against a
+  // rebuilt payload, so learning from the first attempt would move the factor twice for one turn.
+  test("an unfinished turn records no calibration", async () => {
+    const messages = [{ role: "user", content: "x".repeat(28_000) }];
+    const conversationId = "99999999-8888-7777-6666-555555555555";
+    const sameConversation = () => ({
+      ...parsedWith(messages),
+      _providerContinuation: { kiro: { conversationId } },
+    });
+
+    resetKiroCalibration();
+    const failing = createKiroAdapter(provider);
+    await failing.buildRequest(sameConversation());
+    // Report a context percentage, then end the stream with an upstream error rather than a
+    // completion. The percentage is real; the turn is not finished.
+    const events = await collectAdapterEvents(failing.parseStream(new Response(streamOf(
+      eventFrame({ contextUsagePercentage: 10 }),
+      eventFrame({ message: "boom" }, "invalidStateEvent"),
+    ))));
+    // Whatever the exact terminal shape, the turn did NOT deliver a completed answer.
+    expect(events.some(event => event.type === "done")).toBe(false);
+
+    // Compare the ESTIMATE the next request carries, not a second completed turn — completing one
+    // would itself record and mask what we are asserting.
+    const after = createKiroAdapter(provider);
+    await after.buildRequest(sameConversation());
+    const afterEstimate = (await doneUsage(after, eventFrame({ content: "ok" }))).contextTotalTokens;
+
+    resetKiroCalibration();
+    const baselineAdapter = createKiroAdapter(provider);
+    await baselineAdapter.buildRequest(sameConversation());
+    const baseline = (await doneUsage(baselineAdapter, eventFrame({ content: "ok" }))).contextTotalTokens;
+
+    expect(afterEstimate).toBe(baseline);
+  });
+
+  // The bounded completion retry is the case the terminal-only rule exists for: attempt 1 reports
+  // a real percentage but asks for a fallback, so the SAME user turn streams again against a
+  // rebuilt payload. Learning from attempt 1 would move the factor twice for one turn.
+  test("an attempt that falls back to the completion retry does not calibrate", async () => {
+    const messages = [{ role: "user", content: "x".repeat(28_000) }];
+    const conversationId = "abcdabcd-1234-5678-9abc-def012345678";
+    const sameConversation = (tools?: unknown[]) => ({
+      ...parsedWith(messages, tools),
+      _providerContinuation: { kiro: { conversationId } },
+    });
+
+    resetKiroCalibration();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(streamOf(eventFrame({ content: "Final from fallback." })))) as typeof fetch;
+    try {
+      const falling = createKiroAdapter(provider);
+      await falling.buildRequest(sameConversation([bashTool]));
+      // Text plus a context percentage, but no private completion call: this attempt needs the
+      // bounded fallback, so its observation must be discarded rather than learned.
+      await collectAdapterEvents(falling.parseStream(new Response(streamOf(
+        eventFrame({ content: "I am checking." }),
+        eventFrame({ contextUsagePercentage: 10 }),
+      ))));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const after = createKiroAdapter(provider);
+    await after.buildRequest(sameConversation());
+    const afterEstimate = (await doneUsage(after, eventFrame({ content: "ok" }))).contextTotalTokens;
+
+    resetKiroCalibration();
+    const baselineAdapter = createKiroAdapter(provider);
+    await baselineAdapter.buildRequest(sameConversation());
+    const baseline = (await doneUsage(baselineAdapter, eventFrame({ content: "ok" }))).contextTotalTokens;
+
+    expect(afterEstimate).toBe(baseline);
+  });
+
   test("Kiro GPT routes use the Kiro token ratio without context percentage", async () => {
     const adapter = createKiroAdapter(provider);
     await adapter.buildRequest(parsedWith([{ role: "user", content: "x".repeat(3500) }], undefined, "gpt-5.6-sol"));
