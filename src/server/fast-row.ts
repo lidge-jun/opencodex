@@ -73,9 +73,20 @@ export function fastRowEligible(
  * Being too permissive costs nothing here: routing still rejects a base it cannot serve, and
  * the exact-id guard in `parseFastRowId` still protects real models. Being too strict breaks
  * the feature.
+ *
+ * NOT constant across a session. `knownEffortRowIds` reads the live-model cache, so a
+ * live-only model that leaves the cache also leaves this set, and a client holding its
+ * `--fast` selector stops being understood. That is deliberate rather than a gap: the SAME
+ * cache feeds publication, so the plain base row disappears from the listing in the same
+ * breath. A fast row's lifetime is exactly its base row's lifetime, which is the property
+ * that matters; pinning fast selectors alive past their base would be the real defect.
+ * The static native half below is genuinely stable, which is what bare natives need.
  */
-export function fastRowBases(config: OcxConfig): Set<string> {
-  const bases = new Set<string>(knownEffortRowIds(config));
+export function fastRowBases(config: OcxConfig, knownIds?: ReadonlySet<string>): Set<string> {
+  // Reuse the caller's inventory when it already built one: this set is a superset of it, and
+  // rebuilding walks every configured, registry, live-cached and custom model a second time
+  // on a request path.
+  const bases = new Set<string>(knownIds ?? knownEffortRowIds(config));
   // The STATIC upstream table, not `visibleNativeSlugs()`: that one filters by
   // disabled/shadowed state and reaches the catalog cache on disk, so it would both read a
   // file per parsed selector and SHRINK as runtime state changes. A base disappearing
@@ -150,7 +161,7 @@ export function parseSyntheticRowId(
   }
   const knownIds = knownEffortRowIds(config);
   const fastRow = selector.endsWith(FAST_ROW_SUFFIX)
-    ? parseFastRowId(selector, config, knownIds, fastRowBases(config))
+    ? parseFastRowId(selector, config, knownIds, fastRowBases(config, knownIds))
     : null;
   if (fastRow) return { fastRow, effortRow: null };
   // Cursor install detection stays behind its own flag, exactly as parseRequestEffortRowId
@@ -188,4 +199,3 @@ export function expandFastRow<T extends { id: string }>(
   const id = fastRowId(row.id);
   return isKnownId(knownIds, id) ? [row] : [row, { ...row, id }];
 }
-
