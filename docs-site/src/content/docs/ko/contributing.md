@@ -35,7 +35,7 @@ bun run privacy:scan              # CI에서 쓰는 자격 증명/개인정보 �
 bun run prepare:package           # 패키지 런처/asset 갱신
 ```
 
-대부분의 테스트는 `tests/*.test.ts`에 나란히 놓인 Bun 테스트입니다. 공용 fixture는
+테스트는 `src/`를 따라 나눈 도메인 디렉터리(`tests/<domain>/`)에 놓인 Bun 테스트이며, 지도는 `scripts/test-layout/layout.json`입니다. 공용 fixture는
 `tests/helpers/`, 범위가 넓은 네이티브 동등성 시나리오는 `tests/e2e-style/`에 있습니다. 바꾼
 subsystem의 기존 테스트 근처에 집중된 회귀 테스트를 추가하세요. 공용 라우팅, 어댑터, 설정, 서버
 동작을 건드렸다면 전체 스위트도 실행합니다.

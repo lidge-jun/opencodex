@@ -41,7 +41,7 @@ bun run privacy:scan              # CI tarafından kullanılan kimlik/gizlilik t
 bun run prepare:package           # paket başlatıcılarını ve varlıklarını yenileme
 ```
 
-Testlerin çoğu düz `tests/*.test.ts` Bun testleridir. `tests/helpers/`
+Bun testleri `src/` yapısını yansıtan alan dizinlerinde (`tests/<domain>/`) bulunur; harita `scripts/test-layout/layout.json` dosyasıdır. `tests/helpers/`
 paylaşılan test ortamlarını (fixtures) ve `tests/e2e-style/` daha geniş yerel
 parite senaryolarını içerir. Değiştirdiğiniz alt sistemin mevcut testlerinin
 yakınında odaklanmış bir regresyon testi bulundurun; paylaşılan yönlendirme,
@@ -254,5 +254,4 @@ Değişikliğinizi kanıtlayan en dar komutu çalıştırın — tipler için `b
 typecheck`, davranış için odaklanmış bir `bun test tests/<ad>.test.ts` veya
 çalışma zamanı probu, ardından etkilenen yüzeye uygun daha geniş kapılar.
 opencodex büyük partiler yerine küçük, doğrulanabilir commit'leri tercih eder.
-
 
