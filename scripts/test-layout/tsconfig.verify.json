@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["bun-types"],
+    "resolveJsonModule": true,
+    "rootDir": "../..",
+    "declaration": false
+  },
+  "include": [
+    "../../scripts/test-layout/**/*.ts",
+    "../../tests/test-layout.test.ts",
+    "../../tests/test-layout-tooling.test.ts",
+    "../../tests/helpers/repo-root.ts"
+  ]
+}

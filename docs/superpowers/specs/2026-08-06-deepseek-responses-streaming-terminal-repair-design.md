@@ -227,8 +227,8 @@ The implementation is expected to touch these responsibility boundaries:
   wrapper.
 - `src/server/responses/core.ts`: resolve the provider policy and wrap the SSE
   body before transport-specific relay branches.
-- `tests/responses-terminal-repair.test.ts`: unit state-machine coverage.
-- `tests/deepseek-inbound-wire.test.ts`: end-to-end wire, progressive delivery,
+- `tests/responses/responses-terminal-repair.test.ts`: unit state-machine coverage.
+- `tests/providers/deepseek-inbound-wire.test.ts`: end-to-end wire, progressive delivery,
   repair composition, and WebSocket/HTTP activation.
 - Existing relay and item-id tests only where an explicit integration contract
   needs to be pinned.

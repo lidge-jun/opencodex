@@ -1,6 +1,13 @@
 import { promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dialog";
 import { createBoundedFetch } from "./bounded-fetch";
-import { standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
+import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
+
+/**
+ * Fired instead of the admin-token prompt when the dashboard cannot start a session on a
+ * deployment that has no admin token to type. The shell renders it as a notice; nothing
+ * blocks on it.
+ */
+export const SESSION_UNAVAILABLE_EVENT = "opencodex:session-unavailable";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
 const ADMIN_TOKEN_VALIDATION_PATH = "/api/settings";
@@ -34,6 +41,18 @@ let requestAdminToken: AdminTokenPrompt = promptForAdminToken;
 let rebootstrapTimeoutMs = SESSION_REBOOTSTRAP_TIMEOUT_MS;
 let resolutionWatchdogMs = RESOLUTION_WATCHDOG_MS;
 const runtimes = new Map<ApiPlane, TargetRuntime>();
+
+function reportSessionUnavailable(plane: ApiPlane): void {
+  if (typeof window === "undefined") return;
+  // Take the constructor off the same window we dispatch on: a test harness (and a
+  // sandboxed embed) can supply a document without installing CustomEvent globally.
+  const Ctor = (window as unknown as { CustomEvent?: typeof CustomEvent }).CustomEvent
+    ?? (typeof CustomEvent === "function" ? CustomEvent : null);
+  if (!Ctor) return;
+  try {
+    window.dispatchEvent(new Ctor(SESSION_UNAVAILABLE_EVENT, { detail: { plane } }));
+  } catch { /* a shell that cannot receive the notice must not break the fetch path */ }
+}
 
 function blankSession(): ApiSessionState {
   return { token: null, csrfToken: null, browserOrigin: null, serverOrigin: null };
@@ -258,6 +277,14 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
       ]).finally(() => clearTimeout(watchdog));
       if (renewed.kind === "minted") return renewed.token;
       if (renewed.kind === "failed") return null;
+      // A non-hub deployment has no admin token the user could supply: the server mints the
+      // session itself, so a refusal is a Host/Origin misconfiguration. Surface that instead
+      // of a password box the user cannot answer (#3353, #3483).
+      if (!adminTokenPromptAllowed()) {
+        state.promptCancelled = true;
+        reportSessionUnavailable(plane);
+        return null;
+      }
       const prompted = await requestAdminToken(token => verifyAdminToken(plane, token));
       if (prompted) {
         state.session = { token: prompted, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin };

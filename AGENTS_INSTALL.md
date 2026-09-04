@@ -69,8 +69,8 @@ agent-driven callers regardless:
 - [`src/server/management/sidebar-routes.ts`](./src/server/management/sidebar-routes.ts)
   — the `403 agent_consent_required` refusal.
 
-Regression coverage: `tests/startup-prompt.test.ts`,
-`tests/agent-driven.test.ts`, `tests/sidebar-routes.test.ts`.
+Regression coverage: `tests/server/startup-prompt.test.ts`,
+`tests/cli/agent-driven.test.ts`, `tests/server/sidebar-routes.test.ts`.
 
 If a future action spends the user's identity, credits, or reputation, gate it
 the same way rather than relying on a prompt an agent can answer, and document

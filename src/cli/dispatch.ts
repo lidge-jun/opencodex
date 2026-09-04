@@ -349,7 +349,7 @@ const commandRunners: Record<string, CommandRunner> = {
           : "Remote hub catalog synchronized.");
         await handleConnectedSyncCatalogWrite(result, restartCodex, restartDesktopApp);
         // `process.exitCode` rather than a literal 0, for the same reason every other
-        // runner does it (tests/cli-transport-honesty.test.ts): the catalog-write helper
+        // runner does it (tests/cli/cli-transport-honesty.test.ts): the catalog-write helper
         // drives app-server restarts, and one of those recording a failure must not be
         // erased by the value this runner returns. It reads 0 on the ordinary path. Node
         // types it as `number | string`; only a numeric code means anything here.

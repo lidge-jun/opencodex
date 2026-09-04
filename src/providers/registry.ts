@@ -632,7 +632,7 @@ const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
  * `mimo-v2.5-free` and `longcat-2.0-free` ACCEPT images and are deliberately
  * absent. Adding them would silently replace a working image with a caption,
  * which is worse than the loud 400 this list exists to prevent — see the negative
- * assertion in tests/provider-registry-parity.test.ts.
+ * assertion in tests/providers/provider-registry-parity.test.ts.
  *
  * Zen's roster is discovered live while this list is static, so it is a dated
  * exception list, not a capability model. Re-probe before extending it.
@@ -688,7 +688,7 @@ const DEEPSEEK_FLASH_REASONING_MAP: Record<string, string> = {
 /**
  * Flash-versus-Pro classification for DeepSeek V4 model ids, including prefixed
  * (`deepseek/deepseek-v4-pro`) and suffixed (`deepseek-v4-flash-free`) forms.
- * `tests/provider-registry-parity.test.ts` enumerates every id the registry
+ * `tests/providers/provider-registry-parity.test.ts` enumerates every id the registry
  * actually passes here, so a future id this substring test would misread cannot
  * land silently.
  */
@@ -1496,12 +1496,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     featured: true,
     dashboardUrl: "https://platform.openai.com/api-keys",
     defaultModel: "gpt-5.5",
-    models: ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS],
+    models: ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS, "gpt-6-astra"],
     liveModels: true,
-    modelContextWindows: { ...OPENAI_API_GPT56_CONTEXT_WINDOWS, ...OPENAI_DAYBREAK_CONTEXT_WINDOWS },
-    modelMaxInputTokens: { ...OPENAI_API_GPT56_MAX_INPUT_TOKENS, ...OPENAI_DAYBREAK_MAX_INPUT_TOKENS },
+    modelContextWindows: { ...OPENAI_API_GPT56_CONTEXT_WINDOWS, ...OPENAI_DAYBREAK_CONTEXT_WINDOWS, "gpt-6-astra": 1_050_000 },
+    modelMaxInputTokens: { ...OPENAI_API_GPT56_MAX_INPUT_TOKENS, ...OPENAI_DAYBREAK_MAX_INPUT_TOKENS, "gpt-6-astra": 922_000 },
+    modelMaxOutputTokens: { "gpt-6-astra": 128_000 },
     modelInputModalities: Object.fromEntries(
-      ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS]
+      ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS, "gpt-6-astra"]
         .map(id => [id, ["text", "image"]]),
     ),
     modelReasoningEfforts: {
@@ -1509,6 +1510,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
         [...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS].map(id => [id, OPENAI_API_GPT56_REASONING_EFFORTS]),
       ),
       ...OPENAI_DAYBREAK_REASONING_EFFORTS,
+      "gpt-6-astra": ["low", "medium", "high", "xhigh", "max"],
     },
     virtualModels: OPENAI_API_GPT56_VIRTUAL_MODELS,
   },
@@ -1541,7 +1543,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_CONTEXT_WINDOW])),
     // text+image only. Meta also documents video, audio (degraded on 1.3), and PDF, but
     // the catalog modality enum is text/image and over-advertising poisons the exported
-    // client config (see tests/catalog-input-modality-enum.test.ts).
+    // client config (see tests/codex-integration/catalog-input-modality-enum.test.ts).
     modelInputModalities: Object.fromEntries(META_MUSE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
     modelReasoningEfforts: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORTS])),
     modelReasoningEffortMap: Object.fromEntries(META_MUSE_MODELS.map(id => [id, META_MUSE_REASONING_EFFORT_MAP])),

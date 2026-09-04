@@ -2,6 +2,7 @@ import { DICTS, getActiveLocale, type Locale } from "./i18n/shared";
 
 const ADMIN_TOKEN_DIALOG_ID = "opencodex-admin-token-dialog";
 const ADMIN_TOKEN_USERNAME = "OpenCodex";
+const ADMIN_TOKEN_DOCS_URL = "https://opencodex.me/guides/web-dashboard/#finding-the-admin-token";
 
 export type AdminTokenValidation = "accepted" | "rejected" | "unavailable";
 export type AdminTokenVerifier = (token: string) => Promise<AdminTokenValidation>;
@@ -73,6 +74,22 @@ export function promptForAdminToken(
     password.spellcheck = false;
     password.autocapitalize = "none";
     tokenField.append(tokenLabel, password);
+
+    // #3353: the bare password box told a user nothing. Say what the credential is, where
+    // the proxy already wrote it, and link the guide that spells it out.
+    const help = document.createElement("p");
+    help.className = "hint";
+    help.style.marginTop = "var(--space-2)";
+    help.textContent = messages["auth.adminTokenHelp"];
+    const docsLink = document.createElement("a");
+    docsLink.className = "text-control";
+    docsLink.href = ADMIN_TOKEN_DOCS_URL;
+    docsLink.target = "_blank";
+    docsLink.rel = "noreferrer";
+    docsLink.style.color = "var(--accent)";
+    docsLink.textContent = messages["auth.adminTokenDocsLink"];
+    help.append(" ", docsLink);
+    tokenField.append(help);
 
     const validationError = document.createElement("div");
     validationError.className = "notice notice-err";

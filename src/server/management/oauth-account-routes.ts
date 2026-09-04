@@ -333,8 +333,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     if (provider !== "anthropic") {
-      // Generic OAuth pool-settings contract (#695 slice 1): persisted per provider, inert until
-      // the selector consumes it. Codex keeps /api/codex-auth; api-key providers have no pool.
+      // Generic OAuth pool-settings contract (#695 slice 1): persisted per provider. `strategy`
+      // and `autoSwitchThreshold` stay inert until the selector consumes them; `enabled` already
+      // governs the pre-dispatch account preference. Codex keeps /api/codex-auth; api-key
+      // providers have no pool.
       const { poolSettingsCapability, genericPoolSettingsDto } = await import("../../oauth/pool-settings-capability");
       const prov = config.providers[provider];
       if (!provider || !prov || poolSettingsCapability(provider, prov) !== "generic") {

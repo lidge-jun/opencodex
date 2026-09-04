@@ -403,7 +403,7 @@ function serviceTierModelDefaultsFor(
  * The catalog hint pass must not read PROVIDER_REGISTRY: a gather flight captures its registry
  * authority up front and forbids any later read, so consulting the registry per model turned
  * every hint pass into a post-lookup read and dropped a custom-destination flight's own
- * discovery result (tests/codex-gather-authority.test.ts).
+ * discovery result (tests/codex-integration/codex-gather-authority.test.ts).
  *
  * Registry values go in first so an explicit user entry still wins, matching
  * `applyReasoningSummaryDefaults`. `supportsVerbosity` is the provider-wide default, expanded

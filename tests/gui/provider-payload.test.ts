@@ -1,0 +1,307 @@
+import { describe, expect, test } from "bun:test";
+import {
+  buildProviderPayload,
+  buildProviderPostBody,
+  codexAccountProviderNames,
+  codexPresetDescriptionKey,
+  ensureOpenAiProvider,
+  isReservedCodexForwardPreset,
+  openAiAccountProviderState,
+  OpenAiEnableError,
+} from "../../gui/src/provider-payload";
+import { en } from "../../gui/src/i18n/en";
+import { ko } from "../../gui/src/i18n/ko";
+import { de } from "../../gui/src/i18n/de";
+import { zh } from "../../gui/src/i18n/zh";
+import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
+import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+
+describe("provider dashboard payload", () => {
+  test("keeps OpenAI in the account entry even when its provider is absent", () => {
+    expect(codexAccountProviderNames({
+      custom: { authMode: "forward" },
+      anthropic: { authMode: "oauth" },
+    })).toEqual(["openai", "custom"]);
+    expect(codexAccountProviderNames({
+      openai: { authMode: "forward" },
+    })).toEqual(["openai"]);
+  });
+
+  test("rejects noncanonical OpenAI providers before enabling account login", () => {
+    expect(openAiAccountProviderState(undefined)).toBe("absent");
+    expect(openAiAccountProviderState({
+      adapter: "openai-responses",
+      authMode: "forward",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      disabled: true,
+    })).toBe("disabled");
+    expect(openAiAccountProviderState({
+      adapter: "openai-responses",
+      authMode: "forward",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    })).toBe("ready");
+    expect(openAiAccountProviderState({
+      adapter: "openai-responses",
+      authMode: "key",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      disabled: true,
+    })).toBe("invalid");
+    expect(openAiAccountProviderState({
+      adapter: "openai-chat",
+      authMode: "forward",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      disabled: true,
+    })).toBe("invalid");
+    expect(openAiAccountProviderState({
+      adapter: "openai-responses",
+      authMode: "forward",
+      baseUrl: "https://api.openai.com/v1",
+      disabled: true,
+    })).toBe("invalid");
+  });
+
+  test("enables OpenAI through the existing provider preset and provider POST", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const preset = deriveProviderPresets().find(row => row.id === "openai")!;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      requests.push({
+        path: url.pathname,
+        method: init?.method ?? "GET",
+        ...(typeof init?.body === "string" ? { body: JSON.parse(init.body) } : {}),
+      });
+      if (url.pathname === "/api/provider-presets") {
+        return Response.json({ providers: [preset] });
+      }
+      if (url.pathname === "/api/providers") {
+        return Response.json({ success: true, name: "openai" });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    await ensureOpenAiProvider("http://localhost:10100", "absent", fetchImpl);
+
+    expect(requests).toEqual([
+      { path: "/api/provider-presets", method: "GET" },
+      {
+        path: "/api/providers",
+        method: "POST",
+        body: { name: "openai", provider: preset.provider },
+      },
+    ]);
+  });
+
+  test("re-enables OpenAI without replacing its existing provider config", async () => {
+    const requests: Array<{ path: string; method: string; body?: unknown }> = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      requests.push({
+        path: `${url.pathname}${url.search}`,
+        method: init?.method ?? "GET",
+        ...(typeof init?.body === "string" ? { body: JSON.parse(init.body) } : {}),
+      });
+      return Response.json({ success: true });
+    }) as typeof fetch;
+
+    await ensureOpenAiProvider("http://localhost:10100", "disabled", fetchImpl);
+
+    expect(requests).toEqual([{
+      path: "/api/providers?name=openai",
+      method: "PATCH",
+      body: { disabled: false },
+    }]);
+  });
+
+  test("surfaces OpenAI enable failures as stable i18n keys", async () => {
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/provider-presets") {
+        return new Response("nope", { status: 500 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      await ensureOpenAiProvider("http://localhost:10100", "absent", fetchImpl);
+      expect.unreachable("expected OpenAiEnableError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(OpenAiEnableError);
+      expect((error as OpenAiEnableError).i18nKey).toBe("codexAuth.openaiPresetLoadFailed");
+    }
+  });
+
+  test("missing openai preset seed maps to a stable i18n key", async () => {
+    const fetchImpl = (async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/api/provider-presets") {
+        return Response.json({ providers: [{ id: "openai" }] });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    try {
+      await ensureOpenAiProvider("http://localhost:10100", "absent", fetchImpl);
+      expect.unreachable("expected OpenAiEnableError");
+    } catch (error) {
+      expect(error).toBeInstanceOf(OpenAiEnableError);
+      expect((error as OpenAiEnableError).i18nKey).toBe("codexAuth.openaiPresetUnavailable");
+    }
+  });
+
+  test("persists explicit API-key mode for built-in OAuth providers", () => {
+    expect(buildProviderPayload({
+      name: "xai",
+      adapter: " openai-chat ",
+      baseUrl: " https://api.x.ai/v1 ",
+      authMode: "key",
+      apiKey: " xai-key ",
+      defaultModel: " grok-4.5 ",
+    })).toEqual({
+      adapter: "openai-chat",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key",
+      apiKey: "xai-key",
+      defaultModel: "grok-4.5",
+    });
+  });
+
+  test("persists bearer transport only for Anthropic API-key providers", () => {
+    const bearerGateway = {
+      name: "gateway",
+      adapter: "anthropic",
+      baseUrl: "https://gateway.example/v1",
+      authMode: "key" as const,
+      apiKey: " gateway-key ",
+      apiKeyTransport: "bearer" as const,
+      defaultModel: "claude-gateway",
+    };
+    expect(buildProviderPayload(bearerGateway)).toMatchObject({
+      adapter: "anthropic",
+      authMode: "key",
+      apiKey: "gateway-key",
+      apiKeyTransport: "bearer",
+    });
+    expect(buildProviderPayload({ ...bearerGateway, adapter: "openai-chat" })).not.toHaveProperty("apiKeyTransport");
+  });
+
+  test("does not persist secrets for forward or local modes", () => {
+    const base = {
+      name: "local",
+      adapter: "openai-responses",
+      baseUrl: "https://example.test/v1",
+      apiKey: "must-not-leak",
+      defaultModel: "",
+    };
+    expect(buildProviderPayload({ ...base, authMode: "forward" })).toEqual({
+      adapter: "openai-responses",
+      baseUrl: "https://example.test/v1",
+      authMode: "forward",
+    });
+    expect(buildProviderPayload({ ...base, authMode: "local" })).toEqual({
+      adapter: "openai-responses",
+      baseUrl: "https://example.test/v1",
+    });
+  });
+
+  test("posts the immutable canonical OpenAI Pool seed under its reserved id", () => {
+    const preset = deriveProviderPresets().find(row => row.id === "openai")!;
+    const registry = PROVIDER_REGISTRY.find(row => row.id === "openai")!;
+    const originalPreset = structuredClone(preset);
+    const form = {
+      name: "attacker-name",
+      adapter: "openai-chat",
+      baseUrl: "https://attacker.example/v1",
+      authMode: "key" as const,
+      apiKey: "must-not-leak",
+      defaultModel: "attacker-model",
+    };
+    const result = buildProviderPostBody(preset, form);
+    expect(result).toEqual({ name: "openai", provider: providerConfigSeed(registry) });
+    expect(preset).toEqual(originalPreset);
+    expect(result.provider).not.toBe(preset.provider);
+    expect(result.provider.codexAccountMode).toBe("pool");
+    expect(result.provider).not.toHaveProperty("virtualModels");
+    expect(result.provider).not.toHaveProperty("note");
+  });
+
+  test.each([
+    ["pool", "prov.openaiPoolDesc"],
+    ["direct", "prov.openaiDirectDesc"],
+  ] as const)("reserved OpenAI %s mode uses localized copy and never API-key setup semantics", (mode, expectedKey) => {
+    const preset = { ...deriveProviderPresets().find(row => row.id === "openai")!, codexAccountMode: mode };
+    expect(isReservedCodexForwardPreset(preset)).toBe(true);
+    expect(codexPresetDescriptionKey(preset)).toBe(expectedKey);
+    for (const locale of [en, ko, de, zh]) {
+      expect(locale[expectedKey].trim().length).toBeGreaterThan(0);
+      expect(locale[expectedKey]).not.toBe(preset.note);
+      expect(locale[expectedKey].toLowerCase()).not.toContain("api key");
+    }
+  });
+
+  test("only OpenAI is reserved and missing mode resolves to Pool copy", () => {
+    expect(isReservedCodexForwardPreset({ id: "openai-multi" })).toBe(false);
+    expect(deriveProviderPresets().find(row => row.id === "openai-multi")).toBeUndefined();
+    expect(codexPresetDescriptionKey({ id: "openai-multi", codexAccountMode: "direct" })).toBeNull();
+    expect(codexPresetDescriptionKey({ id: "openai" })).toBe("prov.openaiPoolDesc");
+    expect(codexPresetDescriptionKey({ id: "openai", codexAccountMode: "pool" })).toBe("prov.openaiPoolDesc");
+    expect(codexPresetDescriptionKey({ id: "openai", codexAccountMode: "direct" })).toBe("prov.openaiDirectDesc");
+  });
+
+  test("reserved presets fail locally without a canonical seed", () => {
+    expect(() => buildProviderPostBody({ id: "openai" }, {
+      name: "openai",
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+      apiKey: "",
+      defaultModel: "",
+    })).toThrow("Missing canonical provider seed");
+  });
+
+  test("API and custom presets preserve form-owned names and payload behavior", () => {
+    const form = {
+      name: " custom-api ",
+      adapter: " openai-chat ",
+      baseUrl: " https://api.example.test/v1 ",
+      authMode: "key" as const,
+      apiKey: " secret ",
+      defaultModel: " model ",
+    };
+    expect(buildProviderPostBody({ id: "openai-apikey" }, form)).toEqual({
+      name: "custom-api",
+      provider: buildProviderPayload(form),
+    });
+  });
+
+  test("built-in cloud presets include private-network access only when explicitly checked", () => {
+    const preset = deriveProviderPresets().find(row => row.id === "deepseek")!;
+    const form = {
+      name: preset.id,
+      adapter: preset.adapter,
+      baseUrl: preset.baseUrl,
+      authMode: preset.auth,
+      apiKey: "deepseek-key",
+      defaultModel: preset.defaultModel ?? "",
+      allowPrivateNetwork: false,
+    };
+
+    expect(buildProviderPostBody(preset, form).provider).not.toHaveProperty("allowPrivateNetwork");
+    expect(buildProviderPostBody(preset, { ...form, allowPrivateNetwork: true }).provider)
+      .toHaveProperty("allowPrivateNetwork", true);
+  });
+
+  test("reserved OpenAI payload never carries private-network access from form state", () => {
+    const preset = deriveProviderPresets().find(row => row.id === "openai")!;
+    const result = buildProviderPostBody(preset, {
+      name: "openai",
+      adapter: "openai-responses",
+      baseUrl: "https://attacker.example/v1",
+      authMode: "forward",
+      apiKey: "",
+      defaultModel: "",
+      allowPrivateNetwork: true,
+    });
+
+    expect(result.provider).not.toHaveProperty("allowPrivateNetwork");
+  });
+});

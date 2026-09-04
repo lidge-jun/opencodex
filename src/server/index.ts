@@ -512,7 +512,7 @@ function attachLiveSidebandUpstream(
 
 // Adapter resolution + wire-protocol override extracted to ./server/adapter-resolve.
 
-// Source invariant for tests/passthrough-abort.test.ts after the pure module split:
+// Source invariant for tests/responses/passthrough-abort.test.ts after the pure module split:
 // if (isEventStream && upstreamResponse.body) {
 // const repairConfig = route.provider.responsesItemIdRepair;
 // const needsClientRewrite = imageGenCallAliases.size > 0
@@ -1280,7 +1280,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           // Built directly rather than through formatErrorResponse: that helper derives
           // `code` from the status and message via classifyError, and these two need stable,
           // specific codes. `catalog_not_found` in particular is what lets a caller — and
-          // tests/api-key-attribution.test.ts — tell "this route exists and has no catalog"
+          // tests/server/api-key-attribution.test.ts — tell "this route exists and has no catalog"
           // apart from "this route is gone", which is the difference between admission proof
           // and a vacuous pass.
           return withCors(
@@ -2141,6 +2141,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         undefined,
         guiSessionCandidate ?? undefined,
         config.runtimeRole ?? "standalone",
+        isApiAuthRequired(config),
       );
       if (guiFile) return guiFile;
       if (url.pathname === "/" && req.method === "GET") {

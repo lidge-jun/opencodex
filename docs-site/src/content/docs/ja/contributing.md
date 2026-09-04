@@ -13,7 +13,7 @@ bun run dev:proxy    # 開発モードのプロキシ API
 bun run dev:gui      # ダッシュボード dev サーバー(別ターミナル)
 bun run typecheck    # bun x tsc --noEmit
 bun run test:changed              # routine import-graph test selection
-bun test tests/router.test.ts     # routine focused test
+bun test tests/routing/router.test.ts     # routine focused test
 bun run test                      # complete suite (PR-ready / explicit ask)
 ```
 
@@ -29,13 +29,13 @@ bun run test                      # complete suite (PR-ready / explicit ask)
 ```bash
 bun run typecheck                 # 厳密な TypeScript 検査
 bun run test                      # tests/ の全体スイート
-bun test tests/router.test.ts     # 特定テストファイル
+bun test tests/routing/router.test.ts     # 特定テストファイル
 bun run build:gui                 # Vite GUI ビルド + パッケージ準備
 bun run privacy:scan              # CI で使う資格情報/個人情報検査
 bun run prepare:package           # パッケージランチャー/asset 更新
 ```
 
-ほとんどのテストは `tests/*.test.ts` に並んで配置された Bun テストです。共有 fixture は
+テストは `src/` を写したドメインディレクトリ（`tests/<domain>/`）に置かれた Bun テストで、対応表は `scripts/test-layout/layout.json` です。共有 fixture は
 `tests/helpers/`、範囲の広いネイティブ等価性シナリオは `tests/e2e-style/` にあります。変更した
 サブシステムの既存テストの近くに集中した回帰テストを追加してください。共有ルーティング、アダプター、設定、サーバー
 動作を触った場合は全体スイートも実行します。

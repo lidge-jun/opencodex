@@ -8,13 +8,13 @@
  * shadowed copy in `logs-usage-routes.ts` and never the live one.
  *
  * This module is pure DATA and must stay that way. It is imported by
- * `src/server/management-api.ts`, which `tests/core-lab-boundary.test.ts` protects: a user
+ * `src/server/management-api.ts`, which `tests/lab/core-lab-boundary.test.ts` protects: a user
  * with one provider and no Lab must execute no Lab code. Route paths are strings, so
  * declaring `/api/lab/status` here creates no module edge. Never import a handler, and
  * never import anything from `src/lab/`. The `module` field names the owning file as text
  * for exactly this reason.
  *
- * Reconciliation lives in `tests/management-route-registry.test.ts`, which resolves
+ * Reconciliation lives in `tests/server/management-route-registry.test.ts`, which resolves
  * `(method, path)` pairs from source and fails loudly on a route whose method it cannot
  * determine. Adding a route without declaring it here fails that test.
  */

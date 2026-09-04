@@ -122,6 +122,7 @@ import {
   getAnthropicPoolAccessToken,
   getAnthropicPoolRetryAfterSeconds,
   isAnthropicAccountPoolEnabled,
+  hasAnthropicFailoverQuorum,
   promoteAnthropicActiveAccount,
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
@@ -3477,6 +3478,14 @@ async function handleResponsesInner(
         if (isGenericFailoverProvider(route.providerName, route.provider)) {
           genericFailoverAccountId = resolved.accountId;
         }
+        // Anthropic is excluded from isGenericFailoverProvider -- its own pool owns affinity and
+        // a fail-closed local-cli credential rule -- so without this stamp its identity is
+        // dropped whenever the pool flag is off, and a later 429 has no account to cool. Reactive
+        // failover needs only the id: no affinity bind, no promotion, no quota-ranked pick. Those
+        // are proactive and stay behind anthropicAccountPool.enabled.
+        if (route.providerName === "anthropic" && hasAnthropicFailoverQuorum()) {
+          anthropicPoolAccountId = resolved.accountId;
+        }
         // Captured beside the account it fences, so the two can never disagree.
         if (hasPassiveAccountQuota(route.providerName)) {
           passiveQuotaWriterGeneration = captureConfigGeneration();
@@ -3817,7 +3826,7 @@ async function handleResponsesInner(
     // The guard needs a catalog to compare against, so it stands down when the request omits one.
     // An explicit empty catalog is still authoritative: it declares that no client tools may be
     // called. A passthrough request can legitimately omit `tools` entirely and still receive a call
-    // the client understands — `tests/github-copilot-stream-contract.test.ts` sends
+    // the client understands — `tests/providers/github-copilot/github-copilot-stream-contract.test.ts` sends
     // `{model, input, stream}` with no tools and Copilot answers with a `custom_tool_call` for
     // `apply_patch`. Policing an absent catalog truncates that turn. An unreadable body lands there
     // too because the proxy cannot establish the caller's declared authorization boundary.
@@ -5207,12 +5216,15 @@ async function handleResponsesInner(
     });
     if (rotated) {
       route.provider = rotated;
-    } else {
-      if (
-        !genericFailoverAccountId
-        || genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
-        || !isGenericOAuthFailoverEnabled(config, route.providerName)
-      ) return null;
+    } else if (
+      // A POSITIVE gate, not an early return. An early `return null` here made every later arm
+      // unreachable: Anthropic never has a genericFailoverAccountId (isGenericFailoverProvider
+      // excludes it), so its sidecar 429s died on this guard before the Anthropic arm below
+      // could ever be considered.
+      genericFailoverAccountId
+      && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+      && isGenericOAuthFailoverEnabled(config, route.providerName)
+    ) {
       const nextAccountId = rotateGenericOAuthAccountOn429(
         config,
         route.providerName,
@@ -5228,6 +5240,39 @@ async function handleResponsesInner(
       } catch {
         return null;
       }
+    } else if (
+      // Anthropic's pool is excluded from generic failover, so without this arm a 429 inside a
+      // web-search or image-bridge turn was terminal even with the pool fully enabled -- while
+      // the very same 429 on the main response path rotated.
+      anthropicPoolAccountId
+      && anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
+    ) {
+      const nextAccountId = rotateAnthropicAccountOn429(
+        config,
+        anthropicPoolAccountId,
+        retryAfter,
+        anthropicSessionKey,
+      );
+      if (!nextAccountId) return null;
+      try {
+        // Deliberately NOT applyFailoverSnapshot: that helper exists to pair per-account routing
+        // metadata (Copilot origin, Antigravity project, Kiro context) with its bearer. Anthropic
+        // carries none, and getAnthropicPoolAccessToken is what enforces its fail-closed
+        // local-cli credential rule. Both existing Anthropic rotation sites apply the token the
+        // same way.
+        const accessToken = await getAnthropicPoolAccessToken(nextAccountId);
+        anthropicPoolAccountId = nextAccountId;
+        anthropicPoolFailovers += 1;
+        route.provider = { ...route.provider, apiKey: accessToken };
+        promoteAnthropicActiveAccount(nextAccountId);
+        logCtx.provider = formatAnthropicProviderForLog("anthropic", nextAccountId, config);
+      } catch {
+        return null;
+      }
+    } else {
+      // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement
+      // credential. The 429 is terminal for this sidecar turn.
+      return null;
     }
     const rotatedAdapter = resolveAdapter(
       resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
@@ -6171,7 +6216,6 @@ async function handleResponsesInner(
       while (
         upstreamResponse.status === 429
         && anthropicPoolAccountId
-        && isAnthropicAccountPoolEnabled(config)
         && anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
       ) {
         const nextAccountId = rotateAnthropicAccountOn429(
@@ -6582,7 +6626,6 @@ async function handleResponsesInner(
       if (
         response.status === 429
         && anthropicPoolAccountId
-        && isAnthropicAccountPoolEnabled(config)
         && anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
       ) {
         const nextAccountId = rotateAnthropicAccountOn429(
@@ -6608,6 +6651,48 @@ async function handleResponsesInner(
             sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
             nextContinuationRecoveryKind = "anthropic-oauth-429";
             continue;
+          } catch {
+            // fall through to emit continuation error below
+          }
+        }
+      }
+      // Generic OAuth rotation for the continuation loop. The streaming loop grew this arm with
+      // #2568 and this one did not, so an xAI/Cursor/Kimi/Copilot/Antigravity/Nous continuation
+      // 429 stayed terminal even with failover fully active -- the same class of divergence the
+      // two sidecars already produced once. Request-local state is shared with the other arms so
+      // the per-request bound cannot be silently re-armed by reaching a different loop.
+      if (
+        response.status === 429
+        && genericFailoverAccountId
+        && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+        && isGenericOAuthFailoverEnabled(config, route.providerName)
+      ) {
+        const nextAccountId = rotateGenericOAuthAccountOn429(
+          config,
+          route.providerName,
+          genericFailoverAccountId,
+          response.headers.get("retry-after"),
+        );
+        if (nextAccountId) {
+          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+          try {
+            // The FULL snapshot through the shared helper, never a bare bearer: Antigravity
+            // pairs an account-matched projectId with its token and Kiro carries routing
+            // metadata, so a token-only swap would mix one account's credential with another's
+            // routing data.
+            const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
+            genericFailoverAccountId = nextAccountId;
+            genericFailovers += 1;
+            if (applyFailoverSnapshot(snapshot)) {
+              invalidateSameTargetRequest();
+              activeAdapter = resolveAdapter(
+                resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+                config.cacheRetention,
+              );
+              sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+              nextContinuationRecoveryKind = "oauth-account-429";
+              continue;
+            }
           } catch {
             // fall through to emit continuation error below
           }

@@ -40,7 +40,7 @@ devlog/**/security-advisory-draft*
 # Local agent/session artifacts
 # These are per-machine agent state (goalplans, ledgers, evidence scratch).
 # They are never part of the product and must not be committed, not even with
-# `git add -f` — see tests/repo-hygiene.test.ts, which fails if any path here
+# `git add -f` — see tests/ci-workflows/repo-hygiene.test.ts, which fails if any path here
 # becomes tracked again.
 .codexclaw/
 **/.codexclaw/
@@ -57,11 +57,12 @@ devlog/**/security-advisory-draft*
 # blocks the release preflight's clean-tree check for work that has nothing to do
 # with it, so ignore both shapes.
 tests/.tmp-*
+tests/**/.tmp-*
 .claude/
 
 # Retired Go native-runtime experiment. `go/` is not part of the build, the
 # typecheck, or the test path, and nothing in `src/` imports it. A single file
 # from it (go/internal/cli/config_parity.go) has now been committed by a broad
 # `git add` three separate times and reached `dev` once — see
-# tests/repo-hygiene.test.ts, which fails if any path here becomes tracked again.
+# tests/ci-workflows/repo-hygiene.test.ts, which fails if any path here becomes tracked again.
 go/
