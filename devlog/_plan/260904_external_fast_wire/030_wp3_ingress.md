@@ -173,7 +173,7 @@ parameter is for, so this surface migrates fully rather than calling two parsers
 +    ({ fastRow, effortRow } = parseSyntheticRowId(
 +      requestedModel,
 +      config,
-+      decodeClaudeFastSelector(requestedModel, config.claudeCode),
++      () => decodeClaudeFastSelector(requestedModel, config.claudeCode),
 +    ));
      if (effortRow) { anthropicBody.model = effortRow.baseId; effortOverride = effortRow.effort; }
 +    if (fastRow) anthropicBody.model = fastRow.baseId;
@@ -221,9 +221,10 @@ returns an estimate and sends no tier:
    if (countRoute) { model = stripOneMillionMarker(countRoute); raw.model = model; }
 +  // Decode before stripping, for the same aliasing reason as /v1/messages. A token estimate
 +  // carries no tier, so only the identity is corrected here.
-+  const countFastRow = parseSyntheticRowId(
-+    model, config, decodeClaudeFastSelector(model, config.claudeCode),
-+  ).fastRow;
++  // Fast-only: count_tokens never parsed an effort row, so it must not start.
++  const countFastRow = parseFastOnlyRowId(
++    config, () => decodeClaudeFastSelector(model, config.claudeCode),
++  );
 +  if (countFastRow) { model = countFastRow.baseId; raw.model = model; }
 ```
 
@@ -236,7 +237,8 @@ concerns, and the audit caught them being conflated:
 **Identity** is corrected before routing, or the synthetic id fails to route at all:
 
 ```diff
-+  const compactFastRow = parseSyntheticRowId(raw.model, config).fastRow;
++  // Fast-only: compact never parsed an effort row either.
++  const compactFastRow = parseFastOnlyRowId(config, () => raw.model);
 +  if (compactFastRow) raw.model = compactFastRow.baseId;
    route = routeCompactionModel(config, raw.model, evidenceFromBody(raw));
 ```
@@ -292,6 +294,20 @@ Each test drives one conditional and asserts an observable effect, per
     model on both Messages and `count_tokens`.
 14. **Nested markers resolve to neither grammar,** in both orders, identically on all five
     surfaces: `x--fast--high` must NOT reach the effort grammar with base `x--fast`.
+
+## Import changes, per file
+
+Every symbol the diffs above introduce, so the implementer does not have to infer them:
+
+| File | Add | Remove |
+|---|---|---|
+| `src/server/responses/core.ts` | `parseSyntheticRowId` from `../fast-row` | `parseRequestEffortRowId` import, now unused |
+| `src/server/chat-completions.ts` | `parseSyntheticRowId` from `./fast-row` | `parseRequestEffortRowId` import, now unused |
+| `src/server/claude-messages.ts` | `parseSyntheticRowId`, `parseFastOnlyRowId`, and type `ParsedFastRowId` from `./fast-row` | `parseRequestEffortRowId` import, now unused |
+| `src/server/responses/compact.ts` | `parseFastOnlyRowId` from `../fast-row`; `fastPolicyForModel` from `../../providers/service-tier`; `decideTier` from `../../providers/fastwire` | — |
+
+`compact.ts` imports none of the tier helpers today, which is exactly why its Fast handling
+had to be written as an explicit post-routing policy call rather than assumed.
 
 ## Verification
 

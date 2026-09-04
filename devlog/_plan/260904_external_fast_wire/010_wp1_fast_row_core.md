@@ -27,7 +27,7 @@ import {
   accountBoundNativeOpenAiSlugsBySelector,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
-  visibleNativeSlugs,
+  UPSTREAM_NATIVE_ENTRIES,
 } from "../codex/catalog/metadata";
 import { fastPolicyForModel } from "../providers/service-tier";
 import type { InboundWire } from "../providers/registry";
@@ -113,8 +113,14 @@ export function fastRowBases(config: OcxConfig): Set<string> {
   const bases = new Set<string>(knownEffortRowIds(config));
   // Bare natives carry no declared models list and route by family pattern, so the known-id
   // set omits them entirely (router.ts:529). They are also the models Fast matters most for.
+  //
+  // Deliberately the STATIC upstream table, not visibleNativeSlugs(): that one filters by
+  // disabled/shadowed state and reaches readCurrentCatalogOrCache() (metadata.ts:430, :807),
+  // so it would both read the catalog on every parsed selector and SHRINK as runtime state
+  // changes. A base disappearing mid-session would strand a client still holding the id it
+  // was published. A base is meant to be RECOGNIZED here and then judged by routing.
   if (shouldIncludeNativeOpenAi(config)) {
-    for (const slug of visibleNativeSlugs(config)) bases.add(slug);
+    for (const slug of UPSTREAM_NATIVE_ENTRIES.keys()) bases.add(slug);
   }
   if (shouldIncludeAccountBoundNativeOpenAi(config)) {
     // Pass an EMPTY observed-entry list on purpose. The default argument reads the Codex
@@ -130,10 +136,11 @@ export function fastRowBases(config: OcxConfig): Set<string> {
 }
 ```
 
-All four helpers are synchronous, and with the explicit empty observed-entry list none of
-them touches the filesystem (`metadata.ts:430`, `:450`, `:763`). wp2 asserts the containment
-direction that matters: every base it publishes a row for is in this set (test 10). The
-reverse does not hold, by design.
+Every source here is synchronous and, with the static native table and the explicit empty
+observed-entry list, none touches the filesystem (`metadata.ts:450`, `:763`). The set is
+also STABLE for a given config: it cannot shrink because a catalog refresh changed
+visibility. wp2 asserts the containment direction that matters — every base it publishes a
+row for is in this set (test 10). The reverse does not hold, by design.
 
 ```ts
 export interface ParsedFastRowId { baseId: string; }
@@ -211,8 +218,10 @@ export function parseSyntheticRowId(
   id: string,
   config: OcxConfig,
   // Claude surfaces decode the alias before the marker is unambiguous, so they pass the
-  // decoded form for Fast while effort parsing keeps seeing the id the client sent.
-  fastSelector: string = id,
+  // decoded form for Fast while effort parsing keeps seeing the id the client sent. A THUNK,
+  // not a string: arguments are evaluated before the call, so an eager decode would run its
+  // alias lookups even on the fastRows-off path this function exists to leave untouched.
+  fastSelector?: () => string,
 ): ParsedSyntheticRow {
   // Fast off: delegate verbatim. Not merely equivalent - the SAME function shipped today,
   // so an install that never enables this feature cannot observe any change at all, in
@@ -221,13 +230,15 @@ export function parseSyntheticRowId(
   if (config.fastRows !== true) {
     return { fastRow: null, effortRow: parseRequestEffortRowId(id, config) };
   }
+  // Evaluated only past the fastRows gate above.
+  const selector = fastSelector?.() ?? id;
   // Ordinary ids carry no marker at all; bail before building any inventory.
-  if (id.lastIndexOf("--") <= 0 && fastSelector.lastIndexOf("--") <= 0) {
+  if (id.lastIndexOf("--") <= 0 && selector.lastIndexOf("--") <= 0) {
     return { fastRow: null, effortRow: null };
   }
   const knownIds = knownEffortRowIds(config);
-  const fastRow = fastSelector.endsWith(FAST_ROW_SUFFIX)
-    ? parseFastRowId(fastSelector, config, knownIds, fastRowBases(config))
+  const fastRow = selector.endsWith(FAST_ROW_SUFFIX)
+    ? parseFastRowId(selector, config, knownIds, fastRowBases(config))
     : null;
   if (fastRow) return { fastRow, effortRow: null };
   // Cursor install detection stays behind its own flag, exactly as parseRequestEffortRowId
@@ -260,6 +271,21 @@ with `fastRows` off would have lost the `x--fast--high` effort row they get toda
 
 With `fastRows` on, the nested-marker rule is new behaviour for a new opt-in feature, which
 is the only place it is allowed to apply. Test 12 pins the delegation.
+
+Two callers have no effort-row history to preserve — `count_tokens` and `compact` never
+parsed one — so they must not acquire the delegated call either. Both use a Fast-only
+entry point that returns before any inventory work when the flag is off:
+
+```ts
+/** Fast-only resolution for surfaces that never parsed an effort row. */
+export function parseFastOnlyRowId(
+  config: OcxConfig,
+  selector: () => string,
+): ParsedFastRowId | null {
+  if (config.fastRows !== true) return null;
+  return parseSyntheticRowId("", config, selector).fastRow;
+}
+```
 
 `isKnownId` is module-private in `effort-row.ts:32` today. wp1 exports it there rather than
 duplicating the Set-or-predicate branch.

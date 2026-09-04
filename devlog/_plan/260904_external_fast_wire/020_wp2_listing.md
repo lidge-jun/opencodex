@@ -211,6 +211,13 @@ Both id styles are covered, unlike `fastMode`. `fastMode` excludes Desktop 3P be
 *rewrites* a hashed id and would strand a saved selection (`model-info.ts:157`); an added
 row strands nothing, because the original id keeps existing.
 
+## Import changes, per file
+
+| File | Add |
+|---|---|
+| `src/server/index.ts` | `expandFastRow`, `fastRowEligible` from `./fast-row`; `UPSTREAM_NATIVE_ENTRIES` from `../codex/catalog/metadata` (the catalog facade does not re-export it) |
+| `src/claude/model-info.ts` | none — `claudeCodeAlias`/`claudeCodeNativeAlias` (`:19`), `cursorFastIdFor`, and the `aliasForRoute` parameter (`:111`) are all already in scope |
+
 ## Tests — `tests/fast-row-listing.test.ts`
 
 1. Flag off: a listing containing an eligible model has no `--fast` id, on both the
