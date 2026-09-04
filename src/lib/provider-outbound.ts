@@ -7,7 +7,7 @@ import {
   resolvePublicAddresses,
 } from "./destination-policy";
 import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
-import { outboundProxyConfigured } from "./proxy-env";
+import { effectiveProxyFor, outboundProxyConfigured } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
@@ -139,6 +139,11 @@ async function providerOutboundRequest(
   }
   const parsed = postUrl ?? new URL(url);
   const proxyConfigured = configuredProxyFor();
+  // Snapshot the scheme-matched proxy once, before the DNS await, so admission and transport
+  // below reason about the same value. `null` here means "no proxy fetch would actually use",
+  // even if some other proxy variable is set.
+  const effectiveProxy = effectiveProxyFor(parsed);
+  const allowMihomoIpv6FakeIp = effectiveProxy !== null && !noProxyMatches(parsed);
   const resolveAddresses = dependencies.resolveAddresses ?? resolvePublicAddresses;
   const pinnedGet = dependencies.pinnedGet ?? pinnedHttpGet;
   const pinnedPost = dependencies.pinnedPost ?? pinnedHttpPost;
@@ -155,6 +160,12 @@ async function providerOutboundRequest(
       // match is a direct route, so it keeps the benchmark answer rejected. Image/Lab
       // fetch never passes this flag.
       allowBenchmarkAddresses: proxyConfigured && !noProxyMatches(parsed),
+      // Mihomo IPv6 fake-IP (fdfe:dcba:9876::/48) answers are admitted on a stricter gate
+      // than the benchmark range: the proxy must be the one fetch will use for this URL's
+      // scheme, and the request below is then bound to it explicitly (#3462). A ULA answer
+      // is otherwise indistinguishable from a real private host, so proxy presence alone
+      // is not enough.
+      allowMihomoIpv6FakeIp,
     });
   } catch (error) {
     const dnsResolutionFailed = error instanceof DestinationDnsResolutionError
@@ -169,7 +180,10 @@ async function providerOutboundRequest(
   }
   if (proxyConfigured && !resolved.privateNetwork) {
     warnProxyBoundaryOnce();
-    return globalThis.fetch(url, { ...init, method, redirect: "manual" });
+    // When the Mihomo exception could have admitted an answer, pin the transport to the
+    // proxy the admission assumed instead of letting fetch re-infer it from the environment.
+    const proxy = allowMihomoIpv6FakeIp ? effectiveProxy : undefined;
+    return globalThis.fetch(url, { ...init, method, redirect: "manual", ...(proxy ? { proxy } : {}) });
   }
   if (proxyConfigured && resolved.privateNetwork && !noProxyMatches(parsed)) {
     const hostname = normalizeProxyHostname(parsed.hostname);

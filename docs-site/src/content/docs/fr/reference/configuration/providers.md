@@ -158,6 +158,8 @@ les adresses IPv6 entre crochets et `*` ; par exemple, indiquez explicitement `
 restent bloquées. Les requêtes de diagnostic rejettent les redirections et signalent une cible dont les identifiants ont été retirés. L'examen des
 redirections des requêtes ordinaires vers les fournisseurs reste distinct de cette protection de diagnostic.
 
+Deux accommodements fake-IP DNS existent pour les utilisateurs de Clash / Surge / Mihomo, et tous deux ne s'appliquent qu'aux *réponses* DNS — une adresse littérale dans l'URL reste rejetée. La plage de benchmark IANA `198.18.0.0/15` (et ses écritures IPv6 IPv4-mapped) est acceptée dès qu'un proxy sortant s'applique à l'hôte. La plage IPv6 fake-IP par défaut de Mihomo `fdfe:dcba:9876::/48` est acceptée sous une condition plus stricte : la variable de proxy correspondant au schéma de l'URL (`HTTPS_PROXY` pour `https:`, `HTTP_PROXY` pour `http:` ; `ALL_PROXY` ne compte pas) doit être définie, l'hôte ne doit pas correspondre à `NO_PROXY`, et la requête est alors explicitement liée à ce proxy. Tout autre ULA, un préfixe adjacent ou une réponse fake-IP mélangée à une vraie réponse privée exige toujours `allowPrivateNetwork: true`. La validation à l'enregistrement du fournisseur n'applique jamais l'accommodement IPv6.
+
 ## Groupe de comptes Codex
 
 Utilisez **Codex Auth** dans le tableau de bord pour ajouter des comptes au groupe et actualiser les quotas. `config.json` stocke les

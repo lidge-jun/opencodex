@@ -382,3 +382,77 @@ describe("#2810 explicit-zero mapped benchmark answers under the fake-IP opt-in"
     }
   });
 });
+
+describe("#3462 Mihomo IPv6 fake-IP answers (fdfe:dcba:9876::/48) under the dedicated opt-in", () => {
+  const OPT_IN = { context: "provider URL", allowMihomoIpv6FakeIp: true } as const;
+  const URL_ = "https://opencode.ai/zen/v1/models";
+
+  test("the reported answer is accepted and stays non-private", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "fdfe:dcba:9876::7e", family: 6 }]);
+    const resolved = await resolvePublicAddresses(URL_, OPT_IN);
+    expect(resolved.privateNetwork).toBe(false);
+    expect(resolved.addresses).toEqual([{ address: "fdfe:dcba:9876::7e", family: 6 }]);
+  });
+
+  test("compressed, uppercase, expanded and non-zero-fourth-hextet spellings all match the /48", async () => {
+    for (const address of [
+      "FDFE:DCBA:9876::1",
+      "fdfe:dcba:9876:0:0:0:0:1",
+      "fdfe:dcba:9876:ffff::1",
+      "fdfe:dcba:9876:1:2:3:4:5",
+    ]) {
+      lookupMock.mockResolvedValueOnce([{ address, family: 6 }]);
+      const resolved = await resolvePublicAddresses(URL_, OPT_IN);
+      expect(resolved.privateNetwork).toBe(false);
+    }
+  });
+
+  test("rejects without the opt-in, and the benchmark opt-in alone does not admit it", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "fdfe:dcba:9876::7e", family: 6 }]);
+    await expect(resolvePublicAddresses(URL_, { context: "provider URL" }))
+      .rejects.toThrow("private-network address (fdfe:dcba:9876::7e)");
+
+    lookupMock.mockResolvedValueOnce([{ address: "fdfe:dcba:9876::7e", family: 6 }]);
+    await expect(resolvePublicAddresses(URL_, { context: "provider URL", allowBenchmarkAddresses: true }))
+      .rejects.toThrow("private-network address (fdfe:dcba:9876::7e)");
+  });
+
+  test("a literal ULA URL still rejects even with the opt-in (DNS answers only)", async () => {
+    await expect(resolvePublicAddresses("https://[fdfe:dcba:9876::7e]/v1/models", OPT_IN))
+      .rejects.toThrow("private-network address");
+  });
+
+  test("adjacent prefixes, ordinary ULA, loopback, metadata and RFC1918 stay rejected", async () => {
+    for (const [address, family, detail] of [
+      ["fdfe:dcba:9877::1", 6, "private-network address"],
+      ["fdfe:dcba:9875::1", 6, "private-network address"],
+      ["fdfd:dcba:9876::1", 6, "private-network address"],
+      ["fd00::1", 6, "private-network address"],
+      ["::1", 6, "loopback address"],
+      ["169.254.169.254", 4, "metadata"],
+      ["10.0.0.5", 4, "private-network address"],
+    ] as const) {
+      lookupMock.mockResolvedValueOnce([{ address, family }]);
+      await expect(resolvePublicAddresses(URL_, OPT_IN)).rejects.toThrow(detail);
+    }
+  });
+
+  test("a fake-IP answer mixed with a real private answer still rejects", async () => {
+    lookupMock.mockResolvedValueOnce([
+      { address: "fdfe:dcba:9876::7e", family: 6 },
+      { address: "10.0.0.5", family: 4 },
+    ]);
+    await expect(resolvePublicAddresses(URL_, OPT_IN)).rejects.toThrow("private-network address (10.0.0.5)");
+  });
+
+  test("config-time validation is unchanged: the canonical benchmark opt-in never admits the ULA", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "fdfe:dcba:9876::7e", family: 6 }]);
+    const error = await providerDestinationResolvedError(
+      "openai",
+      provider("https://chatgpt.com/backend-api/codex"),
+      { allowBenchmarkAddresses: true },
+    );
+    expect(error).toContain("private-network address (fdfe:dcba:9876::7e)");
+  });
+});
+

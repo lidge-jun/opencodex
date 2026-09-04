@@ -421,3 +421,101 @@ describe("provider outbound POST transport", () => {
     expect(calls).toBe(0);
   });
 });
+
+describe("#3462 Mihomo IPv6 fake-IP admission is gated on the scheme-matched proxy fetch will use", () => {
+  type Captured = { allowMihomoIpv6FakeIp?: boolean };
+  const ULA = "fdfe:dcba:9876::7e";
+  const target = "https://opencode.ai/zen/v1/models";
+
+  async function run(env: Record<string, string>, opts: { admit: boolean }) {
+    for (const key of proxyKeys) delete process.env[key];
+    for (const [k, v] of Object.entries(env)) process.env[k] = v;
+    const originalFetch = globalThis.fetch;
+    const fetchInits: (RequestInit & { proxy?: string })[] = [];
+    globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      fetchInits.push((init ?? {}) as RequestInit & { proxy?: string });
+      return new Response('{"data":[{"id":"muse-spark-1.3-contributor"}]}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    try {
+      const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+      const resolveOptions: Captured[] = [];
+      const { dependencies, captured } = directDependencies(new Response(null, { status: 500 }));
+      dependencies.resolveAddresses = mock(async (_url: string, options?: Captured) => {
+        resolveOptions.push({ allowMihomoIpv6FakeIp: options?.allowMihomoIpv6FakeIp });
+        if (!options?.allowMihomoIpv6FakeIp) {
+          throw new Error(`provider URL hostname opencode.ai resolves to private-network address (${ULA})`);
+        }
+        return { hostname: "opencode.ai", addresses: [{ address: ULA, family: 6 }], privateNetwork: false };
+      }) as ProviderOutboundDependencies["resolveAddresses"];
+
+      const attempt = providerOutboundGet("opencode-go", { baseUrl: "https://opencode.ai/zen/v1" }, target, {}, dependencies);
+      if (opts.admit) {
+        const response = await attempt;
+        expect(response.status).toBe(200);
+      } else {
+        await expect(attempt).rejects.toThrow(/private-network address/);
+      }
+      expect(captured.address).toBeUndefined();
+      return { resolveOptions, fetchInits };
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  test("HTTPS target + HTTPS_PROXY: admitted, and the fetch is bound to that proxy explicitly", async () => {
+    const { resolveOptions, fetchInits } = await run({ HTTPS_PROXY: "http://127.0.0.1:7897" }, { admit: true });
+    expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: true }]);
+    expect(fetchInits).toHaveLength(1);
+    expect(fetchInits[0]!.proxy).toBe("http://127.0.0.1:7897");
+    expect(fetchInits[0]!.redirect).toBe("manual");
+  });
+
+  test("lowercase https_proxy is honoured the same way", async () => {
+    const { resolveOptions, fetchInits } = await run({ https_proxy: "http://127.0.0.1:7897" }, { admit: true });
+    expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: true }]);
+    expect(fetchInits[0]!.proxy).toBe("http://127.0.0.1:7897");
+  });
+
+  test("HTTPS target + HTTP_PROXY only: fetch would not use it, so the ULA is not admitted", async () => {
+    const { resolveOptions, fetchInits } = await run({ HTTP_PROXY: "http://127.0.0.1:7897" }, { admit: false });
+    expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: false }]);
+    expect(fetchInits).toHaveLength(0);
+  });
+
+  test("HTTPS target + ALL_PROXY only: not admitted", async () => {
+    const { resolveOptions, fetchInits } = await run({ ALL_PROXY: "socks5://127.0.0.1:7891" }, { admit: false });
+    expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: false }]);
+    expect(fetchInits).toHaveLength(0);
+  });
+
+  test("NO_PROXY match is a direct route: not admitted even with HTTPS_PROXY", async () => {
+    const { resolveOptions } = await run({ HTTPS_PROXY: "http://127.0.0.1:7897", NO_PROXY: "opencode.ai" }, { admit: false });
+    expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: false }]);
+  });
+
+  test("without any proxy the branch is byte-identical: no flag, no proxy option", async () => {
+    const { resolveOptions, fetchInits } = await run({}, { admit: false });
+    expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: false }]);
+    expect(fetchInits).toHaveLength(0);
+  });
+});
+
+describe("effectiveProxyFor picks the variable Bun fetch actually honours", () => {
+  test("scheme-matched selection; ALL_PROXY is never consulted", async () => {
+    const { effectiveProxyFor } = await import("../../src/lib/proxy-env");
+    const https = new URL("https://opencode.ai/zen/v1/models");
+    const http = new URL("http://ollama.lan:11434/v1/models");
+    expect(effectiveProxyFor(https, { HTTPS_PROXY: "http://p:1" })).toBe("http://p:1");
+    expect(effectiveProxyFor(https, { https_proxy: " http://p:2 " })).toBe("http://p:2");
+    expect(effectiveProxyFor(https, { HTTP_PROXY: "http://p:3" })).toBeNull();
+    expect(effectiveProxyFor(https, { ALL_PROXY: "http://p:4" })).toBeNull();
+    expect(effectiveProxyFor(http, { HTTP_PROXY: "http://p:5" })).toBe("http://p:5");
+    expect(effectiveProxyFor(http, { HTTPS_PROXY: "http://p:6" })).toBeNull();
+    expect(effectiveProxyFor(https, { HTTPS_PROXY: "   " })).toBeNull();
+    expect(effectiveProxyFor(new URL("ftp://x/"), { HTTPS_PROXY: "http://p:7", HTTP_PROXY: "http://p:7" })).toBeNull();
+  });
+});
+

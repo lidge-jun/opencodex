@@ -134,6 +134,8 @@ API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者�
 
 私有/本地目标需要 `allowPrivateNetwork: true`，并且在出站代理启用时，还需要匹配的 `NO_PROXY` 条目。回环地址会自动加入；每个 LAN 主机都必须显式列出，因为 CIDR 条目不会被解释。匹配器支持精确主机、域后缀、可选端口、带方括号的 IPv6 以及 `*`；例如，应显式列出 `192.168.1.50`。元数据和链路本地目标仍会被阻止。诊断请求会拒绝重定向，并报告一个已剥离凭据的目标。普通提供者请求的重定向审查仍然独立于这个诊断保护。
 
+面向 Clash / Surge / Mihomo 用户的 fake-IP DNS 例外有两种，且都只作用于 DNS *应答*——URL 中的字面地址仍会被拒绝。IANA 基准段 `198.18.0.0/15`（含 IPv4-mapped IPv6 写法）在该主机适用出站代理时被接受。Mihomo 默认的 IPv6 fake-IP 段 `fdfe:dcba:9876::/48` 采用更严格的门槛：必须设置与 URL 协议匹配的代理变量（`https:` 对应 `HTTPS_PROXY`，`http:` 对应 `HTTP_PROXY`，`ALL_PROXY` 不算），主机不能命中 `NO_PROXY`，随后请求会被显式绑定到该代理。其他 ULA、相邻前缀，或与真实私网应答混合的 fake-IP 应答仍需要 `allowPrivateNetwork: true`。提供方保存时的校验不应用该 IPv6 例外。
+
 ## Codex 账户池
 
 请在仪表盘 **Codex Auth** 页面添加 pool account 并刷新 quota。配置只保存非 secret account

@@ -145,6 +145,25 @@ function isBenchmarkDnsAnswer(address: string, assessment: DestinationAssessment
   return embedded.kind === "private" && embedded.detail === "benchmark address";
 }
 
+/**
+ * Mihomo (Clash.Meta) fake-IP DNS answers IPv6 queries from `fdfe:dcba:9876::/48` — its
+ * documented default `fake-ip-range6` (#3462). That prefix sits inside ULA `fc00::/7`, so
+ * `classifyIpv6` reports it as a private-network address and, unlike the IPv4 benchmark
+ * range, nothing about the address itself marks it synthetic. The exception is therefore
+ * narrower than the benchmark one: exact /48 match, DNS answers only (a literal URL still
+ * rejects), and only behind the `allowMihomoIpv6FakeIp` opt-in that the outbound caller
+ * derives from a scheme-matched proxy it then binds the request to.
+ */
+const MIHOMO_IPV6_FAKE_IP_PREFIX = [0xfdfe, 0xdcba, 0x9876] as const;
+
+function isMihomoIpv6FakeIpAnswer(address: string, assessment: DestinationAssessment | null): boolean {
+  if (assessment?.kind !== "private" || assessment.detail !== "private-network address") return false;
+  if (isIP(address) !== 6) return false;
+  const hextets = ipv6Hextets(normalizeHostname(address));
+  if (!hextets) return false;
+  return MIHOMO_IPV6_FAKE_IP_PREFIX.every((group, index) => hextets[index] === group);
+}
+
 function firstIpv6Hextet(hostname: string): number | null {
   const head = hostname.split(":")[0];
   if (!head) return 0;
@@ -385,7 +404,13 @@ export function assessUrlDestination(url: string): UrlDestinationAssessment | nu
  */
 export async function resolvePublicAddresses(
   url: string,
-  options?: string | { context?: string; allowPrivateNetwork?: boolean; allowBenchmarkAddresses?: boolean },
+  options?: string | {
+    context?: string;
+    allowPrivateNetwork?: boolean;
+    allowBenchmarkAddresses?: boolean;
+    /** Mihomo IPv6 fake-IP (`fdfe:dcba:9876::/48`) DNS answers; see `isMihomoIpv6FakeIpAnswer`. */
+    allowMihomoIpv6FakeIp?: boolean;
+  },
 ): Promise<{
   hostname: string;
   addresses: { address: string; family: number }[];
@@ -396,6 +421,7 @@ export async function resolvePublicAddresses(
     : options?.context?.trim() || "image URL";
   const privateNetworkAllowed = typeof options === "object" && options?.allowPrivateNetwork === true;
   const benchmarkAllowed = typeof options === "object" && options?.allowBenchmarkAddresses === true;
+  const mihomoIpv6Allowed = typeof options === "object" && options?.allowMihomoIpv6FakeIp === true;
   let hostname: string;
   try {
     hostname = normalizeHostname(new URL(url.trim()).hostname);
@@ -440,7 +466,10 @@ export async function resolvePublicAddresses(
       // fake-IP DNS, not a LAN provider. Accept it without allowPrivateNetwork and
       // do not mark the destination private, so the caller's HTTP(S)_PROXY path
       // still applies (credit #1748).
-      if (benchmarkAllowed && isBenchmarkDnsAnswer(address, assessment)) {
+      if (
+        (benchmarkAllowed && isBenchmarkDnsAnswer(address, assessment))
+        || (mihomoIpv6Allowed && isMihomoIpv6FakeIpAnswer(address, assessment))
+      ) {
         validatedAddresses.push({ address, family: ipKind === 4 || ipKind === 6 ? ipKind : (family || 4) });
         continue;
       }
