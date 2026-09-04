@@ -17,9 +17,11 @@
  * Design of record: devlog/_fin/260803_integrations_toggle_all/030 (routes),
  * 011 (Claude Code), 012 (Grok).
  */
+import { join } from "node:path";
 import { loadConfig, saveConfigPreservingClaudeCode } from "../../config";
 import { readRuntimePort } from "../../config/process-state";
 import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits } from "../../codex/catalog";
+import { getCodexHome } from "../../codex/paths";
 import { providerContextCap } from "../../providers/context-cap";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
@@ -682,8 +684,9 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
 
   if (url.pathname === "/api/native-integrations" && req.method === "GET") {
     const { getConfigPath } = await import("../../config");
+    const codexConfigPath = join(getCodexHome(), "config.toml");
     return jsonResponse({
-      clients: [claudeStatus(config, getConfigPath()), grokStatus(config), codexStatus(config, getConfigPath()), desktopStatus(config)],
+      clients: [claudeStatus(config, getConfigPath()), grokStatus(config), codexStatus(config, codexConfigPath), desktopStatus(config)],
     } satisfies NativeStatusListEnvelope);
   }
 
