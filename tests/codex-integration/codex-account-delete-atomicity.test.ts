@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync} from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import * as accountStoreModule from "../../src/codex/account-store";
 import {
@@ -8,6 +14,7 @@ import {
 } from "../../src/codex/account-store";
 import {
   CodexAccountDeleteCleanupError,
+  CodexAccountDeleteRollbackError,
   deleteCodexAccount,
 } from "../../src/codex/account-lifecycle";
 import {
@@ -85,7 +92,26 @@ describe("Codex account delete persistence ordering", () => {
     }
   });
 
-  test("a failure after durable config replacement restores the prior config", () => {
+  test("a failure before durable config replacement rethrows while disk remains unchanged", () => {
+    const config = seededConfig();
+    const before = structuredClone(config);
+    const beforeBytes = readFileSync(getConfigPath(), "utf8");
+    const saveSpy = spyOn(configModule, "saveConfigPreservingClaudeCode")
+      .mockImplementation(() => { throw new Error("forced pre-write failure"); });
+
+    try {
+      expect(() => deleteCodexAccount(config, ACCOUNT_ID)).toThrow("forced pre-write failure");
+      expect(config).toEqual(before);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeBytes);
+      expect(getCodexAccountCredential(ACCOUNT_ID)).not.toBeNull();
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(true);
+      expect(getAccountQuota(ACCOUNT_ID)).not.toBeNull();
+    } finally {
+      saveSpy.mockRestore();
+    }
+  });
+
+  test("a failure after durable config replacement leaves changed disk untouched", () => {
     const config = seededConfig();
     const before = structuredClone(config);
     const beforeBytes = readFileSync(getConfigPath(), "utf8");
@@ -97,11 +123,61 @@ describe("Codex account delete persistence ordering", () => {
       });
 
     try {
-      expect(() => deleteCodexAccount(config, ACCOUNT_ID)).toThrow("forced post-write failure");
+      expect(() => deleteCodexAccount(config, ACCOUNT_ID)).toThrow(CodexAccountDeleteRollbackError);
 
       expect(config).toEqual(before);
-      expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeBytes);
-      expect(loadConfig().codexAccounts?.some(account => account.id === ACCOUNT_ID)).toBe(true);
+      expect(readFileSync(getConfigPath(), "utf8")).not.toBe(beforeBytes);
+      expect(loadConfig().codexAccounts?.some(account => account.id === ACCOUNT_ID)).toBe(false);
+      expect(getCodexAccountCredential(ACCOUNT_ID)).not.toBeNull();
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(true);
+      expect(getAccountQuota(ACCOUNT_ID)).not.toBeNull();
+    } finally {
+      saveSpy.mockRestore();
+    }
+  });
+
+  test("a concurrent external edit remains byte-identical after uncertain failure", () => {
+    const config = seededConfig();
+    const before = structuredClone(config);
+    const realSave = configModule.saveConfigPreservingClaudeCode;
+    const saveSpy = spyOn(configModule, "saveConfigPreservingClaudeCode")
+      .mockImplementation(candidate => {
+        realSave(candidate);
+        const external = loadConfig();
+        external.port = 12345;
+        writeFileSync(getConfigPath(), JSON.stringify(external, null, 2) + "\n");
+        throw new Error("forced concurrent failure");
+      });
+
+    try {
+      expect(() => deleteCodexAccount(config, ACCOUNT_ID)).toThrow(CodexAccountDeleteRollbackError);
+      const persisted = loadConfig();
+      expect(persisted.port).toBe(12345);
+      expect(persisted.codexAccounts?.some(account => account.id === ACCOUNT_ID)).toBe(false);
+      expect(config).toEqual(before);
+      expect(getCodexAccountCredential(ACCOUNT_ID)).not.toBeNull();
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(true);
+      expect(getAccountQuota(ACCOUNT_ID)).not.toBeNull();
+    } finally {
+      saveSpy.mockRestore();
+    }
+  });
+
+  test("a missing config after uncertain failure is not recreated", () => {
+    const config = seededConfig();
+    const before = structuredClone(config);
+    const realSave = configModule.saveConfigPreservingClaudeCode;
+    const saveSpy = spyOn(configModule, "saveConfigPreservingClaudeCode")
+      .mockImplementation(candidate => {
+        realSave(candidate);
+        unlinkSync(getConfigPath());
+        throw new Error("forced missing-file failure");
+      });
+
+    try {
+      expect(() => deleteCodexAccount(config, ACCOUNT_ID)).toThrow(CodexAccountDeleteRollbackError);
+      expect(existsSync(getConfigPath())).toBe(false);
+      expect(config).toEqual(before);
       expect(getCodexAccountCredential(ACCOUNT_ID)).not.toBeNull();
       expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(true);
       expect(getAccountQuota(ACCOUNT_ID)).not.toBeNull();

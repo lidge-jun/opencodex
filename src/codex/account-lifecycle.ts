@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
-  atomicWriteFile,
   deleteConfigTopLevelKey,
   getConfigPath,
   saveConfigPreservingClaudeCode,
@@ -99,13 +98,10 @@ function restoreRuntimeConfig(target: OcxConfig, snapshot: OcxConfig): void {
   Object.assign(target, snapshot);
 }
 
-function restorePersistedConfig(configPath: string, previousBytes: string): void {
-  try {
-    if (readFileSync(configPath, "utf8") === previousBytes) return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+function assertPersistedConfigUnchanged(configPath: string, previousBytes: string): void {
+  if (readFileSync(configPath, "utf8") !== previousBytes) {
+    throw new CodexAccountDeleteRollbackError();
   }
-  atomicWriteFile(configPath, previousBytes);
 }
 
 /**
@@ -154,7 +150,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
       } catch (error) {
         restoreRuntimeConfig(runtimeConfig, previousConfig);
         try {
-          restorePersistedConfig(configPath, previousPersistedConfig);
+          assertPersistedConfigUnchanged(configPath, previousPersistedConfig);
         } catch {
           throw new CodexAccountDeleteRollbackError();
         }
