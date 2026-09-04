@@ -2116,6 +2116,11 @@ const MUSE_SPARK_WEB_SEARCH_STRICT_MODELS = new Set([
   "muse-spark-1.2-contributor",
 ]);
 
+const MUSE_SPARK_WEB_SEARCH_STRICT_DESTINATIONS = new Set([
+  "https://opencode.ai/zen/v1",
+  "https://opencode.ai/zen/go/v1",
+]);
+
 const MUSE_SPARK_UNSUPPORTED_WEB_SEARCH_FIELDS = [
   "search_content_types",
   "indexed_web_access",
@@ -2127,10 +2132,23 @@ const MUSE_SPARK_UNSUPPORTED_WEB_SEARCH_FIELDS = [
  * remains untouched. Keep the rejected names together so a newly identified field
  * is a one-line compatibility update rather than another bespoke rewrite.
  */
-function stripMuseSparkUnsupportedWebSearchFields(body: unknown, modelId: unknown): unknown {
+function stripMuseSparkUnsupportedWebSearchFields(
+  body: unknown,
+  modelId: unknown,
+  provider: Pick<OcxProviderConfig, "baseUrl">,
+): unknown {
   if (!isPlainObject(body)) return body;
   if (typeof modelId !== "string") return body;
   if (!MUSE_SPARK_WEB_SEARCH_STRICT_MODELS.has(modelId.trim().toLowerCase())) return body;
+  let destination: string;
+  try {
+    const url = new URL(provider.baseUrl);
+    if (url.username || url.password || url.search || url.hash) return body;
+    destination = `${url.origin.toLowerCase()}${url.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return body;
+  }
+  if (!MUSE_SPARK_WEB_SEARCH_STRICT_DESTINATIONS.has(destination)) return body;
 
   const rewriteTools = (tools: unknown[]): { tools: unknown[]; changed: boolean } => {
     let changed = false;
@@ -2409,7 +2427,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (provider.supportsOpenAiWebSearchToolFields === false) {
           outBody = stripOpenAiOnlyWebSearchFields(outBody);
         }
-        outBody = stripMuseSparkUnsupportedWebSearchFields(outBody, parsed.modelId);
+        outBody = stripMuseSparkUnsupportedWebSearchFields(outBody, parsed.modelId, provider);
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
