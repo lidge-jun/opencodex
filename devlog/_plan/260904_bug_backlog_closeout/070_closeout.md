@@ -70,6 +70,34 @@ Holding it would have kept `dev` red for the duration.
 on four runs across three unrelated branches, so it predates this work. Filed rather than
 worked around, per the standing instruction about Windows failures.
 
+## Second round: four more landed after the authors responded
+
+The triage reviews were not the end of those items. Three authors pushed fixes for the exact
+defects named in them, and a fourth PR turned out never to have been failing at all.
+
+| PR | Author | dev sha | What changed after the review |
+|----|--------|---------|-------------------------------|
+| #3403 | ianlyoo | 43248e499 | rebased 68 commits onto dev; collision guard landed |
+| #3432 | luvs01 | 60b196ed2 | whitespace-normalized `file:` bypass closed |
+| #3325 | luvs01 | 7c6104636 | owner-qualified head filter, sponsored and reviewed |
+| #3394 | kremnyi | 52f4ffa5d | rebased; the red check was a cancelled run |
+
+Issues closed by these: #3402.
+
+**A red check is not the same as a failing check.** #3432, #3325, #3383 and #3394 all showed
+`FAILURE` in the PR status rollup, and in every case the latest run of each individual check
+was green — the rollup was still carrying superseded entries from runs that had been
+cancelled by a newer trigger. Reading the aggregate would have left four correct PRs parked.
+What settles it is grouping the rollup by check name and keeping only the most recent run per
+name; that is the difference between "this PR is failing" and "this PR has failed before".
+
+#3432 was verified beyond its own tests: the three whitespace forms from the original finding
+(`fi\nle:`, `fil\te:`, `file\r:`) were run directly against `enforceEventStructureLimits` and
+all reject as `raw_path`, while `https://example.com/path` and `profile:///etc/passwd` still
+pass. A test named after a bypass is not evidence the bypass is closed.
+
+Still open with their defects intact, no commits since the reviews: #3407, #3388, #3348, #3332.
+
 ## Final dev state: green
 
 `dev` at `5ea3f2089` passes every job — `test 1/4` through `4/4`, `macos`, `gates`, the three
