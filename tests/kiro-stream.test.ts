@@ -1457,8 +1457,9 @@ describe("kiro adapter — parseStream", () => {
     const adapter = createKiroAdapter(provider);
     await adapter.buildRequest(parsedWith([{ role: "user", content: "x".repeat(700) }]));
     const done = await doneUsage(adapter, eventFrame({ content: "y".repeat(350) }));
-    expect(done.inputTokens).toBe(200);
-    expect(done.outputTokens).toBe(100);
+    // 700 chars at the 2.8 kiro Latin ratio (the turn adds a trailing newline separator).
+    expect(done.inputTokens).toBe(251);
+    expect(done.outputTokens).toBe(126);
     expect(done.estimated).toBe(true);
   });
 
@@ -1501,7 +1502,7 @@ describe("kiro adapter — parseStream", () => {
     );
     expect(done).toEqual({
       inputTokens: 15,
-      contextTotalTokens: 204,
+      contextTotalTokens: 298,
       cachedInputTokens: 3,
       cacheReadInputTokens: 3,
       cacheCreationInputTokens: 2,
@@ -1577,8 +1578,8 @@ describe("kiro adapter — parseStream", () => {
       eventFrame({ contextUsagePercentage: 25 }),
     );
 
-    expect(done.inputTokens).toBe(200);
-    expect(done.outputTokens).toBe(100);
+    expect(done.inputTokens).toBe(251);
+    expect(done.outputTokens).toBe(126);
     expect(done.totalTokens).toBeUndefined();
     expect(done.estimated).toBe(true);
     expect(done.contextTotalTokens).toBe(50_000);
@@ -1601,10 +1602,10 @@ describe("kiro adapter — parseStream", () => {
       eventFrame({ contextUsagePercentage: 25 }),
     );
 
-    expect(done.inputTokens).toBe(200);
-    expect(done.outputTokens).toBe(100);
+    expect(done.inputTokens).toBe(251);
+    expect(done.outputTokens).toBe(126);
     expect(done.totalTokens).toBeUndefined();
-    expect(done.contextTotalTokens).toBe(300);
+    expect(done.contextTotalTokens).toBe(420);
   });
 
   test("Kiro auto uses the concrete response model to decode context percentage", async () => {
@@ -1624,9 +1625,9 @@ describe("kiro adapter — parseStream", () => {
     await adapter.buildRequest(parsedWith([{ role: "user", content: "x".repeat(3500) }], undefined, "gpt-5.6-sol"));
     const done = await doneUsage(adapter, eventFrame({ content: "y".repeat(3500) }));
 
-    expect(done.inputTokens).toBe(1000);
-    expect(done.outputTokens).toBe(1000);
-    expect(done.contextTotalTokens).toBe(2000);
+    expect(done.inputTokens).toBe(1250);
+    expect(done.outputTokens).toBe(1250);
+    expect(done.contextTotalTokens).toBe(2663);
   });
 
   test("fresh payload includes history while usage counts only the current turn", async () => {
@@ -1699,7 +1700,13 @@ describe("kiro adapter — parseStream", () => {
     expect(usage.inputTokens).toBe(estimateTokens(latest, "claude-sonnet-4.5"));
     expect(request.usageLog?.estimated).toBe(true);
     expect(request.usageLog?.inputTokens).toBeGreaterThan(usage.inputTokens + 4000);
-    expect(usage.contextTotalTokens).toBe((request.usageLog?.inputTokens ?? 0) + usage.outputTokens);
+    // Both estimates cover the whole conversation, but they are built for different consumers and
+    // are no longer expected to be equal. The context checkpoint is derived from the SERIALIZED
+    // payload, so it also carries JSON-escaping expansion and per-entry framing — real charged
+    // cost that a flat text join cannot see. The log estimate stays a plain text measure.
+    expect(usage.contextTotalTokens).toBeGreaterThanOrEqual(
+      (request.usageLog?.inputTokens ?? 0) + usage.outputTokens,
+    );
   });
 
   test("resumed payload preserves the complete locally expanded history", async () => {

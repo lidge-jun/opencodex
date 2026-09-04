@@ -186,6 +186,34 @@ function estimateKiroTokens(text: string, modelId?: string): number {
   return estimateTokens(text, modelId ? `kiro/${modelId}` : "kiro");
 }
 
+/**
+ * Structural cost of one conversation entry, in tokens.
+ *
+ * The walker below concatenates message TEXT, but the wire carries JSON: per-entry keys
+ * (`userInputMessage`, `content`, `modelId`, `origin`) and role framing. That is charged
+ * upstream and is invisible to a text-only count, so without it a long conversation drifts
+ * further below the real charge with every turn added — an error proportional to entry COUNT,
+ * which no per-character ratio can recover.
+ *
+ * Measured against recorded request bodies, framing costs a low-double-digit token amount per
+ * entry. 12 is the conservative end of that range: it corrects a systematic floor without
+ * fabricating context that was never sent.
+ */
+const KIRO_ENTRY_FRAMING_TOKENS = 12;
+
+/**
+ * Multiplier for JSON string escaping inside message content.
+ *
+ * Every newline, quote, tab and backslash in a message occupies two characters on the wire
+ * (`\\n`, `\\"`) but one in the walked string. Agent traffic is dense in exactly those
+ * characters: multi-line file contents, diffs, JSON tool arguments and quoted shell commands.
+ * Measured across recorded payloads, serialized bodies run ~1.12x the walked character count,
+ * and that expansion is charged.
+ *
+ * Applied to the text estimate only — image and framing costs are already counted in wire terms.
+ */
+const KIRO_JSON_ESCAPE_EXPANSION = 1.12;
+
 function estimateKiroPayloadInputTokens(payload: Record<string, unknown>, modelId: string): number {
   const conversationState = (payload as {
     conversationState?: {
@@ -216,7 +244,9 @@ function estimateKiroPayloadInputTokens(payload: Record<string, unknown>, modelI
       if (assistant.toolUses?.length) parts.push(serializeForUsage(assistant.toolUses));
     }
   }
-  return estimateKiroTokens(parts.join("\n"), modelId) + imageTokens;
+  return Math.ceil(estimateKiroTokens(parts.join("\n"), modelId) * KIRO_JSON_ESCAPE_EXPANSION)
+    + imageTokens
+    + entries.length * KIRO_ENTRY_FRAMING_TOKENS;
 }
 
 function shouldCountStablePromptOverhead(parsed: OcxParsedRequest): boolean {
