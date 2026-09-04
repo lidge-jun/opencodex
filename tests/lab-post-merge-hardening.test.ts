@@ -201,6 +201,13 @@ test("event privacy admission rejects raw filesystem path bypass forms", () => {
     String.raw`file:\C:\secret\data`,
     String.raw`file:C:\private\secret`,
     "file:etc/passwd",
+    "fi\nle:///etc/passwd",
+    "fil\te:///etc/passwd",
+    "file\r:///etc/passwd",
+    "file\n:///etc/passwd",
+    "detail\nfile:///etc/passwd",
+    "detail\rfile:etc/passwd",
+    "detail\tfile:C:\\private\\secret",
   ]) {
     try {
       enforceEventStructureLimits({ detail });
