@@ -139,7 +139,8 @@ export async function loginMetaMuse(
   if (platform === "win32") {
     throw new Error(
       "Meta does not ship a native Windows Muse Code CLI, so there is no Windows credential to import. "
-        + "Install the CLI inside WSL2 and import there, or use the meta-model provider with your own key (META_MODEL_API_KEY).",
+        + "The CLI runs under WSL2, but importing from there is not available either until its Linux credential storage is measured. "
+        + "Use the meta-model provider with your own key (META_MODEL_API_KEY).",
     );
   }
   if (platform !== "darwin") {

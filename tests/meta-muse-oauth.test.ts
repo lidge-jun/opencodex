@@ -186,6 +186,14 @@ describe("meta-muse credential import", () => {
     await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.not.toThrow(/Keychain/);
   });
 
+  // WSL2 reports `linux`, so telling a Windows user to "import there" would walk
+  // them straight into the Linux refusal. Naming WSL2 is fine; promising an import
+  // from it is not.
+  test("the Windows refusal does not promise that importing under WSL2 works", async () => {
+    await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.not.toThrow(/import there/);
+    await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.toThrow(/not available/);
+  });
+
   test("the Linux refusal names the unmeasured storage, not the Keychain", async () => {
     await expect(loginMetaMuse({}, deps({ platform: "linux" }))).rejects.toThrow(/not been measured/);
     await expect(loginMetaMuse({}, deps({ platform: "linux" }))).rejects.toThrow(/META_MODEL_API_KEY/);

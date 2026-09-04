@@ -41,10 +41,17 @@ keep refusing Linux until a real pointer is measured.
 if (platform === "win32") {
   throw new Error(
     "Meta does not ship a native Windows Muse Code CLI, so there is no Windows credential to import. "
-      + "Install the CLI inside WSL2 and import there, or use the meta-model provider with your own key (META_MODEL_API_KEY).",
+      + "The CLI runs under WSL2, but importing from there is not available either until its Linux credential storage is measured. "
+      + "Use the meta-model provider with your own key (META_MODEL_API_KEY).",
   );
 }
 ```
+
+The WSL2 sentence must NOT read as "install it there and import". Implementation
+review round 1 caught exactly that: WSL2 reports `linux`, so that advice walks the
+user straight into the Linux refusal below. Name WSL2 because it is where the CLI
+can run, then say plainly that import stays unavailable until the Linux storage
+is measured.
 
 ### 2. Linux gets a true refusal, not a guess
 
@@ -100,4 +107,3 @@ Ship a Linux credential reader. `050` records the measurement that would unblock
 it: a real `~/.config/muse/auth.json` from a Linux install, with its exact
 `storage` value and, if the secret is file-backed, the exact field naming the
 file. That is a measurement task, not an implementation guess.
-
