@@ -318,4 +318,13 @@ export const TOOL_WIRE_DRIVERS = {
       }
     },
   },
+  codebuddy: {
+    // CodeBuddy v1 runs the vendor CLI with `--tools ""` so Codex keeps tool ownership; it forwards
+    // no client tool catalog and is exempt from routed-tool conformance, so this driver is never
+    // invoked. It fails loudly if a future change routes it here before the control-protocol tool
+    // bridge (sdk_mcp / can_use_tool) lands.
+    async observeOutbound(): Promise<string> {
+      throw new Error("codebuddy forwards no client tool catalog in v1; excluded from tool conformance");
+    },
+  },
 } satisfies Record<AdapterWire, ToolWireDriver>;

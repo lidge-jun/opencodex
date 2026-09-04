@@ -50,6 +50,8 @@ import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { recordLiveCursorClaudeModels, recordLiveCursorMaxModeModels } from "../../adapters/cursor/catalog";
+import { fetchQoderModels } from "../../adapters/qoder/live-models";
+import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -1472,6 +1474,50 @@ async function fetchProviderModelsWithAuth(
       ? [...models, vertexDefaultSeed]
       : models
   );
+  if (prov.adapter === "qoder") {
+    if (!apiKey) return observed(configured, "degraded");
+    const profile = resolveQoderProfile(prov.baseUrl);
+    if (!profile) return observed(configured, "degraded");
+    // Qoder's model list is entitlement-specific. Bind cache reads/writes to an irreversible PAT
+    // fingerprint so an account switch cannot observe another account's roster, even if a caller
+    // bypasses the normal config mutation path that clears provider caches.
+    const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
+    const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
+    if (fresh) {
+      return observed(withConfiguredRetention(
+        applyConfigHintsToCachedModels(name, prov, fresh, contextCap, metadataModelIdCaseFold),
+      ), "authoritative");
+    }
+    const scopedStale = getStaleCached(name, authorityIdentity);
+    if (isModelsFetchCoolingDown(name) && scopedStale) {
+      return observed(withConfiguredRetention(
+        applyConfigHintsToCachedModels(name, prov, scopedStale, contextCap, metadataModelIdCaseFold),
+      ), "degraded");
+    }
+    const live = await fetchQoderModels(profile, apiKey);
+    if (live.ok) {
+      const discovered = live.models.map(id => ({
+        id,
+        provider: name,
+        ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold),
+      }));
+      const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
+      markProviderDiscoveryOk(name, live.models.length);
+      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+    }
+    if (isCurrentCacheGeneration()) {
+      markModelsFetchFailure(name);
+      markProviderDiscoveryFailed(name, { reason: "provider" });
+      console.warn(`[opencodex] Qoder model discovery for "${name}" failed [${live.error}]${live.detail ? `: ${live.detail}` : ""}; using stale/static catalog degradation.`);
+    }
+    const stale = getStaleCached(name, authorityIdentity);
+    return observed(withConfiguredRetention(
+      stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold) : configured,
+    ), "degraded");
+  }
   if (prov.adapter === "cursor") {
     if (!apiKey) return observed(configured, "degraded");
     // Cursor uses a bespoke GetUsableModels RPC (not /models), returning the full effort-suffixed
