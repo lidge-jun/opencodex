@@ -1813,9 +1813,9 @@ export const en = {
   "codexAuth.catalogRefreshPending": "The change was saved, but the Codex model catalog refresh is pending. Run ocx sync to retry.",
 
   "anthropicPool.title": "Claude account pool (experimental)",
-  "anthropicPool.enabledDesc": "On 429, cools the account and fails over. New sessions prefer usage under {threshold}% ({window}).",
-  "anthropicPool.enabledNoProactiveDesc": "On 429, cools the account and fails over. Proactive usage-based switching is off at threshold 0, but new-session selection and 429 recovery still use the {window} window.",
-  "anthropicPool.disabledDesc": "Uses only the active Claude account. Enable only if you accept experimental routing.",
+  "anthropicPool.enabledDesc": "Sticky sessions, and new sessions prefer usage under {threshold}% ({window}).",
+  "anthropicPool.enabledNoProactiveDesc": "Sticky sessions. Proactive usage-based switching is off at threshold 0, but new-session selection uses the {window} window.",
+  "anthropicPool.disabledDesc": "One account per session. A 429 still fails over to another logged-in account — that cannot be turned off.",
   "anthropicPool.experimentalWarning": "Experimental and not battle-tested. Anthropic may restrict accounts that look like automated multi-account rotation. Same organization can share quota — pooling those accounts will not help. Keep this off unless you understand the risk.",
   "anthropicPool.needTwoAccounts": "Add at least two Claude OAuth accounts before enabling the pool.",
   "anthropicPool.threshold": "New-session usage threshold",

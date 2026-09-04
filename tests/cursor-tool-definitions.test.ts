@@ -526,7 +526,9 @@ describe("Cursor code mode tool guidance", () => {
     expect(note).toContain("absence from the top-level catalog");
     expect(note).toContain("`*** Begin Patch`");
     expect(note).toContain("`*** End Patch`");
-    expect(note).toContain("no trailing `***`");
+    // The injected text must never display the decorated form as a copyable literal.
+    expect(note).toContain("no further asterisks");
+    expect(note).not.toContain("*** Begin Patch ***");
     expect(note).toContain("OpenCodex does not rewrite JavaScript inside exec");
 
     // The flat-catalog shell-bridge guidance must NOT appear: naming a top-level

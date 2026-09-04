@@ -114,6 +114,80 @@ describe("routed Responses custom-tool compatibility", () => {
     rewrite.dispose?.();
   });
 
+  // A raw patch envelope submitted as the `exec` body is recompiled at the done event, so
+  // the progressive deltas must be held: streaming the envelope bytes and then replacing them
+  // with compiled helper JavaScript is the rewind this path forbids.
+  // See devlog/_plan/260905_apply_patch_envelope_gap.
+  test("holds envelope deltas and compiles a raw exec patch body on the native stream", () => {
+    const rewrite = createRoutedCustomToolRestoreBlockRewrite(
+      new Set(["exec"]),
+      undefined,
+      new Set(),
+      new Set(["exec"]),
+    );
+    rewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: {
+        type: "function_call",
+        id: "fc_raw_patch",
+        call_id: "call_raw_patch",
+        name: "exec",
+        arguments: "",
+        status: "in_progress",
+      },
+    }));
+
+    // Every envelope delta is suppressed rather than previewed.
+    for (const chunk of [WRAPPED_DECORATED_PATCH.slice(0, 20), WRAPPED_DECORATED_PATCH.slice(20)]) {
+      expect(rewrite(frame("response.function_call_arguments.delta", {
+        output_index: 0,
+        item_id: "fc_raw_patch",
+        delta: chunk,
+      }))).toEqual([]);
+    }
+
+    const done = rewrite(frame("response.function_call_arguments.done", {
+      output_index: 0,
+      item_id: "fc_raw_patch",
+      arguments: WRAPPED_DECORATED_PATCH,
+    }));
+    expect(dataPayload(done[0]!).input).toBe(
+      compileCodeModeHelperInput(CANONICAL_PATCH, "apply_patch"),
+    );
+    rewrite.dispose?.();
+  });
+
+  test("keeps progressive deltas for ordinary exec JavaScript", () => {
+    const rewrite = createRoutedCustomToolRestoreBlockRewrite(
+      new Set(["exec"]),
+      undefined,
+      new Set(),
+      new Set(["exec"]),
+    );
+    rewrite(frame("response.output_item.added", {
+      output_index: 0,
+      item: {
+        type: "function_call",
+        id: "fc_plain_js",
+        call_id: "call_plain_js",
+        name: "exec",
+        arguments: "",
+        status: "in_progress",
+      },
+    }));
+
+    const source = "const marker = 1;\ntext(marker);";
+    const wrapped = JSON.stringify({ input: source });
+    const emitted = rewrite(frame("response.function_call_arguments.delta", {
+      output_index: 0,
+      item_id: "fc_plain_js",
+      delta: wrapped,
+    }));
+    expect(emitted.length).toBe(1);
+    expect(dataPayload(emitted[0]!).delta).toBe(source);
+    rewrite.dispose?.();
+  });
+
   test("restores streamed exec_command arguments through unified exec", () => {
     const rewrite = createRoutedCustomToolRestoreBlockRewrite(
       new Set(["exec"]),

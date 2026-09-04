@@ -15,6 +15,7 @@ export {
   modelInList,
   isAllowedToolChoice,
   toolChoiceToolPredicate,
+  declaresCodeModeExec,
 } from "./types/tools";
 
 export type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } from "./types/wire";

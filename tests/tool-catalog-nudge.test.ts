@@ -74,7 +74,9 @@ describe("non-OpenAI tool catalog nudge", () => {
     expect(note).toContain("Do not skip an available nested helper");
     expect(note).toContain("`*** Begin Patch`");
     expect(note).toContain("`*** End Patch`");
-    expect(note).toContain("no trailing `***`");
+    // The injected text must never display the decorated form as a copyable literal.
+    expect(note).toContain("no further asterisks");
+    expect(note).not.toContain("*** Begin Patch ***");
     expect(note).toContain("OpenCodex does not rewrite JavaScript inside exec");
     expect(note).toContain("Nested `tools.apply_patch(input)` is host-executed");
     expect(note).not.toContain("call the listed parent tool and use those helpers only inside that tool's input");
