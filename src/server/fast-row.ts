@@ -74,19 +74,42 @@ export function fastRowEligible(
  * the exact-id guard in `parseFastRowId` still protects real models. Being too strict breaks
  * the feature.
  *
- * NOT constant across a session. `knownEffortRowIds` reads the live-model cache, so a
- * live-only model that leaves the cache also leaves this set, and a client holding its
- * `--fast` selector stops being understood. That is deliberate rather than a gap: the SAME
- * cache feeds publication, so the plain base row disappears from the listing in the same
- * breath. A fast row's lifetime is exactly its base row's lifetime, which is the property
- * that matters; pinning fast selectors alive past their base would be the real defect.
- * The static native half below is genuinely stable, which is what bare natives need.
+ * Membership must not depend on the live-model cache. An earlier version seeded this set
+ * from `knownEffortRowIds` alone, which reads `getStaleCached` (router.ts:125), so a
+ * live-only model leaving the cache silently stopped its `--fast` selector from parsing.
+ * The argument that its base row leaves the listing at the same time is true but
+ * irrelevant: `/v1/models` is discovery, not a routing allowlist, and `routeModel` still
+ * serves the bare base through the default provider (router.ts:791) and the qualified base
+ * through its configured provider (router.ts:680). So the base kept working while only the
+ * fast selector broke — the asymmetry this set exists to prevent.
+ *
+ * Every source below is therefore config-derived or static. A base is RECOGNIZED here and
+ * then judged by routing, which is the component that actually knows whether it can serve
+ * it.
  */
-export function fastRowBases(config: OcxConfig, knownIds?: ReadonlySet<string>): Set<string> {
-  // Reuse the caller's inventory when it already built one: this set is a superset of it, and
-  // rebuilding walks every configured, registry, live-cached and custom model a second time
-  // on a request path.
-  const bases = new Set<string>(knownIds ?? knownEffortRowIds(config));
+export function fastRowBases(config: OcxConfig): Set<string> {
+  const bases = new Set<string>();
+  // Configured providers: any model the router would accept for this provider, plus the
+  // namespaced and alias-namespaced spellings a listing can publish. Deliberately NOT
+  // knownEffortRowIds, whose live-cache half makes membership time-dependent.
+  for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+    if (providerConfig.disabled === true) continue;
+    const namespaces = [providerName, providerConfig.alias].filter(
+      (value): value is string => typeof value === "string" && value.length > 0,
+    );
+    const declared = [
+      ...(providerConfig.models ?? []),
+      ...(providerConfig.defaultModel ? [providerConfig.defaultModel] : []),
+      ...Object.values(providerConfig.modelAliases ?? {}),
+      ...(config.customModels ?? [])
+        .filter(model => model.provider === providerName && model.modelId)
+        .map(model => model.modelId),
+    ];
+    for (const id of declared) {
+      bases.add(id);
+      for (const namespace of namespaces) bases.add(`${namespace}/${id}`);
+    }
+  }
   // The STATIC upstream table, not `visibleNativeSlugs()`: that one filters by
   // disabled/shadowed state and reaches the catalog cache on disk, so it would both read a
   // file per parsed selector and SHRINK as runtime state changes. A base disappearing
@@ -161,7 +184,7 @@ export function parseSyntheticRowId(
   }
   const knownIds = knownEffortRowIds(config);
   const fastRow = selector.endsWith(FAST_ROW_SUFFIX)
-    ? parseFastRowId(selector, config, knownIds, fastRowBases(config, knownIds))
+    ? parseFastRowId(selector, config, knownIds, fastRowBases(config))
     : null;
   if (fastRow) return { fastRow, effortRow: null };
   // Cursor install detection stays behind its own flag, exactly as parseRequestEffortRowId

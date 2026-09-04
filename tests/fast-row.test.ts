@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { clearModelCache, setCached } from "../src/codex/model-cache";
 import { knownEffortRowIds, parseEffortRowId, parseRequestEffortRowId } from "../src/server/effort-row";
 import {
   effortBaseCarriesFastMarker,
@@ -232,42 +233,59 @@ describe("publication and parsing agree", () => {
   });
 
   test("an account-qualified native round-trips", () => {
+    // A configured selector, so this asserts the real qualified id rather than skipping when
+    // none exists - the earlier version returned early and reported green either way.
     const config = configWith({
       openai: provider({ authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" }),
-    });
+    }, { codexAccountNamespaces: { desktop: "@main" } } as Partial<OcxConfig>);
     const bases = fastRowBases(config);
-    const qualified = [...bases].find(id => id.includes("/") && id.endsWith("gpt-5.6-sol"));
-    if (qualified === undefined) return; // no account selector configured in this fixture
-    expect(parseFastRowId(fastRowId(qualified), config, new Set(), bases))
-      .toEqual({ baseId: qualified });
+    expect(bases.has("desktop/gpt-5.6-sol")).toBe(true);
+    expect(parseFastRowId("desktop/gpt-5.6-sol--fast", config, new Set(), bases))
+      .toEqual({ baseId: "desktop/gpt-5.6-sol" });
   });
 });
 
-describe("a fast row lives exactly as long as its base row", () => {
-  test("a base that leaves the routable set stops parsing, as its listing row also would", () => {
-    // fastRowBases is intentionally NOT constant across a session: it reads the live-model
-    // cache, and so does publication. When a live-only model leaves the cache its plain base
-    // row leaves the listing too, so the fast selector going with it is correct. Pinning fast
-    // selectors alive past their base would be the actual defect.
-    const withModel = configWith({ fixture: provider({ models: ["live-only"] }) });
-    const withoutModel = configWith({ fixture: provider({ models: [] }) });
-    expect(parseFastRowId("live-only--fast", withModel, new Set(), fastRowBases(withModel)))
-      .toEqual({ baseId: "live-only" });
-    expect(parseFastRowId("live-only--fast", withoutModel, new Set(), fastRowBases(withoutModel)))
-      .toBeNull();
+describe("routable bases do not depend on the live-model cache", () => {
+  test("a cached-only model leaving the cache does not break its fast selector", () => {
+    // The review blocker. An earlier version seeded the set from knownEffortRowIds, whose
+    // getStaleCached half made membership time-dependent: the selector stopped parsing after
+    // cache churn while routeModel still served the base through the default provider. The
+    // asymmetry is the defect, so this drives the real cache rather than swapping config.
+    const config = configWith({ fixture: provider({ models: ["declared"] }) });
+    setCached("fixture", [{ provider: "fixture", id: "live-only" } as never]);
+    const withCache = fastRowBases(config);
+    clearModelCache("fixture");
+    const withoutCache = fastRowBases(config);
+    // A declared model is recognized either way, and cache churn changes nothing at all.
+    expect(withCache.has("declared")).toBe(true);
+    expect(withoutCache.has("declared")).toBe(true);
+    expect([...withCache].sort()).toEqual([...withoutCache].sort());
   });
 
-  test("a bare native is stable regardless of cache state", () => {
-    // The static half of the set. This is what bare natives need: they route by family
-    // pattern and appear in no cache, so their selectors must never depend on one.
+  test("a bare native is recognized regardless of cache state", () => {
+    // Bare natives route by family pattern and appear in no cache, so their selectors must
+    // never depend on one.
     const config = configWith({
       openai: provider({ authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" }),
     });
     expect(fastRowBases(config).has("gpt-5.6-sol")).toBe(true);
-    expect(fastRowBases(config, new Set()).has("gpt-5.6-sol")).toBe(true);
+    clearModelCache();
+    expect(fastRowBases(config).has("gpt-5.6-sol")).toBe(true);
+  });
+
+  test("a disabled provider contributes no bases", () => {
+    const config = configWith({ fixture: provider({ models: ["m"], disabled: true }) });
+    expect(fastRowBases(config).has("m")).toBe(false);
+  });
+
+  test("namespaced and alias-namespaced spellings are recognized", () => {
+    const config = configWith({ fixture: provider({ models: ["m"], alias: "fx" }) });
+    const bases = fastRowBases(config);
+    expect(bases.has("m")).toBe(true);
+    expect(bases.has("fixture/m")).toBe(true);
+    expect(bases.has("fx/m")).toBe(true);
   });
 });
-
 describe("delegation is the shipped function, not a lookalike", () => {
   test("with fastRows off the wrapper matches parseRequestEffortRowId exactly", () => {
     // Compared against the real function across a selector table: an inline reimplementation
@@ -282,4 +300,3 @@ describe("delegation is the shipped function, not a lookalike", () => {
     }
   });
 });
-
