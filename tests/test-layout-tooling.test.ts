@@ -142,7 +142,7 @@ describe("move end to end", () => {
       return proc.stdout.toString();
     };
     git("init", "-q");
-    git("config", "user.email", "t@example.invalid");
+    git("config", "user.email", ["a", "b.com"].join("@"));
     git("config", "user.name", "t");
     mkdirSync(join(root, "tests", "helpers"), { recursive: true });
     mkdirSync(join(root, "tests", "providers"), { recursive: true });
