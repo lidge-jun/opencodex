@@ -18,6 +18,18 @@ const ZEN_GO_PROVIDER = {
   baseUrl: "https://opencode.ai/zen/go/v1",
 };
 
+const ZEN_PATH_PROVIDER = {
+  ...ZEN_PROVIDER,
+  baseUrl: "https://opencode.ai",
+  responsesPath: "/zen/v1/responses",
+};
+
+const ZEN_GO_PATH_PROVIDER = {
+  ...ZEN_PROVIDER,
+  baseUrl: "https://opencode.ai",
+  responsesPath: "/zen/go/v1/responses",
+};
+
 const META_PROVIDER = {
   ...ZEN_PROVIDER,
   baseUrl: "https://api.meta.ai/v1",
@@ -33,6 +45,7 @@ function webSearchTool(): Record<string, unknown> {
   };
 }
 
+/** Build one passthrough request for an explicit Responses provider fixture. */
 function buildForProvider(
   provider: OcxProviderConfig,
   modelId: string,
@@ -48,6 +61,7 @@ function buildForProvider(
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
+/** Build with the default OpenCode Zen fixture used by the original regressions. */
 function build(modelId: string, rawBody: Record<string, unknown>): Record<string, unknown> {
   return buildForProvider(ZEN_PROVIDER, modelId, rawBody);
 }
@@ -151,6 +165,17 @@ describe("#2617/#3378 Muse Spark web_search compatibility", () => {
     const tool = toolsOf(body)[0]!;
     expect(Object.hasOwn(tool, "search_content_types")).toBe(false);
     expect(Object.hasOwn(tool, "indexed_web_access")).toBe(false);
+  });
+
+  test("split baseUrl and responsesPath configurations derive both strict destinations", () => {
+    for (const provider of [ZEN_PATH_PROVIDER, ZEN_GO_PATH_PROVIDER]) {
+      const body = buildForProvider(provider, "muse-spark-1.3-contributor", {
+        tools: [webSearchTool()],
+      });
+      const tool = toolsOf(body)[0]!;
+      expect(Object.hasOwn(tool, "search_content_types")).toBe(false);
+      expect(Object.hasOwn(tool, "indexed_web_access")).toBe(false);
+    }
   });
 
   test("direct Meta preserves its web_search fields at both tool positions", () => {

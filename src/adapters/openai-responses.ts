@@ -2116,9 +2116,9 @@ const MUSE_SPARK_WEB_SEARCH_STRICT_MODELS = new Set([
   "muse-spark-1.2-contributor",
 ]);
 
-const MUSE_SPARK_WEB_SEARCH_STRICT_DESTINATIONS = new Set([
-  "https://opencode.ai/zen/v1",
-  "https://opencode.ai/zen/go/v1",
+const MUSE_SPARK_WEB_SEARCH_STRICT_RESPONSE_URLS = new Set([
+  "https://opencode.ai/zen/v1/responses",
+  "https://opencode.ai/zen/go/v1/responses",
 ]);
 
 const MUSE_SPARK_UNSUPPORTED_WEB_SEARCH_FIELDS = [
@@ -2129,26 +2129,28 @@ const MUSE_SPARK_UNSUPPORTED_WEB_SEARCH_FIELDS = [
 /**
  * OpenCode Zen / Go Muse Spark Responses gateway refuses a short list of Codex
  * `web_search` fields. `web_search_preview` keeps its accepted shape, and Luna
- * remains untouched. Keep the rejected names together so a newly identified field
- * is a one-line compatibility update rather than another bespoke rewrite.
+ * remains untouched. Match the exact effective request URL; malformed, credentialed,
+ * or parameterized destinations keep their original body instead of assuming this
+ * gateway contract. Keep the rejected names together so a newly identified field is
+ * a one-line compatibility update rather than another bespoke rewrite.
  */
 function stripMuseSparkUnsupportedWebSearchFields(
   body: unknown,
   modelId: unknown,
-  provider: Pick<OcxProviderConfig, "baseUrl">,
+  responseUrl: string,
 ): unknown {
   if (!isPlainObject(body)) return body;
   if (typeof modelId !== "string") return body;
   if (!MUSE_SPARK_WEB_SEARCH_STRICT_MODELS.has(modelId.trim().toLowerCase())) return body;
   let destination: string;
   try {
-    const url = new URL(provider.baseUrl);
+    const url = new URL(responseUrl);
     if (url.username || url.password || url.search || url.hash) return body;
     destination = `${url.origin.toLowerCase()}${url.pathname.replace(/\/+$/, "")}`;
   } catch {
     return body;
   }
-  if (!MUSE_SPARK_WEB_SEARCH_STRICT_DESTINATIONS.has(destination)) return body;
+  if (!MUSE_SPARK_WEB_SEARCH_STRICT_RESPONSE_URLS.has(destination)) return body;
 
   const rewriteTools = (tools: unknown[]): { tools: unknown[]; changed: boolean } => {
     let changed = false;
@@ -2427,7 +2429,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         if (provider.supportsOpenAiWebSearchToolFields === false) {
           outBody = stripOpenAiOnlyWebSearchFields(outBody);
         }
-        outBody = stripMuseSparkUnsupportedWebSearchFields(outBody, parsed.modelId, provider);
+        outBody = stripMuseSparkUnsupportedWebSearchFields(outBody, parsed.modelId, url);
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
