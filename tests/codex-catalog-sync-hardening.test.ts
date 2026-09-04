@@ -139,11 +139,16 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("gpt-5.4");
     expect(slugs).toContain("gpt-5.4-mini");
     expect(slugs).toContain("gpt-5.3-codex-spark");
-    // This isolated fixture has no authenticated ChatGPT roster, so account-gated
-    // native models must fail closed rather than remain selectable.
-    expect(slugs).not.toContain("gpt-5.6-sol");
-    expect(slugs).not.toContain("gpt-5.6-terra");
-    expect(slugs).not.toContain("gpt-5.6-luna");
+    // This isolated fixture has no authenticated ChatGPT roster. The flagship natives list
+    // anyway (owner decision 2026-09-04): asking upstream under an adequate client version
+    // makes the question fair but cannot make an answer appear, and a model that silently
+    // vanishes reads as a bug rather than as missing evidence.
+    expect(slugs).toContain("gpt-5.6-sol");
+    expect(slugs).toContain("gpt-5.6-terra");
+    expect(slugs).toContain("gpt-5.6-luna");
+    // Scoped, not global: Daybreak has no shipped catalog row anywhere, so absence is the only
+    // signal it has and it must still fail closed here. This is what keeps the case honest.
+    expect(slugs).not.toContain("gpt-daybreak-blue-latest");
     expect(slugs).toContain("user-native");           // genuine user native preserved
     expect(slugs).not.toContain("gpt-5.3-codex");      // legacy dropped
     expect(slugs).not.toContain("gpt-5.2");            // legacy dropped

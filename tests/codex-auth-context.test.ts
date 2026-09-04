@@ -1168,13 +1168,17 @@ describe("Codex auth context", () => {
       "chatgpt-account-id": "caller-keyring-account",
     }), cfg, "pool", {
       requestScopedMainCredential: true,
-      modelId: "gpt-5.6-sol",
+      // Uses the one model still account-gated. These #3157 cases are about how a caller
+      // entitlement MISS interacts with the main pin, so they need a model whose entitlement is
+      // actually consulted; the flagships stopped being gated on 2026-09-04 and now skip the
+      // check entirely, which would leave directEntitlementChecks at 0 and prove nothing.
+      modelId: "gpt-daybreak-blue-latest",
       isDirectCallerEntitledToCodexModel: async () => {
         directEntitlementChecks += 1;
         return options.callerEntitled;
       },
       resolveCodexModelEntitlements: async () => ({
-        modelsByAccount: new Map([["pool-a", new Set(["gpt-5.6-sol"])]]),
+        modelsByAccount: new Map([["pool-a", new Set(["gpt-daybreak-blue-latest"])]]),
         clientVersionByAccount: new Map([["pool-a", "0.150.1"]]),
         confirmedAccountIds: new Set(["pool-a"]),
         credentialIdentities: new Map([["pool-a", "pool:1:pool-account"]]),

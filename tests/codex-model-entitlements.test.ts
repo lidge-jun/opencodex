@@ -196,10 +196,14 @@ describe("Codex account model entitlements", () => {
     });
 
     expect([...entitledCodexAccountIdsForModel(snapshot, DAYBREAK)!]).toEqual(["main"]);
-    expect([...entitledCodexAccountIdsForModel(snapshot, SOL)!]).toEqual(["main", "secondary"]);
-    expect([...entitledCodexAccountIdsForModel(snapshot, TERRA)!]).toEqual(["secondary"]);
-    expect([...entitledCodexAccountIdsForModel(snapshot, LUNA)!]).toEqual(["main"]);
-    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([SOL, TERRA, LUNA, DAYBREAK]);
+    // The per-account roster is still recorded for the flagships -- the evidence does not stop
+    // being collected -- but they are no longer GATED on it, so the gated projections skip them
+    // entirely and return undefined rather than a scoped account set.
+    expect(snapshot.modelsByAccount.get("secondary")?.has(TERRA)).toBe(true);
+    expect(entitledCodexAccountIdsForModel(snapshot, SOL)).toBeUndefined();
+    expect(entitledCodexAccountIdsForModel(snapshot, TERRA)).toBeUndefined();
+    expect(entitledCodexAccountIdsForModel(snapshot, LUNA)).toBeUndefined();
+    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([DAYBREAK]);
   });
 
   test("fails closed when an account roster cannot be confirmed", async () => {
@@ -336,6 +340,11 @@ describe("tri-state entitlement authority", () => {
     "chatgpt-account-id": "tri-state-account",
   });
 
+  // The tri-state contract is retargeted onto DAYBREAK, the one model still account-gated after
+  // the flagship ungating (2026-09-04). The mechanism under test never changed; only its subject
+  // did. Deleting these because sol left the gated set would have removed the only coverage of
+  // the fail-closed path while that path still governs a shipped model. Daybreak has no recorded
+  // minimum, so a version-scoped case uses SOL_MINIMUM_SLUG, which stays in the minimums map.
   test("an omitted gated slug below its minimum is unknown and uses the failure TTL", async () => {
     let fetches = 0;
     const backend = (async () => {
@@ -343,18 +352,18 @@ describe("tri-state entitlement authority", () => {
       return roster("gpt-5.5");
     }) as typeof fetch;
 
-    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), SOL, {
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), DAYBREAK, {
       fetcher: backend,
       now: 1_000,
       clientVersion: "0.140.0",
     })).toBe(false);
-    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), SOL, {
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), DAYBREAK, {
       fetcher: backend,
       now: 15_999,
       clientVersion: "0.140.0",
     })).toBe(false);
     expect(fetches).toBe(1);
-    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), SOL, {
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), DAYBREAK, {
       fetcher: backend,
       now: 16_001,
       clientVersion: "0.140.0",
@@ -368,9 +377,12 @@ describe("tri-state entitlement authority", () => {
       clientVersion: "0.140.0",
     });
     expect(snapshot.clientVersionByAccount.get("main")).toBe("0.140.0");
+    // SOL keeps a recorded minimum even though it is no longer gated, so the version-scoped
+    // unknown-vs-denied distinction is still observable through the raw projection.
     expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("unknown");
-    expect(entitledCodexAccountIdsForModel(snapshot, SOL)?.size).toBe(0);
-    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(false);
+    // But it no longer participates in the gated projections at all.
+    expect(entitledCodexAccountIdsForModel(snapshot, SOL)).toBeUndefined();
+    expect(availableAccountGatedNativeModels(snapshot).has(DAYBREAK)).toBe(false);
   });
 
   test("an omitted gated slug at its minimum is denied", async () => {
@@ -382,21 +394,22 @@ describe("tri-state entitlement authority", () => {
     });
 
     expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("denied");
-    expect(entitledCodexAccountIdsForModel(snapshot, SOL)?.size).toBe(0);
-    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(false);
+    expect(projectedEntitlementState(snapshot, "main", DAYBREAK)).toBe("denied");
+    expect(entitledCodexAccountIdsForModel(snapshot, DAYBREAK)?.size).toBe(0);
+    expect(availableAccountGatedNativeModels(snapshot).has(DAYBREAK)).toBe(false);
   });
 
   test("a present gated slug below its minimum is granted", async () => {
     const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
       credentials: [credential("main")],
-      fetcher: (async () => roster("gpt-5.5", SOL)) as typeof fetch,
+      fetcher: (async () => roster("gpt-5.5", DAYBREAK)) as typeof fetch,
       now: 1_000,
       clientVersion: "0.140.0",
     });
 
-    expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("granted");
-    expect([...entitledCodexAccountIdsForModel(snapshot, SOL)!]).toEqual(["main"]);
-    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(true);
+    expect(projectedEntitlementState(snapshot, "main", DAYBREAK)).toBe("granted");
+    expect([...entitledCodexAccountIdsForModel(snapshot, DAYBREAK)!]).toEqual(["main"]);
+    expect(availableAccountGatedNativeModels(snapshot).has(DAYBREAK)).toBe(true);
   });
 
   test("Daybreak omission remains denied without a known minimum", async () => {
@@ -423,30 +436,38 @@ describe("tri-state entitlement authority", () => {
       now: 1_000,
       clientVersion: "0.140.0",
     });
-    expect(entitledCodexAccountIdsForModel(snapshot, SOL)?.size).toBe(0);
-    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(false);
+    expect(entitledCodexAccountIdsForModel(snapshot, DAYBREAK)?.size).toBe(0);
+    expect(availableAccountGatedNativeModels(snapshot).has(DAYBREAK)).toBe(false);
 
     seedCodexModelEntitlementsForTests("main", ["gpt-5.5"], 1_000, "0.140.0");
-    expect(cachedAvailableAccountGatedNativeModels(1_001, undefined, "0.140.0").has(SOL))
+    expect(cachedAvailableAccountGatedNativeModels(1_001, undefined, "0.140.0").has(DAYBREAK))
       .toBe(false);
-    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), SOL, {
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), DAYBREAK, {
       fetcher: (async () => roster("gpt-5.5")) as typeof fetch,
       now: 1_000,
       clientVersion: "0.140.0",
     })).toBe(false);
+
+    // An ungated flagship is the opposite case and is asserted here so the two contracts stay
+    // visibly distinct: Direct authorization admits it without consulting any roster at all.
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders(), SOL, {
+      fetcher: (async () => { throw new Error("an ungated model must not be looked up"); }) as unknown as typeof fetch,
+      now: 1_000,
+      clientVersion: "0.140.0",
+    })).toBe(true);
   });
 
   test("CHARACTERIZATION: an unconfirmed roster cannot grant a present gated slug", () => {
     const snapshot = {
-      modelsByAccount: new Map([["main", new Set([SOL])]]),
+      modelsByAccount: new Map([["main", new Set([DAYBREAK])]]),
       clientVersionByAccount: new Map([["main", "0.140.0"]]),
       confirmedAccountIds: new Set<string>(),
       credentialIdentities: new Map([["main", "test:main"]]),
     };
 
-    expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("unknown");
-    expect(entitledCodexAccountIdsForModel(snapshot, SOL)?.size).toBe(0);
-    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(false);
+    expect(projectedEntitlementState(snapshot, "main", DAYBREAK)).toBe("unknown");
+    expect(entitledCodexAccountIdsForModel(snapshot, DAYBREAK)?.size).toBe(0);
+    expect(availableAccountGatedNativeModels(snapshot).has(DAYBREAK)).toBe(false);
   });
 });
 
@@ -1022,8 +1043,16 @@ describe("entitlement client version (#2886)", () => {
       const version = url.searchParams.get("client_version") ?? "";
       seen.push(version);
       const major = Number(version.split(".")[1] ?? "0");
-      // Below the GPT-5.6 threshold upstream simply omits those rows.
-      return major >= 144 ? roster("gpt-5.5", SOL, TERRA, LUNA) : roster("gpt-5.5");
+      // Below the GPT-5.6 threshold upstream simply omits the version-filtered rows.
+      //
+      // DAYBREAK rides along with the trio here. The flagships stopped being account-gated in
+      // 2026-09-04, so asserting the floor through `availableAccountGatedNativeModels` on them
+      // alone would be vacuous -- that projection no longer contains them. Including the one
+      // model still gated keeps this whole #2886/#3022 suite measuring the thing it exists for:
+      // that an under-reported client version does not turn into a manufactured denial.
+      return major >= 144
+        ? roster("gpt-5.5", SOL, TERRA, LUNA, DAYBREAK)
+        : roster("gpt-5.5");
     }) as typeof fetch;
   }
 
@@ -1039,7 +1068,9 @@ describe("entitlement client version (#2886)", () => {
     expect(seen).toEqual(["0.146.0"]);
     // The wrong behavior: an entitled account classified as denying GPT-5.6 because
     // OpenCodex under-reported its own client version.
-    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([SOL, TERRA, LUNA]);
+    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([DAYBREAK]);
+    // The flagships are present in the recorded roster too; they simply no longer need to be.
+    expect(snapshot.modelsByAccount.get("main")?.has(SOL)).toBe(true);
     expect(snapshot.confirmedAccountIds.has("main")).toBe(true);
   });
 
@@ -1064,7 +1095,7 @@ describe("entitlement client version (#2886)", () => {
         const version = url.searchParams.get("client_version") ?? "";
         seen.push(version);
         const minor = Number(version.split(".")[1] ?? "0");
-        return minor >= 144 ? roster("gpt-5.5", SOL, TERRA, LUNA) : roster("gpt-5.5");
+        return minor >= 144 ? roster("gpt-5.5", SOL, TERRA, LUNA, DAYBREAK) : roster("gpt-5.5");
       }) as typeof fetch,
       now: 1_000,
       clientVersion: null,
@@ -1077,7 +1108,10 @@ describe("entitlement client version (#2886)", () => {
     expect(snapshot.confirmedAccountIds.has("main")).toBe(true);
     // Read the SNAPSHOT, not the process-wide cache: another suite in the same run can leave
     // a confirmed entry behind, and this assertion is about what this discovery pass proved.
-    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([SOL, TERRA, LUNA]);
+    // Asserted through DAYBREAK, the one model still account-gated: the flagships no longer
+    // appear in this projection, so asserting them here would be vacuous rather than green.
+    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([DAYBREAK]);
+    expect(snapshot.modelsByAccount.get("main")?.has(SOL)).toBe(true);
     expect(snapshot.modelsByAccount.has("main")).toBe(true);
   });
 
@@ -1105,7 +1139,7 @@ describe("entitlement client version (#2886)", () => {
         // Gated against the floor itself rather than a hardcoded minor, so raising the floor
         // moves the fixture with it instead of silently mis-gating.
         return compareClientVersionsForTests(version, GATED_MODEL_CLIENT_VERSION_FLOOR) >= 0
-          ? roster("gpt-5.5", SOL, TERRA, LUNA)
+          ? roster("gpt-5.5", SOL, TERRA, LUNA, DAYBREAK)
           : roster("gpt-5.5");
       }) as typeof fetch,
       now: 1_000,
@@ -1116,7 +1150,7 @@ describe("entitlement client version (#2886)", () => {
     // The stale version is never what upstream is asked.
     expect(seen).toEqual([GATED_MODEL_CLIENT_VERSION_FLOOR]);
     expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("granted");
-    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([SOL, TERRA, LUNA]);
+    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([DAYBREAK]);
   });
 
   test("the floor raises a stale runtime but never lowers a current one", () => {
@@ -1217,12 +1251,12 @@ describe("entitlement client version (#2886)", () => {
     const backend = (async () => {
       opened += 1;
       await new Promise<void>(resolve => gate.push(resolve));
-      return roster(SOL);
+      return roster(DAYBREAK);
     }) as typeof fetch;
 
     const asks = Array.from({ length: 12 }, (_, i) => isDirectCallerEntitledToCodexModel(
       directHeaders("tok-flights"),
-      SOL,
+      DAYBREAK,
       { fetcher: backend, now: 1_000, clientVersion: `0.${400 + i}.0` },
     ));
 
@@ -1346,16 +1380,17 @@ describe("entitlement client version (#2886)", () => {
     // models from a newer client or advertise them to an older one (#2548, inverted). The
     // cache holds one entry per account, so what matters is that the entry knows its own
     // version and the projection respects it.
-    seedCodexModelEntitlementsForTests("main", [SOL, TERRA, LUNA], 1_000, "0.146.0");
+    // Uses DAYBREAK: this projection reads the account-gated set, which the flagships left.
+    seedCodexModelEntitlementsForTests("main", [DAYBREAK], 1_000, "0.146.0");
 
     expect([...cachedAvailableAccountGatedNativeModels(1_100, undefined, "0.146.0")])
-      .toEqual([SOL, TERRA, LUNA]);
+      .toEqual([DAYBREAK]);
     // A caller asking about an older client must not be handed the newer client's roster.
     expect([...cachedAvailableAccountGatedNativeModels(1_100, undefined, "0.140.0")]).toEqual([]);
     // An unusable version cannot select an entry at all, so it degrades to the unfiltered
     // read rather than silently matching one.
     expect([...cachedAvailableAccountGatedNativeModels(1_100, undefined, "0.0.0")])
-      .toEqual([SOL, TERRA, LUNA]);
+      .toEqual([DAYBREAK]);
   });
 
   // The projection test above seeds the cache directly, so it cannot see the cache-hit key or
@@ -1372,22 +1407,22 @@ describe("entitlement client version (#2886)", () => {
     const backend = (async (input: RequestInfo | URL) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       asked.push(url.searchParams.get("client_version") ?? "");
-      return roster(SOL);
+      return roster(DAYBREAK);
     }) as typeof fetch;
 
     // Same account, same credential, same instant — only the version differs.
-    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-refetch"), SOL, {
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-refetch"), DAYBREAK, {
       fetcher: backend, now: 1_000, clientVersion: "0.146.0",
     })).toBe(true);
     // Second ask under the SAME version is served from cache: no new request.
-    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-refetch"), SOL, {
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-refetch"), DAYBREAK, {
       fetcher: backend, now: 1_000, clientVersion: "0.146.0",
     })).toBe(true);
     expect(asked).toEqual(["0.146.0"]);
 
     // A different version is a different question and must reach upstream again, even though
     // the entry is still well within its TTL.
-    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-refetch"), SOL, {
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-refetch"), DAYBREAK, {
       fetcher: backend, now: 1_000, clientVersion: "0.150.0",
     })).toBe(true);
     expect(asked).toEqual(["0.146.0", "0.150.0"]);
@@ -1402,15 +1437,15 @@ describe("entitlement client version (#2886)", () => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       const version = url.searchParams.get("client_version") ?? "";
       // The newer client is entitled; the older one is not.
-      const body = version === "0.150.0" ? roster(SOL, TERRA) : roster("gpt-5.5");
+      const body = version === "0.150.0" ? roster(DAYBREAK, TERRA) : roster("gpt-5.5");
       await new Promise<void>(resolve => release.push(resolve));
       return body;
     }) as typeof fetch;
 
-    const newer = isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), SOL, {
+    const newer = isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), DAYBREAK, {
       fetcher: backend, now: 1_000, clientVersion: "0.150.0",
     });
-    const older = isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), SOL, {
+    const older = isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), DAYBREAK, {
       fetcher: backend, now: 1_000, clientVersion: "0.140.0",
     });
     // Let both requests reach the backend, then complete the NEWER one first so the older,
@@ -1435,13 +1470,13 @@ describe("entitlement client version (#2886)", () => {
       refetches += 1;
       const url = new URL(input instanceof Request ? input.url : String(input));
       // Inverted on purpose: 0.150.0 would become denied, 0.140.0 would become entitled.
-      return url.searchParams.get("client_version") === "0.150.0" ? roster("gpt-5.5") : roster(SOL);
+      return url.searchParams.get("client_version") === "0.150.0" ? roster("gpt-5.5") : roster(DAYBREAK);
     }) as typeof fetch;
 
-    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), SOL, {
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), DAYBREAK, {
       fetcher: inverted, now: 1_000, clientVersion: "0.150.0",
     })).toBe(true);
-    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), SOL, {
+    expect(await isDirectCallerEntitledToCodexModel(directHeaders("tok-race"), DAYBREAK, {
       fetcher: inverted, now: 1_000, clientVersion: "0.140.0",
     })).toBe(false);
     expect(refetches).toBe(0);
@@ -1458,10 +1493,10 @@ describe("entitlement client version (#2886)", () => {
     // eviction test built on it passes without ever storing an entry. (That mistake was made and
     // caught here: the first version of this test was vacuous for exactly that reason.)
     let fetches = 0;
-    const backend = (async () => { fetches += 1; return roster(SOL); }) as typeof fetch;
+    const backend = (async () => { fetches += 1; return roster(DAYBREAK); }) as typeof fetch;
     const ask = (token: string, version: string) => isDirectCallerEntitledToCodexModel(
       directHeaders(token),
-      SOL,
+      DAYBREAK,
       { fetcher: backend, now: 1_000, clientVersion: version },
     );
 
@@ -1484,10 +1519,10 @@ describe("entitlement client version (#2886)", () => {
     // The per-account bound is what makes the class budget safe. Without it, one account's
     // versions grow without limit inside its own class.
     let fetches = 0;
-    const backend = (async () => { fetches += 1; return roster(SOL); }) as typeof fetch;
+    const backend = (async () => { fetches += 1; return roster(DAYBREAK); }) as typeof fetch;
     const ask = (version: string) => isDirectCallerEntitledToCodexModel(
       directHeaders("tok-bounded"),
-      SOL,
+      DAYBREAK,
       { fetcher: backend, now: 1_000, clientVersion: version },
     );
 
@@ -1509,10 +1544,10 @@ describe("entitlement client version (#2886)", () => {
     // that by the per-account version bound, so a deployment well inside the intended limit would
     // start losing evidence: 20 accounts holding 4 versions each is 80 keys but only 20 accounts.
     let fetches = 0;
-    const backend = (async () => { fetches += 1; return roster(SOL); }) as typeof fetch;
+    const backend = (async () => { fetches += 1; return roster(DAYBREAK); }) as typeof fetch;
     const ask = (token: string, version: string) => isDirectCallerEntitledToCodexModel(
       directHeaders(token),
-      SOL,
+      DAYBREAK,
       { fetcher: backend, now: 1_000, clientVersion: version },
     );
 
@@ -1540,6 +1575,39 @@ describe("entitlement client version (#2886)", () => {
     // a confirmed denial — entitled Plus accounts lost sol/terra/luna.
     expect(compareClientVersionsForTests(GATED_MODEL_CLIENT_VERSION_FLOOR, "0.144.0"))
       .toBeGreaterThanOrEqual(0);
+  });
+
+  test("ungating the 5.6 family empties the derivation without lowering the floor", () => {
+    // The trio carried the only snapshot rows the derivation could see: each records 0.142.2,
+    // and gpt-daybreak-blue-latest has no row at all. Ungating them therefore empties
+    // deriveGatedClientVersionFloor, which falls to the 0.142.2 fallback -- BELOW the measured
+    // minimum. The composed floor survives only because the measurement wins that comparison.
+    //
+    // Without this test the failure mode is silent: the floor would quietly drop to 0.142.2,
+    // upstream would answer without gpt-5.6 again, and #3442 would be undone by a change that
+    // never mentioned it.
+    const rows = (upstreamModelsSnapshot as { models?: Array<Record<string, unknown>> }).models ?? [];
+    const afterUngating = new Set([DAYBREAK]);
+
+    expect(deriveGatedClientVersionFloor(rows, afterUngating)).toBeNull();
+    expect(composeGatedClientVersionFloorForTests(rows, afterUngating)).toBe("0.144.0");
+    // And the shipped constant agrees, so this is the live state and not a synthetic one.
+    expect(GATED_MODEL_CLIENT_VERSION_FLOOR).toBe("0.144.0");
+  });
+
+  test("the client-version minimums outlive gating, and Daybreak was never in that map", () => {
+    // ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS keeps its three entries after the trio
+    // stop being gated. hasUnknownGatedAbsence iterates this map alone, and the entries keep the
+    // tier-1 escape hatch alive for a client that self-declares a version below the floor.
+    //
+    // The second assertion pins a fact that was got WRONG while planning this change: Daybreak
+    // is deliberately absent here, so this map never protected it and emptying the map would not
+    // have hurt it. A comment claiming otherwise would have become load-bearing and false.
+    for (const slug of [SOL, TERRA, LUNA]) {
+      expect(ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS.get(slug)).toBe("0.144.0");
+      expect(ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)).toBe(false);
+    }
+    expect(ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS.has(DAYBREAK)).toBe(false);
   });
 
   test("the floor is the higher of the derived and the measured minimum, not either alone", () => {
@@ -1580,7 +1648,7 @@ describe("entitlement client version (#2886)", () => {
 
     const ask = (now: number) => isDirectCallerEntitledToCodexModel(
       directHeaders("tok-empty"),
-      SOL,
+      DAYBREAK,
       { fetcher: empty, now, clientVersion: "0.146.0" },
     );
 
@@ -1602,10 +1670,10 @@ describe("entitlement client version (#2886)", () => {
     // short roster must keep confirming the account and keep granting what it lists, otherwise
     // the empty-roster fix would have widened into a denial of service for everyone.
     let fetches = 0;
-    const backend = (async () => { fetches += 1; return roster(SOL); }) as typeof fetch;
+    const backend = (async () => { fetches += 1; return roster(DAYBREAK); }) as typeof fetch;
     const ask = (now: number) => isDirectCallerEntitledToCodexModel(
       directHeaders("tok-nonempty"),
-      SOL,
+      DAYBREAK,
       { fetcher: backend, now, clientVersion: "0.146.0" },
     );
 
@@ -1624,14 +1692,14 @@ describe("entitlement client version (#2886)", () => {
     const filtered = (async () => {
       fetches += 1;
       return Response.json({ models: [
-        { slug: SOL, supported_in_api: true, visibility: "hide" },
+        { slug: DAYBREAK, supported_in_api: true, visibility: "hide" },
         { slug: "gpt-disabled", supported_in_api: false, visibility: "list" },
       ] });
     }) as typeof fetch;
 
     const ask = (now: number) => isDirectCallerEntitledToCodexModel(
       directHeaders("tok-filtered"),
-      SOL,
+      DAYBREAK,
       { fetcher: filtered, now, clientVersion: "0.146.0" },
     );
 

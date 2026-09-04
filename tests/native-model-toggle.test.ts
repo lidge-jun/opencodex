@@ -117,6 +117,28 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(visibleNativeSlugs({ disabledModels: ["gpt-6-astra"] })).not.toContain("gpt-6-astra");
   });
 
+  test("the flagship natives list without any roster; only Daybreak still waits for one", () => {
+    // Owner decision (2026-09-04): gpt-5.6-sol/terra/luna join gpt-6-astra in listing on every
+    // install. Asking upstream under an adequate client version (#3442) guarantees the QUESTION
+    // is fair; it cannot guarantee an ANSWER. An unconfirmed account, a timed-out fetch or a
+    // shard that has not caught up all produce the same silent disappearance, which reads as
+    // "opencodex lost my model" rather than "upstream did not confirm it".
+    resetCodexModelEntitlementCacheForTests();
+    const flagship = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"];
+    const slugs = nativeModelRows({ disabledModels: [] }).map(row => row.slug);
+    for (const slug of flagship) {
+      expect(ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)).toBe(false);
+      expect(slugs).toContain(slug);
+      expect(visibleNativeSlugs({ disabledModels: [] })).toContain(slug);
+    }
+    // Scoped, not global: Daybreak is a genuinely entitlement-restricted surface with no shipped
+    // catalog row, so it still waits for a confirming roster. If this flips, the ungating leaked.
+    expect(ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has("gpt-daybreak-blue-latest")).toBe(true);
+    expect(slugs).not.toContain("gpt-daybreak-blue-latest");
+    // The user's visibility lever is untouched by any of this.
+    expect(visibleNativeSlugs({ disabledModels: flagship })).not.toContain("gpt-5.6-sol");
+  });
+
   test("the 1M opt-in raises gpt-6-astra to its own 872k ceiling, not the family's 922k", () => {
     // The dashboard's native 1M toggle writes providerContextCaps.openai = 922_000 for the whole
     // group. Raising a window only happens for slugs that HAVE an opt-in ceiling, which used to
