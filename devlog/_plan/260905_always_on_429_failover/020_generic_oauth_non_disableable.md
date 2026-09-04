@@ -76,11 +76,33 @@ monotone with the old behaviour for every operator who never wrote the key.
 no edit — the predicate they call simply became presence-only. `:3422` guards
 `preferredInitialAccount`, which now self-gates on the proactive predicate.
 
-## Tests (`tests/generic-oauth-failover.test.ts`)
+## Tests
+
+**Amended after audit round 1 (B2).** Three existing tests encode the OLD contract and will go
+red. They are rewritten to assert the new one, each carrying the reason in the test body — a
+reversed assertion with no explanation is indistinguishable from a test someone broke.
+
+Rewritten:
+
+- `tests/generic-oauth-failover.test.ts:80` "an explicit knob still wins over presence" ->
+  becomes "an explicit knob no longer disables reactive rotation": `config(false)` still
+  rotates.
+- `tests/generic-oauth-failover.test.ts:107-114` "a per-provider override beats the global
+  switch" -> the override now governs the PROACTIVE preference only; reactive rotation ignores
+  both booleans.
+- `tests/adapter-event-oauth-failover.test.ts:129` "an explicit opt-out keeps single-account
+  behaviour with two accounts stored" -> with two accounts stored, the opt-out no longer keeps
+  the 429; the second account serves the retry.
+
+New:
 
 1. `oauthAccountFailover.enabled: false` globally, two accounts, 429 -> still rotates.
 2. Per-provider `enabled: false`, two accounts, 429 -> still rotates.
-3. One account -> `null` regardless of any flag.
-4. `enabled: false` -> `preferredInitialAccount` returns `null` even with headroom evidence
-   (the proactive refusal is preserved).
-5. Existing presence-default-on tests continue to pass unchanged.
+3. One account -> `null` regardless of any flag (strict no-op preserved).
+4. `enabled: false` -> `preferredInitialAccount` returns `null` even with headroom evidence,
+   proving the proactive refusal survived the re-scope.
+
+Unaffected (verified, not assumed): `tests/account-pool-management-api.test.ts` (Anthropic pool
+DTO round-trip), `tests/management-provider-validation.test.ts:996-1031` and
+`tests/oauth-upsert-preserves-api-key.test.ts` (field preservation only — the knob is kept, so
+preservation still holds).

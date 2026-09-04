@@ -42,32 +42,31 @@ eligible non-excluded account — a deterministic, evidence-optional pick. No ne
 `clearAnthropicSessionAffinityForAccount` still runs. Harmless with the flag off: the
 affinity map is empty because nothing binds into it.
 
-## Change 2 — `src/server/responses/core.ts` (:3395-3420)
+## Change 2 — `src/server/responses/core.ts` (:3475-3480)
 
-The account identity must be captured even when the pool is off, or the rotation loops have
-nothing to cool. Restructure the branch:
+**Amended after audit round 1 (B3).** An earlier draft of this doc proposed a dedicated
+`else if` arm that called `getValidAccessTokenSnapshot("anthropic")` itself. That is rejected:
+it mints a second credential read for an account the shared arm has already resolved.
+
+Anthropic reaches the shared OAuth else-arm whenever the pool is off, because the inner `if`
+requires `isAnthropicAccountPoolEnabled`. That arm resolves the active account into
+`resolved`, and `resolved.accountId` is precisely the account that will serve the request.
+So the capture is one stamp beside the existing generic one:
 
 ```ts
-if (route.providerName === "anthropic" && isAnthropicAccountPoolEnabled(config)) {
-  ... existing proactive selection, unchanged ...
-} else if (route.providerName === "anthropic" && route.provider.authMode === "oauth"
-           && hasAnthropicFailoverQuorum()) {
-  // Pool off: keep the ordinary active-account resolution, but REMEMBER which account
-  // served the request so a later 429 cools that one. No affinity bind, no promotion,
-  // no quota-ranked pick -- those are proactive and remain opt-in.
-  const snapshot = await getValidAccessTokenSnapshot("anthropic");
-  anthropicPoolAccountId = snapshot.accountId;
-  route.provider = { ...route.provider, apiKey: snapshot.accessToken };
-  logCtx.provider = formatAnthropicProviderForLog("anthropic", snapshot.accountId, config);
-}
+ if (isGenericFailoverProvider(route.providerName, route.provider)) {
+   genericFailoverAccountId = resolved.accountId;
+ }
++// Anthropic is excluded from isGenericFailoverProvider (its pool owns affinity and a
++// fail-closed local-cli rule), so without this its identity is dropped and a later 429 has
++// nothing to cool. Reactive failover needs only the id -- no affinity bind, no promotion,
++// no quota-ranked pick. Those are proactive and stay behind the pool flag.
++if (route.providerName === "anthropic" && hasAnthropicFailoverQuorum()) {
++  anthropicPoolAccountId = resolved.accountId;
++}
 ```
 
-Note the ordering constraint: the `else` arm of the outer `if (route.provider.authMode === "oauth")`
-block currently handles every non-Anthropic-pool OAuth provider through the generic path.
-Anthropic is excluded from `isGenericFailoverProvider`, so it reaches that arm and resolves
-the active account normally. The minimal edit is therefore to capture `anthropicPoolAccountId`
-from `resolved.accountId` in that shared arm when the provider is `anthropic` and the quorum
-holds, rather than duplicating a resolution. Prefer that: one resolution, one stamp.
+One resolution, one stamp, no new credential read.
 
 ## Change 3 — the two rotation loops (:6173, :6584)
 
