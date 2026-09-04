@@ -127,18 +127,20 @@ function isPermissionMessage(text: string): boolean {
   );
 }
 
+export const LOCATION_UNSUPPORTED_PATTERNS = [
+  "location is not supported",
+  "location not supported",
+  "unsupported location",
+  "region is not supported",
+  "unsupported region",
+  "country is not supported",
+  "not supported in your country",
+  "not supported in your region",
+] as const;
+
 export function isLocationUnsupportedMessage(text: string): boolean {
-  return (
-    text.includes("location is not supported") ||
-    text.includes("location not supported") ||
-    text.includes("unsupported location") ||
-    text.includes("region is not supported") ||
-    text.includes("unsupported region") ||
-    text.includes("country is not supported") ||
-    text.includes("not supported in your country") ||
-    text.includes("not supported in your region") ||
-    text.includes("not supported for the api use")
-  );
+  const lower = text.toLowerCase();
+  return LOCATION_UNSUPPORTED_PATTERNS.some(needle => lower.includes(needle));
 }
 
 /**

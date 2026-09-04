@@ -192,6 +192,34 @@ describe("vertex retry fetch", () => {
     expect(text).not.toContain("secret-token");
   });
 
+  test("Antigravity location unsupported logs diagnostic warning and classifies correctly", async () => {
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      mockFetch([new Response(vertexError(400, "FAILED_PRECONDITION", "User location is not supported for the API use."), { status: 400 })]);
+      const res = await fetchAntigravityWithRetry(request, { timeoutMs: 5_000 });
+      const text = await res.text();
+      expect(text).toContain("Antigravity location not supported");
+      expect(warnings.some(w => w.includes("client location is not supported") && w.includes("TUN mode"))).toBe(true);
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
+  test("Antigravity non-location error does not log location diagnostic warning", async () => {
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      mockFetch([new Response(vertexError(400, "INVALID_ARGUMENT", "syntax error"), { status: 400 })]);
+      await fetchAntigravityWithRetry(request, { timeoutMs: 5_000 });
+      expect(warnings.some(w => w.includes("client location is not supported"))).toBe(false);
+    } finally {
+      console.warn = origWarn;
+    }
+  });
+
   test("does not retry 401/403 (single attempt)", async () => {
     const mock401 = mockFetch([new Response(vertexError(401, "UNAUTHENTICATED", "bad token"), { status: 401 })]);
     const res401 = await fetchVertexWithRetry(request, { timeoutMs: 5_000 });

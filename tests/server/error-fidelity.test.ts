@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE, formatErrorResponse } from "../../src/bridge";
-import { classifyError } from "../../src/lib/errors";
+import { classifyError, isLocationUnsupportedMessage } from "../../src/lib/errors";
 import { sanitizePassthroughHeaders } from "../../src/server";
 import type { AdapterEvent } from "../../src/types";
 
@@ -103,6 +103,13 @@ describe("error fidelity", () => {
       type: "permission_error",
       code: "location_not_supported",
     });
+    expect(classifyError(400, "upstream_error", "USER LOCATION IS NOT SUPPORTED IN YOUR REGION")).toMatchObject({
+      type: "permission_error",
+      code: "location_not_supported",
+    });
+    expect(isLocationUnsupportedMessage("USER LOCATION IS NOT SUPPORTED")).toBe(true);
+    expect(isLocationUnsupportedMessage("Region Is Not Supported")).toBe(true);
+    expect(isLocationUnsupportedMessage("not supported for the api use")).toBe(false);
   });
 
   test("formatErrorResponse returns OpenAI-compatible classified error envelope", async () => {

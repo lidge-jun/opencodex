@@ -93,7 +93,7 @@ describe("google error classification & quota exhaustion", () => {
       "User location is not supported for the API use.",
       "Location not supported in your region.",
       "This model is not supported in your country.",
-      "Service is not supported for the api use in this location.",
+      "Unsupported location for the API use.",
     ];
 
     for (const phrase of locationPhrases) {

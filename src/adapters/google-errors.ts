@@ -1,4 +1,5 @@
 import { parseUpstreamJsonPayload, safeUpstreamErrorString, sanitizeUpstreamErrorText } from "./upstream-http-error";
+import { isLocationUnsupportedMessage, LOCATION_UNSUPPORTED_PATTERNS } from "../lib/errors";
 
 /** Pull the human detail out of the Google API error envelope `{error:{message,status,code}}`. */
 function googleErrorDetail(payloadText: string): { message?: string; status?: string } {
@@ -54,22 +55,8 @@ export function isGoogleQuotaExhaustedText(text: string): boolean {
   return GOOGLE_QUOTA_EXHAUSTED_NEEDLES.some(needle => lower.includes(needle));
 }
 
-export const GOOGLE_LOCATION_UNSUPPORTED_PATTERNS = [
-  "location is not supported",
-  "location not supported",
-  "unsupported location",
-  "region is not supported",
-  "unsupported region",
-  "country is not supported",
-  "not supported in your country",
-  "not supported in your region",
-  "not supported for the api use",
-];
-
-export function isGoogleLocationUnsupportedText(text: string): boolean {
-  const lower = text.toLowerCase();
-  return GOOGLE_LOCATION_UNSUPPORTED_PATTERNS.some(needle => lower.includes(needle));
-}
+export const GOOGLE_LOCATION_UNSUPPORTED_PATTERNS = LOCATION_UNSUPPORTED_PATTERNS;
+export const isGoogleLocationUnsupportedText = isLocationUnsupportedMessage;
 
 function classifyGoogle(label: string, status: number | undefined, enumStatus: string | undefined, text: string): string {
   const lower = `${enumStatus ?? ""} ${text}`.toLowerCase();
