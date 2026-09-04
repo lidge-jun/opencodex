@@ -1081,6 +1081,85 @@ describe("entitlement client version (#2886)", () => {
     expect(snapshot.modelsByAccount.has("main")).toBe(true);
   });
 
+  test("a persisted runtime BELOW the gated floor still asks under the floor", async () => {
+    // #3022 restored the floor for a host with NO runtime. A host with an OLD one stayed
+    // broken, and ended up worse off than a host with none: tier 2 returned its honest
+    // 0.141.0, upstream truthfully answered without gpt-5.6, and the rows vanished. Having
+    // an outdated Codex CLI must not be worse than having no Codex CLI at all.
+    //
+    // A caller that supplies no client version is asking whether the ACCOUNT owns the model.
+    // Upstream only incidentally filters that answer by version, so the question is asked at
+    // no less than the version this build has measured upstream to honour.
+    const stale = () => ({ selectedVersion: "0.141.0" });
+    expect(resolveCodexEntitlementClientVersion(null, stale, { bypassRuntimeMemo: true }))
+      .toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
+
+    const seen: string[] = [];
+    const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+      credentials: [credential("main")],
+      fetcher: (async (input: RequestInfo | URL) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        const version = url.searchParams.get("client_version") ?? "";
+        seen.push(version);
+        // Mirrors the measured upstream behaviour: the gated rows appear only at >= 0.144.0.
+        const minor = Number(version.split(".")[1] ?? "0");
+        return minor >= 144 ? roster("gpt-5.5", SOL, TERRA, LUNA) : roster("gpt-5.5");
+      }) as typeof fetch,
+      now: 1_000,
+      clientVersion: null,
+      loadPersistedRuntime: stale,
+    });
+
+    // The stale version is never what upstream is asked.
+    expect(seen).toEqual([GATED_MODEL_CLIENT_VERSION_FLOOR]);
+    expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("granted");
+    expect([...availableAccountGatedNativeModels(snapshot)]).toEqual([SOL, TERRA, LUNA]);
+  });
+
+  test("the floor raises a stale runtime but never lowers a current one", () => {
+    const ask = (runtime: string | null) => resolveCodexEntitlementClientVersion(
+      null,
+      () => (runtime === null ? null : { selectedVersion: runtime }),
+      { bypassRuntimeMemo: true },
+    );
+    // Below the floor: clamped up.
+    expect(ask("0.141.0")).toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
+    expect(ask("0.100.0")).toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
+    // At the floor: itself, which is also the floor.
+    expect(ask(GATED_MODEL_CLIENT_VERSION_FLOOR)).toBe(GATED_MODEL_CLIENT_VERSION_FLOOR);
+    // Above the floor: preserved exactly. The clamp raises; it must never lower, or a newer
+    // runtime would be under-reported and lose the models only it can drive.
+    expect(ask("0.145.1")).toBe("0.145.1");
+    expect(ask("0.153.2")).toBe("0.153.2");
+    // An inbound version still wins outright, stale or not — that caller is asking what IT
+    // may use, and answering for a different version is #2548 in one direction or the other.
+    expect(resolveCodexEntitlementClientVersion("0.140.0", () => ({ selectedVersion: "0.150.0" }), { bypassRuntimeMemo: true }))
+      .toBe("0.140.0");
+    expect(resolveCodexEntitlementClientVersion("0.150.0", () => ({ selectedVersion: "0.141.0" }), { bypassRuntimeMemo: true }))
+      .toBe("0.150.0");
+  });
+
+  test("the floor asks a better question; it does not invent a grant", async () => {
+    // The clamp changes which version is asked, never what the answer means. An account that
+    // genuinely does not own the model is not granted it merely because we asked politely.
+    const seen: string[] = [];
+    const snapshot = await resolveCodexModelEntitlements({ codexAccounts: [] }, {
+      credentials: [credential("main")],
+      fetcher: (async (input: RequestInfo | URL) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        seen.push(url.searchParams.get("client_version") ?? "");
+        return roster("gpt-5.5");
+      }) as typeof fetch,
+      now: 1_000,
+      clientVersion: null,
+      loadPersistedRuntime: () => ({ selectedVersion: "0.141.0" }),
+    });
+    expect(seen).toEqual([GATED_MODEL_CLIENT_VERSION_FLOOR]);
+    // Asked at an adequate version and still absent: that is a real denial, not doubt.
+    expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("denied");
+    expect(availableAccountGatedNativeModels(snapshot).has(SOL)).toBe(false);
+  });
+
   test("the gated floor derivation picks the highest usable gated version", () => {
     // Asserted on INDEPENDENT fixtures, not the shipped snapshot. An earlier version of this test
     // compared the constant against the bundled data and reimplemented the comparator, so it
