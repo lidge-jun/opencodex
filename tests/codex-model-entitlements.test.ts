@@ -344,7 +344,8 @@ describe("tri-state entitlement authority", () => {
   // the flagship ungating (2026-09-04). The mechanism under test never changed; only its subject
   // did. Deleting these because sol left the gated set would have removed the only coverage of
   // the fail-closed path while that path still governs a shipped model. Daybreak has no recorded
-  // minimum, so a version-scoped case uses SOL_MINIMUM_SLUG, which stays in the minimums map.
+  // minimum, so a version-scoped case still reads SOL, which stays in the minimums map even
+  // though it is no longer gated.
   test("an omitted gated slug below its minimum is unknown and uses the failure TTL", async () => {
     let fetches = 0;
     const backend = (async () => {
@@ -394,6 +395,10 @@ describe("tri-state entitlement authority", () => {
     });
 
     expect(projectedEntitlementState(snapshot, "main", SOL)).toBe("denied");
+    // SOL's raw tri-state is unchanged mechanics -- codexModelEntitlementStateForRoster never
+    // consulted the gated set. What ungating actually changed is that it no longer reaches the
+    // gated projections at all, so that is asserted rather than restated.
+    expect(entitledCodexAccountIdsForModel(snapshot, SOL)).toBeUndefined();
     expect(projectedEntitlementState(snapshot, "main", DAYBREAK)).toBe("denied");
     expect(entitledCodexAccountIdsForModel(snapshot, DAYBREAK)?.size).toBe(0);
     expect(availableAccountGatedNativeModels(snapshot).has(DAYBREAK)).toBe(false);

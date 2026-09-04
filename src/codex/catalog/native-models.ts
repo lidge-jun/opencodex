@@ -165,3 +165,28 @@ export const NATIVE_OPENAI_MODELS = [
 ];
 
 export const SUPPORTED_NATIVE_OPENAI_SLUGS = new Set(NATIVE_OPENAI_MODELS);
+
+/**
+ * Natives that retain the physical main account as a read-free sentinel during a native-main
+ * drain, instead of reading as unavailable and letting the subagent fallback chain advance.
+ *
+ * This used to be spelled `ACCOUNT_GATED_NATIVE_OPENAI_MODELS`, which was never what it meant:
+ * the sentinel protects the atomic main claim so a routed fallback cannot bypass it, and that
+ * has nothing to do with entitlement. The two sets were identical in practice, so the accident
+ * went unnoticed until the flagships were ungated (2026-09-04) and the predicate would have
+ * flipped false — letting a drain silently rewrite the operator's configured subagent model.
+ *
+ * It is an explicit list rather than `SUPPORTED_NATIVE_OPENAI_SLUGS`, which would have widened
+ * the sentinel to `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` and `gpt-5.3-codex-spark` as well. Those
+ * models were never covered, and widening would turn "fell back and answered" into a
+ * maintenance error for the most commonly configured fallback slug in the repo. Membership is
+ * the set the drain behaviour was actually reasoned about: the account-gated natives plus the
+ * flagships that just left that set.
+ */
+export const NATIVE_MAIN_DRAIN_SENTINEL_MODELS: ReadonlySet<string> = new Set([
+  ...ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  NATIVE_GPT6_ASTRA_MODEL,
+]);

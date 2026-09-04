@@ -38,7 +38,7 @@ import {
 import { routeModel, type RouteResult } from "../router";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { codexAccountNamespaceForModel } from "./account-namespace-match";
-import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./catalog/native-models";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_MAIN_DRAIN_SENTINEL_MODELS } from "./catalog/native-models";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import {
   getUpstreamHostHealth,
@@ -329,15 +329,16 @@ export function isSubagentModelUnavailable(
   // gated model, retain main only as a read-free sentinel: final auth owns the atomic
   // claim and returns maintenance instead of letting a routed fallback bypass it.
   //
-  // The predicate is the SUPPORTED NATIVE set, not the account-gated one. The sentinel exists
-  // to protect the atomic main claim during a drain, which has nothing to do with entitlement;
-  // it read the gated set only because every native it applied to happened to be gated. When
-  // the flagships were ungated (2026-09-04) that accident would have flipped this false and let
-  // a drain silently rewrite the operator's configured subagent model to the next chain entry
-  // instead of reporting maintenance -- a different model answering than was chosen.
+  // The predicate is its OWN set, not the account-gated one. The sentinel protects the atomic
+  // main claim during a drain, which has nothing to do with entitlement; it read the gated set
+  // only because the two happened to hold the same slugs. Ungating the flagships (2026-09-04)
+  // would have flipped this false and let a drain silently rewrite the operator's configured
+  // subagent model instead of reporting maintenance -- a different model answering than was
+  // chosen. The set is explicit rather than every supported native, so gpt-5.5 and friends keep
+  // their existing fall-back-and-answer behaviour.
   const preserveDrainingMainCandidate = route.codexAccountId === undefined
     && candidateAccountUsabilityOptions?.nativeMainSelectionOnly === true
-    && SUPPORTED_NATIVE_OPENAI_SLUGS.has(route.modelId);
+    && NATIVE_MAIN_DRAIN_SENTINEL_MODELS.has(route.modelId);
   if (!preserveDrainingMainCandidate) return true;
   const drainingMainUsabilityOptions: CodexAccountUsabilityOptions = {
     ...candidateAccountUsabilityOptions,

@@ -708,7 +708,7 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
         chatgptAccountId: "acc-other",
       }),
     });
-    const gatedModel = "gpt-5.6-sol";
+    const gatedModel = "gpt-daybreak-blue-latest";
     const harness = installHarness({
       responseForSend: authorization => {
         if (authorization === "Bearer rejected-access") {
@@ -850,7 +850,7 @@ describe("ordinary pool 401 refresh and replay (#2887)", () => {
     // from the opaque-blob case. When the refreshed roster still grants the model,
     // retryCodexPoolOnAlternateAccount sets retryAuthCtx = firstAuthCtx and sends again to the
     // account already paying — no other account is charged, so it is outside the budget.
-    const gatedModel = "gpt-5.6-sol";
+    const gatedModel = "gpt-daybreak-blue-latest";
     const harness = installHarness({
       responseForSend: (authorization, sendNumber) => {
         if (authorization === "Bearer rejected-access") {

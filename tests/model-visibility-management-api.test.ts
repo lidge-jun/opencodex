@@ -335,8 +335,11 @@ describe("atomic model visibility management", () => {
     // rows and routing stays gated, so this removes a misleading error rather than granting
     // access.
     saveConfig({ ...loadConfig(), disabledModels: ["gpt-5.6-sol", "other/keep"] });
-    // Precondition: the model is genuinely absent from the rendered rows here.
-    expect(nativeModelRows(loadConfig()).some(row => row.slug === "gpt-5.6-sol")).toBe(false);
+    // Precondition: the model is genuinely absent from the rendered rows here -- asserted on
+    // DAYBREAK, which is still account-gated. Sol stopped being gated on 2026-09-04, so it now
+    // renders even without a roster and could no longer stand in for a suppressed model.
+    expect(nativeModelRows(loadConfig()).some(row => row.slug === "gpt-daybreak-blue-latest"))
+      .toBe(false);
 
     const response = await put({
       scope: "models",

@@ -935,7 +935,11 @@ describe("native fallback account preview", () => {
 
     await expect(postSpawn(
       cfg,
-      { model: "team/gpt-5.6-sol", input: readableAgentInput(), stream: false },
+      // Account-qualified DAYBREAK: this case is about the entitlement resolution that runs
+      // twice (preview then final auth), and only an account-gated model resolves entitlements
+      // at all. The flagships stopped being gated on 2026-09-04, so team/gpt-5.6-sol would now
+      // skip both calls and the admission-release accounting under test would never run.
+      { model: "team/gpt-daybreak-blue-latest", input: readableAgentInput(), stream: false },
       {
         turnAdmissionLease,
         resolveCodexModelEntitlements: async () => {

@@ -20,6 +20,8 @@ import {
   subagentFallbackGuidanceText,
 } from "../src/codex/subagent-model-fallback";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { NATIVE_MAIN_DRAIN_SENTINEL_MODELS } from "../src/codex/catalog/native-models";
+import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../src/codex/account-runtime-state";
 import { clearAccountQuota, setAccountQuotaFromParsed, updateAccountQuota } from "../src/codex/quota";
 import {
@@ -251,6 +253,37 @@ describe("subagent model fallback chain", () => {
       throwingPreview,
       () => new Set(["account-a"]),
     )).toBe(false);
+  });
+
+test("the native-main drain sentinel covers the flagships without widening to gpt-5.5", () => {
+    // During a native-main drain with no usable non-main candidate, a sentinel model retains
+    // main as a read-free candidate so final auth returns maintenance and owns the atomic claim.
+    // Anything outside the sentinel set reads as unavailable and the chain advances.
+    //
+    // The predicate used to be spelled ACCOUNT_GATED_NATIVE_OPENAI_MODELS, which was an accident
+    // of the two sets holding the same slugs. Ungating the flagships (2026-09-04) would have
+    // flipped it false and let a drain silently rewrite the operator's configured subagent model.
+    // Widening it to every supported native would have been the opposite error: gpt-5.5 and the
+    // other non-flagship natives would newly raise a maintenance error where they used to fall
+    // back and answer. This pins both edges.
+    const now = 1_800_000_000_000;
+    const config = cfg({ autoSwitchThreshold: 0 });
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 10, undefined, 20);
+    const draining = { nativeMainSelectionOnly: true } as const;
+    const noPoolCandidate = () => undefined;
+
+    for (const slug of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-daybreak-blue-latest"]) {
+      expect(NATIVE_MAIN_DRAIN_SENTINEL_MODELS.has(slug)).toBe(true);
+      expect(isSubagentModelUnavailable(slug, config, null, now, draining, noPoolCandidate))
+        .toBe(false);
+    }
+
+    // Outside the set, and deliberately so: these keep advancing the chain as they always did.
+    for (const slug of ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]) {
+      expect(NATIVE_MAIN_DRAIN_SENTINEL_MODELS.has(slug)).toBe(false);
+      expect(isSubagentModelUnavailable(slug, config, null, now, draining, noPoolCandidate))
+        .toBe(true);
+    }
   });
 
   test("unqualified gated candidates pass their entitlement set into Pool preview", () => {
