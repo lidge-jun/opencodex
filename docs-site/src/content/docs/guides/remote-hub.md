@@ -8,9 +8,10 @@ use its data plane remotely. The browser-facing management plane is separate: an
 binds only `127.0.0.1`, serves the dashboard and `/api/*`, and is intended to sit behind Tailscale
 Serve or another operator-owned HTTPS frontend.
 
-The management ingress never serves `/v1/*`, `/healthz`, `/readyz`, or WebSockets. Do not publish its
-port directly, do not add a cloud-firewall rule for it, and do not use Tailscale Funnel. Funnel is a
-public-internet surface and is outside this deployment model.
+The management ingress never serves `/v1/*`, `/healthz`, or `/readyz`. Its only WebSocket exception
+is the bearer-authenticated `/remote-workspace/agent` connection opened outbound by a paired OCX
+Executor. Do not publish the ingress port directly, do not add a cloud-firewall rule for it, and do
+not use Tailscale Funnel. Funnel is a public-internet surface and is outside this deployment model.
 
 ## Trust and consent boundaries
 

@@ -282,6 +282,12 @@ describe("headless GUI parity CLI", () => {
       // history remains available through observe/index tooling.
       ["/api/routing-profiles", "ocx route policy"],
       ["/api/routing-analytics", "(none — GUI analytics surface; history via ocx observe/logs)"],
+      // Remote Workspace is one product family in both surfaces. The current CLI owns
+      // executor pairing, presence, and local status; Hub/device/session inspection is
+      // intentionally dashboard-only until the deferred Hub-status verbs documented in
+      // the management route registry land. Naming the family here does not claim those
+      // local and Hub status payloads are equivalent.
+      ["/api/remote-workspace", "ocx remote-workspace"],
       ["/api/shadow", "ocx models"],
       ["/api/sidecar", "ocx agent"],
       ["/api/startup", "ocx system"],

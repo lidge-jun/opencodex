@@ -22,6 +22,10 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // than prose. Translating it would invent a difference the UI does not have.
   "models.aliasAuto",
   "common.github",
+  // Product names and ordinary French words whose correct spelling is identical to English.
+  "remote.pairingCommandWindows",
+  "remote.sessions",
+  "remote.prompt",
   // A filename and a product name. "AGENTS.md" is the literal file Codex reads,
   // and translating "Plugins" would invent a difference French does not have.
   "codexSet.layer.agents-md",

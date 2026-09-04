@@ -418,6 +418,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleConnectCommand } = await import("./connect");
     return await handleConnectCommand(deps.args.slice(1));
   },
+  "remote-workspace": async deps => {
+    const { runRemoteWorkspaceCommand } = await import("./remote-workspace");
+    return await runRemoteWorkspaceCommand(deps.args.slice(1));
+  },
   disconnect: async deps => {
     const { handleDisconnectCommand } = await import("./connect");
     return await handleDisconnectCommand(deps.args.slice(1));

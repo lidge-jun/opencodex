@@ -109,6 +109,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "codexAuth.codexApp",
   "codexAuth.creditNextBadge",
   "common.github",
+  // Windows PowerShell is a product name, not an untranslated prose placeholder.
+  "remote.pairingCommandWindows",
   "grok.title",
   // Integration tabs: client/product proper nouns kept in English
   "integrations.tab.codex",

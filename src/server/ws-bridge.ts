@@ -7,6 +7,8 @@ import type { ResponsesTerminalStatus } from "../bridge";
 import type { DataPlaneAdmission } from "./auth-cors";
 import type { AdmissionLease, AdmissionReservation } from "../lib/admission";
 import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
+import type { RemoteWorkspaceHubAgentConnection } from "../remote-control/workspace-agent-connection";
+import type { RemoteWorkspaceHub } from "../remote-control/workspace-hub";
 
 const OPEN = 1;
 type ResponsesTerminalReporter = (status: ResponsesTerminalStatus) => void;
@@ -37,7 +39,11 @@ export interface WsData {
   /** Fixed-size logical session lane derived at the HTTP upgrade boundary. */
   sessionLaneId?: string;
   /** Discriminator: Responses reframing vs transparent live/realtime sideband relay. */
-  kind?: "responses" | "live-sideband";
+  kind?: "responses" | "live-sideband" | "remote-workspace-agent";
+  remoteWorkspaceDeviceId?: string;
+  remoteWorkspaceHub?: RemoteWorkspaceHub;
+  remoteWorkspaceConnection?: RemoteWorkspaceHubAgentConnection;
+  remoteWorkspaceOpen?: (socket: ServerWebSocket<WsData>) => RemoteWorkspaceHubAgentConnection;
   liveUpstream?: WebSocket;
   liveUpstreamUrl?: string;
   liveUpstreamHeaders?: Record<string, string>;

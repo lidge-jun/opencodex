@@ -104,6 +104,8 @@ describe("GitHub Actions hardening", () => {
     // Higher than the Linux shards on purpose: at 15 the Windows leg cancelled a
     // shard mid-suite, which reports as neither pass nor fail (#2152).
     expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(25);
+    expect(ci.jobs?.["native-workspace-helper"]?.["timeout-minutes"]).toBe(8);
+    expect(ci.jobs?.["linux-workspace-confinement"]?.["timeout-minutes"]).toBe(8);
     expect(ci.jobs?.["keyring-smoke"]?.["timeout-minutes"]).toBe(8);
     // Same lesson as the Windows shards above, one job later: at 8 the Windows leg
     // spent ~7 minutes installing dependencies and was cancelled at the wall before
@@ -129,6 +131,46 @@ describe("GitHub Actions hardening", () => {
       { name: "windows", runner: "windows-latest" },
       { name: "macos", runner: "macos-latest" },
     ]);
+    const nativeJob = ci.jobs?.["native-workspace-helper"] as {
+      "runs-on"?: string;
+      strategy?: { matrix?: { include?: Array<{ name: string; runner: string }> } };
+      steps?: Array<{ uses?: string; with?: Record<string, unknown>; run?: string }>;
+    } | undefined;
+    expect(nativeJob?.["runs-on"]).toBe("${{ matrix.runner }}");
+    expect(nativeJob?.strategy?.matrix?.include).toEqual([
+      { name: "macos", runner: "macos-latest" },
+      { name: "windows", runner: "windows-latest" },
+    ]);
+    const nativeRun = nativeJob?.steps?.find(step => step.run)?.run;
+    expect(nativeRun).toBe("cargo test --locked --release --manifest-path native/remote-workspace-helper/Cargo.toml");
+    expect(nativeRun).not.toContain("${{");
+    const linuxConfinementJob = ci.jobs?.["linux-workspace-confinement"] as {
+      "runs-on"?: string;
+      steps?: Array<{
+        name?: string;
+        uses?: string;
+        with?: Record<string, unknown>;
+        env?: Record<string, unknown>;
+        run?: string;
+      }>;
+    } | undefined;
+    expect(linuxConfinementJob?.["runs-on"]).toBe("ubuntu-22.04");
+    const linuxConfinementSteps = linuxConfinementJob?.steps ?? [];
+    const linuxCheckout = linuxConfinementSteps.find(step => step.name === "Checkout");
+    expect(linuxCheckout?.uses).toBe("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
+    expect(linuxCheckout?.with).toMatchObject({ "persist-credentials": false, "fetch-tags": true });
+    expect(linuxConfinementSteps.find(step => step.name === "Setup project Bun")?.uses)
+      .toBe("./.github/actions/setup-project-bun");
+    expect(linuxConfinementSteps.find(step => step.name === "Install bubblewrap")?.run)
+      .toContain("sudo apt-get install --yes --no-install-recommends bubblewrap");
+    const linuxConfinementRun = linuxConfinementSteps.find(step => step.name === "Prove Linux confinement boundary");
+    expect(linuxConfinementRun?.env).toEqual({ OCX_REQUIRE_LINUX_REMOTE_WORKSPACE_CONFINEMENT: "1" });
+    expect(linuxConfinementRun?.run).toContain('HOME="$isolated_root/home"');
+    expect(linuxConfinementRun?.run).toContain('OPENCODEX_HOME="$isolated_root/opencodex"');
+    expect(linuxConfinementRun?.run).toContain('CODEX_HOME="$isolated_root/codex"');
+    expect(linuxConfinementRun?.run).toContain('PASEO_HOME="$isolated_root/paseo"');
+    expect(linuxConfinementRun?.run)
+      .toContain("bun test --isolate tests/remote-workspace-linux-confinement.test.ts");
     expectSecureLinuxKeyringBootstrap(workflow);
     // Every job must stay bounded — an unbounded job can hang a queue for hours.
     // Asserted structurally rather than by counting the string: a count passes if
@@ -166,7 +208,7 @@ describe("GitHub Actions hardening", () => {
     // how the first cut of that test shipped, so pin the flag rather than trusting a
     // comment. Asserted per job so a future edit cannot drop it from one leg while
     // the other still carries it.
-    for (const jobName of ["test", "platform-macos", "platform-windows"]) {
+    for (const jobName of ["test", "platform-macos", "platform-windows", "linux-workspace-confinement"]) {
       const steps = (ci.jobs?.[jobName] as { steps?: Array<{ uses?: string; with?: Record<string, unknown> }> })?.steps ?? [];
       const checkout = steps.find(step => typeof step.uses === "string" && step.uses.includes("actions/checkout"));
       expect(`${jobName}:${String(checkout?.with?.["fetch-tags"])}`).toBe(`${jobName}:true`);
@@ -443,6 +485,7 @@ describe("GitHub Actions hardening", () => {
       "bin/**",
       "bun.lock",
       "gui/**",
+      "native/**",
       "package.json",
       "scripts/**",
       "src/**",
@@ -488,7 +531,7 @@ describe("GitHub Actions hardening", () => {
     expect(scopeIndex).toBeGreaterThan(filterIndex);
 
     const scopedCondition = "github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'";
-    for (const jobName of ["test", "storage-policy", "gates", "platform-macos", "keyring-smoke"]) {
+    for (const jobName of ["test", "storage-policy", "gates", "platform-macos", "native-workspace-helper", "keyring-smoke"]) {
       const job = ci.jobs?.[jobName] as { needs?: string; if?: string } | undefined;
       expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
       expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);
@@ -554,6 +597,7 @@ describe("GitHub Actions hardening", () => {
       "bin/**",
       "bun.lock",
       "gui/**",
+      "native/**",
       "package.json",
       "scripts/prepare-package.ts",
       "src/**",

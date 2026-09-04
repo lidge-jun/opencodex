@@ -65,3 +65,6 @@ tests/.tmp-*
 # `git add` three separate times and reached `dev` once — see
 # tests/repo-hygiene.test.ts, which fails if any path here becomes tracked again.
 go/
+
+# Rust native helpers keep their reproducible sources and lockfile in git, never local artifacts.
+native/**/target/

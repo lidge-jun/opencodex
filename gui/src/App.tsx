@@ -10,6 +10,7 @@ import Storage from "./pages/Storage";
 import CodexSet from "./pages/CodexSet";
 import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
+import RemoteWorkspace from "./pages/RemoteWorkspace";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
@@ -35,6 +36,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   logs: "nav.logs",
   usage: "nav.usage",
   storage: "nav.storage",
+  remote: "nav.remote",
   "codex-set": "nav.codexSet",
   integrations: "nav.integrations",
 };
@@ -68,6 +70,7 @@ const NAV: NavEntry[] = [
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
+  { id: "remote", tkey: "nav.remote", Icon: IconMonitor },
   { id: "integrations", tkey: "nav.integrations", Icon: IconGlobe },
 ];
 
@@ -414,6 +417,7 @@ export default function App() {
                 {page === "logs" && <Logs apiBase={sharedBase} />}
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />}
                 {page === "storage" && <Storage apiBase={sharedBase} />}
+                {page === "remote" && <RemoteWorkspace apiBase={sharedBase} />}
                 {page === "codex-set" && <CodexSet apiBase={sharedBase} />}
                 {page === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
               </>

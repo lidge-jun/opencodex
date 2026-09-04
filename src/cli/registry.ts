@@ -100,6 +100,17 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "remote-workspace",
+    usage: "ocx remote-workspace <pair|agent|status>",
+    summary: "Pair this OCX-only computer with a hub and run its remote workspace executor.",
+    details: [
+      "Pair: ocx remote-workspace pair <hub-url> --pairing-code-stdin --root <absolute-path> [--toolchain-root <absolute-directory>] [--executor-helper <absolute-file>] [--name <device-name>]",
+      "Agent: ocx remote-workspace agent",
+      "Status: ocx remote-workspace status [--json]",
+      "Codex, Claude Code, Pi, provider logins, and API keys remain on the hub; only workspace tools execute here.",
+    ],
+  },
+  {
     name: "disconnect",
     usage: "ocx disconnect [--keep-catalog] [--json]",
     summary: "Restore local client state offline and clear the remote-hub connection.",

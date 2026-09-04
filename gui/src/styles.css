@@ -24,6 +24,7 @@
 @import "./styles-apikeys-workspace.css";
 @import "./styles-codex-set.css";
 @import "./styles-compatibility-matrix.css";
+@import "./styles-remote-workspace.css";
 
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */

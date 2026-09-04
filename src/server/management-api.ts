@@ -132,6 +132,12 @@ async function handleLabRoutesOnDemand(ctx: ManagementContext): Promise<Response
   return handleLabRoutes(ctx);
 }
 
+async function handleRemoteWorkspaceRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/remote-workspace")) return null;
+  const { handleRemoteWorkspaceRoutes } = await import("./management/remote-workspace-routes");
+  return handleRemoteWorkspaceRoutes(ctx);
+}
+
 export async function handleManagementAPI(
   req: Request,
   url: URL,
@@ -225,6 +231,7 @@ export async function handleManagementAPI(
   let routed: Response | null;
   try {
     routed = handleSessionRoutes(ctx)
+    ??     (await handleRemoteWorkspaceRoutesOnDemand(ctx))
     ??     (await handleConfigRoutes(ctx))
     ??     (await handleStorageLogGuardRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))

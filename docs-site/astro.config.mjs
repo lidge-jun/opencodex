@@ -86,6 +86,7 @@ export default defineConfig({
           translations: { fr: "Guides", ko: "가이드", "zh-CN": "指南", "zh-TW": "指南", ru: "Руководства", ja: "ガイド", tr: "Kılavuzlar" },
           items: [
             { label: "Remote Hub Deployment", translations: { fr: "Déploiement Remote Hub", ko: "Remote Hub 배포", "zh-CN": "Remote Hub 部署", "zh-TW": "Remote Hub 部署", ru: "Развёртывание Remote Hub", ja: "Remote Hub のデプロイ", tr: "Remote Hub Dağıtımı" }, slug: "guides/remote-hub" },
+            { label: "Remote Workspace", translations: { fr: "Espace de travail distant", ko: "원격 워크스페이스", "zh-CN": "远程工作区", "zh-TW": "遠端工作區", ru: "Удалённая рабочая область", ja: "リモートワークスペース", tr: "Uzak Çalışma Alanı" }, slug: "guides/remote-workspace" },
             { label: "Providers", translations: { fr: "Fournisseurs", ko: "프로바이더", "zh-CN": "提供商", "zh-TW": "供應商", ru: "Провайдеры", ja: "プロバイダー", tr: "Sağlayıcılar" }, slug: "guides/providers" },
             { label: "Factory Droid Bridge", translations: { fr: "Pont Factory Droid", ko: "Factory Droid 브리지" }, slug: "guides/factory-droid" },
             { label: "Cursor Private Inference", translations: { ko: "Cursor Private Inference" }, slug: "guides/cursor-private-inference" },

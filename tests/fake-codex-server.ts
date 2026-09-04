@@ -177,6 +177,10 @@ async function handleMessage(msg: Record<string, unknown>): Promise<void> {
     return;
   }
   switch (method) {
+    case "config/read": {
+      respond(id, { config: {}, origins: {}, layers: null });
+      return;
+    }
     case "thread/start": {
       if (script.rejectThreadStart) {
         respondError(id, script.rejectThreadStart);

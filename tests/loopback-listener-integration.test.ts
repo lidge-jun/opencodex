@@ -759,7 +759,7 @@ describe("seams the runtime cannot defend", () => {
     // issued from a sibling Bun.serve in the same process. Another version or platform is not
     // promised to, and the loopback listener would then fail to upgrade at all.
     expect(serverSource).not.toMatch(/\bif \(server\.upgrade\(req,/);
-    expect(serverSource.match(/requestServer\.upgrade\(req,/g)?.length).toBe(2);
+    expect(serverSource.match(/requestServer\.upgrade\(req,/g)?.length).toBe(3);
   });
 
   test("the loopback listener binds 127.0.0.1 explicitly", () => {

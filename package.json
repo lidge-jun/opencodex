@@ -25,6 +25,9 @@
     "assets/codex-app-picker.png",
     "README.md",
     "AGENTS_INSTALL.md",
+    "native/remote-workspace-helper/Cargo.toml",
+    "native/remote-workspace-helper/Cargo.lock",
+    "native/remote-workspace-helper/src",
     "LICENSE"
   ],
   "engines": {
@@ -47,6 +50,8 @@
     "skill:surface:check": "bun scripts/generate-ocx-skill-surface.ts --check",
     "generate:model-metadata": "bun scripts/generate-model-metadata.ts",
     "build:gui": "cd gui && bun install --frozen-lockfile && bun run build && cd .. && bun run prepare:package",
+    "build:remote-workspace-helper": "cargo build --release --locked --manifest-path native/remote-workspace-helper/Cargo.toml",
+    "test:remote-workspace-helper": "cargo test --locked --manifest-path native/remote-workspace-helper/Cargo.toml",
     "prepare:package": "bun scripts/prepare-package.ts",
     "prepack": "bun run prepare:package",
     "prepublishOnly": "bun run audit:high && bun run typecheck && bun run build:gui",

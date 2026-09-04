@@ -11,6 +11,7 @@ export type Page =
   | "logs"
   | "usage"
   | "storage"
+  | "remote"
   | "codex-set"
   | "integrations";
 
@@ -23,6 +24,7 @@ export const VALID_PAGES = new Set<Page>([
   "logs",
   "usage",
   "storage",
+  "remote",
   "codex-set",
   "integrations",
 ]);

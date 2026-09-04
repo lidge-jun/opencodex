@@ -18,8 +18,13 @@ import type {
   performCodexRestart,
   readCodexAppServerState,
 } from "../../codex/app-server-restart-service";
+import type { RemoteWorkspaceHub } from "../../remote-control/workspace-hub";
+import type { RemoteWorkspaceSessionService } from "../../remote-control/workspace-sessions";
 
 export interface ManagementApiDeps {
+  /** Test/runtime seam shared by management routes and the executor WebSocket ingress. */
+  remoteWorkspaceHub?: RemoteWorkspaceHub;
+  remoteWorkspaceSessions?: RemoteWorkspaceSessionService;
   /** Platform seam for capability projections; does not alter host-level startup behavior. */
   platform?: NodeJS.Platform;
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;

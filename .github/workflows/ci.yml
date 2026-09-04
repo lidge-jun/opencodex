@@ -30,6 +30,7 @@ on:
       - "bin/**"
       - "tests/**"
       - "scripts/**"
+      - "native/**"
       - "gui/**"
       - "assets/**"
       - ".gitattributes"
@@ -178,6 +179,7 @@ jobs:
               - 'bin/**'
               - 'tests/**'
               - 'scripts/**'
+              - 'native/**'
               - 'gui/**'
               - 'assets/**'
               - '.gitattributes'
@@ -213,6 +215,7 @@ jobs:
               - 'README.md'
               - 'LICENSE'
               - 'scripts/prepare-package.ts'
+              - 'native/**'
 
       - name: Assert the scope output is usable
         id: scope
@@ -669,6 +672,79 @@ jobs:
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
 
+  # Remote Workspace advertises native command execution only after the helper itself proves the
+  # OS boundary. Keep this small exact-binary lane on disposable hosted runners even while the full
+  # Windows Bun suite remains dispatch-only: cross-compilation proves types, not Seatbelt or
+  # AppContainer behavior.
+  native-workspace-helper:
+    name: native workspace helper (${{ matrix.name }})
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos
+            runner: macos-latest
+          - name: windows
+            runner: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Build and run native confinement probe
+        run: cargo test --locked --release --manifest-path native/remote-workspace-helper/Cargo.toml
+
+  # Unlike the Rust helpers, Linux confinement lives in the production TypeScript runner. Make
+  # bubblewrap absence fatal in this dedicated hosted lane and exercise the real write/read/network
+  # boundary instead of treating an argv-shape unit test as sandbox evidence.
+  linux-workspace-confinement:
+    name: Linux workspace confinement
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    # Noble's AppArmor user-namespace policy can make bwrap fail closed before the test reaches the
+    # product boundary. Use a fixed hosted Jammy image for the semantic confinement proof instead
+    # of weakening the disposable runner's kernel policy with a privileged sysctl.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          fetch-tags: true
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install bubblewrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+
+      - name: Prove Linux confinement boundary
+        shell: bash
+        env:
+          OCX_REQUIRE_LINUX_REMOTE_WORKSPACE_CONFINEMENT: "1"
+        run: |
+          set -euo pipefail
+          isolated_root="$(mktemp -d)"
+          mkdir -p "$isolated_root/home" "$isolated_root/opencodex" "$isolated_root/codex" "$isolated_root/paseo"
+          HOME="$isolated_root/home" \
+            OPENCODEX_HOME="$isolated_root/opencodex" \
+            CODEX_HOME="$isolated_root/codex" \
+            PASEO_HOME="$isolated_root/paseo" \
+            bun test --isolate tests/remote-workspace-linux-confinement.test.ts
+
   # Keep every OS credential-store check on a disposable GitHub-hosted machine.
   # A force-cancelled process cannot run its in-process finally cleanup, so no
   # keyring matrix leg may use the persistent self-hosted Windows runner.
@@ -811,7 +887,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped` — which the gate is required to read as a deliberate skip.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, platform-windows, keyring-smoke, npm-global-smoke]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, platform-windows, native-workspace-helper, linux-workspace-confinement, keyring-smoke, npm-global-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

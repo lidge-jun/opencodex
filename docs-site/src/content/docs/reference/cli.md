@@ -18,6 +18,19 @@ opencodex state.
 
 `ocx alias list [--json]` shows effective user and built-in aliases. Use `ocx alias set <provider>[/<native-model-id>] <alias>` and `ocx alias rm <provider>[/<native-model-id>]` to edit them. Native model ids may contain additional slashes because the selector splits only at the first slash. Enable shipped defaults with `ocx alias defaults on|off [--provider <name>]`.
 
+### `ocx remote-workspace`
+
+`ocx remote-workspace pair <hub-url> --pairing-code-stdin --root <absolute-path>` enrolls the local
+computer as an OCX-only Executor. Repeat `--root` to approve more folders and use `--name` to
+override the hostname. Repeat `--toolchain-root <absolute-directory>` to expose a user-installed
+Node, Rust, Go, or other toolchain directory read-only inside the command sandbox. On macOS and
+Windows private-dogfood builds, `bun run build:remote-workspace-helper` creates the Rust helper that
+the pair command discovers automatically; `--executor-helper <absolute-file>` selects another
+explicitly reviewed build and pins its digest in local Executor state.
+`ocx remote-workspace agent` maintains the outbound encrypted connection;
+`ocx remote-workspace status [--json]` reports the Hub, device, roots, and advertised capabilities
+without printing its bearer or private key. See [Remote Workspace](/guides/remote-workspace/).
+
 - [Lifecycle](/reference/cli/lifecycle/) — setup, proxy and service lifecycle, health, diagnostics,
   catalog sync, the dashboard, and updates.
 - [Providers, accounts, and models](/reference/cli/providers-accounts/) — provider configuration,
