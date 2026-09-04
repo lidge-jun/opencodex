@@ -1,5 +1,7 @@
 # 030 — Ultra Fast as an explicit opt-in (issue #3429)
 
+> **Landed** in PR #3478 as `3a9c4d297`. See `040_delivery_record.md`.
+
 Work-phase `wp3`. Depends on 000. This is the phase that needs judgment, not just
 diffs.
 
@@ -135,6 +137,8 @@ switch that implies a speed it cannot deliver is the #2994 defect in a new place
   toggle are reachable below
 
 ## What this phase will NOT claim
+
+Done: closed #3429 with `3a9c4d297`, stating which half shipped and which did not.
 
 It will not claim Ultra Fast delivers Ultra Fast speed. If live evidence shows an
 opted-in request still cannot get the tier honored end-to-end, that is reported
