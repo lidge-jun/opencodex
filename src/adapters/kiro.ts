@@ -187,6 +187,33 @@ function estimateKiroTokens(text: string, modelId?: string): number {
   return estimateTokens(text, modelId ? `kiro/${modelId}` : "kiro");
 }
 
+/** Hangul/Han/kana ranges, matching the shared estimator's own CJK classification. */
+function kiroCjkCount(text: string): number {
+  let cjk = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (
+      (c >= 0xac00 && c <= 0xd7a3) || (c >= 0x1100 && c <= 0x11ff) || (c >= 0x3130 && c <= 0x318f)
+      || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0x3400 && c <= 0x4dbf) || (c >= 0x3040 && c <= 0x30ff)
+    ) cjk++;
+  }
+  return cjk;
+}
+
+/**
+ * Token estimate for walked payload text, with the wire expansion applied to the Latin portion
+ * only. Splitting here rather than inside the shared estimator keeps that module pure and
+ * provider-neutral: the expansion is a fact about Kiro's wire, not about tokenization.
+ */
+function estimateKiroWireTokens(text: string, modelId: string): number {
+  if (!text) return 0;
+  const cjk = kiroCjkCount(text);
+  if (cjk === 0) return Math.ceil(estimateKiroTokens(text, modelId) * KIRO_LATIN_WIRE_EXPANSION);
+  const latinTokens = estimateKiroTokens("x".repeat(text.length - cjk), modelId);
+  const cjkTokens = estimateKiroTokens("\uac00".repeat(cjk), modelId);
+  return Math.ceil(latinTokens * KIRO_LATIN_WIRE_EXPANSION + cjkTokens);
+}
+
 /**
  * Structural cost of one conversation entry, in tokens.
  *
@@ -214,25 +241,30 @@ function estimateKiroTokens(text: string, modelId?: string): number {
 const KIRO_ENTRY_FRAMING_TOKENS = 27;
 
 /**
- * Multiplier reconciling the text estimate with what the wire charges for that same text.
+ * Multiplier reconciling the LATIN text estimate with what the wire charges for that same text.
  *
- * Two effects combine here. Every newline, quote, tab and backslash occupies two characters on
- * the wire (`\\n`, `\\"`) but one in the walked string, and agent traffic is dense in exactly
- * those characters: multi-line file contents, diffs, JSON tool arguments, quoted shell commands.
- * Separately, the shared estimator counts Latin text at 2.8 chars/token, while the wire charges
- * 2.433 bytes per token at 1.0422 bytes per walked character — an effective 2.334 chars/token.
- *
- * 2.8 / 2.334 = 1.199. That is where this number comes from; it is not a fudge factor.
+ * The shared estimator counts Latin text at 2.8 chars/token, while the wire charges 2.433 bytes
+ * per token at 1.0422 bytes per walked character — an effective 2.334 chars/token, and
+ * 2.8 / 2.334 = 1.199.
  *
  * The evidence that the split between this term and `KIRO_ENTRY_FRAMING_TOKENS` is right is its
  * stability: holding framing at 27, the multiplier the charge implies stays within 1.189-1.209
- * across a 230x range of conversation sizes. A mis-specified split would drift with size, and
- * the earlier 1.12/12 pair did — its accuracy fell from 0.92 at four messages to 0.87 at seven
+ * across a 230x range of conversation sizes. A mis-specified split drifts with size, and the
+ * earlier 1.12/12 pair did — its accuracy fell from 0.92 at four messages to 0.87 at seven
  * hundred.
  *
- * Applied to the text estimate only — image and framing costs are already counted in wire terms.
+ * LATIN ONLY, deliberately. 2.433 bytes/token is a property of this traffic mix, which is Latin
+ * and code. A Hangul character is three UTF-8 bytes but roughly one token, so its bytes-per-token
+ * is entirely different and a Latin-derived byte rate says nothing about it. Scaling CJK by this
+ * factor bills Hangul at 1.25 chars/token, against recorded ground truth that already places the
+ * shared 1.5 ratio at 0.90 of the authoritative count — an over-charge that would compact Korean
+ * threads early.
+ *
+ * This is NOT JSON escaping, despite what an earlier version of this comment claimed. Measured
+ * directly, `JSON.stringify` expands prose by 1.012 (Latin) to 1.019 (Korean), nowhere near 1.2.
+ * Escaping is real but small, and is already inside the byte measurement this factor comes from.
  */
-const KIRO_JSON_ESCAPE_EXPANSION = 1.2;
+const KIRO_LATIN_WIRE_EXPANSION = 1.2;
 
 function estimateKiroPayloadInputTokens(payload: Record<string, unknown>, modelId: string): number {
   const conversationState = (payload as {
@@ -264,7 +296,7 @@ function estimateKiroPayloadInputTokens(payload: Record<string, unknown>, modelI
       if (assistant.toolUses?.length) parts.push(serializeForUsage(assistant.toolUses));
     }
   }
-  return Math.ceil(estimateKiroTokens(parts.join("\n"), modelId) * KIRO_JSON_ESCAPE_EXPANSION)
+  return estimateKiroWireTokens(parts.join("\n"), modelId)
     + imageTokens
     + entries.length * KIRO_ENTRY_FRAMING_TOKENS;
 }
