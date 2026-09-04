@@ -13,6 +13,7 @@ import { resolveProviderApiKey } from "./key-store";
 import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
+import { isCanonicalOllamaCloudUrl } from "../adapters/ollama-native-url";
 import { providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../lib/provider-outbound";
 import { apiKeyPoolEntryId } from "./api-keys";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
@@ -83,6 +84,8 @@ const OPENCODE_GO_USAGE_URL = `${OPENCODE_GO_BASE_URL}/usage`;
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const CLINE_BASE_URL = "https://api.cline.bot";
+const OLLAMA_CLOUD_BASE_URL = "https://ollama.com";
+const OLLAMA_CLOUD_USAGE_URL = `${OLLAMA_CLOUD_BASE_URL}/api/usage`;
 const ZAI_BASE_URL = "https://api.z.ai";
 const ZAI_CN_BASE_URL = "https://open.bigmodel.cn";
 const MINIMAX_REMAINS_URL = "https://www.minimax.io/v1/token_plan/remains";
@@ -326,6 +329,15 @@ function isCanonicalDeepSeekBaseUrl(baseUrl: string): boolean {
 function isCanonicalClineBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   return normalized === CLINE_BASE_URL || normalized === `${CLINE_BASE_URL}/api/v1`;
+}
+
+function isCanonicalOllamaCloudBaseUrl(baseUrl?: string): boolean {
+  if (!baseUrl) return false;
+  try {
+    return isCanonicalOllamaCloudUrl(baseUrl);
+  } catch {
+    return false;
+  }
 }
 
 function isCanonicalZaiBaseUrl(baseUrl: string): boolean {
@@ -657,6 +669,78 @@ async function fetchClineQuota(provider: string, config: OcxProviderConfig): Pro
     }
   }
   return windows > 0 ? report(provider, "cline:plan-usage-limits", quota) : null;
+}
+
+/**
+ * Ollama Cloud `GET https://ollama.com/api/usage` — returns account usage.
+ * Legacy plans report rolling 5-hour `limits.session.usage` and 7-day
+ * `limits.weekly.usage`. Migrated monthly-credit plans report
+ * `limits.monthly.usage`. `usage` values are normalized fractions (0..1).
+ */
+function parseOllamaPercent(usageValue: unknown): number | undefined {
+  const usage = toFiniteNumber(usageValue);
+  if (usage === undefined || usage < 0) return undefined;
+  const percent = Math.round(usage * 10000) / 100;
+  return normalizePercent(percent);
+}
+
+export function parseOllamaCloudQuota(body: Record<string, unknown> | null): ProviderQuota | null {
+  if (!body) return null;
+  const limits = asRecord(body.limits);
+  if (!limits) return null;
+
+  const quota: ProviderQuota = { updatedAt: Date.now() };
+  let windows = 0;
+
+  const session = asRecord(limits.session);
+  if (session) {
+    const percent = parseOllamaPercent(session.usage);
+    if (percent !== undefined) {
+      quota.fiveHourPercent = percent;
+      windows += 1;
+    }
+  }
+
+  const weekly = asRecord(limits.weekly);
+  if (weekly) {
+    const percent = parseOllamaPercent(weekly.usage);
+    if (percent !== undefined) {
+      quota.weeklyPercent = percent;
+      windows += 1;
+    }
+  }
+
+  const monthly = asRecord(limits.monthly);
+  if (monthly) {
+    const percent = parseOllamaPercent(monthly.usage);
+    if (percent !== undefined) {
+      quota.monthlyPercent = percent;
+      windows += 1;
+    }
+  }
+
+  return windows > 0 ? quota : null;
+}
+
+async function fetchOllamaCloudQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  const effectiveBaseUrl = config.baseUrl ?? getProviderRegistryEntry(provider)?.baseUrl ?? "";
+  if (!isCanonicalOllamaCloudBaseUrl(effectiveBaseUrl)) return null;
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(OLLAMA_CLOUD_USAGE_URL, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    if (response.status === 404) return null;
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const quota = parseOllamaCloudQuota(body);
+  return quota ? report(provider, "ollama-cloud:usage", quota) : null;
 }
 
 /**
@@ -2287,10 +2371,11 @@ function classifyAntigravityFamily(modelId: string, modelInfo: Record<string, un
 }
 
 function antigravityUsedPercent(quotaInfo: Record<string, unknown>): number | undefined {
-  const remaining = normalizePercent(toFiniteNumber(quotaInfo.remainingFraction) !== undefined
-    ? toFiniteNumber(quotaInfo.remainingFraction)! * 100
-    : toFiniteNumber(quotaInfo.remainingPercentage) !== undefined
-      ? toFiniteNumber(quotaInfo.remainingPercentage)! * 100
+  const target = asRecord(quotaInfo.remaining) ?? quotaInfo;
+  const remaining = normalizePercent(toFiniteNumber(target.remainingFraction) !== undefined
+    ? toFiniteNumber(target.remainingFraction)! * 100
+    : toFiniteNumber(target.remainingPercentage) !== undefined
+      ? toFiniteNumber(target.remainingPercentage)! * 100
       : undefined);
   if (remaining === undefined) return undefined;
   return normalizePercent(100 - remaining);
@@ -2325,6 +2410,75 @@ function antigravityWindowsFromModels(body: Record<string, unknown> | null): Pro
   return customWindows;
 }
 
+/**
+ * Parse Google Antigravity quota from `v1internal:retrieveUserQuotaSummary`.
+ * Groups contain Gemini models and Claude/3P models, each with 5h and weekly limit buckets.
+ */
+function parseAntigravityQuotaSummary(body: Record<string, unknown> | null): ProviderQuota | null {
+  const groups = Array.isArray(body?.groups) ? (body.groups as unknown[]) : [];
+  if (groups.length === 0) return null;
+
+  const customWindowsMap = new Map<string, ProviderQuotaWindow>();
+
+  for (const rawGroup of groups) {
+    const group = asRecord(rawGroup);
+    if (!group) continue;
+    const groupName = `${typeof group.displayName === "string" ? group.displayName : ""} ${typeof group.description === "string" ? group.description : ""}`.toLowerCase();
+    const isGemini = groupName.includes("gemini");
+    const isClaude = groupName.includes("claude") || groupName.includes("3p") || groupName.includes("gpt");
+
+    const buckets = Array.isArray(group.buckets) ? (group.buckets as unknown[]) : [];
+    for (const rawBucket of buckets) {
+      const bucket = asRecord(rawBucket);
+      if (!bucket) continue;
+      const windowStr = `${typeof bucket.window === "string" ? bucket.window : ""} ${typeof bucket.bucketId === "string" ? bucket.bucketId : ""} ${typeof bucket.displayName === "string" ? bucket.displayName : ""}`.toLowerCase();
+      const percent = antigravityUsedPercent(bucket);
+      if (percent === undefined) continue;
+      const resetAt = normalizeResetAt(bucket.resetTime);
+
+      const isWeekly = windowStr.includes("week");
+      const is5h = windowStr.includes("5h") || windowStr.includes("five");
+
+      if (isGemini) {
+        const label = is5h ? "Gem" : isWeekly ? "Gem (Weekly)" : "";
+        if (label && !customWindowsMap.has(label)) {
+          customWindowsMap.set(label, { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
+        }
+      } else if (isClaude) {
+        const label = is5h ? "Cla" : isWeekly ? "Cla (Weekly)" : "";
+        if (label && !customWindowsMap.has(label)) {
+          customWindowsMap.set(label, { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
+        }
+      } else {
+        const baseLabel = typeof group.displayName === "string" ? group.displayName : "Other";
+        const label = isWeekly ? `${baseLabel} (Weekly)` : baseLabel;
+        if (!customWindowsMap.has(label)) {
+          customWindowsMap.set(label, { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
+        }
+      }
+    }
+  }
+
+  const PREFERRED_ORDER = ["Gem", "Gem (Weekly)", "Cla", "Cla (Weekly)"];
+  const customWindows = Array.from(customWindowsMap.values()).sort((a, b) => {
+    const ia = PREFERRED_ORDER.indexOf(a.label);
+    const ib = PREFERRED_ORDER.indexOf(b.label);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a.label.localeCompare(b.label);
+  });
+
+  if (customWindows.length === 0) {
+    return null;
+  }
+
+  return {
+    customWindows,
+    updatedAt: Date.now(),
+  };
+}
+
 const ANTIGRAVITY_ACCOUNT_QUOTA_BASE = "https://daily-cloudcode-pa.googleapis.com";
 let antigravityOutboundDependencies: ProviderOutboundDependencies = {};
 
@@ -2341,6 +2495,28 @@ export function setAntigravityAccountQuotaTransportForTests(dependencies: Provid
  * A redirect or non-2xx yields null (unavailable), never a partial row.
  */
 export async function fetchAntigravityUsageQuota(accessToken: string, projectId: string): Promise<ProviderQuota | null> {
+  const summaryUrl = `${ANTIGRAVITY_ACCOUNT_QUOTA_BASE}/v1internal:retrieveUserQuotaSummary`;
+  try {
+    const summaryResponse = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, summaryUrl, {
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": antigravityUserAgent(),
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ project: projectId }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    }, antigravityOutboundDependencies);
+    if (await providerRedirectError(summaryResponse, summaryUrl)) return null;
+    if (summaryResponse.status === 401 || summaryResponse.status === 403) return null;
+    if (summaryResponse.ok) {
+      const quota = parseAntigravityQuotaSummary(asRecord(await readQuotaJson(summaryResponse)));
+      if (quota) return quota;
+    }
+  } catch {
+    // Fallback to fetchAvailableModels on error
+  }
+
   const url = `${ANTIGRAVITY_ACCOUNT_QUOTA_BASE}/v1internal:fetchAvailableModels`;
   const response = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
     headers: {
@@ -2369,6 +2545,30 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     return null;
   }
   const baseUrl = (config.baseUrl || ANTIGRAVITY_ACCOUNT_QUOTA_BASE).replace(/\/+$/, "");
+
+  try {
+    const summaryResponse = await fetch(`${baseUrl}/v1internal:retrieveUserQuotaSummary`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": antigravityUserAgent(),
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ project: credential.projectId }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (summaryResponse.status === 401 || summaryResponse.status === 403) return null;
+    if (summaryResponse.ok) {
+      const quota = parseAntigravityQuotaSummary(asRecord(await readQuotaJson(summaryResponse)));
+      if (quota) {
+        return report(provider, "google-antigravity:retrieveUserQuotaSummary", quota);
+      }
+    }
+  } catch {
+    // Fallback on network/fetch error
+  }
+
   const response = await fetch(`${baseUrl}/v1internal:fetchAvailableModels`, {
     method: "POST",
     headers: {
@@ -2445,6 +2645,10 @@ async function maybeFetchProviderQuota(
     }
     if ((provider.authMode ?? "key") === "key" && name === "cline-pass") {
       return fetchClineQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key"
+      && (name === "ollama-cloud" || isCanonicalOllamaCloudBaseUrl(provider.baseUrl))) {
+      return fetchOllamaCloudQuota(name, provider);
     }
     if ((provider.authMode ?? "key") === "key"
       && (name === "zai" || name === "glm" || name === "glm-cn" || name === "zhipu-bigmodel-coding")) {
