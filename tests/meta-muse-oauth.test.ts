@@ -177,6 +177,31 @@ describe("meta-muse credential import", () => {
     expect(received).toBe(ac.signal);
   });
 
+  // The old refusal blamed the macOS Keychain on EVERY platform. On Windows that
+  // is simply false — Meta ships no Windows CLI — and a user who believed it
+  // would go looking for a credential store instead of WSL2.
+  test("the Windows refusal names WSL2 and does not blame the Keychain", async () => {
+    await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.toThrow(/WSL2/);
+    await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.toThrow(/META_MODEL_API_KEY/);
+    await expect(loginMetaMuse({}, deps({ platform: "win32" }))).rejects.not.toThrow(/Keychain/);
+  });
+
+  test("the Linux refusal names the unmeasured storage, not the Keychain", async () => {
+    await expect(loginMetaMuse({}, deps({ platform: "linux" }))).rejects.toThrow(/not been measured/);
+    await expect(loginMetaMuse({}, deps({ platform: "linux" }))).rejects.toThrow(/META_MODEL_API_KEY/);
+    await expect(loginMetaMuse({}, deps({ platform: "linux" }))).rejects.not.toThrow(/Keychain/);
+  });
+
+  test("the consent warning still precedes an unsupported-platform refusal", async () => {
+    for (const platform of ["win32", "linux"] as const) {
+      const seen: string[] = [];
+      await expect(
+        loginMetaMuse({ onProgress: m => seen.push(m) }, deps({ platform })),
+      ).rejects.toThrow();
+      expect(seen[0]).toContain("UNSUPPORTED");
+    }
+  });
+
   for (const [label, over] of [
     ["a non-darwin platform", { platform: "linux" }],
     ["no credential file", { readPointer: async () => null }],

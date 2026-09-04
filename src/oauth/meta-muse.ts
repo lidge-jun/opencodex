@@ -133,10 +133,20 @@ export async function loginMetaMuse(
   ctrl.onProgress?.(CONSENT_WARNING);
 
   const platform = deps.platform ?? process.platform;
+  // Two refusals rather than one, because the reasons are different and the old
+  // shared message was wrong on Windows: it blamed the Keychain when the actual
+  // reason is that Meta ships no Windows build of the CLI at all.
+  if (platform === "win32") {
+    throw new Error(
+      "Meta does not ship a native Windows Muse Code CLI, so there is no Windows credential to import. "
+        + "Install the CLI inside WSL2 and import there, or use the meta-model provider with your own key (META_MODEL_API_KEY).",
+    );
+  }
   if (platform !== "darwin") {
     throw new Error(
-      "Meta Muse Code login is macOS-only: the CLI stores its credential in the macOS Keychain, "
-        + "and no other platform's storage has been verified. Use the meta-model provider with your own key instead.",
+      "Meta Muse Code import is verified only on macOS. The Muse CLI runs on Linux, but the credential storage "
+        + "it writes there has not been measured, and importing an unverified credential shape is refused. "
+        + "Use the meta-model provider with your own key (META_MODEL_API_KEY).",
     );
   }
 
