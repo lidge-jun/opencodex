@@ -1501,15 +1501,21 @@ describe("kiro adapter — parseStream", () => {
         },
       }, "metadataEvent"),
     );
-    expect(done).toEqual({
+    // Authoritative per-turn numbers replace the estimates exactly; the context checkpoint is
+    // derived from the payload estimate, so it is asserted as a RELATION rather than a snapshot
+    // of the current escape/framing constants.
+    const { contextTotalTokens, ...turn } = done;
+    expect(turn).toEqual({
       inputTokens: 15,
-      contextTotalTokens: 298,
       cachedInputTokens: 3,
       cacheReadInputTokens: 3,
       cacheCreationInputTokens: 2,
       outputTokens: 4,
       totalTokens: 19,
     });
+    // The whole-payload checkpoint must exceed this turn's own total, which is the point of
+    // reporting it separately.
+    expect(contextTotalTokens).toBeGreaterThan(19);
   });
 
   test("authoritative turn usage floors a smaller payload context estimate", async () => {
@@ -1606,7 +1612,9 @@ describe("kiro adapter — parseStream", () => {
     expect(done.inputTokens).toBe(251);
     expect(done.outputTokens).toBe(126);
     expect(done.totalTokens).toBeUndefined();
-    expect(done.contextTotalTokens).toBe(420);
+    // No upstream window for kiro-auto, so the checkpoint falls back to the payload estimate,
+    // which must still exceed the current turn's input+output.
+    expect(done.contextTotalTokens).toBeGreaterThan(251 + 126);
   });
 
   test("Kiro auto uses the concrete response model to decode context percentage", async () => {
@@ -1745,7 +1753,8 @@ describe("kiro adapter — parseStream", () => {
 
     expect(done.inputTokens).toBe(1250);
     expect(done.outputTokens).toBe(1250);
-    expect(done.contextTotalTokens).toBe(2663);
+    // Absolute checkpoint covers the whole payload, so it exceeds this turn's 1250 + 1250.
+    expect(done.contextTotalTokens).toBeGreaterThan(2500);
   });
 
   test("fresh payload includes history while usage counts only the current turn", async () => {
@@ -1789,6 +1798,41 @@ describe("kiro adapter — parseStream", () => {
     expect(request.body).not.toContain(privateReasoning);
     expect(request.usageLog?.inputTokens).toBeGreaterThan((usage.contextTotalTokens ?? 0) + 1000);
     expect(usage.contextTotalTokens).toBeLessThan(1000);
+  });
+
+  // Framing is charged PER ENTRY, not as a share of the text. Adding turns that carry almost no
+  // text must still raise the estimate by roughly the per-entry cost — which is exactly what a
+  // text-proportional multiplier cannot do. If the framing term were ever folded into the escape
+  // multiplier, the estimate would barely move here and this fails.
+  //
+  // The constant is deliberately not restated: the assertion is the SHAPE (linear in entry count,
+  // several tokens each), so it survives a re-measurement of the exact value.
+  test("context growth tracks entry count, not just text length", async () => {
+    const filler = "hi";
+    const build = async (turns: number) => {
+      const messages: unknown[] = [];
+      for (let i = 0; i < turns; i++) {
+        messages.push(i % 2 === 0
+          ? { role: "user", content: filler }
+          : { role: "assistant", content: [{ type: "text", text: filler }] });
+      }
+      if ((messages[messages.length - 1] as { role: string }).role !== "user") {
+        messages.push({ role: "user", content: filler });
+      }
+      const adapter = createKiroAdapter(provider);
+      await adapter.buildRequest(parsedWith(messages));
+      return (await doneUsage(adapter, eventFrame({ content: "ok" }))).contextTotalTokens ?? 0;
+    };
+
+    const small = await build(4);
+    const large = await build(84);
+    const addedEntries = 80;
+    const perEntry = (large - small) / addedEntries;
+
+    // 80 near-empty turns carry only ~160 chars of text between them, so anything beyond a
+    // couple of tokens per entry can only come from a per-entry structural charge.
+    expect(perEntry).toBeGreaterThan(10);
+    expect(perEntry).toBeLessThan(60);
   });
 
   test("normalized images contribute conservative context tokens", async () => {

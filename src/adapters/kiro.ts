@@ -196,24 +196,43 @@ function estimateKiroTokens(text: string, modelId?: string): number {
  * further below the real charge with every turn added — an error proportional to entry COUNT,
  * which no per-character ratio can recover.
  *
- * Measured against recorded request bodies, framing costs a low-double-digit token amount per
- * entry. 12 is the conservative end of that range: it corrects a systematic floor without
- * fabricating context that was never sent.
+ * Regressing serialized bodies against what the walker counts, over eleven payload sizes from
+ * 3 to 701 entries:
+ *
+ *     bodyBytes = 1.0422 * walkedChars + 66.7 * entries + 68
+ *
+ * 66.7 bytes at the measured 2.433 bytes per charged token is 27.4 tokens per entry. The
+ * earlier value of 12 was a conservative hand-fit taken before that regression existed, and
+ * being less than half the real cost is precisely why the estimate decayed with conversation
+ * length: an under-charge of ~15 tokens per entry is invisible across four messages and
+ * dominant across seven hundred.
+ *
+ * Cross-checked against 4,090 recorded requests, where real traffic averages 1,310 bytes per
+ * message: 66.7 bytes is 5% of that, so this term charges framing and is not quietly absorbing
+ * message content.
  */
-const KIRO_ENTRY_FRAMING_TOKENS = 12;
+const KIRO_ENTRY_FRAMING_TOKENS = 27;
 
 /**
- * Multiplier for JSON string escaping inside message content.
+ * Multiplier reconciling the text estimate with what the wire charges for that same text.
  *
- * Every newline, quote, tab and backslash in a message occupies two characters on the wire
- * (`\\n`, `\\"`) but one in the walked string. Agent traffic is dense in exactly those
- * characters: multi-line file contents, diffs, JSON tool arguments and quoted shell commands.
- * Measured across recorded payloads, serialized bodies run ~1.12x the walked character count,
- * and that expansion is charged.
+ * Two effects combine here. Every newline, quote, tab and backslash occupies two characters on
+ * the wire (`\\n`, `\\"`) but one in the walked string, and agent traffic is dense in exactly
+ * those characters: multi-line file contents, diffs, JSON tool arguments, quoted shell commands.
+ * Separately, the shared estimator counts Latin text at 2.8 chars/token, while the wire charges
+ * 2.433 bytes per token at 1.0422 bytes per walked character — an effective 2.334 chars/token.
+ *
+ * 2.8 / 2.334 = 1.199. That is where this number comes from; it is not a fudge factor.
+ *
+ * The evidence that the split between this term and `KIRO_ENTRY_FRAMING_TOKENS` is right is its
+ * stability: holding framing at 27, the multiplier the charge implies stays within 1.189-1.209
+ * across a 230x range of conversation sizes. A mis-specified split would drift with size, and
+ * the earlier 1.12/12 pair did — its accuracy fell from 0.92 at four messages to 0.87 at seven
+ * hundred.
  *
  * Applied to the text estimate only — image and framing costs are already counted in wire terms.
  */
-const KIRO_JSON_ESCAPE_EXPANSION = 1.12;
+const KIRO_JSON_ESCAPE_EXPANSION = 1.2;
 
 function estimateKiroPayloadInputTokens(payload: Record<string, unknown>, modelId: string): number {
   const conversationState = (payload as {
