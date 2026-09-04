@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { LAYOUT_PATH, loadLayout, rewriteMetaDirEscapes, rewriteSource, scanEscapes, type Layout } from "./schema";
-import { planMoves, repoRootFromHere, type Move } from "./plan";
-import { filesNaming, runVerify } from "./verify";
+import { parseDomainArgs, planMoves, repoRootFromHere, type Move } from "./plan";
+import { filesNamingAny, runVerify } from "./verify";
 
 /**
  * Move one slice of test files into their domain directories.
@@ -85,8 +85,9 @@ export function runMove(options: MoveOptions): MoveReport {
 
   // Preflight: the complete write set.
   const literalTargets = new Map<string, string[]>();
+  const naming = filesNamingAny(root, moves.map(move => move.from));
   for (const move of moves) {
-    for (const file of filesNaming(root, move.from)) {
+    for (const file of naming.get(move.from) ?? []) {
       if (file === move.from) continue;
       const list = literalTargets.get(file) ?? [];
       list.push(move.from);
@@ -176,16 +177,9 @@ export function runMove(options: MoveOptions): MoveReport {
 }
 
 if (import.meta.main) {
-  const argv = process.argv.slice(2);
-  const domains: string[] = [];
-  let dryRun = false;
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--domain") { domains.push(argv[++i]!); continue; }
-    if (argv[i]!.startsWith("--domain=")) { domains.push(argv[i]!.slice("--domain=".length)); continue; }
-    if (argv[i] === "--dry-run") dryRun = true;
-  }
   try {
-    const report = runMove({ root: repoRootFromHere(), domains, dryRun });
+    const { domains, flags } = parseDomainArgs(process.argv.slice(2));
+    const report = runMove({ root: repoRootFromHere(), domains, dryRun: flags.has("--dry-run") });
     process.exit(report.exitCode);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

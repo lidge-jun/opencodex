@@ -207,6 +207,9 @@ describe("membership oracle", () => {
   const layout = loadLayout();
 
   test("the live tree and the fixture agree entry by entry", () => {
+    // The explicit map and the fixture are two copies of the same table; they must be identical
+    // so a file added to one side cannot silently ride on the regex seeds.
+    expect(layout.explicit).toEqual(EXPECTED);
     const live = listTestFiles(repoRoot()).map(rel => basename(rel)).filter(name => !layout.keepAtRoot.includes(name));
     const liveSet = new Set(live);
     const missingFromTree = Object.keys(EXPECTED).filter(name => !liveSet.has(name)).sort();
@@ -229,7 +232,7 @@ describe("membership oracle", () => {
     for (const target of Object.values(EXPECTED)) histogram[target] = (histogram[target] ?? 0) + 1;
     const doc = readFileSync(repoPath("devlog", "_plan", "260905_test_modularization_and_windows", "001_test_inventory.md"), "utf8");
     const expected: Record<string, number> = {};
-    for (const m of doc.matchAll(/^#### `tests\/([a-z0-9/-]+)\/` \((\d+)\)$/gm)) expected[m[1]!] = Number(m[2]);
+    for (const m of doc.matchAll(/^#### `tests\/([a-z0-9/-]+)\/` \((\d+)\)\r?$/gm)) expected[m[1]!] = Number(m[2]);
     expect(Object.keys(expected).length).toBeGreaterThan(20);
     expect(Object.keys(histogram).sort()).toEqual(Object.keys(expected).sort());
     const below = Object.entries(expected).filter(([dir, n]) => (histogram[dir] ?? 0) < n).map(([dir, n]) => `${dir}: ${histogram[dir]} < ${n}`);
@@ -239,16 +242,18 @@ describe("membership oracle", () => {
   test("a file that only the regex seeds know still resolves (new test files before they are mapped)", () => {
     const layout = loadLayout();
     const seedOnly: Layout = { ...layout, explicit: {} };
-    // Every explicit entry whose first token is unique to one domain must resolve through the
-    // seeds alone; that is what lets a brand-new file land in the right place on the day it is
-    // added, before someone updates the map.
+    // A seed may only ever disagree with the explicit table on a file the table pins on purpose
+    // (the 001 §2 "9 disagreeing files" whose name says one thing and whose imports say another).
+    // Anything else is a seed pointing at the wrong domain, which would place a brand-new file
+    // incorrectly on the day it is added.
+    const pinnedOverrides = new Set(["openai-responses-passthrough.test.ts"]);
     const mismatches: string[] = [];
     let resolved = 0;
     for (const [name, target] of Object.entries(layout.explicit)) {
       const r = resolveTarget(seedOnly, name);
       if (r === null) continue;
       resolved += 1;
-      if (r !== target) mismatches.push(`${name}: seed ${r} != ${target}`);
+      if (r !== target && !pinnedOverrides.has(name)) mismatches.push(`${name}: seed ${r} != ${target}`);
     }
     expect(resolved).toBeGreaterThan(600);
     expect(mismatches).toEqual([]);

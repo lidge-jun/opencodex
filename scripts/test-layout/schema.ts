@@ -259,6 +259,8 @@ export interface EscapeHit {
 export function scanEscapes(source: string): EscapeHit[] {
   const tokens = tokenize(source);
   const masked = maskNonCode(source, tokens);
+  const view = maskKeepStrings(source, tokens);
+  const stringTokens = tokens.filter(t => t.kind === "string");
   const lines = source.split("\n");
   const hits = new Map<number, EscapeHit>();
   const lineOf = (offset: number) => source.slice(0, offset).split("\n").length;
@@ -274,8 +276,8 @@ export function scanEscapes(source: string): EscapeHit[] {
     const back = Math.max(masked.lastIndexOf(";", at) + 1, masked.lastIndexOf("\n\n", at), 0);
     const fwd = masked.indexOf(";", at);
     const end = fwd === -1 ? source.length : fwd + 1;
-    const stmt = maskKeepStrings(source, tokens).slice(back, end);
-    const strings = tokens.filter(t => t.kind === "string" && t.start >= back && t.end <= end).map(t => source.slice(t.start, t.end));
+    const stmt = view.slice(back, end);
+    const strings = stringTokens.filter(t => t.start >= back && t.end <= end).map(t => source.slice(t.start, t.end));
     const urlSpec = /new\s+URL\s*\(\s*(["'][^"']*["'])\s*,\s*import\.meta\.url/.exec(stmt)?.[1];
     const escapes = strings.some(str => str !== urlSpec && ESCAPE_ARG.test(str));
     if (escapes || URL_ROOT.test(stmt)) report(at, end);

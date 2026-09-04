@@ -333,7 +333,10 @@ export const SERIAL_FULL_SUITE_FILES = [
   "update-stop-first.test.ts",
 ] as const;
 
-const SERIAL_LANE_TIMEOUT_MS: Partial<Record<string, number>> = {
+type SerialLaneBasename = (typeof SERIAL_FULL_SUITE_FILES)[number] extends infer P
+  ? P extends `${string}/${infer B}` ? B : P
+  : never;
+const SERIAL_LANE_TIMEOUT_MS: Partial<Record<SerialLaneBasename, number>> = {
   // This file intentionally exercises 33 complete release-script subprocess trees.
   // It is ~90s on an idle machine and measured at ~170s under unrelated host load.
   "release-helper.test.ts": 5 * 60 * 1000,
@@ -370,7 +373,7 @@ export function resolveBunTestPlan(requested: string[], comparisonCommit?: strin
     ...SERIAL_FULL_SUITE_FILES.map(file => ({
       label: basename(file),
       args: resolveBunTestArgs(["--parallel=1", ...serialRequested, `./tests/${file}`]),
-      timeoutMs: SERIAL_LANE_TIMEOUT_MS[basename(file)] ?? 3 * 60 * 1000,
+      timeoutMs: SERIAL_LANE_TIMEOUT_MS[basename(file) as SerialLaneBasename] ?? 3 * 60 * 1000,
     })),
   ];
 }

@@ -53,22 +53,29 @@ export function planMoves(layout: Layout, root: string, domains: string[] = []):
   return { moves, unresolved };
 }
 
-function parseDomains(argv: string[]): { domains: string[]; json: boolean } {
+/** Shared flag parser: every `--domain` must carry a value, so a forgotten one cannot become `[undefined]`. */
+export function parseDomainArgs(argv: string[]): { domains: string[]; flags: Set<string> } {
   const domains: string[] = [];
-  let json = false;
+  const flags = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--domain") { domains.push(argv[++i]!); continue; }
-    if (argv[i]!.startsWith("--domain=")) { domains.push(argv[i]!.slice("--domain=".length)); continue; }
-    if (argv[i] === "--json") json = true;
+    const arg = argv[i]!;
+    if (arg === "--domain" || arg.startsWith("--domain=")) {
+      const value = arg === "--domain" ? argv[++i] : arg.slice("--domain=".length);
+      if (!value || value.startsWith("--")) throw new Error("--domain requires a value");
+      domains.push(value);
+      continue;
+    }
+    if (arg.startsWith("--")) flags.add(arg);
+    else throw new Error(`unexpected argument ${arg}`);
   }
-  return { domains, json };
+  return { domains, flags };
 }
 
 if (import.meta.main) {
-  const { domains, json } = parseDomains(process.argv.slice(2));
+  const { domains, flags } = parseDomainArgs(process.argv.slice(2));
   const layout = loadLayout();
   const result = planMoves(layout, repoRootFromHere(), domains);
-  if (json) {
+  if (flags.has("--json")) {
     console.log(JSON.stringify(result, null, 2));
   } else {
     for (const move of result.moves) console.log(`${move.from} -> ${move.to}`);

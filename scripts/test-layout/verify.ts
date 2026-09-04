@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { LAYOUT_PATH, loadLayout, scanEscapes } from "./schema";
-import { listTestFiles, repoRootFromHere } from "./plan";
+import { listTestFiles, parseDomainArgs, repoRootFromHere } from "./plan";
 
 /**
  * Verify one or more migrated domains:
@@ -52,32 +52,58 @@ export const SWEEP_ROOTS = [
  * gitignored reference clones and build output are never scanned.
  */
 export function filesNaming(root: string, literal: string): string[] {
+  return filesNamingAny(root, [literal]).get(literal) ?? [];
+}
+
+/** One `git grep` for many literals; returns literal -> tracked files (posix paths) that contain it. */
+export function filesNamingAny(root: string, literals: string[]): Map<string, string[]> {
+  const result = new Map<string, string[]>();
+  if (literals.length === 0) return result;
   const roots = SWEEP_ROOTS.filter(p => existsSync(join(root, p)));
-  if (roots.length === 0) return [];
-  const proc = Bun.spawnSync(["git", "grep", "-l", "--fixed-strings", "-e", literal, "--", ...roots], {
+  if (roots.length === 0) return result;
+  const patterns = literals.flatMap(literal => ["-e", literal]);
+  // -n -o prints "path:line:match" so one pass attributes each hit to its literal.
+  const proc = Bun.spawnSync(["git", "grep", "-n", "-o", "--fixed-strings", ...patterns, "--", ...roots], {
     cwd: root, stdout: "pipe", stderr: "pipe",
   });
   // git grep exits 1 for "no matches"; anything above that is an execution error.
   if (proc.exitCode !== 0 && proc.exitCode !== 1) {
-    throw new Error(`git grep failed while sweeping for ${literal} (exit ${proc.exitCode}): ${proc.stderr.toString()}`);
+    throw new Error(`git grep failed while sweeping (exit ${proc.exitCode}): ${proc.stderr.toString()}`);
   }
-  return proc.exitCode === 0 ? proc.stdout.toString().split("\n").filter(Boolean) : [];
+  if (proc.exitCode !== 0) return result;
+  for (const line of proc.stdout.toString().split("\n")) {
+    if (!line) continue;
+    const first = line.indexOf(":");
+    const second = line.indexOf(":", first + 1);
+    if (first === -1 || second === -1) continue;
+    const file = line.slice(0, first).split("\\").join("/");
+    const match = line.slice(second + 1);
+    const list = result.get(match) ?? [];
+    if (!list.includes(file)) list.push(file);
+    result.set(match, list);
+  }
+  return result;
 }
 
 export function runVerify(options: VerifyOptions): VerifyReport {
   const { root, domains } = options;
   const log = options.log ?? ((line: string) => console.log(line));
+  if (domains.length === 0) throw new Error("verify: at least one --domain is required");
   loadLayout(options.layoutPath ?? LAYOUT_PATH); // validates the map is well-formed
   const files = listTestFiles(root).filter(rel => domains.some(d => rel.startsWith(`tests/${d}/`)));
+  if (files.length === 0) throw new Error(`verify: no test files under tests/{${domains.join(",")}}; has the slice moved?`);
 
   const staleLiterals: VerifyReport["staleLiterals"] = [];
   const manual: VerifyReport["manual"] = [];
   const suppressed: VerifyReport["suppressed"] = [];
+  // One sweep for the whole slice instead of one repository scan per file.
+  const literals = files.map(rel => `tests/${basename(rel)}`);
+  const staleByFile = filesNamingAny(root, literals);
   for (const rel of files) {
     const literal = `tests/${basename(rel)}`;
     // "tests/<basename>" cannot be a substring of any "tests/<dir>/<other>" (verified over all
     // 1061 basenames in the tooling test), so any hit is stale by construction.
-    for (const file of filesNaming(root, literal)) staleLiterals.push({ file, literal });
+    for (const file of staleByFile.get(literal) ?? []) staleLiterals.push({ file, literal });
     for (const hit of scanEscapes(readFileSync(join(root, rel), "utf8"))) {
       (hit.suppressed ? suppressed : manual).push({ file: rel, line: hit.line, text: hit.text.trim() });
     }
@@ -126,14 +152,12 @@ export function runVerify(options: VerifyOptions): VerifyReport {
 }
 
 if (import.meta.main) {
-  const argv = process.argv.slice(2);
-  const domains: string[] = [];
-  let skipTests = false;
-  for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === "--domain") { domains.push(argv[++i]!); continue; }
-    if (argv[i]!.startsWith("--domain=")) { domains.push(argv[i]!.slice("--domain=".length)); continue; }
-    if (argv[i] === "--skip-tests") skipTests = true;
+  try {
+    const { domains, flags } = parseDomainArgs(process.argv.slice(2));
+    const report = runVerify({ root: repoRootFromHere(), domains, skipTests: flags.has("--skip-tests") });
+    process.exit(report.ok ? 0 : 1);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   }
-  const report = runVerify({ root: repoRootFromHere(), domains, skipTests });
-  process.exit(report.ok ? 0 : 1);
 }

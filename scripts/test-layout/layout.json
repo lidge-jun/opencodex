@@ -52,7 +52,9 @@
         "anthropic": [
           "^(?:anthropic)-"
         ],
-        "openai": []
+        "openai": [
+          "^(?:openai)-"
+        ]
       }
     },
     "responses": {
