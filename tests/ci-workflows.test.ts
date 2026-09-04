@@ -90,6 +90,18 @@ describe("GitHub Actions hardening", () => {
     const ci = Bun.YAML.parse(workflow) as {
       permissions?: Record<string, string>;
       jobs?: Record<string, { "timeout-minutes"?: number } | undefined>;
+      on?: {
+        workflow_dispatch?: {
+          inputs?: {
+            lane?: {
+              description?: string;
+              type?: string;
+              default?: string;
+              options?: string[];
+            };
+          };
+        };
+      };
     };
 
     // Job-scoped: a global count still passes if values are swapped between jobs.
@@ -100,7 +112,8 @@ describe("GitHub Actions hardening", () => {
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
     expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
     expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
-    expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(30);
+    expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(20);
+    expect(ci.jobs?.["macos-control"]?.["timeout-minutes"]).toBe(30);
     // Higher than the Linux shards on purpose: at 15 the Windows leg cancelled a
     // shard mid-suite, which reports as neither pass nor fail (#2152).
     expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(25);
@@ -166,7 +179,7 @@ describe("GitHub Actions hardening", () => {
     // how the first cut of that test shipped, so pin the flag rather than trusting a
     // comment. Asserted per job so a future edit cannot drop it from one leg while
     // the other still carries it.
-    for (const jobName of ["test", "platform-macos", "platform-windows"]) {
+    for (const jobName of ["test", "platform-macos", "macos-control", "platform-windows"]) {
       const steps = (ci.jobs?.[jobName] as { steps?: Array<{ uses?: string; with?: Record<string, unknown> }> })?.steps ?? [];
       const checkout = steps.find(step => typeof step.uses === "string" && step.uses.includes("actions/checkout"));
       expect(`${jobName}:${String(checkout?.with?.["fetch-tags"])}`).toBe(`${jobName}:true`);
@@ -219,8 +232,12 @@ describe("GitHub Actions hardening", () => {
     const macosSteps = (ci.jobs?.["platform-macos"] as { steps?: { run?: string }[] })?.steps ?? [];
     // The 60s per-test ceiling is part of the pinned shape: dropping it silently
     // restores the timing-flake class this lane kept surfacing.
-    expect(macosSteps.some(step => step.run?.includes("bun test --isolate --timeout 60000 tests"))).toBe(true);
-    expect(macosSteps.some(step => step.run?.includes("--shard"))).toBe(false);
+    expect(macosSteps.some(step => step.run?.includes("bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/2"))).toBe(true);
+    const macosShards = (ci.jobs?.["platform-macos"] as {
+      strategy?: { "fail-fast"?: boolean; matrix?: { shard?: number[] } };
+    })?.strategy;
+    expect(macosShards?.["fail-fast"]).toBe(false);
+    expect(macosShards?.matrix?.shard).toEqual([1, 2]);
 
     // The macOS leg retries ONLY a Bun runtime crash, and only once. Bun 1.3.14
     // segfaults reclaiming a Worker at an `--isolate` file boundary with
@@ -229,7 +246,7 @@ describe("GitHub Actions hardening", () => {
     // `scripts/ci/run-bun-test-batches.sh`. Two ways to break this silently:
     // drop the crash-signature guard so an assertion failure gets retried into
     // green, or let the retry loop swallow a repeated crash. Pin both.
-    const macosTestRun = macosSteps.find(step => step.run?.includes("bun test --isolate --timeout 60000 tests"))?.run ?? "";
+    const macosTestRun = macosSteps.find(step => step.run?.includes("bun test --isolate --timeout 60000 tests --shard=${{ matrix.shard }}/2"))?.run ?? "";
     // Actions invokes multiline `run:` blocks with `bash -e`. The retry loop
     // must disable errexit before the crash-prone command or exit 133 aborts
     // the step before PIPESTATUS can be inspected and the retry can run.
@@ -245,6 +262,33 @@ describe("GitHub Actions hardening", () => {
     expect((ci.jobs?.["platform-macos"] as { if?: string })?.if)
       .toBe("github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'");
 
+    // Whole-pool control lives on dispatch so every push does not pay the
+    // unsharded macOS critical path. Keep the unsharded bun test line and the
+    // 30-minute budget; do not sneak a shard divisor into this job.
+    const macosControlJob = ci.jobs?.["macos-control"] as {
+      name?: string;
+      needs?: string;
+      if?: string;
+      "runs-on"?: string;
+      "timeout-minutes"?: number;
+      strategy?: unknown;
+      steps?: { run?: string }[];
+    } | undefined;
+    expect(macosControlJob?.name).toBe("macos control");
+    expect(macosControlJob?.needs).toBe("changes");
+    expect(macosControlJob?.if).toBe("github.event_name == 'workflow_dispatch'");
+    expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
+    expect(macosControlJob?.strategy).toBeUndefined();
+    const macosControlSteps = macosControlJob?.steps ?? [];
+    expect(macosControlSteps.some(step => step.run?.includes("bun test --isolate --timeout 60000 tests"))).toBe(true);
+    expect(macosControlSteps.some(step => step.run?.includes("--shard"))).toBe(false);
+    const macosControlTestRun = macosControlSteps.find(step => step.run?.includes("bun test --isolate --timeout 60000 tests"))?.run ?? "";
+    expect(hasExactShellCommand(macosControlTestRun, "set +e")).toBe(true);
+    expect(macosControlTestRun).toContain("for attempt in 1 2");
+    expect(macosControlTestRun).not.toContain("while true");
+    expect(macosControlTestRun).toContain("assertion failures are not retried");
+    expect(macosControlTestRun).toContain("failing after one retry");
+
     // Windows is dispatch-only: it gates nothing, not even the shipping
     // boundary. The sharded promotion run surfaced ~207 Windows-only failures
     // that pre-date every released version, so the leg became a measurement
@@ -252,11 +296,23 @@ describe("GitHub Actions hardening", () => {
     // condition and the absence of every automatic trigger — a stray
     // `|| github.ref == ...` would restore a red leg to the release path.
     const windowsIf = String((ci.jobs?.["platform-windows"] as { if?: string })?.if ?? "");
-    expect(windowsIf).toContain("github.event_name == 'workflow_dispatch'");
+    expect(windowsIf).toBe(
+      "github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')",
+    );
     expect(windowsIf).not.toContain("refs/heads/main");
     expect(windowsIf).not.toContain("refs/heads/preview");
     expect(windowsIf).not.toContain("refs/heads/dev");
     expect(windowsIf).not.toContain("pull_request");
+
+    // A lane=macos-control dispatch must skip Windows so a red Windows burn-down
+    // cannot fail the unsharded macOS control run. A plain dispatch still runs
+    // everything, including Windows, which is what empty-or-all encodes.
+    expect(ci.on?.workflow_dispatch?.inputs?.lane).toEqual({
+      description: "all (default) or macos-control",
+      type: "choice",
+      default: "all",
+      options: ["all", "macos-control"],
+    });
 
     // Windows runs the same suite, sharded like the Linux legs, and keeps the
     // self-hosted workspace wipe. Without the wipe a deleted file survives on
@@ -299,11 +355,13 @@ describe("GitHub Actions hardening", () => {
     const batchScript = await readText("scripts/ci/run-bun-test-batches.sh");
     for (const signature of crashSignatures) {
       expect(`macos:${signature}:${macosTestRun.includes(signature)}`).toBe(`macos:${signature}:true`);
+      expect(`macos-control:${signature}:${macosControlTestRun.includes(signature)}`).toBe(`macos-control:${signature}:true`);
       expect(`windows:${signature}:${windowsTestRun.includes(signature)}`).toBe(`windows:${signature}:true`);
       expect(`script:${signature}:${batchScript.includes(signature)}`).toBe(`script:${signature}:true`);
     }
     // The thread-numbered form must not be the anchor anywhere.
     expect(macosTestRun).not.toContain("panic\\(thread");
+    expect(macosControlTestRun).not.toContain("panic\\(thread");
     expect(windowsTestRun).not.toContain("panic\\(thread");
     expect(batchScript).not.toContain("panic\\(thread");
 
@@ -321,7 +379,7 @@ describe("GitHub Actions hardening", () => {
     // accident, because the same job also ran the GUI build — splitting the suite
     // away from the gates removed that coincidence, and the shards went red on a
     // pull request before this pin existed.
-    for (const jobName of ["test", "platform-macos", "platform-windows"]) {
+    for (const jobName of ["test", "platform-macos", "macos-control", "platform-windows"]) {
       const steps = (ci.jobs?.[jobName] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
       const build = steps.find(step => step.run?.includes("bun run build"));
       expect(`${jobName}:${build === undefined}`).toBe(`${jobName}:false`);
@@ -493,6 +551,9 @@ describe("GitHub Actions hardening", () => {
       expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
       expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);
     }
+    const macosControlIf = ci.jobs?.["macos-control"] as { needs?: string; if?: string } | undefined;
+    expect(macosControlIf?.needs).toBe("changes");
+    expect(macosControlIf?.if).toBe("github.event_name == 'workflow_dispatch'");
   });
 
   test("cross-platform CI keeps the GUI lint and build gates", async () => {
