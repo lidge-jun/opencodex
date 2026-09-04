@@ -176,7 +176,8 @@ export function rateLimitRetryDelayMs(
  * The returned object is a snapshot of the PERSISTED config — it carries none of the
  * registry backfills `routedProviderConfig` merges in at request time. Request paths must
  * not assign it to an active route wholesale; use `rotateProviderTransportOn429`, which
- * takes only the swapped key and keeps the routed provider intact.
+ * rebuilds from this committed row, reapplies registry metadata, and retains only explicit
+ * runtime transport state (`fetch` and generated OpenCode session affinity).
  */
 export function rotateKeyOn429(
   config: OcxConfig,
