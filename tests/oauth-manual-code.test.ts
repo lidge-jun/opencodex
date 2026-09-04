@@ -55,6 +55,14 @@ describe("parseCallbackInput kinds", () => {
     expect(parseCallbackInput("?code=abc&state=xyz")).toEqual({ kind: "query", code: "abc", state: "xyz" });
   });
 
+  // A Meta Muse Code key is pasted into this same field on Windows and Linux, where
+  // there is no CLI credential to import. It carries no "code=" and no "#", so it must
+  // survive as a raw value: the shared gate rejects anything with no code, and a key
+  // split on "#" would be truncated into an invalid credential.
+  test("a Muse Code API key survives as a raw value", () => {
+    const key = "LLM|1234567890123456|abcdefghijklmnopqrstuvwxy";
+    expect(parseCallbackInput(key)).toEqual({ kind: "raw", code: key, state: undefined });
+  });
   test("raw authorization code -> kind raw", () => {
     expect(parseCallbackInput("  raw-auth-code  ")).toEqual({ kind: "raw", code: "raw-auth-code", state: undefined });
   });
