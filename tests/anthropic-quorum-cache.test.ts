@@ -1,0 +1,119 @@
+/**
+ * The quorum predicate must not read the auth store on every request.
+ *
+ * `hasAnthropicFailoverQuorum` decides whether an Anthropic request records the account that
+ * served it, so it runs on the INITIAL resolution of ordinary traffic -- not only after a 429.
+ * `getAccountSet` goes through `loadAuthStore`, which has no cache: it chmods the config dir,
+ * chmods the secret, reads the whole file and normalizes it on every call. An uncached predicate
+ * therefore puts a synchronous file read in front of every Anthropic turn.
+ *
+ * The generic module already solved this with a TTL-bounded count cache. These tests pin the same
+ * three properties for the Anthropic twin: the read is shared inside the window, a fresh login is
+ * still visible once it expires, and a rotation invalidates immediately rather than answering the
+ * next question from a pre-failure count.
+ */
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, statSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  clearAnthropicAccountPoolState,
+  forgetAnthropicFailoverQuorum,
+  hasAnthropicFailoverQuorum,
+  rotateAnthropicAccountOn429,
+} from "../src/oauth/anthropic-routing";
+import { getAccountSet, saveCredential } from "../src/oauth/store";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
+
+const originalHome = process.env.OPENCODEX_HOME;
+let home: string;
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "ocx-quorum-cache-"));
+  process.env.OPENCODEX_HOME = home;
+  clearAnthropicAccountPoolState();
+  forgetAnthropicFailoverQuorum();
+});
+
+afterEach(() => {
+  clearAnthropicAccountPoolState();
+  forgetAnthropicFailoverQuorum();
+  if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = originalHome;
+  removeTreeWithRetry(home);
+});
+
+async function seed(count: number, offset = 0): Promise<string[]> {
+  for (let i = offset; i < offset + count; i++) {
+    await saveCredential("anthropic", {
+      access: `access-${i}`,
+      refresh: `refresh-${i}`,
+      expires: Date.now() + 3_600_000,
+      accountId: `uuid-${i}`,
+      email: `user${i}@example.test`,
+    } as never);
+  }
+  return getAccountSet("anthropic")?.accounts.map(a => a.id) ?? [];
+}
+
+/**
+ * Observe the store read without stubbing the module: `loadAuthStore` calls `readFileSync`,
+ * which updates atime. Pinning atime into the past and checking whether it moved is a direct
+ * observation of the syscall this cache exists to avoid.
+ */
+function storePath(): string {
+  return join(home, "auth.json");
+}
+
+function markStoreUnread(): void {
+  const stats = statSync(storePath());
+  utimesSync(storePath(), new Date(Date.now() - 60_000), stats.mtime);
+}
+
+function storeWasRead(): boolean {
+  return statSync(storePath()).atimeMs > Date.now() - 30_000;
+}
+
+describe("Anthropic failover quorum cache", () => {
+  test("a burst of requests inside the TTL window shares one store read", async () => {
+    const start = Date.now();
+    await seed(2);
+    // Prime the cache, then prove the next calls do not touch the file at all.
+    expect(hasAnthropicFailoverQuorum(start)).toBe(true);
+    markStoreUnread();
+    for (let i = 0; i < 25; i++) expect(hasAnthropicFailoverQuorum(start + i)).toBe(true);
+    expect(storeWasRead()).toBe(false);
+  });
+
+  test("a fresh login is visible once the window expires", async () => {
+    // The cache must not be able to strand an operator who just logged a second account in:
+    // a stale false would keep failover off for exactly the traffic that needs it.
+    const start = Date.now();
+    await seed(1);
+    expect(hasAnthropicFailoverQuorum(start)).toBe(false);
+    await seed(1, 1);
+    // Same instant: still the memoized answer.
+    expect(hasAnthropicFailoverQuorum(start)).toBe(false);
+    // Past the window: seen without any explicit invalidation call.
+    expect(hasAnthropicFailoverQuorum(start + 2_001)).toBe(true);
+  });
+
+  test("a rotation invalidates immediately rather than waiting out the TTL", async () => {
+    const start = Date.now();
+    const ids = await seed(2);
+    expect(hasAnthropicFailoverQuorum(start)).toBe(true);
+    expect(rotateAnthropicAccountOn429({ providers: {} } as never, ids[0]!, null, null, start)).toBe(ids[1]);
+    // The roster in use just changed, so the next question re-reads instead of answering from
+    // the count taken before the failure.
+    markStoreUnread();
+    hasAnthropicFailoverQuorum(start + 1);
+    expect(storeWasRead()).toBe(true);
+  });
+
+  test("the cache holds no credential material", async () => {
+    // A boolean derived from a count. If this ever became an id or a token the cache would
+    // outlive the store's own hardening, which is the thing loadAuthStore re-applies per read.
+    await seed(2);
+    expect(typeof hasAnthropicFailoverQuorum()).toBe("boolean");
+  });
+});
