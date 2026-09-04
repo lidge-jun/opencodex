@@ -222,6 +222,18 @@ describe("sidecar-settings remaining vision controls", () => {
     expect(config.visionSidecar).toEqual({ ...FULL_VISION, enabled: false });
   });
 
+  test("GET and PUT expose the effective web-search enabled state", async () => {
+    const unset = await getSidecarSettings(emptyConfig());
+    expect((await unset.json() as { webSearch: { enabled: boolean } }).webSearch.enabled).toBe(true);
+
+    const config = emptyConfig({ webSearchSidecar: { enabled: false } });
+    const disabled = await getSidecarSettings(config);
+    expect((await disabled.json() as { webSearch: { enabled: boolean } }).webSearch.enabled).toBe(false);
+
+    const response = await putSidecarSettings(config, { webSearch: { streamRoutedModelOutput: true } });
+    expect((await response.json() as { webSearch: { enabled: boolean } }).webSearch.enabled).toBe(false);
+  });
+
   test("timeoutMs validation reuses the runtime bounds rather than a second contract", async () => {
     expect(resolveVisionTimeoutMs(undefined)).toBe(DEFAULT_VISION_TIMEOUT_MS);
     expect(resolveVisionTimeoutMs(MIN_VISION_TIMEOUT_MS)).toBe(MIN_VISION_TIMEOUT_MS);

@@ -611,6 +611,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const webSearchCandidates = await webSearchCandidateRows(config);
     return jsonResponse({
       webSearch: {
+        enabled: ws.enabled !== false,
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
@@ -849,6 +850,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     return jsonResponse({
       ok: true,
       webSearch: {
+        enabled: ws.enabled !== false,
         model: ws.model ?? "gpt-5.6-luna",
         backend: ws.backend,
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
