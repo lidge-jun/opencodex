@@ -162,4 +162,57 @@ describe("the consent boundary is stated, not implied", () => {
     expect(recipes).toContain("PREVIEW");
     expect(recipes).toContain("get approval");
   });
+
+  const secretBearingAccessKeyCommand =
+    /\b(?:ocx|opencodex)(?:\.(?:exe|mjs))?["']?\s+(?:access\s+keys?|api-key)\s+(?:create\b|rotate\b(?!\s+(?:--json\s+)?(?:commit|abort)\b))/gim;
+  const secretBearingManagementRequest =
+    /(?:(?:\bPOST\b|(?:--request|-X|-Method)\s+["']?POST["']?|method\s*:\s*["']POST["'])[^\n]{0,240}\/api\/keys(?:\/rotate)?(?=$|[\s"'?#])|\/api\/keys(?:\/rotate)?(?=$|[\s"'?#])[^\n]{0,240}(?:\bPOST\b|(?:--request|-X|-Method)\s+["']?POST["']?|method\s*:\s*["']POST["']))/gim;
+
+  function secretBearingCommandsInFences(text: string): string[] {
+    const matches: string[] = [];
+    for (const block of text.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) {
+      // Fold common shell continuations so a wrapped command cannot evade the check.
+      const executableText = block[1]!.replace(/(?:\\|`|\^)\r?\n\s*/g, " ");
+      matches.push(...executableText.matchAll(secretBearingAccessKeyCommand).map(match => match[0]));
+      matches.push(...executableText.matchAll(secretBearingManagementRequest).map(match => match[0]));
+    }
+    return matches;
+  }
+
+  test("the secret-bearing command detector covers aliases and shell wrappers", () => {
+    for (const command of [
+      "ocx access key create rotated --json",
+      "& ocx access keys create rotated --json",
+      "opencodex api-key rotate old-id --json",
+      "ocx access key rotate --json old-id",
+      "ocx access key \\\n  create rotated --json",
+      "curl -X POST http://127.0.0.1:3000/api/keys",
+      "Invoke-RestMethod http://127.0.0.1:3000/api/keys/rotate -Method Post",
+    ]) {
+      expect(secretBearingCommandsInFences("```bash\n" + command + "\n```"), command).toHaveLength(1);
+    }
+    for (const command of [
+      "ocx access key rotate commit old-id rotation-id",
+      "ocx access key rotate --json commit old-id rotation-id",
+      "ocx access key rotate --json abort old-id rotation-id",
+    ]) {
+      expect(secretBearingCommandsInFences("```bash\n" + command + "\n```"), command).toEqual([]);
+    }
+    expect(secretBearingCommandsInFences("```bash\ncurl -X POST http://127.0.0.1:3000/api/keys/rotate/commit\n```")).toEqual([]);
+  });
+
+  test("agent-facing guidance never exposes secret-bearing access-key commands", () => {
+    for (const file of ["SKILL.md", ...REFERENCES.map(ref => join("references", ref))]) {
+      expect(secretBearingCommandsInFences(read(file)), file).toEqual([]);
+    }
+    const skill = readFileSync(SKILL, "utf8");
+    const recipes = read("references/03_recipes.md");
+    expect(skill).toMatch(/outside the agent\s+session/);
+    expect(skill).toMatch(/configuration\s+confirmation is not approval/i);
+    expect(skill).toMatch(/separate explicit user approval/i);
+    const approvalAt = recipes.indexOf("obtain separate explicit user approval");
+    expect(approvalAt).toBeGreaterThanOrEqual(0);
+    expect(approvalAt).toBeLessThan(recipes.indexOf("ocx access key rotate commit"));
+    expect(approvalAt).toBeLessThan(recipes.indexOf("ocx access key remove"));
+  });
 });

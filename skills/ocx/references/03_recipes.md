@@ -93,20 +93,47 @@ Read `accounts[]`. Two things to respect:
 `providers[]` and `models[]` carry `estimatedCostUsd`. Costs are estimates; `estimateReasons` in the
 log rows tells you why (for example `usage_estimated`, `expected_price_overlay`).
 
-## 5. Rotate an access key and confirm it went quiet
+## 5. Prepare an access-key rotation without exposing the new key
 
 ```bash
 ocx access key list --json
-ocx access key create rotated --json          # the plaintext key is in THIS response only
-ocx access key remove <old-id> --yes --json
-ocx access key list --json                    # the old id is gone; check usage on the rest
 ```
 
-Note the argument style: `create <name>` and `remove <id>` are **positionals**, not `--label` and
-`--id`. `remove` also refuses without `--yes`.
+Creating a key or starting an in-place rotation returns a one-time plaintext credential. **Do not
+run either secret-returning command from an agent session, including through the `access keys` or
+`api-key` aliases, the `opencodex` executable, or direct management-API POSTs to `/api/keys` and
+`/api/keys/rotate`:** terminal output can enter the model transcript. Ask the user to perform that
+step in a separate terminal, configure the replacement, and report only that it is configured plus
+any non-secret key or rotation id needed for follow-up. Never ask for the key itself.
+
+Configuration confirmation is not approval to revoke the existing credential. After confirmation,
+identify the existing key id that will be revoked and obtain separate explicit user approval
+immediately before one of the following paths.
+
+For an in-place rotation, commit the pending replacement on the same id:
+
+```bash
+ocx access key rotate commit <id> <rotation-id> --json
+```
+
+For a separately created replacement key, remove the old id:
+
+```bash
+ocx access key remove <old-id> --yes --json
+```
+
+Then verify the matching result:
+
+```bash
+ocx access key list --json
+```
+
+For an in-place rotation, the same id remains and `pendingRotation` disappears. For a separately
+created replacement, the old id disappears; check usage on the remaining keys. Note the argument
+style: `remove <id>` is positional, not `--id`, and refuses without `--yes`.
 
 The list carries per-key usage, so a key whose count stops advancing is genuinely unused. The
-plaintext key appears once, in the `create` response, and is never retrievable again.
+replacement key's plaintext is never retrievable after creation.
 
 An `ambiguous` footer on the list means two configured keys share an id, so per-key totals do not
 exist for them — do not attribute usage to either.
