@@ -268,7 +268,7 @@ describe("membership oracle", () => {
     // from the map, which is the defect this guards against.
     const histogram: Record<string, number> = {};
     for (const target of Object.values(EXPECTED)) histogram[target] = (histogram[target] ?? 0) + 1;
-    const doc = readFileSync(repoPath("devlog", "_plan", "260905_test_modularization_and_windows", "001_test_inventory.md"), "utf8");
+    const doc = readFileSync(repoPath("devlog", "_fin", "260905_test_modularization_and_windows", "001_test_inventory.md"), "utf8");
     const expected: Record<string, number> = {};
     for (const m of doc.matchAll(/^#### `tests\/([a-z0-9/-]+)\/` \((\d+)\)\r?$/gm)) expected[m[1]!] = Number(m[2]);
     expect(Object.keys(expected).length).toBeGreaterThan(20);
