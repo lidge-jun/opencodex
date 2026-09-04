@@ -50,8 +50,18 @@ runtime the leak itself remains an upstream problem:
   whereas a flat `responseState` under rising observed memory points away from
   that store. The values are scalar-only — no request bodies, tokens, paths, or
   account identifiers — and the read is side-effect free (it never prunes or
-  evicts). The dashboard's **Memory observability** card renders the
-  same fields and offers a confirm-gated **Drain & restart** action: it shows
+  evicts). Spill-write health is reported separately inside that block:
+  `spillWriteStatus` starts as `initial`, becomes `degraded` after a failed
+  publication, and returns to `healthy` after the next successful publication.
+  `spillWriteConsecutiveFailures`, the last failure time, and the last success
+  time show whether failures are accumulating or recovering in the same process.
+  The last failure is a fixed privacy-safe class such as `EACCES`, `ENOSPC`,
+  `ETIMEDOUT`, or `EACLRETRYEXHAUSTED`; raw error messages and filesystem paths
+  are never returned. These diagnostics stay on the authenticated management
+  endpoint and are intentionally absent from `/healthz`, which remains a liveness
+  signal. The dashboard's **Memory observability** card renders the memory and
+  continuation-size fields from this endpoint and offers a confirm-gated
+  **Drain & restart** action: it shows
   the current active-turn count, waits up to 60s for active turns (reusing
   the existing 503 + `Retry-After` drain), then aborts any remaining turns.
   The running proxy owns restart authorization and drain coordination, then
@@ -59,6 +69,9 @@ runtime the leak itself remains an upstream problem:
   The action reports success only after a different, identity-verified process
   is healthy on the same port, without tearing down Codex injection. That is a
   longer, informed recycle than the short drain on `POST /api/stop`.
+
+  For a scriptable snapshot of the complete authenticated payload, run
+  `ocx observe memory --json`; the CLI forwards the same response-state fields.
 - **A gated alternative stream path** — a bounded single-reader relay that
   removes the unbounded buffering shape entirely. On Windows it becomes the
   default automatically once a bundled Bun release verifiably carries the
