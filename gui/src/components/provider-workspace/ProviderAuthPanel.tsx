@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
-import { IconLock, IconTrash } from "../../icons";
+import { IconLock, IconRefresh, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
 import { displayAccountId } from "../../lib/privacy";
@@ -196,6 +196,24 @@ export default function ProviderAuthPanel({
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
   const [manualCodeOk, setManualCodeOk] = useState(true);
+  const [refreshingQuota, setRefreshingQuota] = useState(false);
+  const [quotaRefreshResult, setQuotaRefreshResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const onRefreshQuota = authHandlers?.onRefreshQuota;
+  const refreshQuota = async () => {
+    if (!onRefreshQuota || refreshingQuota) return;
+    setRefreshingQuota(true);
+    // Cleared on click so a previous "refreshed" cannot sit under a later failure.
+    setQuotaRefreshResult(null);
+    try {
+      const ok = await onRefreshQuota(item.name);
+      setQuotaRefreshResult({ ok, text: t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed") });
+    } catch {
+      setQuotaRefreshResult({ ok: false, text: t("codexAuth.quotaRefreshFailed") });
+    } finally {
+      setRefreshingQuota(false);
+    }
+  };
 
   // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
   // bar height briefly so bars don't shove rows when WHAM returns.
@@ -542,10 +560,29 @@ export default function ProviderAuthPanel({
               <div className="pwi-auth-state pwi-auth-state--empty">{t("pws.noAccounts")}</div>
             )}
             {loggedIn && (
-              <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 8 }}
-                onClick={() => void authHandlers.onLogin(item.name, true)} disabled={busy || Boolean(switchingAccountId)}>
-                {t("pws.addAccount")}
-              </button>
+              <div className="pwi-auth-actions">
+                <button type="button" className="btn btn-ghost btn-sm"
+                  onClick={() => void authHandlers.onLogin(item.name, true)} disabled={busy || Boolean(switchingAccountId)}>
+                  {t("pws.addAccount")}
+                </button>
+                {onRefreshQuota && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={refreshingQuota || busy || Boolean(switchingAccountId)}
+                    onClick={() => { void refreshQuota(); }}
+                  >
+                    <IconRefresh width={14} height={14} aria-hidden="true" />
+                    {" "}
+                    {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
+                  </button>
+                )}
+                {quotaRefreshResult && (
+                  <span role="status" className={quotaRefreshResult.ok ? "pws-status-ok" : "pws-status-warn"}>
+                    {quotaRefreshResult.text}
+                  </span>
+                )}
+              </div>
             )}
           </>
         )}

@@ -142,6 +142,19 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const invalidateProviderQuotas = useCallback((force = false) => {
     setQuotaRefresh(previous => ({ epoch: previous.epoch + 1, force }));
   }, []);
+  /*
+   * Operator-initiated refresh needs an answer, and the bump above is not one: it is a
+   * setState, so awaiting it tells you only that React was told to re-render. The shell
+   * owns the actual `/api/provider-quotas` read, so the resolver is parked here and the
+   * shell settles it. Without this a refresh button would flip back to idle and report
+   * success while the old numbers were still on screen.
+   */
+  const quotaRefreshWaiters = useRef<Array<(ok: boolean) => void>>([]);
+  const settleQuotaRefresh = useCallback((ok: boolean) => {
+    const waiters = quotaRefreshWaiters.current;
+    quotaRefreshWaiters.current = [];
+    for (const resolve of waiters) resolve(ok);
+  }, []);
   const { fetchConfig, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
     apiBase, t, setConfig, setOauthProviders, setOauthStatus, notify,
     invalidateProviderQuotas,
@@ -199,6 +212,22 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     saveConfig, openJsonEditor, discardJsonEditor, requestCloseJsonEditor, restoreJsonEditor,
     jsonIsDirty, setJsonLeaveOpen,
   } = jsonEditor;
+
+  /**
+   * Force a fresh quota read for one provider and resolve with what actually happened.
+   *
+   * Declared here because it needs `fetchAccountSets` from the account-pool hook above.
+   * Per-account bars come from a different read (`&quota=1` inside `fetchAccountSets`),
+   * so both must fire or the rows beside each account keep their old numbers. That read's
+   * enrichment is best-effort by design — the panel shows its own load state — so the
+   * REPORTED result is the provider-level read, which is what the button is about.
+   */
+  const refreshProviderQuota = useCallback((provider: string): Promise<boolean> => {
+    const settled = new Promise<boolean>(resolve => { quotaRefreshWaiters.current.push(resolve); });
+    void fetchAccountSets([provider]);
+    void fetchProviderQuotas(true);
+    return settled;
+  }, [fetchAccountSets, fetchProviderQuotas]);
 
   useEffect(() => {
     // Deferred by a microtask, not a timer. A timer had to be cancelled in cleanup, so navigating
@@ -348,6 +377,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         activeAccountNeedsReauth={activeAccountNeedsReauth}
         quotaRefreshEpoch={quotaRefresh.epoch}
         quotaForceRefresh={quotaRefresh.force}
+        onQuotaRefreshSettled={settleQuotaRefresh}
         detail={(item, data) => {
           const loginStatus = accountLoginStatus[item.name] ?? oauthStatus[item.name];
           return (
@@ -387,7 +417,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               onSwitchApiKey: switchApiKey,
               onRemoveApiKey: removeApiKey,
               onEditAlias: editCredentialAlias,
+              onRefreshQuota: refreshProviderQuota,
             }}
+            onRefreshQuota={() => refreshProviderQuota(item.name)}
             isDefault={item.name === config.defaultProvider}
             onRemoveProvider={removeProvider}
             onSetDisabled={setProviderDisabled}

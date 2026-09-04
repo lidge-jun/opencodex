@@ -24,7 +24,7 @@
 .pwi-auth-state--error { color: var(--red); background: var(--red-soft); justify-content: space-between; }
 .pwi-auth-state--empty { justify-content: center; }
 
-.pwi-auth-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pwi-auth-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 
 .pwi-auth-optin-row {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;

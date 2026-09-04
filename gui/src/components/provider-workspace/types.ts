@@ -83,6 +83,13 @@ export interface ProviderAuthHandlers {
   onSwitchApiKey: (provider: string, entry: ApiKeyRow) => void | Promise<void>;
   onRemoveApiKey: (provider: string, entry: ApiKeyRow) => void | Promise<void>;
   onEditAlias: (provider: string, type: "oauth" | "api-key", id: string, current?: string) => void | Promise<void>;
+  /**
+   * Force a fresh quota read for this provider, resolving with whether it succeeded.
+   *
+   * Optional: the Codex account pool owns its own refresh control, and a caller that
+   * cannot force a read simply renders no button rather than one that does nothing.
+   */
+  onRefreshQuota?: (provider: string) => Promise<boolean>;
 }
 
 export type ProviderUpdatePatch = {

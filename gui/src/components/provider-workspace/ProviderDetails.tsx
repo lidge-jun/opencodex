@@ -55,6 +55,7 @@ export default function ProviderDetails({
   onRemoveProvider,
   onSetDisabled,
   onSetDefault,
+  onRefreshQuota,
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
@@ -90,6 +91,8 @@ export default function ProviderDetails({
   onRemoveProvider?: (name: string) => void;
   onSetDisabled?: (name: string, disabled: boolean) => void;
   onSetDefault?: (name: string) => void;
+  /** Force a fresh quota read for this provider; resolves with whether it succeeded. */
+  onRefreshQuota?: () => Promise<boolean>;
 }) {
   const t = useT();
   const [tab, setTab] = useState<Tab>("overview");
@@ -296,7 +299,13 @@ export default function ProviderDetails({
           />
         )}
         {tab === "usage" && (
-          <ProviderUsage item={item} usageTotals={usageTotals} quotaReport={quotaReport} modelUsage={modelUsage} />
+          <ProviderUsage
+            item={item}
+            usageTotals={usageTotals}
+            quotaReport={quotaReport}
+            modelUsage={modelUsage}
+            {...(onRefreshQuota ? { onRefreshQuota } : {})}
+          />
         )}
         {tab === "accounts" && (
           <ProviderAuthPanel

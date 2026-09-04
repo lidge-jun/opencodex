@@ -4,17 +4,20 @@
  */
 import { Fragment, useMemo, useState } from "react";
 import { useT, useI18n } from "../../i18n/shared";
+import { IconRefresh } from "../../icons";
 import QuotaBars from "../QuotaBars";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatRelativeTime, relativeTimeLabelsFromT, formatRequestCount, formatTokenCount, formatCostUsd } from "../../provider-workspace/usage";
 import { accountQuotaFromReport, formatQuotaSourceLabel, observedAtFromReport, type ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { ProviderUsageTotals, ProviderModelUsageRow } from "./types";
 
-export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsage }: {
+export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsage, onRefreshQuota }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
   quotaReport?: ProviderQuotaReportView;
   modelUsage?: ProviderModelUsageRow[];
+  /** Force a fresh quota read; omitted when the page cannot drive one. */
+  onRefreshQuota?: () => Promise<boolean>;
 }) {
   const t = useT();
   const { locale } = useI18n();
@@ -25,7 +28,24 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
   // observation it is the difference between a live reading and a remembered one.
   const observedAt = observedAtFromReport(quotaReport);
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
+  const [refreshingQuota, setRefreshingQuota] = useState(false);
+  const [refreshResult, setRefreshResult] = useState<{ ok: boolean; text: string } | null>(null);
   void item;
+
+  const refreshQuota = async () => {
+    if (!onRefreshQuota || refreshingQuota) return;
+    setRefreshingQuota(true);
+    // Cleared on click so a previous "refreshed" cannot sit under a later failure.
+    setRefreshResult(null);
+    try {
+      const ok = await onRefreshQuota();
+      setRefreshResult({ ok, text: t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed") });
+    } catch {
+      setRefreshResult({ ok: false, text: t("codexAuth.quotaRefreshFailed") });
+    } finally {
+      setRefreshingQuota(false);
+    }
+  };
 
   const sortedModels = useMemo(() => {
     if (!modelUsage?.length) return [];
@@ -138,7 +158,30 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
       )}
 
       <div className="pws-usage-block">
-        <h3 className="pws-section-title">{t("pws.rateLimits")}</h3>
+        <div className="pws-usage-block-head">
+          <h3 className="pws-section-title">{t("pws.rateLimits")}</h3>
+          {onRefreshQuota && (
+            // Rendered even when there is no quota to show: "nothing here" is exactly when
+            // an operator wants to retry.
+            <div className="pws-quota-refresh">
+              {refreshResult && (
+                <span role="status" className={refreshResult.ok ? "pws-status-ok" : "pws-status-warn"}>
+                  {refreshResult.text}
+                </span>
+              )}
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={refreshingQuota}
+                onClick={() => { void refreshQuota(); }}
+              >
+                <IconRefresh width={14} height={14} aria-hidden="true" />
+                {" "}
+                {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
+              </button>
+            </div>
+          )}
+        </div>
         {quota ? (
           <>
             <QuotaBars

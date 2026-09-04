@@ -82,6 +82,7 @@ export default function ProviderWorkspaceShell({
   /** Stable key of active OAuth account ids — refetch overview quotas after account switch. */
   quotaRefreshEpoch = 0,
   quotaForceRefresh = false,
+  onQuotaRefreshSettled,
   detail,
 }: {
   providers: Record<string, WorkspaceProvider>;
@@ -104,6 +105,15 @@ export default function ProviderWorkspaceShell({
    * data arriving on a cold load no longer re-triggers the read once per provider.
    */
   quotaRefreshEpoch?: number;
+  /**
+   * Called when a FORCED quota read settles, with whether it succeeded.
+   *
+   * The shell owns the only `/api/provider-quotas` read, so it owns the only truthful
+   * completion signal. An operator-facing refresh button that resolved on its own would
+   * report success before the response landed — `fetchProviderQuotas(true)` is a
+   * synchronous state bump, not a request.
+   */
+  onQuotaRefreshSettled?: (ok: boolean) => void;
   /** True when the bump came from a mutation that needs the server to bypass its TTL. */
   quotaForceRefresh?: boolean;
   /** Detail body for the selected provider (WP090); a placeholder renders when absent. */
@@ -219,11 +229,20 @@ export default function ProviderWorkspaceShell({
       void fetch(`${apiBase}/api/provider-quotas${quotaForceRefresh ? "?refresh=1" : ""}`)
         .then(r => readJsonIfOk<{ reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown; observed?: boolean; aggregation?: unknown }> }>(r))
         .then((data) => {
-          if (cancelled || !data) return;
+          if (cancelled) return;
+          // `readJsonIfOk` resolves undefined on a non-OK response rather than rejecting.
+          // That is a FAILED refresh, and it must be reported: returning silently here
+          // would leave an operator's button spinning until the component unmounted.
+          if (!data) {
+            if (quotaForceRefresh) onQuotaRefreshSettled?.(false);
+            return;
+          }
           // A successful endpoint response is authoritative, including an empty report list.
           const next = freshQuotaReportsFromResponse(data.reports);
           setQuotaReports(next);
           writeSessionListCache(quotasCacheKey, next);
+          // Report only for a forced read: an ordinary revalidation has no operator waiting on it.
+          if (quotaForceRefresh) onQuotaRefreshSettled?.(true);
         })
         .catch(() => {
           if (cancelled) return;
@@ -233,6 +252,7 @@ export default function ProviderWorkspaceShell({
             writeSessionListCache(quotasCacheKey, next);
             return next;
           });
+          if (quotaForceRefresh) onQuotaRefreshSettled?.(false);
         })
         .finally(() => { if (!cancelled) setQuotasLoading(false); });
     }, 0);
@@ -241,7 +261,7 @@ export default function ProviderWorkspaceShell({
       window.clearTimeout(timeout);
     };
     // Keyed on the explicit revision: account arrival is silent, real mutations re-read.
-  }, [apiBase, quotaRefreshEpoch, quotaForceRefresh, quotasCacheKey]);
+  }, [apiBase, quotaRefreshEpoch, quotaForceRefresh, quotasCacheKey, onQuotaRefreshSettled]);
 
   useEffect(() => {
     if (!filterOpen) return;
