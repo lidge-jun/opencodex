@@ -9,6 +9,7 @@ export interface ProvidersConfig {
     defaultModel?: string;
     models?: string[];
     liveModels?: boolean;
+    modelContextTiers?: Record<string, "default" | "long_context">;
     upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2";
     reasoningWireFormat?: "gateway-object";
     authMode?: string;

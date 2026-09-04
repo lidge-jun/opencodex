@@ -25,6 +25,8 @@ const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azu
 const EMPTY_MODELS: string[] = [];
 
 type ChoicesStatus = "idle" | "loading" | "ready" | "error";
+type ContextTier = "default" | "long_context";
+type ContextTiers = Record<string, ContextTier>;
 type PacingRule = { requestsPerMinute?: number; minIntervalMs?: number };
 type PacingStatus = { enabled: boolean; queued: number; nextSlotInMs: number; lastStartedAt?: number; lastModelId?: string };
 type CursorHttpVersion = "http2" | "http1.1";
@@ -43,6 +45,16 @@ function positiveInteger(value: string): number | undefined {
   if (!value.trim()) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+function contextTierMap(value: WorkspaceItem["modelContextTiers"]): ContextTiers {
+  const result: ContextTiers = {};
+  for (const [modelId, tier] of Object.entries(value ?? {})) {
+    if (tier === "default" || tier === "long_context") result[modelId] = tier;
+  }
+  return result;
+}
+function contextTierSignature(value: ContextTiers): string {
+  return JSON.stringify(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)));
 }
 function pacingSignature(value: WorkspaceItem["requestPacing"] | undefined): string {
   const models = Object.entries(value?.models ?? {})
@@ -81,6 +93,8 @@ export default function ProviderSettings({
   const [note, setNote] = useState(item.note ?? "");
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(item.allowPrivateNetwork ?? false);
   const [liveModels, setLiveModels] = useState(savedLiveModels);
+  const persistedCopilotContextTiers = useMemo(() => contextTierMap(item.modelContextTiers), [item.modelContextTiers]);
+  const [copilotContextTiers, setCopilotContextTiers] = useState<ContextTiers>(() => contextTierMap(item.modelContextTiers));
   const [cursorHttpVersion, setCursorHttpVersion] = useState<CursorHttpVersion>(savedCursorHttpVersion);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -109,6 +123,7 @@ export default function ProviderSettings({
     setNote(item.note ?? "");
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
     setLiveModels(savedLiveModels);
+    setCopilotContextTiers(contextTierMap(item.modelContextTiers));
     setCursorHttpVersion(savedCursorHttpVersion);
     setPacingEnabled(item.requestPacing?.enabled === true);
     setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
@@ -117,7 +132,7 @@ export default function ProviderSettings({
     setMsg(null);
     setModeMsg(null);
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
-  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.requestPacing, baseUrlChoices]);
+  }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, savedCursorHttpVersion, item.modelContextTiers, item.requestPacing, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Account mode syncs on its own: a mode PATCH refresh must not reset an in-progress
@@ -194,6 +209,7 @@ export default function ProviderSettings({
     || note.trim() !== (item.note ?? "")
     || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false)
     || liveModels !== savedLiveModels
+    || (item.name === "github-copilot" && contextTierSignature(copilotContextTiers) !== contextTierSignature(persistedCopilotContextTiers))
     || (adapter.trim() === "cursor" && cursorHttpVersion !== savedCursorHttpVersion);
   const pacingDirty = pacingSignature(pacingDraft) !== pacingSignature(item.requestPacing);
   const formDirty = dirty || pacingDirty;
@@ -206,6 +222,22 @@ export default function ProviderSettings({
     if (item.defaultModel) set.add(item.defaultModel);
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [availableModels, defaultModel, item.defaultModel]);
+
+  const copilotContextModels = useMemo(() => {
+    if (item.name !== "github-copilot") return EMPTY_MODELS;
+    const modelIds = new Set<string>();
+    const add = (modelId: string | undefined) => {
+      const trimmed = modelId?.trim();
+      if (trimmed) modelIds.add(trimmed);
+    };
+    for (const modelId of availableModels) add(modelId);
+    for (const modelId of item.models ?? []) add(modelId);
+    for (const modelId of Object.keys(item.modelContextTiers ?? {})) add(modelId);
+    for (const modelId of Object.keys(copilotContextTiers)) add(modelId);
+    add(defaultModel);
+    add(item.defaultModel);
+    return [...modelIds].sort((left, right) => left.localeCompare(right));
+  }, [availableModels, copilotContextTiers, defaultModel, item.defaultModel, item.modelContextTiers, item.models, item.name]);
 
   const adapterOptions = useMemo(() => {
     const list = [...ADAPTERS] as string[];
@@ -256,6 +288,9 @@ export default function ProviderSettings({
         }
         if (supportsApiKeyTransport) patch.apiKeyTransport = apiKeyTransport;
         else if (item.apiKeyTransport !== undefined) patch.apiKeyTransport = "";
+        if (item.name === "github-copilot" && contextTierSignature(copilotContextTiers) !== contextTierSignature(persistedCopilotContextTiers)) {
+          patch.modelContextTiers = copilotContextTiers;
+        }
       }
       const res = await onUpdateProvider(item.name, patch);
       setMsg(res.ok ? { ok: true, text: t("pws.settingsSaved") } : { ok: false, text: res.error || t("prov.saveFailed") });
@@ -301,6 +336,7 @@ export default function ProviderSettings({
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? ""); setAllowPrivateNetwork(item.allowPrivateNetwork ?? false); setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion); setMsg(null);
+    setCopilotContextTiers(persistedCopilotContextTiers);
     setPacingEnabled(item.requestPacing?.enabled === true); setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
     setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs)); setPacingModels({ ...(item.requestPacing?.models ?? {}) });
     setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl));
@@ -405,6 +441,37 @@ export default function ProviderSettings({
           </select>
         )}
       </label>
+      {item.name === "github-copilot" && (
+        <section className="pwi-settings-field pwi-copilot-context-field" aria-labelledby="pwi-copilot-context-tier-label">
+          <span className="pwi-settings-label" id="pwi-copilot-context-tier-label">{t("pws.copilotContextTier")}</span>
+          {copilotContextModels.length > 0 ? (
+            <div className="pwi-copilot-context-models">
+              {copilotContextModels.map(modelId => (
+                <label key={modelId} className="pwi-copilot-context-row">
+                  <code title={modelId}>{modelId}</code>
+                  <select
+                    className="input"
+                    data-model-id={modelId}
+                    aria-label={`${t("pws.copilotContextTier")} — ${modelId}`}
+                    value={copilotContextTiers[modelId] ?? "default"}
+                    disabled={saving || modeSaving}
+                    onChange={e => {
+                      const next = e.target.value as ContextTier;
+                      setCopilotContextTiers(current => ({ ...current, [modelId]: next }));
+                    }}
+                  >
+                    <option value="default">{t("pws.copilotContextTierDefault")}</option>
+                    <option value="long_context">{t("pws.copilotContextTierLong")}</option>
+                  </select>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <span className="pwi-settings-hint">{t("pws.copilotContextTierNoModels")}</span>
+          )}
+          <span className="pwi-settings-hint">{t("pws.copilotContextTierDesc")}</span>
+        </section>
+      )}
       {isCanonicalOpenAi && (
         <label className="pwi-settings-field">
           <span className="pwi-settings-label">{t("codexAuth.accountModeTitle")}</span>

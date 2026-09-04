@@ -92,7 +92,7 @@ import {
   type ProviderEditorProviderDTO,
 } from "../auth-cors";
 import { providerServiceTierConfigError } from "./provider-capability-config";
-import { providerEmptyToolOutputConfigError } from "../../config/provider-validation";
+import { contextTierRecordConfigError, providerEmptyToolOutputConfigError } from "../../config/provider-validation";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -468,6 +468,20 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "modelContextTiers")) {
+    const value = rawBody.modelContextTiers;
+    if (value === null || (isPlainRecord(value) && Object.keys(value).length === 0)) {
+      delete next.modelContextTiers;
+    } else {
+      const error = contextTierRecordConfigError(value, "modelContextTiers");
+      if (error) return { error };
+      next.modelContextTiers = {
+        ...(next.modelContextTiers ?? {}),
+        ...(value as OcxProviderConfig["modelContextTiers"]),
+      };
+    }
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "modelAutoCompactTokenLimits")) {
     const value = rawBody.modelAutoCompactTokenLimits;
     const error = modelAutoCompactTokenLimitsConfigError(value, {
@@ -679,6 +693,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
+      modelContextTiers: p.modelContextTiers,
       modelAutoCompactTokenLimits: p.modelAutoCompactTokenLimits,
       modelSupportsServiceTier: p.modelSupportsServiceTier,
       noStructuredOutputModels: p.noStructuredOutputModels,
@@ -925,6 +940,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // call can never fire.
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
+    const submittedModelContextTiers = Object.hasOwn(prov, "modelContextTiers");
     const submittedModelAutoCompactTokenLimits = Object.hasOwn(prov, "modelAutoCompactTokenLimits");
     const submittedModelDisplayNames = Object.hasOwn(prov, "modelDisplayNames");
     const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
@@ -983,6 +999,13 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       prov.modelContextWindows = submittedModelContextWindows
         ? { ...existing.modelContextWindows, ...(prov.modelContextWindows ?? {}) }
         : { ...existing.modelContextWindows };
+    }
+    if (existing?.modelContextTiers) {
+      // Preserve the per-model upstream tier when the full provider form omits it; PATCH or
+      // the dedicated GUI control remains the explicit mutation path for changing the tier.
+      prov.modelContextTiers = submittedModelContextTiers
+        ? { ...existing.modelContextTiers, ...(prov.modelContextTiers ?? {}) }
+        : { ...existing.modelContextTiers };
     }
     if (existing?.modelAutoCompactTokenLimits) {
       prov.modelAutoCompactTokenLimits = submittedModelAutoCompactTokenLimits

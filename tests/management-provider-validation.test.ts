@@ -1457,6 +1457,21 @@ describe("provider management validation", () => {
       }
     });
 
+    test("an omitted modelContextTiers keeps the user's map", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, {
+          modelContextTiers: { "gpt-5.6-luna": "long_context" },
+        })).status).toBe(200);
+        expect((await seedProvider(server.url, {})).status).toBe(200);
+        expect(loadConfig().providers["opencode-go"]?.modelContextTiers)
+          .toEqual({ "gpt-5.6-luna": "long_context" });
+      } finally {
+        await server.stop(true);
+      }
+    });
+
     test("a submitted modelContextWindows updates that key and keeps the others", async () => {
       freshHome();
       const server = startServer(0);
@@ -1624,6 +1639,9 @@ describe("provider management validation", () => {
         ["map-shape", { ...canonicalDirect, modelContextWindows: [] }],
         ["map-value", { ...canonicalDirect, modelContextWindows: { "gpt-5.6-sol": "wide" } }],
         ["map-key", { ...canonicalDirect, modelContextWindows: { "  ": 500_000 } }],
+        ["tier-shape", { ...canonicalDirect, modelContextTiers: [] }],
+        ["tier-value", { ...canonicalDirect, modelContextTiers: { "gpt-5.6-sol": "wide" } }],
+        ["tier-key", { ...canonicalDirect, modelContextTiers: { "  ": "default" } }],
         ["soft-map-shape", { ...canonicalDirect, modelAutoCompactTokenLimits: [] }],
         ["soft-map-value", { ...canonicalDirect, modelAutoCompactTokenLimits: { "gpt-5.6-sol": 1e100 } }],
         ["soft-map-key", { ...canonicalDirect, modelAutoCompactTokenLimits: { "team/gpt-5.6-sol": 120_000 } }],
@@ -3716,6 +3734,7 @@ describe("provider management validation", () => {
           models: ["wide", "narrow"],
           contextWindow: 256_000,
           modelContextWindows: { narrow: 64_000 },
+          modelContextTiers: { narrow: "default" },
           modelAutoCompactTokenLimits: { narrow: 32_000 },
           modelSupportsServiceTier: { narrow: false },
         },
@@ -3740,11 +3759,13 @@ describe("provider management validation", () => {
       name: string;
       contextWindow?: number;
       modelContextWindows?: Record<string, number>;
+      modelContextTiers?: Record<string, "default" | "long_context">;
       modelAutoCompactTokenLimits?: Record<string, number>;
     }>;
     expect(rows.find(row => row.name === "relay")).toMatchObject({
       contextWindow: 256_000,
       modelContextWindows: { narrow: 64_000 },
+      modelContextTiers: { narrow: "default" },
       modelAutoCompactTokenLimits: { narrow: 32_000 },
       modelSupportsServiceTier: { narrow: false },
     });
@@ -3752,6 +3773,7 @@ describe("provider management validation", () => {
     const updated = await request("PATCH", {
       contextWindow: 350_000,
       modelContextWindows: { wide: 350_000 },
+      modelContextTiers: { wide: "long_context" },
       modelAutoCompactTokenLimits: { wide: 100_000 },
       modelSupportsServiceTier: { wide: true },
     });
@@ -3759,12 +3781,14 @@ describe("provider management validation", () => {
     expect(liveConfig.providers.relay).toMatchObject({
       contextWindow: 350_000,
       modelContextWindows: { wide: 350_000, narrow: 64_000 },
+      modelContextTiers: { wide: "long_context", narrow: "default" },
       modelAutoCompactTokenLimits: { wide: 100_000, narrow: 32_000 },
       modelSupportsServiceTier: { wide: true, narrow: false },
     });
     expect(loadConfig().providers.relay).toMatchObject({
       contextWindow: 350_000,
       modelContextWindows: { wide: 350_000, narrow: 64_000 },
+      modelContextTiers: { wide: "long_context", narrow: "default" },
       modelAutoCompactTokenLimits: { wide: 100_000, narrow: 32_000 },
       modelSupportsServiceTier: { wide: true, narrow: false },
     });
@@ -3779,6 +3803,9 @@ describe("provider management validation", () => {
       { modelContextWindows: { wide: 1e100 } },
       { modelContextWindows: { "": 100_000 } },
       { modelContextWindows: { wide: -1 } },
+      { modelContextTiers: [] },
+      { modelContextTiers: { wide: "unsupported" } },
+      { modelContextTiers: { "": "default" } },
       { modelAutoCompactTokenLimits: { wide: 1e100 } },
       { modelAutoCompactTokenLimits: { "": 100_000 } },
       { modelAutoCompactTokenLimits: { constructor: 100_000 } },
@@ -3790,6 +3817,7 @@ describe("provider management validation", () => {
     expect(liveConfig.providers.relay).toMatchObject({
       contextWindow: 350_000,
       modelContextWindows: { wide: 350_000, narrow: 64_000 },
+      modelContextTiers: { wide: "long_context", narrow: "default" },
       modelAutoCompactTokenLimits: { wide: 100_000, narrow: 32_000 },
       modelSupportsServiceTier: { wide: true, narrow: false },
     });
@@ -3807,12 +3835,14 @@ describe("provider management validation", () => {
     const cleared = await request("PATCH", {
       contextWindow: null,
       modelContextWindows: null,
+      modelContextTiers: null,
       modelAutoCompactTokenLimits: null,
       modelSupportsServiceTier: null,
     });
     expect(cleared?.status).toBe(200);
     expect(liveConfig.providers.relay.contextWindow).toBeUndefined();
     expect(liveConfig.providers.relay.modelContextWindows).toBeUndefined();
+    expect(liveConfig.providers.relay.modelContextTiers).toBeUndefined();
     expect(liveConfig.providers.relay.modelAutoCompactTokenLimits).toBeUndefined();
     expect(liveConfig.providers.relay.modelSupportsServiceTier).toBeUndefined();
     expect(loadConfig().providers.relay.modelAutoCompactTokenLimits).toBeUndefined();

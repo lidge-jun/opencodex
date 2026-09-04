@@ -103,6 +103,7 @@ export type {
   RequestPacingRule,
   ProviderRequestPacingConfig,
   FastWire,
+  OcxContextTier,
   AttemptTierOutcome,
   TierObservationContext,
   TierDecision,

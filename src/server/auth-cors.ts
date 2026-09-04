@@ -12,6 +12,7 @@ import {
 import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
+  contextTierRecordConfigError,
   modelAdapterRecordConfigError,
   nonBlankStringArrayConfigError,
   positiveIntegerConfigError,
@@ -689,6 +690,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
   const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");
   if (maxOutputError) return `provider ${name} ${maxOutputError}`;
+  const contextTiersError = contextTierRecordConfigError(raw.modelContextTiers, "modelContextTiers");
+  if (contextTiersError) return `provider ${name} ${contextTiersError}`;
   const structuredOutputOptOutError = nonBlankStringArrayConfigError(
     raw.noStructuredOutputModels,
     "noStructuredOutputModels",
@@ -802,6 +805,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelPreset: "editor",
   contextWindow: "editor",
   modelContextWindows: "editor",
+  modelContextTiers: "editor",
   modelInputModalities: "editor",
   modelMaxInputTokens: "runtime",
   modelAutoCompactTokenLimits: "editor",

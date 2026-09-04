@@ -112,6 +112,17 @@
 .pwi-settings-mode-msg--ok  { color: var(--green); }
 .pwi-settings-mode-msg--err { color: var(--red); }
 
+.pwi-copilot-context-field { gap: 8px; }
+.pwi-copilot-context-models {
+  display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow: auto;
+  padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
+}
+.pwi-copilot-context-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, .7fr); align-items: center; gap: 10px;
+  min-height: 34px; padding: 5px 8px; border-radius: var(--radius-xs); background: var(--bg);
+}
+.pwi-copilot-context-row code { overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+
 .pwi-settings-sticky-bar {
   position: sticky; bottom: 0; z-index: 2;
   display: flex; align-items: center; gap: 8px;
@@ -154,6 +165,7 @@
   .pwi-pacing-grid--model .btn { width: 100%; }
   .pwi-pacing-row { grid-template-columns: minmax(0, 1fr) auto; }
   .pwi-pacing-row span { grid-column: 1 / -1; grid-row: 2; }
+  .pwi-copilot-context-row { grid-template-columns: 1fr; gap: 4px; }
 }
 
 /* ── ProviderJsonEditor ────────────────────────────────────── */

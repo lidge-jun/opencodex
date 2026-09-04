@@ -1,7 +1,8 @@
-import type { AdapterRequest, ProviderAdapter } from "./base";
+import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall, OcxUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { applyGithubCopilotContextTier } from "../providers/github-copilot-context";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { isDebugEnabled } from "../lib/debug-settings";
@@ -112,6 +113,7 @@ export function buildOpenAIChatPassthroughRequest(
   stream: boolean,
   fastPolicy: ResolvedFastPolicy = fastPolicyForModel(provider, modelId, undefined, "chat"),
   fastMode?: boolean,
+  providerName?: string,
 ): AdapterRequest {
   const { url, headers, hasCredential } = openAIChatTransport(provider);
 
@@ -175,7 +177,7 @@ export function buildOpenAIChatPassthroughRequest(
     body.stream_options = rawBody.stream_options;
   }
 
-  const bodyJson = JSON.stringify(body);
+  const bodyJson = JSON.stringify(applyGithubCopilotContextTier(body, provider, modelId, providerName));
 
   if (isDebugEnabled()) {
     let host = "upstream";
@@ -1445,7 +1447,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
     formatErrorBody: formatOpenAIChatErrorBody,
 
-    buildRequest(parsed: OcxParsedRequest) {
+    buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       lastRequestedModelId = parsed.modelId;
       const { url, headers, hasCredential } = openAIChatTransport(provider);
       const messages = frameAgentRouterMessages(provider.baseUrl, messagesToChatFormat(parsed, provider));
@@ -1611,7 +1613,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       if (parsed.stream) body.stream_options = { include_usage: true };
 
-      const bodyJson = JSON.stringify(body);
+      const bodyJson = JSON.stringify(applyGithubCopilotContextTier(body, provider, parsed.modelId, incoming?.providerName));
       const actualServiceTier = typeof body.service_tier === "string" ? body.service_tier : null;
       const tierLog = createAdapterTierMetadata(
         parsed.options.tierObservation,

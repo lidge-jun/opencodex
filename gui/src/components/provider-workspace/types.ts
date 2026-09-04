@@ -98,6 +98,7 @@ export type ProviderUpdatePatch = {
   disabled?: boolean;
   allowPrivateNetwork?: boolean;
   liveModels?: boolean;
+  modelContextTiers?: Record<string, "default" | "long_context"> | null;
   upstreamHttpVersion?: "auto" | "http1.1" | "h1" | "http2" | "h2" | null;
   requestPacing?: WorkspaceItem["requestPacing"] | null;
   /** Dedicated field: the API PATCHes it alone for the canonical `openai` provider. */

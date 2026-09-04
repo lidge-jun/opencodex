@@ -1367,6 +1367,9 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (existing?.oauthAccountFailover !== undefined) {
     next.oauthAccountFailover = existing.oauthAccountFailover;
   }
+  if (existing?.modelContextTiers !== undefined) {
+    next.modelContextTiers = cloneProviderField(existing.modelContextTiers) as OcxProviderConfig["modelContextTiers"];
+  }
   if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
     // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
     let storedApiKey = sanitizeApiKeyValue(existing.apiKey);

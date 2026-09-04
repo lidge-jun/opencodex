@@ -5,6 +5,8 @@ import type { AdapterTierMetadata } from "../providers/fastwire";
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
 export interface IncomingMeta {
   headers: Headers;
+  /** Canonical routed provider name, used by provider-specific wire extensions. */
+  providerName?: string;
   translatorBudget: TranslatorBudget;
   abortSignal?: AbortSignal;
   /**
