@@ -29,9 +29,16 @@ PRs in wp4 are mechanical.
 6. File-level sharding stays (Bun `--shard` and the batch script's sorted
    round-robin). Directory sharding would let one fat domain (providers 201)
    dominate a shard.
-7. Files that must stay at `tests/` root: `preload.ts` (bunfig),
+7. Files that stay at `tests/` root: `preload.ts` (bunfig),
    `tsconfig.doctor-service-memory-contract.json` (ci.yml gates),
-   `test-layout.test.ts` (new, below). Everything else moves in wp4.
+   `fake-codex-server.ts` (support, imported relatively by codex tests; moving it
+   would be a second 100-importer rewrite for no gain), and `test-layout.test.ts`
+   (new, below). All 1045 root `*.test.ts` files move in wp4; with the new guard
+   the suite is 1062 files.
+8. Depth-aware rewriting: a file at `tests/<domain>/` reaches `tests/helpers` with
+   `../helpers` and the repo root with `../..`; a file at `tests/<domain>/<sub>/`
+   uses `../../helpers` and `../../..`. The rewriter computes both offsets from the
+   target path separately (`toHelpers` and `toRepo`), never one shared prefix.
 
 ## 2. Taxonomy (25 domains, 1061 files, from 001 §2.B)
 
@@ -145,9 +152,12 @@ the layout test below exercises it.
     "update": { "match": ["^update"] },
     "images": { "existing": true }, "videos": { "existing": true }, "e2e-style": { "existing": true }
   },
-  "explicit": {}
+  "explicit": {},
+  "migrated": []
 }
 ```
+
+`scripts/test-layout/schema.ts` exports `type Layout = { version: 1; root: "tests"; keepAtRoot: string[]; domains: Record<string, Domain>; explicit: Record<string, string>; migrated: string[] }` and `resolveTarget(layout, basename): string | null` (explicit first, then children regexes, then domain regexes, first match wins, `null` = unresolved). The mover, `plan.ts`, and the layout test all import this one resolver, so "where does file X belong" has exactly one answer.
 
 The `match` regexes are the seed. `explicit` is a filename -> dir map that wins
 over regexes and is where the 9 disagreeing files from 001 §2 (GUI oracles named
@@ -167,16 +177,36 @@ restricts output to one domain (the per-PR slice in wp4), `--json`.
 `bun scripts/test-layout/move.ts --domain <name> [--dry-run]`:
 
 1. `plan()` for the domain.
-2. For each pair: `git mv <from> <to>` (fails if the file is dirty).
-3. Rewrite in the moved file:
-   - `from "../helpers/` -> `from "<up>/helpers/` where `<up>` is `..` or `../..` by depth
-   - same for `../fixtures/`, `../preload`, `./helpers/`, `./fixtures/`
-   - `from "../src/` -> `from "<up>/src/`; same for `../gui/`, `../scripts/`, `../bin/`
-   - `new URL("../src/` / `new URL("./helpers/` / `new URL("../scripts/` / `new URL("../package.json"` -> depth-adjusted
-   - `join(import.meta.dir, "..", ...)` and `join(import.meta.dir, "../src"` -> `repoPath(...)` with an added import of `repo-root`
-   - `join(import.meta.dir, "helpers", X)` -> `helperPath(X)`
-   - `join(repoRoot, "tests", "helpers", X)` / `resolve(repoRoot, "tests/helpers/X")` -> `helperPath(X)` when a local `repoRoot` was `import.meta`-derived
-   - `join(process.cwd(), "tests", "helpers", X)` -> `helperPath(X)`
+2. For each pair: `git mv <from> <to>` after the cleanliness check in step 3.
+3. Rewrite in the moved file. Let `toHelpers` be `..` (depth 1) or `../..`
+   (depth 2) and `toRepo` be `../..` or `../../..`:
+   - static `import ... from "<spec>"`, dynamic `await import("<spec>")`,
+     `require("<spec>")`, `import.meta.resolve("<spec>")`, and
+     `new URL("<spec>", import.meta.url)` are all handled by one function
+     `rewriteSpecifier(spec)`: `./helpers/` and `../helpers/` -> `${toHelpers}/helpers/`;
+     same for `fixtures/`, `preload`, `fake-codex-server`; `../src/`, `../gui/`,
+     `../scripts/`, `../bin/`, `../package.json`, `../.gitignore`, `../.github/`,
+     `../skills/`, `../docs-site/`, `../structure/`, `../devlog/` and the bare
+     `"../"` root URL -> `${toRepo}/...`. Specifiers that do not start with `./` or
+     `../` are untouched.
+   - `join(import.meta.dir, "..", ...)`, `join(import.meta.dir, "../src", ...)`,
+     `resolve(import.meta.dir, "..")`, `fileURLToPath(new URL("../", import.meta.url))`,
+     `new URL("../", import.meta.url)` -> `repoPath(...)` / `repoRoot()` with an
+     added import of `repo-root`.
+   - `join(import.meta.dir, "helpers", X)`, `join(repoRoot, "tests", "helpers", X)`,
+     `resolve(repoRoot, "tests/helpers/X")`, `join(process.cwd(), "tests", "helpers", X)`
+     -> `helperPath(X)`.
+   - Any other line containing `import.meta.dir` or `import.meta.url` that the
+     rules above did not consume is printed as `MANUAL <file>:<line>` and the run
+     exits 2. The MANUAL check runs on the post-rewrite text, so nothing the
+     rewriter skipped can reach a commit silently. Known MANUAL sites from 001
+     §3.E: `ci-workflows.test.ts:30-35`, `core-lab-boundary.test.ts:34`,
+     `openai-provider-option-e2e.test.ts:258-272` (dynamic imports of helper
+     modules), `fixture-dir-uniqueness.test.ts` (below).
+   - Cleanliness: before any `git mv`, `git status --porcelain -- tests/<from>`
+     must be empty (staged or unstaged); a dirty file aborts the whole domain
+     with the list printed. `git mv` itself does not refuse a dirty tracked file,
+     so this check is what prevents an unrelated edit from riding inside a rename.
 4. Rewrite every other file that names the moved path as a literal
    (`rg -l --fixed-strings "tests/<basename>"` over `tests scripts .github AGENTS.md src docs-site structure`),
    replacing `tests/<basename>` with `tests/<domain>/<basename>`. Prints each edit.
@@ -191,7 +221,7 @@ edits it by hand before committing.
 For a domain (or all):
 - every file in the domain resolves its imports: `bun build --no-bundle` is not
   usable for TS-only; instead `bun x tsc --noEmit -p scripts/test-layout/tsconfig.verify.json`
-  with `include: ["tests/<domain>/**/*.ts", "tests/helpers/**/*.ts"]`,
+  with `include: ["scripts/test-layout/**/*.ts", "tests/test-layout.test.ts", "tests/helpers/**/*.ts", "tests/<domain>/**/*.ts"]` (the first three always; the domain glob appended per `--domain`),
   `noEmit`, `skipLibCheck`, `types: ["bun-types"]`. Tests are not typechecked by
   the root tsconfig today (001 §4.A), so this catches only unresolved
   modules and gross breakage, which is exactly what a move can cause.
@@ -206,34 +236,39 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { helperPath, repoPath, repoRoot } from "./helpers/repo-root";
-import layout from "../scripts/test-layout/layout.json";
+import { loadLayout, resolveTarget } from "../scripts/test-layout/schema";
 
-// Every *.test.ts under tests/ must sit in a directory layout.json knows about, and every
-// root-level test file must be on the keepAtRoot list. Migrated domains are listed in
-// layout.migrated; a file in a migrated domain that is still at root fails here.
+// Every *.test.ts under tests/ must resolve to a domain, and once a domain is listed in
+// layout.migrated no file that resolves to it may still sit at the root. Root support files
+// are on keepAtRoot. Uses the same resolver as the mover, so the guard and the tool agree.
 describe("tests/ layout", () => {
+  const layout = loadLayout();
+  const root = join(repoRoot(), "tests");
+
   test("repo-root helper resolves the package", () => {
     expect(repoRoot()).toBe(repoPath());
-    expect(helperPath("remove-tree.ts")).toBe(join(repoRoot(), "tests", "helpers", "remove-tree.ts"));
+    expect(helperPath("remove-tree.ts")).toBe(join(root, "helpers", "remove-tree.ts"));
   });
 
-  test("no test file outside a known domain once its domain is migrated", () => {
-    const root = join(repoRoot(), "tests");
-    const offenders: string[] = [];
+  test("every test file resolves to a domain and migrated domains hold no stragglers", () => {
+    const unresolved: string[] = [];
+    const stragglers: string[] = [];
+    const misplaced: string[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir)) {
         const full = join(dir, entry);
-        if (statSync(full).isDirectory()) { if (!["helpers", "fixtures"].includes(entry)) walk(full); continue; }
+        if (statSync(full).isDirectory()) { if (entry !== "helpers" && entry !== "fixtures") walk(full); continue; }
         if (!entry.endsWith(".test.ts")) continue;
         const rel = relative(root, full);
-        const dirName = rel.includes("/") ? rel.split("/")[0] : "";
-        if (dirName === "") {
-          if (!(layout.keepAtRoot as string[]).includes(entry) && (layout.migrated as string[]).some(d => layout.explicit[entry] === d)) offenders.push(rel);
-        } else if (!(dirName in layout.domains)) offenders.push(rel);
+        const target = resolveTarget(layout, entry);
+        if (target === null) { if (!layout.keepAtRoot.includes(entry)) unresolved.push(rel); continue; }
+        const dirName = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+        if (dirName === "" && layout.migrated.includes(target.split("/")[0]!)) stragglers.push(rel);
+        if (dirName !== "" && dirName !== target) misplaced.push(`${rel} -> ${target}`);
       }
     };
     walk(root);
-    expect(offenders).toEqual([]);
+    expect({ unresolved, stragglers, misplaced }).toEqual({ unresolved: [], stragglers: [], misplaced: [] });
   });
 });
 ```
@@ -334,6 +369,39 @@ Same shape for the `../package.json` and `join(import.meta.dir, "..", relative)`
 Doing these four in wp3 proves the helper on real oracles before the mover
 relies on it.
 
+### MODIFY `tests/fixture-dir-uniqueness.test.ts`
+
+It scans `readdirSync(import.meta.dir)` non-recursively and opens two root basenames
+directly (`:20,28-31,49-50,71-77`). After the move it would scan only `ci-workflows/`
+and pass vacuously. In wp3, before anything moves:
+
+```diff
+-const TESTS_DIR = import.meta.dir;
++import { repoPath } from "./helpers/repo-root";
++const TESTS_DIR = repoPath("tests");
+...
+-function testFiles(): string[] {
+-  return readdirSync(TESTS_DIR)
+-    .filter(name => name.endsWith(".test.ts") && name !== SELF)
+-    .sort();
+-}
++function testFiles(): string[] {
++  const out: string[] = [];
++  const walk = (dir: string) => {
++    for (const entry of readdirSync(dir, { withFileTypes: true })) {
++      if (entry.isDirectory()) { if (entry.name !== "helpers" && entry.name !== "fixtures") walk(join(dir, entry.name)); continue; }
++      if (entry.name.endsWith(".test.ts") && entry.name !== SELF) out.push(relative(TESTS_DIR, join(dir, entry.name)));
++    }
++  };
++  walk(TESTS_DIR);
++  return out.sort();
++}
+```
+
+and the two direct basename reads at `:71-77` go through `resolveTarget` so they
+follow the files. This is the one test whose invariant spans the whole tree; it
+is proven on the flat tree in wp3 (same pass/fail set) before any move.
+
 ### MODIFY `AGENTS.md` (repository layout paragraph)
 
 ```diff
@@ -350,11 +418,13 @@ Plus the `bun test tests/<name>.test.ts` example becomes `bun test tests/<domain
 
 ## 4. Verification for wp3
 
-- `bun x tsc --noEmit` (root; scripts/ are outside include, so also
-  `bun x tsc --noEmit -p scripts/test-layout/tsconfig.verify.json`).
+- `bun x tsc --noEmit` (root) and `bun x tsc --noEmit -p scripts/test-layout/tsconfig.verify.json`
+  (covers `scripts/test-layout/**`, `tests/test-layout.test.ts`, `tests/helpers/**`; the
+  root tsconfig excludes tests, so this is the only typecheck the tooling gets).
 - `bun test tests/test-layout.test.ts tests/test-runner.test.ts tests/zz-ci-storage-policy-isolation.test.ts tests/zz-ci-api-usage-isolation.test.ts tests/repo-hygiene.test.ts tests/skill-ocx.test.ts tests/bun-runtime.test.ts tests/release-version-line.test.ts tests/ci-workflows.test.ts`
 - `bun scripts/test-layout/plan.ts` exits 0 with zero UNRESOLVED (proves the map covers 1061).
 - `bun scripts/test-layout/move.ts --domain windows --dry-run` prints the 20 moves and the rewrites without touching the tree.
 - `bun run test:changed`, `bun run privacy:scan`.
 - PR to `dev`, exact-head `ci` success, admin merge, ancestry proof.
+
 

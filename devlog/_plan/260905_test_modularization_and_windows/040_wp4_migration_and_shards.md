@@ -23,8 +23,11 @@ proven before it touches the oracles that pin CI.
 | 6 | `layout/server-storage-ci` | server, storage, ci-workflows | 140 | storage three-way edit (ci.yml, release.ts, zz-ci-storage oracle); `ci-workflows.test.ts` 22 literals; `loopback-listener-integration:837` `process.cwd()` child spawn; `release-helper`, `issue-452-empty-503` serial lanes; `dev-version-bump.yml` explicit path; `.github/scripts/pr-hygiene.cjs` `TEST_PREFIXES` (prefix only, unchanged) |
 | 7 | `ci/macos-2way-shard` | ci.yml only | 0 | `ci-workflows.test.ts:219-245,301-306,491` pin the macOS step |
 
-Total moved: 1045 root files minus 3 kept at root = 1042 across slices 1-6;
-the existing `images/ videos/ e2e-style/` stay.
+Total moved: all 1045 root `*.test.ts` files across slices 1-6 (the slice counts
+above are 001 §2.B domain sizes and include the 16 already-nested files; the
+authoritative per-PR list is `plan.ts --domain` output). Root keeps `preload.ts`,
+`fake-codex-server.ts`, `tsconfig.doctor-service-memory-contract.json`, and the
+new `test-layout.test.ts`; `images/ videos/ e2e-style/` stay where they are.
 
 ## 2. Per-slice procedure (identical for PRs 1-6)
 
@@ -43,8 +46,12 @@ gh pr create --base dev ...   # Summary / Verification / Checklist filled
 ```
 
 Serial lanes: when a slice moves one of the six `SERIAL_FULL_SUITE_FILES`, the
-entry in `scripts/test.ts` becomes `"<domain>/<basename>"` and the matching
-`tests/test-runner.test.ts` expectations change in the same commit:
+entry in `scripts/test.ts` becomes `"<domain>/<basename>"`. Lane `label`, the
+`--path-ignore-patterns **/<x>` glob, and the `SERIAL_LANE_TIMEOUT_MS` lookup all
+use `basename(file)`; only the lane argv uses the full `./tests/${file}`.
+`tests/test-runner.test.ts:176-185` is rewritten to assert those two forms
+separately (`**/${basename(file)}` in the parallel lane, `./tests/${file}` in
+the serial lane, `label === basename(file)`). Same commit as the move:
 
 ```diff
  export const SERIAL_FULL_SUITE_FILES = [
@@ -154,12 +161,30 @@ New job `macos-control`: a copy of the pre-change `platform-macos` job with
 matrix, unchanged 30-minute budget and the unsharded `bun test ... tests` line.
 Added to the `ci` aggregate `needs` list (a skipped result passes the allowlist).
 
-`tests/ci-workflows.test.ts` edits, same commit:
-- line 103: `timeout-minutes` 30 -> 20 for `platform-macos`; add a 30 assertion for `macos-control`.
-- lines 222-223: the shard-free assertion moves to `macos-control`; `platform-macos` asserts the `--shard=` argument and `matrix.shard` `[1, 2]`.
-- the crash-signature loop (301-306) runs for both jobs.
-- line 491 list gains `macos-control`.
-- the `ci` needs assertion gains `macos-control`.
+`tests/ci-workflows.test.ts` edits, same commit (line numbers at `9c0e3ca80`):
+- `:100-106` timeout ownership: `platform-macos` 20, `macos-control` 30.
+- `:169-173` and `:317-329` ("every root-suite job" fetch-tags and GUI-build
+  invariants): the iterated job list gains `macos-control`; both jobs must keep
+  `fetch-tags: true` and the `Build GUI` step.
+- `:188-192` aggregate: `ci.needs` must contain `macos-control` (it would fail
+  otherwise, which is the right signal).
+- `:216-246` sharded-versus-control: `platform-macos` steps contain
+  `--shard=${{ matrix.shard }}/2` and `strategy.matrix.shard` equals `[1, 2]`;
+  `macos-control` steps contain the unsharded `bun test --isolate --timeout 60000 tests`
+  line and no `--shard`. `platform-macos.needs === "changes"` and its `if`
+  stay; `macos-control.if === "github.event_name == 'workflow_dispatch'"`.
+- `:291-304` crash-signature consumers run over both jobs' Test steps.
+- `:490-495` is the list of jobs that must carry the PR/push scoped `if`;
+  `macos-control` is dispatch-only and is asserted in its own block, NOT added
+  to this list.
+
+PR 7 merge gate: because this PR replaces the whole-pool control that today
+runs on every push, ordinary exact-head `ci` is not enough. Before merge, push
+the PR head to an immutable `codex/ci-dispatch-<sha>` ref and run
+`gh workflow run ci.yml --ref <that ref>`; the run must show `macos 1/2`,
+`macos 2/2` and `macos control` all green (Windows shards on that dispatch are
+reported but are someone else's to fix and do not gate this PR). Record the
+run id in `041`. Delete the ref afterwards.
 
 Stale comment at `ci.yml:450-452` ("5m23s, cheapest") is deleted in the same PR.
 
@@ -176,4 +201,5 @@ As in 030 §4 plus, for each move PR, the exact-head `ci` run must show
 `test 1/4..4/4`, `storage policy`, `api usage`, `macos` green, which is the
 proof that discovery, the batch script and the isolated jobs all still find
 the moved files.
+
 
