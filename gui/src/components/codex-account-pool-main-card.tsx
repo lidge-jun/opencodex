@@ -234,23 +234,81 @@ export function CodexAccountPoolPageHead({
             </button>
           </span>
         )}
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost codex-auth-action-btn"
-          onClick={onPauseExhausted}
-          disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
-        >
-          <IconPause width={14} /> {pausingExhausted ? t("codexAuth.pausingExhausted") : t("codexAuth.pauseExhausted")}
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm btn-ghost codex-auth-action-btn"
-          onClick={onRefresh}
-          disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
-        >
-          <IconRefresh width={14} /> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
-        </button>
+        {/*
+          The two account-scoped actions used to live here, beside the page title. On the
+          standalone page that put four controls plus a heading on one row, and the actions
+          sat far above the account cards they act on. They render in
+          CodexAccountPoolActions below instead. The embedded surface keeps them inline,
+          because there is no title row there to crowd.
+        */}
+        {embedded && (
+          <CodexAccountPoolActionButtons
+            t={t}
+            refreshingQuota={refreshingQuota}
+            pausingExhausted={pausingExhausted}
+            pauseBusy={pauseBusy}
+            onRefresh={onRefresh}
+            onPauseExhausted={onPauseExhausted}
+          />
+        )}
       </div>
+    </div>
+  );
+}
+
+/** The pause/refresh pair, shared by the embedded head and the standalone action row. */
+export function CodexAccountPoolActionButtons({
+  t,
+  refreshingQuota,
+  pausingExhausted,
+  pauseBusy,
+  onRefresh,
+  onPauseExhausted,
+}: {
+  t: TFn;
+  refreshingQuota: boolean;
+  pausingExhausted: boolean;
+  pauseBusy?: boolean;
+  onRefresh: () => void;
+  onPauseExhausted: () => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        className="btn btn-sm btn-ghost codex-auth-action-btn"
+        onClick={onPauseExhausted}
+        disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
+      >
+        <IconPause width={14} /> {pausingExhausted ? t("codexAuth.pausingExhausted") : t("codexAuth.pauseExhausted")}
+      </button>
+      <button
+        type="button"
+        className="btn btn-sm btn-ghost codex-auth-action-btn"
+        onClick={onRefresh}
+        disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
+      >
+        <IconRefresh width={14} /> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
+      </button>
+    </>
+  );
+}
+
+/**
+ * Standalone-page action row: the pause/refresh pair, moved out of the page head and
+ * placed directly above the account cards they operate on.
+ */
+export function CodexAccountPoolActions(props: {
+  t: TFn;
+  refreshingQuota: boolean;
+  pausingExhausted: boolean;
+  pauseBusy?: boolean;
+  onRefresh: () => void;
+  onPauseExhausted: () => void;
+}) {
+  return (
+    <div className="codex-auth-actions-row">
+      <CodexAccountPoolActionButtons {...props} />
     </div>
   );
 }

@@ -303,6 +303,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // Absent means hidden, so the GUI renders the switch without having to know that
       // `undefined` and `false` mean the same thing.
       showCodexSparkQuota: config.showCodexSparkQuota === true,
+      // Absent means off, same convention: the GUI renders a plain switch without
+      // needing to know that `undefined` and `false` mean the same thing here.
+      ultraFastTier: config.ultraFastTier === true,
       // Absent means the historical auto-open, so the GUI can render the toggle
       // without having to know that `undefined` and `true` mean the same thing.
       oauthOpenBrowser: config.oauthOpenBrowser !== false,
@@ -394,6 +397,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexAccountPickerEnabled?: unknown;
       oauthOpenBrowser?: unknown;
       showCodexSparkQuota?: unknown;
+      ultraFastTier?: unknown;
       codexDesktopAuthless?: unknown;
     };
     if (body.codexAutoStart === undefined
@@ -402,8 +406,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexAccountPickerEnabled === undefined
       && body.oauthOpenBrowser === undefined
       && body.showCodexSparkQuota === undefined
+      && body.ultraFastTier === undefined
       && body.codexDesktopAuthless === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, oauthOpenBrowser, showCodexSparkQuota, or codexDesktopAuthless" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, oauthOpenBrowser, showCodexSparkQuota, ultraFastTier, or codexDesktopAuthless" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -420,6 +425,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.showCodexSparkQuota !== undefined && typeof body.showCodexSparkQuota !== "boolean") {
       return jsonResponse({ error: "showCodexSparkQuota boolean is required" }, 400);
+    }
+    if (body.ultraFastTier !== undefined && typeof body.ultraFastTier !== "boolean") {
+      return jsonResponse({ error: "ultraFastTier boolean is required" }, 400);
     }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
@@ -447,6 +455,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasOauthOpenBrowser: Object.hasOwn(config, "oauthOpenBrowser"),
       showCodexSparkQuota: config.showCodexSparkQuota,
       hasShowCodexSparkQuota: Object.hasOwn(config, "showCodexSparkQuota"),
+      ultraFastTier: config.ultraFastTier,
+      hasUltraFastTier: Object.hasOwn(config, "ultraFastTier"),
       codexDesktopAuthless: config.codexDesktopAuthless,
       hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
     };
@@ -479,6 +489,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (typeof body.showCodexSparkQuota === "boolean") {
         config.showCodexSparkQuota = body.showCodexSparkQuota;
       }
+      // Off deletes the key rather than persisting `false`: absent is the documented
+      // default, and a written `false` would survive as a decision nobody made.
+      if (body.ultraFastTier === true) config.ultraFastTier = true;
+      else if (body.ultraFastTier === false) deleteConfigTopLevelKey(config, "ultraFastTier");
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
       pickerIsEnabled = codexAccountPickerEnabled(config);
@@ -503,6 +517,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasShowCodexSparkQuota) {
         config.showCodexSparkQuota = previousSettings.showCodexSparkQuota;
       } else deleteConfigTopLevelKey(config, "showCodexSparkQuota");
+      if (previousSettings.hasUltraFastTier) {
+        config.ultraFastTier = previousSettings.ultraFastTier;
+      } else deleteConfigTopLevelKey(config, "ultraFastTier");
       if (previousSettings.hasCodexDesktopAuthless) {
         config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
       } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");

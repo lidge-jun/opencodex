@@ -244,9 +244,22 @@ export function resolveFastPolicy(
   };
 }
 
-export function canonicalFastTierMarker(callerTier: string | undefined): "priority" | undefined {
+/**
+ * Fold a caller's service tier onto a canonical fast marker.
+ *
+ * `ultrafast` is recognised as INTENT even though no shipped catalog advertises it and
+ * `DEFAULT_SERVICE_TIER_FAST_WIRE` has no wire mapping for it. That asymmetry is
+ * deliberate: a caller who sends `ultrafast` (which #3429's reporter did, via their own
+ * catalog edit) was previously folded to `undefined`, which made `fastIntent` false and
+ * recorded `fastOutcome: "not-requested"` — the log asserting the user asked for nothing.
+ * Recognising the intent without a wire mapping lands the attempt on `unknown` instead,
+ * which is the truth: the tier was requested, and we cannot confirm it was honored.
+ */
+export function canonicalFastTierMarker(callerTier: string | undefined): "priority" | "ultrafast" | undefined {
   const folded = callerTier?.trim().toLowerCase();
-  return folded === "priority" || folded === "fast" ? "priority" : undefined;
+  if (folded === "priority" || folded === "fast") return "priority";
+  if (folded === "ultrafast") return "ultrafast";
+  return undefined;
 }
 
 /** Capture Fast demand before the final A1 serialization action rewrites the parsed tier view. */
@@ -298,7 +311,8 @@ export function createAdapterTierMetadata(
 ): AdapterTierMetadata | undefined {
   if (!context || !decision) return undefined;
 
-  const callerCanonicalFast = canonicalFastTierMarker(context.callerTier) === "priority";
+  const callerMarker = canonicalFastTierMarker(context.callerTier);
+  const callerCanonicalFast = callerMarker !== undefined;
   const callerTierDropped = context.callerTier !== undefined
     && !callerCanonicalFast
     && wireValue === null;

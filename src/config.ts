@@ -1053,6 +1053,9 @@ const configSchema = z.object({
   // Same opt-in discipline: a malformed hand edit degrades to off rather than rejecting
   // every provider.
   fastRows: z.boolean().optional().catch(false),
+  // Ultra Fast is opt-in for the same reason and degrades the same way: a malformed hand
+  // edit turns the tier off rather than rejecting the config that carries it.
+  ultraFastTier: z.boolean().optional().catch(false),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),

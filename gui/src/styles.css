@@ -1618,6 +1618,13 @@ dialog.modal-overlay::backdrop {
 .codex-request-user-input-controls > .toggle { margin-left: auto; }
 .codex-request-user-input-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
 .codex-request-user-input-feedback.is-error { color: var(--red); }
+/* Ultra Fast opt-in: same card-row idiom as the picker and request-user-input switches. */
+.codex-ultrafast-card { gap: 16px; flex-wrap: wrap; }
+.codex-ultrafast-copy { flex: 1 1 auto; min-width: 0; }
+.codex-ultrafast-copy .card-sub { padding: 2px 0 0; }
+.codex-ultrafast-controls { display: flex; align-items: flex-end; gap: 12px; flex: 0 0 auto; margin-left: auto; }
+.codex-ultrafast-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
+.codex-ultrafast-feedback.is-error { color: var(--red); }
 .codex-account-picker-card { gap: 16px; flex-wrap: wrap; margin-top: 16px; }
 .codex-auth-advanced { margin-top: 8px; }
 .codex-auth-advanced__toggle {
@@ -1808,6 +1815,17 @@ dialog.modal-overlay::backdrop {
 .codex-auth-spark-toggle__label {
   font-size: 12px;
   color: var(--muted);
+}
+/* The pause/refresh pair after it moved out of the page head. Right-aligned so it still
+   reads as chrome for the account list below rather than a heading of its own, and it
+   wraps because both labels grow substantially in several locales. */
+.codex-auth-actions-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 /* Account actions (pause / copy doctor / pause-exhausted): clearer hover than plain
    btn-ghost on card surface — same raised-hover + faint border as icon/list cues. */

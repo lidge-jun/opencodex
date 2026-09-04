@@ -14,7 +14,7 @@ import { readJsonIfOk } from "../fetch-json";
 import { CodexAccountPoolCards, CodexAccountPoolReauthBanner } from "./codex-account-pool-cards";
 import { CodexAccountSwitchModal } from "./codex-account-switch-modal";
 import { CodexAccountResetModal } from "./codex-account-reset-modal";
-import { CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
+import { CodexAccountPoolActions, CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
 import { redeemResetCredit } from "./codex-account-pool-handlers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { accountNeedsReauth } from "../oauth-health-display";
@@ -347,6 +347,22 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       />
 
       {banner}
+
+      {/*
+        Relocated out of the page head: with two accounts the head carried a title, a
+        status line, a toggle and two buttons on one row, and the actions sat above the
+        cards they act on. They belong next to the accounts.
+      */}
+      {!embedded && (
+        <CodexAccountPoolActions
+          t={t}
+          refreshingQuota={refreshingQuota}
+          pausingExhausted={pausingExhausted}
+          pauseBusy={pauseBusy}
+          onRefresh={() => { void refreshQuotas(); }}
+          onPauseExhausted={() => { void pauseExhausted(); }}
+        />
+      )}
 
       {/* Skeleton must sit where main/pool cards will be — never above the account-mode
           banner, or the strip collapses on ready and shoves the whole page up (CLS). */}

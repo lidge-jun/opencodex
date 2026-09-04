@@ -382,6 +382,17 @@ export interface OcxConfig {
    * `priority` service tier. Omitted/false preserves discovery output exactly.
    */
   fastRows?: boolean;
+  /**
+   * Opt-in Ultra Fast service tier, default off.
+   *
+   * This does NOT synthesize an `ultrafast` row: `src/codex/data/upstream-models.json`
+   * advertises only `priority`, and PR #2994 was closed precisely because a catalog row
+   * the wire cannot honor is a picker entry that lies. What the flag turns on is honesty
+   * about a tier the operator supplies themselves — the catalog stops stripping an
+   * `ultrafast` the user configured, and the request path names it instead of recording
+   * "no fast tier was requested".
+   */
+  ultraFastTier?: boolean;
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */

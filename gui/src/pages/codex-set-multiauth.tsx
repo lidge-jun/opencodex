@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import CodexAccountPool from "../components/CodexAccountPool";
 import DefaultModeRequestUserInputSetting from "../components/DefaultModeRequestUserInputSetting";
+import UltraFastTierSetting from "../components/UltraFastTierSetting";
 import CodexAccountPickerSetting from "../components/CodexAccountPickerSetting";
 import { codexAccountModeState, type CodexAccountModeState } from "../codex-multi-state";
 import { navigateHash } from "../hash-routing";
@@ -196,6 +197,7 @@ export default function CodexSetMultiauth({ apiBase }: { apiBase: string }) {
         advancedExtras={<>
           <CodexAccountPickerSetting apiBase={apiBase} />
           <DefaultModeRequestUserInputSetting apiBase={apiBase} />
+          <UltraFastTierSetting apiBase={apiBase} />
         </>}
       />
     </>
