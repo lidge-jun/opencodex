@@ -28,14 +28,6 @@ import {
 
 const SID = "S-1-5-21-111-222-333-1001";
 
-/** Encode `text` in a legacy Windows code page the way the console would emit it. */
-function legacyBytes(text: string, encoding: string): Uint8Array {
-  // Bun ships full ICU, so these decoders exist; the encode side does not, so the
-  // fixtures are built from a decode round-trip of known byte sequences below.
-  throw new Error(`unused placeholder for ${text} / ${encoding}`);
-}
-void legacyBytes;
-
 /**
  * Byte fixtures, written out rather than generated: TextEncoder only emits UTF-8, so a
  * legacy-code-page fixture has to be literal bytes or it is not testing the decode.
