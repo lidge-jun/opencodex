@@ -341,4 +341,3 @@ describe("live-discovered publication is recognized", () => {
     expect(fastRowBases(config)("whatever")).toBe(false);
   });
 });
-
