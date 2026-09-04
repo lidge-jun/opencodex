@@ -77,7 +77,7 @@ authenticated catalog access, and a real routed response themselves.
 | `.github/workflows/issue-quality-tests.yml` | `pull_request` and `push` filtered on the issue/PR automation scripts, templates, and their workflows | Tests the issue and PR automation scripts themselves, so the gates cannot rot silently. |
 | `.github/workflows/issue-triage.yml` | `issues` (opened) | Duplicate detection and triage labeling for new issues. |
 | `.github/workflows/pr-labeler.yml` | `pull_request_target` (opened, edited, synchronize, labeled, unlabeled) | Type and path labeling plus title sync; `labeled`/`unlabeled` let a human override enqueue a fresher run in the per-PR concurrency group. |
-| `.github/workflows/react-doctor.yml` | `pull_request` (opened, synchronize, reopened, ready_for_review) and `push` to `main`; no path filter | React-focused static review. Findings fail the job; write-scoped outputs stay disabled, a contract pinned by `tests/ci-workflows.test.ts`. |
+| `.github/workflows/react-doctor.yml` | `pull_request` (opened, synchronize, reopened, ready_for_review) and `push` to `main`; no path filter | React-focused static review. Findings fail the job; write-scoped outputs stay disabled, a contract pinned by `tests/ci-workflows/ci-workflows.test.ts`. |
 | `.github/workflows/stale-needs-info.yml` | `schedule` only (daily 06:15 UTC); deliberately no manual dispatch | Closes issues left in needs-info past the grace period. Manual dispatch is omitted so a branch-selected run cannot execute that branch's body with issue write scope. |
 
 `pull_request_target`, `issues`, and `schedule` workflows always load from the repository default
@@ -129,7 +129,7 @@ exists so the repository-shape source of truth does not omit the shape of its ow
   `devlog/_chase/` (the reference clones themselves are gitignored).
 - The runtime does not consume `devlog/`, so a contributor who ignores it still builds and runs.
   Repository checks do read it deliberately: `privacy:scan` scans it, and
-  `tests/repo-hygiene.test.ts` enforces the mechanical guards — no tracked `160000` gitlink anywhere,
+  `tests/ci-workflows/repo-hygiene.test.ts` enforces the mechanical guards — no tracked `160000` gitlink anywhere,
   devlog Markdown tracked as ordinary blobs, no `.gitmodules`, and no open plan carrying an unresolved
   security verdict on a security-boundary topic. Some unit-scoped release gate scripts resolve their
   evidence directory from `devlog/_plan` or `_fin` as well.

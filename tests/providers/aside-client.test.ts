@@ -106,7 +106,7 @@ describe("Aside client config", () => {
    *
    * This is the SERIALIZER half of the contract. It starts from a hand-built ExportModel, so
    * it would stay green if enrichment or the catalog dropped the ladder upstream; the
-   * end-to-end guard for that seam lives in tests/management-client-config-route.test.ts.
+   * end-to-end guard for that seam lives in tests/server/management-client-config-route.test.ts.
    */
   test("an Anthropic row with a ladder gets an effort control, one without stays bare", () => {
     const withLadder = buildClientConfig("aside", {

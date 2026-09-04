@@ -52,12 +52,12 @@ const focusedTests = [
   "tests/gui/codex-account-mode-state.test.ts",
   "tests/routing/router.test.ts",
   "tests/codex-integration/codex-routing.test.ts",
-  "tests/server-auth.test.ts",
+  "tests/server/server-auth.test.ts",
   "tests/codex-integration/codex-catalog.test.ts",
   "tests/codex-integration/codex-quota-prime.test.ts",
   "tests/providers/provider-quota.test.ts",
-  "tests/server-images.test.ts",
-  "tests/server-search.test.ts",
+  "tests/server/server-images.test.ts",
+  "tests/server/server-search.test.ts",
 ];
 const staleContractPattern = [
   ["openai", "multi"].join("-"),

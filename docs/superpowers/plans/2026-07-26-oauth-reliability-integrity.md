@@ -609,7 +609,7 @@ EOF
 **Files:**
 - Test: `tests/codex-integration/codex-metadata-integrity.test.ts` (new)
 - Modify only if a real gap is found: `src/codex/auth-context.ts`, `src/adapters/openai-responses.ts`
-- Confirm existing: `tests/server-xai-oauth-401-replay.test.ts`, `tests/server-kiro-oauth-401-replay.test.ts`, `tests/codex-integration/codex-routing.test.ts` (policy A)
+- Confirm existing: `tests/server/server-xai-oauth-401-replay.test.ts`, `tests/server/server-kiro-oauth-401-replay.test.ts`, `tests/codex-integration/codex-routing.test.ts` (policy A)
 
 **Interfaces:**
 - Consumes: `headersForCodexAuthContext`, `FORWARD_HEADERS`
@@ -655,7 +655,7 @@ If fabrication or account-id mismatch is found, fix the minimal header path. Do 
 - [ ] **Step 4: Run related suite**
 
 ```bash
-bun test tests/codex-integration/codex-metadata-integrity.test.ts tests/codex-integration/codex-auth-context.test.ts tests/codex-integration/codex-routing.test.ts tests/session-affinity.test.ts tests/server-xai-oauth-401-replay.test.ts tests/server-kiro-oauth-401-replay.test.ts
+bun test tests/codex-integration/codex-metadata-integrity.test.ts tests/codex-integration/codex-auth-context.test.ts tests/codex-integration/codex-routing.test.ts tests/server/session-affinity.test.ts tests/server/server-xai-oauth-401-replay.test.ts tests/server/server-kiro-oauth-401-replay.test.ts
 ```
 
 Expected: PASS
@@ -714,7 +714,7 @@ EOF
 
 ```bash
 bun test tests/lib/privacy-mask-account.test.ts tests/oauth/oauth-log.test.ts tests/oauth/oauth-refresh-generic-lock.test.ts tests/oauth/oauth-health.test.ts tests/cli/cli-status-oauth-health.test.ts tests/service/doctor-oauth.test.ts tests/oauth/oauth-accounts-api.test.ts tests/codex-integration/codex-metadata-integrity.test.ts
-bun test tests/oauth/oauth-refresh.test.ts tests/providers/xai/xai-refresh-lock.test.ts tests/codex-integration/codex-routing.test.ts tests/session-affinity.test.ts tests/codex-integration/codex-auth-context.test.ts
+bun test tests/oauth/oauth-refresh.test.ts tests/providers/xai/xai-refresh-lock.test.ts tests/codex-integration/codex-routing.test.ts tests/server/session-affinity.test.ts tests/codex-integration/codex-auth-context.test.ts
 bun run test
 bun run typecheck
 bun run lint:gui

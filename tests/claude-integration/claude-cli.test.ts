@@ -31,7 +31,7 @@ describe("ocx claude proxy liveness", () => {
     const seen: (number | undefined)[] = [];
     const findLiveProxy = async (io?: LivenessIo): Promise<LiveProxy> => {
       seen.push(io?.attempts);
-      // retry semantics are covered by tests/proxy-liveness.test.ts:102-119; this pins that the launcher hands the stop-path budget down.
+      // retry semantics are covered by tests/server/proxy-liveness.test.ts:102-119; this pins that the launcher hands the stop-path budget down.
       return { pid: 4242, port: 10100, source: "runtime" };
     };
 

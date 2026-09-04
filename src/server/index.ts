@@ -1280,7 +1280,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           // Built directly rather than through formatErrorResponse: that helper derives
           // `code` from the status and message via classifyError, and these two need stable,
           // specific codes. `catalog_not_found` in particular is what lets a caller — and
-          // tests/api-key-attribution.test.ts — tell "this route exists and has no catalog"
+          // tests/server/api-key-attribution.test.ts — tell "this route exists and has no catalog"
           // apart from "this route is gone", which is the difference between admission proof
           // and a vacuous pass.
           return withCors(

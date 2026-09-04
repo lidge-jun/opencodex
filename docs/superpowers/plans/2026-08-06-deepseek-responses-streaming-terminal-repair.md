@@ -366,7 +366,7 @@ abort/cancel, taint, and candidate completeness immediately before enqueueing.
 Run:
 
 ```bash
-bun test tests/responses/responses-terminal-repair.test.ts tests/responses/sse-failed-tail.test.ts tests/relay-eager.test.ts
+bun test tests/responses/responses-terminal-repair.test.ts tests/responses/sse-failed-tail.test.ts tests/server/relay-eager.test.ts
 ```
 
 Expected: all tests pass with no duplicate terminal, timer leak, or retained
@@ -560,7 +560,7 @@ git commit -m "docs(deepseek): describe streaming terminal repair"
 Run:
 
 ```bash
-bun test tests/responses/responses-terminal-repair.test.ts tests/providers/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts tests/responses/sse-failed-tail.test.ts tests/relay-eager.test.ts tests/responses/responses-item-id-repair.test.ts tests/providers/deepseek-responses-item-id-repair.test.ts tests/providers/deepseek-reasoning-replay.test.ts tests/responses/responses-state.test.ts
+bun test tests/responses/responses-terminal-repair.test.ts tests/providers/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts tests/responses/sse-failed-tail.test.ts tests/server/relay-eager.test.ts tests/responses/responses-item-id-repair.test.ts tests/providers/deepseek-responses-item-id-repair.test.ts tests/providers/deepseek-reasoning-replay.test.ts tests/responses/responses-state.test.ts
 ```
 
 Expected: 0 failures.

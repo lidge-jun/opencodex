@@ -27,7 +27,7 @@
 
 **Files:**
 - Create: `tests/lab/lab-public-deep-review-regressions.test.ts`
-- Modify: `tests/ci-workflows.test.ts`
+- Modify: `tests/ci-workflows/ci-workflows.test.ts`
 
 **Interfaces:**
 - Consumes: current CL-10 public module APIs.

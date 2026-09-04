@@ -17,7 +17,7 @@ Bun-native TypeScript with no separate server compile step.
   `scripts/test-layout/layout.json`; a domain's files move together with
   `scripts/test-layout/move.ts` and `layout.migrated` records which domains
   have moved, so until a domain is listed there its files are still at the
-  root. `tests/test-layout.test.ts` enforces the map. Shared helpers in
+  root. `tests/ci-workflows/test-layout.test.ts` enforces the map. Shared helpers in
   `tests/helpers/`, fixtures in `tests/fixtures/`, broader scenarios in
   `tests/e2e-style/`. Source-oracle tests resolve the repository through
   `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`. A new test
@@ -103,7 +103,7 @@ contributor who ignores it entirely still passes every gate. `privacy:scan` does
 read it — that is deliberate, and it is what makes a public devlog safe rather
 than merely visible.
 
-Two mechanical guards in `tests/repo-hygiene.test.ts` back this up: no `160000`
+Two mechanical guards in `tests/ci-workflows/repo-hygiene.test.ts` back this up: no `160000`
 gitlink may be tracked anywhere, and neither the vendored reference clones nor
 the security triage excised before publication may reappear in the index. Both
 were driven red once to prove they are not vacuous. The gitlink assertion exists
@@ -161,8 +161,8 @@ What matters for development work: the enforcement is code, not prose —
 [`src/cli/agent-driven.ts`](./src/cli/agent-driven.ts),
 [`src/cli/star-prompt.ts`](./src/cli/star-prompt.ts), and
 [`src/server/management/sidebar-routes.ts`](./src/server/management/sidebar-routes.ts),
-covered by `tests/startup-prompt.test.ts`, `tests/cli/agent-driven.test.ts`, and
-`tests/sidebar-routes.test.ts`. If you add another action that spends the user's
+covered by `tests/server/startup-prompt.test.ts`, `tests/cli/agent-driven.test.ts`, and
+`tests/server/sidebar-routes.test.ts`. If you add another action that spends the user's
 identity, credits, or reputation, gate it the same way rather than relying on a
 prompt an agent can answer, and document it in `AGENTS_INSTALL.md`.
 
@@ -197,7 +197,7 @@ bun run skill:surface        # regenerate after adding a capability
 bun run skill:surface:check  # what CI asserts
 ```
 
-`tests/skill-ocx.test.ts` fails if the committed map drifts from `src/cli/capabilities.ts`, and
+`tests/ci-workflows/skill-ocx.test.ts` fails if the committed map drifts from `src/cli/capabilities.ts`, and
 also if the hand-written pages name a command the registry does not have. That second check is not
 hypothetical: it caught a documented `ocx request-history` that never existed.
 

@@ -72,7 +72,7 @@ describe("proxy process-state ownership", () => {
     )).toBe(true);
     expect(isOcxStartCommandLine("opencodex start")).toBe(true);
     expect(isOcxStartCommandLine("bun run src/cli.ts status")).toBe(false);
-    expect(isOcxStartCommandLine("bun test C:/work/opencodex/tests/config.test.ts")).toBe(false);
+    expect(isOcxStartCommandLine("bun test C:/work/opencodex/tests/server/config.test.ts")).toBe(false);
     expect(isOcxStartCommandLine("notepad.exe")).toBe(false);
   });
 

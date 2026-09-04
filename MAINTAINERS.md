@@ -75,7 +75,7 @@ when a maintainer steps down.
 - Promotion from `dev` to `main` and npm releases is maintainer-controlled.
 - **Closing out a release includes moving `dev`'s version line forward.** A published
   release leaves `dev` carrying a version at or behind it, and
-  `tests/release-version-line.test.ts` then fails on `dev` and on every pull request
+  `tests/ci-workflows/release-version-line.test.ts` then fails on `dev` and on every pull request
   opened against it — red that contributors inherit and cannot fix from their own diff.
   This was repaired by hand four times (`32529c2b2`, `e4a85d134`, `076ad3036`,
   `befcac3e1`) before it was automated.
