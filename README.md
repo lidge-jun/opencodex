@@ -227,7 +227,7 @@ full-slash form keeps working too. Details: [model routing docs](https://opencod
 OpenAI (ChatGPT login or API key), Anthropic, Google Gemini, xAI, Kimi, Azure OpenAI, Ollama
 (local + Cloud), Cursor (experimental), and every OpenAI-compatible endpoint — plus DeepSeek,
 Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
-Qwen Cloud, SiliconFlow, and more. Full list: `ocx init` or the
+Qwen Cloud, Qoder Global and CN (official PAT + CLI), SiliconFlow, and more. Full list: `ocx init` or the
 [provider docs](https://opencodex.me/guides/providers/).
 
 ## CLI

@@ -19,7 +19,7 @@ export const FREE_PROVIDER_ACCESS_GROUPS = {
   "recurring-credit": ["bytez", "nous-research"],
   "signup-credit": [
     "agentrouter", "ai21", "baichuan", "baseten", "deepinfra", "deepseek", "doubao", "fireworks", "freemodel-dev", "glm-cn",
-    "hyperbolic", "longcat", "monsterapi", "nebius", "novita", "nscale", "nvidia", "predibase", "publicai", "qoder",
+    "hyperbolic", "longcat", "monsterapi", "nebius", "novita", "nscale", "nvidia", "predibase", "publicai", "qoder", "qoder-cn",
     "scaleway", "sensenova", "stepfun", "together", "vertex",
   ],
 } as const satisfies Record<ProviderAccessGroup, readonly string[]>;
@@ -140,6 +140,30 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   nscale: openAi("https://inference.api.nscale.com/v1", "https://console.nscale.com", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.nscale.com/docs/use-cases/chat", modelsUrl: "https://inference.api.nscale.com/v1/models", lastVerified: "2026-08-03" }),
   nvidia: openAi("https://integrate.api.nvidia.com/v1", "https://build.nvidia.com", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.api.nvidia.com/nim/reference/llm-apis" }),
   publicai: openAi("https://api.publicai.co/v1", "https://publicai.co"),
+  qoder: {
+    baseUrl: "https://qoder.com",
+    dashboardUrl: "https://qoder.com/account/integrations",
+    adapter: "qoder",
+    authKind: "key",
+    supportLevel: "supported",
+    verification: "official",
+    documentationUrl: "https://docs.qoder.com/cli/authentication",
+    discovery: "live",
+    liveModels: true,
+    lastVerified: "2026-09-03",
+  },
+  "qoder-cn": {
+    baseUrl: "https://qoder.cn",
+    dashboardUrl: "https://qoder.cn/account/integrations",
+    adapter: "qoder",
+    authKind: "key",
+    supportLevel: "supported",
+    verification: "official",
+    documentationUrl: "https://docs.qoder.cn/en/cli/authentication",
+    discovery: "live",
+    liveModels: true,
+    lastVerified: "2026-09-03",
+  },
   scaleway: openAi("https://api.scaleway.ai/v1", "https://console.scaleway.com/generative-api", { supportLevel: "supported", verification: "official", documentationUrl: "https://www.scaleway.com/en/docs/generative-apis/api-cli/using-generative-apis/", modelsUrl: "https://api.scaleway.ai/v1/models", lastVerified: "2026-08-01" }),
   sensenova: openAi("https://token.sensenova.cn/v1", "https://console.sensenova.cn", { verification: "official" }),
   stepfun: openAi("https://api.stepfun.com/v1", "https://platform.stepfun.com", { verification: "official" }),
@@ -160,7 +184,7 @@ const LABELS: Record<string, string> = {
   ai21: "AI21", baichuan: "Baichuan", deepinfra: "DeepInfra", deepseek: "DeepSeek", doubao: "Doubao",
   "freemodel-dev": "FreeModel.dev", sambanova: "SambaNova Cloud", nebius: "Nebius Token Factory",
   novita: "Novita", nscale: "Nscale", nvidia: "NVIDIA NIM",
-  publicai: "PublicAI", qoder: "Qoder", sensenova: "SenseNova", stepfun: "StepFun", vertex: "Google Vertex AI",
+  publicai: "PublicAI", qoder: "Qoder", "qoder-cn": "Qoder CN", sensenova: "SenseNova", stepfun: "StepFun", vertex: "Google Vertex AI",
 };
 
 const referenceNote = "Reference entry only: no safe documented API integration is enabled. Configure it manually only with provider documentation; consumer-web cookies and anti-bot bypasses are intentionally unsupported.";

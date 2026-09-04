@@ -10,6 +10,7 @@ import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const EXPECTED_ADAPTER_NAMES = {
+  codebuddy: "codebuddy",
   "command-code": "command-code",
   "openai-chat": "openai-chat",
   "ollama-native": "ollama-native",
@@ -21,6 +22,7 @@ const EXPECTED_ADAPTER_NAMES = {
   "azure-openai": "azure-openai",
   cursor: "cursor",
   "mimo-free": "mimo-free",
+  qoder: "qoder",
 } as const;
 
 function provider(adapter: string): OcxProviderConfig {
@@ -30,11 +32,15 @@ function provider(adapter: string): OcxProviderConfig {
     // adapter accepts the placeholder URL.
     baseUrl: adapter === "mimo-free"
       ? "https://api.xiaomimimo.com/api/free-ai/openai/chat"
-      // ollama-native refuses a bare /v1 path on a host it does not recognise, rather than
-      // guessing that an arbitrary destination speaks Ollama's compatibility surface.
-      : adapter === "ollama-native"
-        ? "https://example.invalid/api"
-        : "https://example.invalid/v1",
+      : adapter === "codebuddy"
+        ? "https://www.codebuddy.ai"
+        : adapter === "qoder"
+          ? "https://qoder.com"
+        // ollama-native refuses a bare /v1 path on a host it does not recognise, rather than
+        // guessing that an arbitrary destination speaks Ollama's compatibility surface.
+        : adapter === "ollama-native"
+          ? "https://example.invalid/api"
+          : "https://example.invalid/v1",
     authMode: "key",
     apiKey: "test-key",
     defaultMaxOutputTokens: 4096,

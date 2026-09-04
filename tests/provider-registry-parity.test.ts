@@ -37,9 +37,19 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
   "opencode-free", "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
+  "qoder", "qoder-cn", "codebuddy", "codebuddy-cn",
 ];
 
 describe("provider registry parity", () => {
+  test("CodeBuddy static catalogs cover every official CLI-agent model in the bundled 2.143.0 manifest", () => {
+    const global = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "codebuddy")!);
+    const cn = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "codebuddy-cn")!);
+    expect(global.models).toContain("gemini-3.5-flash");
+    expect(cn.models).toEqual(expect.arrayContaining([
+      "glm-5.0", "glm-5.0-turbo", "glm-5v-turbo", "glm-4.7", "kimi-k2.5", "deepseek-v3-2-volc",
+    ]));
+  });
+
   test("registry ids are unique", () => {
     const ids = PROVIDER_REGISTRY.map(entry => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -1110,13 +1120,13 @@ describe("free-provider directory isolation", () => {
   test("directory metadata never becomes a canonical runtime provider", () => {
     // The directory is a catalog of endpoints we have not adopted. If its ids reached
     // PROVIDER_REGISTRY, routedProviderConfig() would canonicalize a user's same-named provider
-    // onto the directory's adapter and baseUrl — for `qoder` that baseUrl is the empty string,
-    // so the request would lose its destination entirely.
+    // onto the directory's adapter and baseUrl, so the request could lose its destination.
     const directoryOnlyIds = FREE_PROVIDER_DIRECTORY
       .filter(entry => entry.supportLevel === "reference")
       .map(entry => entry.id);
     expect(directoryOnlyIds.length).toBeGreaterThan(0);
-    expect(directoryOnlyIds).toContain("qoder");
+    expect(directoryOnlyIds).not.toContain("qoder");
+    expect(directoryOnlyIds).not.toContain("qoder-cn");
 
     const registryIds = new Set(PROVIDER_REGISTRY.map(entry => entry.id));
     for (const id of directoryOnlyIds) {
@@ -1161,6 +1171,33 @@ describe("free-provider directory isolation", () => {
       baseUrl: "https://custom.example.test/v1",
       liveModels: true,
     });
+    expect(routed.provider.adapter).not.toBe("qoder");
+    expect(routed.provider.baseUrl).not.toBe("https://qoder.com");
+    expect(routed.modelId).toBe("custom-model");
+  });
+
+  test("a custom provider named codebuddy keeps its own destination (preserveCustomDestination)", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "codebuddy",
+      providers: {
+        codebuddy: {
+          adapter: "openai-chat",
+          baseUrl: "https://custom.codebuddy.example.test/v1",
+          apiKey: "test-key",
+          liveModels: true,
+        },
+      },
+    };
+
+    const routed = routeModel(config, "codebuddy/custom-model");
+    expect(routed.provider).toMatchObject({
+      adapter: "openai-chat",
+      baseUrl: "https://custom.codebuddy.example.test/v1",
+      liveModels: true,
+    });
+    expect(routed.provider.adapter).not.toBe("codebuddy");
+    expect(routed.provider.baseUrl).not.toBe("https://www.codebuddy.ai");
     expect(routed.modelId).toBe("custom-model");
   });
 

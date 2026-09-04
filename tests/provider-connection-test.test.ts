@@ -3,6 +3,7 @@ import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setFetchCursorUsableModelsForTests } from "../src/adapters/cursor/live-models";
+import { setFetchQoderModelsForTests } from "../src/adapters/qoder/live-models";
 import { handleManagementAPI } from "../src/server/management-api";
 import { saveConfig } from "../src/config";
 import { OAUTH_PROVIDERS } from "../src/oauth";
@@ -24,6 +25,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setFetchCursorUsableModelsForTests(null);
+  setFetchQoderModelsForTests(null);
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -54,6 +56,38 @@ async function probe(config: OcxConfig, name: string): Promise<{ status: number;
 }
 
 describe("POST /api/providers/test (WP040 connectivity probe)", () => {
+  test("Qoder probes the official CLI model list for the configured PAT", async () => {
+    const calls: Array<{ providerId: string; token: string }> = [];
+    setFetchQoderModelsForTests((profile, token) => {
+      calls.push({ providerId: profile.providerId, token });
+      return { ok: true, models: ["Qwen3.8-Max", "GLM-5.3"] };
+    });
+    const config = baseConfig({
+      qoder: { adapter: "qoder", baseUrl: "https://qoder.com", apiKey: "qoder-pat", authMode: "key", liveModels: true },
+    });
+
+    const { body } = await probe(config, "qoder");
+
+    expect(body).toMatchObject({ ok: true, models: 2, message: "Connected. 2 models." });
+    expect(calls).toEqual([{ providerId: "qoder", token: "qoder-pat" }]);
+  });
+
+  test("Qoder CN probes its own CLI profile and PAT", async () => {
+    const calls: Array<{ providerId: string; token: string }> = [];
+    setFetchQoderModelsForTests((profile, token) => {
+      calls.push({ providerId: profile.providerId, token });
+      return { ok: true, models: ["Qwen3.8-Flash"] };
+    });
+    const config = baseConfig({
+      "qoder-cn": { adapter: "qoder", baseUrl: "https://qoder.cn", apiKey: "cn-pat", authMode: "key", liveModels: true },
+    });
+
+    const { body } = await probe(config, "qoder-cn");
+
+    expect(body).toMatchObject({ ok: true, models: 1, message: "Connected. 1 models." });
+    expect(calls).toEqual([{ providerId: "qoder-cn", token: "cn-pat" }]);
+  });
+
   test("Cursor probes GetUsableModels and reports the live model count", async () => {
     const calls: { apiKey: string; baseUrl?: string }[] = [];
     setFetchCursorUsableModelsForTests(async options => {
