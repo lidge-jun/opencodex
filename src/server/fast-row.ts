@@ -162,6 +162,14 @@ export function fastRowBases(config: OcxConfig): (id: string) => boolean {
     if (slash <= 0 || slash === id.length - 1) return false;
     // A live-discovered or retained model is published as `<provider>/<model>` and appears in
     // no config, so structural recognition is the only cache-free way to accept it.
+    //
+    // But NOT when the remainder itself ends in the marker. A real live model may legitimately
+    // be named `foo--fast`; its exact id is protected by the known-id guard only while the
+    // discovery cache still holds it, and after eviction that guard goes quiet while this
+    // clause would still accept `provider/foo` structurally - silently routing a DIFFERENT
+    // model than the client selected. Refusing the strip is the safe side: the caller then
+    // sends the id verbatim and routing resolves the real model, or fails honestly.
+    if (id.slice(slash + 1).endsWith(FAST_ROW_SUFFIX)) return false;
     return namespaces.has(id.slice(0, slash).toLowerCase());
   };
 }
@@ -216,18 +224,22 @@ export function parseSyntheticRowId(
     return { fastRow: null, effortRow: parseRequestEffortRowId(id, config) };
   }
   const selector = fastSelector?.() ?? id;
-  // Ordinary ids carry no marker at all; bail before building any inventory.
-  if (id.lastIndexOf("--") <= 0 && selector.lastIndexOf("--") <= 0) {
-    return { fastRow: null, effortRow: null };
-  }
+  const wantsFast = selector.endsWith(FAST_ROW_SUFFIX);
+  // Bail before building any inventory when neither grammar can match. A readable Claude
+  // alias is `claude-ocx-<provider>--<model>`, so it ALWAYS contains `--`: testing only for
+  // the separator would rebuild the whole model inventory on every Claude turn for a
+  // selector that cannot be a fast row. With effort parsing off, the terminal suffix is the
+  // only thing that can match.
+  const wantsEffort = config.cursorEffortRows === true && id.lastIndexOf("--") > 0;
+  if (!wantsFast && !wantsEffort) return { fastRow: null, effortRow: null };
   const knownIds = knownEffortRowIds(config);
-  const fastRow = selector.endsWith(FAST_ROW_SUFFIX)
+  const fastRow = wantsFast
     ? parseFastRowId(selector, config, knownIds, fastRowBases(config))
     : null;
   if (fastRow) return { fastRow, effortRow: null };
   // Cursor install detection stays behind its own flag, exactly as parseRequestEffortRowId
   // gates it today.
-  const effortRow = config.cursorEffortRows === true
+  const effortRow = wantsEffort
     ? parseEffortRowId(id, config, { knownIds, table: loadDetectedCursorEffortTable() })
     : null;
   return effortRow && effortBaseCarriesFastMarker(effortRow.baseId, knownIds)

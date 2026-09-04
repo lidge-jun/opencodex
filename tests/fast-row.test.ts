@@ -341,3 +341,32 @@ describe("live-discovered publication is recognized", () => {
     expect(fastRowBases(config)("whatever")).toBe(false);
   });
 });
+describe("review findings from PR #3457", () => {
+  test("a real live model ending in the marker is never re-interpreted after cache eviction", () => {
+    // Codex P2: the exact-id guard protects `provider/foo--fast` only while the discovery
+    // cache still holds it. After eviction that guard goes quiet, and structural namespace
+    // recognition would still accept `provider/foo` - silently routing a DIFFERENT model
+    // than the client selected. Refusing the strip is the safe side.
+    const config = configWith({ fixture: provider({ models: ["declared"] }) });
+    const bases = fastRowBases(config);
+    expect(bases("fixture/anything")).toBe(true);
+    expect(bases("fixture/foo--fast")).toBe(false);
+    expect(parseFastRowId("fixture/foo--fast--fast", config, new Set(), bases)).toBeNull();
+  });
+
+  test("an ordinary Claude alias builds no inventory when only fast rows are on", () => {
+    // Codex P2: a readable Claude alias is `claude-ocx-<provider>--<model>`, so it ALWAYS
+    // contains the separator. Testing only for that rebuilt the whole model inventory on
+    // every Claude turn for a selector that cannot be a fast row.
+    const config = configWith({ fixture: provider({ models: ["m"] }) }, { cursorEffortRows: false });
+    let decoded = 0;
+    const rows = parseSyntheticRowId("claude-ocx-fixture--m", config, () => { decoded += 1; return "fixture/m"; });
+    expect(rows).toEqual({ fastRow: null, effortRow: null });
+    // The thunk runs once to obtain the selector; what must NOT happen is the inventory scan,
+    // which is observable through the effort grammar staying inert.
+    expect(decoded).toBe(1);
+    // And a genuine fast selector still resolves on the same config.
+    expect(parseSyntheticRowId("x", config, () => "m--fast").fastRow).toEqual({ baseId: "m" });
+  });
+});
+

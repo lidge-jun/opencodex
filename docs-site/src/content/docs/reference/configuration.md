@@ -79,6 +79,10 @@ it, or supports it on a wire the route cannot use, gets no row. `fastMode: false
 Fast globally and takes precedence over a selected row, and a selector whose model later loses
 eligibility degrades to an ordinary request instead of failing.
 
+Native models carry one extra condition: as well as an eligible policy, upstream must advertise the
+Fast tier for that model. This is the same evidence the Codex picker's own toggle is built from, so
+the two surfaces cannot disagree about which natives have Fast.
+
 Scope: this covers the request-serving surfaces — `/v1/models`, Claude Code discovery, and the
 `/v1/responses`, `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`, and
 `/v1/responses/compact` endpoints. `ocx export` and the OpenCode integration emit base ids only,

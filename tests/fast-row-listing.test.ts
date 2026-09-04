@@ -66,13 +66,19 @@ describe("fast rows on Claude discovery", () => {
     // With both `foo` and a real `foo--fast` present, the synthetic id for `foo` IS the real
     // model's id. The dedupe set alone would let whichever ran first own the row, so the
     // outcome must not depend on ordering.
-    const forward = build([], [routed("foo"), routed("foo--fast")], () => true);
-    const reverse = build([], [routed("foo--fast"), routed("foo")], () => true);
-    const count = (ids: string[]) => ids.filter(id => id.endsWith("--fast")).length;
-    expect(count(forward)).toBe(count(reverse));
-    // And the real model's own row is present either way.
-    expect(forward.some(id => id.endsWith("foo--fast"))).toBe(true);
-    expect(reverse.some(id => id.endsWith("foo--fast"))).toBe(true);
+    //
+    // Asserted on display_name, not just the id: counting ids alone cannot tell the REAL
+    // `foo--fast` row apart from a synthetic sibling of `foo`, so a broken implementation
+    // that published the synthetic one in forward order still passed (CodeRabbit, PR #3457).
+    const rows = (models: CatalogModel[]) => buildAnthropicModelInfos(
+      [], models, AUTO_CONTEXT_OFF, "readable", desktop3pAlias, undefined, undefined, () => true,
+    );
+    const ownerOf = (models: CatalogModel[]) => rows(models)
+      .filter(info => info.id.endsWith("foo--fast"))
+      .map(info => info.display_name);
+    // The real model's own row names itself; a synthetic sibling would read "foo (fixture) · Fast".
+    expect(ownerOf([routed("foo"), routed("foo--fast")])).toEqual(["foo--fast (fixture)"]);
+    expect(ownerOf([routed("foo--fast"), routed("foo")])).toEqual(["foo--fast (fixture)"]);
   });
 
   test("a combo row is classified by its aggregated capability, not a provider lookup", () => {
@@ -84,4 +90,3 @@ describe("fast rows on Claude discovery", () => {
     expect(ids.some(id => id.endsWith("--fast"))).toBe(true);
   });
 });
-
