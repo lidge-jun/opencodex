@@ -148,6 +148,7 @@ export default defineConfig({
             },
             { label: "Adapters", translations: { fr: "Adaptateurs", ko: "어댑터", "zh-CN": "适配器", "zh-TW": "適配器", ru: "Адаптеры", ja: "アダプター", tr: "Adaptörler" }, slug: "reference/adapters" },
             { label: "Architecture", translations: { fr: "Architecture", ko: "아키텍처", "zh-CN": "架构", "zh-TW": "架構", ru: "Архитектура", ja: "アーキテクチャ", tr: "Mimari" }, slug: "reference/architecture" },
+            { label: "Platform Support", translations: { fr: "Prise en charge des plateformes", ko: "플랫폼 지원", "zh-CN": "平台支持", "zh-TW": "平台支援", ru: "Поддержка платформ", ja: "プラットフォーム対応", tr: "Platform Desteği" }, link: `${SITE_URL}/reference/platform-support` },
             { label: "Proxy API Formats", translations: { fr: "Formats de l’API proxy", ko: "프록시 API 형식", "zh-CN": "代理 API 格式", "zh-TW": "代理 API 格式", ru: "Форматы API прокси", ja: "プロキシAPI形式", tr: "Proxy API Formatları" }, slug: "reference/proxy-formats" },
             { label: "Management API", translations: { fr: "API de gestion", ko: "관리 API", "zh-CN": "管理 API", "zh-TW": "管理 API", ru: "API управления", ja: "管理API", tr: "Yönetim API'si" }, slug: "reference/management-api" },
           ],
