@@ -4,6 +4,8 @@ import {
   shouldIncludeNativeOpenAi,
   UPSTREAM_NATIVE_ENTRIES,
 } from "../codex/catalog/metadata";
+import { comboModelId, comboPublicModelId } from "../combos/types";
+import { policyModelId, policyPublicModelId } from "../routing/profile";
 import type { InboundWire } from "../providers/registry";
 import { fastPolicyForModel } from "../providers/service-tier";
 import type { OcxConfig } from "../types";
@@ -134,6 +136,19 @@ export function fastRowBases(config: OcxConfig): (id: string) => boolean {
   }
   // Namespaces whose qualified ids route, whatever the cache currently holds.
   const namespaces = new Set<string>();
+  // Virtual rows. A combo or routing profile is published under its canonical
+  // `<namespace>/<id>` AND under an operator alias, which may be an arbitrary bare string
+  // with no namespace to vouch for it, so the structural clause below cannot reach it. A
+  // combo also cannot be covered by config.providers: declaring a provider named `combo`
+  // is rejected outright (combos/types.ts:191).
+  for (const [id, combo] of Object.entries(config.combos ?? {})) {
+    bases.add(comboModelId(id));
+    bases.add(comboPublicModelId(id, combo));
+  }
+  for (const [id, profile] of Object.entries(config.routingProfiles ?? {})) {
+    bases.add(policyModelId(id));
+    bases.add(policyPublicModelId(id, profile));
+  }
   for (const [providerName, providerConfig] of Object.entries(config.providers)) {
     if (providerConfig.disabled === true) continue;
     namespaces.add(providerName.toLowerCase());
