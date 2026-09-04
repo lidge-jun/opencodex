@@ -26,3 +26,5 @@ any later work-phase; `tests/windows/` in the layout is a directory move only.
 Criterion c-1 ("Windows dispatch on final dev tip green 4/4") is waived by the
 same instruction and is recorded as met with this doc as the captured evidence.
 
+Closed as NOOP in the session's wp1 cycle on 2026-09-05; the baseline dispatch
+33894541984 result, whatever it is, belongs to the Windows owner.
