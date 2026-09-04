@@ -163,6 +163,36 @@ describe("Codex account delete persistence ordering", () => {
     }
   });
 
+  test("distinct bytes with the same decoded text are treated as changed", () => {
+    const config = seededConfig();
+    const before = structuredClone(config);
+    const validBytes = Buffer.from('{"value":"\uFFFD"}\n', "utf8");
+    const malformedBytes = Buffer.concat([
+      Buffer.from('{"value":"', "utf8"),
+      Buffer.from([0x80]),
+      Buffer.from('"}\n', "utf8"),
+    ]);
+    expect(validBytes.equals(malformedBytes)).toBe(false);
+    expect(validBytes.toString("utf8")).toBe(malformedBytes.toString("utf8"));
+    writeFileSync(getConfigPath(), validBytes);
+    const saveSpy = spyOn(configModule, "saveConfigPreservingClaudeCode")
+      .mockImplementation(() => {
+        writeFileSync(getConfigPath(), malformedBytes);
+        throw new Error("forced byte-alias failure");
+      });
+
+    try {
+      expect(() => deleteCodexAccount(config, ACCOUNT_ID)).toThrow(CodexAccountDeleteRollbackError);
+      expect(readFileSync(getConfigPath()).equals(malformedBytes)).toBe(true);
+      expect(config).toEqual(before);
+      expect(getCodexAccountCredential(ACCOUNT_ID)).not.toBeNull();
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(true);
+      expect(getAccountQuota(ACCOUNT_ID)).not.toBeNull();
+    } finally {
+      saveSpy.mockRestore();
+    }
+  });
+
   test("a missing config after uncertain failure is not recreated", () => {
     const config = seededConfig();
     const before = structuredClone(config);
