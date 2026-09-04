@@ -1187,7 +1187,7 @@ describe("launchd service plist", () => {
   // the versioned package directory, and a plist that named the old Bun + CLI pair keeps launchd
   // on the stale build until someone restarts it. Naming the shim lets the next start follow it.
   test("a stable launcher install names the launcher in the plist and bakes no versioned path (#3464)", () => {
-    const launcher = "/Users/u/.local/share/mise/shims/ocx";
+    const launcher = "/home/u/.local/share/mise/shims/ocx";
     const plist = buildPlist(resolvedProxyEnv({}), {
       launcher,
       runtime: { path: "/opt/opencodex/versioned/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
@@ -1216,7 +1216,7 @@ describe("launchd service plist", () => {
   });
 
   test("launcher mode preserves only a proof-bound Bun override, never an ambient one (#3464)", () => {
-    const launcher = "/Users/u/.local/share/mise/shims/ocx";
+    const launcher = "/home/u/.local/share/mise/shims/ocx";
     const trusted = buildPlist(resolvedProxyEnv({}), {
       launcher,
       runtime: { path: "/custom/bun", source: "override", overrideEnv: "OPENCODEX_BUN_PATH" },
@@ -1233,7 +1233,7 @@ describe("launchd service plist", () => {
   });
 
   test("launcher paths with shell and XML metacharacters stay quoted in the plist (#3464)", () => {
-    const launcher = "/Users/u/My Tools & Shims/it's/ocx";
+    const launcher = "/home/u/My Tools & Shims/it's/ocx";
     const plist = buildPlist(resolvedProxyEnv({}), {
       launcher,
       runtime: { path: "/opt/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
@@ -3215,10 +3215,10 @@ describe("launchctl load verification", () => {
 
     test("a recorded launcher yields the launcher exec line at the installed port", () => {
       const command = expectedLaunchdCommand(14001, {
-        state: { ...base, bunPath: entry.bun, cliPath: entry.cli, launcherPath: "/Users/u/.local/share/mise/shims/ocx" },
+        state: { ...base, bunPath: entry.bun, cliPath: entry.cli, launcherPath: "/home/u/.local/share/mise/shims/ocx" },
         entry,
       });
-      expect(command).toContain("exec '/Users/u/.local/share/mise/shims/ocx' start --port 14001");
+      expect(command).toContain("exec '/home/u/.local/share/mise/shims/ocx' start --port 14001");
       expect(command).not.toContain(entry.cli);
     });
 
