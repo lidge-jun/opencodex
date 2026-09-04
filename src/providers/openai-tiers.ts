@@ -235,9 +235,10 @@ function hasKnownLegacyOpenAiReference(config: OcxConfig): boolean {
   return config.defaultProvider === LEGACY_OPENAI_MULTI_PROVIDER_ID
     || matchesList(config.disabledModels)
     || matchesList(config.subagentModels)
-    || matches(config.injectionModel)
-    || matches(config.shadowCallIntercept?.model)
-    || matches(config.webSearchSidecar?.model)
+   || matches(config.injectionModel)
+   || matches(config.shadowCallIntercept?.model)
+    || (config.shadowCallIntercept?.modelMap ? Object.values(config.shadowCallIntercept.modelMap).some(matches) : false)
+   || matches(config.webSearchSidecar?.model)
     || matches(config.visionSidecar?.model)
     || matches(claude?.webSearchSidecar?.model)
     || matches(claude?.visionSidecar?.model)
@@ -253,9 +254,15 @@ function hasKnownLegacyOpenAiReference(config: OcxConfig): boolean {
 function rewriteLegacyOpenAiReferences(config: OcxConfig, warnings: string[]): void {
   config.disabledModels = rewriteLegacyOpenAiModelList(config.disabledModels);
   config.subagentModels = rewriteLegacyOpenAiModelList(config.subagentModels);
-  if (config.injectionModel) config.injectionModel = rewriteLegacyOpenAiSelectedId(config.injectionModel);
-  if (config.shadowCallIntercept?.model) {
-    config.shadowCallIntercept.model = rewriteLegacyOpenAiSelectedId(config.shadowCallIntercept.model);
+ if (config.injectionModel) config.injectionModel = rewriteLegacyOpenAiSelectedId(config.injectionModel);
+ if (config.shadowCallIntercept?.model) {
+   config.shadowCallIntercept.model = rewriteLegacyOpenAiSelectedId(config.shadowCallIntercept.model);
+ }
+  if (config.shadowCallIntercept?.modelMap) {
+    for (const key of Object.keys(config.shadowCallIntercept.modelMap)) {
+      const value = config.shadowCallIntercept.modelMap[key];
+      if (value) config.shadowCallIntercept.modelMap[key] = rewriteLegacyOpenAiSelectedId(value);
+    }
   }
   if (config.webSearchSidecar?.model) config.webSearchSidecar.model = rewriteLegacyOpenAiSelectedId(config.webSearchSidecar.model);
   if (config.visionSidecar?.model) config.visionSidecar.model = rewriteLegacyOpenAiSelectedId(config.visionSidecar.model);
@@ -306,10 +313,10 @@ function isKnownLegacyValuePath(path: readonly string[]): boolean {
     "claudeCode.model",
     "claudeCode.smallFastModel",
     "claudeCode.tierModels.opus",
-    "claudeCode.tierModels.sonnet",
+   "claudeCode.tierModels.sonnet",
     "claudeCode.tierModels.haiku",
     "claudeCode.tierModels.fable",
-  ]).has(joined) || /^claudeCode\.modelMap\..+$/.test(joined);
+  ]).has(joined) || /^claudeCode\.modelMap\..+$/.test(joined) || /^shadowCallIntercept\.modelMap\..+$/.test(joined);
 }
 
 function unknownLegacyOpenAiWarnings(config: OcxConfig): string[] {

@@ -179,6 +179,19 @@
 .models-shadow-warning {
   white-space: nowrap;
 }
+.models-shadow-source-label {
+  white-space: nowrap;
+  min-width: 7rem;
+  font-weight: 600;
+}
+.models-shadow-source-name {
+  color: var(--text);
+}
+.models-shadow-fallback-label {
+  font-style: italic;
+  font-weight: 500;
+  opacity: 0.8;
+}
 
 .models-shadow-model-slot {
   flex: 0 1 auto;

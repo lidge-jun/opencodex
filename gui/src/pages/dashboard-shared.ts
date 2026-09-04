@@ -119,7 +119,7 @@ export interface SidecarPatch {
     timeoutMs?: number;
   };
 }
-export interface ShadowCallData { enabled: boolean; model: string; sourceModels?: string[] }
+export interface ShadowCallData { enabled: boolean; model: string; modelMap?: Record<string, string>; sourceModels?: string[] }
 export interface UsageSummary30d { summary: { requests: number; totalTokens: number; coverageRatio: number } }
 export type UpdateChannel = "latest" | "preview";
 export type Installer = "npm" | "bun" | "source";

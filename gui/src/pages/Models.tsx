@@ -67,7 +67,7 @@ import {
 } from "./models-shared";
 import { EmptyProviderHint } from "./models-provider-hints";
 import { shadowCallModelOptions } from "./dashboard-shared";
-import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
+import { DEFAULT_SOURCE_MODELS, shadowSourceModelLabel } from "./shadow-call-source";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -344,6 +344,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
+  const [customSourceDraft, setCustomSourceDraft] = useState("");
+  const [customTargetDraft, setCustomTargetDraft] = useState("");
 
   // App owns the in-session view mode; fallback to persisted mode for isolated renders/tests.
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -356,14 +358,21 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     () => activeModelOptions(models, disabled, selectedModels ?? {}, t),
     [models, disabled, selectedModels, t],
   );
-  const shadowCallOptions = useMemo(() => {
-    const activeNamespaced = new Set(shadowModelOptions.map(option => option.value));
-    return shadowCallModelOptions(
-      models.filter(model => activeNamespaced.has(model.namespaced)),
-      shadowCall?.model,
-      shadowCall?.sourceModels,
-    );
-  }, [models, shadowCall?.model, shadowCall?.sourceModels, shadowModelOptions]);
+ const shadowCallOptions = useMemo(() => {
+   const activeNamespaced = new Set(shadowModelOptions.map(option => option.value));
+   return shadowCallModelOptions(
+     models.filter(model => activeNamespaced.has(model.namespaced)),
+     shadowCall?.model,
+     shadowCall?.sourceModels,
+   );
+ }, [models, shadowCall?.model, shadowCall?.sourceModels, shadowModelOptions]);
+  const activeModels = useMemo(
+    () => {
+      const activeNamespaced = new Set(shadowModelOptions.map(option => option.value));
+      return models.filter(model => activeNamespaced.has(model.namespaced));
+    },
+    [models, shadowModelOptions],
+  );
 
   const loadShadowCall = useCallback(async () => {
     const bounded = createBoundedFetch(15_000);
@@ -1593,12 +1602,117 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         </div>
         <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
           <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip></span>
-          <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
           <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
-          <div className="models-shadow-model-slot">
-            <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
-          </div>
         </div>
+        {shadowCall?.enabled && DEFAULT_SOURCE_MODELS.map(sourceModel => {
+          const current = shadowCall?.modelMap?.[sourceModel] ?? "";
+          const perSourceOptions = shadowCallModelOptions(activeModels, current || undefined, [sourceModel]);
+          return (
+            <div key={sourceModel} className="models-shadow-row row muted text-control">
+              <code className="models-shadow-source-label models-shadow-source-name">{sourceModel} →</code>
+              <div className="models-shadow-model-slot">
+                <Select
+                  value={current}
+                  options={perSourceOptions}
+                  onChange={v => {
+                    const next = { ...(shadowCall?.modelMap ?? {}) };
+                    if (v === "") delete next[sourceModel];
+                    else next[sourceModel] = v;
+                    setShadowCall(c => c ? { ...c, modelMap: next } : c);
+                    void saveShadowCall({ modelMap: next });
+                  }}
+                  disabled={!shadowCall || shadowCallSaving}
+                  label={sourceModel}
+                />
+              </div>
+            </div>
+          );
+        })}
+        {shadowCall?.enabled && (
+          <>
+            <div className="models-shadow-row row muted text-control">
+              <code className="models-shadow-source-label models-shadow-fallback-label">{t("models.shadowCallCustom")}</code>
+              <input
+                type="text"
+                className="input text-control"
+                style={{ minWidth: "14rem" }}
+                placeholder={t("models.shadowCallCustomPlaceholder")}
+                value={customSourceDraft}
+                onChange={e => setCustomSourceDraft(e.target.value)}
+                disabled={shadowCallSaving}
+              />
+              <span className="models-shadow-source-name">→</span>
+              <div className="models-shadow-model-slot">
+                <Select
+                  value={customTargetDraft}
+                  options={shadowCallOptions}
+                  onChange={v => setCustomTargetDraft(v)}
+                  disabled={shadowCallSaving}
+                  label={t("models.shadowCallCustom")}
+                />
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={!customSourceDraft.trim() || !customTargetDraft || shadowCallSaving}
+                onClick={() => {
+                  const src = customSourceDraft.trim();
+                  if (!src || !customTargetDraft || !shadowCall) return;
+                  if (DEFAULT_SOURCE_MODELS.includes(src)) return;
+                  const nextMap = { ...(shadowCall.modelMap ?? {}), [src]: customTargetDraft };
+                  const customs = Object.keys(nextMap).filter(k => !DEFAULT_SOURCE_MODELS.includes(k));
+                  const nextSources = [...DEFAULT_SOURCE_MODELS, ...customs];
+                  setShadowCall({ ...shadowCall, modelMap: nextMap, sourceModels: nextSources });
+                  setCustomSourceDraft("");
+                  setCustomTargetDraft("");
+                  void saveShadowCall({ modelMap: nextMap, sourceModels: nextSources });
+                }}
+              >
+                {t("models.shadowCallAdd")}
+              </button>
+            </div>
+            {Object.keys(shadowCall?.modelMap ?? {}).filter(k => !DEFAULT_SOURCE_MODELS.includes(k)).map(src => {
+              const mapped = shadowCall?.modelMap?.[src] ?? "";
+              const customOptions = shadowCallModelOptions(activeModels, mapped || undefined, [src]);
+              return (
+                <div key={src} className="models-shadow-row row muted text-control">
+                  <code className="models-shadow-source-label models-shadow-source-name">{src} →</code>
+                  <div className="models-shadow-model-slot">
+                    <Select
+                      value={mapped}
+                      options={customOptions}
+                      onChange={v => {
+                        if (!shadowCall) return;
+                        const nextMap = { ...(shadowCall.modelMap ?? {}) };
+                        if (v === "") delete nextMap[src];
+                        else nextMap[src] = v;
+                        setShadowCall({ ...shadowCall, modelMap: nextMap });
+                        void saveShadowCall({ modelMap: nextMap, sourceModels: shadowCall.sourceModels });
+                      }}
+                      disabled={!shadowCall || shadowCallSaving}
+                      label={src}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={shadowCallSaving}
+                    onClick={() => {
+                      if (!shadowCall) return;
+                      const nextMap = { ...(shadowCall.modelMap ?? {}) };
+                      delete nextMap[src];
+                      const nextSources = (shadowCall.sourceModels ?? []).filter(x => x !== src);
+                      setShadowCall({ ...shadowCall, modelMap: nextMap, sourceModels: nextSources });
+                      void saveShadowCall({ modelMap: nextMap, sourceModels: nextSources });
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+          </>
+        )}
 
         {(v2Loading || v2) && (
           <div className="models-v2-mode-row row">

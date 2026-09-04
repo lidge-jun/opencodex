@@ -1,13 +1,19 @@
 /**
  * Shadow-call intercept source models.
  *
- * Codex 0.145.0+ uses `gpt-5.6-luna` for helper calls. Older clients through
- * 0.144.x used `gpt-5.4-mini`; operators supporting them can restore that
- * prefix with the `sourceModels` override. Every surface that names the
- * intercepted model (management API, GUI badges/tooltips, CLI) reads it from
- * here instead of hard-coding a slug that goes stale on the next client bump.
+ * Codex's helper calls span the ChatGPT-native lineup: gpt-5.6-luna,
+ * gpt-5.6-sol, gpt-5.6-terra, the frontier gpt-5.5, and the cheap tier
+ * gpt-5.4-mini (older clients). Every surface that names the intercepted
+ * model (management API, GUI badges/tooltips, CLI) reads it from here instead
+ * of hard-coding a slug that goes stale on the next client bump.
  */
-export const DEFAULT_SHADOW_SOURCE_MODELS = ["gpt-5.6-luna"] as const;
+export const DEFAULT_SHADOW_SOURCE_MODELS = [
+  "gpt-5.6-luna",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.5",
+  "gpt-5.4-mini",
+] as const;
 
 /**
  * Optional blocked model redirects at the shared routing layer.
@@ -59,6 +65,32 @@ export function isShadowSourceModel(modelId: string, configured?: unknown): bool
 export function shadowSourceModelPrefix(modelId: string, configured?: unknown): string | undefined {
   if (modelId.includes("/")) return undefined;
   return shadowSourceModels(configured).find(prefix => modelId.startsWith(prefix));
+}
+
+/**
+ * Resolve the per-source-model replacement id for a shadow source model.
+ *
+ * Per-source granularity (Plan B): `shadowCallIntercept.modelMap` maps a
+ * source prefix to its own replacement, so luna/sol/terra/5.5/5.4-mini can
+ * each route to a different third-party model. A source prefix absent from
+ * modelMap falls back to the shared `shadowCallIntercept.model`; when that is
+ * also unset the source model is NOT intercepted (left native). Returns the
+ * replacement id, or undefined when no replacement is configured for it.
+ */
+export function shadowCallReplacementFor(
+  modelId: string,
+  sci: { model?: string; modelMap?: Record<string, string>; sourceModels?: unknown } | undefined,
+): string | undefined {
+  if (!sci) return undefined;
+  const prefix = shadowSourceModelPrefix(modelId, sci.sourceModels);
+  if (!prefix) return undefined;
+  if (sci.modelMap && typeof sci.modelMap === "object") {
+    const mapped = sci.modelMap[prefix];
+    if (typeof mapped === "string" && mapped.trim() !== "") return mapped;
+  }
+  const fallback = sci.model;
+  if (typeof fallback === "string" && fallback.trim() !== "") return fallback;
+  return undefined;
 }
 
 export interface ShadowCallModelIdentity {

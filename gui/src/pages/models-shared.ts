@@ -67,9 +67,11 @@ export interface V2Status {
 
 export interface ShadowCallData {
   enabled: boolean;
-  model: string;
-  /** Source models the runtime actually intercepts. Older runtimes omit it. */
-  sourceModels?: string[];
+ model: string;
+  /** Per-source-model replacement ids; a source absent from the map falls back to model. */
+  modelMap?: Record<string, string>;
+ /** Source models the runtime actually intercepts. Older runtimes omit it. */
+ sourceModels?: string[];
 }
 
 export const CAP_OPTIONS = Array.from({ length: 18 }, (_, i) => 100_000 + i * 50_000); // 100k … 950k

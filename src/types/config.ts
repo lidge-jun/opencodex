@@ -530,19 +530,30 @@ export interface OcxConfig {
   /**
   * Shadow call intercept: redirect Codex's hard-coded helper calls (title generation,
   * commit messages, skill orchestration) to a user-chosen model. Default intercepted
-  * source models: gpt-5.4-mini (older clients) and gpt-5.6-luna (Codex 0.145.0+).
-  * Opt-in; disabled by default. Matching requests preserve their configured reasoning effort.
-  * All requests for configured shadow source models are intercepted regardless of request kind,
-  * except when the replacement intersects the same provider+model source set.
-  */
- shadowCallIntercept?: {
-   /** When true, requests for known shadow/helper source models are rewritten to the configured model. */
-   enabled?: boolean;
-   /** Replacement model id (e.g. "gpt-5.5"). */
-   model?: string;
-   /** Optional override of intercepted source-model prefixes (default: gpt-5.4-mini, gpt-5.6-luna). */
-   sourceModels?: string[];
- };
+ * source models: gpt-5.4-mini (older clients) and gpt-5.6-luna (Codex 0.145.0+).
+ * Opt-in; disabled by default. Matching requests preserve their configured reasoning effort.
+ * All requests for configured shadow source models are intercepted regardless of request kind,
+ * except when the replacement intersects the same provider+model source set.
+ */
+shadowCallIntercept?: {
+  /** When true, requests for known shadow/helper source models are rewritten to the configured model. */
+  enabled?: boolean;
+  /**
+   * Fallback replacement model id (e.g. "gpt-5.5"). Used when a source prefix
+   * has no explicit entry in modelMap. When modelMap covers every source and
+   * no shared fallback is wanted, leave this unset.
+   */
+  model?: string;
+  /**
+   * Per-source-model replacement ids. Key = source prefix (e.g. "gpt-5.6-luna"),
+   * value = replacement model id. A source prefix present here takes precedence
+   * over the shared `model` fallback; a source absent from both is left native.
+   * This lets luna/sol/terra/5.5/5.4-mini each route to a different third-party model.
+   */
+  modelMap?: Record<string, string>;
+  /** Optional override of intercepted source-model prefixes (default: gpt-5.4-mini, gpt-5.6-luna). */
+  sourceModels?: string[];
+};
   /**
    * Optional map of blocked model IDs to their replacement model IDs.
    * When configured, incoming requests targeting a blocked model (including
