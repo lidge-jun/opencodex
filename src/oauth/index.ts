@@ -1,7 +1,7 @@
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
-import { ConfigMutationLockError, loadConfig, saveConfig } from "../config";
+import { ConfigMutationLockError, loadConfig, mutatePersistedConfig, saveConfig } from "../config";
 import { resolveProviderApiKey } from "../providers/key-store";
 import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
@@ -1247,42 +1247,106 @@ function migrateLegacyAntigravityStaticCatalog(config: OcxConfig): boolean {
   return true;
 }
 
-export function reconcileOAuthProviders(config: OcxConfig): boolean {
-  let changed = migrateLegacyAntigravityStaticCatalog(config);
-  for (const [name, prov] of Object.entries(config.providers)) {
+interface OAuthReconcileProjection {
+  config: OcxConfig;
+  changed: boolean;
+  touchedProviders: string[];
+  touchedAntigravityVersion: boolean;
+}
+
+function projectOAuthProviderReconciliation(config: OcxConfig): OAuthReconcileProjection {
+  const projected = structuredClone(config);
+  const touchedProviders = new Set<string>();
+  const beforeAntigravity = JSON.stringify(projected.providers[GOOGLE_ANTIGRAVITY_PROVIDER]);
+  const beforeAntigravityVersion = projected.googleAntigravityStaticCatalogVersion;
+  let changed = migrateLegacyAntigravityStaticCatalog(projected);
+  if (JSON.stringify(projected.providers[GOOGLE_ANTIGRAVITY_PROVIDER]) !== beforeAntigravity) {
+    touchedProviders.add(GOOGLE_ANTIGRAVITY_PROVIDER);
+  }
+  const touchedAntigravityVersion = projected.googleAntigravityStaticCatalogVersion !== beforeAntigravityVersion;
+
+  for (const [name, prov] of Object.entries(projected.providers)) {
+    const beforeProvider = JSON.stringify(prov);
     const def = OAUTH_PROVIDERS[name];
     if (name === "command-code" && isLegacyCommandCodeStaticCatalog(prov)) {
       // The former experimental preset was the exact three-model seed above. It was not a user
       // choice to disable discovery, so promote only that shape to the account live catalog.
       prov.liveModels = true;
-      changed = true;
     }
-    if (!def || prov.authMode !== "oauth") continue;
-    const preset = def.providerConfig;
-    for (const field of OAUTH_RECONCILE_FIELDS) {
-      if (JSON.stringify(prov[field]) === JSON.stringify(preset[field])) continue;
-      if (preset[field] !== undefined) {
-        prov[field] = cloneProviderField(preset[field]) as never;
-      } else {
-        delete prov[field];
+    if (def && prov.authMode === "oauth") {
+      const preset = def.providerConfig;
+      for (const field of OAUTH_RECONCILE_FIELDS) {
+        if (JSON.stringify(prov[field]) === JSON.stringify(preset[field])) continue;
+        if (preset[field] !== undefined) {
+          prov[field] = cloneProviderField(preset[field]) as never;
+        } else {
+          delete prov[field];
+        }
       }
-      changed = true;
+      if (prov.liveModels === undefined && preset.liveModels !== undefined) {
+        prov.liveModels = preset.liveModels;
+      }
+      // Heal a defaultModel that no longer exists in the refreshed list (e.g. a deprecated snapshot).
+      // Skip providers without a static preset `models` list: for live-discovery providers
+      // (e.g. command-code OAuth) the account-scoped catalog is not enumerable here, so any
+      // persisted defaultModel is a user selection and must not be overwritten by the seed.
+      if (prov.defaultModel && preset.defaultModel && preset.models && preset.models.length > 0 && !(prov.models ?? []).includes(prov.defaultModel)) {
+        prov.defaultModel = preset.defaultModel;
+      }
     }
-    if (prov.liveModels === undefined && preset.liveModels !== undefined) {
-      prov.liveModels = preset.liveModels;
+    if (JSON.stringify(prov) !== beforeProvider) {
       changed = true;
-    }
-    // Heal a defaultModel that no longer exists in the refreshed list (e.g. a deprecated snapshot).
-    // Skip providers without a static preset `models` list: for live-discovery providers
-    // (e.g. command-code OAuth) the account-scoped catalog is not enumerable here, so any
-    // persisted defaultModel is a user selection and must not be overwritten by the seed.
-    if (prov.defaultModel && preset.defaultModel && preset.models && preset.models.length > 0 && !(prov.models ?? []).includes(prov.defaultModel)) {
-      prov.defaultModel = preset.defaultModel;
-      changed = true;
+      touchedProviders.add(name);
     }
   }
-  if (changed) saveConfig(config);
-  return changed;
+
+  return {
+    config: projected,
+    changed,
+    touchedProviders: [...touchedProviders],
+    touchedAntigravityVersion,
+  };
+}
+
+function adoptOAuthReconciliation(config: OcxConfig, projection: OAuthReconcileProjection): void {
+  for (const name of projection.touchedProviders) {
+    const provider = projection.config.providers[name];
+    if (provider) config.providers[name] = structuredClone(provider);
+    else delete config.providers[name];
+  }
+  if (projection.touchedAntigravityVersion) {
+    config.googleAntigravityStaticCatalogVersion = projection.config.googleAntigravityStaticCatalogVersion;
+  }
+}
+
+function withOAuthReconciliationTouchedKeys(
+  projection: OAuthReconcileProjection,
+  required: OAuthReconcileProjection,
+): OAuthReconcileProjection {
+  return {
+    ...projection,
+    touchedProviders: [...new Set([...projection.touchedProviders, ...required.touchedProviders])],
+    touchedAntigravityVersion: projection.touchedAntigravityVersion || required.touchedAntigravityVersion,
+  };
+}
+
+export function reconcileOAuthProviders(config: OcxConfig, persist = true): boolean {
+  const projection = projectOAuthProviderReconciliation(config);
+  if (!projection.changed) return false;
+  if (!persist) {
+    adoptOAuthReconciliation(config, projection);
+    return true;
+  }
+  const outcome = mutatePersistedConfig(fresh => {
+    const next = projectOAuthProviderReconciliation(fresh);
+    if (next.changed) adoptOAuthReconciliation(fresh, next);
+    return { changed: next.changed, value: next };
+  });
+  if (outcome.status === "unavailable") {
+    throw new Error(`OAuth provider reconciliation persistence unavailable: ${outcome.reason}`);
+  }
+  adoptOAuthReconciliation(config, withOAuthReconciliationTouchedKeys(outcome.value, projection));
+  return true;
 }
 
 /** Runtime guards: provider config is intentionally passthrough, so persisted fields may be malformed. */

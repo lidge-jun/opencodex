@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "../../src/config";
+import {
+  getConfigPath,
+  loadConfig,
+  saveConfig,
+  setPersistedConfigMutationBeforeCommitForTests,
+} from "../../src/config";
 import { OAUTH_PROVIDERS, reconcileOAuthProviders, upsertOAuthProvider } from "../../src/oauth";
 import { getCredential, saveCredential } from "../../src/oauth/store";
 import { routeModel } from "../../src/router";
@@ -15,6 +20,7 @@ const originalHome = process.env.OPENCODEX_HOME;
 const homes: string[] = [];
 
 afterEach(() => {
+  setPersistedConfigMutationBeforeCommitForTests(null);
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
   for (const home of homes.splice(0)) removeTreeWithRetry(home);
@@ -39,6 +45,7 @@ describe("OAuth provider reconciliation", () => {
         },
       },
     } satisfies OcxConfig;
+    saveConfig(config);
 
     expect(reconcileOAuthProviders(config)).toBe(true);
     expect(config.providers.cursor.noVisionModels).toEqual(preset.noVisionModels);
@@ -48,6 +55,66 @@ describe("OAuth provider reconciliation", () => {
     expect(modelInList(config.providers.cursor.noVisionModels, "composer-2.5")).toBe(true);
     expect(reconcileOAuthProviders(config)).toBe(false);
   });
+
+  test("unavailable persistence leaves live OAuth reconciliation input unchanged", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-oauth-reconcile-unavailable-"));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
+    const config = {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          adapter: "google",
+          baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+          authMode: "oauth",
+          googleMode: "cloud-code-assist",
+          defaultModel: "gemini-3.5-flash-low",
+          models: ["gemini-3.5-flash-low", "gemini-3.5-flash-high"],
+          liveModels: true,
+        },
+      },
+    } satisfies OcxConfig;
+    const before = structuredClone(config);
+
+    expect(() => reconcileOAuthProviders(config)).toThrow(
+      "OAuth provider reconciliation persistence unavailable: missing",
+    );
+    expect(config).toEqual(before);
+  });
+
+  test("rebases startup reconciliation over a concurrent provider edit", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-oauth-reconcile-race-"));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
+    const preset = OAUTH_PROVIDERS.cursor.providerConfig;
+    const config = {
+      port: 10100,
+      defaultProvider: "cursor",
+      providers: {
+        cursor: {
+          ...structuredClone(preset),
+          authMode: "oauth",
+          noVisionModels: cursorModelIds(CURSOR_STATIC_MODELS),
+        },
+      },
+    } satisfies OcxConfig;
+    saveConfig(config);
+    setPersistedConfigMutationBeforeCommitForTests(() => {
+      const concurrent = loadConfig();
+      concurrent.providers.cursor.note = "concurrent-operator-edit";
+      writeFileSync(getConfigPath(), JSON.stringify(concurrent, null, 2) + "\n");
+    });
+
+    expect(reconcileOAuthProviders(config)).toBe(true);
+
+    expect(config.providers.cursor.noVisionModels).toEqual(preset.noVisionModels);
+    expect(config.providers.cursor.note).toBe("concurrent-operator-edit");
+    const persisted = loadConfig();
+    expect(persisted.providers.cursor.noVisionModels).toEqual(preset.noVisionModels);
+    expect(persisted.providers.cursor.note).toBe("concurrent-operator-edit");
+  });
+
   test("refreshes a saved Antigravity 3.5 preset without touching credentials or user fields", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-gemini-36-reconcile-"));
     homes.push(home);
@@ -76,6 +143,7 @@ describe("OAuth provider reconciliation", () => {
         },
       },
     } satisfies OcxConfig;
+    saveConfig(config);
 
     expect(reconcileOAuthProviders(config)).toBe(true);
     const provider = config.providers["google-antigravity"];
@@ -112,6 +180,9 @@ describe("OAuth provider reconciliation", () => {
   });
 
   test("migrates the version-1 canonical Antigravity static row to live discovery", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-static-reconcile-"));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
     const config = {
       port: 10100,
       defaultProvider: "google-antigravity",
@@ -134,6 +205,7 @@ describe("OAuth provider reconciliation", () => {
         },
       },
     } satisfies OcxConfig;
+    saveConfig(config);
 
     expect(reconcileOAuthProviders(config)).toBe(true);
     expect(config.providers["google-antigravity"].liveModels).toBe(true);
@@ -144,11 +216,64 @@ describe("OAuth provider reconciliation", () => {
     expect(config.providers["google-antigravity"].models).toHaveLength(7);
   });
 
+  test("adopts already-reconciled persisted OAuth state into a stale live config", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-unchanged-adopt-"));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
+    const staleLive = {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      googleAntigravityStaticCatalogVersion: 1,
+      providers: {
+        "google-antigravity": {
+          ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+          defaultModel: "gemini-3.6-flash",
+          models: [
+            "gemini-3.6-flash",
+            "gemini-3.1-pro",
+            "gemini-3.1-flash-image",
+            "claude-sonnet-4-6",
+            "claude-opus-4-6-thinking",
+            "gpt-oss-120b-medium",
+          ],
+          liveModels: false,
+        },
+        "local-only": {
+          adapter: "openai",
+          baseUrl: "http://127.0.0.1:9999/v1",
+          allowPrivateNetwork: true,
+          models: ["local-live"],
+          note: "live-only",
+        },
+      },
+    } satisfies OcxConfig;
+    const reconciledDisk = structuredClone(staleLive);
+    reconciledDisk.googleAntigravityStaticCatalogVersion = 2;
+    reconciledDisk.providers["google-antigravity"].liveModels = true;
+    reconciledDisk.providers["disk-only"] = {
+      adapter: "openai",
+      baseUrl: "http://127.0.0.1:9998/v1",
+      allowPrivateNetwork: true,
+      models: ["disk-only"],
+    };
+    delete reconciledDisk.providers["local-only"];
+    saveConfig(reconciledDisk);
+
+    expect(reconcileOAuthProviders(staleLive)).toBe(true);
+    expect(staleLive.googleAntigravityStaticCatalogVersion).toBe(2);
+    expect(staleLive.providers["google-antigravity"].liveModels).toBe(true);
+    expect(staleLive.providers["local-only"]?.note).toBe("live-only");
+    expect(staleLive.providers["disk-only"]).toBeUndefined();
+  });
+
   test("an explicit 3.7 default survives the 3.8 launch while its capabilities refresh", () => {
     // The 3.5 case above starts from a RETIRED id, so it only exercises the stale-default
     // healing branch. This one is the opposite claim, and the one that matters for an
     // additive rollout: a user who deliberately chose 3.7 must still be on 3.7 afterwards.
     // Google still serves it, so healing it onto 3.8 would be silently overriding a choice.
+    const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-explicit-default-"));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
     saveCredential("google-antigravity", { access: "a", refresh: "r", projectId: "p" });
     const config = {
       port: 10100,
@@ -165,6 +290,7 @@ describe("OAuth provider reconciliation", () => {
         },
       },
     } satisfies OcxConfig;
+    saveConfig(config);
 
     reconcileOAuthProviders(config);
     const provider = config.providers["google-antigravity"];
@@ -264,7 +390,7 @@ describe("OAuth provider reconciliation", () => {
       },
     } satisfies OcxConfig;
 
-    reconcileOAuthProviders(config);
+    reconcileOAuthProviders(config, false);
     expect(config.providers.kimi.requiresReasoningPlaceholderModels).toEqual([]);
   });
 
@@ -288,6 +414,7 @@ describe("OAuth provider reconciliation", () => {
         },
       },
     } satisfies OcxConfig;
+    saveConfig(config);
 
     expect(reconcileOAuthProviders(config)).toBe(true);
     expect(config.providers.xai.modelReasoningEfforts?.["grok-4.6"])

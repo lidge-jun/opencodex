@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   MODEL_RENAMES,
   projectModelRenames,
   type ModelRename,
 } from "../../src/providers/model-rename-migration";
+import { runModelRenameStartupMigration } from "../../src/providers/model-rename-startup";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import type { OcxConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const INTL_BASE_URL = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
 
@@ -128,6 +133,35 @@ describe("registry model rename migration (#1610)", () => {
       expect(entry?.models).toContain(rename.to);
       // A rename whose source id is still seeded would fight the registry.
       expect(entry?.models).not.toContain(rename.from);
+    }
+  });
+
+  test("startup no-op preserves the live config object identity", () => {
+    const clean = projectModelRenames(staleConfig(), [RENAME]).config;
+    const returned = runModelRenameStartupMigration(clean, {
+      project: config => projectModelRenames(config, [RENAME]),
+      save: () => { throw new Error("no-op must not save"); },
+    });
+
+    expect(returned).toBe(clean);
+  });
+
+  test("startup persistence failure leaves live model-rename input unchanged", () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-model-rename-unavailable-"));
+    try {
+      process.env.OPENCODEX_HOME = home;
+      const live = staleConfig();
+      const before = structuredClone(live);
+
+      expect(() => runModelRenameStartupMigration(live)).toThrow(
+        "model rename startup persistence unavailable: missing",
+      );
+      expect(live).toEqual(before);
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
     }
   });
 });
