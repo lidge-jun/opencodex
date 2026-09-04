@@ -14,6 +14,8 @@ Depends on verified evidence in `000_plan.md`; one work-phase, not separate back
 
 ## Value chain and activation matrix
 
+C full-suite delta: `tests/providers/provider-registry-parity.test.ts` must include Astra in the exact API seed and assert its three limits; `tests/routing/fastwire-observability.test.ts` retains fixed synthetic base rates but updates native Fast expectations from 2x to 2.5x. These are required expectation updates, no assertion removal. Remote launcher/cache failures separately show Node was missing from SSH PATH; use the host's installed Node v22.22.0 for the rerun, not production changes.
+
 C review synthesis: accepted native Sol provenance finding. The native official correction is API-equivalent (`verified-derived`), while API Sol is verified. Propagate the override's status through `cost.ts` rather than hardcoding verified, reject unverified overrides, and assert native estimated=true/API estimated=false.
 
 B alias/base verification exposed a stale nonzero generated Sol tuple (5/30 versus the independently verified current 4/20). Add provider-exact official Sol corrections via existing `VERIFIED_PRICE_OVERRIDES` for canonical native/API providers; do not edit generated vendor data or reseller rows. Existing custom-overlay test inputs remain unchanged; update the default shipped-rate assertion to the official tuple.

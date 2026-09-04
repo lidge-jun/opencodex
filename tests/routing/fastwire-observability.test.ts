@@ -558,8 +558,8 @@ describe("FastWire per-attempt cost", () => {
         tierOutcome: outcome,
       },
     ], overlays, { requestedServiceTier: "priority" })!;
-    expect(estimate.priorityMultiplier).toBe(2);
-    expect(estimate.cost.total).toBeCloseTo(3.2, 9);
+    expect(estimate.priorityMultiplier).toBe(2.5);
+    expect(estimate.cost.total).toBeCloseTo(4.0, 9);
   });
 
   test("combo prices each attempt from its own outcome before the top-level tier", () => {
@@ -600,10 +600,10 @@ describe("FastWire per-attempt cost", () => {
       overlays,
       { requestedServiceTier: "priority" },
     )!;
-    expect(estimate.attempts?.[0]?.cost.total).toBeCloseTo(3.2, 9);
+    expect(estimate.attempts?.[0]?.cost.total).toBeCloseTo(4.0, 9);
     expect(estimate.attempts?.[1]?.cost.total).toBeCloseTo(1.6, 9);
-    expect(estimate.cost.total).toBeCloseTo(4.8, 9);
-    expect(estimate.cost.total).not.toBeCloseTo(6.4, 9);
+    expect(estimate.cost.total).toBeCloseTo(5.6, 9);
+    expect(estimate.cost.total).not.toBeCloseTo(8.0, 9);
   });
 
   test("old attempts without outcomes retain the top-level fallback", () => {
@@ -611,8 +611,8 @@ describe("FastWire per-attempt cost", () => {
       { ordinal: 1, provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage },
       { ordinal: 2, provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage },
     ], overlays, { requestedServiceTier: "priority" })!;
-    expect(estimate.cost.total).toBeCloseTo(6.4, 9);
-    expect(estimate.attempts?.every(attempt => attempt.priorityMultiplier === 2)).toBe(true);
+    expect(estimate.cost.total).toBeCloseTo(8.0, 9);
+    expect(estimate.attempts?.every(attempt => attempt.priorityMultiplier === 2.5)).toBe(true);
   });
 
   test("confirmed OpenRouter priority is a standard-price lower bound, while downgrade and OpenAI stay unchanged", () => {
@@ -684,8 +684,8 @@ describe("FastWire per-attempt cost", () => {
       usage,
       tierOutcome: confirmedPriority,
     }], overlays)!;
-    expect(openAi.cost.total).toBeCloseTo(3.2, 9);
-    expect(openAi.priorityMultiplier).toBe(2);
+    expect(openAi.cost.total).toBeCloseTo(4.0, 9);
+    expect(openAi.priorityMultiplier).toBe(2.5);
     expect(openAi.priorityLowerBound).toBeUndefined();
   });
 
@@ -874,4 +874,3 @@ describe("#2558 a non-authoritative destination cannot confirm or deny Fast", ()
     expect(tracker.outcome.fastOutcome).toBe("downgraded");
   });
 });
-
