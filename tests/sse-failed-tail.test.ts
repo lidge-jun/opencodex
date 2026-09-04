@@ -153,6 +153,32 @@ describe("relaySseWithFailedTail", () => {
     expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
   });
 
+  test("clean EOF after a recorded upstream error reports that error instead of adapter_eof", async () => {
+    const upstream = new AbortController();
+    const src = sourceStream(['data: {"type":"response.in_progress"}\n\n']);
+    const out = await drain(relaySseWithFailedTail(src, upstream, undefined, {
+      upstreamError: "The usage limit has been reached",
+    }));
+
+    expect(out).toContain("event: response.failed");
+    expect(out).toContain("The usage limit has been reached");
+    expect(out).not.toContain('"reason":"adapter_eof"');
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+  });
+
+  test("clean EOF after an upstream error keeps the same failed payload through eager relay", async () => {
+    const upstream = new AbortController();
+    const src = sourceStream(['data: {"type":"response.in_progress"}\n\n']);
+    const out = await drain(relaySseEagerBounded(src, upstream, parityHooks, {
+      upstreamError: "The usage limit has been reached",
+    }));
+
+    expect(out).toContain("event: response.failed");
+    expect(out).toContain("The usage limit has been reached");
+    expect(out).not.toContain('"reason":"adapter_eof"');
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+  });
+
   test("translator overflow failed tail preserves translation_buffer_limit", async () => {
     const upstream = new AbortController();
     const error = new TranslatorBudgetExceededError("live_transient", 32 * 1024 * 1024);

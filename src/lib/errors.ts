@@ -18,7 +18,12 @@ export function upstreamErrorMessageFromPayload(payload: unknown): string | unde
   const message = json.error?.message
     ?? json.last_error?.message
     ?? json.response?.error?.message
-    ?? json.response?.incomplete_details?.message;
+    ?? json.response?.incomplete_details?.message
+    // The Responses stream error event carries a flat message (type/code/message),
+    // unlike the response.failed envelope the branches above already cover.
+    ?? ((json as { type?: unknown }).type === "error"
+      ? (json as unknown as { message?: unknown }).message
+      : undefined);
   return typeof message === "string" ? message : undefined;
 }
 

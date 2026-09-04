@@ -30,6 +30,23 @@ const RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS = new Set([
   "upstream_stall_timeout",
 ]);
 
+// The ChatGPT backend reports an undecryptable replayed blob as a bare error SSE
+// event (not response.failed) before any output; with zero committed output that
+// event is exactly as replayable as a response.failed terminal.
+const ENCRYPTED_FUNCTION_OUTPUT_REJECTION_MESSAGE =
+  "Encrypted function output content could not be decrypted or decoded.";
+
+function errorEventMessage(payload: Record<string, unknown>): string | undefined {
+  const direct = payload.message;
+  if (typeof direct === "string") return direct;
+  const nested = payload.error;
+  if (nested !== null && typeof nested === "object" && !Array.isArray(nested)) {
+    const message = (nested as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return undefined;
+}
+
 function retryableZeroOutputTerminal(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const event = payload as {
@@ -37,6 +54,9 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
     response?: { incomplete_details?: { reason?: unknown } };
   };
   if (event.type === "response.failed") return true;
+  if (event.type === "error") {
+    return errorEventMessage(event) === ENCRYPTED_FUNCTION_OUTPUT_REJECTION_MESSAGE;
+  }
   if (event.type !== "response.incomplete") return false;
   const reason = event.response?.incomplete_details?.reason;
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
@@ -51,6 +71,9 @@ export function comboStreamPayloadCommitsOutput(payload: unknown): boolean {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return true;
   const type = (payload as { type?: unknown }).type;
   if (typeof type !== "string") return true;
+  // An error event carries no client-visible output; treating it as committing
+  // would pin a child to a turn that already failed before producing anything.
+  if (type === "error") return false;
   return !PRE_OUTPUT_CONTROL_EVENTS.has(type) && !TERMINAL_EVENTS.has(type);
 }
 
@@ -180,7 +203,10 @@ export async function preflightComboStreamResponse(
         inspector.feed(retained);
       }
 
-      if ((terminalStatus === "failed" || terminalStatus === "incomplete")
+      // A bare error event is not a protocol terminal (terminalStatus stays undefined),
+      // so its exact-message retryable match doubles as the terminal evidence.
+      if ((terminalStatus === "failed" || terminalStatus === "incomplete"
+        || retryableTerminalPayload?.type === "error")
         && !outputCommitted && retryableTerminalPayload) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
         return { kind: "failed", response: failedTerminalResponse(response, retryableTerminalPayload, logCtx) };

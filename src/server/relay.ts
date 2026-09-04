@@ -260,10 +260,29 @@ export function relaySseWithFailedTail(
   body: ReadableStream<Uint8Array>,
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
+  opts?: { upstreamError?: string },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
   const terminalBoundary = createSseTerminalOutputBoundary();
+  const failedTailPayload = opts?.upstreamError === undefined
+    ? FAILED_TAIL_FALLBACK_PAYLOAD
+    : JSON.stringify({
+      type: "response.failed",
+      response: {
+        status: "failed",
+        error: {
+          type: "upstream_error",
+          code: "upstream_server_error",
+          message: opts.upstreamError,
+        },
+        last_error: {
+          type: "upstream_error",
+          code: "upstream_server_error",
+          message: opts.upstreamError,
+        },
+      },
+    });
   let closed = false;
   const relayChunk = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -306,8 +325,11 @@ export function relaySseWithFailedTail(
               // A clean upstream EOF is still a failed Responses turn when no
               // protocol terminal arrived. Make that state explicit so Codex
               // does not treat HTTP 200 + bare EOF as a retryable disconnect.
-              const incomplete = adapterEofIncompleteFrame(encoder);
-              controller.enqueue(incomplete);
+              controller.enqueue(encoder.encode(
+                opts?.upstreamError === undefined
+                  ? `event: response.incomplete\ndata: ${ADAPTER_EOF_INCOMPLETE_PAYLOAD}\n\n`
+                  : `event: response.failed\ndata: ${failedTailPayload}\n\n`,
+              ));
               controller.enqueue(doneFrame(encoder));
             }
             terminalBoundary.dispose();

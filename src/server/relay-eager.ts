@@ -79,6 +79,8 @@ export type EagerRelayOptions = {
   postCancelDrainMs?: number;
   /** Post-cancel discard-drain byte bound. Default 32 MiB. */
   postCancelDrainBytes?: number;
+  /** Last known upstream failure to preserve when EOF would otherwise become adapter_eof. */
+  upstreamError?: string;
   /** Injectable clock for tests. */
   now?: () => number;
 };
@@ -108,6 +110,24 @@ export function relaySseEagerBounded(
   const terminalEncoder = new TextEncoder();
   const adapterEofFrame = adapterEofIncompleteFrame(terminalEncoder);
   const terminalSentinel = doneFrame(terminalEncoder);
+  const upstreamErrorFrame = opts?.upstreamError === undefined
+    ? adapterEofFrame
+    : terminalEncoder.encode(`event: response.failed\ndata: ${JSON.stringify({
+      type: "response.failed",
+      response: {
+        status: "failed",
+        error: {
+          type: "upstream_error",
+          code: "upstream_server_error",
+          message: opts.upstreamError,
+        },
+        last_error: {
+          type: "upstream_error",
+          code: "upstream_server_error",
+          message: opts.upstreamError,
+        },
+      },
+    })}\n\n`);
   const terminalBoundary = createSseTerminalOutputBoundary();
   const activeRewrite: SseBlockRewrite | undefined = hooks.rewriteBlocks
     ?? (hooks.rewritePayload ? payloadRewriteAsBlockRewrite(hooks.rewritePayload) : undefined);
@@ -282,12 +302,12 @@ export function relaySseEagerBounded(
           } else if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
             // A clean 200 EOF without a Responses terminal must be visible to
             // Codex as one incomplete turn, followed by the normal sentinel.
-            queuedBytes += adapterEofFrame.byteLength + terminalSentinel.byteLength;
+            queuedBytes += upstreamErrorFrame.byteLength + terminalSentinel.byteLength;
             try {
-              controllerRef?.enqueue(adapterEofFrame);
+              controllerRef?.enqueue(upstreamErrorFrame);
               controllerRef?.enqueue(terminalSentinel);
             } catch { /* client already gone */ }
-            syntheticKind = "incomplete";
+            syntheticKind = opts?.upstreamError === undefined ? "incomplete" : "failed";
           }
           break;
         }

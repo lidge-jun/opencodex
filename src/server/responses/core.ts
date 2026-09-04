@@ -629,28 +629,97 @@ const OPAQUE_RESPONSES_INPUT_TYPES = new Set([
   "compaction_summary",
   "context_compaction",
 ]);
+const ENCRYPTED_FUNCTION_OUTPUT_REJECTION = "Encrypted function output content could not be decrypted or decoded.";
+const FUNCTION_OUTPUT_TYPES = new Set(["function_call_output", "custom_tool_call_output"]);
+// codex-app subagent results replay as agent_message items whose content parts may carry
+// backend-minted encrypted_content; the ChatGPT backend decrypts them in its function-output
+// path, so a cross-identity replay of those parts produces ENCRYPTED_FUNCTION_OUTPUT_REJECTION.
+const AGENT_MESSAGE_TYPE = "agent_message";
 
-function outboundResponsesBodyCarriesOpaqueBlob(bodyText: string | undefined): boolean {
-  if (!bodyText) return false;
+function encryptedFunctionOutputParts(output: unknown): boolean {
+  return Array.isArray(output) && output.some(part => (
+    part !== null
+    && typeof part === "object"
+    && !Array.isArray(part)
+    && (part as { type?: unknown }).type === "encrypted_content"
+    && typeof (part as { encrypted_content?: unknown }).encrypted_content === "string"
+    && (part as { encrypted_content: string }).encrypted_content.length > 0
+  ));
+}
+
+function outboundResponsesInput(bodyText: string | undefined): unknown[] | undefined {
+  if (!bodyText) return undefined;
   try {
     const body = JSON.parse(bodyText) as unknown;
-    if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
     const input = (body as { input?: unknown }).input;
-    if (!Array.isArray(input)) return false;
-    return input.some(item => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
-      const candidate = item as { type?: unknown; encrypted_content?: unknown };
-      return typeof candidate.type === "string"
-        && OPAQUE_RESPONSES_INPUT_TYPES.has(candidate.type)
-        && typeof candidate.encrypted_content === "string"
-        && candidate.encrypted_content.length > 0;
-    });
+    return Array.isArray(input) ? input : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function outboundResponsesBodyCarriesEncryptedFunctionOutput(bodyText: string | undefined): boolean {
+  const input = outboundResponsesInput(bodyText);
+  if (!input) return false;
+  return input.some(item => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
+    const candidate = item as { type?: unknown; output?: unknown; content?: unknown };
+    const type = String(candidate.type ?? "");
+    if (FUNCTION_OUTPUT_TYPES.has(type) && encryptedFunctionOutputParts(candidate.output)) return true;
+    return type === AGENT_MESSAGE_TYPE && encryptedFunctionOutputParts(candidate.content);
+  });
+}
+
+function outboundResponsesBodyCarriesOpaqueBlob(bodyText: string | undefined): boolean {
+  const input = outboundResponsesInput(bodyText);
+  if (!input) return false;
+  return input.some(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+    const candidate = item as { type?: unknown; encrypted_content?: unknown; output?: unknown };
+    if (
+      typeof candidate.type === "string"
+      && OPAQUE_RESPONSES_INPUT_TYPES.has(candidate.type)
+      && typeof candidate.encrypted_content === "string"
+      && candidate.encrypted_content.length > 0
+    ) return true;
+    if (
+      typeof candidate.type === "string"
+      && FUNCTION_OUTPUT_TYPES.has(candidate.type)
+      && encryptedFunctionOutputParts(candidate.output)
+    ) return true;
+    return candidate.type === AGENT_MESSAGE_TYPE
+      && encryptedFunctionOutputParts((candidate as { content?: unknown }).content);
+  });
+}
+
+function isEncryptedFunctionOutputRejection(bodyText: string): boolean {
+  if (bodyText.trim() === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;
+  try {
+    const payload = JSON.parse(bodyText) as unknown;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const record = payload as { detail?: unknown; message?: unknown; error?: unknown };
+    if (record.detail === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;
+    if (record.message === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;
+    if (record.error === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) return true;
+    return record.error !== null
+      && typeof record.error === "object"
+      && !Array.isArray(record.error)
+      && (record.error as { message?: unknown }).message === ENCRYPTED_FUNCTION_OUTPUT_REJECTION;
   } catch {
     return false;
   }
 }
 
 function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
+  if (isEncryptedFunctionOutputRejection(bodyText)) return true;
+  try {
+    if (upstreamErrorMessageFromPayload(JSON.parse(bodyText) as unknown) === ENCRYPTED_FUNCTION_OUTPUT_REJECTION) {
+      return true;
+    }
+  } catch {
+    /* invalid JSON bodies fall through to the exact nested envelope checks */
+  }
   try {
     const payload = JSON.parse(bodyText) as unknown;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
@@ -695,8 +764,13 @@ export function shouldAttemptOpaqueBlobRecovery(args: {
   errorBody: string;
   alreadyAttempted: boolean;
 }): boolean {
-  return args.status >= 400
-    && args.status < 500
+  const acceptedStatus = (args.status >= 400 && args.status < 500)
+    || (
+      args.status === 502
+      && outboundResponsesBodyCarriesEncryptedFunctionOutput(args.outboundBody)
+      && isEncryptedFunctionOutputRejection(args.errorBody)
+    );
+  return acceptedStatus
     && args.adapterName === "openai-responses"
     && !args.alreadyAttempted
     && outboundResponsesBodyCarriesOpaqueBlob(args.outboundBody)
@@ -712,7 +786,7 @@ async function opaqueBlobRejectionBodyForRecovery(
 ): Promise<string | undefined> {
   if (
     response.status < 400
-    || response.status >= 500
+    || (response.status >= 500 && response.status !== 502)
     || adapterName !== "openai-responses"
     || alreadyAttempted
     || !outboundResponsesBodyCarriesOpaqueBlob(outboundBody)
@@ -789,6 +863,50 @@ function normalizeUpstreamErrorText(text: string, fallback: string): NormalizedU
 
 function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
   parsed._stripReasoningEncryptedContent = true;
+  const rawBody = parsed._rawBody;
+  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return;
+  const input = (rawBody as { input?: unknown }).input;
+  if (!Array.isArray(input)) return;
+  const stripEncryptedParts = (parts: unknown[]): unknown[] => {
+    let changed = false;
+    const stripped = parts.map(part => {
+      if (
+        part !== null
+        && typeof part === "object"
+        && !Array.isArray(part)
+        && (part as { type?: unknown }).type === "encrypted_content"
+        && typeof (part as { encrypted_content?: unknown }).encrypted_content === "string"
+        && (part as { encrypted_content: string }).encrypted_content.length > 0
+      ) {
+        changed = true;
+        return { type: "input_text", text: "[encrypted content omitted]" };
+      }
+      return part;
+    });
+    return changed ? stripped : parts;
+  };
+  const strippedInput = input.map(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const record = item as Record<string, unknown>;
+    const type = String(record.type ?? "");
+    if (FUNCTION_OUTPUT_TYPES.has(type) && Array.isArray(record.output)) {
+      const output = stripEncryptedParts(record.output);
+      return output !== record.output ? { ...record, output } : item;
+    }
+    if (type === AGENT_MESSAGE_TYPE && Array.isArray(record.content)) {
+      const content = stripEncryptedParts(record.content);
+      return content !== record.content ? { ...record, content } : item;
+    }
+    return item;
+  });
+  parsed._rawBody = { ...(rawBody as Record<string, unknown>), input: strippedInput };
+}
+
+function resetStreamedOpaqueBlobLogContext(logCtx: RequestLogContext): void {
+  delete logCtx.upstreamError;
+  delete logCtx.terminalHttpStatus;
+  delete logCtx.terminalErrorCode;
+  delete logCtx.terminalIncompleteReason;
 }
 
 type OpaqueBlobRecoveryGuard = { attempted: boolean };
@@ -4609,6 +4727,38 @@ async function handleResponsesInner(
       upstreamResponse = opaqueBlobRecovery.response;
       continue passthroughRecovery;
     }
+
+    const recoveryContentType = upstreamResponse.headers.get("content-type")?.toLowerCase() ?? "";
+    const streamedFunctionOutputCandidate = upstreamResponse.ok
+      && !!upstreamResponse.body
+      && (recoveryContentType.includes("text/event-stream") || (!recoveryContentType && parsed.stream))
+      && !opaqueBlobRecoveryGuard.attempted
+      && outboundResponsesBodyCarriesEncryptedFunctionOutput(request.body);
+    if (streamedFunctionOutputCandidate) {
+      const preflightLog: RequestLogContext = { model: logCtx.model, provider: logCtx.provider };
+      const preflight = await preflightComboStreamResponse(upstreamResponse, preflightLog);
+      upstreamResponse = preflight.response;
+      if (preflight.kind === "failed") {
+        const streamedOpaqueRecovery = await attemptOpaqueBlobRecovery({
+          response: upstreamResponse,
+          outboundBody: request.body,
+          adapterName: adapter.name,
+          parsed,
+          guard: opaqueBlobRecoveryGuard,
+          signal: upstream.signal,
+        }, rebuildAndRefetch);
+        if (streamedOpaqueRecovery.kind === "failed") return streamedOpaqueRecovery.response;
+        if (streamedOpaqueRecovery.kind === "recovered") {
+          resetStreamedOpaqueBlobLogContext(logCtx);
+          upstreamResponse = streamedOpaqueRecovery.response;
+          continue passthroughRecovery;
+        }
+        logCtx.upstreamError = preflightLog.upstreamError;
+        logCtx.terminalHttpStatus = preflightLog.terminalHttpStatus;
+        logCtx.terminalErrorCode = preflightLog.terminalErrorCode;
+        logCtx.terminalIncompleteReason = preflightLog.terminalIncompleteReason;
+      }
+    }
     break;
     }
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
@@ -4903,7 +5053,14 @@ async function handleResponsesInner(
           },
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => unregisterTurn(turnAc),
-        }, inlineEagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
+        }, inlineEagerRewrite
+          ? {
+            rewriteBudget: translatorBudget,
+            ...(logCtx.upstreamError === undefined ? {} : { upstreamError: logCtx.upstreamError }),
+          }
+          : logCtx.upstreamError === undefined
+            ? undefined
+            : { upstreamError: logCtx.upstreamError });
         // When selected, this relay closes response.completed even if upstream
         // keeps the connection alive. Marked Codex WS traffic, Windows
         // forced-rewrite traffic, and Darwin explicit eager traffic apply
@@ -4982,7 +5139,12 @@ async function handleResponsesInner(
       const rewrittenBody = clientBlockRewrite !== undefined
         ? relaySseWithBlockRewrite(nativeBody, clientBlockRewrite, translatorBudget)
         : nativeBody;
-      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => clientGone.abort(reason));
+      const clientBody = relaySseWithFailedTail(
+        rewrittenBody,
+        upstream,
+        reason => clientGone.abort(reason),
+        { upstreamError: logCtx.upstreamError },
+      );
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
         headers,
