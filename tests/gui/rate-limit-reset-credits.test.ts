@@ -180,9 +180,9 @@ describe("rate-limit reset credits", () => {
           tertiary_window: { used_percent: 50, reset_at: 1788000000 },
         },
       });
-      // No provenance flag on the Go/Free branch: the monthly window governs those plans
-      // regardless of which window produced the reading, so recovery never consults it.
-      expect(quota).toEqual({ monthlyPercent: 30, monthlyResetAt: 1787401330 });
+      // The same account can move from weekly to monthly. Preserve the observed primary
+      // provenance so policy storage can retire its obsolete weekly tuple on that transition.
+      expect(quota).toEqual({ monthlyPercent: 30, monthlyResetAt: 1787401330, monthlyIsPrimaryWindow: true });
     });
 
     it("keeps legacy tertiary monthly next to a duration-less weekly primary", () => {
