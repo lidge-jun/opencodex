@@ -6,6 +6,18 @@ against the current tree at this cycle's P before implementing.
 
 ---
 
+## wp4 P stale-check + amendments (binding over the lane text below)
+
+Stale-check at 37622b92d (stack pos 2 head): `cliEntry(runtime)` :66, `writeServiceInstallState(backend, launcherPath)` :238, `buildPlist` :489-527, `installLaunchd` :2244-2272, `buildServiceLauncherShellCommand` :567, `buildUnit` launcher/env shape :3268-3301, `bakedServicePathsDiagnostic` launcher-aware :3236 — all as the lane text assumed.
+
+Amendment (missed by the lane): `launchdStart` (:2281-2300) decides "already loaded from the current plist" by matching the live `launchctl print` output against `buildServiceShellCommand(entry.bun, entry.cli)`. After this change a launcher-baked plist would never match that string, so every healthy `ocx service start` on macOS would fall through to the failure branch. Fix: derive the expected command from the recorded install state — `readServiceInstallState()?.launcherPath` present ⇒ `buildServiceLauncherShellCommand(launcherPath)`, else the Bun+CLI pair — and pin it with a test in the existing `launchdStart` describe.
+
+`ServiceInstallState.launcherPath` doc comment says "Linux only"; update to "launchd and systemd".
+
+Docs: lifecycle.md :245/:256 as the lane text says; structure/04 :36 generalised. Optional `version-skew.ts` wording change is **deferred** (separate concern, keeps this PR to launcher parity).
+
+---
+
 1) VERDICT: FIXABLE
 
 Launchd parity is **not fixed**. The stable launcher fixes which version starts next; it does **not** replace an already-running proxy after `mise upgrade`.
