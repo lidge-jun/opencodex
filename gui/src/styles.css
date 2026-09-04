@@ -1763,13 +1763,26 @@ dialog.modal-overlay::backdrop {
   z-index: 1;
 }
 
-.codex-auth-page-head { align-items: flex-start; }
+/* The action cluster is four nowrap items on one line — feedback, the Spark switch,
+   and two labelled buttons. Narrow the window and that line wants ~577px inside a
+   437px column, and because `.page-head` is a plain nowrap flex row the surplus did
+   not wrap or scroll: the trailing "Refresh quotas" button rendered ~140px past its
+   own container and was sliced by the viewport edge. Both axes wrap now — the
+   cluster drops below the title first, then breaks internally if it still does not
+   fit — so every control stays reachable at any width. Wrapping is inert while the
+   line fits, so the wide layout is byte-identical. */
+.codex-auth-page-head { align-items: flex-start; flex-wrap: wrap; row-gap: 8px; }
 .codex-auth-page-head__actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
   min-width: 0;
 }
+/* Once the cluster owns its own line the title no longer competes for width, so it
+   takes the full row rather than wrapping "Codex Auth" onto two lines. */
+.codex-auth-page-head > .page-title { flex: 1 1 auto; }
 /* Spark visibility switch: a labelled toggle, not a bare knob. An unlabelled switch sitting
    between two labelled buttons is a guessing game, and this one changes what every card in the
    page renders. The label carries the meaning; the toggle carries the state. */

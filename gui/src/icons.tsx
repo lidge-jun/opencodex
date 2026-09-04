@@ -37,6 +37,33 @@ export const IconPower = (p: P) => (<svg {...S(p)}><path d="M18.4 5.6a9 9 0 1 1-
 export const IconExternal = (p: P) => (<svg {...S(p)}><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>);
 export const IconKey = (p: P) => (<svg {...S(p)}><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.6-9.6M16 7l3 3M14 9l2 2"/></svg>);
 
+/**
+ * The Codex mark — a terminal prompt (`>` and an underscore) inside a ring.
+ *
+ * Path data is copied verbatim from the mark the Codex CLI renders on its own
+ * login-success page,
+ * openai/codex `codex-rs/login/src/assets/success.html` (`svg.codex-mark`), so the
+ * geometry traces to a source rather than to a redraw. That mark is already
+ * stroked on `currentColor` with round caps, which is exactly this file's
+ * convention; only its viewBox differs. It keeps the source's `0 0 32 32` box and
+ * `2.484` stroke instead of being rescaled — at 24 units that stroke would be
+ * 1.863, within a hair of the `2` its neighbours use, so it sits at the same
+ * visual weight while staying byte-identical to the original. That is also why it
+ * does not go through `S()`, which hardcodes the 24-unit box and a stroke of 2.
+ */
+export const IconCodex = (p: P) => (
+  <svg
+    viewBox="0 0 32 32"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2.484}
+    strokeLinecap="round"
+    {...p}
+  >
+    <path d="M22.356 19.797H17.17M9.662 12.29l1.979 3.576a.511.511 0 0 1-.005.504l-1.974 3.409M30.758 16c0 8.15-6.607 14.758-14.758 14.758-8.15 0-14.758-6.607-14.758-14.758C1.242 7.85 7.85 1.242 16 1.242c8.15 0 14.758 6.608 14.758 14.758Z" />
+  </svg>
+);
+
 export const IconLock = (p: P) => (<svg {...S(p)}><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>);
 export const IconTicket = (p: P) => (<svg {...S(p)}><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/></svg>);
 export const IconLink = (p: P) => (<svg {...S(p)}><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8"/></svg>);
