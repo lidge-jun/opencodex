@@ -14,6 +14,8 @@ Depends on verified evidence in `000_plan.md`; one work-phase, not separate back
 
 ## Value chain and activation matrix
 
+B review synthesis: accepted native Daybreak Blue mismatch (Medium). It aliases Sol and shares its native credit rates, so include it in the 2.5x native rule and test alias/base equality; API alias and compatibility export remain 2x. Unchanged legacy rules retain their original source/date rather than claiming fresh verification.
+
 B propagation amendment: trusted API reconstruction discards prior Fast hints. Reapply only Fast capability/description after reconstruction from the already-captured provider authority, not the mutable registry and not all user hints (which would override trusted modality/effort policy). This covers reconstructed missing rows and explicit false overrides. Add positive/negative emitted-row assertions; no new service-tier permission.
 
 B evidence amendment: the API snapshot omitted registry `modelMaxOutputTokens`, so Astra's explicit output ceiling vanished in trusted reconstruction (new test red). Add that optional map to `CatalogTrustedOpenAiApiPolicySnapshot` in `src/codex/convergence-types.ts`; capture/freeze it with sibling maps in `provider-fetch.ts` and pass the authoritative value to `routedMaxOutputTokens`, which preserves smaller user limits. The whole policy is included in existing canonical identity serialization; no external deserializer exists. Test actual gather/emitted rows plus configured lower ceiling. Also use the actual native opt-in key `providerContextCaps.openai`, not a new boolean.

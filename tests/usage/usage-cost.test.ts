@@ -675,10 +675,13 @@ describe("priority (Fast) service tier multiplier", () => {
   });
 
   test("P9b. Daybreak priority rules stay inside their routable provider namespace", () => {
-    expect(findPriorityPricingRule("openai", "gpt-daybreak-blue-latest")?.multiplier).toBe(2);
+    expect(findPriorityPricingRule("openai", "gpt-daybreak-blue-latest")?.multiplier).toBe(2.5);
     expect(findPriorityPricingRule("openai-apikey", "daybreak-blue-latest")?.multiplier).toBe(2);
     expect(findPriorityPricingRule("openai-apikey", "gpt-daybreak-blue-latest")).toBeUndefined();
     expect(findPriorityPricingRule("openai", "daybreak-blue-latest")).toBeUndefined();
+    const alias = estimateRequestCost({ provider: "openai", model: "gpt-daybreak-blue-latest", usageStatus: "reported", usage, serviceTier: "priority" });
+    const sol = estimateRequestCost({ provider: "openai", model: "gpt-5.6-sol", usageStatus: "reported", usage, serviceTier: "priority" });
+    expect(alias?.cost.total).toBeCloseTo(sol!.cost.total, 9);
   });
 
   test("P10. attempt cost with priority tier", () => {

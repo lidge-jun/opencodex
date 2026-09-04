@@ -318,6 +318,7 @@ export interface PriorityPricingRule {
 }
 
 const XAI_PRIORITY_PRICING = "https://docs.x.ai/developers/advanced-api-usage/priority-processing";
+const CODEX_FAST_CREDIT_MODELS = new Set(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-daybreak-blue-latest"]);
 
 /**
  * Exact provider/model priority premiums. Routed resellers never inherit a vendor rule merely
@@ -334,10 +335,12 @@ export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
       .map(([modelId, multiplier]): PriorityPricingRule => ({
         provider,
         modelId,
-        multiplier: provider === "openai" && ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].includes(modelId)
+        multiplier: provider === "openai" && CODEX_FAST_CREDIT_MODELS.has(modelId)
           ? 2.5 : multiplier,
-        source: provider === "openai" ? CODEX_SPEED : "https://developers.openai.com/api/docs/pricing",
-        verifiedAt: "2026-09-05",
+        source: provider === "openai" && CODEX_FAST_CREDIT_MODELS.has(modelId) ? CODEX_SPEED
+          : modelId === "gpt-6-astra" ? ASTRA_API_PRICING : "https://openai.com/api-fast-mode/",
+        verifiedAt: modelId === "gpt-6-astra" || (provider === "openai" && CODEX_FAST_CREDIT_MODELS.has(modelId))
+          ? "2026-09-05" : "2026-08-05",
       })),
   ),
   ...["gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro"].map((modelId): PriorityPricingRule => ({
@@ -432,7 +435,7 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
       multiplier: OPENAI_LONG_CONTEXT,
       confirmedPriorityRelation: provider === "openai-apikey" ? "stack" : "exclusive",
       source: OPENAI_PRICING_DOC,
-      verifiedAt: "2026-08-03",
+      verifiedAt: provider === "openai-apikey" ? "2026-09-05" : "2026-08-03",
     })),
   ),
   {
