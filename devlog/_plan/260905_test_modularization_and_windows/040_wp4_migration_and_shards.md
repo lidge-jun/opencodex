@@ -34,8 +34,8 @@ two new guards `test-layout.test.ts` and `test-layout-tooling.test.ts`; `images/
 ```bash
 git switch -c codex/layout-<slice> origin/dev
 bun scripts/test-layout/move.ts --domain <a> --domain <b> ...   # one invocation per slice; preflights all, moves all, appends migrated, verifies; exits 2 on MANUAL lines
-# hand-edit every MANUAL <file>:<line>; re-run verify
-bun scripts/test-layout/verify.ts --domain <a> --domain <b> ...
+# on exit 2 the slice is fully moved and migrated; hand-edit every MANUAL <file>:<line> (or add "// layout: local"), then
+bun scripts/test-layout/verify.ts --domain <a> --domain <b> ...   # re-runs the same escape scanner before the rest
 bun test tests/test-layout.test.ts <the domain dirs>   # test-runner.test.ts is inside ci-workflows/ from PR 6 on; before that name it explicitly
 bun x tsc --noEmit
 bun run test:changed          # on macmini-cf if the slice is large

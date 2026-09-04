@@ -219,15 +219,27 @@ the mover itself makes in step 4 are therefore never mistaken for dirt.
      handle automatically (dynamic imports in `openai-provider-option-e2e.test.ts:258-272`,
      the root URL in `core-lab-boundary.test.ts:34`) are not MANUAL; the dry-run
      output on the flat tree is the authoritative list of what is.
-   - Cleanliness: before any `git mv`, `git status --porcelain -- tests/<from>`
-     must be empty (staged or unstaged); a dirty file aborts the whole domain
-     with the list printed. `git mv` itself does not refuse a dirty tracked file,
+   - Cleanliness: preflight computes the complete write set first: every source
+     file of the slice, every file step 4 will rewrite (found by the same
+     `rg -l --fixed-strings` sweep, run before any move), `scripts/test.ts` when a
+     serial-lane file is in the slice, and `scripts/test-layout/layout.json`.
+     `git status --porcelain -- <write set>` must be empty (staged or unstaged);
+     any dirt aborts the whole slice with the list printed and nothing touched.
+     Dirt outside the write set is ignored. `git mv` itself does not refuse a dirty tracked file,
      so this check is what prevents an unrelated edit from riding inside a rename.
 4. Rewrite every other file that names the moved path as a literal
    (`rg -l --fixed-strings "tests/<basename>"` over `tests scripts .github AGENTS.md src docs-site structure`),
    replacing `tests/<basename>` with `tests/<domain>/<basename>`. Prints each edit.
 5. Appends the selected domains to `layout.migrated`, then runs
    `bun scripts/test-layout/verify.ts --domain <each>`.
+
+Exit 2 (MANUAL lines) happens after steps 2-4 have run for the whole slice and
+after `layout.migrated` has been appended, so the tree is in the post-move
+state with every automatic rewrite applied and only the flagged lines left. The
+operator edits those lines (or adds `// layout: local`) and re-runs
+`verify.ts --domain <each>`, which re-runs the same escape scanner first. There
+is no partial-move state to resume: the mover either aborts in preflight (step
+3, nothing touched) or completes every `git mv` and rewrite before reporting.
 
 The rewriter is regex-based and conservative: any `import.meta.dir` use it cannot
 classify is printed as `MANUAL <file>:<line>` and the run exits 2 so the operator
@@ -242,7 +254,7 @@ For a domain (or all):
   `noEmit`, `skipLibCheck`, `types: ["bun-types"]`. Tests are not typechecked by
   the root tsconfig today (001 §4.A), so this catches only unresolved
   modules and gross breakage, which is exactly what a move can cause.
-- no remaining `import.meta.dir` + `".."` pattern in the domain (rg).
+- the escape scanner from `schema.ts` (the same function and the same `// layout: local` marker policy the mover uses) reports nothing in the domain; honoured markers are printed.
 - `rg --fixed-strings "tests/<basename>"` finds no stale literal for any moved file.
 - runs `bun test --isolate tests/<domain>` (focused, permitted).
 
@@ -455,16 +467,22 @@ Table-driven, runs on the flat tree, no git side effects (operates on a
   and that the `repo-root` import is added once.
 - MANUAL scan: a file-local `join(import.meta.dir, ".tmp-x")` passes; a
   `join(import.meta.dir, "..", "src")` that survived rewriting fails; a flagged
-  line with `// layout: local` passes and is reported.
-- Cleanliness: a dirty file in the selected domains aborts before any `git mv`
-  (assert the tree is untouched); a dirty file outside the slice does not.
+  line with `// layout: local` passes and is reported. The same three cases are
+  asserted against `verify.ts`, which must accept the marked line.
+- Cleanliness: a dirty source test, a dirty rewrite target (e.g. a file under
+  `scripts/` that names a moved path), and a dirty `scripts/test.ts` with a
+  serial-lane file in the slice each abort before any `git mv` (assert the tree
+  is untouched); a dirty file outside the write set does not.
 - `resolveTarget`: explicit beats child regex beats domain regex; unknown -> `null`.
 - `currentPath`: root before `migrated`, target after.
 - Independent mapping oracle: `tests/fixtures/test-layout-expected.json` is the
-  full basename -> target membership from 001 §2.D (1045 entries, generated once
-  from that doc, then hand-corrected alongside `explicit`). The test resolves
-  every live root and nested `*.test.ts` basename through `resolveTarget` and
-  asserts equality with the fixture entry by entry, then derives the per-domain
+  full basename -> target membership from 001 §2.D (1061 entries: the 1045 root
+  files plus the 16 already nested under `images/`, `videos/`, `e2e-style/`;
+  generated once from that doc, then hand-corrected alongside `explicit`). The test resolves
+  every live `*.test.ts` basename except the two `keepAtRoot` guards through
+  `resolveTarget` and asserts equality with the fixture entry by entry (both
+  directions: no live file missing from the fixture, no fixture entry without a
+  live file), then derives the per-domain
   histogram from the fixture and asserts it equals 001 §2.B. A swap between two
   domains fails the membership assertion; a resolver defect that moves and
   blesses the wrong target therefore fails here, not in the guard that shares the
