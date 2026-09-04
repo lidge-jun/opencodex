@@ -215,6 +215,8 @@ function normalizeResetAt(value: unknown): number | undefined {
 function hasKnownQuotaValue(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
   return [quota.weeklyPercent, quota.monthlyPercent, quota.shortPercent]
     .some(value => typeof value === "number" && Number.isFinite(value))
+    // Known short-window shape with unknown usage still selects that window for policy.
+    || snapshotHasShort(quota)
     || !!quota.customWindows?.some(window => Number.isFinite(window.percent));
 }
 
@@ -361,7 +363,8 @@ function mergeAccountQuota(
     if (existing.monthlyIsPrimaryWindow === true) next.monthlyIsPrimaryWindow = true;
   }
 
-  if (snapshotHasShort(quota)) {
+  const preserveKnownShort = quota.shortPercent === undefined && finitePercent(existing?.shortPercent);
+  if (snapshotHasShort(quota) && !preserveKnownShort) {
     if (quota.shortPercent !== undefined) {
       next.shortPercent = quota.shortPercent;
       if (Number.isFinite(quota.shortPercent)) next.shortObservedAt = next.updatedAt;
@@ -369,8 +372,8 @@ function mergeAccountQuota(
     if (quota.shortResetAt !== undefined) next.shortResetAt = quota.shortResetAt;
     if (quota.shortWindowSeconds !== undefined) next.shortWindowSeconds = quota.shortWindowSeconds;
   } else {
-    // Header and reset-credit updates are partial snapshots. Preserve the last full WHAM
-    // burst tuple when those updates do not carry enough window metadata to replace it.
+    // Unknown usage is not a lower reading. Retain the entire known tuple: pairing
+    // its percentage with new metadata would silently extend or shorten its reset.
     if (existing?.shortPercent !== undefined) next.shortPercent = existing.shortPercent;
     if (existing?.shortObservedAt !== undefined) next.shortObservedAt = existing.shortObservedAt;
     if (existing?.shortResetAt !== undefined) next.shortResetAt = existing.shortResetAt;
@@ -469,7 +472,7 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
   // it into weeklyPercent both discards the real weekly reading and leaves the account looking
   // exhausted long after the burst window resets. Duration decides, exactly as parseUsageQuota
   // already does for the WHAM payload — the two parsers must not disagree about the same data.
-  const primaryIsShort = primaryRaw !== null && isExplicitShortWindowMinutes(primaryWindowMinutes);
+  const primaryIsShort = isExplicitShortWindowMinutes(primaryWindowMinutes);
 
   if (primaryIsMonthly) {
     if (primaryPercent !== undefined) {
@@ -485,12 +488,10 @@ export function parseUpstreamQuotaHeaders(headers: Headers): Omit<StoredAccountQ
       if (secondaryResetAt !== undefined) quota.weeklyResetAt = secondaryResetAt;
     }
   } else if (primaryIsShort) {
-    if (primaryPercent !== undefined) {
-      quota.shortPercent = primaryPercent;
-      if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
-      const minutes = windowMinutes_(primaryWindowMinutes);
-      if (minutes !== undefined) quota.shortWindowSeconds = Math.round(minutes * 60);
-    }
+    if (primaryPercent !== undefined) quota.shortPercent = primaryPercent;
+    if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
+    const minutes = windowMinutes_(primaryWindowMinutes);
+    if (minutes !== undefined) quota.shortWindowSeconds = Math.round(minutes * 60);
     // The burst window vacates the primary slot, so the weekly reading is the secondary — which
     // is where it was all along. Without this the true weekly value is silently dropped.
     if (secondaryPercent !== undefined) {
@@ -771,10 +772,10 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
   const primaryIsShort = isExplicitShortWindow(primaryWindow);
   const weeklyCandidatePercent = primaryIsShort ? undefined : primaryPercent;
   const weeklyCandidateResetAt = primaryIsShort ? undefined : primaryResetAt;
-  // Keep the burst reading instead of dropping it on the floor: it is a real limit, and
-  // the account is blocked when it fills even though the weekly window is fine (#1791).
-  if (primaryIsShort && primaryPercent !== undefined) {
-    quota.shortPercent = primaryPercent;
+  // Retain the declared burst tuple even when its usage is unknown. Its shape selects
+  // the short-window policy; a missing reading is not permission to fall back to weekly.
+  if (primaryIsShort) {
+    if (primaryPercent !== undefined) quota.shortPercent = primaryPercent;
     if (primaryResetAt !== undefined) quota.shortResetAt = primaryResetAt;
     const seconds = primaryWindow?.limit_window_seconds;
     if (typeof seconds === "number" && Number.isFinite(seconds)) quota.shortWindowSeconds = seconds;

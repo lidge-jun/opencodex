@@ -65,6 +65,13 @@ async function freePort(): Promise<number> {
   return await findAvailablePort(0, "127.0.0.1");
 }
 
+/** Port 0 on the public listener can otherwise claim the just-released loopback port. */
+async function startLoopbackTestServer(loopbackPort: number) {
+  const publicPort = await findAvailablePort(0, "0.0.0.0", { reservedPort: loopbackPort });
+  expect(publicPort).not.toBe(loopbackPort);
+  return startServer(publicPort);
+}
+
 function firstNonLoopbackIPv4(): string | null {
   for (const entries of Object.values(networkInterfaces())) {
     for (const entry of entries ?? []) {
@@ -224,7 +231,7 @@ describe("unauthenticated loopback listener", () => {
   test("admits without a credential while the public listener does not", async () => {
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     try {
       // Same request, two sockets, two answers. This is the whole feature.
       const viaPublic = await fetch(`http://127.0.0.1:${server.port}/v1/models`);
@@ -247,7 +254,7 @@ describe("unauthenticated loopback listener", () => {
     }
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     try {
       const refused = await new Promise<boolean>(resolve => {
         const socket = connect({ host: address, port: loopbackPort });
@@ -272,7 +279,7 @@ describe("unauthenticated loopback listener", () => {
   test("serves only the allowlisted routes, using each route's real method", async () => {
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     const base = `http://127.0.0.1:${loopbackPort}`;
     try {
       // Each entry uses the METHOD its handler actually accepts. Probing a POST route with GET
@@ -317,7 +324,7 @@ describe("unauthenticated loopback listener", () => {
   test("admits POST /v1/alpha/search so native web search reaches the relay (#3192)", async () => {
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     const body = '{"query":"x"}';
     const headers = { "content-type": "application/json" };
     try {
@@ -352,7 +359,7 @@ describe("unauthenticated loopback listener", () => {
   test("admits the exact standalone Images POST routes so they reach the relay (#3428)", async () => {
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     const headers = { "content-type": "application/json" };
     try {
       for (const path of ["/v1/images/generations", "/v1/images/edits"]) {
@@ -392,7 +399,7 @@ describe("unauthenticated loopback listener", () => {
   test("admits standalone realtime voice WebSocket upgrades, HTTP stays rejected", async () => {
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     const base = `http://127.0.0.1:${loopbackPort}`;
     const upgradeHeaders = {
       connection: "upgrade",
@@ -421,7 +428,7 @@ describe("unauthenticated loopback listener", () => {
   test("admits WebRTC voice call-create POSTs and keyed sideband upgrades (openai/codex #35830)", async () => {
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     const base = `http://127.0.0.1:${loopbackPort}`;
     const upgradeHeaders = {
       connection: "upgrade",
@@ -460,7 +467,7 @@ describe("unauthenticated loopback listener", () => {
   test("admits POST /v1/responses and its compact sibling without a credential", async () => {
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     const base = `http://127.0.0.1:${loopbackPort}`;
     const publicBase = `http://127.0.0.1:${server.port}`;
     try {
@@ -497,7 +504,7 @@ describe("unauthenticated loopback listener", () => {
   test("upgrades a Responses WebSocket on the listener that received it", async () => {
     const loopbackPort = await freePort();
     saveConfig({ ...baseConfig(loopbackPort), websockets: true } as unknown as OcxConfig);
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     try {
       // What this proves: the loopback listener completes a Responses WebSocket handshake
       // without a credential, and the public one does not.
@@ -518,7 +525,7 @@ describe("unauthenticated loopback listener", () => {
   test("applies the loopback Host and Origin gate, not the public same-origin rule", async () => {
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     const url = `http://127.0.0.1:${loopbackPort}/v1/models`;
     try {
       // The kernel refuses remote TCP, but a victim's browser connects locally on an
@@ -541,7 +548,7 @@ describe("unauthenticated loopback listener", () => {
   test("stopping the server closes both listeners", async () => {
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));
-    const server = startServer(0);
+    const server = await startLoopbackTestServer(loopbackPort);
     const publicPort = server.port;
     await server.stop(true);
 

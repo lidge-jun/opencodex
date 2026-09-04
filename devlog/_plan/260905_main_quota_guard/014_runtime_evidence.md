@@ -34,3 +34,12 @@
 - Independent Tesla review: unrelated-provider refusal finding closed; final VERDICT PASS.
 - No local test suite was executed. Exact-head CI is pending publication and is required before runtime completion/merge.
 - Installed Desktop Reserve-gate source evidence is in001; live Reserve success is not claimed.
+
+## CI round1:373915800
+
+Run33929679810, test2/4 job101205597376: two exact-context assertions in `codex-main-rotation.test.ts:158,186` failed because they did not include the intentionally added internal `mainQuotaWriter`. The batch reported136pass/2fail. Other gates, including the actual CI typecheck/GUI tests/privacy/build job, passed at this point; remaining jobs were not yet complete.
+Repair classification: required contract-fixture extension. Preserve exact whole-object equality and every prior credential/routing assertion; add explicit writer key-format and generation-type checks. Identity/ABA semantics remain covered by new provenance tests. No production change and no local suite run.
+
+The same run's test1/4 job101205597387 also failed native-search listener setup with EADDRINUSE at the secondary bind (`server/index.ts:2375`), before the request/assertions. Its fixture chooses a free secondary port, releases it, then binds the public listener with0; that draw can claim the reserved secondary port. The existing `findAvailablePort(...,{reservedPort})` contract already addresses this exact collision in a sibling test. Reuse it for all equivalent ordinary loopback-start fixtures, leaving intentional bind-failure tests unchanged. This changes test port selection only, not production startup, timeouts, retries or assertions. No flake is excused merely by retrying.
+
+Repair checkpoint: preserve declared short-window metadata and retain an already measured tuple on missing usage; `main-quota-window-observation.test.ts` adds owned WHAM/header coverage and is registered in both manifests. Fresh C reviewer Feynman closed the parser finding and reviewed both CI fixture repairs, VERDICT PASS. Root typecheck, standalone new observation-test typecheck, privacy scan and diff check all exited0. No local suite.
