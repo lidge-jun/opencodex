@@ -2600,6 +2600,115 @@ describe("codex-auth API", () => {
     }
   });
 
+  test("the main account DTO keeps its resetCredits when a later WHAM usage omits the summary", async () => {
+    // /wham/usage carries rate_limit_reset_credits only intermittently. Pool DTOs survive
+    // that because they re-read the merged store; the main DTO used to serialize the raw
+    // parse result, so the ticket badge disappeared on every response that omitted it.
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-dto-credits", account_id: "acct-main-dto-credits" },
+    }));
+    reconcileMainCodexAccountRuntimeState();
+    const originalFetch = globalThis.fetch;
+    let includeCredits = true;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/backend-api/wham/usage")) {
+          return Response.json({
+            email: "main@example.test",
+            plan_type: "pro",
+            rate_limit: { primary_window: { used_percent: 28, reset_at: 1788749167 } },
+            ...(includeCredits ? { rate_limit_reset_credits: { available_count: 1 } } : {}),
+          });
+        }
+        return originalFetch(input);
+      }) as typeof fetch;
+
+      const first = await listCodexAuthAccounts(makeConfig(), true);
+      expect(first.find(a => a.id === MAIN_CODEX_ACCOUNT_ID)!.quota?.resetCredits).toBe(1);
+
+      includeCredits = false;
+      const second = await listCodexAuthAccounts(makeConfig(), true);
+      const main = second.find(a => a.id === MAIN_CODEX_ACCOUNT_ID)!;
+      expect(main.quota?.resetCredits).toBe(1);
+      expect(main.quota?.weeklyPercent).toBe(28);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("the main account DTO never carries resetCredits across a main identity change", async () => {
+    // `__main__` is an alias: ~/.codex/auth.json can be swapped for another physical
+    // ChatGPT account, so a carried ticket count must be bound to the identity it was read
+    // from or one account's credits show up on another's card.
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-ident-a", account_id: "acct-main-ident-a" },
+    }));
+    reconcileMainCodexAccountRuntimeState();
+    const originalFetch = globalThis.fetch;
+    let includeCredits = true;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/backend-api/wham/usage")) {
+          return Response.json({
+            email: "main@example.test",
+            plan_type: "pro",
+            rate_limit: { primary_window: { used_percent: 40, reset_at: 1788749167 } },
+            ...(includeCredits ? { rate_limit_reset_credits: { available_count: 5 } } : {}),
+          });
+        }
+        return originalFetch(input);
+      }) as typeof fetch;
+
+      const first = await listCodexAuthAccounts(makeConfig(), true);
+      expect(first.find(a => a.id === MAIN_CODEX_ACCOUNT_ID)!.quota?.resetCredits).toBe(5);
+
+      // The operator signs in as a different physical account and the next usage response
+      // happens not to carry the summary.
+      writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+        tokens: { access_token: "main-ident-b", account_id: "acct-main-ident-b" },
+      }));
+      includeCredits = false;
+      const second = await listCodexAuthAccounts(makeConfig(), true);
+      const main = second.find(a => a.id === MAIN_CODEX_ACCOUNT_ID)!;
+      expect(main.quota?.resetCredits).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a freshly parsed main resetCredits of zero overrides the stored value", async () => {
+    // Zero is a real reading, not an absence: the DTO fill must never resurrect a stale
+    // non-zero ticket count over it.
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-dto-zero", account_id: "acct-main-dto-zero" },
+    }));
+    reconcileMainCodexAccountRuntimeState();
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, undefined, undefined, undefined, undefined, 3);
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/backend-api/wham/usage")) {
+          return Response.json({
+            email: "main@example.test",
+            plan_type: "pro",
+            rate_limit: { primary_window: { used_percent: 10, reset_at: 1788749167 } },
+            rate_limit_reset_credits: { available_count: 0 },
+          });
+        }
+        return originalFetch(input);
+      }) as typeof fetch;
+
+      const accounts = await listCodexAuthAccounts(makeConfig(), true);
+      const main = accounts.find(account => account.id === MAIN_CODEX_ACCOUNT_ID)!;
+      expect(main.quota?.resetCredits).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("reset-credit consume omits remaining when main WHAM refresh is non-2xx", async () => {
     writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
       tokens: { access_token: "main-reset-fail", account_id: "acct-main-reset-fail" },

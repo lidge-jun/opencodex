@@ -85,7 +85,7 @@ export function CodexAccountPoolMainCard({
         <span className={`dot ${showReauth ? "dot-amber" : "dot-green"}`} />
         <strong>{t("codexAuth.mainAccount")}</strong>
         <span className="card-badges">
-          {main && <CodexTicketBadge t={t} account={{ ...main, id: "__main__" } as CodexAccountEntry} onClick={() => onOpenReset({ ...main, id: "__main__" } as CodexAccountEntry)} />}
+          {main?.plan && <span className="badge badge-green">{main.plan}</span>}
           {main?.paused && (
             <span className="badge badge-muted" title={t("codexAuth.pausedHint")}>
               {t("codexAuth.paused")}
@@ -93,6 +93,7 @@ export function CodexAccountPoolMainCard({
           )}
           <AccountPriorityBadge value={mainSwitchEntry.priority} />
           {pinnedId === "__main__" && !main?.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
+          {main && <CodexTicketBadge t={t} account={{ ...main, id: "__main__" } as CodexAccountEntry} onClick={() => onOpenReset({ ...main, id: "__main__" } as CodexAccountEntry)} />}
           {healthLabel && (
             <span className={oauthHealthBadgeClass(main?.health?.status)}>{healthLabel}</span>
           )}
