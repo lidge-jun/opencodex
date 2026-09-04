@@ -337,6 +337,16 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 An opt-in shadow-call rewrite persists the bounded, redacted original helper model as
 `shadowCallRewrittenFrom`, so helper traffic remains identifiable after restart without storing
 request content or inferring a helper subtype from timing.
+Streaming request execution records bounded, attempt-isolated `streamTimeline` milestones
+(`upstreamDispatchMs`, `upstreamHeadersMs`, `upstreamFirstByteMs`, `upstreamFirstSemanticOutputMs`,
+`downstreamFirstWriteMs`, `upstreamEndMs`, `downstreamEndMs`) and closed-enum failure attribution
+(`failureSide`: `upstream | relay | downstream | client | local`, `failureStage`: `pre_dispatch | upstream_wait_headers | upstream_read | relay_transform | downstream_write | client_cancel | terminal_delivery`).
+Timeline recording is strictly content-gated: `upstreamFirstSemanticOutputMs` requires actual
+non-empty text or reasoning output deltas rather than pre-populated context state. Inspected stream
+provenance (`inspectedSource`: `upstream` vs `relay`) explicitly isolates bridge/adapter translation
+failures (such as buffer or schema limits) into `relay` / `relay_transform` attribution rather than
+misclassifying them as upstream failures. Diagnostic `transportPhase` and `terminalSource` fields are
+strictly validated, sanitized of credential shapes, and preserved across process restarts.
 `src/usage/summary.ts` turns that file into the `/api/usage` shape — totals, daily zero-filled
 grid, model and provider breakdowns, and `measured / reported / unreported / unsupported / estimated` counts.
 The management route streams the complete ledger from its beginning in fixed 1 MiB chunks on a

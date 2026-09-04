@@ -22,6 +22,34 @@ export type UsageAccountLogLabel = "main" | `p${string}` | `o${string}`;
 export type CodexUsageAccountLogLabel = UsageAccountLogLabel;
 
 /**
+ * Bounded stream timing breakdown in elapsed ms from request/attempt start (issue #1217).
+ * Best-effort correlation metrics for streaming observability.
+ */
+export interface StreamTimeline {
+  upstreamDispatchMs?: number;
+  upstreamHeadersMs?: number;
+  upstreamFirstByteMs?: number;
+  upstreamFirstSemanticOutputMs?: number;
+  downstreamFirstWriteMs?: number;
+  upstreamEndMs?: number;
+  downstreamEndMs?: number;
+}
+
+export type FailureSide = "upstream" | "relay" | "downstream" | "client" | "local";
+export type FailureStage =
+  | "pre_dispatch"
+  | "upstream_wait_headers"
+  | "upstream_read"
+  | "relay_transform"
+  | "downstream_write"
+  | "client_cancel"
+  | "terminal_delivery";
+/** Bounded, redacted diagnostic string describing the transport phase. */
+export type TransportPhase = string;
+/** Bounded, redacted diagnostic string describing the terminal source. */
+export type TerminalSource = string;
+
+/**
  * Accepts EITHER label family. This is the predicate the persistence writers use, so widening
  * it here is what stops six separate call sites from silently dropping an `o`-label -- including
  * two in the live request path (`request-log.ts:972` and `:1187`).
@@ -94,6 +122,12 @@ export interface PersistedUsageAttempt {
   reasoningWireValue?: string | number | boolean;
   /** Adapter-produced tier fact for this physical attempt; absent on pre-B0 rows. */
   tierOutcome?: AttemptTierOutcome;
+  /** Bounded streaming timeline for this attempt (issue #1217). */
+  streamTimeline?: StreamTimeline;
+  failureSide?: FailureSide;
+  failureStage?: FailureStage;
+  transportPhase?: TransportPhase;
+  terminalSource?: TerminalSource;
 }
 
 export interface PersistedUsageEntry {
@@ -148,6 +182,14 @@ export interface PersistedUsageEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
   upstreamError?: string;
+  /**
+   * Bounded streaming timeline and causal failure attribution (issue #1217).
+   */
+  streamTimeline?: StreamTimeline;
+  failureSide?: FailureSide;
+  failureStage?: FailureStage;
+  transportPhase?: TransportPhase;
+  terminalSource?: TerminalSource;
   /**
    * Bounded route-decision trace (RI-01): why this provider/model/account was
    * selected. Additive field; old rows without it parse unchanged. Never
@@ -281,6 +323,84 @@ const TIER_CONFIRMATIONS = new Set<AttemptTierOutcome["confirmation"]>([
 const FAST_DOWNGRADE_REASONS = new Set<NonNullable<AttemptTierOutcome["fastDowngradeReason"]>>([
   "route-unsupported", "wire-unavailable", "response-declined",
 ]);
+const KNOWN_FAILURE_SIDES = new Set<FailureSide>([
+  "upstream", "relay", "downstream", "client", "local",
+]);
+const KNOWN_FAILURE_STAGES = new Set<FailureStage>([
+  "pre_dispatch",
+  "upstream_wait_headers",
+  "upstream_read",
+  "relay_transform",
+  "downstream_write",
+  "client_cancel",
+  "terminal_delivery",
+]);
+const MAX_STREAM_DIAGNOSTIC_LENGTH = 64;
+const STREAM_DIAGNOSTIC_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+
+/**
+ * Keep bounded diagnostic values when they are safe, but drop the complete value
+ * when redaction had to rewrite it. Keeping a redacted fragment would make the
+ * field look trustworthy while still retaining attacker-controlled context next
+ * to a credential-shaped marker.
+ */
+function normalizeBoundedStreamDiagnostic(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.trim().replace(STREAM_DIAGNOSTIC_CONTROL_CHARS, "");
+  if (!cleaned) return undefined;
+  const unbounded = sanitizeLogMetadataString(cleaned, cleaned.length);
+  if (!unbounded || unbounded !== cleaned) return undefined;
+  return cleaned.slice(0, MAX_STREAM_DIAGNOSTIC_LENGTH);
+}
+
+function normalizeStreamTimeline(raw: unknown): StreamTimeline | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const t = raw as Record<string, unknown>;
+  const out: StreamTimeline = {};
+  for (const key of [
+    "upstreamDispatchMs",
+    "upstreamHeadersMs",
+    "upstreamFirstByteMs",
+    "upstreamFirstSemanticOutputMs",
+    "downstreamFirstWriteMs",
+    "upstreamEndMs",
+    "downstreamEndMs",
+  ] as const) {
+    if (key in t && isNonNegativeFiniteNumber(t[key])) {
+      out[key] = t[key] as number;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+export function normalizeStreamDiagnostics(raw: {
+  streamTimeline?: unknown;
+  failureSide?: unknown;
+  failureStage?: unknown;
+  transportPhase?: unknown;
+  terminalSource?: unknown;
+}): {
+  streamTimeline?: StreamTimeline;
+  failureSide?: FailureSide;
+  failureStage?: FailureStage;
+  transportPhase?: TransportPhase;
+  terminalSource?: TerminalSource;
+} {
+  const streamTimeline = normalizeStreamTimeline(raw.streamTimeline);
+  const transportPhase = normalizeBoundedStreamDiagnostic(raw.transportPhase);
+  const terminalSource = normalizeBoundedStreamDiagnostic(raw.terminalSource);
+  return {
+    ...(streamTimeline ? { streamTimeline } : {}),
+    ...(typeof raw.failureSide === "string" && KNOWN_FAILURE_SIDES.has(raw.failureSide as FailureSide)
+      ? { failureSide: raw.failureSide as FailureSide }
+      : {}),
+    ...(typeof raw.failureStage === "string" && KNOWN_FAILURE_STAGES.has(raw.failureStage as FailureStage)
+      ? { failureStage: raw.failureStage as FailureStage }
+      : {}),
+    ...(transportPhase ? { transportPhase: transportPhase as TransportPhase } : {}),
+    ...(terminalSource ? { terminalSource: terminalSource as TerminalSource } : {}),
+  };
+}
 
 export function isLabRouteSubjectId(value: unknown): value is string {
   return typeof value === "string" && LAB_ROUTE_SUBJECT_ID_RE.test(value);
@@ -439,6 +559,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
         : { reasoningWireValue: attempt.reasoningWireValue }
       : {}),
     ...(tierOutcome ? { tierOutcome } : {}),
+    ...normalizeStreamDiagnostics(attempt),
   };
 }
 
@@ -551,6 +672,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+    ...normalizeStreamDiagnostics(entry),
     ...(routeDecision ? { routeDecision } : {}),
   };
 }

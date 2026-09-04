@@ -913,4 +913,272 @@ describe("usage log", () => {
 
     expect(readRecentUsageEntries(1)).toEqual([]);
   }, STORE_BUDGET_MS);
+
+  test("normalizes and preserves streamTimeline and failure attribution (#1217)", () => {
+    appendUsageEntry({
+      requestId: "ocx-stream-timeline-test",
+      timestamp: Date.now(),
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      status: 502,
+      durationMs: 61342,
+      firstOutputMs: 9107,
+      usageStatus: "unreported",
+      streamTimeline: {
+        upstreamDispatchMs: 12,
+        upstreamHeadersMs: 4410,
+        upstreamFirstByteMs: 4421,
+        upstreamFirstSemanticOutputMs: 9107,
+        downstreamFirstWriteMs: 4423,
+        upstreamEndMs: 61340,
+        downstreamEndMs: 61342,
+      },
+      failureSide: "upstream",
+      failureStage: "upstream_read",
+      transportPhase: "mid_stream",
+      terminalSource: "synthetic",
+    });
+
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === "ocx-stream-timeline-test");
+    expect(row).toBeDefined();
+    expect(row?.streamTimeline).toEqual({
+      upstreamDispatchMs: 12,
+      upstreamHeadersMs: 4410,
+      upstreamFirstByteMs: 4421,
+      upstreamFirstSemanticOutputMs: 9107,
+      downstreamFirstWriteMs: 4423,
+      upstreamEndMs: 61340,
+      downstreamEndMs: 61342,
+    });
+    expect(row?.failureSide).toBe("upstream");
+    expect(row?.failureStage).toBe("upstream_read");
+    expect(row?.transportPhase).toBe("mid_stream");
+    expect(row?.terminalSource).toBe("synthetic");
+  });
+
+  test("preserves bounded diagnostics but drops invalid closed attribution (#1217)", () => {
+    appendUsageEntry({
+      requestId: "ocx-stream-invalid-attribution-test",
+      timestamp: Date.now(),
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      status: 502,
+      durationMs: 1000,
+      usageStatus: "unreported",
+      failureSide: "invalid_side" as unknown as any,
+      failureStage: "invalid_stage" as unknown as any,
+      transportPhase: "invalid_phase" as unknown as any,
+      terminalSource: "invalid_source" as unknown as any,
+      attempts: [
+        {
+          ordinal: 1,
+          adapter: "anthropic",
+          sendCount: 1,
+          usageStatus: "unreported",
+          timestamp: Date.now(),
+          provider: "anthropic",
+          model: "claude-sonnet-5",
+          status: 502,
+          durationMs: 1000,
+          failureSide: "bogus_side" as unknown as any,
+          failureStage: "bogus_stage" as unknown as any,
+          transportPhase: "bogus_phase" as unknown as any,
+          terminalSource: "bogus_source" as unknown as any,
+        },
+      ],
+    });
+
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === "ocx-stream-invalid-attribution-test");
+    expect(row).toBeDefined();
+    expect(row?.failureSide).toBeUndefined();
+    expect(row?.failureStage).toBeUndefined();
+    expect(row?.transportPhase).toBe("invalid_phase");
+    expect(row?.terminalSource).toBe("invalid_source");
+    expect(row?.attempts?.[0].failureSide).toBeUndefined();
+    expect(row?.attempts?.[0].failureStage).toBeUndefined();
+    expect(row?.attempts?.[0].transportPhase).toBe("bogus_phase");
+    expect(row?.attempts?.[0].terminalSource).toBe("bogus_source");
+  });
+
+  test("drops credential-shaped values from diagnostic metadata (#1217)", () => {
+    appendUsageEntry({
+      requestId: "ocx-stream-credential-drop-test",
+      timestamp: Date.now(),
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      status: 502,
+      durationMs: 1000,
+      usageStatus: "unreported",
+      failureSide: "Basic dXNlcjpwYXNz" as unknown as any,
+      failureStage: "token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" as unknown as any,
+      transportPhase: "password=super-secret-pw" as unknown as any,
+      terminalSource: "api-key=supersecret12345" as unknown as any,
+    });
+
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === "ocx-stream-credential-drop-test");
+    expect(row).toBeDefined();
+    expect(row?.failureSide).toBeUndefined();
+    expect(row?.failureStage).toBeUndefined();
+    expect(row?.transportPhase).toBeUndefined();
+    expect(row?.terminalSource).toBeUndefined();
+  });
+
+  test("shared request logging flow populates streamTimeline and failure attribution from real streaming failure (#1217)", async () => {
+    const { addFinalRequestLog } = await import("../src/server/request-log");
+    const { consumeForInspection } = await import("../src/server/relay");
+    type ReqLogCtx = import("../src/server/request-log").RequestLogContext;
+
+    const requestId = "ocx-real-stream-fail-test";
+    const start = Date.now() - 50;
+    const logCtx: ReqLogCtx = {
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      providerAdapter: "anthropic",
+      requestStartedAt: start,
+    };
+
+    // Simulate an SSE stream that delivers data then encounters an upstream read error (socket reset)
+    let sentFirst = false;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (!sentFirst) {
+          sentFirst = true;
+          controller.enqueue(new TextEncoder().encode('data: {"type":"response.output_item.added"}\n\n'));
+          return;
+        }
+        controller.error(new Error("socket reset mid-stream"));
+      },
+    });
+
+    await new Promise<void>(resolve => {
+      consumeForInspection(
+        stream,
+        (terminalStatus, httpStatusOverride) => {
+          addFinalRequestLog(
+            requestId,
+            start,
+            logCtx,
+            httpStatusOverride ?? (terminalStatus === "completed" ? 200 : 502),
+            { terminalStatus },
+          );
+          resolve();
+        },
+        undefined,
+        () => resolve(),
+        logCtx,
+      );
+    });
+
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === requestId);
+    expect(row).toBeDefined();
+    expect(row?.status).toBe(502);
+    expect(row?.terminalStatus).toBe("failed");
+    expect(row?.transportPhase).toBe("mid_stream");
+    expect(row?.terminalSource).toBe("synthetic");
+    expect(row?.failureSide).toBe("upstream");
+    expect(row?.failureStage).toBe("upstream_read");
+    expect(row?.streamTimeline?.upstreamFirstByteMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test("synthetic clean EOF sets transportPhase to mid_stream", async () => {
+    const { addFinalRequestLog } = await import("../src/server/request-log");
+    const { consumeForInspection } = await import("../src/server/relay");
+    const requestId = "ocx-stream-clean-eof-test";
+    const start = Date.now() - 50;
+    const logCtx: RequestLogContext = {
+      requestId,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      requestStartedAt: start,
+      activeAttemptStartedAt: start,
+      activeAttempt: {
+        ordinal: 1,
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        adapter: "anthropic",
+        status: 200,
+        durationMs: 50,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+      },
+    };
+
+    // An empty SSE stream that terminates with clean EOF without a completed terminal event
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.close();
+      },
+    });
+
+    await new Promise<void>(resolve => {
+      consumeForInspection(
+        stream,
+        (terminalStatus, httpStatusOverride) => {
+          addFinalRequestLog(
+            requestId,
+            start,
+            logCtx,
+            httpStatusOverride ?? 502,
+            { terminalStatus },
+          );
+          resolve();
+        },
+        undefined,
+        () => resolve(),
+        logCtx,
+      );
+    });
+
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === requestId);
+    expect(row).toBeDefined();
+    expect(row?.transportPhase).toBe("mid_stream");
+    expect(row?.terminalSource).toBe("synthetic");
+    expect(row?.failureSide).toBe("upstream");
+    expect(row?.failureStage).toBe("upstream_read");
+  });
+
+  test("preserves distinct attempt-relative and request-relative streamTimeline on retry", async () => {
+    const { addFinalRequestLog, noteStreamTimelineEvent } = await import("../src/server/request-log");
+    const requestId = "ocx-stream-retry-timeline-test";
+    const requestStart = 10000;
+    const attemptStart = 12000; // attempt starts 2000ms after request
+    const now = 13500;
+
+    const attempt: PersistedUsageAttempt = {
+      ordinal: 2,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      adapter: "anthropic",
+      status: 200,
+      durationMs: 1500,
+      sendCount: 2,
+      recoveryKinds: ["retry"],
+      usageStatus: "reported",
+    };
+    const logCtx: RequestLogContext = {
+      requestId,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      requestStartedAt: requestStart,
+      activeAttemptStartedAt: attemptStart,
+      activeAttempt: attempt,
+      attempts: [attempt],
+    };
+
+    noteStreamTimelineEvent(logCtx, "upstreamFirstByteMs", requestStart, now);
+    expect(logCtx.streamTimeline?.upstreamFirstByteMs).toBe(3500); // 13500 - 10000
+    expect(logCtx.activeAttempt?.streamTimeline?.upstreamFirstByteMs).toBe(1500); // 13500 - 12000
+
+    addFinalRequestLog(requestId, requestStart, logCtx, 200, { terminalStatus: "completed" });
+    const entries = readRecentUsageEntries(10);
+    const row = entries.find(e => e.requestId === requestId);
+    expect(row?.streamTimeline?.upstreamFirstByteMs).toBe(3500);
+    expect(row?.attempts?.[0]?.streamTimeline?.upstreamFirstByteMs).toBe(1500);
+  });
 });

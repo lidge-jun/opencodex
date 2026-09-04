@@ -2366,6 +2366,7 @@ export async function handleComboResponses(
     const childLog: RequestLogContext = {
       model: pick.target.model,
       provider: pick.target.provider,
+      ...(logCtx.requestStartedAt !== undefined ? { requestStartedAt: logCtx.requestStartedAt } : {}),
       ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     };
@@ -4889,6 +4890,7 @@ async function handleResponsesInner(
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
+        requestStartedAt: logCtx.requestStartedAt,
         clientGoneSignal: clientGone.signal,
         drainBounds: { ms: 15_000, bytes: 32 * 1024 * 1024 },
         upstream,
