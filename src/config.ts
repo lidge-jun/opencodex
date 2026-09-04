@@ -3118,6 +3118,14 @@ export function websocketsEnabled(config: Pick<OcxConfig, "websockets">): boolea
   return config.websockets === true;
 }
 
+/**
+ * Opt-in Ultra Fast, read with the house `=== true` idiom so an absent key and a
+ * malformed one both mean off.
+ */
+export function ultraFastTierEnabled(config: Pick<OcxConfig, "ultraFastTier">): boolean {
+  return config.ultraFastTier === true;
+}
+
 // ---------------------------------------------------------------------------
 // Hand-edit protection for the `claudeCode` subtree (devlog 260726_claude_auth_auto/040 H1).
 //

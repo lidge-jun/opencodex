@@ -14,6 +14,7 @@
 import { describe, expect, test } from "bun:test";
 import { canonicalFastTierMarker } from "../src/providers/fastwire";
 import { requestLogSpeedLabel } from "../src/server/request-log";
+import { normalizeRoutedCatalogEntry } from "../src/codex/catalog/parsing";
 
 describe("ultrafast intent is recognised, not mistaken for silence", () => {
   test("the caller marker folds ultrafast to its own canonical, not to priority", () => {
@@ -57,5 +58,61 @@ describe("ultrafast gets a speed label", () => {
     expect(requestLogSpeedLabel("auto")).toBeUndefined();
     expect(requestLogSpeedLabel(undefined)).toBeUndefined();
     expect(requestLogSpeedLabel("")).toBeUndefined();
+  });
+});
+
+/**
+ * The catalog half. The flag PRESERVES a tier the operator supplied; it never invents one,
+ * which is the line PR #2994 was closed for crossing.
+ */
+describe("routed rows and the ultrafast opt-in", () => {
+  const operatorRow = () => ({
+    slug: "kimi/k3",
+    service_tier: "ultrafast",
+    default_service_tier: "ultrafast",
+    service_tiers: [
+      { id: "priority", name: "Fast", description: "1.5x speed, increased usage" },
+      { id: "ultrafast", name: "Ultra Fast", description: "operator supplied" },
+    ],
+    additional_speed_tiers: ["fast", "ultrafast"],
+  });
+
+  test("with the flag OFF every tier field is stripped, exactly as before", () => {
+    const entry = normalizeRoutedCatalogEntry(operatorRow(), false, undefined, { ultraFastTier: false });
+    expect(entry.service_tier).toBeUndefined();
+    expect(entry.service_tiers).toBeUndefined();
+    expect(entry.default_service_tier).toBeUndefined();
+    expect(entry.additional_speed_tiers).toBeUndefined();
+  });
+
+  test("with the flag ON the operator's ultrafast survives regeneration", () => {
+    // The whole reported symptom: a hand-edited catalog lost the tier on every sync.
+    const entry = normalizeRoutedCatalogEntry(operatorRow(), false, undefined, { ultraFastTier: true });
+    expect(entry.service_tiers).toEqual([{ id: "ultrafast", name: "Ultra Fast", description: "operator supplied" }]);
+    expect(entry.additional_speed_tiers).toEqual(["ultrafast"]);
+    expect(entry.service_tier).toBe("ultrafast");
+    expect(entry.default_service_tier).toBe("ultrafast");
+  });
+
+  test("the flag never smuggles Fast onto a routed row", () => {
+    // Routed rows are stripped because a clone of a native template would otherwise inherit
+    // OpenAI's priority tier. Preserving ultrafast must not reopen that.
+    const entry = normalizeRoutedCatalogEntry(operatorRow(), false, undefined, { ultraFastTier: true });
+    const ids = (entry.service_tiers as Array<{ id: string }>).map(tier => tier.id);
+    expect(ids).not.toContain("priority");
+    expect(entry.additional_speed_tiers).not.toContain("fast");
+  });
+
+  test("the flag invents nothing when the operator supplied no ultrafast", () => {
+    // A row carrying only the upstream Fast tier is stripped whether the flag is on or off:
+    // upstream advertises no ultrafast, so there is nothing to preserve.
+    const fastOnly = {
+      slug: "kimi/k3",
+      service_tiers: [{ id: "priority", name: "Fast" }],
+      additional_speed_tiers: ["fast"],
+    };
+    const entry = normalizeRoutedCatalogEntry(fastOnly, false, undefined, { ultraFastTier: true });
+    expect(entry.service_tiers).toBeUndefined();
+    expect(entry.additional_speed_tiers).toBeUndefined();
   });
 });

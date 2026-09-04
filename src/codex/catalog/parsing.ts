@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from "../../config";
+import { atomicWriteFile, expandUserPath, getConfigDir, loadConfig, ultraFastTierEnabled, websocketsEnabled } from "../../config";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
@@ -302,6 +302,70 @@ export function findSupportedNativeTemplate(catalog: RawCatalog | null): RawEntr
 const NO_FAST_TIER_NATIVE_SLUGS = new Set([
   "gpt-5.3-codex-spark",
 ]);
+
+/** Does this row already carry an `ultrafast` tier the operator put there themselves? */
+/**
+ * Read the opt-in from the live config.
+ *
+ * `deriveEntry` and its five call sites are pure `RawEntry -> RawEntry` transforms with no
+ * config parameter, and threading one through all of them to carry a single boolean would
+ * be a much larger change than the behavior it gates. Callers that already hold a config
+ * can still pass `opts.ultraFastTier` explicitly, which is what the tests do; this is the
+ * fallback for the sync path. Failure reads as OFF, matching `.catch(false)`.
+ */
+function ultraFastTierOptIn(): boolean {
+  try {
+    return ultraFastTierEnabled(loadConfig());
+  } catch {
+    return false;
+  }
+}
+
+function entryDeclaresUltraFast(entry: RawEntry): boolean {
+  const tiers = entry.service_tiers;
+  const declaredInTiers = Array.isArray(tiers) && tiers.some(tier => (
+    !!tier && typeof tier === "object" && "id" in tier
+    && String((tier as { id?: unknown }).id).trim().toLowerCase() === "ultrafast"
+  ));
+  const speeds = entry.additional_speed_tiers;
+  const declaredInSpeeds = Array.isArray(speeds) && speeds.some(speed => (
+    typeof speed === "string" && speed.trim().toLowerCase() === "ultrafast"
+  ));
+  return declaredInTiers || declaredInSpeeds;
+}
+
+/**
+ * Keep the operator's `ultrafast` and drop everything else.
+ *
+ * A routed row must not inherit the native template's `priority` tier, which is the whole
+ * reason this strip exists. Preserving the supplied tier without this narrowing would
+ * smuggle Fast onto third-party providers under an unrelated flag.
+ */
+function retainOnlyUltraFastTier(entry: RawEntry): void {
+  const tiers = entry.service_tiers;
+  const keptTiers = Array.isArray(tiers)
+    ? tiers.filter(tier => (
+      !!tier && typeof tier === "object" && "id" in tier
+      && String((tier as { id?: unknown }).id).trim().toLowerCase() === "ultrafast"
+    ))
+    : [];
+  if (keptTiers.length > 0) entry.service_tiers = keptTiers;
+  else delete entry.service_tiers;
+
+  const speeds = entry.additional_speed_tiers;
+  const keptSpeeds = Array.isArray(speeds)
+    ? speeds.filter(speed => typeof speed === "string" && speed.trim().toLowerCase() === "ultrafast")
+    : [];
+  if (keptSpeeds.length > 0) entry.additional_speed_tiers = keptSpeeds;
+  else delete entry.additional_speed_tiers;
+
+  // A default of `priority` on a row that now only offers ultrafast would name a tier the
+  // row no longer carries.
+  if (String(entry.service_tier ?? "").trim().toLowerCase() !== "ultrafast") delete entry.service_tier;
+  if (String(entry.default_service_tier ?? "").trim().toLowerCase() !== "ultrafast") {
+    delete entry.default_service_tier;
+  }
+}
 
 export function normalizeServiceTiers(entry: RawEntry): RawEntry {
   // Strip service tiers for models that do not actually support the Fast tier.
@@ -612,6 +676,7 @@ export function normalizeRoutedCatalogEntry(
   entry: RawEntry,
   parallelToolCalls = false,
   toolMode?: "code_mode_only" | "shell" | string,
+  opts?: { ultraFastTier?: boolean },
 ): RawEntry {
   delete entry.model_messages;
   delete entry.tool_mode;
@@ -619,10 +684,25 @@ export function normalizeRoutedCatalogEntry(
   delete entry.multi_agent_version;
   delete entry.use_responses_lite;
   delete entry.supports_websockets;
-  delete entry.additional_speed_tiers;
-  delete entry.service_tier;
-  delete entry.service_tiers;
-  delete entry.default_service_tier;
+  /*
+   * Tier metadata is stripped from routed rows because a row cloned from a native template
+   * would otherwise hand a third-party provider OpenAI's tiers.
+   *
+   * The opt-in carves out exactly one case: an `ultrafast` the OPERATOR put in their own
+   * catalog. #3429's reporter added it by hand and watched a regeneration delete it every
+   * time. Preserving what they wrote is not the same as advertising a tier — upstream
+   * publishes only `priority`, and synthesizing an ultrafast row is what PR #2994 was
+   * closed for. So this keeps a supplied tier and still never invents one.
+   */
+  const keepUltraFast = (opts?.ultraFastTier ?? ultraFastTierOptIn()) && entryDeclaresUltraFast(entry);
+  if (!keepUltraFast) {
+    delete entry.additional_speed_tiers;
+    delete entry.service_tier;
+    delete entry.service_tiers;
+    delete entry.default_service_tier;
+  } else {
+    retainOnlyUltraFastTier(entry);
+  }
   // Routed rows cloned from native templates must not inherit OpenAI-only summary delivery.
   // Explicit provider/model metadata is re-applied after this normalization step.
   delete entry.supports_reasoning_summaries;
