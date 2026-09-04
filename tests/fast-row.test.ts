@@ -117,7 +117,7 @@ describe("fast-row routable bases", () => {
     // publish `gpt-5.6-sol--fast` and then refuse to parse it.
     const config = configWith({ openai: provider({ authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" }) });
     const bases = fastRowBases(config);
-    expect(bases.has("gpt-5.6-sol")).toBe(true);
+    expect(bases("gpt-5.6-sol")).toBe(true);
     expect(parseFastRowId("gpt-5.6-sol--fast", config, new Set(), bases))
       .toEqual({ baseId: "gpt-5.6-sol" });
   });
@@ -125,8 +125,8 @@ describe("fast-row routable bases", () => {
   test("configured routed ids stay routable", () => {
     const config = configWith({ fixture: provider({ models: ["m1"] }) });
     const bases = fastRowBases(config);
-    expect(bases.has("m1")).toBe(true);
-    expect(bases.has("fixture/m1")).toBe(true);
+    expect(bases("m1")).toBe(true);
+    expect(bases("fixture/m1")).toBe(true);
   });
 });
 
@@ -239,7 +239,7 @@ describe("publication and parsing agree", () => {
       openai: provider({ authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" }),
     }, { codexAccountNamespaces: { desktop: "@main" } } as Partial<OcxConfig>);
     const bases = fastRowBases(config);
-    expect(bases.has("desktop/gpt-5.6-sol")).toBe(true);
+    expect(bases("desktop/gpt-5.6-sol")).toBe(true);
     expect(parseFastRowId("desktop/gpt-5.6-sol--fast", config, new Set(), bases))
       .toEqual({ baseId: "desktop/gpt-5.6-sol" });
   });
@@ -257,9 +257,12 @@ describe("routable bases do not depend on the live-model cache", () => {
     clearModelCache("fixture");
     const withoutCache = fastRowBases(config);
     // A declared model is recognized either way, and cache churn changes nothing at all.
-    expect(withCache.has("declared")).toBe(true);
-    expect(withoutCache.has("declared")).toBe(true);
-    expect([...withCache].sort()).toEqual([...withoutCache].sort());
+    expect(withCache("declared")).toBe(true);
+    expect(withoutCache("declared")).toBe(true);
+    // And the live-only model is recognized both before and after churn: it is namespaced
+    // under an enabled provider, which is structural rather than cache-derived.
+    expect(withCache("fixture/live-only")).toBe(true);
+    expect(withoutCache("fixture/live-only")).toBe(true);
   });
 
   test("a bare native is recognized regardless of cache state", () => {
@@ -268,22 +271,22 @@ describe("routable bases do not depend on the live-model cache", () => {
     const config = configWith({
       openai: provider({ authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" }),
     });
-    expect(fastRowBases(config).has("gpt-5.6-sol")).toBe(true);
+    expect(fastRowBases(config)("gpt-5.6-sol")).toBe(true);
     clearModelCache();
-    expect(fastRowBases(config).has("gpt-5.6-sol")).toBe(true);
+    expect(fastRowBases(config)("gpt-5.6-sol")).toBe(true);
   });
 
   test("a disabled provider contributes no bases", () => {
     const config = configWith({ fixture: provider({ models: ["m"], disabled: true }) });
-    expect(fastRowBases(config).has("m")).toBe(false);
+    expect(fastRowBases(config)("m")).toBe(false);
   });
 
   test("namespaced and alias-namespaced spellings are recognized", () => {
     const config = configWith({ fixture: provider({ models: ["m"], alias: "fx" }) });
     const bases = fastRowBases(config);
-    expect(bases.has("m")).toBe(true);
-    expect(bases.has("fixture/m")).toBe(true);
-    expect(bases.has("fx/m")).toBe(true);
+    expect(bases("m")).toBe(true);
+    expect(bases("fixture/m")).toBe(true);
+    expect(bases("fx/m")).toBe(true);
   });
 });
 describe("delegation is the shipped function, not a lookalike", () => {
@@ -300,3 +303,42 @@ describe("delegation is the shipped function, not a lookalike", () => {
     }
   });
 });
+describe("live-discovered publication is recognized", () => {
+  test("a live-only model published under its provider namespace parses back", () => {
+    // The review blocker: listings publish goModels and retainModels, which appear in NO
+    // config. A config-only Set missed them, so wp2 would have published
+    // `fixture/live-only--fast` that no ingress could resolve. Structural namespace
+    // recognition covers it without reading the cache.
+    const config = configWith({ fixture: provider({ models: ["declared"], supportsServiceTier: true }) });
+    const bases = fastRowBases(config);
+    const published = expandFastRow({ id: "fixture/live-only" }, true, config)
+      .map(row => row.id)
+      .filter(id => id.endsWith("--fast"));
+    expect(published).toEqual(["fixture/live-only--fast"]);
+    for (const id of published) {
+      expect(parseFastRowId(id, config, new Set(), bases)).toEqual({ baseId: "fixture/live-only" });
+    }
+  });
+
+  test("an unknown namespace is still refused", () => {
+    // Structural recognition is scoped to enabled configured providers, so it does not
+    // degrade into accepting anything containing a slash.
+    const config = configWith({ fixture: provider() });
+    const bases = fastRowBases(config);
+    expect(bases("nosuchprovider/m")).toBe(false);
+    expect(parseFastRowId("nosuchprovider/m--fast", config, new Set(), bases)).toBeNull();
+  });
+
+  test("a disabled provider's namespace is refused", () => {
+    const config = configWith({ fixture: provider({ models: ["m"], disabled: true }) });
+    const bases = fastRowBases(config);
+    expect(bases("fixture/anything")).toBe(false);
+  });
+
+  test("a bare unknown id is refused", () => {
+    // No namespace to vouch for it, and not a declared or native id.
+    const config = configWith({ fixture: provider({ models: ["m"] }) });
+    expect(fastRowBases(config)("whatever")).toBe(false);
+  });
+});
+

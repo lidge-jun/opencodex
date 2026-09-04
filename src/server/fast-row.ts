@@ -83,11 +83,18 @@ export function fastRowEligible(
  * through its configured provider (router.ts:680). So the base kept working while only the
  * fast selector broke — the asymmetry this set exists to prevent.
  *
- * Every source below is therefore config-derived or static. A base is RECOGNIZED here and
- * then judged by routing, which is the component that actually knows whether it can serve
- * it.
+ * A pure Set cannot express this. Listings also publish LIVE-discovered and retained models
+ * that appear in no config (`provider-fetch.ts` publishes `goModels` and `retainModels`), and
+ * enumerating them means reading the very cache whose churn caused the original defect. So
+ * this returns a PREDICATE: an id is a routable base when it is a known static/config id, or
+ * when it is namespaced under an enabled configured provider. The second clause is
+ * structural, so it holds for a live-discovered model without consulting the cache, and it
+ * is exactly the shape `routeModel` uses to accept a qualified id (router.ts:680).
+ *
+ * A base is RECOGNIZED here and then judged by routing, which is the component that actually
+ * knows whether it can serve it.
  */
-export function fastRowBases(config: OcxConfig): Set<string> {
+export function fastRowBases(config: OcxConfig): (id: string) => boolean {
   const bases = new Set<string>();
   // Configured providers: any model the router would accept for this provider, plus the
   // namespaced and alias-namespaced spellings a listing can publish. Deliberately NOT
@@ -125,7 +132,23 @@ export function fastRowBases(config: OcxConfig): Set<string> {
       for (const slug of slugs) bases.add(`${selector}/${slug}`);
     }
   }
-  return bases;
+  // Namespaces whose qualified ids route, whatever the cache currently holds.
+  const namespaces = new Set<string>();
+  for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+    if (providerConfig.disabled === true) continue;
+    namespaces.add(providerName.toLowerCase());
+    if (typeof providerConfig.alias === "string" && providerConfig.alias.length > 0) {
+      namespaces.add(providerConfig.alias.toLowerCase());
+    }
+  }
+  return (id: string): boolean => {
+    if (bases.has(id)) return true;
+    const slash = id.indexOf("/");
+    if (slash <= 0 || slash === id.length - 1) return false;
+    // A live-discovered or retained model is published as `<provider>/<model>` and appears in
+    // no config, so structural recognition is the only cache-free way to accept it.
+    return namespaces.has(id.slice(0, slash).toLowerCase());
+  };
 }
 
 export function parseFastRowId(
