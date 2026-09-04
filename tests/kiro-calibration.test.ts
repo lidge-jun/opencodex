@@ -101,4 +101,25 @@ describe("kiro per-conversation calibration", () => {
     // The second identical observation is consistent, so it must not push the factor further.
     expect(afterSecond).toBe(afterFirst);
   });
+
+  // The upstream checkpoint is the context size AFTER the response, while the estimate covers the
+  // request alone. Learning from the raw checkpoint would charge generated tokens to
+  // prompt-tokenization error: a short prompt answered at length would look like a huge
+  // under-estimate and inflate every later request in that conversation.
+  test("output tokens must be removed before learning, or a long answer poisons the factor", () => {
+    const requestEstimate = 1000;
+    const trulyAccurate = 1000;   // our estimate was exactly right for the prompt
+    const longAnswer = 2000;      // ...but the model then wrote a long response
+    const checkpointAfterResponse = trulyAccurate + longAnswer;
+
+    // Correct: subtract the output, observe a 1.0 ratio, leave the estimate alone.
+    calibrateKiroEstimate("conv-good", requestEstimate);
+    recordKiroCalibration("conv-good", requestEstimate, checkpointAfterResponse - longAnswer);
+    expect(calibrateKiroEstimate("conv-good", requestEstimate)).toBe(requestEstimate);
+
+    // Wrong: feeding the post-response checkpoint straight in learns a 3x error that never existed.
+    calibrateKiroEstimate("conv-bad", requestEstimate);
+    recordKiroCalibration("conv-bad", requestEstimate, checkpointAfterResponse);
+    expect(calibrateKiroEstimate("conv-bad", requestEstimate)).toBeGreaterThan(requestEstimate * 2);
+  });
 });

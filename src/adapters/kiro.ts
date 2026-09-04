@@ -1511,9 +1511,19 @@ async function* parseKiroAttemptEvents(
     // the estimator ever receives. Recorded here rather than at the terminal returns above because
     // this is the path where a turn completed normally — a stream that failed mid-flight proves
     // nothing about how densely its payload tokenized.
-    const chargedFloor = contextUsageTotalFloor();
-    if (chargedFloor !== undefined && contextInputEstimate !== undefined) {
-      recordKiroCalibration(returnedConversationId, contextInputEstimate, chargedFloor);
+    //
+    // Subtract the output first. `contextUsageTotalFloor` is the absolute context size AFTER the
+    // response (`OcxUsage.contextTotalTokens`, types/request.ts), while `contextInputEstimate`
+    // covers the request payload alone. Dividing one by the other would charge generated tokens to
+    // prompt-tokenization error, so a short prompt answered at length would learn a large factor
+    // and inflate every later request in that conversation — exactly the premature compaction this
+    // work exists to prevent.
+    const chargedTotal = contextUsageTotalFloor();
+    if (chargedTotal !== undefined && contextInputEstimate !== undefined) {
+      const chargedInput = chargedTotal - finalUsage.outputTokens;
+      if (chargedInput > 0) {
+        recordKiroCalibration(returnedConversationId, contextInputEstimate, chargedInput);
+      }
     }
     // Native stop metadata proves that this inference ended, but it does not prove that ordinary
     // text is a final answer. Kiro has emitted END_TURN for progress prose, so tool-enabled turns
