@@ -7,7 +7,7 @@ import { useT, useI18n } from "../../i18n/shared";
 import QuotaBars from "../QuotaBars";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { formatRelativeTime, relativeTimeLabelsFromT, formatRequestCount, formatTokenCount, formatCostUsd } from "../../provider-workspace/usage";
-import { accountQuotaFromReport, formatQuotaSourceLabel, type ProviderQuotaReportView } from "../../provider-workspace/report";
+import { accountQuotaFromReport, formatQuotaSourceLabel, observedAtFromReport, type ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { ProviderUsageTotals, ProviderModelUsageRow } from "./types";
 
 export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsage }: {
@@ -21,6 +21,9 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
   const timeLabels = relativeTimeLabelsFromT(t);
   const hasUsage = usageTotals?.requests !== undefined;
   const quota = accountQuotaFromReport(quotaReport);
+  // Passive providers only. An age line beside a probed number would be noise; beside an
+  // observation it is the difference between a live reading and a remembered one.
+  const observedAt = observedAtFromReport(quotaReport);
   const [expandedModel, setExpandedModel] = useState<string | null>(null);
   void item;
 
@@ -138,7 +141,14 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsa
         <h3 className="pws-section-title">{t("pws.rateLimits")}</h3>
         {quota ? (
           <>
-            <QuotaBars quota={quota} plan={null} threshold={80} t={t} layout="stacked" />
+            <QuotaBars
+              quota={quota}
+              plan={null}
+              threshold={80}
+              t={t}
+              layout="stacked"
+              {...(observedAt !== undefined ? { observedAt } : {})}
+            />
             <dl className="pws-kv pws-usage-meta">
               {quotaReport?.source?.trim() && (
                 <div className="pws-kv-row">

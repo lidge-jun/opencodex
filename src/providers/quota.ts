@@ -130,6 +130,18 @@ export interface ProviderQuotaReport {
   quota: ProviderQuota;
   updatedAt: number;
   reverseEngineered?: boolean;
+  /**
+   * The row was OBSERVED in-band on a streaming turn rather than probed.
+   *
+   * Age means something different for these. A probed provider re-reads on its own TTL,
+   * so a row older than the last-good bound means the probe is failing and showing it
+   * would misrepresent a live number. A passive provider publishes no endpoint at all
+   * (`hasPassiveAccountQuota`), so its last observation is not a stale reading of
+   * something fresher — it is the only measurement that exists, and dropping it leaves
+   * the operator with nothing. Consumers that enforce a freshness bound must exempt
+   * these and state the observation age instead.
+   */
+  observed?: boolean;
   aggregation?: CodexCapacityAggregation;
 }
 
@@ -1427,7 +1439,9 @@ async function fetchPassiveProviderQuota(provider: string): Promise<ProviderQuot
   hydrateAccountQuotaCache();
   const entry = accountQuotaCache.get(accountCacheKey(provider, activeId));
   if (!entry?.quota) return null;
-  return report(provider, `${provider}:subscription-observation`, entry.quota);
+  const built = report(provider, `${provider}:subscription-observation`, entry.quota);
+  // Tagged here rather than inside report(), which every probed path shares.
+  return built ? { ...built, observed: true } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2472,9 +2486,14 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
   const now = Date.now();
   // The cache fast path must not extend a preserved last-good row past its 30-minute bound:
   // a row preserved at age 29:59 plus a full 5-minute TTL would otherwise serve until ~35min.
+  // An OBSERVED row is exempt: it carries the observation time, which is older than the bound
+  // by construction and never becomes fresher on its own. Without the exemption a single
+  // configured passive provider makes this predicate permanently false, so every dashboard
+  // poll re-probes every OTHER provider upstream instead of serving the 5-minute cache.
   const cacheFresh = cache && cache.key === key && now - cache.ts < CACHE_TTL_MS
     && cache.response.reports.every(item =>
-      now - item.updatedAt < LAST_GOOD_MAX_AGE_MS && isProviderQuotaReportCurrent(item));
+      (item.observed === true || now - item.updatedAt < LAST_GOOD_MAX_AGE_MS)
+      && isProviderQuotaReportCurrent(item));
   if (!forceRefresh && cacheFresh) return cache!.response;
   const joinable = inflight.get(key);
   if (!forceRefresh && joinable && joinable.epoch === invalidationEpoch) return joinable.promise;
@@ -2518,7 +2537,9 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
     const byProvider = new Map<string, ProviderQuotaReport>();
     const generationMismatchedProviders = new Set<string>();
     for (const item of previous) {
-      if (item.updatedAt < cutoff) continue;
+      // Same exemption as the fast path. A passive row reaching `previous` is not a probe
+      // that went quiet — there is no probe — so age cannot condemn it.
+      if (item.observed !== true && item.updatedAt < cutoff) continue;
       if (isProviderQuotaReportCurrent(item)) byProvider.set(item.provider, item);
       else generationMismatchedProviders.add(item.provider);
     }

@@ -8,6 +8,7 @@ import { useT, useI18n, type Locale } from "../../i18n/shared";
 import {
   accountQuotaFromReport,
   capacityAggregationFromReport,
+  observedAtFromReport,
   type CapacityWindowView,
   type ProviderQuotaReportView,
 } from "../../provider-workspace/report";
@@ -45,6 +46,8 @@ export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuo
   const { locale } = useI18n();
   const aggregation = capacityAggregationFromReport(report);
   const primaryQuota = accountQuotaFromReport(report);
+  // Only a passively observed row carries this; see ProviderUsage for the same rule.
+  const observedAt = observedAtFromReport(report);
   const credits = primaryQuota?.creditsUsd;
   const showsAggregate = aggregation?.presentation === "aggregate";
   const incompleteWindowKeys = new Set<QuotaWindowKey>();
@@ -92,6 +95,7 @@ export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuo
           t={t}
           layout="stacked"
           pending={pending}
+          {...(observedAt !== undefined ? { observedAt } : {})}
           incompleteWindowKeys={showsAggregate ? incompleteWindowKeys : undefined}
           incompleteCustomWindowLabels={showsAggregate ? incompleteCustomWindowLabels : undefined}
         />
