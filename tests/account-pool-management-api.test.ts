@@ -432,6 +432,18 @@ describe("Anthropic account pool strategy management API", () => {
       await server.stop(true);
     }
   });
+  test("the inert marker describes strategy/threshold only, never enabled", async () => {
+    // `inert: true` used to read as "the whole DTO changes nothing". That stopped being true
+    // when reactive and proactive activation were split: `enabled: false` still refuses the
+    // pre-dispatch account preference, it just can no longer refuse 429 rotation. A dashboard
+    // reading `inert` as covering `enabled` would render a live control as decorative.
+    const source = await Bun.file("src/oauth/pool-settings-capability.ts").text();
+    const start = source.indexOf("autoSwitchThreshold: number | null;");
+    const marker = source.slice(start, source.indexOf("inert: true;", start));
+    expect(marker).toContain("strategy");
+    expect(marker).toContain("autoSwitchThreshold");
+    expect(marker).toContain("enabled");
+  });
 });
 
 describe("generic OAuth pool-settings contract (#695)", () => {
