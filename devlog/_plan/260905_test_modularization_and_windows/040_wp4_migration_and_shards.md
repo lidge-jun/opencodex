@@ -33,10 +33,9 @@ new `test-layout.test.ts`; `images/ videos/ e2e-style/` stay where they are.
 
 ```bash
 git switch -c codex/layout-<slice> origin/dev
-for d in <domains>; do bun scripts/test-layout/move.ts --domain $d; done   # exits 2 on MANUAL lines
+bun scripts/test-layout/move.ts --domain <a> --domain <b> ...   # one invocation per slice; preflights all, moves all, appends migrated, verifies; exits 2 on MANUAL lines
 # hand-edit every MANUAL <file>:<line>; re-run verify
-bun scripts/test-layout/verify.ts --domain <each>
-# append the domains to layout.migrated in scripts/test-layout/layout.json
+bun scripts/test-layout/verify.ts --domain <a> --domain <b> ...
 bun test tests/test-layout.test.ts <the domain dirs>   # test-runner.test.ts is inside ci-workflows/ from PR 6 on; before that name it explicitly
 bun x tsc --noEmit
 bun run test:changed          # on macmini-cf if the slice is large
@@ -164,7 +163,7 @@ result passes the allowlist).
 Dispatch inputs. Today `workflow_dispatch` runs everything including
 `platform-windows`, so a dispatch on a PR head whose Windows shards are red
 (someone else's burn-down) produces a red `ci` on that SHA. The workflow gains
-one boolean input:
+one choice input:
 
 ```diff
 -  workflow_dispatch:
@@ -207,7 +206,9 @@ the PR head to an immutable `codex/ci-dispatch-<sha>` ref and run
 `gh workflow run ci.yml --ref <that ref> -f lane=macos-control`; the run must
 show `macos 1/2`, `macos 2/2`, `macos control` green and `windows */4` skipped,
 so the aggregate `ci` on that SHA is green rather than red on someone else's
-Windows burn-down. Record the
+Windows burn-down. The branch is only immutable by convention: immediately
+before merge, `gh run view <id> --json headSha` must equal
+`gh pr view <n> --json headRefOid`, and both must equal the SHA being merged. Record the
 run id in `041`. Delete the ref afterwards.
 
 Stale comment at `ci.yml:450-452` ("5m23s, cheapest") is deleted in the same PR.
@@ -225,6 +226,4 @@ As in 030 §4 plus, for each move PR, the exact-head `ci` run must show
 `test 1/4..4/4`, `storage policy`, `api usage`, `macos` green, which is the
 proof that discovery, the batch script and the isolated jobs all still find
 the moved files.
-
-
 

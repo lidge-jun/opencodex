@@ -174,9 +174,16 @@ restricts output to one domain (the per-PR slice in wp4), `--json`.
 
 ### NEW `scripts/test-layout/move.ts`
 
-`bun scripts/test-layout/move.ts --domain <name> [--dry-run]`:
+`bun scripts/test-layout/move.ts --domain <a> [--domain <b> ...] [--dry-run]`:
 
-1. `plan()` for the domain.
+A slice is one invocation with every domain of that PR, so the sequence is
+preflight-all, move-all, rewrite-all, verify-all. The cleanliness gate (step 3)
+runs once over the union of source files before the first `git mv`; rewrites
+the mover itself makes in step 4 are therefore never mistaken for dirt.
+`layout.migrated` is appended with every selected domain before step 5 runs, so
+`currentPath` and the layout guard see the post-move state during verification.
+
+1. `plan()` for every selected domain (union, deduplicated).
 2. For each pair: `git mv <from> <to>` after the cleanliness check in step 3.
 3. Rewrite in the moved file. Let `toHelpers` be `..` (depth 1) or `../..`
    (depth 2) and `toRepo` be `../..` or `../../..`:
@@ -207,10 +214,10 @@ restricts output to one domain (the per-PR slice in wp4), `--json`.
      reads a source-oracle string) is accepted by a same-line trailing marker
      `// layout: local` that a human adds after reading it; the mover prints every
      marker it honoured so the reviewer sees them in the PR. Flagged lines print as
-     `MANUAL <file>:<line>` and the run exits 2. Known MANUAL sites from 001
-     §3.E: `ci-workflows.test.ts:30-35`, `core-lab-boundary.test.ts:34`,
-     `openai-provider-option-e2e.test.ts:258-272` (dynamic imports of helper
-     modules), `fixture-dir-uniqueness.test.ts` (below).
+     `MANUAL <file>:<line>` and the run exits 2. Sites the rules above
+     handle automatically (dynamic imports in `openai-provider-option-e2e.test.ts:258-272`,
+     the root URL in `core-lab-boundary.test.ts:34`) are not MANUAL; the dry-run
+     output on the flat tree is the authoritative list of what is.
    - Cleanliness: before any `git mv`, `git status --porcelain -- tests/<from>`
      must be empty (staged or unstaged); a dirty file aborts the whole domain
      with the list printed. `git mv` itself does not refuse a dirty tracked file,
@@ -218,7 +225,8 @@ restricts output to one domain (the per-PR slice in wp4), `--json`.
 4. Rewrite every other file that names the moved path as a literal
    (`rg -l --fixed-strings "tests/<basename>"` over `tests scripts .github AGENTS.md src docs-site structure`),
    replacing `tests/<basename>` with `tests/<domain>/<basename>`. Prints each edit.
-5. Runs `bun scripts/test-layout/verify.ts --domain <name>`.
+5. Appends the selected domains to `layout.migrated`, then runs
+   `bun scripts/test-layout/verify.ts --domain <each>`.
 
 The rewriter is regex-based and conservative: any `import.meta.dir` use it cannot
 classify is printed as `MANUAL <file>:<line>` and the run exits 2 so the operator
@@ -229,7 +237,7 @@ edits it by hand before committing.
 For a domain (or all):
 - every file in the domain resolves its imports: `bun build --no-bundle` is not
   usable for TS-only; instead `bun x tsc --noEmit -p scripts/test-layout/tsconfig.verify.json`
-  with the committed `include: ["scripts/test-layout/**/*.ts", "tests/test-layout.test.ts", "tests/helpers/**/*.ts"]`; `verify.ts --domain X` writes a temp config under `.tmp/` that `extends` it and adds `"tests/X/**/*.ts"`, runs tsc with `-p` on that file, then deletes it,
+  with the committed `include: ["scripts/test-layout/**/*.ts", "tests/test-layout.test.ts", "tests/helpers/**/*.ts"]`; `verify.ts --domain X` writes a temp config under `.tmp/` that `extends` it and repeats the three base entries plus `"tests/X/**/*.ts"` in its own `include` (`include` is replaced, not merged, through `extends`), runs tsc with `-p` on that file, then deletes it,
   `noEmit`, `skipLibCheck`, `types: ["bun-types"]`. Tests are not typechecked by
   the root tsconfig today (001 §4.A), so this catches only unresolved
   modules and gross breakage, which is exactly what a move can cause.
@@ -426,16 +434,43 @@ is proven on the flat tree in wp3 (same pass/fail set) before any move.
 
 Plus the `bun test tests/<name>.test.ts` example becomes `bun test tests/<domain>/<name>.test.ts`.
 
+### NEW `tests/test-layout-tooling.test.ts`
+
+Table-driven, runs on the flat tree, no git side effects (operates on a
+`mkdtempSync` copy with its own `git init`):
+
+- `rewriteSpecifier`: for each of depth 1 and depth 2, each of static import,
+  `await import()`, `require()`, `import.meta.resolve()`, `new URL(..., import.meta.url)`
+  and each prefix (`./helpers/`, `../helpers/`, `../fixtures/`, `../preload`,
+  `../src/`, `../gui/`, `../scripts/`, `../bin/`, `../package.json`, `../.github/`,
+  `../skills/`, `"../"`), the expected output string; plus negative cases
+  (`bun:test`, `node:fs`, package names, `./sibling` at depth 0) unchanged.
+- `import.meta` rewrites: each pattern in step 3 bullets 2-3 to `repoPath`/`repoRoot`/`helperPath`,
+  and that the `repo-root` import is added once.
+- MANUAL scan: a file-local `join(import.meta.dir, ".tmp-x")` passes; a
+  `join(import.meta.dir, "..", "src")` that survived rewriting fails; a flagged
+  line with `// layout: local` passes and is reported.
+- Cleanliness: a dirty file in the selected domains aborts before any `git mv`
+  (assert the tree is untouched); a dirty file outside the slice does not.
+- `resolveTarget`: explicit beats child regex beats domain regex; unknown -> `null`.
+- `currentPath`: root before `migrated`, target after.
+- Independent mapping oracle: `tests/fixtures/test-layout-expected.json` holds
+  the per-domain file counts from 001 §2.B (`providers/cursor: 63`, ...); the
+  test resolves every live `tests/**/*.test.ts` basename and asserts the
+  histogram equals the fixture. A resolver defect that moves and blesses the
+  wrong target therefore fails here, not in the guard that shares the resolver.
+- End-to-end on the temp copy: seed six fake files across two domains, run
+  `move` with both domains, assert paths, rewritten imports, `migrated`, and that
+  `verify` passes; then assert the layout guard passes on the result.
+
 ## 4. Verification for wp3
 
 - `bun x tsc --noEmit` (root) and `bun x tsc --noEmit -p scripts/test-layout/tsconfig.verify.json`
   (covers `scripts/test-layout/**`, `tests/test-layout.test.ts`, `tests/helpers/**`; the
   root tsconfig excludes tests, so this is the only typecheck the tooling gets).
-- `bun test tests/test-layout.test.ts tests/test-runner.test.ts tests/zz-ci-storage-policy-isolation.test.ts tests/zz-ci-api-usage-isolation.test.ts tests/repo-hygiene.test.ts tests/skill-ocx.test.ts tests/bun-runtime.test.ts tests/release-version-line.test.ts tests/ci-workflows.test.ts`
+- `bun test tests/test-layout.test.ts tests/test-layout-tooling.test.ts tests/test-runner.test.ts tests/zz-ci-storage-policy-isolation.test.ts tests/zz-ci-api-usage-isolation.test.ts tests/repo-hygiene.test.ts tests/skill-ocx.test.ts tests/bun-runtime.test.ts tests/release-version-line.test.ts tests/ci-workflows.test.ts`
 - `bun scripts/test-layout/plan.ts` exits 0 with zero UNRESOLVED (proves the map covers 1061).
 - `bun scripts/test-layout/move.ts --domain windows --dry-run` prints the 20 moves and the rewrites without touching the tree.
 - `bun run test:changed`, `bun run privacy:scan`.
 - PR to `dev`, exact-head `ci` success, admin merge, ancestry proof.
-
-
 
