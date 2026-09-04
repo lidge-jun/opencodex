@@ -60,7 +60,16 @@ ocx connect rotate --admin-token-stdin
 
 ## Docker、回滚与排障
 
-opencodex 不发布官方 Docker 镜像。请按 digest 固定 Bun 镜像，将 `/home/bun/.opencodex` 挂载为持久卷，并将密钥挂载到 `/run/secrets/ocx_api_token`。只发布 `10100`，不要发布 `10101`。不要把密钥放入 `ARG`、`ENV`、`COPY`、Compose、镜像历史或 argv。healthcheck 后仍需单独验证 readiness、目录和真实请求。
+opencodex 不发布官方 Docker 镜像，但仓库提供维护的 `Dockerfile` 和 `compose.yaml`，用于在本地构建按 digest 固定的 Bun 镜像。首次启动前，通过 stdin 初始化一次数据密钥；密钥不会输出，并以仅所有者可读的权限保存在 `ocx-state` 卷中。
+
+```bash
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex
+openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
+docker compose up -d
+```
+
+容器以非 root 的 `bun` 用户运行，根文件系统只读，并且只发布 `10100`。不要发布 `10101`，也不要把密钥放入 `ARG`、`ENV`、`COPY`、Compose、镜像历史或 argv。healthcheck 后仍需单独验证 readiness、认证目录和真实请求。`docker compose down` 会保留卷；`docker compose down --volumes` 还会删除配置、凭据和数据密钥。
 
 - hub 宕机：可以离线断开，但远程密钥仍待吊销。
 - 目录过期：仅在临时故障时保留已验证的 LKG；认证、架构、大小或协议错误不会回退到本地提供商。

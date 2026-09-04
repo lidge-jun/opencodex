@@ -37,22 +37,24 @@ bun run build
 
 ## Container deployment recipe
 
-Phase-5 remote-hub documentation includes an operator-owned multi-stage Dockerfile and Compose
-example in `guides/remote-hub`; the repository intentionally ships no root `Dockerfile`,
-`.dockerignore`, registry image, or publish workflow. An official image would create a release
-surface that also requires maintained base-image digest updates, vulnerability scanning, SBOM,
-signing, registry provenance, rollback, and support policy. Until those controls have an explicit
-owner, the guide requires operators to pin the Bun base digest, run non-root, persist
-`OPENCODEX_HOME`, mount the data token through `OCX_API_TOKEN_FILE`, and prove liveness, readiness,
-authenticated catalog access, and a real routed response themselves.
+The repository ships a root multi-stage `Dockerfile`, `compose.yaml`, narrow `.dockerignore`, and
+container bootstrap helper, but still publishes no registry image. The source build pins the Bun
+base by multi-platform digest, runs non-root with a read-only root filesystem and dropped
+capabilities, persists `OPENCODEX_HOME`, and streams the initial data token through stdin into the
+owner-only canonical token file. Operators must still prove liveness, readiness, authenticated
+catalog access, and a real routed response before promotion.
+
+An official image would create a larger release surface requiring maintained base-image digest
+updates, vulnerability scanning, SBOM, signing, registry provenance, rollback, and support policy.
+Those controls still have no owner, so there is no image-publish workflow or official registry tag.
 
 [Decision Log]
 - 목적과 의도: Document a reproducible container topology without silently creating an official image channel.
-- 기존 구현 및 제약 조건: The repository has no maintained Docker release artifacts, registry workflow, scanner, SBOM/signing chain, or image rollback policy.
-- 검토한 주요 대안: Add a root Dockerfile and publish it; omit containers entirely; provide a complete operator-owned recipe in the remote-hub guide.
-- 선택한 방식: Keep the recipe in documentation, require an operator-resolved base digest and mounted secret file, and publish only the public data port.
-- 다른 대안 대신 이 방식을 선택한 이유: A source recipe communicates the supported runtime contract while leaving image provenance and operations with the party building it.
-- 장점, 단점 및 영향: Docker users have a concrete starting point, but opencodex does not claim to ship, scan, sign, or support the resulting image.
+- 기존 구현 및 제약 조건: The documentation recipe was not executable from the repository root, file-backed Compose secret ownership varies by implementation, and no registry workflow, scanner, SBOM/signing chain, or image rollback policy exists.
+- 검토한 주요 대안: Publish an official image; keep only copied documentation snippets; ship a maintained source recipe with a volume-backed stdin bootstrap.
+- 선택한 방식: Maintain the root source-build recipe, persist the owner-only token in the state volume, publish only `10100`, and leave registry publication out of scope.
+- 다른 대안 대신 이 방식을 선택한 이유: A runnable source recipe can be tested and reviewed without claiming provenance and operational controls the project does not provide.
+- 장점, 단점 및 영향: Compose users get a reproducible non-root deployment and safe first-run secret path; operators still own image builds, upgrades, external TLS/tailnet management, and rollout policy.
 
 ## Windows service wrapper and incomplete updates
 

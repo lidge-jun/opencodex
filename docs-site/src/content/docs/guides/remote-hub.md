@@ -160,85 +160,48 @@ Never put the OAuth code in shell argv, logs, issue text, screenshots, or deploy
 manual-code route keeps its existing unknown-provider, no-active-flow, invalid-code, and 4096-byte
 input checks.
 
-## Operator-owned Docker recipe
+## Docker Compose
 
-opencodex does not publish or maintain an official container image. The following recipe is an
-operator-owned starting point. Before building, resolve `oven/bun:1.4.0` to a registry digest and
-replace both `REPLACE_WITH_BUN_1_4_0_DIGEST` values. A tag alone is not a production pin.
+opencodex does not publish an official container image. The repository does maintain a source-build
+[`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/main/Dockerfile),
+[`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/main/compose.yaml), and a narrow
+`.dockerignore`. The build pins the multi-platform Bun 1.4.0 image index by digest, runs the proxy as
+the non-root `bun` user, keeps the root filesystem read-only, drops Linux capabilities, and publishes
+only the data listener on `10100`.
 
-```dockerfile
-# syntax=docker/dockerfile:1
-FROM oven/bun:1.4.0@sha256:REPLACE_WITH_BUN_1_4_0_DIGEST AS build
-WORKDIR /home/bun/app
-COPY --chown=bun:bun package.json bun.lock ./
-RUN bun install --frozen-lockfile
-COPY --chown=bun:bun src ./src
-COPY --chown=bun:bun gui ./gui
-COPY --chown=bun:bun tsconfig.json ./
-RUN cd gui && bun install --frozen-lockfile && bun run build
-
-FROM oven/bun:1.4.0@sha256:REPLACE_WITH_BUN_1_4_0_DIGEST AS runtime
-WORKDIR /home/bun/app
-ENV OPENCODEX_HOME=/home/bun/.opencodex
-ENV OCX_API_TOKEN_FILE=/run/secrets/ocx_api_token
-COPY --from=build --chown=bun:bun /home/bun/app/package.json ./package.json
-COPY --from=build --chown=bun:bun /home/bun/app/bun.lock ./bun.lock
-COPY --from=build --chown=bun:bun /home/bun/app/node_modules ./node_modules
-COPY --from=build --chown=bun:bun /home/bun/app/src ./src
-COPY --from=build --chown=bun:bun /home/bun/app/gui/dist ./gui/dist
-USER bun
-VOLUME ["/home/bun/.opencodex"]
-EXPOSE 10100
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD ["bun", "-e", "const r=await fetch('http://127.0.0.1:10100/healthz');if(!r.ok)process.exit(1)"]
-CMD ["bun", "run", "src/cli/index.ts", "start", "--port", "10100"]
-```
-
-An example Compose definition keeps mutable state and the token outside the image:
-
-```yaml
-services:
-  hub:
-    build: .
-    read_only: true
-    ports:
-      - "10100:10100"
-    volumes:
-      - ocx-state:/home/bun/.opencodex
-    tmpfs:
-      - /tmp
-    secrets:
-      - source: ocx_api_token
-        target: ocx_api_token
-        uid: "1000"
-        gid: "1000"
-        mode: 0440
-    restart: unless-stopped
-
-volumes:
-  ocx-state:
-
-secrets:
-  ocx_api_token:
-    file: ./secrets/ocx_api_token
-```
-
-Initialize the named volume before the first normal start. Container port publishing requires the
-data listener to bind `0.0.0.0`; the management listener remains fixed to container loopback:
+The image seeds a first-run `hub` configuration that binds the container listener to `0.0.0.0`.
+Before the first normal start, stream a freshly generated data-plane token into the bootstrap helper.
+The helper accepts at most one 4096-byte line, never prints the token, refuses to replace an existing
+token, and persists it as the canonical owner-only `service-api-token` in the `ocx-state` volume:
 
 ```bash
-docker compose run --rm hub bun run src/cli/index.ts config set runtimeRole hub
-docker compose run --rm hub bun run src/cli/index.ts config set hostname 0.0.0.0
-docker compose run --rm hub bun run src/cli/index.ts config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
-docker compose run --rm hub bun run src/cli/index.ts config set hub.managementIngress '{"enabled":true,"port":10101}'
-docker compose run --rm hub bun run src/cli/index.ts config set remoteGui.allowedTailscaleUsers '["operator@example.com"]'
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex
+openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
 ```
 
-Do not put a token in `ARG`, `ENV`, `COPY`, Compose YAML, image history, or the command line. Do not
-mount the Docker socket, host home, Codex home, SSH agent, or provider-key files. Publish only port
-`10100`. A management ingress bound to `127.0.0.1:10101` inside the container is reachable only by a
-TLS/tailnet frontend in the same network namespace; never publish `10101` as a shortcut.
+Set an alternate host port without changing the container's fixed `10100` listener:
+
+```bash
+OPENCODEX_PORT=10190 docker compose up -d
+```
+
+Configure providers with the dashboard through an operator-owned management frontend, or with
+one-shot CLI commands that share the state volume. The commands below show the existing Remote Hub
+settings; replace the example origin and identity before enabling them:
+
+```bash
+docker compose run --rm hub bun run src/cli/index.ts config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
+docker compose run --rm hub bun run src/cli/index.ts config set hub.managementIngress '{"enabled":true,"port":10101}'
+docker compose run --rm hub bun run src/cli/index.ts config set remoteGui.allowedTailscaleUsers '["operator@example.com"]'
+docker compose restart hub
+```
+
+Do not put a token in `ARG`, `ENV`, `COPY`, Compose YAML, image history, or command arguments. Do not
+mount the Docker socket, host home, Codex home, SSH agent, or provider-key files. A management
+ingress bound to `127.0.0.1:10101` inside the container is reachable only by a TLS/tailnet frontend
+in the same network namespace; never publish `10101` as a shortcut.
 
 After the container is healthy, run a separate readiness promotion check:
 
@@ -252,6 +215,10 @@ docker compose exec hub bun -e \
 
 Then send one real authenticated routed response with a configured model. If the secret is absent or
 unreadable, a non-loopback hub must not be accepted as ready. Never treat liveness alone as proof.
+
+`docker compose down` removes the container and network but retains the named volume. Treat
+`docker compose down --volumes` as destructive: it deletes configuration, OAuth credentials, usage
+history, and the data-plane token together.
 
 ## Rollback
 

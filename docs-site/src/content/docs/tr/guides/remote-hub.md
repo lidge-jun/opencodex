@@ -60,7 +60,16 @@ Döndürme sırasında eski ve yeni anahtar aynı `apiKeyId` altında en fazla o
 
 ## Docker ve sorun giderme
 
-Resmî Docker imajı yoktur. Bun imajını digest ile sabitleyin, `/home/bun/.opencodex` için volume ve `/run/secrets/ocx_api_token` için secret kullanın. Yalnızca `10100` portunu yayımlayın; `10101` yayımlanmaz. Sırları `ARG`, `ENV`, `COPY`, Compose, imaj geçmişi veya argv içine koymayın. Healthcheck sonrasında readiness, kimlik doğrulamalı katalog ve gerçek yanıtı ayrıca doğrulayın.
+Resmî Docker imajı yoktur; ancak depo, digest ile sabitlenmiş Bun imajını yerelde oluşturmak için bakımı yapılan bir `Dockerfile` ve `compose.yaml` sağlar. İlk başlatmadan önce veri anahtarını stdin üzerinden bir kez başlatın; anahtar yazdırılmaz ve `ocx-state` volume içinde yalnızca sahibinin okuyabileceği izinlerle saklanır.
+
+```bash
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex
+openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
+docker compose up -d
+```
+
+Konteyner root olmayan `bun` kullanıcısıyla, salt okunur kök dosya sistemiyle çalışır ve yalnızca `10100` portunu yayımlar. `10101` portunu yayımlamayın ve sırları `ARG`, `ENV`, `COPY`, Compose, imaj geçmişi veya argv içine koymayın. Healthcheck sonrasında readiness, kimlik doğrulamalı katalog ve gerçek yanıtı ayrıca doğrulayın. `docker compose down` volume'u korur; `docker compose down --volumes` yapılandırmayı, kimlik bilgilerini ve anahtarı da siler.
 
 - Hub kapalıysa yerel geri dönüş yapılabilir; uzaktaki anahtarın iptali bekler.
 - Geçici arızada doğrulanmış LKG korunur; auth, şema, boyut veya protokol hatasında yerel fallback yoktur.

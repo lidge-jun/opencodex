@@ -85,6 +85,25 @@ npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled auto
 ocx start                            # or `ocx service` to run it in the background
 ```
 
+### Docker Compose
+
+The repository ships a digest-pinned, non-root Compose build. Initialize the data-plane token once
+through stdin, then start the hub:
+
+```bash
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex
+openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
+docker compose up -d
+curl --fail --silent http://127.0.0.1:10100/healthz
+curl --fail --silent http://127.0.0.1:10100/readyz
+```
+
+The token and mutable state stay in the `ocx-state` named volume; no credential is placed in the
+image, Compose file, environment, or shell arguments. See the
+[Remote Hub deployment guide](https://opencodex.me/guides/remote-hub/#docker-compose) for provider
+setup, authenticated acceptance checks, remote management, and rollback.
+
 <details>
 <summary>Install from source (latest dev)</summary>
 

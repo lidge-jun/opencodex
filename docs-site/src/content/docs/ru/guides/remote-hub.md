@@ -60,7 +60,16 @@ OAuth запускается через `POST /api/oauth/login`. Если callba
 
 ## Docker и устранение неполадок
 
-Официального Docker-образа нет. Закрепите Bun-образ по digest, используйте volume для `/home/bun/.opencodex` и secret `/run/secrets/ocx_api_token`. Публикуйте только `10100`, не `10101`. Не помещайте секреты в `ARG`, `ENV`, `COPY`, Compose, историю образа или argv. После healthcheck отдельно проверьте readiness, каталог и реальный запрос.
+Официального Docker-образа нет, но репозиторий содержит поддерживаемые `Dockerfile` и `compose.yaml` для локальной сборки Bun-образа, закреплённого по digest. Перед первым запуском один раз передайте ключ данных через stdin; он не выводится и сохраняется с доступом только для владельца в volume `ocx-state`.
+
+```bash
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex
+openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
+docker compose up -d
+```
+
+Контейнер работает от непривилегированного пользователя `bun`, с корневой файловой системой только для чтения и публикует только `10100`. Не публикуйте `10101` и не помещайте секреты в `ARG`, `ENV`, `COPY`, Compose, историю образа или argv. После healthcheck отдельно проверьте readiness, аутентифицированный каталог и реальный запрос. `docker compose down` сохраняет volume; `docker compose down --volumes` удаляет также конфигурацию, учётные данные и ключ.
 
 - При недоступном hub можно отключиться офлайн, но отзыв ключа останется незавершённым.
 - LKG сохраняется только при временном сбое; при ошибке auth, схемы, размера или протокола локального fallback нет.
