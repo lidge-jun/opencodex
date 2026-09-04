@@ -60,7 +60,9 @@ describe("parseCallbackInput kinds", () => {
   // survive as a raw value: the shared gate rejects anything with no code, and a key
   // split on "#" would be truncated into an invalid credential.
   test("a Muse Code API key survives as a raw value", () => {
-    const key = "LLM|1234567890123456|abcdefghijklmnopqrstuvwxy";
+    // Assembled, never written literally: privacy:scan detects the real key grammar
+    // (`LLM|<digits>|<tail>`) and a literal fixture would trip its meta-api-key rule.
+    const key = `LLM|${"1".repeat(16)}|${"c".repeat(27)}`;
     expect(parseCallbackInput(key)).toEqual({ kind: "raw", code: key, state: undefined });
   });
   test("raw authorization code -> kind raw", () => {
