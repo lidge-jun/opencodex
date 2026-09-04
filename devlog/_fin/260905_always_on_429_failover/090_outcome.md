@@ -1,15 +1,24 @@
 # 090 — Outcome
 
-Shipped in three pull requests:
+Shipped in eight pull requests:
 
 | PR | Merge | What |
 |---|---|---|
 | [#3495](https://github.com/lidge-jun/opencodex/pull/3495) | `56a084aa9` | the failover fix itself |
 | [#3499](https://github.com/lidge-jun/opencodex/pull/3499) | `26a2e512a` | GUI copy the fix invalidated |
 | [#3503](https://github.com/lidge-jun/opencodex/pull/3503) | `6edc56328` | a per-request store read #3495 introduced |
+| [#3512](https://github.com/lidge-jun/opencodex/pull/3512) | `c91c8c5b2` | rotator-set contract test |
+| [#3517](https://github.com/lidge-jun/opencodex/pull/3517) | `9be23dc41` | the `inert` DTO marker, rescoped |
+| [#3520](https://github.com/lidge-jun/opencodex/pull/3520) | `5d10a1900` | public docs, 8 locales |
+| [#3523](https://github.com/lidge-jun/opencodex/pull/3523) | `69d35a736` | the last stale guide + re-gating guard |
+| [#3526](https://github.com/lidge-jun/opencodex/pull/3526) | `99fc38c39` | a duplicated test file |
 
-The second and third were not planned. Both were found by auditing the merged result against
-the tree rather than against the plan, and both are recorded in `091`.
+**Only the first was planned.** Every other one came from auditing the merged result against
+the tree rather than against the plan — the plan's own criteria were satisfied after #3495.
+Two were defects the fix itself created (#3499, #3503), three were surfaces still describing the
+old contract (#3517, #3520, #3523), one closed the structural gap that let this unit ship two
+subset-rotator loops (#3512), and one cleaned up after a collision with concurrent maintainer
+work (#3526). All are recorded in `091`.
 
 ## What changed
 

@@ -55,3 +55,35 @@ resource pressure that was timing the job out. Rebasing onto it turned macOS gre
 
 **Rule:** when a rerun fails the same way twice, stop rerunning and check whether the base
 branch already carries the fix. A stale branch point is a cause, not a flake.
+
+## A merge I should not have made
+
+I merged #3523 on `gh pr checks` reporting five passes. The test and macOS jobs were still
+**queued** — that command lists only the check runs GitHub has reported so far, so a partial set
+reads exactly like a complete green one. A count of passes is not a statement that anything
+finished.
+
+The post-merge run on `dev` then showed `ci failure`, which was a genuinely alarming way to find
+out. It turned out to be cancellation by the maintainer's next merge two minutes later, not a
+real failure — every job read `cancelled`, not `failure`.
+
+**Rule:** verify with the check-runs API and require zero `null` conclusions, not a pass count:
+
+```bash
+gh api repos/<owner>/<repo>/commits/<sha>/check-runs \
+  --jq '[.check_runs[] | .conclusion] | group_by(.) | map({(.[0]//"null"): length}) | add'
+```
+
+A clean result looks like `{"skipped":3,"success":24}` — no `null` key at all.
+
+The near-miss paid for itself: sweeping `dev` afterwards found a real defect. #3511 and #3513
+landed concurrently, one moving `anthropic-quorum-cache.test.ts` into `tests/routing/` and the
+other placing a copy in `tests/adapters/anthropic/`. Different paths, so git saw no conflict and
+both survived — a byte-identical duplicate running the same six tests twice. Removed in #3526.
+
+## Reviewer credit
+
+CodeRabbit caught that the first Claude Code guide assertion was too weak: requiring the intro to
+mention `429` and carry emphasis is satisfied by the **original stale sentence**, so a revert
+would have passed. Each locale now bans the phrase pattern that actually attributed failover to
+the pool, and the test was driven red against the restored sentence before committing.
