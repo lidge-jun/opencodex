@@ -1764,7 +1764,7 @@ export const tr: Record<TKey, string> = {
 
   "anthropicPool.title": "Claude hesap havuzu (deneysel)",
   "anthropicPool.enabledDesc": "Oturumlar aynı hesapta kalır; yeni oturumlar {window} değerine göre %{threshold} altında kullanıma sahip hesapları tercih eder.",
-  "anthropicPool.enabledNoProactiveDesc": "429 alındığında hesabı bekletir ve başka bir hesaba geçer. Eşik 0 iken kullanıma dayalı öngörülü geçiş kapalıdır, ancak yeni oturum seçimi ve 429 kurtarma hâlâ {window} penceresini kullanır.",
+  "anthropicPool.enabledNoProactiveDesc": "Oturumlar aynı hesapta kalır. Eşik 0 iken kullanıma dayalı öngörülü geçiş kapalıdır, ancak yeni oturum seçimi hâlâ {window} penceresini kullanır.",
   "anthropicPool.disabledDesc": "Oturum başına tek hesap. 429 alındığında yine de giriş yapılmış başka bir hesaba geçilir — bu kapatılamaz.",
   "anthropicPool.experimentalWarning": "Deneysel: Claude OAuth hesaplarını döndürmek desteklenmeyen bir kullanım yoludur ve Anthropic hesap kısıtlamalarına veya hesabın askıya alınmasına yol açabilir. Aynı kuruluşu paylaşan hesaplar oran limitlerini paylaşır ve döndürmeden ek kapasite kazanmaz. Riskleri anlamıyorsanız kapalı tutun.",
   "anthropicPool.needTwoAccounts": "Havuzu etkinleştirmeden önce en az iki Claude OAuth hesabı ekleyin.",

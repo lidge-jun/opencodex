@@ -1289,7 +1289,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.catalogRefreshPending": "更改已保存，但 Codex 模型目录仍待刷新。请运行 ocx sync 重试。",
   "anthropicPool.title": "Claude 账户池（实验性）",
   "anthropicPool.enabledDesc": "会话固定在同一账户；新会话优先使用{window}低于 {threshold}% 的账户。",
-  "anthropicPool.enabledNoProactiveDesc": "429 时冷却账号并切换。阈值为 0 时停用主动的用量切换，但新会话选择与 429 恢复仍会使用 {window} 窗口。",
+  "anthropicPool.enabledNoProactiveDesc": "会话固定在同一账户。阈值为 0 时停用主动的用量切换，但新会话选择仍会使用 {window} 窗口。",
   "anthropicPool.disabledDesc": "每个会话仅用一个账户。遇到 429 仍会切换到另一个已登录账户——该行为无法关闭。",
   "anthropicPool.experimentalWarning": "实验性功能，尚未充分验证。看起来像自动多账户轮换的行为可能导致 Anthropic 限制账户。同一组织可能共享配额——对这些账户做池化没有帮助。除非了解风险，否则请保持关闭。",
   "anthropicPool.needTwoAccounts": "启用账户池前请至少添加两个 Claude OAuth 账户。",
