@@ -61,6 +61,45 @@ metadata, and Pro virtual ids rewrite to the base wire model with `reasoning.mod
 shipped v1 config, opencodex creates `config.json.pre-openai-tiers-v2.bak` without replacing a
 differing backup and rewrites known legacy namespaced selected ids to bare ids.
 
+### GPT-6 Astra
+
+`gpt-6-astra` uses the Codex-login route; `openai-apikey/gpt-6-astra` uses your API key.
+Availability still depends on the upstream account. Native Astra keeps the shipped Codex defaults:
+272,000 context, `low` reasoning, and the `low`/`medium`/`high`/`xhigh`/`max`/`ultra` ladder.
+Its Fast catalog description is **2x speed**; that is not the billing multiplier.
+
+Set `providerContextCaps.openai` to `922000` to opt the native group into long context; Astra
+stops at its own **872,000** ceiling. Per-model `providers.openai.modelContextWindows`
+and `modelAutoCompactTokenLimits` can narrow its window and soft compaction budget. For example,
+`modelAutoCompactTokenLimits: { "gpt-6-astra": 700000 }` lowers the long-window default of 784,800.
+An explicit smaller provider cap or target limit still wins, including native-alias combos.
+
+The API row has 1,050,000 context, 922,000 maximum input, 128,000 maximum output, text/image input,
+and API reasoning efforts through `max`. OpenCodex's routed synthetic Ultra control retains its
+existing wire-effort mapping; it is not an additional API effort. There is no Astra `-pro` alias.
+Use the existing `fastMode` setting, or Codex's `service_tier = "fast"` with
+`[features].fast_mode = true`; API `fast` and `priority` are accepted Fast spellings.
+
+Pricing checked September 5, 2026:
+
+| Astra API (USD per million tokens) | Input | Cached input | Cache write | Output |
+| --- | ---: | ---: | ---: | ---: |
+| Standard, up to 272k input | 10 | 1 | 12.5 | 50 |
+| Standard, above 272k input | 20 | 2 | 25 | 75 |
+| Fast, up to 272k input | 20 | 2 | 25 | 100 |
+| Fast, above 272k input | 40 | 4 | 50 | 150 |
+
+The [API price table](https://developers.openai.com/api/docs/pricing) reprices the **whole request**
+above 272k, counting cached tokens toward the threshold. Fast and long-context rates combine;
+this also applies to the published GPT-5.6 API rows and their Pro virtual selections.
+
+[Codex/ChatGPT pricing](https://learn.chatgpt.com/docs/pricing) is separate: Astra and GPT-5.6
+Fast consume **2.5x** Standard credits, versus **2x** for the API. The inspected native rate card
+does not publish a separate 272k band; that does **not** mean tokens after 272k are free.
+OpenCodex does not import the API's long-context surcharge into native Astra. Its native dollar
+display is an **API-equivalent estimate**, including an estimated cache-write rate, not a credit
+conversion or invoice. Credit purchase prices depend on the plan or agreement.
+
 ## Provider entries (`OcxProviderConfig`)
 
 | Field | Type | Meaning |

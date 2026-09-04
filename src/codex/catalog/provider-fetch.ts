@@ -380,6 +380,7 @@ function captureTrustedOpenAiApiPolicy(
     models: entry.models,
     ...(entry.modelContextWindows ? { modelContextWindows: entry.modelContextWindows } : {}),
     ...(entry.modelMaxInputTokens ? { modelMaxInputTokens: entry.modelMaxInputTokens } : {}),
+    ...(entry.modelMaxOutputTokens ? { modelMaxOutputTokens: entry.modelMaxOutputTokens } : {}),
     ...(entry.virtualModels ? { virtualModels: entry.virtualModels } : {}),
     ...(entry.modelInputModalities ? { modelInputModalities: entry.modelInputModalities } : {}),
     ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: entry.modelReasoningEfforts } : {}),
@@ -2099,6 +2100,18 @@ async function gatherRoutedModelsUncached(
     config,
     capture.openAiApiPolicy,
   );
+  const apiProvider = activeProviders.find(provider => provider.name === OPENAI_API_PROVIDER_ID);
+  // Trusted reconstruction replaces whole rows, including the earlier Fast hints.
+  // Restore only that capability from the same captured authority used by discovery.
+  if (apiProvider) {
+    for (const model of apiAugmented) {
+      if (model.provider !== OPENAI_API_PROVIDER_ID) continue;
+      const policy = fastPolicyForModel(apiProvider.provider, model.id, apiProvider.name);
+      const supported = serviceTierSupportFromPolicy(policy);
+      if (supported !== undefined) model.supportsServiceTier = supported;
+      if (supported === true && policy.fastTierDescription !== undefined) model.fastTierDescription = policy.fastTierDescription;
+    }
+  }
   const metadataModelIdCaseFoldByProvider = new Map(
     activeProviders.map(provider => [provider.name, provider.metadataModelIdCaseFold]),
   );
@@ -2189,7 +2202,7 @@ async function gatherRoutedModelsUncached(
     const nativeAliasMaxInput = combo.nativeAlias && combo.alias
       ? (combo.alias.startsWith("gpt-5.6-") || combo.alias.includes("daybreak")
         ? NATIVE_GPT56_MAX_INPUT_TOKENS
-        : nativeOpenAiMaxInputTokens(combo.alias) ?? nativeOpenAiContextWindow(combo.alias))
+        : nativeOpenAiMaxInputTokens(combo.alias, comboNativeLimits) ?? nativeOpenAiContextWindow(combo.alias, comboNativeLimits))
       : undefined;
     const nativeAliasAutoCompact = combo.nativeAlias && combo.alias
       ? nativeOpenAiAutoCompactTokenLimit(combo.alias, comboNativeLimits)
@@ -2512,7 +2525,9 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
     const maxOutputTokens = routedMaxOutputTokens(
       OPENAI_API_PROVIDER_ID,
       configured,
-      existingById.get(id) ?? { provider: OPENAI_API_PROVIDER_ID, id },
+      policy.modelMaxOutputTokens?.[id] !== undefined
+        ? { provider: OPENAI_API_PROVIDER_ID, id, maxOutputTokens: policy.modelMaxOutputTokens[id] }
+        : existingById.get(id) ?? { provider: OPENAI_API_PROVIDER_ID, id },
       policy.virtualModels?.[id]?.wireModelId ?? id,
     );
     return {

@@ -42,6 +42,10 @@ export interface ExpectedPriceOverlay {
 
 const GEMINI_31_PRO: Cost4 = { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 };
 const GPT56_SOL: Cost4 = { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 };
+const GPT6_ASTRA: Cost4 = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
+const ASTRA_API_PRICING = "https://developers.openai.com/api/docs/models/gpt-6-astra";
+const CODEX_PRICING = "https://learn.chatgpt.com/docs/pricing";
+const CODEX_SPEED = "https://learn.chatgpt.com/docs/agent-configuration/speed";
 /**
  * Daybreak aliases. `daybreak-*-latest` never appears in the pricing table itself — only its
  * current snapshot does — so these tuples are the snapshot's published rates and carry
@@ -112,6 +116,10 @@ const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cac
 const QWEN38_MAX_PRICING = "https://qwen.ai/blog?id=qwen3.8 (Qwen release announcement; no Model Studio billing row yet; cache rates unpublished -> 0)";
 
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
+  { provider: "openai-apikey", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: ASTRA_API_PRICING, verifiedAt: "2026-09-05", status: "verified" },
+  // Native dollars are API-equivalent estimates, not conversion of plan-dependent credits.
+  // The native rate card publishes neither a 272k surcharge nor a cache-write price.
+  { provider: "openai", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: `API-equivalent estimate (including cache writes): ${ASTRA_API_PRICING}; native credits: ${CODEX_PRICING}`, verifiedAt: "2026-09-05", status: "verified-derived" },
   // claude-fable-5-1 now HAS a generated jawcode row, so the two Anthropic surfaces resolve
   // from it and these overlays are the fallback rather than the primary source. They stay:
   // the overlay lookup is keyed by the configured provider id, so an account-pool log label
@@ -280,6 +288,7 @@ export function findExpectedPriceOverlay(
 
 /** OpenAI Fast price multipliers retained as a compatibility export. */
 export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
+  "gpt-6-astra": 2,
   "gpt-5.6-sol": 2,
   "gpt-daybreak-blue-latest": 2,
   "daybreak-blue-latest": 2,
@@ -308,7 +317,6 @@ export interface PriorityPricingRule {
   verifiedAt: string;
 }
 
-const OPENAI_FAST_PRICING = "https://openai.com/api-fast-mode/";
 const XAI_PRIORITY_PRICING = "https://docs.x.ai/developers/advanced-api-usage/priority-processing";
 
 /**
@@ -326,11 +334,17 @@ export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
       .map(([modelId, multiplier]): PriorityPricingRule => ({
         provider,
         modelId,
-        multiplier,
-        source: OPENAI_FAST_PRICING,
-        verifiedAt: "2026-08-05",
+        multiplier: provider === "openai" && ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].includes(modelId)
+          ? 2.5 : multiplier,
+        source: provider === "openai" ? CODEX_SPEED : "https://developers.openai.com/api/docs/pricing",
+        verifiedAt: "2026-09-05",
       })),
   ),
+  ...["gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro"].map((modelId): PriorityPricingRule => ({
+    provider: "openai-apikey", modelId, multiplier: 2,
+    source: "https://developers.openai.com/api/docs/pricing (derived from the virtual selection's base wire model)",
+    verifiedAt: "2026-09-05",
+  })),
   ...["grok-4.5", "grok-4.6"].map((modelId): PriorityPricingRule => ({
     provider: "xai",
     modelId,
@@ -376,7 +390,7 @@ export interface ContextTier {
   /** Per-field factor from the short rate to the published long rate. */
   multiplier: Cost4;
   /** Published relationship between confirmed priority and long-context bands. */
-  confirmedPriorityRelation?: "exclusive" | "lower-bound";
+  confirmedPriorityRelation?: "exclusive" | "lower-bound" | "stack";
   source: string;
   verifiedAt: string;
 }
@@ -403,6 +417,12 @@ const OPENAI_GPT56_CONTEXT_MODELS = [
 ];
 
 export const CONTEXT_TIERS: readonly ContextTier[] = [
+  // API only: the Codex credit rate card does not establish this threshold for native Astra.
+  {
+    provider: "openai-apikey", modelId: "gpt-6-astra", thresholdInputTokens: 272_000,
+    inclusive: false, multiplier: OPENAI_LONG_CONTEXT, confirmedPriorityRelation: "stack",
+    source: ASTRA_API_PRICING, verifiedAt: "2026-09-05",
+  },
   ...["openai", "openai-apikey"].flatMap(provider =>
     OPENAI_GPT56_CONTEXT_MODELS.map((modelId): ContextTier => ({
       provider,
@@ -410,7 +430,7 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
       thresholdInputTokens: 272_000,
       inclusive: false,
       multiplier: OPENAI_LONG_CONTEXT,
-      confirmedPriorityRelation: "exclusive",
+      confirmedPriorityRelation: provider === "openai-apikey" ? "stack" : "exclusive",
       source: OPENAI_PRICING_DOC,
       verifiedAt: "2026-08-03",
     })),
