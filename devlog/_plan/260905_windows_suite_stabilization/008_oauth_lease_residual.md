@@ -239,12 +239,41 @@ or a `handle.exe` invocation triggered by the failing `afterEach` itself, not a
 polling loop. That is a real piece of work and it is not justified by one failing
 case out of 17807.
 
+## Measurement 8: it is deterministic in a shard, on an idle box
+
+Confirmation run 2, box fully idle, no watcher, no competing process — the same
+case failed again, at the same log offset:
+
+```
+3707:tests\oauth-store-multi.test.ts:
+3736:error: EPERM ... rm 'C:\ocxwin\repo\tests\.tmp-oauth-store-multi-test'
+```
+
+Three shard-2 runs, three identical failures. So "load-dependent" from
+measurement 6 was wrong as a cause: the load explains why the two-file PAIR
+needed it, not why the SHARD fails. Corrected picture:
+
+| context | runs | result |
+|---|---|---|
+| the file alone | 5 | pass |
+| the two-file pair, idle | 8 | pass |
+| the two-file pair, box loaded | 1 | 22 fail |
+| **full shard 2, idle or not** | **3** | **1 fail, always the same case** |
+
+Something in the other ~263 files of shard 2 is required, and once present the
+failure is reliable. That is a much better position to debug from than "flaky
+under load" — and it means the eventual bisect target is the shard, not the pair.
+
 ## Final position for this cycle
 
 **1 failure remaining, cause unidentified, no fix attempted.** The two defects
 this unit set out to fix are fixed and verified. This one is documented to the
-limit of what was measured, including the two dead ends and the instrument that
-contaminated its own experiment.
+limit of what was measured, including the two dead ends, the instrument that
+contaminated its own experiment, and the corrected load hypothesis above.
+
+The next person's cheapest path is a binary search over shard 2's file list with
+`oauth-store-multi` pinned last — roughly 8 runs of ~2 minutes each to find the
+file that arms it, rather than the 17-minute full-shard cycle used here.
 
 ## Process note
 
