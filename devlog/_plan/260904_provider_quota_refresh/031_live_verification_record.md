@@ -57,3 +57,17 @@ The refresh control was exercised, not merely rendered:
 | `020_usage_refresh_result.png` | the same tab after a click, showing the success status |
 | `030_accounts_refresh_button.png` | Accounts tab control for a pooled OAuth provider |
 | `040_accounts_refresh_result.png` | Accounts tab after a click |
+
+## CI (PR #3448, head 232afdd97)
+
+Attempt 1 ended `cancelled`, which `gh pr checks` renders as `fail` for two rows. That
+was not a test failure and is worth stating precisely, because "a red check" and "a broken
+change" are different claims: every substantive job succeeded — all four `test` shards,
+`gates`, `macos`, all three `keyring` jobs, `npm-global` on ubuntu and macos,
+`storage policy`, `api usage`, `react-doctor`, `enforce-target`. The single
+`npm-global windows-latest` job was cancelled with ZERO failing steps
+(`steps: []` under a `cancelled` conclusion), and the aggregate `ci` gate then failed
+for the one reason it exists to check: "Assert every needed job succeeded or was skipped".
+
+Attempt 2 completed with `conclusion: success`, and the PR now shows 10 passing checks
+with nothing pending or failing.
