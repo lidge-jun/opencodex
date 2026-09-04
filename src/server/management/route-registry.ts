@@ -14,7 +14,7 @@
  * never import anything from `src/lab/`. The `module` field names the owning file as text
  * for exactly this reason.
  *
- * Reconciliation lives in `tests/management-route-registry.test.ts`, which resolves
+ * Reconciliation lives in `tests/server/management-route-registry.test.ts`, which resolves
  * `(method, path)` pairs from source and fails loudly on a route whose method it cannot
  * determine. Adding a route without declaring it here fails that test.
  */

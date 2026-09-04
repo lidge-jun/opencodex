@@ -34,7 +34,7 @@ bun run privacy:scan              # CI 使用的 credential/privacy 扫描
 bun run prepare:package           # 刷新 package launcher/asset
 ```
 
-大多数测试是平铺在 `tests/*.test.ts` 下的 Bun test。`tests/helpers/` 存放共享 fixture，
+测试是按 `src/` 划分的领域目录（`tests/<domain>/`）下的 Bun test，映射表在 `scripts/test-layout/layout.json`。`tests/helpers/` 存放共享 fixture，
 `tests/e2e-style/` 存放范围更广的原生一致性场景。请在对应 subsystem 的现有测试附近加入聚焦的
 回归测试；若改动涉及共享 routing、adapter、config 或 server 行为，还应运行完整 suite。
 

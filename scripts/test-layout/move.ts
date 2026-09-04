@@ -141,12 +141,18 @@ export function runMove(options: MoveOptions): MoveReport {
     const path = join(root, byFrom.get(file) ?? file);
     let text = readFileSync(path, "utf8");
     const original = text;
-    for (const [from, to] of byFrom) {
-      text = text.split(from).join(to);
-      if (file === SERIAL_LANE_SOURCE && serial.has(basename(from))) {
-        const rel = from.slice("tests/".length);
-        text = text.split(`"${rel}"`).join(`"${to.slice("tests/".length)}"`);
-      }
+    for (const [from, to] of byFrom) text = text.split(from).join(to);
+    if (file === SERIAL_LANE_SOURCE) {
+      // Only the SERIAL_FULL_SUITE_FILES array holds tests/-relative paths; the timeout table
+      // next to it is keyed by basename and must not change.
+      text = text.replace(/SERIAL_FULL_SUITE_FILES = \[([\s\S]*?)\]/, (whole, body: string) => {
+        let next = body;
+        for (const [from, to] of byFrom) {
+          if (!serial.has(basename(from))) continue;
+          next = next.split(`"${from.slice("tests/".length)}"`).join(`"${to.slice("tests/".length)}"`);
+        }
+        return whole.replace(body, next);
+      });
     }
     if (text !== original) {
       writeFileSync(path, text);

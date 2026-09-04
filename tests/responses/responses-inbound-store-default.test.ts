@@ -12,7 +12,7 @@
  *
  * End-to-end cases assert the captured upstream request body — the externally
  * observable payload. Pattern mirrors tests/responses/responses-compaction-routing.test.ts
- * and tests/github-copilot-wire-defaults.test.ts.
+ * and tests/providers/github-copilot/github-copilot-wire-defaults.test.ts.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";

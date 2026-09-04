@@ -82,11 +82,15 @@ describe("scanEscapes", () => {
       'const c = copyFileSync(join(import.meta.dir, "helpers", "child.ts"), out);',
       'const d = join(import.meta.dir, "..");',
       'const e = fileURLToPath(new URL("../", import.meta.url));',
+      'const f = readFileSync(join(import.meta.dir, "fixtures/x.json"), "utf8");',
+      'const g = join(import.meta.dir, "helpers/child.ts");',
       'const local = join(import.meta.dir, ".tmp-x");',
     ].join("\n");
     const { source, rewrites } = rewriteMetaDirEscapes(src, 1);
-    expect(rewrites).toBe(5);
-    expect(source).toContain('import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";');
+    expect(rewrites).toBe(7);
+    expect(source).toContain('import { fixturePath, helperPath, repoPath, repoRoot } from "../helpers/repo-root";');
+    expect(source).toContain('readFileSync(fixturePath("x.json"), "utf8")');
+    expect(source).toContain('const g = helperPath("child.ts");');
     expect(source).toContain('readFileSync(repoPath("src", "cli", "index.ts"), "utf8")');
     expect(source).toContain('repoPath("src/lib/winsw.ts")');
     expect(source).toContain('copyFileSync(helperPath("child.ts"), out)');
@@ -123,6 +127,20 @@ describe("scanEscapes", () => {
     expect(out.source).toContain("const repoRoot = resolveRepoRoot();");
     expect(out.source).toContain('readFileSync(join(repoRoot, rel), "utf8")');
     expect(scanEscapes(out.source)).toEqual([]);
+
+    // A second escape in the same file must call the alias, never the local string; and a
+    // dynamic import() deep in the file must not drag the helper import to the bottom.
+    const two = 'import { join } from "node:path";\nconst repoRoot = join(import.meta.dir, "..");\nasync function f() {\n  const m = await import("../src/x");\n  return { cwd: join(import.meta.dir, "..") };\n}\n';
+    const outTwo = rewriteMetaDirEscapes(two, 1);
+    expect(outTwo.source.split("\n")[1]).toBe('import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";');
+    expect(outTwo.source).toContain("return { cwd: resolveRepoRoot() };");
+    expect(outTwo.source).not.toContain("repoRoot()");
+
+    // A file whose last line is a stray import still gets the helper in the leading block.
+    const trailing = 'import { join } from "node:path";\n\nconst r = join(import.meta.dir, "..");\nimport { X } from "../helpers/x";\n';
+    const outTrailing = rewriteMetaDirEscapes(trailing, 1).source.split("\n");
+    expect(outTrailing[1]).toBe('import { repoRoot } from "../helpers/repo-root";');
+    expect(outTrailing[outTrailing.length - 2]).toBe('import { X } from "../helpers/x";');
 
     const url = 'import { join } from "node:path";\nconst root = new URL("../../", import.meta.url);\nconst t = await Bun.file(new URL(p, root)).text();\n';
     const outUrl = rewriteMetaDirEscapes(url, 2);
@@ -184,6 +202,9 @@ describe("scanEscapes", () => {
     // A rewritten URL specifier is what a correct move looks like; a bare "../" root URL is not.
     expect(scanEscapes('const u = new URL("../../package.json", import.meta.url);')).toEqual([]);
     expect(scanEscapes('const root = fileURLToPath(new URL("../", import.meta.url));')).toHaveLength(1);
+    expect(scanEscapes('const root = fileURLToPath(new URL("..", import.meta.url));')).toHaveLength(1);
+    expect(rewriteMetaDirEscapes('const R = fileURLToPath(new URL("..", import.meta.url));\nconst U = new URL("..", import.meta.url).href;\n', 1).source)
+      .toContain('const R = repoRoot();\nconst U = pathToFileURL(repoRoot() + "/").href;');
     expect(scanEscapes('const c = join(import.meta.dir, "helpers", "child.ts");')).toHaveLength(1);
     expect(scanEscapes('const r = resolve(\n  import.meta.dir,\n  "..",\n);')).toHaveLength(1);
     expect(scanEscapes('const t = `${import.meta.dir}/../src/x.ts`;')).toHaveLength(1);
@@ -207,6 +228,7 @@ describe("resolver", () => {
   };
 
   test("explicit beats child regex beats domain regex; unknown is null", () => {
+    expect(resolveTarget({ ...layout, keepAtRoot: ["server-kept.test.ts"] }, "server-kept.test.ts")).toBeNull();
     expect(resolveTarget(layout, "cursor-odd.test.ts")).toBe("server");
     expect(resolveTarget(layout, "cursor-adapter.test.ts")).toBe("providers/cursor");
     expect(resolveTarget(layout, "provider-x.test.ts")).toBe("providers");
@@ -246,7 +268,7 @@ describe("membership oracle", () => {
     // from the map, which is the defect this guards against.
     const histogram: Record<string, number> = {};
     for (const target of Object.values(EXPECTED)) histogram[target] = (histogram[target] ?? 0) + 1;
-    const doc = readFileSync(repoPath("devlog", "_plan", "260905_test_modularization_and_windows", "001_test_inventory.md"), "utf8");
+    const doc = readFileSync(repoPath("devlog", "_fin", "260905_test_modularization_and_windows", "001_test_inventory.md"), "utf8");
     const expected: Record<string, number> = {};
     for (const m of doc.matchAll(/^#### `tests\/([a-z0-9/-]+)\/` \((\d+)\)\r?$/gm)) expected[m[1]!] = Number(m[2]);
     expect(Object.keys(expected).length).toBeGreaterThan(20);
@@ -262,7 +284,12 @@ describe("membership oracle", () => {
     // (the 001 §2 "9 disagreeing files" whose name says one thing and whose imports say another).
     // Anything else is a seed pointing at the wrong domain, which would place a brand-new file
     // incorrectly on the day it is added.
-    const pinnedOverrides = new Set(["openai-responses-passthrough.test.ts"]);
+    const pinnedOverrides = new Set([
+      "openai-responses-passthrough.test.ts",
+      // Placed under routing/ by its author (#3523, restored by #3530): it exercises the oauth
+      // routing quorum, not the Anthropic adapter, so the anthropic- seed is wrong for it.
+      "anthropic-quorum-cache.test.ts",
+    ]);
     const mismatches: string[] = [];
     let resolved = 0;
     for (const [name, target] of Object.entries(layout.explicit)) {

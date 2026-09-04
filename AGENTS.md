@@ -12,18 +12,20 @@ Bun-native TypeScript with no separate server compile step.
 ## Repository layout
 
 - `src/` — proxy runtime: routing, provider adapters, config, management API.
-- `tests/` — Bun tests, migrating from one flat directory into domain
-  directories that mirror `src/` (`tests/<domain>/*.test.ts`). The map is
-  `scripts/test-layout/layout.json`; a domain's files move together with
-  `scripts/test-layout/move.ts` and `layout.migrated` records which domains
-  have moved, so until a domain is listed there its files are still at the
-  root. `tests/test-layout.test.ts` enforces the map. Shared helpers in
-  `tests/helpers/`, fixtures in `tests/fixtures/`, broader scenarios in
-  `tests/e2e-style/`. Source-oracle tests resolve the repository through
-  `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`. A new test
-  file needs an entry in both `layout.json` `explicit` and
-  `tests/fixtures/test-layout-expected.json` (the tooling test says which).
-  Design and slice order: `devlog/_plan/260905_test_modularization_and_windows/`.
+- `tests/` — Bun tests in domain directories that mirror `src/`
+  (`tests/<domain>/*.test.ts`; `providers/` and `adapters/` have one more
+  level for the larger vendors). The map is `scripts/test-layout/layout.json`
+  and `tests/test-layout.test.ts` enforces it: every file resolves to a
+  domain and sits in it, and only the two layout guards live at the root.
+  Shared helpers in `tests/helpers/`, fixtures in `tests/fixtures/`, broader
+  scenarios in `tests/e2e-style/`. Source-oracle tests resolve the repository
+  through `tests/helpers/repo-root.ts` (`repoRoot()`, `repoPath()`,
+  `helperPath()`, `fixturePath()`), never `import.meta.dir + "/.."`. A new
+  test file lands in its domain directory and needs an entry in both
+  `layout.json` `explicit` and `tests/fixtures/test-layout-expected.json`
+  (`tests/test-layout-tooling.test.ts` names the missing one); the regex
+  seeds in `layout.json` place a conventionally named file until then.
+  History: `devlog/_fin/260905_test_modularization_and_windows/`.
 - `gui/` — React + Vite dashboard; packaged output is served from `gui/dist`.
 - `docs-site/` — public docs (Astro + Starlight), deployed to GitHub Pages.
 - `go/` — retired Go native-runtime experiment; kept only where the TypeScript
@@ -103,7 +105,7 @@ contributor who ignores it entirely still passes every gate. `privacy:scan` does
 read it — that is deliberate, and it is what makes a public devlog safe rather
 than merely visible.
 
-Two mechanical guards in `tests/repo-hygiene.test.ts` back this up: no `160000`
+Two mechanical guards in `tests/ci-workflows/repo-hygiene.test.ts` back this up: no `160000`
 gitlink may be tracked anywhere, and neither the vendored reference clones nor
 the security triage excised before publication may reappear in the index. Both
 were driven red once to prove they are not vacuous. The gitlink assertion exists
@@ -161,8 +163,8 @@ What matters for development work: the enforcement is code, not prose —
 [`src/cli/agent-driven.ts`](./src/cli/agent-driven.ts),
 [`src/cli/star-prompt.ts`](./src/cli/star-prompt.ts), and
 [`src/server/management/sidebar-routes.ts`](./src/server/management/sidebar-routes.ts),
-covered by `tests/startup-prompt.test.ts`, `tests/cli/agent-driven.test.ts`, and
-`tests/sidebar-routes.test.ts`. If you add another action that spends the user's
+covered by `tests/server/startup-prompt.test.ts`, `tests/cli/agent-driven.test.ts`, and
+`tests/server/sidebar-routes.test.ts`. If you add another action that spends the user's
 identity, credits, or reputation, gate it the same way rather than relying on a
 prompt an agent can answer, and document it in `AGENTS_INSTALL.md`.
 
@@ -197,13 +199,13 @@ bun run skill:surface        # regenerate after adding a capability
 bun run skill:surface:check  # what CI asserts
 ```
 
-`tests/skill-ocx.test.ts` fails if the committed map drifts from `src/cli/capabilities.ts`, and
+`tests/ci-workflows/skill-ocx.test.ts` fails if the committed map drifts from `src/cli/capabilities.ts`, and
 also if the hand-written pages name a command the registry does not have. That second check is not
 hypothetical: it caught a documented `ocx request-history` that never existed.
 
 During implementation, use the smallest focused checks that directly cover the
-changed subsystem. Prefer `bun test tests/<name>.test.ts` (or
-`tests/<domain>/<name>.test.ts` once its domain has migrated) for a known file, or
+changed subsystem. Prefer `bun test tests/<domain>/<name>.test.ts` for a known
+file, `bun test tests/<domain>` for one subsystem, or
 `bun run test:changed` when the touch set is broader than one file. Do **not**
 run repository-wide `bun run test` or a bare `bun test` with no file arguments
 for a scoped change by default. `bun run test:changed` follows Bun's parsed module graph: it

@@ -917,7 +917,7 @@ describe("empty and absent tool catalogs", () => {
   );
 
   // A passthrough request may omit `tools` entirely and still receive a tool call the client
-  // understands — the Copilot contract in tests/github-copilot-stream-contract.test.ts does
+  // understands — the Copilot contract in tests/providers/github-copilot/github-copilot-stream-contract.test.ts does
   // exactly that with `apply_patch`. With no catalog the proxy has no authorization boundary to
   // enforce, so the call remains untouched on both transports.
   test("non-streaming, no tools field — relayed, not refused", async () => {

@@ -325,11 +325,11 @@ export function resolveBunTestArgs(
 // Paths relative to tests/. An entry moves with its file (scripts/test-layout/move.ts rewrites
 // it); the lane label, the ignore glob, and the timeout table all key on the basename.
 export const SERIAL_FULL_SUITE_FILES = [
-  "codex-shim.test.ts",
-  "cursor-native-exec-shell.test.ts",
-  "issue-452-empty-503.test.ts",
+  "codex-integration/codex-shim.test.ts",
+  "providers/cursor/cursor-native-exec-shell.test.ts",
+  "codex-integration/issue-452-empty-503.test.ts",
   "adapters/openai/openai-provider-option-e2e.test.ts",
-  "release-helper.test.ts",
+  "ci-workflows/release-helper.test.ts",
   "update/update-stop-first.test.ts",
 ] as const;
 
@@ -460,7 +460,7 @@ async function runTestLane(
 
 /**
  * `gui` is not a workspace of the root package and declares React only in `gui/package.json`, so a
- * root `bun install` never creates `gui/node_modules`. Twenty-five files under `tests/` import
+ * root `bun install` never creates `gui/node_modules`. Twenty-six files under `tests/` import
  * modules from `gui/src`, which makes those tests fail on a fresh clone or worktree with
  * `Cannot find package 'react'` — reported as an "Unhandled error between tests" that names no
  * test, so the cause is not obvious from the output.

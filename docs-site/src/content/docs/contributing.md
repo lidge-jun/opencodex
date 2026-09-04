@@ -42,10 +42,14 @@ bun run prepare:package           # refresh package launchers/assets
 `origin/dev`, then local `dev`. It reports that ref and the exact `git merge-base HEAD <ref>`
 commit, then passes the merge-base SHA to Bun.
 
-Most tests are flat `tests/*.test.ts` Bun tests. `tests/helpers/` contains shared fixtures and
-`tests/e2e-style/` contains broader native-parity scenarios. Keep a focused regression near the
-existing tests for the subsystem you change; run the full suite for shared routing, adapters, config,
-or server behavior.
+Tests are Bun tests in domain directories that mirror `src/`: `tests/server/`, `tests/providers/`,
+`tests/adapters/openai/`, `tests/cli/` and so on. `scripts/test-layout/layout.json` is the map
+and `tests/test-layout.test.ts` enforces it, so a new test goes into its domain directory and gets
+an entry in the map (the tooling test tells you which one is missing). `tests/helpers/` holds
+shared fixtures and `tests/helpers/repo-root.ts` is how a test reaches repository files;
+`tests/e2e-style/` holds broader native-parity scenarios. Keep a focused regression near the
+existing tests for the subsystem you change (`bun test tests/<domain>` runs one subsystem); run
+the full suite for shared routing, adapters, config, or server behavior.
 
 The docs site you're reading lives in `docs-site/` (Astro + Starlight):
 
@@ -222,5 +226,5 @@ startup path must not import the manifest catalog or activate Compatibility Lab.
 ## Verify before you claim done
 
 Run the narrowest command that proves your change — `bun run typecheck` for types, a focused
-`bun test tests/<name>.test.ts` or runtime probe for behavior, then the broader gates appropriate to
+`bun test tests/<domain>/<name>.test.ts` or runtime probe for behavior, then the broader gates appropriate to
 the affected surface. opencodex favors small, verifiable commits over large batches.

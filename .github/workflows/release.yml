@@ -59,7 +59,7 @@ jobs:
   # still bumps it, which is the point.
   #
   # It is declared FIRST in this file, ahead of the jobs it depends on, because
-  # tests/ci-workflows.test.ts splits the workflow on `- name:` and reads each `run:`
+  # tests/ci-workflows/ci-workflows.test.ts splits the workflow on `- name:` and reads each `run:`
   # block to the start of the next one when it checks that dispatch inputs never
   # interpolate into shell source. A job declared between two steps lands inside that
   # window and reads as shell. Job order in YAML carries no execution meaning - `needs`

@@ -38,7 +38,7 @@ bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
 ```
 
-La plupart des tests Bun sont des fichiers plats `tests/*.test.ts`. `tests/helpers/` contient les fixtures
+Les tests Bun vivent dans des répertoires par domaine calqués sur `src/` (`tests/<domain>/`), la carte étant `scripts/test-layout/layout.json`. `tests/helpers/` contient les fixtures
 partagées et `tests/e2e-style/` des scénarios plus larges de parité native. Placez une régression ciblée près
 des tests existants du sous-système modifié. Exécutez la suite complète pour le routage partagé, les adaptateurs,
 la configuration ou le comportement du serveur.

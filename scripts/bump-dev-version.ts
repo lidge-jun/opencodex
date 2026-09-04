@@ -8,7 +8,7 @@
  * `package.json` there, and pushes that branch. `release.yml` ends at "Create GitHub
  * release". Nothing advances `dev`. So the moment a release publishes, `dev` carries a
  * version that is at or behind a published one, and
- * `tests/release-version-line.test.ts` fails on `dev` and on every pull request opened
+ * `tests/ci-workflows/release-version-line.test.ts` fails on `dev` and on every pull request opened
  * against it — inherited red that a contributor cannot fix from their own diff.
  *
  * That has been repaired by hand four times: `32529c2b2`, `e4a85d134`, `076ad3036`,
@@ -45,7 +45,7 @@
  * stable release means that core is consumed, so `dev` moves to the next minor.
  *
  * Freeness is then checked where the tag set IS visible: the workflow runs
- * `tests/release-version-line.test.ts` in the `dev` checkout after the rewrite. If the
+ * `tests/ci-workflows/release-version-line.test.ts` in the `dev` checkout after the rewrite. If the
  * candidate collides with something published, that test fails, no pull request is
  * opened, and the job goes red asking for a human decision. This file only enforces
  * what it can prove without I/O — that the candidate ranks strictly ahead of both
@@ -108,7 +108,7 @@ export function decideDevVersion(released: string, current: string): BumpDecisio
     : `${rel.major}.${rel.minor}.${rel.patch}`;
 
   // Nothing to do when dev is already clear of the RELEASED version. That is the real
-  // question — the detector in tests/release-version-line.test.ts compares dev against
+  // question — the detector in tests/ci-workflows/release-version-line.test.ts compares dev against
   // published tags, not against this candidate.
   //
   // Comparing against the candidate instead is wrong, and a test caught it: dev at

@@ -13,9 +13,9 @@
 ## Task 1: Lock the routed catalog contract with failing tests
 
 **Files:**
-- Modify: `tests/codex-catalog.test.ts:280-300`
-- Modify: `tests/codex-catalog.test.ts:1011-1045`
-- Modify: `tests/codex-catalog.test.ts:1230-1255`
+- Modify: `tests/codex-integration/codex-catalog.test.ts:280-300`
+- Modify: `tests/codex-integration/codex-catalog.test.ts:1011-1045`
+- Modify: `tests/codex-integration/codex-catalog.test.ts:1230-1255`
 
 **Step 1: Change the combo assertion to require the explicit routed mode**
 
@@ -68,7 +68,7 @@ expect(rows.find(row => row.slug === "team/gpt-5.5")?.tool_mode).toBe("code");
 Run:
 
 ```bash
-bun test tests/codex-catalog.test.ts
+bun test tests/codex-integration/codex-catalog.test.ts
 ```
 
 Expected: routed/template/combo/fallback assertions fail because current production code deletes or omits `tool_mode`; native preservation assertions remain green.
@@ -76,7 +76,7 @@ Expected: routed/template/combo/fallback assertions fail because current product
 **Step 6: Commit the red tests only**
 
 ```bash
-git add tests/codex-catalog.test.ts
+git add tests/codex-integration/codex-catalog.test.ts
 git commit -m "test(codex): require code mode for routed models"
 ```
 
@@ -86,7 +86,7 @@ git commit -m "test(codex): require code mode for routed models"
 - Modify: `src/codex/catalog/parsing.ts:341-375`
 - Modify: `src/codex/catalog/sync.ts:33`
 - Modify: `src/codex/catalog/sync.ts:276-310`
-- Test: `tests/codex-catalog.test.ts`
+- Test: `tests/codex-integration/codex-catalog.test.ts`
 
 **Step 1: Add a named compatibility helper**
 
@@ -128,7 +128,7 @@ Do not call the full routed normalizer from the fallback branch; that would broa
 **Step 4: Run the focused tests and confirm GREEN**
 
 ```bash
-bun test tests/codex-catalog.test.ts
+bun test tests/codex-integration/codex-catalog.test.ts
 ```
 
 Expected: all catalog tests pass, including native/account preservation.
@@ -151,8 +151,8 @@ git commit -m "fix(codex): enable code mode for routed models"
 ## Task 3: Prove on-disk catalog synchronization preserves the policy
 
 **Files:**
-- Modify: `tests/codex-catalog-sync-hardening.test.ts`
-- Test: `tests/codex-catalog-sync-hardening.test.ts`
+- Modify: `tests/codex-integration/codex-catalog-sync-hardening.test.ts`
+- Test: `tests/codex-integration/codex-catalog-sync-hardening.test.ts`
 
 **Step 1: Add a real sync fixture assertion**
 
@@ -169,7 +169,7 @@ Also assert a generated native account-qualified row retains `"code"` if the fix
 **Step 2: Run the sync test**
 
 ```bash
-bun test tests/codex-catalog-sync-hardening.test.ts
+bun test tests/codex-integration/codex-catalog-sync-hardening.test.ts
 ```
 
 Expected: pass and prove the serialized catalog, not merely the in-memory builder.
@@ -177,7 +177,7 @@ Expected: pass and prove the serialized catalog, not merely the in-memory builde
 **Step 3: Commit the persistence test**
 
 ```bash
-git add tests/codex-catalog-sync-hardening.test.ts
+git add tests/codex-integration/codex-catalog-sync-hardening.test.ts
 git commit -m "test(codex): persist routed code mode policy"
 ```
 
@@ -229,7 +229,7 @@ git commit -m "docs(codex): explain routed local tool access"
 Run:
 
 ```bash
-bun test tests/responses/responses-parser.test.ts tests/adapters/bridge.test.ts tests/multi-agent-compat.test.ts
+bun test tests/responses/responses-parser.test.ts tests/adapters/bridge.test.ts tests/codex-integration/multi-agent-compat.test.ts
 ```
 
 Expected: custom declaration, streaming `custom_tool_call`, exact freeform input, and output replay remain green. Add no production protocol change unless one of these tests proves a real gap.
@@ -239,7 +239,7 @@ Expected: custom declaration, streaming `custom_tool_call`, exact freeform input
 Run:
 
 ```bash
-bun test tests/responses/responses-terminal-repair.test.ts tests/deepseek-inbound-wire.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/responses/passthrough-abort.test.ts
+bun test tests/responses/responses-terminal-repair.test.ts tests/providers/deepseek-inbound-wire.test.ts tests/providers/deepseek-responses-item-id-repair.test.ts tests/responses/passthrough-abort.test.ts
 ```
 
 Expected: progressive deltas, strict terminal repair, item IDs, and cancellation pass.
@@ -249,7 +249,7 @@ Expected: progressive deltas, strict terminal repair, item IDs, and cancellation
 Run:
 
 ```bash
-bun test tests/vision/vision-sidecar-e2e.test.ts tests/vision/vision-anthropic.test.ts tests/vision/vision-cache.test.ts tests/vision/vision-fail-closed.test.ts tests/catalog-vision-sidecar-modalities.test.ts tests/responses/openai-responses-passthrough.test.ts
+bun test tests/vision/vision-sidecar-e2e.test.ts tests/vision/vision-anthropic.test.ts tests/vision/vision-cache.test.ts tests/vision/vision-fail-closed.test.ts tests/codex-integration/catalog-vision-sidecar-modalities.test.ts tests/responses/openai-responses-passthrough.test.ts
 ```
 
 Expected: captions replace raw image parts in passthrough bodies, empty references do not consume captions, and partial/failure paths omit pixels safely.

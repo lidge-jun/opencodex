@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";
 import { join } from "node:path";
 import {
   buildWindowsTrayLauncherScript,
@@ -557,4 +558,3 @@ describe("Windows tray packaging and command safety", () => {
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
-import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";

@@ -15,6 +15,7 @@ import {
   resolveMetadataProvider,
 } from "../generated/model-metadata";
 import type { AttemptTierOutcome, OcxUsage } from "../types";
+import { canonicalFastTierMarker } from "../providers/fastwire";
 import { baseProviderLabel, canonicalUsageProviderLabel } from "../providers/label";
 import type { PersistedUsageAttempt, UsageStatus } from "./log";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
@@ -36,10 +37,9 @@ export type ContextTierName = "long";
 
 /**
  * Service-tier provenance. `effectiveServiceTier()` collapses these with `??`,
- * but long-context exclusivity needs to know WHICH source supplied "priority":
- * OpenAI does not serve long context in Fast mode, so a >272k request that was
- * merely TAGGED priority was necessarily downgraded and must still be priced at
- * the long rate. Only a response-confirmed Fast tier suppresses the context tier.
+ * but provider-specific long-context rules need to know WHICH source supplied Fast.
+ * Current API rows stack Fast and long rates; legacy exclusive rows and unknown
+ * vendor combinations still require response-confirmed provenance.
  */
 export interface ServiceTierContext {
   responseServiceTier?: string;
@@ -253,7 +253,7 @@ function resolveMatchedPriceExact(
   const verifiedOverride = overlays === EXPECTED_PRICE_OVERLAYS
     ? findVerifiedPriceOverride(provider, modelId)
     : undefined;
-  if (verifiedOverride && validCost4(verifiedOverride.cost4) && hasNonZeroCost(verifiedOverride.cost4)) {
+  if (verifiedOverride && verifiedOverride.status !== "unverified" && validCost4(verifiedOverride.cost4) && hasNonZeroCost(verifiedOverride.cost4)) {
     return {
       provider,
       modelId,
@@ -261,7 +261,7 @@ function resolveMatchedPriceExact(
       source: "expected",
       sourceRef: verifiedOverride.source,
       verifiedAt: verifiedOverride.verifiedAt,
-      status: "verified",
+      status: verifiedOverride.status,
     };
   }
   const metadataProvider = resolveMetadataProvider(provider);
@@ -433,7 +433,7 @@ function tierScalar(tier?: ServiceTierInput): string | undefined {
 
 /** True only when the UPSTREAM RESPONSE confirmed the Fast tier (see ServiceTierContext). */
 function isConfirmedFast(tier?: ServiceTierInput): boolean {
-  return typeof tier === "object" && tier.responseServiceTier === "priority";
+  return typeof tier === "object" && canonicalFastTierMarker(tier.responseServiceTier) === "priority";
 }
 
 /**
@@ -445,7 +445,7 @@ function isConfirmedFast(tier?: ServiceTierInput): boolean {
  * cache-heavy long prompt would fall below the boundary and under-bill.
  *
  * A provider's declaration decides how a response-confirmed priority tier relates to this band.
- * OpenAI declares the bands exclusive. xAI publishes neither a combined rate nor an exclusion,
+ * API rows can stack the bands. xAI publishes neither a combined rate nor an exclusion,
  * so its long-context rate remains the known lower bound instead of inventing a stacked multiplier.
  */
 function applyContextTier(
@@ -481,9 +481,11 @@ function applyPriorityMultiplier(
   provider: string,
   modelId: string,
   serviceTier?: ServiceTierInput,
+  contextTier?: ContextTierName,
 ): [Cost4, number] {
-  if (tierScalar(serviceTier) !== "priority") return [cost4, 1];
+  if (canonicalFastTierMarker(tierScalar(serviceTier)) !== "priority") return [cost4, 1];
   const base = baseProviderLabel(provider);
+  if (contextTier && findContextTier(base, modelId)?.confirmedPriorityRelation !== "stack") return [cost4, 1];
   const rule = findPriorityPricingRule(base, modelId);
   if (rule?.requiresResponseConfirmation && !isConfirmedFast(serviceTier)) return [cost4, 1];
   const multiplier = rule?.multiplier ?? 1;
@@ -540,12 +542,9 @@ export function estimateAttemptCost(
   const [tieredCost4, contextTier, contextPriorityLowerBound] = applyContextTier(
     price.cost4, attempt.provider, attempt.model, attempt.usage.inputTokens, attemptServiceTier,
   );
-  // A published long-context row owns the numeric estimate. OpenAI declares that band
-  // exclusive with Fast; xAI's confirmed combination is deliberately left unmultiplied
-  // and marked as a lower bound because no combined price has been published.
-  const [effectiveCost4, multiplier] = contextTier
-    ? [tieredCost4, 1] as const
-    : applyPriorityMultiplier(tieredCost4, attempt.provider, attempt.model, attemptServiceTier);
+  const [effectiveCost4, multiplier] = applyPriorityMultiplier(
+    tieredCost4, attempt.provider, attempt.model, attemptServiceTier, contextTier,
+  );
   const priorityLowerBound = contextPriorityLowerBound
     || isOpenRouterPriorityLowerBound(attempt.provider, attempt.tierOutcome);
   return {
@@ -627,9 +626,9 @@ export function estimateRequestCost(
   const [tieredCost4, contextTier, contextPriorityLowerBound] = applyContextTier(
     price.cost4, input.provider, input.model, input.usage.inputTokens, input.serviceTier,
   );
-  const [effectiveCost4, multiplier] = contextTier
-    ? [tieredCost4, 1] as const
-    : applyPriorityMultiplier(tieredCost4, input.provider, input.model, input.serviceTier);
+  const [effectiveCost4, multiplier] = applyPriorityMultiplier(
+    tieredCost4, input.provider, input.model, input.serviceTier, contextTier,
+  );
   const priorityLowerBound = contextPriorityLowerBound || isOpenRouterPriorityLowerBound(
     input.provider,
     typeof input.serviceTier === "object" ? input.serviceTier.tierOutcome : undefined,

@@ -1,0 +1,3254 @@
+import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
+import { logsFromApiBody } from "../helpers/logs-api";
+import { managementFetch as fetch, ManagementRequest as Request } from "../helpers/management-auth";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  clearComboSelectionState,
+  clearComboTargetCooldowns,
+  isComboTargetInCooldown,
+} from "../../src/combos";
+import { readConfigDiagnostics, saveConfig } from "../../src/config";
+import type { ProviderAdapter } from "../../src/adapters/base";
+import { handleManagementAPI } from "../../src/server/management-api";
+import { saveCredential } from "../../src/oauth/store";
+import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
+import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
+import type { AdapterEvent, OcxConfig, OcxProviderConfig, OcxProviderContinuationState } from "../../src/types";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { clearRequestLogsForTests, hydrateRequestLogsFromDisk, type RequestLogContext } from "../../src/server/request-log";
+import { responseWithDeferredRequestLog } from "../../src/server/relay";
+import { readUsageEntries } from "../../src/usage/log";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import {
+  clearCodexUpstreamHealth,
+  formatCodexProviderForLog,
+  getCodexUpstreamHealth,
+} from "../../src/codex/routing";
+import { startServer } from "../../src/server";
+import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
+import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import {
+  clearResponseStateForTests,
+  flushResponseState,
+  responseStatePersistPendingForTests,
+} from "../../src/responses/state";
+import { clearCursorThreadContinuityForTests } from "../../src/adapters/cursor/thread-continuity";
+import { COMPACT_PROMPT, encodeCompactionSummary } from "../../src/responses/compaction";
+
+// Full-suite Windows load: startServer + combo rename/delete management flows exceed the
+// default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
+setDefaultTimeout(30_000);
+
+const actualResolver = await import("../../src/server/adapter-resolve");
+const actualResolveAdapter = actualResolver.resolveAdapter;
+const actualRetry = await import("../../src/lib/upstream-retry");
+const actualFetchWithTransientRetry = actualRetry.fetchWithTransientRetry;
+const { createCursorAdapter } = await import("../../src/adapters/cursor");
+import type { CursorTransportFactory } from "../../src/adapters/cursor/transport";
+let customRunTurn: NonNullable<ProviderAdapter["runTurn"]> | undefined;
+let customFetchResponse: NonNullable<ProviderAdapter["fetchResponse"]> | undefined;
+let customTransientResponse: (() => Promise<Response>) | undefined;
+let customUsageEstimate: ((model: string) => number | undefined) | undefined;
+let customCursorTransportFactory: CursorTransportFactory | undefined;
+
+mock.module("../../src/server/adapter-resolve", () => ({
+  ...actualResolver,
+  resolveAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
+    if (provider.adapter === "cursor" && customCursorTransportFactory) {
+      // Real cursor adapter (adapter.name === "cursor") over a fake transport, so server-level
+      // tests can drive the genuine continuation/persistence policy without a live socket.
+      return createCursorAdapter(provider, { createTransport: customCursorTransportFactory });
+    }
+    if (
+      provider.adapter === "test-run-turn"
+      || provider.adapter === "test-kiro"
+      || provider.adapter === "test-owned"
+    ) {
+      const adapter: ProviderAdapter = {
+        name: provider.adapter === "test-kiro" ? "kiro" : provider.adapter,
+        buildRequest: () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
+        async *parseStream(): AsyncGenerator<AdapterEvent> {
+          yield { type: "error", message: "test runTurn adapter does not use parseStream" };
+        },
+        async runTurn(parsed, incoming, emit) {
+          if (!customRunTurn) throw new Error("custom runTurn not installed");
+          await customRunTurn(parsed, incoming, emit);
+        },
+      };
+      return adapter;
+    }
+    if (provider.adapter === "test-response") {
+      const base = actualResolveAdapter({ ...provider, adapter: "openai-chat" }, cacheRetention);
+      return {
+        ...base,
+        name: "test-response",
+        async buildRequest(parsed, options) {
+          const request = await base.buildRequest(parsed, options);
+          const estimate = customUsageEstimate?.(parsed.modelId);
+          return estimate === undefined
+            ? request
+            : { ...request, usageLog: { inputTokens: estimate } };
+        },
+        async fetchResponse(request, context) {
+          if (!customFetchResponse) throw new Error("custom fetchResponse not installed");
+          return customFetchResponse(request, context);
+        },
+      };
+    }
+    return actualResolveAdapter(provider, cacheRetention);
+  },
+}));
+
+mock.module("../../src/lib/upstream-retry", () => ({
+  ...actualRetry,
+  fetchWithTransientRetry(
+    ...args: Parameters<typeof actualFetchWithTransientRetry>
+  ): ReturnType<typeof actualFetchWithTransientRetry> {
+    if (customTransientResponse) return customTransientResponse();
+    return actualFetchWithTransientRetry(...args);
+  },
+}));
+
+const { handleResponses } = await import("../../src/server/responses");
+const { handleResponsesCompact } = await import("../../src/server/responses/compact");
+type HandleOptions = NonNullable<Parameters<typeof handleResponses>[3]>;
+
+const TOKEN_ENDPOINT = "https://auth.x.ai/oauth/token";
+const XAI_CHAT_ENDPOINT = `${XAI_GROK_CLI_BASE_URL}/chat/completions`;
+
+let testDir = "";
+let previousHome: string | undefined;
+let previousCursorToken: string | undefined;
+let isolatedCodexHome: IsolatedCodexHome | null = null;
+let originalFetch: typeof fetch;
+let originalNow: () => number;
+const servers: Array<ReturnType<typeof Bun.serve>> = [];
+
+beforeEach(() => {
+  originalFetch = globalThis.fetch;
+  originalNow = Date.now;
+  previousHome = process.env.OPENCODEX_HOME;
+  previousCursorToken = process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+  delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+  isolatedCodexHome = installIsolatedCodexHome("ocx-combo-030-codex-");
+  testDir = mkdtempSync(join(tmpdir(), "ocx-combo-030-"));
+  process.env.OPENCODEX_HOME = testDir;
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
+  clearCodexUpstreamHealth();
+  customRunTurn = undefined;
+  customFetchResponse = undefined;
+  customTransientResponse = undefined;
+  customUsageEstimate = undefined;
+  customCursorTransportFactory = undefined;
+  clearRequestLogsForTests();
+  clearResponseStateForTests();
+  clearCursorThreadContinuityForTests();
+});
+
+afterEach(async () => {
+  let responseStatePending = true;
+  try {
+    for (const server of servers.splice(0)) await server.stop(true);
+    await flushResponseState();
+    responseStatePending = responseStatePersistPendingForTests();
+  } finally {
+    clearResponseStateForTests();
+    clearCursorThreadContinuityForTests();
+    globalThis.fetch = originalFetch;
+    Date.now = originalNow;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    if (previousCursorToken === undefined) delete process.env.OPENCODEX_CURSOR_TEST_TOKEN;
+    else process.env.OPENCODEX_CURSOR_TEST_TOKEN = previousCursorToken;
+    isolatedCodexHome?.restore();
+    isolatedCodexHome = null;
+    if (testDir) removeTreeWithRetry(testDir);
+    clearComboSelectionState();
+    clearComboTargetCooldowns();
+    clearCodexUpstreamHealth();
+    clearRequestLogsForTests();
+  }
+  expect(responseStatePending).toBe(false);
+});
+
+function serve(handler: (request: Request) => Response | Promise<Response>) {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
+  servers.push(server);
+  return server;
+}
+
+function baseUrl(server: ReturnType<typeof Bun.serve>): string {
+  return `${server.url.toString().replace(/\/$/, "")}/v1`;
+}
+
+function chatSuccess(text: string, model = "model"): Response {
+  return Response.json({
+    id: `chatcmpl-${model}`,
+    object: "chat.completion",
+    model,
+    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+  });
+}
+
+function chatStream(text: string): Response {
+  const frames = [
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } })}\n\n`,
+    "data: [DONE]\n\n",
+  ].join("");
+  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
+}
+
+function chatTruncatedZeroOutputStream(): Response {
+  const frames = [
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: null }] })}\n\n`,
+  ].join("");
+  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
+}
+
+function chatErrorStream(message: string, prefix?: string): Response {
+  const frames = [
+    ...(prefix
+      ? [`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: prefix }, finish_reason: null }] })}\n\n`]
+      : []),
+    `data: ${JSON.stringify({ error: { type: "server_error", code: "upstream_server_error", message } })}\n\n`,
+    "data: [DONE]\n\n",
+  ].join("");
+  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
+}
+
+function responsesSuccess(text: string, model = "responses-model"): Record<string, unknown> {
+  return {
+    id: `resp-${model}`,
+    object: "response",
+    status: "completed",
+    model,
+    output: [{
+      id: "msg_backup",
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      content: [{ type: "output_text", text, annotations: [] }],
+    }],
+    usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
+  };
+}
+
+function provider(
+  adapter: string,
+  url: string,
+  apiKey: string,
+  extra: Partial<OcxProviderConfig> = {},
+): OcxProviderConfig {
+  return {
+    adapter,
+    baseUrl: url,
+    allowPrivateNetwork: url.includes("127.0.0.1"),
+    authMode: "key",
+    apiKey,
+    ...extra,
+  };
+}
+
+function comboConfig(
+  providers: OcxConfig["providers"],
+  targets = Object.keys(providers).map((name, index) => ({ provider: name, model: `m${index + 1}` })),
+  extra: Partial<NonNullable<OcxConfig["combos"]>[string]> = {},
+): OcxConfig {
+  return {
+    port: 0,
+    defaultProvider: Object.keys(providers)[0]!,
+    providers,
+    combos: { free: { strategy: "failover", targets, ...extra } },
+  };
+}
+
+async function post(
+  config: OcxConfig,
+  raw: Record<string, unknown> = {},
+  options: HandleOptions = {},
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  return handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
+  }), config, { model: "", provider: "" }, options);
+}
+
+let loggedRequestSequence = 0;
+
+async function postLogged(
+  config: OcxConfig,
+  raw: Record<string, unknown> = {},
+  options: HandleOptions = {},
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const start = Date.now();
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
+  }), config, logCtx, options);
+  loggedRequestSequence += 1;
+  return responseWithDeferredRequestLog(
+    response,
+    `combo-test-${loggedRequestSequence}`,
+    start,
+    logCtx,
+  );
+}
+
+async function postModelLogged(
+  config: OcxConfig,
+  model: string,
+  raw: Record<string, unknown> = {},
+  options: HandleOptions = {},
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const start = Date.now();
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({ model, input: "hello", stream: false, ...raw }),
+  }), config, logCtx, options);
+  loggedRequestSequence += 1;
+  return responseWithDeferredRequestLog(
+    response,
+    `direct-test-${loggedRequestSequence}`,
+    start,
+    logCtx,
+  );
+}
+
+async function latestAttemptReceipts(config: OcxConfig) {
+  const response = await management(config, "GET", "/api/logs?tail=1");
+  const logs = logsFromApiBody(await response!.json());
+  const usage = readUsageEntries();
+  return { log: logs[0]!, usage: usage.at(-1)! };
+}
+
+async function expectCancelledAttemptReceipt(
+  config: OcxConfig,
+  expected: { provider: string; model: string; adapter: string },
+): Promise<void> {
+  const { log, usage } = await latestAttemptReceipts(config);
+  for (const receipt of [log, usage]) {
+    expect(receipt).toMatchObject({
+      provider: "combo",
+      model: "combo/free",
+      attempts: [{ ...expected, status: 499 }],
+    });
+    expect((receipt.attempts as unknown[])).toHaveLength(1);
+  }
+}
+
+interface SseFrame {
+  event?: string;
+  data: Record<string, unknown>;
+}
+
+async function collectSse(response: Response): Promise<SseFrame[]> {
+  const text = await response.text();
+  return text.split("\n\n").flatMap(block => {
+    if (!block.trim()) return [];
+    let event: string | undefined;
+    let data = "";
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      if (line.startsWith("data:")) data += line.slice(5).trim();
+    }
+    if (!data || data === "[DONE]") return [];
+    try {
+      return [{ ...(event ? { event } : {}), data: JSON.parse(data) as Record<string, unknown> }];
+    } catch {
+      return [];
+    }
+  });
+}
+
+async function management(
+  config: OcxConfig,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<Response | null> {
+  const request = new Request(`http://localhost${path}`, {
+    method,
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return handleManagementAPI(request, new URL(request.url), config, {
+    createManagementConvergeCodex: catalogConvergenceFactory(),
+  });
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function within<T>(promise: Promise<T>, ms = 2_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+describe("server combo failover 030 activation matrix", () => {
+  test("dispatches a selected concrete target despite a shadowing combo alias", async () => {
+    const hits: string[] = [];
+    const a = serve(async request => {
+      const body = await request.json() as { model?: string; messages?: Array<{ content?: string }> };
+      hits.push(`a:${body.model}:${body.messages?.[0]?.content}`);
+      return chatSuccess("intended", "m1");
+    });
+    const b = serve(async request => {
+      const body = await request.json() as { model?: string; messages?: Array<{ content?: string }> };
+      hits.push(`b:${body.model}:${body.messages?.[0]?.content}`);
+      return chatSuccess("shadow", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    }, [{ provider: "a", model: "m1" }]);
+    config.defaultProvider = "b";
+    config.combos!.shadow = {
+      alias: "a/m1",
+      targets: [{ provider: "b", model: "m2" }],
+    };
+
+    const response = await post(config, { input: "SECRET_PROMPT_X" });
+
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await response.json())).toContain("intended");
+    expect(hits).toEqual(["a:m1:SECRET_PROMPT_X"]);
+  });
+
+  test("monthly quota then Orca free-prompt cap continues to a healthy third provider", async () => {
+    const hits: string[] = [];
+    const go = serve(async request => {
+      const body = await request.json() as { model?: string };
+      hits.push(`go:${body.model}`);
+      return Response.json({
+        error: { type: "GoUsageLimitError", message: "Monthly usage limit reached. Resets in 14 days." },
+      }, { status: 429 });
+    });
+    const orca = serve(async request => {
+      const body = await request.json() as { model?: string };
+      hits.push(`orca:${body.model}`);
+      return Response.json({ error: {
+        message: "This prompt is longer than the free tier allows for a single request.",
+        type: "invalid_request_error",
+        code: "free_rate_limited",
+        metadata: { reason: "err_free_prompt_cap" },
+      } }, { status: 400 });
+    });
+    const backup = serve(async request => {
+      const body = await request.json() as { model?: string };
+      hits.push(`backup:${body.model}`);
+      return chatSuccess("healthy fallback", "m3");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(go), "key-a"),
+      b: provider("openai-chat", baseUrl(orca), "key-b"),
+      c: provider("openai-chat", baseUrl(backup), "key-c"),
+    }, [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+      { provider: "c", model: "m3" },
+    ]);
+
+    const response = await post(config);
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await response.json())).toContain("healthy fallback");
+    expect(hits).toEqual(["go:m1", "orca:m2", "backup:m3"]);
+  });
+
+  test("ordinary openai-chat 503 hops to backup for non-stream and stream", async () => {
+    const hits: string[] = [];
+    const a = serve(async request => {
+      hits.push(`a:${(await request.json() as { stream?: boolean }).stream}`);
+      return Response.json({ error: { message: "overloaded" } }, { status: 503 });
+    });
+    const b = serve(async request => {
+      const body = await request.json() as { stream?: boolean };
+      hits.push(`b:${body.stream}`);
+      return body.stream ? chatStream("stream backup") : chatSuccess("json backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+
+    const unary = await post(config);
+    expect(unary.status).toBe(200);
+    expect(JSON.stringify(await unary.json())).toContain("json backup");
+    clearComboTargetCooldowns();
+    clearComboSelectionState();
+    const streaming = await post(config, { stream: true });
+    expect(streaming.status).toBe(200);
+    expect(JSON.stringify(await collectSse(streaming))).toContain("stream backup");
+    expect(hits).toEqual(["a:false", "b:false", "a:true", "b:true"]);
+  });
+
+  test("zero-output terminal SSE failure hops before committing the child stream", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return chatErrorStream("service busy, please try again later");
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return chatStream("stream backup");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+
+    const response = await postLogged(config, { stream: true });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await collectSse(response))).toContain("stream backup");
+    expect(hits).toEqual(["a", "b"]);
+
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        resolvedModel: "m2",
+        attempts: [
+          { ordinal: 1, provider: "a", model: "m1", status: 502 },
+          { ordinal: 2, provider: "b", model: "m2", status: 200 },
+        ],
+      });
+      expect(receipt.attempts[0]).not.toHaveProperty("firstOutputMs");
+    }
+  });
+
+  test("zero-output adapter EOF hops to the next combo target", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return chatTruncatedZeroOutputStream();
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return chatStream("stream backup after adapter eof");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+
+    const response = await postLogged(config, { stream: true });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await collectSse(response))).toContain("stream backup after adapter eof");
+    expect(hits).toEqual(["a", "b"]);
+
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        resolvedModel: "m2",
+        attempts: [
+          { ordinal: 1, provider: "a", model: "m1", status: 502 },
+          { ordinal: 2, provider: "b", model: "m2", status: 200 },
+        ],
+      });
+      expect(receipt.attempts[0]).not.toHaveProperty("firstOutputMs");
+    }
+  });
+
+  test("terminal SSE failure after output stays on the first target and never replays", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return chatErrorStream("late service failure", "already visible");
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return chatStream("must not replay");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+
+    const response = await post(config, { stream: true });
+    expect(response.status).toBe(200);
+    const frames = await collectSse(response);
+    expect(JSON.stringify(frames)).toContain("already visible");
+    expect(frames.some(frame => frame.data.type === "response.failed")).toBe(true);
+    expect(JSON.stringify(frames)).not.toContain("must not replay");
+    expect(hits).toEqual(["a"]);
+  });
+
+  test("model-lifecycle 410 hops once and cools only the dead combo target", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return Response.json({
+        error: {
+          type: "invalid_request_error",
+          code: "model_end_of_life",
+          message: "The model 'm1' has reached its end of life and is no longer available.",
+        },
+      }, { status: 410 });
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return chatSuccess("lifecycle backup", "m2");
+    });
+    const targets = [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ];
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    }, targets);
+
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("lifecycle backup");
+    expect(isComboTargetInCooldown("free", targets[0]!)).toBe(true);
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt.attempts).toMatchObject([
+        { ordinal: 1, provider: "a", model: "m1", status: 410 },
+        { ordinal: 2, provider: "b", model: "m2", status: 200 },
+      ]);
+    }
+
+    clearComboSelectionState();
+    const retry = await post(config);
+    expect(retry.status).toBe(200);
+    expect(await retry.text()).toContain("lifecycle backup");
+    expect(hits).toEqual(["a", "b", "b"]);
+  });
+
+  test("persists one logical A503 to B200 request with ordered physical usage", async () => {
+    const a = serve(() => Response.json({
+      error: { message: "overloaded" },
+      usage: { input_tokens: 7, output_tokens: 1, total_tokens: 8 },
+    }, { status: 503 }));
+    const b = serve(() => chatSuccess("logged backup", "m2"));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        requestedModel: "combo/free",
+        resolvedModel: "m2",
+        attempts: [
+          { ordinal: 1, provider: "a", model: "m1", status: 503, usage: { inputTokens: 7, outputTokens: 1 } },
+          { ordinal: 2, provider: "b", model: "m2", status: 200, usage: { inputTokens: 2, outputTokens: 1 } },
+        ],
+      });
+    }
+  });
+
+  test("persists one immutable combo route trace, not the child route trace", async () => {
+    const a = serve(() => chatSuccess("winner", "m1"));
+    const b = serve(() => chatSuccess("backup", "m2"));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt.routeDecision).toBeDefined();
+      expect(receipt.routeDecision.routeKind).toBe("combo");
+      expect(receipt.routeDecision.requestedModel).toBe("combo/free");
+      expect(receipt.routeDecision.candidates).toHaveLength(2);
+      expect(receipt.routeDecision.selected).toMatchObject({
+        provider: "a",
+        model: "m1",
+        reason: "combo-pick",
+      });
+      // Selection trace stays immutable: exactly one physical attempt happened
+      // and the trace still describes the combo decision, not the child route.
+      expect(receipt.attempts).toHaveLength(1);
+      expect(receipt.attempts![0]).toMatchObject({ provider: "a", model: "m1" });
+    }
+  });
+
+  test("terminal combo failure keeps the combo trace through child adoption", async () => {
+    const a = serve(() => Response.json({ error: { message: "overloaded" } }, { status: 503 }));
+    const b = serve(() => Response.json({ error: { message: "overloaded" } }, { status: 503 }));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBeGreaterThanOrEqual(500);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt.routeDecision).toBeDefined();
+      expect(receipt.routeDecision.routeKind).toBe("combo");
+      expect(receipt.routeDecision.selected).toMatchObject({
+        provider: "a",
+        model: "m1",
+        reason: "combo-pick",
+      });
+      expect(receipt.attempts).toHaveLength(2);
+    }
+  });
+
+  test("preserves distinct failed and winning reasoning wires through restart hydration", async () => {
+    const bodies: Array<{ provider: string; effort?: unknown }> = [];
+    const a = serve(async request => {
+      const body = await request.json() as Record<string, unknown>;
+      bodies.push({ provider: "a", effort: body.reasoning_effort });
+      return Response.json({ error: { message: "overloaded" } }, { status: 503 });
+    });
+    const b = serve(async request => {
+      const body = await request.json() as Record<string, unknown>;
+      bodies.push({ provider: "b", effort: body.reasoning_effort });
+      return chatSuccess("mapped backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "low" },
+      }),
+      b: provider("openai-chat", baseUrl(b), "key-b", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "high" },
+      }),
+    });
+
+    const response = await postLogged(config, { reasoning: { effort: "max" } });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("mapped backup");
+    expect(bodies).toEqual([
+      { provider: "a", effort: "low" },
+      { provider: "b", effort: "high" },
+    ]);
+
+    const expectMappedReceipt = (receipt: Record<string, unknown>) => {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        requestedEffort: "max",
+        effectiveEffort: "high",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "high",
+        attempts: [
+          {
+            ordinal: 1,
+            provider: "a",
+            status: 503,
+            requestedEffort: "max",
+            effectiveEffort: "low",
+            reasoningWireField: "reasoning_effort",
+            reasoningWireValue: "low",
+          },
+          {
+            ordinal: 2,
+            provider: "b",
+            status: 200,
+            requestedEffort: "max",
+            effectiveEffort: "high",
+            reasoningWireField: "reasoning_effort",
+            reasoningWireValue: "high",
+          },
+        ],
+      });
+    };
+
+    const { log, usage } = await latestAttemptReceipts(config);
+    expectMappedReceipt(log);
+    expectMappedReceipt(usage);
+    expect(log).not.toHaveProperty("upstreamError");
+
+    clearRequestLogsForTests();
+    expect(hydrateRequestLogsFromDisk()).toBe(1);
+    const hydratedResponse = await management(config, "GET", "/api/logs?tail=1");
+    const hydrated = logsFromApiBody(await hydratedResponse!.json());
+    expect(hydrated).toHaveLength(1);
+    expectMappedReceipt(hydrated[0]!);
+  });
+
+  test("all-target exhaustion promotes the final attempt reasoning wire to the logical row", async () => {
+    const a = serve(() => Response.json({ error: { message: "first overloaded" } }, { status: 503 }));
+    const b = serve(() => Response.json({ error: { message: "last overloaded" } }, { status: 503 }));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "low" },
+      }),
+      b: provider("openai-chat", baseUrl(b), "key-b", {
+        reasoningEfforts: ["low", "high"],
+        reasoningEffortMap: { max: "high" },
+      }),
+    });
+
+    const response = await postLogged(config, { reasoning: { effort: "max" } });
+    expect(response.status).toBe(503);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        requestedEffort: "max",
+        effectiveEffort: "high",
+        reasoningWireField: "reasoning_effort",
+        reasoningWireValue: "high",
+        attempts: [
+          { provider: "a", status: 503, effectiveEffort: "low", reasoningWireValue: "low" },
+          { provider: "b", status: 503, effectiveEffort: "high", reasoningWireValue: "high" },
+        ],
+      });
+    }
+  });
+
+  test("bare alias runs full failover and preserves structural combo log identity", async () => {
+    const targetBodies: Array<{ provider: string; model?: unknown }> = [];
+    const a = serve(async request => {
+      const body = await request.json() as { model?: unknown };
+      targetBodies.push({ provider: "a", model: body.model });
+      return Response.json({ error: { message: "overloaded" } }, { status: 503 });
+    });
+    const b = serve(async request => {
+      const body = await request.json() as { model?: unknown };
+      targetBodies.push({ provider: "b", model: body.model });
+      return chatSuccess("alias backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    }, undefined, { alias: "deepseek-v4-flash" });
+    const response = await postLogged(config, { model: "deepseek-v4-flash" });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("alias backup");
+    expect(targetBodies).toEqual([
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ]);
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "deepseek-v4-flash",
+        requestedModel: "deepseek-v4-flash",
+        attempts: [
+          { ordinal: 1, provider: "a", model: "m1", status: 503 },
+          { ordinal: 2, provider: "b", model: "m2", status: 200 },
+        ],
+      });
+    }
+  });
+
+  test("ordinary /v1/models restores a non-OpenAI selector after combo alias rename and deletion", async () => {
+    const selector = "deepseek/deepseek-chat";
+    const combo = {
+      strategy: "failover" as const,
+      targets: [{ provider: "deepseek", model: "deepseek-chat" }],
+      alias: selector,
+    };
+    const config = comboConfig({
+      deepseek: provider("openai-chat", "http://127.0.0.1:1/v1", "key-deepseek", {
+        liveModels: false,
+        models: ["deepseek-chat"],
+        modelContextWindows: { "deepseek-chat": 128_000 },
+        modelMaxOutputTokens: { "deepseek-chat": 64_000 },
+      }),
+    }, combo.targets, { alias: combo.alias });
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const publicRows = async () => {
+        const response = await fetch(new URL("/v1/models", server.url));
+        expect(response.status).toBe(200);
+        const payload = await response.json() as {
+          data: Array<{
+            id: string;
+            owned_by: string;
+            is_combo?: boolean;
+            capabilities?: { max_output_tokens?: number };
+          }>;
+        };
+        return payload.data;
+      };
+      const updateAlias = async (alias: string) => fetch(new URL("/api/combos", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "free", combo: { ...combo, alias } }),
+      });
+
+      // Rows also carry api_types/capabilities for Cursor local-agent discovery; match the
+      // combo-relevant shape and keep is_combo presence/absence explicit.
+      const initialRows = (await publicRows()).filter(model => model.id === selector);
+      expect(initialRows).toHaveLength(1);
+      expect(initialRows[0]).toMatchObject({ id: selector, object: "model", created: 0, owned_by: "openai", is_combo: true });
+      expect(initialRows[0]!.capabilities?.max_output_tokens).toBe(64_000);
+
+      const renamed = await updateAlias("fast-chat");
+      expect(renamed.status).toBe(200);
+      const renamedRows = await publicRows();
+      const renamedSelectorRows = renamedRows.filter(model => model.id === selector);
+      expect(renamedSelectorRows).toHaveLength(1);
+      expect(renamedSelectorRows[0]).toMatchObject({ id: selector, object: "model", created: 0, owned_by: "deepseek" });
+      expect(renamedSelectorRows[0]!.capabilities?.max_output_tokens).toBe(64_000);
+      expect(renamedSelectorRows[0].is_combo).toBeUndefined();
+      const renamedAliasRows = renamedRows.filter(model => model.id === "fast-chat");
+      expect(renamedAliasRows).toHaveLength(1);
+      expect(renamedAliasRows[0]).toMatchObject({ id: "fast-chat", object: "model", created: 0, owned_by: "openai", is_combo: true });
+
+      const restored = await updateAlias(selector);
+      expect(restored.status).toBe(200);
+      const deleted = await fetch(new URL("/api/combos?id=free", server.url), { method: "DELETE" });
+      expect(deleted.status).toBe(200);
+      const deletedRows = await publicRows();
+      const deletedSelectorRows = deletedRows.filter(model => model.id === selector);
+      expect(deletedSelectorRows).toHaveLength(1);
+      expect(deletedSelectorRows[0]).toMatchObject({ id: selector, object: "model", created: 0, owned_by: "deepseek" });
+      expect(deletedSelectorRows[0]!.capabilities?.max_output_tokens).toBe(64_000);
+      expect(deletedSelectorRows[0].is_combo).toBeUndefined();
+      expect(deletedRows.some(model => model.is_combo === true)).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  }, 60_000);
+
+  test("ordinary /v1/models preserves raw nested selectors while an exact combo alias wins", async () => {
+    const config = comboConfig({
+      a: provider("openai-chat", "http://127.0.0.1:1/v1", "key-a", {
+        liveModels: false,
+        models: ["vendor/model", "vendor-model"],
+        modelContextWindows: { "vendor/model": 128_000, "vendor-model": 128_000 },
+      }),
+    }, [{ provider: "a", model: "vendor/model" }], { alias: "a/vendor-model" });
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/models", server.url));
+      expect(response.status).toBe(200);
+      const payload = await response.json() as {
+        data: Array<{ id: string; owned_by: string; is_combo?: boolean }>;
+      };
+      const vendorRows = payload.data.filter(model => model.id.startsWith("a/vendor")).sort((a, b) => a.id.localeCompare(b.id));
+      expect(vendorRows).toHaveLength(2);
+      expect(vendorRows[0]).toMatchObject({ id: "a/vendor-model", object: "model", created: 0, owned_by: "openai", is_combo: true });
+      expect(vendorRows[1]).toMatchObject({ id: "a/vendor/model", object: "model", created: 0, owned_by: "a" });
+      expect(vendorRows[1].is_combo).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("streaming failover records request-relative parent TTFT and attempt-relative attempt TTFT", async () => {
+    // A fails after a real delay so parent TTFT (request-relative) must exceed
+    // the successful B attempt's own TTFT (attempt-relative) — WP4 separation.
+    const A_DELAY_MS = 120;
+    const a = serve(async () => {
+      await new Promise(resolve => setTimeout(resolve, A_DELAY_MS));
+      return Response.json({ error: { message: "overloaded" } }, { status: 503 });
+    });
+    const b = serve(() => chatStream("ttft backup"));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await postLogged(config, { stream: true });
+    expect(response.status).toBe(200);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      const parentTtft = receipt.firstOutputMs as number;
+      expect(typeof parentTtft).toBe("number");
+      expect(parentTtft).toBeGreaterThanOrEqual(A_DELAY_MS);
+      const attempts = receipt.attempts as Array<Record<string, unknown>>;
+      expect(attempts).toHaveLength(2);
+      // failed attempt A produced no output: unset
+      expect(attempts[0]).not.toHaveProperty("firstOutputMs");
+      // successful attempt B: attempt-relative, strictly smaller than the parent value
+      const attemptTtft = attempts[1]!.firstOutputMs as number;
+      expect(typeof attemptTtft).toBe("number");
+      expect(attemptTtft).toBeGreaterThanOrEqual(0);
+      expect(attemptTtft).toBeLessThan(parentTtft);
+    }
+  });
+
+  test("non-streaming failover leaves firstOutputMs unset", async () => {
+    const a = serve(() => Response.json({ error: { message: "overloaded" } }, { status: 503 }));
+    const b = serve(() => chatSuccess("json backup", "m2"));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).not.toHaveProperty("firstOutputMs");
+      const attempts = receipt.attempts as Array<Record<string, unknown>>;
+      for (const attempt of attempts) expect(attempt).not.toHaveProperty("firstOutputMs");
+    }
+  });
+
+  test("seals a Codex pool child to its safe account label and final wire adapter", async () => {
+    const rawAccountId = "raw-pool-account-id";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [{ provider: "openai", model: "gpt-5.4" }]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "pool@example.test",
+      isMain: false,
+      logLabel: "pabc123",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.autoSwitchThreshold = 0;
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-pool-safe",
+    });
+    customTransientResponse = async () => Response.json(responsesSuccess("pool success", "gpt-5.4"));
+
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+
+    const expectedProvider = formatCodexProviderForLog("openai", rawAccountId, config);
+    const { log, usage } = await latestAttemptReceipts(config);
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        provider: "combo",
+        model: "combo/free",
+        attempts: [{
+          provider: expectedProvider,
+          adapter: "openai-responses",
+          status: 200,
+        }],
+      });
+      expect(JSON.stringify(receipt)).not.toContain(rawAccountId);
+      expect(JSON.stringify(receipt)).not.toContain("acct-pool-safe");
+    }
+  });
+
+  test("records one account-health failure for one zero-output native terminal", async () => {
+    const rawAccountId = "combo-terminal-account";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [{ provider: "openai", model: "gpt-5.4" }]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "combo-terminal@example.test",
+      isMain: false,
+      logLabel: "pterm001",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.upstreamFailoverThreshold = 3;
+    config.streamMode = "legacy-tee";
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "combo-terminal-access",
+      refreshToken: "combo-terminal-refresh",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-combo-terminal",
+    });
+    customTransientResponse = async () => new Response([
+      "event: response.created",
+      'data: {"type":"response.created","response":{"id":"resp_failed","status":"in_progress"}}',
+      "",
+      "event: response.failed",
+      'data: {"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"type":"server_error","code":"upstream_server_error","message":"busy"}}}',
+      "",
+      "",
+    ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+
+    const response = await post(config, { stream: true });
+    expect(response.status).toBe(502);
+    expect(getCodexUpstreamHealth(rawAccountId)).toMatchObject({
+      consecutiveFailures: 1,
+      lastFailureStatus: 502,
+    });
+  });
+
+  test("lets a same-provider combo try its next model after a reset-derived 429", async () => {
+    const rawAccountId = "combo-reset-account";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [
+      { provider: "openai", model: "gpt-5.3-codex-spark" },
+      { provider: "openai", model: "gpt-5.4" },
+    ]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "combo-reset@example.test",
+      isMain: false,
+      logLabel: "preset01",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.autoSwitchThreshold = 0;
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "combo-reset-access",
+      refreshToken: "combo-reset-refresh",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-combo-reset",
+    });
+    let calls = 0;
+    customTransientResponse = async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json(
+          { error: { message: "spark quota window exhausted", type: "rate_limit_error" } },
+          {
+            status: 429,
+            headers: { "x-codex-primary-reset-at": String(Math.floor(Date.now() / 1000) + 3600) },
+          },
+        )
+        : Response.json(responsesSuccess("model fallback succeeded", "gpt-5.4"));
+    };
+
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(calls).toBe(2);
+    expect(getCodexUpstreamHealth(rawAccountId)?.cooldownUntil).toBeUndefined();
+  });
+
+  test("keeps explicit Retry-After account-wide during same-provider combo failover", async () => {
+    const rawAccountId = "combo-retry-after-account";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [
+      { provider: "openai", model: "gpt-5.3-codex-spark" },
+      { provider: "openai", model: "gpt-5.4" },
+    ]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "combo-retry-after@example.test",
+      isMain: false,
+      logLabel: "pretry01",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.autoSwitchThreshold = 0;
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "combo-retry-after-access",
+      refreshToken: "combo-retry-after-refresh",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-combo-retry-after",
+    });
+    let calls = 0;
+    customTransientResponse = async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json(
+          { error: { message: "retry later", type: "rate_limit_error" } },
+          {
+            status: 429,
+            headers: {
+              "retry-after": "120",
+              "x-codex-primary-reset-at": String(Math.floor(Date.now() / 1000) + 3600),
+            },
+          },
+        )
+        : Response.json(responsesSuccess("must not reach second upstream", "gpt-5.4"));
+    };
+
+    const response = await postLogged(config);
+    expect(response.status).toBe(429);
+    await response.text();
+    expect(calls).toBe(1);
+    expect(getCodexUpstreamHealth(rawAccountId)?.cooldownSource).toBe("retry-after");
+  });
+
+  test("Spark reset cooldown fails over to the shared native quota on the same account (#590)", async () => {
+    const rawAccountId = "spark-scope-account";
+    const config = comboConfig({
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "pool",
+      },
+    }, [
+      { provider: "openai", model: "gpt-5.3-codex-spark" },
+      { provider: "openai", model: "gpt-5.5" },
+    ]);
+    config.codexAccounts = [{
+      id: rawAccountId,
+      email: "pool@example.test",
+      isMain: false,
+      logLabel: "pspark1",
+    }];
+    config.activeCodexAccountId = rawAccountId;
+    config.autoSwitchThreshold = 0;
+    saveCodexAccountCredential(rawAccountId, {
+      accessToken: "pool-access-token",
+      refreshToken: "pool-refresh-token",
+      expiresAt: Date.now() + 300_000,
+      chatgptAccountId: "acct-pool-spark",
+    });
+
+    const resetAt = Math.floor((Date.now() + 4 * 24 * 60 * 60_000) / 1000);
+    let upstreamCalls = 0;
+    customTransientResponse = async () => {
+      upstreamCalls += 1;
+      if (upstreamCalls === 1) {
+        return Response.json({ error: { message: "Spark quota exhausted" } }, {
+          status: 429,
+          headers: { "x-codex-primary-reset-at": String(resetAt) },
+        });
+      }
+      return Response.json(responsesSuccess("Shared-native fallback", "gpt-5.5"));
+    };
+
+    const response = await post(config);
+    expect(response.status).toBe(200);
+    expect(upstreamCalls).toBe(2);
+    expect(await response.json()).toMatchObject({ model: "gpt-5.5" });
+  });
+
+  test("keeps a failed estimate on A without overwriting B reported usage", async () => {
+    customUsageEstimate = model => model === "m1" ? 41 : undefined;
+    customFetchResponse = async request => {
+      const model = (JSON.parse(String(request.body)) as { model?: string }).model;
+      return model === "m1"
+        ? Response.json({ error: { message: "down" } }, { status: 503 })
+        : chatSuccess("estimate backup", "m2");
+    };
+    const config = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", "key-a"),
+      b: provider("test-response", "https://test.invalid/v1", "key-b"),
+    });
+    const response = await postLogged(config);
+    await response.text();
+    const { usage } = await latestAttemptReceipts(config);
+    expect(usage.attempts).toMatchObject([
+      { provider: "a", usageStatus: "estimated", inputTokenEstimate: 41, usage: { inputTokens: 41, outputTokens: 0, estimated: true } },
+      { provider: "b", usageStatus: "reported", usage: { inputTokens: 2, outputTokens: 1 } },
+    ]);
+  });
+
+  test("captures ordinary failed usage from its original bounded body exactly once", async () => {
+    let ordinaryReads = 0;
+    customFetchResponse = async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        ordinaryReads += 1;
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({
+          error: { message: "ordinary failed" },
+          usage: { input_tokens: 11, output_tokens: 2, total_tokens: 13 },
+        })));
+        controller.close();
+      },
+    }), { status: 503, headers: { "content-type": "application/json" } });
+    const ordinaryConfig = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", "key-a"),
+    });
+    const ordinary = await postLogged(ordinaryConfig);
+    const ordinaryBody = await ordinary.json() as Record<string, unknown>;
+    expect(ordinaryBody).not.toHaveProperty("usage");
+    expect(ordinaryReads).toBe(1);
+    expect((await latestAttemptReceipts(ordinaryConfig)).usage.attempts?.[0]?.usage)
+      .toEqual({ inputTokens: 11, outputTokens: 2, totalTokens: 13 });
+  });
+
+  test("captures passthrough failed usage from its original bounded body exactly once", async () => {
+    let passthroughReads = 0;
+    let passthroughResponses = 0;
+    customTransientResponse = async () => {
+      passthroughResponses += 1;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({
+          error: { message: "passthrough failed" },
+          usage: { input_tokens: 17, output_tokens: 3, total_tokens: 20 },
+        })));
+        controller.close();
+        },
+      });
+      const response = new Response(body, { status: 503, headers: { "content-type": "application/json" } });
+      Object.defineProperty(response, "body", {
+        configurable: true,
+        get() {
+          passthroughReads += 1;
+          return body;
+        },
+      });
+      return response;
+    };
+    const passthroughConfig = comboConfig({
+      a: provider("openai-responses", "https://passthrough.test/v1", "key-a"),
+    });
+    const passthrough = await postLogged(passthroughConfig);
+    expect(passthrough.status).toBe(503);
+    const passthroughBody = await passthrough.json() as Record<string, unknown>;
+    expect(passthroughBody).not.toHaveProperty("usage");
+    expect(passthroughResponses).toBe(1);
+    expect(passthroughReads).toBe(1);
+    expect((await latestAttemptReceipts(passthroughConfig)).usage.attempts?.[0]?.usage)
+      .toEqual({ inputTokens: 17, outputTokens: 3, totalTokens: 20 });
+  });
+
+  test("provider-local retry keeps one attempt, two sends, recovery kind, and latest estimate", async () => {
+    const estimates = [10, 25];
+    customUsageEstimate = () => estimates.shift();
+    let calls = 0;
+    customFetchResponse = async () => {
+      calls += 1;
+      return calls === 1
+        ? Response.json({ error: { message: "rotate" } }, { status: 429 })
+        : chatSuccess("rotated", "m1");
+    };
+    const pool = [
+      { id: "k1", key: "key-alpha-000111222333", addedAt: 1 },
+      { id: "k2", key: "key-beta-444555666777", addedAt: 2 },
+    ];
+    const config = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", pool[0]!.key, { apiKeyPool: pool }),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    await response.text();
+    const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
+    expect(attempt).toMatchObject({
+      provider: "a",
+      model: "m1",
+      sendCount: 2,
+      inputTokenEstimate: 25,
+      recoveryKinds: ["key-429"],
+    });
+  });
+
+  test("connection exception reaches the backup exactly once", async () => {
+    let bHits = 0;
+    const b = serve(() => {
+      bHits += 1;
+      return chatSuccess("connected backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", "http://127.0.0.1:1/v1", "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    config.connectTimeoutMs = 250;
+    const response = await post(config);
+    expect(response.status).toBe(200);
+    expect(bHits).toBe(1);
+    expect(JSON.stringify(await response.json())).toContain("connected backup");
+  });
+
+  test("Azure passthrough 403 hops into ordinary openai-chat", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("azure");
+      return Response.json({ error: { message: "permission denied" } }, { status: 403 });
+    });
+    const b = serve(() => {
+      hits.push("chat");
+      return chatSuccess("chat backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("azure", baseUrl(a), "azure-key"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await post(config);
+    expect(response.status).toBe(200);
+    expect(hits).toEqual(["azure", "chat"]);
+  });
+
+  test("cross-adapter chat 503 to Responses 200 returns the exact backup response", async () => {
+    const a = serve(() => Response.json({ error: { message: "down" } }, { status: 503 }));
+    const exact = responsesSuccess("raw backup", "m2");
+    let bBody: Record<string, unknown> | undefined;
+    const b = serve(async request => {
+      bBody = await request.json() as Record<string, unknown>;
+      return Response.json(exact);
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b"),
+    });
+    const response = await post(config);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(exact);
+    expect(bBody?.model).toBe("m2");
+  });
+
+  test("Cursor runTurn first-event error hops before stream commit", async () => {
+    let bHits = 0;
+    const b = serve(() => {
+      bHits += 1;
+      return chatStream("cursor backup");
+    });
+    const config = comboConfig({
+      a: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", models: ["m1"] },
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await post(config, { stream: true });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await collectSse(response))).toContain("cursor backup");
+    expect(bHits).toBe(1);
+  });
+
+  test("runTurn combo attempts retain requested effort without adapter wire metadata", async () => {
+    customRunTurn = async (parsed, _incoming, emit) => {
+      if (parsed.modelId === "m1") {
+        emit({ type: "error", message: "first target unavailable" });
+        return;
+      }
+      emit({ type: "text_delta", text: "runTurn backup" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const response = await postLogged(config, {
+      reasoning: { effort: "high" },
+    });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await response.json())).toContain("runTurn backup");
+    const { log, usage } = await latestAttemptReceipts(config);
+
+    for (const receipt of [log, usage]) {
+      expect(receipt).toMatchObject({
+        attempts: [
+          { ordinal: 1, provider: "a", requestedEffort: "high" },
+          { ordinal: 2, provider: "b", requestedEffort: "high" },
+        ],
+      });
+      for (const attempt of receipt.attempts as Array<Record<string, unknown>>) {
+        expect(attempt).not.toHaveProperty("effectiveEffort");
+        expect(attempt).not.toHaveProperty("reasoningWireField");
+        expect(attempt).not.toHaveProperty("reasoningWireValue");
+      }
+    }
+  });
+
+  test("hosted web-search eager model failure hops through the loop path", async () => {
+    const modelHits: Array<{ model?: string; hasWebTool: boolean }> = [];
+    const routed = serve(async request => {
+      const body = await request.json() as { model?: string; tools?: Array<{ type?: string }> };
+      modelHits.push({
+        model: body.model,
+        hasWebTool: body.tools?.some(tool => tool.type === "function") ?? false,
+      });
+      if (body.model === "m1") {
+        return Response.json({ error: { message: "loop unavailable" } }, { status: 503 });
+      }
+      return chatStream("web loop backup");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(routed), "key-a"),
+      b: provider("openai-chat", baseUrl(routed), "key-b"),
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    }, [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ]);
+    config.webSearchSidecar = { enabled: true, backend: "openai" };
+    const response = await post(config, {
+      stream: true,
+      tools: [{ type: "web_search" }],
+    }, {}, {
+      authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-combo-search" })}`,
+      "chatgpt-account-id": "acct-combo-search",
+    });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await collectSse(response))).toContain("web loop backup");
+    expect(modelHits.map(hit => hit.model)).toEqual(["m1", "m2"]);
+    expect(modelHits.every(hit => hit.hasWebTool)).toBe(true);
+  });
+
+  test("context 400 stops while exhausted retryable targets return the sanitized last status", async () => {
+    let stopBackupHits = 0;
+    const context = serve(() => Response.json({ error: { code: "context_length_exceeded", message: "too many tokens" } }, { status: 400 }));
+    const unused = serve(() => {
+      stopBackupHits += 1;
+      return chatSuccess("must not run");
+    });
+    const stopConfig = comboConfig({
+      a: provider("openai-chat", baseUrl(context), "key-a"),
+      b: provider("openai-chat", baseUrl(unused), "key-b"),
+    });
+    const stopped = await post(stopConfig);
+    expect(stopped.status).toBe(400);
+    expect(stopBackupHits).toBe(0);
+
+    const order: string[] = [];
+    const first = serve(() => {
+      order.push("a");
+      return new Response("secret sk-a-should-redact", { status: 503 });
+    });
+    const last = serve(() => {
+      order.push("b");
+      return Response.json({ error: { message: "missing model" } }, { status: 404 });
+    });
+    const exhausted = await post(comboConfig({
+      a: provider("openai-chat", baseUrl(first), "key-a"),
+      b: provider("openai-chat", baseUrl(last), "key-b"),
+    }));
+    expect(exhausted.status).toBe(404);
+    expect(order).toEqual(["a", "b"]);
+    expect(await exhausted.text()).not.toContain("sk-a-should-redact");
+  });
+
+  test("provider-specific prompt-too-long 400 hops to a larger-context combo target", async () => {
+    let backupHits = 0;
+    const capped = serve(() => Response.json({ error: {
+      message: "Prompt 346030 > 262144 maximum context length",
+      type: "invalid_request_prompt_too_long",
+      code: "5059",
+      raw_status_code: 400,
+    } }, { status: 400 }));
+    const backup = serve(() => {
+      backupHits += 1;
+      return chatSuccess("larger context backup", "m2");
+    });
+    const response = await post(comboConfig({
+      a: provider("openai-chat", baseUrl(capped), "key-a"),
+      b: provider("openai-chat", baseUrl(backup), "key-b"),
+    }));
+    expect(response.status).toBe(200);
+    expect(backupHits).toBe(1);
+    expect(await response.text()).toContain("larger context backup");
+  });
+
+  test("429 Retry-After 120 keeps A cooling at 60 seconds and restores it at 120", async () => {
+    const t0 = Date.parse("2026-07-18T00:00:00.000Z");
+    let now = t0;
+    Date.now = () => now;
+    let aHits = 0;
+    let bHits = 0;
+    const a = serve(() => {
+      aHits += 1;
+      if (aHits === 1) {
+        return Response.json({ error: { message: "rate limited" } }, {
+          status: 429,
+          headers: { "retry-after": "120" },
+        });
+      }
+      return chatSuccess("a recovered", "m1");
+    });
+    const b = serve(() => {
+      bHits += 1;
+      return chatSuccess("b backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    expect((await post(config)).status).toBe(200);
+    now = t0 + 60_000;
+    expect((await post(config)).status).toBe(200);
+    expect(aHits).toBe(1);
+    now = t0 + 120_000;
+    expect((await post(config)).status).toBe(200);
+    expect(aHits).toBe(2);
+    expect(bHits).toBe(2);
+  });
+
+  test("disabled image input rejects the request before any combo target is called", async () => {
+    let hits = 0;
+    const a = serve(() => {
+      hits += 1;
+      return chatSuccess("unexpected", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
+      imageInput: "disabled",
+    });
+    const response = await post(config, {
+      input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }] }],
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("does not accept image input");
+    expect(hits).toBe(0);
+  });
+
+  test("disabled image input ignores tool schemas that only mention input_image", async () => {
+    let hits = 0;
+    const bodies: Array<Record<string, unknown>> = [];
+    const a = serve(async request => {
+      hits += 1;
+      bodies.push(await request.json() as Record<string, unknown>);
+      return chatSuccess("text only", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
+      imageInput: "disabled",
+    });
+    const response = await post(config, {
+      input: [{ role: "user", content: "describe without images" }],
+      tools: [{
+        type: "function",
+        name: "classify",
+        parameters: {
+          type: "object",
+          properties: {
+            part: { type: "string", enum: ["input_image", "input_text"] },
+            example: { type: "input_image" },
+          },
+        },
+      }],
+      metadata: { sample: { type: "input_image" } },
+    });
+    expect(response.status).toBe(200);
+    expect(hits).toBe(1);
+    // openai-chat upstream receives the bare model id after concrete routing.
+    expect(bodies[0]?.model).toBe("m1");
+  });
+
+  test("disabled image input rejects unavailable previous_response_id before dispatch", async () => {
+    let hits = 0;
+    const a = serve(() => {
+      hits += 1;
+      return chatSuccess("unexpected", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
+      imageInput: "disabled",
+    });
+    const response = await post(config, {
+      previous_response_id: "resp_missing_local_state",
+      input: [{ role: "user", content: "continue" }],
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("Continuation state is unavailable");
+    expect(hits).toBe(0);
+  });
+
+  test("disabled image input expands text-only previous_response_id exactly once before child dispatch", async () => {
+    const { rememberResponseState } = await import("../../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: [{ role: "user", content: "earlier text" }] },
+      {
+        id: "resp_combo_text_prev",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "ack" }],
+      },
+    );
+    const bodies: Array<Record<string, unknown>> = [];
+    const a = serve(async request => {
+      bodies.push(await request.json() as Record<string, unknown>);
+      return chatSuccess("continued", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
+      imageInput: "disabled",
+    });
+    const response = await post(config, {
+      previous_response_id: "resp_combo_text_prev",
+      input: [{ role: "user", content: "next turn" }],
+    });
+    expect(response.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+    const child = bodies[0]!;
+    // Parent already expanded; child must not keep previous_response_id (would double-prepend).
+    expect(child.previous_response_id).toBeUndefined();
+    const inputText = JSON.stringify(child.input ?? child.messages ?? child);
+    expect(inputText.split("earlier text")).toHaveLength(2);
+    expect(inputText.split("next turn")).toHaveLength(2);
+  });
+
+  test("combo continuation expansion respects the client task scope", async () => {
+    const { rememberResponseState } = await import("../../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: "legacy private history" },
+      {
+        id: "resp_combo_legacy_unscoped",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "legacy reply" }],
+      },
+    );
+    rememberResponseState(
+      { model: "combo/free", input: "scoped private history" },
+      {
+        id: "resp_combo_scoped",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "scoped reply" }],
+      },
+      undefined,
+      { clientThreadId: "combo-task" },
+    );
+    const bodies: Array<Record<string, unknown>> = [];
+    const a = serve(async request => {
+      bodies.push(await request.json() as Record<string, unknown>);
+      return chatSuccess("continued", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") });
+    const headers = { "x-codex-parent-thread-id": "combo-task" };
+
+    const legacyResponse = await post(config, {
+      previous_response_id: "resp_combo_legacy_unscoped",
+      input: "fresh scoped input",
+    }, {}, headers);
+    const scopedResponse = await post(config, {
+      previous_response_id: "resp_combo_scoped",
+      input: "continue scoped task",
+    }, {}, headers);
+
+    expect(legacyResponse.status).toBe(200);
+    expect(scopedResponse.status).toBe(200);
+    expect(bodies).toHaveLength(2);
+    expect(JSON.stringify(bodies[0])).not.toContain("legacy private history");
+    expect(JSON.stringify(bodies[0])).toContain("fresh scoped input");
+    expect(JSON.stringify(bodies[1])).toContain("scoped private history");
+    expect(JSON.stringify(bodies[1])).toContain("continue scoped task");
+  });
+
+  test("combo child preserves replay provenance for compaction and generated guidance", async () => {
+    const { rememberResponseState } = await import("../../src/responses/state");
+    const { multiAgentGuidanceText, PROACTIVE_MULTI_AGENT_MODE_TEXT } = await import("../../src/server/responses/collaboration");
+    const guidance = `<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`;
+    const tools = ["spawn_agent", "send_input"].map(name => ({
+      type: "function",
+      name,
+      namespace: "multi_agent_v1",
+      description: "Collaborate on work",
+      parameters: { type: "object", properties: {} },
+    }));
+    rememberResponseState(
+      {
+        model: "combo/free",
+        input: [
+          { type: "context_compaction" },
+          {
+            type: "message",
+            role: "developer",
+            content: [{ type: "input_text", text: guidance }],
+          },
+          { type: "message", role: "user", content: "prior task" },
+        ],
+        reasoning: { effort: "max" },
+        tools,
+      },
+      {
+        id: "resp_combo_replay_provenance",
+        status: "completed",
+        output: [{
+          id: "msg_combo_replay_provenance",
+          type: "message",
+          role: "assistant",
+          content: "prior answer",
+        }],
+      },
+      undefined,
+      { clientThreadId: "combo-provenance-task" },
+    );
+
+    let observed: {
+      replayPrefixLength: number;
+      contextCompactionBoundary: boolean | undefined;
+      generatedGuidance: string | null;
+      taggedGuidance: string[];
+    } | undefined;
+    const guidanceOptions = { multiAgentGuidanceEnabled: true };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+    });
+    Object.assign(config, guidanceOptions);
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const rawInput = (parsed._rawBody as { input?: unknown[] } | undefined)?.input ?? [];
+      const taggedGuidance = rawInput.flatMap(item => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const record = item as Record<string, unknown>;
+        if (record.type !== "message" || record.role !== "developer" || !Array.isArray(record.content)) return [];
+        return record.content.flatMap(part => !!part && typeof part === "object"
+          && !Array.isArray(part)
+          && (part as Record<string, unknown>).type === "input_text"
+          && typeof (part as Record<string, unknown>).text === "string"
+          && ((part as Record<string, unknown>).text as string).startsWith("<multi_agent_mode>")
+          && ((part as Record<string, unknown>).text as string).endsWith("</multi_agent_mode>")
+          ? [(part as Record<string, unknown>).text as string]
+          : []);
+      });
+      observed = {
+        replayPrefixLength: parsed._replayPrefixLen ?? 0,
+        contextCompactionBoundary: parsed._contextCompactionBoundary,
+        generatedGuidance: await multiAgentGuidanceText(parsed, guidanceOptions),
+        taggedGuidance,
+      };
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done" });
+    };
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_replay_provenance",
+      input: [{ type: "message", role: "user", content: "current turn" }],
+      reasoning: { effort: "max" },
+      tools,
+    }, {}, { "x-codex-parent-thread-id": "combo-provenance-task" });
+
+    expect(response.status).toBe(200);
+    expect(observed).toEqual({
+      replayPrefixLength: expect.any(Number),
+      contextCompactionBoundary: undefined,
+      generatedGuidance: guidance,
+      taggedGuidance: [guidance],
+    });
+    expect(observed!.replayPrefixLength).toBeGreaterThan(0);
+  });
+
+  test("combo failover dispatches the one parent-validated continuation snapshot", async () => {
+    const { clearResponseStateForTests, rememberResponseState } = await import("../../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: [{ role: "user", content: "stable prior history" }] },
+      {
+        id: "resp_combo_stable_snapshot",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "stable prior answer" }],
+      },
+    );
+    const a = serve(() => {
+      clearResponseStateForTests();
+      return Response.json({ error: { message: "retry" } }, { status: 503 });
+    });
+    let backupParsed: {
+      previousResponseId?: string;
+      replayPrefixLength: number;
+      rawInput: unknown[];
+    } | undefined;
+    customRunTurn = async (parsed, _incoming, emit) => {
+      backupParsed = {
+        previousResponseId: parsed.previousResponseId,
+        replayPrefixLength: parsed._replayPrefixLen ?? 0,
+        rawInput: (parsed._rawBody as { input?: unknown[] } | undefined)?.input ?? [],
+      };
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_stable_snapshot",
+      input: [{ role: "user", content: "stable current turn" }],
+    });
+
+    expect(response.status).toBe(200);
+    expect(backupParsed?.previousResponseId).toBe("resp_combo_stable_snapshot");
+    expect(backupParsed?.replayPrefixLength).toBeGreaterThan(0);
+    const requestText = JSON.stringify(backupParsed?.rawInput);
+    expect(backupParsed?.rawInput).toHaveLength(3);
+    expect(requestText.split("stable prior history")).toHaveLength(2);
+    expect(requestText.split("stable prior answer")).toHaveLength(2);
+    expect(requestText.split("stable current turn")).toHaveLength(2);
+  });
+
+  test("combo keeps an explicitly empty provider-state snapshot across failover", async () => {
+    const { previousResponseProviderState, rememberResponseState } = await import("../../src/responses/state");
+    customRunTurn = async (_parsed, _incoming, emit) => {
+      emit({ type: "text_delta", text: "seed" });
+      emit({ type: "done", providerState: { kiro: { conversationId: "late-owned-state" } } });
+    };
+    const config = comboConfig({
+      b: provider("test-owned", "https://provider-b.test/v1", "key-b"),
+    }, [{ provider: "b", model: "m2" }]);
+    const seed = await post(config, { input: "seed owner" });
+    expect(seed.status).toBe(200);
+    const seedJson = await seed.json() as { id: string };
+    const ownedState = previousResponseProviderState(seedJson.id);
+    expect(ownedState?.__ocxOwner?.providerName).toBe("b");
+
+    config.providers.a = provider("test-owned", "https://provider-a.test/v1", "key-a");
+    config.combos!.free!.targets = [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ];
+    let backupObserved: string | undefined;
+    customRunTurn = async (parsed, _incoming, emit) => {
+      if (parsed.modelId === "m1") {
+        rememberResponseState(
+          { model: "combo/free", input: "late state" },
+          {
+            id: "resp_combo_late_provider_state",
+            status: "completed",
+            output: [{ type: "message", role: "assistant", content: "late" }],
+          },
+          ownedState,
+          { force: true },
+        );
+        emit({ type: "error", message: "retry elsewhere", status: 503, retryable: true });
+        return;
+      }
+      backupObserved = parsed._providerContinuation?.kiro?.conversationId;
+      emit({ type: "text_delta", text: "backup" });
+      emit({ type: "done" });
+    };
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_late_provider_state",
+      input: "continue",
+    });
+
+    expect(response.status).toBe(200);
+    expect(backupObserved).toBeUndefined();
+  });
+
+  test("combo response state deep-merges provider-private payloads generically", async () => {
+    const { previousResponseProviderState } = await import("../../src/responses/state");
+    let turn = 0;
+    customRunTurn = async (_parsed, _incoming, emit) => {
+      turn += 1;
+      emit({ type: "text_delta", text: `turn-${turn}` });
+      emit({
+        type: "done",
+        providerState: turn === 1
+          ? {
+              cursor: { checkpointRef: "opaque-ref" },
+              future: {
+                stable: "keep",
+                changed: "old",
+                metadata: {
+                  stable: "keep-nested",
+                  changed: "old-nested",
+                  list: ["old"],
+                  scalar: "old",
+                },
+              },
+            }
+          : {
+              cursor: { checkpointUsable: true },
+              future: {
+                changed: "new",
+                metadata: {
+                  changed: "new-nested",
+                  list: ["new"],
+                  scalar: 42,
+                },
+              },
+            },
+      });
+    };
+    const config = comboConfig({
+      a: provider("test-owned", "https://provider-a.test/v1", "key-a"),
+    }, [{ provider: "a", model: "m1" }]);
+
+    const first = await post(config, { input: "seed future provider state" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    const second = await post(config, {
+      previous_response_id: firstJson.id,
+      input: "update future provider state",
+    });
+    expect(second.status).toBe(200);
+    const secondJson = await second.json() as { id: string };
+
+    const stored = previousResponseProviderState(secondJson.id);
+    expect(stored?.future).toEqual({
+      stable: "keep",
+      changed: "new",
+      metadata: {
+        stable: "keep-nested",
+        changed: "new-nested",
+        list: ["new"],
+        scalar: 42,
+      },
+    });
+    expect(stored?.cursor).toEqual({ checkpointRef: "opaque-ref", checkpointUsable: true });
+    expect(stored?.__ocxOwner?.providerName).toBe("a");
+  });
+
+  test("combo child retains the local id without inheriting unbound provider state", async () => {
+    const { rememberResponseState } = await import("../../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: "prior target turn" },
+      {
+        id: "resp_combo_unbound_provider_state",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "prior target answer" }],
+      },
+      {
+        cursor: { conversationId: "cursor_owned_by_another_target" },
+        kiro: { conversationId: "kiro_owned_by_another_target" },
+      },
+    );
+    let observed: {
+      previousResponseId?: string;
+      providerContinuation: unknown;
+      cursorConversationId: unknown;
+    } | undefined;
+    customRunTurn = async (parsed, _incoming, emit) => {
+      observed = {
+        previousResponseId: parsed.previousResponseId,
+        providerContinuation: parsed._providerContinuation,
+        cursorConversationId: parsed._cursorConversationId,
+      };
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+    });
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_unbound_provider_state",
+      input: [{ role: "user", content: "continue" }],
+    });
+
+    expect(response.status).toBe(200);
+    expect(observed?.previousResponseId).toBe("resp_combo_unbound_provider_state");
+    expect(observed?.providerContinuation).toBeUndefined();
+    expect(observed?.cursorConversationId).toBeUndefined();
+  });
+
+  test("combo rejects malformed provider-continuation owner metadata", async () => {
+    const { rememberResponseState } = await import("../../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: "prior target turn" },
+      {
+        id: "resp_combo_malformed_provider_owner",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "prior target answer" }],
+      },
+      {
+        __ocxOwner: {
+          version: 2,
+          providerName: "a",
+          providerDestinationIdentity: `destination:${"a".repeat(64)}`,
+          adapterName: "kiro",
+          modelId: "m1",
+          credentialIdentity: `key:${"b".repeat(64)}`,
+        },
+        kiro: { conversationId: "must-not-restore" },
+      } as unknown as OcxProviderContinuationState,
+    );
+    let observed: string | undefined;
+    customRunTurn = async (parsed, _incoming, emit) => {
+      observed = parsed._providerContinuation?.kiro?.conversationId;
+      emit({ type: "text_delta", text: "continued" });
+      emit({ type: "done", providerState: { kiro: { conversationId: "fresh" } } });
+    };
+    const config = comboConfig({
+      a: provider("test-kiro", "https://kiro-a.test/v1", "key-a"),
+    });
+
+    const response = await post(config, {
+      previous_response_id: "resp_combo_malformed_provider_owner",
+      input: "continue",
+    });
+
+    expect(response.status).toBe(200);
+    expect(observed).toBeUndefined();
+  });
+
+  test("same Kiro combo target and credential retain the provider conversation id", async () => {
+    const seen: Array<string | undefined> = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+      seen.push(conversationId);
+      emit({ type: "text_delta", text: "continued" });
+      emit({
+        type: "done",
+        providerState: { kiro: { conversationId: conversationId ?? "kiro-owned-conversation" } },
+      });
+    };
+    const config = comboConfig({
+      a: provider("test-kiro", "https://kiro-a.test/v1", "key-a"),
+    });
+
+    const first = await post(config, { store: false, input: "first" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    const second = await post(config, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "second",
+    });
+
+    expect(second.status).toBe(200);
+    expect(seen).toEqual([undefined, "kiro-owned-conversation"]);
+  });
+
+  test("same Cursor combo target without a parent-thread header retains its conversation id", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = () => ({
+      async *run(request) {
+        seen.push(request.conversationId);
+        yield { type: "text", text: "cursor ok" };
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2, estimated: true } };
+      },
+      writeClient() {},
+      close() {},
+    });
+    const config = comboConfig(
+      { cursortest: provider("cursor", "https://api2.cursor.sh", "fake-cursor-token") },
+      [{ provider: "cursortest", model: "composer-2" }],
+    );
+
+    const first = await post(config, { store: false, input: "first" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    const second = await post(config, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "second",
+    });
+
+    expect(second.status).toBe(200);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+  });
+
+  test("combo failover to another provider does not inherit provider continuation state", async () => {
+    const seen: Array<{ model: string; conversationId?: string }> = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+      seen.push({ model: parsed.modelId, ...(conversationId ? { conversationId } : {}) });
+      emit({ type: "text_delta", text: "first" });
+      emit({ type: "done", providerState: { kiro: { conversationId: "kiro-provider-a" } } });
+    };
+    const config = comboConfig({
+      a: provider("test-kiro", "https://kiro-a.test/v1", "key-a"),
+    });
+    const first = await post(config, { store: false, input: "first" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+
+    config.providers.b = provider("test-owned", "https://provider-b.test/v1", "key-b");
+    config.combos!.free!.targets = [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+      seen.push({ model: parsed.modelId, ...(conversationId ? { conversationId } : {}) });
+      if (parsed.modelId === "m1") {
+        emit({ type: "error", message: "retry elsewhere", status: 503, retryable: true });
+        return;
+      }
+      emit({ type: "text_delta", text: "backup" });
+      emit({ type: "done", providerState: { kiro: { conversationId: "provider-b" } } });
+    };
+
+    const second = await post(config, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "second",
+    });
+
+    expect(second.status).toBe(200);
+    expect(seen.slice(1)).toEqual([
+      { model: "m1", conversationId: "kiro-provider-a" },
+      { model: "m2" },
+    ]);
+  });
+
+  test("same provider with a different credential does not inherit provider continuation state", async () => {
+    const seen: Array<string | undefined> = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+      seen.push(conversationId);
+      emit({ type: "text_delta", text: "continued" });
+      emit({
+        type: "done",
+        providerState: { kiro: { conversationId: conversationId ?? "credential-one-conversation" } },
+      });
+    };
+    const config = comboConfig({
+      a: provider("test-kiro", "https://kiro-a.test/v1", "credential-one"),
+    });
+    const first = await post(config, { store: false, input: "first" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+
+    config.providers.a!.apiKey = "credential-two";
+    const second = await post(config, {
+      store: false,
+      previous_response_id: firstJson.id,
+      input: "second",
+    });
+
+    expect(second.status).toBe(200);
+    expect(seen).toEqual([undefined, undefined]);
+  });
+
+  test.each(["provider", "destination", "adapter", "model"] as const)(
+    "continuation owner rejects an exact %s mismatch",
+    async mismatch => {
+      const seen: Array<string | undefined> = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        const conversationId = parsed._providerContinuation?.kiro?.conversationId;
+        seen.push(conversationId);
+        emit({ type: "text_delta", text: "continued" });
+        emit({
+          type: "done",
+          providerState: { kiro: { conversationId: conversationId ?? "owned-conversation" } },
+        });
+      };
+      const config = comboConfig({
+        a: provider("test-kiro", "https://kiro-a.test/v1", "credential-one"),
+      });
+      const first = await post(config, { store: false, input: "first" });
+      expect(first.status).toBe(200);
+      const firstJson = await first.json() as { id: string };
+
+      if (mismatch === "provider") {
+        config.providers.b = provider("test-kiro", "https://kiro-a.test/v1", "credential-one");
+        config.combos!.free!.targets = [{ provider: "b", model: "m1" }];
+      } else if (mismatch === "destination") {
+        config.providers.a!.baseUrl = "https://kiro-b.test/v1";
+      } else if (mismatch === "adapter") {
+        // Keep provider, destination, credential, and model fixed so only the adapter owner
+        // component changes. The first test-kiro turn already persisted the owned state.
+        config.providers.a!.adapter = "test-owned";
+      } else {
+        config.combos!.free!.targets = [{ provider: "a", model: "m2" }];
+      }
+      const second = await post(config, {
+        store: false,
+        previous_response_id: firstJson.id,
+        input: "second",
+      });
+
+      expect(second.status).toBe(200);
+      expect(seen).toEqual([undefined, undefined]);
+    },
+  );
+
+  test("disabled image input rejects an image restored from previous_response_id before dispatch", async () => {
+    const { rememberResponseState } = await import("../../src/responses/state");
+    rememberResponseState(
+      {
+        model: "combo/free",
+        input: [{
+          role: "user",
+          content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }],
+        }],
+      },
+      {
+        id: "resp_combo_image_prev",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "image received" }],
+      },
+    );
+    let hits = 0;
+    const a = serve(() => {
+      hits += 1;
+      return chatSuccess("unexpected", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
+      imageInput: "disabled",
+    });
+    const response = await post(config, {
+      previous_response_id: "resp_combo_image_prev",
+      input: [{ role: "user", content: "continue" }],
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("does not accept image input");
+    expect(hits).toBe(0);
+  });
+
+  test("fresh child reparsing recomputes vision and effort per target", async () => {
+    const bodies: Array<{ provider: string; body: Record<string, unknown> }> = [];
+    const a = serve(async request => {
+      bodies.push({ provider: "a", body: await request.json() as Record<string, unknown> });
+      return Response.json({ error: { message: "retry" } }, { status: 503 });
+    });
+    const b = serve(async request => {
+      bodies.push({ provider: "b", body: await request.json() as Record<string, unknown> });
+      return chatSuccess("vision backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a", {
+        noVisionModels: ["m1"],
+        reasoningEfforts: ["low"],
+      }),
+      b: provider("openai-chat", baseUrl(b), "key-b", {
+        reasoningEfforts: ["low", "high"],
+      }),
+    }, undefined, { defaultEffort: "high" });
+    const response = await post(config, {
+      input: [{
+        role: "user",
+        content: [
+          { type: "input_text", text: "inspect" },
+          { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+        ],
+      }],
+    });
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(bodies[0]!.body)).not.toContain("data:image/png");
+    expect(JSON.stringify(bodies[1]!.body)).toContain("data:image/png");
+    // #3108: the combo default is resolved against each target's ladder rather than
+    // dropped on an exact-membership miss. This combo's advertised default IS "low" —
+    // the catalog intersects member ladders (a: ["low"], b: ["low","high"]) to ["low"]
+    // and effectiveComboDefault("high", ["low"]) yields "low" — so sending "low" to the
+    // first target is what the served catalog promised. Previously nothing was sent and
+    // the provider default silently applied.
+    expect(bodies[0]!.body.reasoning_effort).toBe("low");
+    expect(bodies[1]!.body.reasoning_effort).toBe("high");
+
+    clearComboSelectionState();
+    clearComboTargetCooldowns();
+    bodies.length = 0;
+    const owned = await post(config, { reasoning: { effort: "low" } });
+    expect(owned.status).toBe(200);
+    expect(bodies.map(row => row.body.reasoning_effort)).toEqual(["low", "low"]);
+  });
+
+  test("backup noReasoningModels removes the fresh combo default", async () => {
+    const a = serve(() => Response.json({ error: { message: "retry" } }, { status: 503 }));
+    let backupBody: Record<string, unknown> | undefined;
+    const b = serve(async request => {
+      backupBody = await request.json() as Record<string, unknown>;
+      return chatSuccess("no reasoning", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b", { noReasoningModels: ["m2"] }),
+    }, undefined, { defaultEffort: "high" });
+    expect((await post(config)).status).toBe(200);
+    expect(backupBody).not.toHaveProperty("reasoning_effort");
+  });
+
+  test("bare third-party defaultModel keeps max off the native clamp path", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    customFetchResponse = async request => {
+      const body = JSON.parse(String(request.body)) as Record<string, unknown>;
+      seen.push(body);
+      return chatSuccess("ok", String(body.model ?? "glm-5.2-fast-preview"));
+    };
+    const config: OcxConfig = {
+      port: 0,
+      defaultProvider: "bailian",
+      providers: {
+        bailian: provider("test-response", "https://test.invalid/v1", "key-b", {
+          defaultModel: "glm-5.2-fast-preview",
+          modelReasoningEfforts: { "glm-5.2-fast-preview": ["low", "medium", "high", "xhigh", "max"] },
+        }),
+      },
+    };
+
+    const bare = await postModelLogged(config, "glm-5.2-fast-preview", { reasoning: { effort: "max" } });
+    expect(bare.status).toBe(200);
+    await bare.text();
+    expect(seen[0]!.reasoning_effort).toBe("max");
+    let { log, usage } = await latestAttemptReceipts(config);
+    expect(log).toMatchObject({
+      provider: "bailian",
+      requestedModel: "glm-5.2-fast-preview",
+      requestedEffort: "max",
+      resolvedModel: "glm-5.2-fast-preview",
+    });
+    expect(usage).toMatchObject({
+      provider: "bailian",
+      requestedModel: "glm-5.2-fast-preview",
+      requestedEffort: "max",
+      resolvedModel: "glm-5.2-fast-preview",
+    });
+
+    seen.length = 0;
+    const prefixed = await postModelLogged(config, "bailian/glm-5.2-fast-preview", { reasoning: { effort: "max" } });
+    expect(prefixed.status).toBe(200);
+    await prefixed.text();
+    expect(seen[0]!.reasoning_effort).toBe("max");
+    ({ log, usage } = await latestAttemptReceipts(config));
+    expect(log).toMatchObject({
+      provider: "bailian",
+      requestedModel: "bailian/glm-5.2-fast-preview",
+      requestedEffort: "max",
+      resolvedModel: "glm-5.2-fast-preview",
+    });
+    expect(usage).toMatchObject({
+      provider: "bailian",
+      requestedModel: "bailian/glm-5.2-fast-preview",
+      requestedEffort: "max",
+      resolvedModel: "glm-5.2-fast-preview",
+    });
+  });
+
+  test("xAI 401 refresh stays within one target and succeeds without backup", async () => {
+    await saveCredential("xai", {
+      access: "xai-old",
+      refresh: "xai-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "acct-xai",
+      source: "oauth",
+    });
+    let refreshHits = 0;
+    let backupHits = 0;
+    const auth: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = typeof input === "object" && input !== null && "url" in input ? String((input as Request).url) : String(input);
+      if (url === XAI_OAUTH_DISCOVERY_URL) {
+        return Response.json({ authorization_endpoint: "https://auth.x.ai/oauth/authorize", token_endpoint: TOKEN_ENDPOINT });
+      }
+      if (url === TOKEN_ENDPOINT) {
+        refreshHits += 1;
+        return Response.json({ access_token: "xai-fresh", refresh_token: "xai-refresh-2", expires_in: 3600 });
+      }
+      if (url === XAI_CHAT_ENDPOINT) {
+        const bearer = new Headers(init?.headers).get("authorization") ?? "";
+        auth.push(bearer);
+        return bearer === "Bearer xai-old"
+          ? Response.json({ error: { message: "rejected" } }, { status: 401 })
+          : chatSuccess("xai refreshed", "grok");
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    const backup = serve(() => {
+      backupHits += 1;
+      return chatSuccess("unused");
+    });
+    const config = comboConfig({
+      xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" },
+      b: provider("openai-chat", baseUrl(backup), "key-b"),
+    }, [{ provider: "xai", model: "grok" }, { provider: "b", model: "m2" }]);
+    expect((await post(config)).status).toBe(200);
+    expect(refreshHits).toBe(1);
+    expect(auth).toEqual(["Bearer xai-old", "Bearer xai-fresh"]);
+    expect(backupHits).toBe(0);
+  });
+
+  test("backup 401 never triggers xAI refresh or receives an xAI bearer", async () => {
+    for (const includeC of [false, true]) {
+      clearComboSelectionState();
+      clearComboTargetCooldowns();
+      await saveCredential("xai", {
+        access: "xai-live",
+        refresh: "xai-refresh",
+        expires: Date.now() + 3_600_000,
+        accountId: "acct-xai",
+        source: "oauth",
+      });
+      let refreshHits = 0;
+      const backupAuth: string[] = [];
+      const captured = new Set<string>();
+      globalThis.fetch = (async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        const headers = new Headers(init?.headers);
+        captured.add(JSON.stringify([...headers.entries()]));
+        if (typeof init?.body === "string") captured.add(init.body);
+        if (url === XAI_OAUTH_DISCOVERY_URL) {
+          return Response.json({ authorization_endpoint: "https://auth.x.ai/oauth/authorize", token_endpoint: TOKEN_ENDPOINT });
+        }
+        if (url === TOKEN_ENDPOINT) {
+          refreshHits += 1;
+          return Response.json({ access_token: "xai-refreshed-secret", refresh_token: "refresh", expires_in: 3600 });
+        }
+        if (url === XAI_CHAT_ENDPOINT) {
+          return Response.json({ error: { message: "xai unavailable" } }, { status: 503 });
+        }
+        if (url.includes("/b/v1/chat/completions")) {
+          backupAuth.push(headers.get("authorization") ?? "");
+          return Response.json({ error: { message: "backup key rejected" } }, { status: 401 });
+        }
+        if (url.includes("/c/v1/chat/completions")) return chatSuccess("third target", "m3");
+        return originalFetch(input, init);
+      }) as typeof fetch;
+      const local = serve(request => originalFetch(request));
+      const root = local.url.toString().replace(/\/$/, "");
+      const providers: OcxConfig["providers"] = {
+        xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" },
+        b: provider("openai-chat", `${root}/b/v1`, "key-b"),
+        ...(includeC ? { c: provider("openai-chat", `${root}/c/v1`, "key-c") } : {}),
+      };
+      const targets = [
+        { provider: "xai", model: "grok" },
+        { provider: "b", model: "m2" },
+        ...(includeC ? [{ provider: "c", model: "m3" }] : []),
+      ];
+      const response = await post(comboConfig(providers, targets));
+      expect(response.status).toBe(includeC ? 200 : 401);
+      expect(refreshHits).toBe(0);
+      expect(backupAuth).toEqual(["Bearer key-b"]);
+      expect([...captured].join("\n")).not.toContain("xai-refreshed-secret");
+      expect([...captured].filter(value => value.includes("/b/")).join("\n")).not.toContain("xai-live");
+      globalThis.fetch = originalFetch;
+      await local.stop(true);
+      servers.splice(servers.indexOf(local), 1);
+    }
+  });
+
+  test("committed runTurn heartbeat text error never replays on backup", async () => {
+    let aHits = 0;
+    let bHits = 0;
+    customRunTurn = async (_parsed, _incoming, emit) => {
+      aHits += 1;
+      emit({ type: "heartbeat" });
+      emit({ type: "text_delta", text: "once" });
+      emit({ type: "error", message: "late failure" });
+    };
+    const b = serve(() => {
+      bHits += 1;
+      return chatStream("duplicate");
+    });
+    const config = comboConfig({
+      a: provider("test-run-turn", "test://run-turn", "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await post(config, { stream: true });
+    const frames = await collectSse(response);
+    expect(aHits).toBe(1);
+    expect(bHits).toBe(0);
+    expect(frames.filter(frame => frame.event === "response.output_text.delta"))
+      .toEqual([expect.objectContaining({ data: expect.objectContaining({ delta: "once" }) })]);
+    expect(frames.filter(frame => frame.event === "response.failed")).toHaveLength(1);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+  });
+
+  test("runTurn control-only late errors stay on the adapter-owned stream", async () => {
+    let aHits = 0;
+    let bHits = 0;
+    customRunTurn = async (_parsed, _incoming, emit) => {
+      aHits += 1;
+      // preflightAdapterEvents commits this custom transport at its first
+      // non-heartbeat event even though the bridge emits no visible output.
+      emit({ type: "assistant_boundary" });
+      emit({ type: "error", message: "late runTurn failure" });
+    };
+    const b = serve(() => {
+      bHits += 1;
+      return chatStream("must not replay");
+    });
+    const config = comboConfig({
+      a: provider("test-run-turn", "test://run-turn", "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const response = await post(config, { stream: true });
+    const frames = await collectSse(response);
+    expect(aHits).toBe(1);
+    expect(bHits).toBe(0);
+    expect(frames.filter(frame => frame.event === "response.failed")).toHaveLength(1);
+    expect(frames.some(frame => frame.event === "response.output_text.delta")).toBe(false);
+  });
+
+  test("PATCH-disable-all returns combo_unavailable without any fallback hit", async () => {
+    let aHits = 0;
+    let bHits = 0;
+    let cHits = 0;
+    const a = serve(() => { aHits += 1; return chatSuccess("a"); });
+    const b = serve(() => { bHits += 1; return chatSuccess("b"); });
+    const c = serve(() => { cHits += 1; return chatSuccess("default"); });
+    const config: OcxConfig = {
+      port: 0,
+      defaultProvider: "c",
+      providers: {
+        a: provider("openai-chat", baseUrl(a), "key-a"),
+        b: provider("openai-chat", baseUrl(b), "key-b"),
+        c: provider("openai-chat", baseUrl(c), "key-c"),
+      },
+    };
+    saveConfig(config);
+    expect((await management(config, "PUT", "/api/combos", {
+      id: "free",
+      combo: { targets: [{ provider: "a", model: "m1" }, { provider: "b", model: "m2" }] },
+    }))?.status).toBe(200);
+    expect((await management(config, "PATCH", "/api/providers?name=a", { disabled: true }))?.status).toBe(200);
+    expect((await management(config, "PATCH", "/api/providers?name=b", { disabled: true }))?.status).toBe(200);
+    const reloaded = readConfigDiagnostics().config;
+    const response = await post(reloaded);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      error: { type: "server_error", code: "combo_unavailable" },
+    });
+    expect([aHits, bHits, cHits]).toEqual([0, 0, 0]);
+  });
+
+  test("existence gate preserves physical combo provider and unknown routeModel 404", async () => {
+    let physicalHits = 0;
+    let memberHits = 0;
+    let defaultHits = 0;
+    let physicalModel = "";
+    const physical = serve(async request => {
+      physicalHits += 1;
+      physicalModel = (await request.json() as { model?: string }).model ?? "";
+      return chatSuccess("physical combo", "model");
+    });
+    const physicalConfig: OcxConfig = {
+      port: 0,
+      defaultProvider: "combo",
+      providers: { combo: provider("openai-chat", baseUrl(physical), "key-combo") },
+    };
+    const physicalResponse = await post(physicalConfig, { model: "combo/model" });
+    expect(physicalResponse.status).toBe(200);
+    expect(physicalHits).toBe(1);
+    expect(physicalModel).toBe("model");
+
+    const member = serve(() => { memberHits += 1; return chatSuccess("member"); });
+    const fallback = serve(() => { defaultHits += 1; return chatSuccess("default"); });
+    const unknownConfig: OcxConfig = {
+      port: 0,
+      defaultProvider: "fallback",
+      providers: {
+        member: provider("openai-chat", baseUrl(member), "key-member"),
+        fallback: provider("openai-chat", baseUrl(fallback), "key-fallback"),
+      },
+      combos: { free: { targets: [{ provider: "member", model: "m1" }] } },
+    };
+    const unknown = await post(unknownConfig, { model: "combo/missing" });
+    expect(unknown.status).toBe(404);
+    expect([memberHits, defaultHits]).toEqual([0, 0]);
+  });
+
+  test("failed passthrough child callbacks stay buffered and only B finalizes", async () => {
+    const terminalFrame = (status: "failed" | "completed") => [
+      `event: response.${status}`,
+      `data: ${JSON.stringify({ type: `response.${status}`, response: { id: `resp_${status}`, status, output: [] } })}`,
+      "",
+      "",
+    ].join("\n");
+    const a = serve(() => new Response(terminalFrame("failed"), {
+      status: 503,
+      headers: { "content-type": "text/event-stream" },
+    }));
+    const b = serve(() => new Response(terminalFrame("completed"), {
+      headers: { "content-type": "text/event-stream" },
+    }));
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b"),
+    });
+    const finalized = deferred();
+    const statuses: string[] = [];
+    let cancels = 0;
+    const response = await post(config, { stream: true }, {
+      onNativePassthroughTerminal: status => {
+        statuses.push(status);
+        finalized.resolve();
+      },
+      onNativePassthroughCancel: () => { cancels += 1; },
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    await within(finalized.promise);
+    expect(statuses).toEqual(["completed"]);
+    expect(cancels).toBe(0);
+  });
+
+  test("connect cancellation wins with 499, no backup, warning, or cooldown", async () => {
+    let bHits = 0;
+    const aStarted = deferred();
+    const a = serve(() => {
+      aStarted.resolve();
+      return new Promise<Response>(() => {});
+    });
+    const b = serve(() => { bHits += 1; return chatSuccess("must not run"); });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const abort = new AbortController();
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+      const pending = postLogged(config, {}, { abortSignal: abort.signal });
+      await aStarted.promise;
+      abort.abort(new DOMException("client closed", "AbortError"));
+      const response = await pending;
+      expect(response.status).toBe(499);
+      expect(await response.json()).toMatchObject({ error: { code: "client_cancelled" } });
+      await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "openai-chat" });
+      expect(bHits).toBe(0);
+      expect(warnings.some(row => String(row[0]).includes("[combo]"))).toBe(false);
+      expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(false);
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("failure-body cancellation wins before cooldown or backup", async () => {
+    const bodyRead = deferred();
+    const bodyCancelled = deferred();
+    let cancelled = 0;
+    let bHits = 0;
+    customFetchResponse = async request => {
+      const body = JSON.parse(String(request.body)) as { model?: string };
+      if (body.model === "m2") {
+        bHits += 1;
+        return chatSuccess("must not run");
+      }
+      let pulls = 0;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulls += 1;
+          if (pulls === 1) controller.enqueue(new TextEncoder().encode("partial"));
+          else bodyRead.resolve();
+        },
+        cancel() {
+          cancelled += 1;
+          bodyCancelled.resolve();
+        },
+      }), { status: 429, headers: { "content-type": "application/json" } });
+    };
+    const config = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", "key-a"),
+      b: provider("test-response", "https://test.invalid/v1", "key-b"),
+    });
+    const abort = new AbortController();
+    const pending = postLogged(config, {}, { abortSignal: abort.signal });
+    await bodyRead.promise;
+    abort.abort(new DOMException("client closed", "AbortError"));
+    const response = await pending;
+    expect(response.status).toBe(499);
+    await response.text();
+    await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "test-response" });
+    expect(bHits).toBe(0);
+    await within(bodyCancelled.promise);
+    expect(cancelled).toBe(1);
+    expect(isComboTargetInCooldown("free", { provider: "a", model: "m1" })).toBe(false);
+  });
+
+  test("200 resolved after abort returns 499 with zero success accounting or callback publication", async () => {
+    const started = deferred();
+    let waitForAbort = true;
+    const models: string[] = [];
+    customFetchResponse = async (request, context) => {
+      const model = (JSON.parse(String(request.body)) as { model?: string }).model ?? "";
+      models.push(model);
+      if (waitForAbort) {
+        started.resolve();
+        await new Promise<void>(resolve => {
+          if (context?.abortSignal?.aborted) resolve();
+          else context?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+      return chatSuccess(`ok ${model}`, model);
+    };
+    const config = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", "key-a"),
+      b: provider("test-response", "https://test.invalid/v1", "key-b"),
+    }, undefined, { strategy: "round-robin", stickyLimit: 2 });
+    const abort = new AbortController();
+    let authPublications = 0;
+    const pending = postLogged(config, {}, {
+      abortSignal: abort.signal,
+      onCodexAuthContextResolved: () => { authPublications += 1; },
+    });
+    await started.promise;
+    abort.abort();
+    const cancelledResponse = await pending;
+    expect(cancelledResponse.status).toBe(499);
+    await cancelledResponse.text();
+    await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "test-response" });
+    expect(authPublications).toBe(0);
+
+    waitForAbort = false;
+    for (let i = 0; i < 3; i++) expect((await post(config)).status).toBe(200);
+    expect(models).toEqual(["m1", "m1", "m1", "m2"]);
+  });
+
+  test("direct child status 499 is retained exactly once without backup", async () => {
+    let bHits = 0;
+    customFetchResponse = async request => {
+      const model = (JSON.parse(String(request.body)) as { model?: string }).model;
+      if (model === "m2") {
+        bHits += 1;
+        return chatSuccess("must not run", "m2");
+      }
+      return Response.json({ error: { code: "client_cancelled" } }, { status: 499 });
+    };
+    const config = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", "key-a"),
+      b: provider("test-response", "https://test.invalid/v1", "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(499);
+    await response.text();
+    expect(bHits).toBe(0);
+    await expectCancelledAttemptReceipt(config, { provider: "a", model: "m1", adapter: "test-response" });
+  });
+
+  test("oversized ordinary failure is canceled once, leaks no prefix, and advances", async () => {
+    const hostile = `hostile-prefix-${"x".repeat(70_000)}`;
+    let reads = 0;
+    let cancels = 0;
+    customFetchResponse = async request => {
+      const model = (JSON.parse(String(request.body)) as { model?: string }).model;
+      if (model === "m2") return chatSuccess("safe backup", "m2");
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          reads += 1;
+          controller.enqueue(new TextEncoder().encode(hostile));
+        },
+        cancel() { cancels += 1; },
+      }), { status: 429, headers: { "content-type": "application/json" } });
+    };
+    const config = comboConfig({
+      a: provider("test-response", "https://test.invalid/v1", "key-a"),
+      b: provider("test-response", "https://test.invalid/v1", "key-b"),
+    });
+    const response = await postLogged(config);
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain("safe backup");
+    expect(text).not.toContain("hostile-prefix");
+    expect(reads).toBe(1);
+    expect(cancels).toBe(1);
+    const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
+    expect(attempt).toMatchObject({ provider: "a", status: 429, usageStatus: "unreported" });
+    expect(attempt).not.toHaveProperty("usage");
+  });
+
+  test("stalled passthrough JSON is canceled at five seconds and advances once", async () => {
+    let reads = 0;
+    let cancels = 0;
+    let bHits = 0;
+    const cancelled = deferred();
+    customTransientResponse = async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          reads += 1;
+          controller.enqueue(new TextEncoder().encode("hostile-stalled-prefix"));
+        },
+        cancel() {
+          cancels += 1;
+          cancelled.resolve();
+        },
+      }), { status: 429, headers: { "content-type": "application/json" } });
+    const b = serve(() => {
+      bHits += 1;
+      return chatSuccess("bounded backup", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-responses", "https://stalled.test/v1", "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const started = performance.now();
+    const response = await postLogged(config);
+    const elapsed = performance.now() - started;
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain("bounded backup");
+    expect(text).not.toContain("hostile-stalled-prefix");
+    await within(cancelled.promise);
+    expect([reads, cancels, bHits]).toEqual([1, 1, 1]);
+    expect(elapsed).toBeGreaterThanOrEqual(4_500);
+    const attempt = (await latestAttemptReceipts(config)).usage.attempts?.[0];
+    expect(attempt).toMatchObject({ provider: "a", status: 429, usageStatus: "unreported" });
+    expect(attempt).not.toHaveProperty("usage");
+  }, 10_000);
+});
+
+describe("cursor conversation continuity across store:false chains", () => {
+  function fakeCursorTransportFactory(seenConversationIds: string[]): CursorTransportFactory {
+    return () => ({
+      async *run(request) {
+        seenConversationIds.push(request.conversationId);
+        yield { type: "text", text: "cursor ok" };
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2, estimated: true } };
+      },
+      writeClient() {},
+      close() {},
+    });
+  }
+
+  async function postCursor(config: OcxConfig, raw: Record<string, unknown>): Promise<Response> {
+    return handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ stream: false, store: false, ...raw }),
+    }), config, { model: "", provider: "" }, {});
+  }
+
+  function cursorConfig(): OcxConfig {
+    return {
+      port: 0,
+      // Registry forces authMode=oauth for the canonical "cursor" name; a non-registry
+      // provider name keeps key auth so the fake transport is reachable without a login.
+      defaultProvider: "cursortest",
+      providers: {
+        cursortest: provider("cursor", "https://api2.cursor.sh", "fake-cursor-token"),
+      },
+    };
+  }
+
+  test("ownerless legacy Cursor state fails closed before adapter dispatch", async () => {
+    const { rememberResponseState } = await import("../../src/responses/state");
+    rememberResponseState(
+      { model: "cursortest/composer-2", input: "legacy" },
+      {
+        id: "resp_cursor_ownerless_legacy",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "legacy reply" }],
+      },
+      { cursor: { conversationId: "legacy-cursor-conversation" } },
+      { force: true },
+    );
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+
+    const response = await postCursor(cursorConfig(), {
+      model: "cursortest/composer-2",
+      previous_response_id: "resp_cursor_ownerless_legacy",
+      input: "continue",
+    });
+
+    expect(response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toBe("legacy-cursor-conversation");
+  });
+
+  test("store:false chain reuses the SAME cursor conversationId (native model)", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+
+    const first = await postCursor(config, { model: "cursortest/composer-2", input: "hello" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    expect(seen).toHaveLength(1);
+
+    const second = await postCursor(config, {
+      model: "cursortest/composer-2",
+      previous_response_id: firstJson.id,
+      input: [{ role: "user", content: "continue" }],
+    });
+    expect(second.status).toBe(200);
+    expect(seen).toHaveLength(2);
+    // The whole point of forced continuation: the second turn continues the SAME
+    // Cursor conversation instead of minting a fresh id (which would miss the
+    // context-usage carry-forward and report output-delta-sized totals).
+    expect(seen[1]).toBe(seen[0]);
+  });
+
+  test("external-model toolResult continuation preserves and persists the same id", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+
+    const first = await postCursor(config, { model: "cursortest/grok-4.5", input: "use tools" });
+    expect(first.status).toBe(200);
+    const firstJson = await first.json() as { id: string };
+    expect(seen).toHaveLength(1);
+
+    const second = await postCursor(config, {
+      model: "cursortest/grok-4.5",
+      previous_response_id: firstJson.id,
+      input: [{ type: "function_call_output", call_id: "call_x", output: "tool says hi" }],
+    });
+    expect(second.status).toBe(200);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+
+    const secondJson = await second.json() as { id: string };
+    const { previousResponseProviderState } = await import("../../src/responses/state");
+    expect(previousResponseProviderState(secondJson.id)?.cursor?.conversationId).toBe(seen[1]);
+  });
+
+  test("external store:false full-history turns reuse the client thread identity", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-codex-parent-thread-id": "desktop-thread-external",
+      },
+      body: JSON.stringify({
+        model: "cursortest/grok-4.5",
+        input,
+        stream: false,
+        store: false,
+        prompt_cache_key: "shared-cache-key",
+      }),
+    }), config, { model: "", provider: "" }, {});
+
+    expect((await postThreadTurn("start")).status).toBe(200);
+    expect((await postThreadTurn([
+      { role: "user", content: "start" },
+      { role: "assistant", content: "working" },
+      { type: "function_call_output", call_id: "call_x", output: "tool result" },
+    ])).status).toBe(200);
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+  });
+
+  test("Desktop session and thread headers retain Cursor ownership without a parent-thread header", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+    const postDesktopTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "session-id": "desktop-session-owner",
+        "thread-id": "desktop-thread-owner",
+      },
+      body: JSON.stringify({
+        model: "cursortest/grok-4.5",
+        input,
+        stream: false,
+        store: false,
+      }),
+    }), config, { model: "", provider: "" }, {});
+
+    expect((await postDesktopTurn("start")).status).toBe(200);
+    expect((await postDesktopTurn([
+      { role: "user", content: "start" },
+      { role: "assistant", content: "working" },
+      { role: "user", content: "continue" },
+    ])).status).toBe(200);
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+  });
+
+  test("native composer reuses conversationId across store:false turns via parent thread id", async () => {
+    const seen: string[] = [];
+    customCursorTransportFactory = fakeCursorTransportFactory(seen);
+    const config = cursorConfig();
+    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-codex-parent-thread-id": "desktop-thread-native",
+      },
+      body: JSON.stringify({
+        model: "cursortest/composer-2.5",
+        input,
+        stream: false,
+        store: false,
+        prompt_cache_key: "shared-cache-key",
+      }),
+    }), config, { model: "", provider: "" }, {});
+
+    expect((await postThreadTurn("hello")).status).toBe(200);
+    expect((await postThreadTurn([
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "cursor ok" },
+      { role: "user", content: "continue" },
+    ])).status).toBe(200);
+
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBe(seen[0]);
+  });
+});
+
+describe("combo compact failover", () => {
+  function compactRequest(body: Record<string, unknown>): Request {
+    return new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function postCompactLogged(config: OcxConfig): Promise<Response> {
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const start = Date.now();
+    const response = await handleResponsesCompact(compactRequest({
+      model: "combo/free",
+      stream: false,
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] }],
+    }), config, logCtx);
+    loggedRequestSequence += 1;
+    return responseWithDeferredRequestLog(response, `combo-compact-${loggedRequestSequence}`, start, logCtx);
+  }
+
+  function canonicalPoolConfig(
+    targets: Array<{ provider: string; model: string }>,
+    backupUrl?: string,
+  ): { config: OcxConfig } {
+    const config = comboConfig({
+      "openai-apikey": {
+        adapter: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authMode: "key",
+        apiKey: "combo-compact-key",
+      },
+      backup: provider("openai-chat", backupUrl ?? "http://127.0.0.1:9", "key-b"),
+    }, targets);
+    return { config };
+  }
+
+  test("native-capable first target 429 hops compact to the backup target", async () => {
+    const childBodies: Array<Record<string, unknown>> = [];
+    const b = serve(async request => {
+      childBodies.push(JSON.parse(await request.text()) as Record<string, unknown>);
+      return chatStream("compact backup");
+    });
+    const { config } = canonicalPoolConfig([
+      { provider: "openai-apikey", model: "gpt-5.4" },
+      { provider: "backup", model: "m1" },
+    ], baseUrl(b));
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === "object" && input !== null && "url" in input ? String((input as Request).url) : String(input);
+      if (url.includes("api.openai.com")) {
+        return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+      }
+      return originalFetch(input as RequestInfo, init);
+    }) as typeof fetch;
+
+    const response = await postCompactLogged(config);
+    expect(response.status).toBe(200);
+    const json = await response.json() as { output?: unknown[] };
+    expect(JSON.stringify(json.output)).toContain("compact backup");
+
+    // The backup child received the synthetic summarizer turn as SSE, with the
+    // summarizer prompt present in its chat wire body.
+    expect(childBodies).toHaveLength(1);
+    expect(childBodies[0]!.stream).toBe(true);
+    expect(JSON.stringify(childBodies[0]!.messages)).toContain("CONTEXT CHECKPOINT COMPACTION");
+
+    const { log } = await latestAttemptReceipts(config);
+    const attempts = log.attempts as Array<Record<string, unknown>>;
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]).toMatchObject({
+      provider: "openai-apikey",
+      adapter: "openai-responses",
+      status: 429,
+    });
+    expect(attempts[1]).toMatchObject({ provider: "backup", adapter: "openai-chat", status: 200 });
+  });
+
+  test("account-gated first target failover decodes the backup ocx1 compaction", async () => {
+    const b = serve(() => chatStream("mixed combo backup summary"));
+    const { config } = canonicalPoolConfig([
+      { provider: "openai-apikey", model: "gpt-daybreak-blue-latest" },
+      { provider: "backup", model: "m1" },
+    ], baseUrl(b));
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === "object" && input !== null && "url" in input ? String((input as Request).url) : String(input);
+      if (url.includes("api.openai.com")) {
+        return Response.json({ error: { message: "rate limited" } }, { status: 429 });
+      }
+      return originalFetch(input as RequestInfo, init);
+    }) as typeof fetch;
+
+    const response = await postCompactLogged(config);
+    expect(response.status).toBe(200);
+    const json = await response.json() as { output?: unknown[] };
+    expect(JSON.stringify(json.output)).toContain("mixed combo backup summary");
+    expect(JSON.stringify(json.output)).not.toContain("ocx1:");
+  });
+
+  test("combo compact runs the synthetic turn as SSE so a canonical child can serve it", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const { config } = canonicalPoolConfig([{ provider: "openai-apikey", model: "gpt-5.4" }]);
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === "object" && input !== null && "url" in input
+        ? String((input as Request).url)
+        : String(input);
+      if (!url.includes("api.openai.com")) {
+        return originalFetch(input as RequestInfo, init);
+      }
+      // Only the codex/responses child turn is under test; side probes (e.g. the
+      // wham/usage quota check) just get a tolerated non-2xx.
+      if (!url.includes("api.openai.com/v1/responses")) {
+        return Response.json({ error: { message: "probe not under test" } }, { status: 403 });
+      }
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      bodies.push(body);
+      // Canonical ChatGPT Responses rejects non-streaming turns; a stream:false child
+      // request would strand every canonical-only combo here before the SSE coercion.
+      if (body.stream !== true) {
+        return Response.json({ error: { message: "non-streaming turns are rejected" } }, { status: 400 });
+      }
+      const completed = {
+        type: "response.completed",
+        response: {
+          id: "resp_compact",
+          status: "completed",
+          output: [{ type: "compaction", encrypted_content: "gAAAAABm-native-openai-ciphertext" }],
+        },
+      };
+      return new Response([
+        "event: response.created",
+        'data: {"type":"response.created","response":{"id":"resp_compact","status":"in_progress"}}',
+        "",
+        `event: ${completed.type}`,
+        `data: ${JSON.stringify(completed)}`,
+        "",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    const response = await postCompactLogged(config);
+    expect(response.status).toBe(200);
+    const json = await response.json() as { output?: unknown[] };
+    expect(json.output).toEqual([expect.objectContaining({
+      type: "compaction", encrypted_content: "gAAAAABm-native-openai-ciphertext",
+    })]);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]!.stream).toBe(true);
+    expect(JSON.stringify(bodies[0]!.input)).toContain("CONTEXT CHECKPOINT COMPACTION");
+  });
+
+  test("native compact rejects an empty ciphertext item", async () => {
+    const { config } = canonicalPoolConfig([{ provider: "openai-apikey", model: "gpt-5.4" }]);
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === "object" && input !== null && "url" in input
+        ? String((input as Request).url)
+        : String(input);
+      if (!url.includes("api.openai.com/v1/responses")) {
+        return Response.json({ error: { message: "probe not under test" } }, { status: 403 });
+      }
+      const completed = {
+        type: "response.completed",
+        response: {
+          id: "resp_compact_empty",
+          status: "completed",
+          output: [{ type: "compaction", encrypted_content: "" }],
+        },
+      };
+      return new Response([
+        `event: ${completed.type}`,
+        `data: ${JSON.stringify(completed)}`,
+        "",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    const response = await postCompactLogged(config);
+    expect(response.status).toBe(502);
+    expect(await response.text()).toContain("empty summary");
+  });
+});

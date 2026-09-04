@@ -44,7 +44,7 @@ describe("OpenAI API virtual model resolution", () => {
   }
 
   // 2. Base models are NOT virtual
-  for (const base of ["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+  for (const base of ["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"]) {
     test(`base model ${base} is not virtual on openai-apikey`, () => {
       expect(resolveOpenAiVirtualModel("openai-apikey", base)).toBeUndefined();
     });

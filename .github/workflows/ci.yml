@@ -273,7 +273,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
-          # tests/release-version-line.test.ts compares package.json against the
+          # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
           # the exact regression it exists to catch would ride through CI green.
@@ -347,12 +347,12 @@ jobs:
       - name: Test storage policy API
         run: |
           bun test --isolate \
-            ./tests/api-storage-policy-already-running.test.ts \
-            ./tests/api-storage-policy-mutation-busy.test.ts \
-            ./tests/api-storage-policy-put-race.test.ts \
-            ./tests/api-storage-policy-run.test.ts \
-            ./tests/api-storage-policy.test.ts \
-            ./tests/api-storage.test.ts
+            ./tests/storage/api-storage-policy-already-running.test.ts \
+            ./tests/storage/api-storage-policy-mutation-busy.test.ts \
+            ./tests/storage/api-storage-policy-put-race.test.ts \
+            ./tests/storage/api-storage-policy-run.test.ts \
+            ./tests/storage/api-storage-policy.test.ts \
+            ./tests/storage/api-storage.test.ts
 
   # Bun 1.3.14 has shown a Linux isolate wedge around startServer() plus the user
   # cost overlay reconciler. Keep api-usage in one fresh process so a runtime
@@ -384,7 +384,7 @@ jobs:
           bun run build
 
       - name: Test api usage API
-        run: bun test --isolate ./tests/api-usage.test.ts
+        run: bun test --isolate ./tests/server/api-usage.test.ts
 
   # Everything that is not the suite: type safety, privacy, lint, build, smoke.
   # One runner, once per push. Splitting these across the shards would repeat a
@@ -431,7 +431,7 @@ jobs:
         run: bun run privacy:scan
 
       # The ocx skill ships a capability -> route map generated from src/cli/capabilities.ts.
-      # `bun run test` already covers this via tests/skill-ocx.test.ts; this step exists so the
+      # `bun run test` already covers this via tests/ci-workflows/skill-ocx.test.ts; this step exists so the
       # failure names the fix instead of surfacing as a byte-comparison diff in a test log.
       - name: Check the generated ocx skill surface is current
         run: bun run skill:surface:check
@@ -471,7 +471,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
-          # tests/release-version-line.test.ts compares package.json against the
+          # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
           # the exact regression it exists to catch would ride through CI green.
@@ -564,7 +564,7 @@ jobs:
           # between jobs, so leaving a usable token in .git/config is avoidable
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
-          # tests/release-version-line.test.ts compares package.json against the
+          # tests/ci-workflows/release-version-line.test.ts compares package.json against the
           # newest release tag. actions/checkout fetches no tags by default, so
           # without this the check reads an empty tag set and passes on anything -
           # the exact regression it exists to catch would ride through CI green.
@@ -709,7 +709,7 @@ jobs:
           # residue. Matches the convention already used by the other workflows.
           persist-credentials: false
           # Same reason as the Linux shards and the macOS control: this leg runs the
-          # whole suite, and tests/release-version-line.test.ts reads release tags.
+          # whole suite, and tests/ci-workflows/release-version-line.test.ts reads release tags.
           # Without tags the check sees an empty set and cannot fail.
           fetch-tags: true
 

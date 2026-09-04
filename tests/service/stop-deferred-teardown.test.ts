@@ -10,7 +10,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 /**
  * Behavioural cover for the deferred shared teardown (#3008).
  *
- * The wiring assertions in tests/grok-lifecycle.test.ts read source text, which cannot
+ * The wiring assertions in tests/providers/xai/grok-lifecycle.test.ts read source text, which cannot
  * tell a working deferral from a plausible-looking one. These tests call the real
  * functions: the graceful-stop client that builds the URL, the teardown decision the
  * route delegates to, and the on-disk receipts that decide whether a deferral is an owned

@@ -26,7 +26,7 @@ type RawModel = {
 // the generator runs correctly from any working directory.
 const sourcePath = resolve(import.meta.dir, "model-metadata.source.json");
 // `MODEL_METADATA_OUT` lets the sync guard regenerate into a temp file and byte-compare without
-// any risk of clobbering the committed output (tests/model-metadata-sync.test.ts).
+// any risk of clobbering the committed output (tests/codex-integration/model-metadata-sync.test.ts).
 const outPath = process.env.MODEL_METADATA_OUT
   ? resolve(process.env.MODEL_METADATA_OUT)
   : resolve(import.meta.dir, "../src/generated/model-metadata.ts");
@@ -52,7 +52,7 @@ const allowedProviders = Array.from(
 // `opencode-go/hy3-preview` returns `Provider error 400 ... model_not_supported` because it is not
 // on the Zen Go lite model list, yet upstream keeps re-adding `tencent/hy3-preview`. Without this
 // block, every regeneration resurrects it as a selectable model and users hit that 400 again.
-// Keyed as `<bundle>/<modelId>`; `tests/codex-catalog.test.ts` asserts the slug stays absent.
+// Keyed as `<bundle>/<modelId>`; `tests/codex-integration/codex-catalog.test.ts` asserts the slug stays absent.
 const EXCLUDED_MODELS = new Set<string>([
   "opencode-go/hy3-preview",
 ]);

@@ -249,6 +249,19 @@ export function getEligibleAnthropicAccounts(now = Date.now()): string[] {
  * enough that a login in another window is visible before the operator can switch back and send a
  * prompt, long enough that a burst of requests shares one read. The cache holds a BOOLEAN derived
  * from a count — never a credential, never an account id.
+ *
+ * Staleness is bounded by consequence, not only by the TTL. Explicit invalidation covers the
+ * roster mutations this module can see (rotation, pool-state reset, affinity clear on account
+ * removal, manual selection), but not one it cannot: a 401 elsewhere flagging an account
+ * `needsReauth` drops the real quorum to one while a cached `true` survives for up to 2s.
+ *
+ * That window is harmless in both directions, which is why it is left rather than plumbed
+ * through the store. A stale `true` only lets the caller ASK for an alternate;
+ * `pickAlternateAnthropicAccount` re-reads the roster through `getEligibleAnthropicAccounts`,
+ * skips the reauth-flagged account and returns `null`, so the 429 surfaces exactly as it would
+ * have. A stale `false` costs one un-rotated 429 and self-corrects on the next read. Neither
+ * can dispatch on an unusable credential, which is the only outcome worth adding a store hook
+ * to prevent.
  */
 const QUORUM_CACHE_TTL_MS = 2_000;
 
