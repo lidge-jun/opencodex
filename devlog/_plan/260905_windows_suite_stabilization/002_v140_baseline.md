@@ -1,5 +1,16 @@
 # 002 — Corrected baseline on the pinned runtime (`bun 1.4.0`)
 
+> **PARTIALLY SUPERSEDED by `007_acl_defect_retracted.md`.** The shard counts
+> below are the raw measurement and stand. The DIAGNOSIS does not: the 22
+> shard-2 failures attributed here to an ACL-seam defect were contamination
+> from a killed 1.3.14 run, proven by a probe that stubbed both `icacls`
+> runners and logged zero invocations while the failures persisted. On a clean
+> tree that file is 22 pass in 1.4s.
+>
+> Read `007` before using anything in this document. Every "three defects" and
+> "defect 2" reference below should be read as **two** defects; phase `010` and
+> its follow-up `040` are retracted.
+
 Same box, same checkout, same serial lock. The only change from `000` is the
 binary: `./node_modules/bun/bin/bun.exe` (1.4.0, the version `package.json:68`
 pins) instead of the 1.3.14 on `PATH`.
@@ -82,7 +93,7 @@ fabric guard failures do not exist on the pinned runtime.
 
 ### Where the implementation plans live
 
-This document is research: baseline and root-cause analysis only. One diff-level
+This document is research: the raw baseline, plus a root-cause roll-up whose ACL portion is retracted by 007. One diff-level
 document per surviving phase, each independently landable:
 
 | doc | defect | failures | files touched |

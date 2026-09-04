@@ -32,9 +32,23 @@ A mechanism that never executes cannot be the cause. Every claim in `010` about
 
 `tests/.tmp-oauth-store-multi-test/auth.json`, timestamped **00:44** — from the
 1.3.14 baseline, hours earlier. At 01:08 I sent `kill -9` to the wedged shard-3
-process (PID 1382, `001`/`005`). On Windows that leaves the handle held: the
-process is gone but its open file keeps the directory undeletable, and every
-later `beforeEach` in that fixture hit EPERM.
+process (PID 1382, `001`/`005`).
+
+**Something left by that killed run held the directory**, so every later
+`beforeEach` in the fixture hit EPERM until the leftover was removed by hand.
+
+What the evidence does NOT establish is WHO held it. An earlier draft of this
+document said the dead process kept its own handle; that is wrong — Windows
+closes a terminated process's handles. The candidates that remain — a surviving
+descendant of the killed shard, an indexer or antivirus scanner that opened the
+file, or a delete pending on a handle closed later — were not distinguished,
+because no handle-owner snapshot was taken before the directory was deleted.
+Taking one (`handle.exe`, `openfiles`, or Resource Monitor) is what a future
+occurrence should start with.
+
+What IS established: the killed run is the origin (the debris carries its
+timestamp), `icacls` is not the mechanism (0 invocations with both runners
+stubbed), and the file is green once the debris is gone.
 
 After deleting the leftover:
 
@@ -87,9 +101,10 @@ built on top of it.
 
 ## Operational lesson, now a rule for this unit
 
-**A killed suite process contaminates the next run.** `kill -9` on a Bun test
-process leaves Windows handles held. Before any measurement that a conclusion
-depends on:
+**A killed suite run contaminates the next one.** `kill -9` on a Bun test process
+leaves debris that something on the box may still hold — the mechanism was not
+identified, and the practical rule does not depend on identifying it. Before any
+measurement that a conclusion depends on:
 
 ```bash
 cd /c/ocxwin/repo && git status --short          # leftover tests/.tmp-* dirs?

@@ -58,16 +58,17 @@ prevent a defect that does not exist.
 
 ## Research
 
-`001`-`006` are analysis and are not implemented from:
+`001`-`007` are analysis and are not implemented from:
 
 | doc | what it is |
 |---|---|
 | `001_runtime_fault.md` | the 1.3.14-vs-1.4.0 A/B, and the method correction |
-| `002_v140_baseline.md` | the corrected baseline and root-cause roll-up |
+| `002_v140_baseline.md` | the raw 1.4.0 shard counts — its ACL diagnosis is retracted by `007` |
 | `003_void_preload_analysis.md` | VOID — a 1.3.14-only mechanism; records a latent hazard at `tests/preload.ts:41` |
 | `004_void_singles_analysis.md` | VOID — four of six "singles" do not exist on 1.4.0 |
 | `005_wedge_resolution.md` | RESOLVED — the shard-3 wedge was the runtime; no code target |
 | `006_void_inventory_1314.md` | VOID — the first inventory, kept as the record of the mistake |
+| `007_acl_defect_retracted.md` | RETRACTED — the 22-failure "ACL seam" defect was self-inflicted contamination |
 
 ## Acceptance for the unit
 

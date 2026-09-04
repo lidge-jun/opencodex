@@ -102,8 +102,18 @@ function isolateHomes(): void {
  * these tests assert the OS launcher's argument grammar instead of the state
  * transition they exist to check.
  *
- * This THROWS on anything else rather than falling back, so a bypassed or
- * malformed invocation fails the test instead of silently matching.
+ * SCOPE: this extracts the SEMANTIC ARGUMENTS. It deliberately does not check
+ * WHICH executable is being launched — it never sees `file`, and it accepts any
+ * `.cmd`/`.bat` target, so `evil.cmd` parses as readily as `codex.cmd`.
+ * Executable identity belongs to the launcher contract, which is pinned
+ * independently by `tests/codex-v2-gate.test.ts` (`codexFeaturesInvocation`
+ * resolving `codex` on POSIX, `.cmd` and `.exe` on win32) and
+ * `tests/win-exec.test.ts` (PATH×PATHEXT resolution and escaping). Duplicating
+ * that here would couple these state tests to resolution behaviour again, which
+ * is the defect this helper exists to remove.
+ *
+ * Within that scope it THROWS rather than falling back, so a malformed argv or
+ * an unrecognized shape fails the test instead of silently matching.
  */
 function featureActionOf(args: readonly string[]): string {
   const ACTION = /^(?:enable|disable)$/;
@@ -219,7 +229,7 @@ describe("keep-native-v1 restamp path", () => {
 });
 
 describe("ocx v2 keep-native-v1", () => {
-  test("featureActionOf parses both launcher shapes and rejects everything else", () => {
+  test("featureActionOf parses both launcher shapes and rejects malformed argv", () => {
     // The exact strings commandInvocation emits, captured from a real run against
     // three target shapes: plain path, a path containing a space, and a
     // node_modules/.bin shim (double-escaped).
@@ -235,7 +245,9 @@ describe("ocx v2 keep-native-v1", () => {
       String.raw`"C:\p\node_modules\.bin\codex.cmd ^^^"features^^^" ^^^"enable^^^" ^^^"multi_agent_v2^^^""`]))
       .toBe("features enable multi_agent_v2");
 
-    // A bypassed target must not match merely because the phrase is present.
+    // A non-batch target must not match merely because the phrase is present.
+    // (A .cmd target that is not codex DOES parse — see the helper's SCOPE note:
+    //  executable identity is the launcher contract's job, not this helper's.)
     expect(() => featureActionOf(["/d", "/s", "/c",
       String.raw`"echo ^"features^" ^"disable^" ^"multi_agent_v2^""`])).toThrow();
     expect(() => featureActionOf(["features", "disable"])).toThrow();
