@@ -24,6 +24,42 @@ export function isConnectedRuntime(): boolean {
   return runtimeRoleFromDocument() === "client";
 }
 
+/**
+ * May this dashboard ask the user to type an admin token?
+ *
+ * This asks the BIND, not the topology. The server decides whether a typed credential is
+ * required with `isApiAuthRequired` — "is the bind hostname non-loopback" — and now states
+ * that answer in the served document alongside the role.
+ *
+ * The role is the wrong predicate, and it was tried first: `standalone` + `hostname:
+ * "0.0.0.0"` is an operator who deliberately exposed the dashboard and MUST type the admin
+ * token (tests/server-management-auth.test.ts, "a non-loopback binding never issues a GUI
+ * session from a forged loopback Host"), while a `hub` on loopback still mints its own
+ * session. Gating on `role === "hub"` would have hidden the prompt from exactly the
+ * operator who needs it.
+ *
+ * A loopback install mints its own session, so a refusal there is a Host/Origin
+ * misconfiguration rather than a missing credential: prompting asks the user a question they
+ * did not cause and cannot fix by answering (#3353). The published contract already promises
+ * loopback "never asks for a token"
+ * (docs-site/src/content/docs/guides/web-dashboard.md, "Sign-in").
+ *
+ * A missing tag means an older server, a separately hosted GUI, or the Vite dev server; those
+ * fall back to the role so a hub dashboard still works against a server that predates the
+ * tag, and everything else reads as loopback — the safe default this file already uses.
+ */
+export function adminTokenPromptAllowed(): boolean {
+  if (typeof document !== "undefined") {
+    const declared = document
+      .querySelector('meta[name="opencodex-management-auth-required"]')
+      ?.getAttribute("content")
+      ?.trim();
+    if (declared === "1") return true;
+    if (declared === "0") return false;
+  }
+  return runtimeRoleFromDocument() === "hub";
+}
+
 export interface ApiTarget {
   id: ApiPlane;
   baseUrl: string;
