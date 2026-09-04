@@ -798,6 +798,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
    * on the direct-spawn host into a 404 (#3192). The handler still runs its own admission, so a
    * loopback caller without a ChatGPT credential is refused inside it rather than by this gate.
    *
+   * The standalone Images client uses the same base URL for its two POST routes. Their handler
+   * keeps the paid upstream behind its own admission and forward-credential checks, so admit only
+   * the exact methods and paths it serves (#3428).
+   *
    * `GET /v1/models` is on the list for a reason that is easy to miss. When catalog
    * materialization fails or finds no source, `syncCodex` warns and injects with
    * `catalogPath: null`; Codex then builds an ONLINE model manager and `model/list` refreshes
@@ -811,6 +815,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     }
     if (path === "/v1/responses/compact") return req.method === "POST";
     if (path === "/v1/alpha/search") return req.method === "POST";
+    if (path === "/v1/images/generations" || path === "/v1/images/edits") {
+      return req.method === "POST";
+    }
     if (path === "/v1/models") return req.method === "GET";
     // Realtime voice — a directly-spawned `codex app-server` needs these for desktop voice
     // the same way it needs /v1/responses. Two shapes, same trust model as /v1/responses:

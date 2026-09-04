@@ -285,7 +285,6 @@ describe("unauthenticated loopback listener", () => {
         { method: "GET", path: "/readyz" },
         { method: "POST", path: "/v1/chat/completions", body: '{"model":"x","messages":[]}' },
         { method: "POST", path: "/v1/messages", body: '{"model":"x","messages":[]}' },
-        { method: "POST", path: "/v1/images/generations", body: '{"prompt":"x"}' },
         { method: "GET", path: "/v1/opencodex/artifacts/x" },
         // Voice call-create is admitted only as POST; the keyed sideband join only as an upgrade.
         { method: "GET", path: "/v1/live/rtc_x" },
@@ -296,6 +295,8 @@ describe("unauthenticated loopback listener", () => {
         { method: "DELETE", path: "/v1/responses" },
         { method: "POST", path: "/v1/models" },
         { method: "GET", path: "/v1/alpha/search" },
+        { method: "GET", path: "/v1/images/generations" },
+        { method: "GET", path: "/v1/images/edits" },
       ];
       for (const { method, path, body } of denied) {
         const res = await fetch(`${base}${path}`, {
@@ -343,6 +344,40 @@ describe("unauthenticated loopback listener", () => {
       expect(viaPublic.status).toBe(401);
       const publicBody = await viaPublic.json() as { error?: { message?: string } };
       expect(publicBody.error?.message).toBe("opencodex API key required");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("admits the exact standalone Images POST routes so they reach the relay (#3428)", async () => {
+    const loopbackPort = await freePort();
+    saveConfig(baseConfig(loopbackPort));
+    const server = startServer(0);
+    const headers = { "content-type": "application/json" };
+    try {
+      for (const path of ["/v1/images/generations", "/v1/images/edits"]) {
+        const viaLoopback = await fetch(`http://127.0.0.1:${loopbackPort}${path}`, {
+          method: "POST",
+          body: '{"prompt":"x"}',
+          headers,
+        });
+        const loopbackBody = await viaLoopback.json() as { error?: { message?: string } };
+        expect(viaLoopback.status).not.toBe(404);
+        expect([400, 503]).toContain(viaLoopback.status);
+        expect(loopbackBody.error?.message).toBeDefined();
+        expect(loopbackBody.error?.message).not.toBe("opencodex API key required");
+
+        // The public listener remains credential-gated. Only the separately bound loopback
+        // listener gets the narrow route exception.
+        const viaPublic = await fetch(`http://127.0.0.1:${server.port}${path}`, {
+          method: "POST",
+          body: '{"prompt":"x"}',
+          headers,
+        });
+        expect(viaPublic.status).toBe(401);
+        const publicBody = await viaPublic.json() as { error?: { message?: string } };
+        expect(publicBody.error?.message).toBe("opencodex API key required");
+      }
     } finally {
       await server.stop(true);
     }
