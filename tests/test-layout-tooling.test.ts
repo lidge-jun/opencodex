@@ -11,6 +11,7 @@ import {
   currentPath,
   loadLayout,
   resolveTarget,
+  rewriteMetaDirEscapes,
   rewriteSource,
   rewriteSpecifier,
   REWRITE_PREFIXES,
@@ -69,6 +70,31 @@ describe("rewriteSpecifier", () => {
 });
 
 describe("scanEscapes", () => {
+  test("rewriteMetaDirEscapes converts the documented shapes and adds the helper import once", () => {
+    const src = [
+      'import { join } from "node:path";',
+      'import { x } from "../../src/x";',
+      '',
+      'const a = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");',
+      'const b = join(import.meta.dir, "../src/lib/winsw.ts");',
+      'const c = copyFileSync(join(import.meta.dir, "helpers", "child.ts"), out);',
+      'const d = join(import.meta.dir, "..");',
+      'const e = fileURLToPath(new URL("../", import.meta.url));',
+      'const local = join(import.meta.dir, ".tmp-x");',
+    ].join("\n");
+    const { source, rewrites } = rewriteMetaDirEscapes(src, 1);
+    expect(rewrites).toBe(4);
+    expect(source).toContain('import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";');
+    expect(source).toContain('readFileSync(repoPath("src", "cli", "index.ts"), "utf8")');
+    expect(source).toContain('repoPath("src/lib/winsw.ts")');
+    expect(source).toContain('copyFileSync(helperPath("child.ts"), out)');
+    expect(source).toContain("const d = repoRoot();");
+    expect(source).toContain("const e = repoRoot();");
+    expect(source).toContain('join(import.meta.dir, ".tmp-x")');
+    expect(scanEscapes(source)).toEqual([]);
+    expect(rewriteMetaDirEscapes(source, 1).rewrites).toBe(0);
+  });
+
   test("file-local uses pass, escapes fail, the marker suppresses and is reported", () => {
     const local = 'const dir = join(import.meta.dir, ".tmp-x");';
     const escape = 'const src = join(import.meta.dir, "..", "src");';
@@ -191,12 +217,14 @@ describe("move end to end", () => {
       // Dirt outside the write set does not abort.
       writeFileSync(join(root, "src", "thing.ts"), "export const thing = 2;\n");
       const report = runMove({ root, domains: ["server", "providers"], dryRun: false, layoutPath, log: l => logs.push(l) });
-      expect(report.exitCode).toBe(2); // the child-helper join survives as MANUAL
-      expect(report.manual.map(m => m.file)).toEqual(["tests/server/server-a.test.ts"]);
+      expect(report.exitCode).toBe(0);
+      expect(report.manual).toEqual([]);
 
       const serverA = readFileSync(join(root, "tests", "server", "server-a.test.ts"), "utf8");
       expect(serverA).toContain('from "../../src/thing"');
       expect(serverA).toContain('from "../helpers/remove-tree"');
+      expect(serverA).toContain('helperPath("child.ts")');
+      expect(serverA).toContain('from "../helpers/repo-root"');
       const cursorB = readFileSync(join(root, "tests", "providers", "cursor", "cursor-b.test.ts"), "utf8");
       expect(cursorB).toContain('from "../../../src/thing"');
       expect(cursorB).toContain('new URL("../../../package.json", import.meta.url)');

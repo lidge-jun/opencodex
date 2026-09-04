@@ -149,6 +149,43 @@ export function rewriteSource(source: string, depth: number): string {
 
 export const LOCAL_MARKER = "// layout: local";
 
+const REPO_ROOT_IMPORT = 'import { helperPath, repoPath, repoRoot } from "<toTests>/helpers/repo-root";';
+
+/**
+ * Rewrite `import.meta.dir`-anchored escapes into repo-root helper calls:
+ *   join(import.meta.dir, "..")                    -> repoRoot()
+ *   join(import.meta.dir, "..", "src", "x.ts")     -> repoPath("src", "x.ts")
+ *   join(import.meta.dir, "../src/x.ts")           -> repoPath("src/x.ts")
+ *   join(import.meta.dir, "helpers", "c.ts")       -> helperPath("c.ts")
+ *   fileURLToPath(new URL("../", import.meta.url)) -> repoRoot()
+ * Only the shapes above; anything else stays for the escape scanner. Adds the helper import
+ * when a rewrite happened and the file does not already import it.
+ */
+export function rewriteMetaDirEscapes(source: string, depth: number): { source: string; rewrites: number } {
+  let rewrites = 0;
+  let out = source;
+  const count = (next: string) => { if (next !== out) rewrites += 1; out = next; };
+
+  count(out.replace(/\bjoin\(\s*import\.meta\.dir\s*,\s*"\.\."\s*(,\s*)?/g, (_m, comma: string | undefined) => (comma ? "repoPath(" : "repoRoot(")));
+  count(out.replace(/\bjoin\(\s*import\.meta\.dir\s*,\s*"\.\.\/([^"]+)"/g, (_m, rest: string) => `repoPath("${rest}"`));
+  count(out.replace(/\bjoin\(\s*import\.meta\.dir\s*,\s*"helpers"\s*,\s*/g, "helperPath("));
+  count(out.replace(/\bfileURLToPath\(\s*new\s+URL\(\s*"\.\.\/"\s*,\s*import\.meta\.url\s*\)\s*\)/g, "repoRoot()"));
+
+  if (rewrites > 0 && !/helpers\/repo-root"/.test(out)) {
+    const { toTests } = anchors(depth);
+    const line = REPO_ROOT_IMPORT.replace("<toTests>", toTests);
+    const lines = out.split("\n");
+    let last = -1;
+    for (let i = 0; i < lines.length; i += 1) {
+      if (/^import\b/.test(lines[i]!) || (last >= 0 && /^\s*[\w{},*\s]+from\s+["']/.test(lines[i]!))) last = i;
+      else if (last >= 0 && lines[i]!.trim() === "") break;
+    }
+    lines.splice(last + 1, 0, line);
+    out = lines.join("\n");
+  }
+  return { source: out, rewrites };
+}
+
 /**
  * A path built from import.meta.dir that reaches outside the file's own directory:
  *   join(import.meta.dir, "..", ...)        join(import.meta.dir, "../src", ...)

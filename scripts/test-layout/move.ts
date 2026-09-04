@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { LAYOUT_PATH, loadLayout, rewriteSource, scanEscapes, type Layout } from "./schema";
+import { LAYOUT_PATH, loadLayout, rewriteMetaDirEscapes, rewriteSource, scanEscapes, type Layout } from "./schema";
 import { planMoves, repoRootFromHere, type Move } from "./plan";
 
 /**
@@ -128,7 +128,7 @@ export function runMove(options: MoveOptions): MoveReport {
   for (const move of moves) {
     const path = join(root, move.to);
     const before = readFileSync(path, "utf8");
-    const after = rewriteSource(before, move.depth);
+    const after = rewriteMetaDirEscapes(rewriteSource(before, move.depth), move.depth).source;
     if (after !== before) writeFileSync(path, after);
   }
 

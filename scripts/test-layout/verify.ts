@@ -7,8 +7,11 @@ import { listTestFiles, repoRootFromHere } from "./plan";
  * Verify one or more migrated domains:
  *   1. no stale `tests/<basename>` literal for any file in the domain remains anywhere,
  *   2. the escape scanner (same one the mover uses) reports nothing unsuppressed,
- *   3. the domain typechecks under scripts/test-layout/tsconfig.verify.json (via a temp config
- *      that extends it with absolute include paths, since `include` is replaced, not merged),
+ *   3. the domain has no module-resolution errors under scripts/test-layout/tsconfig.verify.json
+ *      (via a temp config that extends it with absolute include paths, since `include` is
+ *      replaced, not merged). Tests are not strict-typechecked by the root tsconfig and carry
+ *      pre-existing type errors, so only the error classes a move can introduce count:
+ *      TS2307 (cannot find module), TS2306 (not a module), TS6053 (file not found), TS5097.
  *   4. `bun test --isolate tests/<domain>` passes.
  */
 
@@ -24,6 +27,7 @@ export interface VerifyReport {
   manual: Array<{ file: string; line: number; text: string }>;
   suppressed: Array<{ file: string; line: number; text: string }>;
   typecheckExit: number;
+  resolutionErrors: string[];
   testExit: number;
   ok: boolean;
 }
@@ -73,13 +77,17 @@ export function runVerify(options: VerifyOptions): VerifyReport {
   ];
   writeFileSync(tmpConfig, JSON.stringify({ extends: join(root, "scripts", "test-layout", "tsconfig.verify.json"), include }, null, 2));
   let typecheckExit: number;
+  let resolutionErrors: string[] = [];
   try {
-    const tsc = Bun.spawnSync(["bun", "x", "tsc", "--noEmit", "-p", tmpConfig], { cwd: root, stdout: "inherit", stderr: "inherit" });
+    const tsc = Bun.spawnSync(["bun", "x", "tsc", "--noEmit", "-p", tmpConfig], { cwd: root, stdout: "pipe", stderr: "pipe" });
     typecheckExit = tsc.exitCode;
+    const output = tsc.stdout.toString() + tsc.stderr.toString();
+    resolutionErrors = output.split("\n").filter(line => /error TS(2307|2306|6053|5097)\b/.test(line));
   } finally {
     rmSync(tmpConfig, { force: true });
   }
-  log(`typecheck exit ${typecheckExit}`);
+  for (const line of resolutionErrors) log(`RESOLVE ${line}`);
+  log(`typecheck exit ${typecheckExit}, ${resolutionErrors.length} module-resolution error(s)`);
 
   let testExit = 0;
   if (!options.skipTests && domains.length > 0) {
@@ -88,8 +96,8 @@ export function runVerify(options: VerifyOptions): VerifyReport {
     log(`bun test exit ${testExit}`);
   }
 
-  const ok = staleLiterals.length === 0 && manual.length === 0 && typecheckExit === 0 && testExit === 0;
-  return { staleLiterals, manual, suppressed, typecheckExit, testExit, ok };
+  const ok = staleLiterals.length === 0 && manual.length === 0 && resolutionErrors.length === 0 && testExit === 0;
+  return { staleLiterals, manual, suppressed, typecheckExit, resolutionErrors, testExit, ok };
 }
 
 if (import.meta.main) {
