@@ -941,6 +941,34 @@ function annotateEmptyResponsesToolOutputs(body: unknown, enabled: boolean): unk
 }
 
 /**
+ * Preserve the text of structurally invalid tool-output items before they reach a strict
+ * Responses parser. Stateful destinations may legitimately receive an output whose matching
+ * call lives behind `previous_response_id`, so ordinary orphan repair cannot run universally.
+ * A missing or empty `call_id`, however, cannot identify stored state on any destination.
+ */
+function repairUnidentifiedToolOutputItems(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let changed = false;
+  const input = body.input.map(item => {
+    if (!isPlainObject(item)
+      || (item.type !== "function_call_output" && item.type !== "custom_tool_call_output")
+      || (typeof item.call_id === "string" && item.call_id.length > 0)) {
+      return item;
+    }
+    changed = true;
+    return {
+      type: "message",
+      role: "user",
+      content: [{
+        type: "input_text",
+        text: `[tool output for unknown call]\n${toolOutputText(item.output)}`,
+      }],
+    };
+  });
+  return changed ? { ...body, input } : body;
+}
+
+/**
  * Repair a forward-mode input array whose continuation context was lost. When the replay
  * expansion misses (proxy restart, unrecorded prior turn), previous_response_id is stripped
  * (the ChatGPT backend rejects it), so the delta may carry items that reference now-absent
@@ -2272,11 +2300,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // Same predicate as the routedCompaction gate in handleResponses(): an authMode check would
       // let a noncanonical custom forward provider skip this rewrite while the server still routes
       // it as a summarizer turn (#422). The compaction body build removes the tool surface and must
-      // therefore be the last routed transform: anything before it may depend on the declarations;
-      // anything after it cannot.
+      // therefore be the last routed transform that may depend on those declarations. Structural
+      // sanitizers below can still run after it.
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
+      // Run after routed compaction so nested input_image parts are replaced before a malformed
+      // tool output is flattened to text and can no longer be inspected structurally.
+      outBody = repairUnidentifiedToolOutputItems(outBody);
       const threadServingIdentityChanged = parsed._stripReasoningEncryptedContent === true;
       const sanitizedBody = normalizeToolSchemas(
         stripSparkCompatibility(

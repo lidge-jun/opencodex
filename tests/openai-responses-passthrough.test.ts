@@ -2245,6 +2245,65 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(rawDeltaBody.input).toHaveLength(1);
   });
 
+  test("api-key mode preserves delegated tool output text when call_id is missing", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key" as const,
+      apiKey: "xai-test",
+    });
+
+    const body = JSON.parse(adapter.buildRequest({
+      ...parsedBase,
+      previousResponseId: undefined,
+      _rawBody: {
+        model: "grok-4.6",
+        input: [
+          {
+            type: "function_call_output",
+            id: "fco_delegation",
+            output: "<codex_delegation>Inspect the adapter.</codex_delegation>",
+          },
+        ],
+      },
+    }, meta).body) as { input: Record<string, unknown>[] };
+
+    expect(body.input).toEqual([{
+      type: "message",
+      role: "user",
+      content: [{
+        type: "input_text",
+        text: "[tool output for unknown call]\n<codex_delegation>Inspect the adapter.</codex_delegation>",
+      }],
+    }]);
+  });
+
+  test("api-key mode keeps stateful tool outputs with call_id intact", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key" as const,
+      apiKey: "xai-test",
+    });
+    const statefulOutput = {
+      type: "function_call_output",
+      call_id: "call_from_previous_response",
+      output: "tool result",
+    };
+
+    const body = JSON.parse(adapter.buildRequest({
+      ...parsedBase,
+      _rawBody: {
+        model: "grok-4.6",
+        previous_response_id: "resp_stateful",
+        input: [statefulOutput],
+      },
+    }, meta).body) as { previous_response_id?: string; input: Record<string, unknown>[] };
+
+    expect(body.previous_response_id).toBe("resp_stateful");
+    expect(body.input).toEqual([statefulOutput]);
+  });
+
   test("forward unexpanded miss converts orphan tool outputs and drops reasoning", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
     const body = JSON.parse(adapter.buildRequest({
