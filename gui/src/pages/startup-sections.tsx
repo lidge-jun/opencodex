@@ -53,23 +53,17 @@ export function StartupHeroSection({
             : data.status === "at-risk"
               ? t(startupRiskDetailKey(data))
               : t("startup.safeDetail")}</p>
+          {/*
+            The three stat cards that used to restate this answer (routing, protection,
+            preference) are one line now; the page subtitle rides underneath as a visible
+            sentence rather than a title attribute.
+          */}
+          <p className="muted startup-state-line">
+            {t(routingKey)} · {t(PROTECTION_KEYS[data.protection])} · {t(data.autostartEnabled ? "startup.enabled" : "startup.disabled")}
+          </p>
+          <p className="muted text-label">{t("startup.subtitle")}</p>
         </div>
       </section>
-
-      <div className="startup-state-grid">
-        <section className="stat">
-          <div className="label">{t("startup.routing")}</div>
-          <div className="value">{t(routingKey)}</div>
-        </section>
-        <section className="stat">
-          <div className="label">{t("startup.restartProtection")}</div>
-          <div className="value">{t(PROTECTION_KEYS[data.protection])}</div>
-        </section>
-        <section className="stat">
-          <div className="label">{t("startup.preference")}</div>
-          <div className="value">{t(data.autostartEnabled ? "startup.enabled" : "startup.disabled")}</div>
-        </section>
-      </div>
     </>
   );
 }
@@ -239,7 +233,12 @@ export function StartupRecoverySection({
         <h3 className="panel-title">{t("startup.recovery")}</h3>
         <IconTerminal />
       </div>
-      <p className="muted">{t("startup.recoveryHint")}</p>
+      {/*
+        The one-click install/repair buttons above are the primary path; the copyable
+        commands are the fallback. Open by default only while protection is missing.
+      */}
+      <details className="startup-recovery-details" open={data.status !== "protected"}>
+        <summary className="muted">{t("startup.recoveryHint")}</summary>
       <div className="startup-command-list">
         {data.serviceSupported && (
           <div className="startup-command-row">
@@ -276,6 +275,7 @@ export function StartupRecoverySection({
           <IconPower /> {t("startup.recommended", { cmd: data.recommendedCommand ?? data.commands.installService })}
         </div>
       )}
+      </details>
     </section>
   );
 }

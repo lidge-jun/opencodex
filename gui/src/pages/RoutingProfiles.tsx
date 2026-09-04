@@ -1012,6 +1012,8 @@ export default function RoutingProfiles({
         </form>
       ) : null}
 
+      {/* A dry-run form is dead weight until an existing profile is selected to evaluate. */}
+      {selected && (
       <div className="panel" style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
         <h3>{t("routing.dryRun")}</h3>
         <label className="field-label" htmlFor="routing-context">
@@ -1094,6 +1096,8 @@ export default function RoutingProfiles({
         ) : null}
       </div>
 
+      )}
+      {profiles.length > 0 && (
       <div className="panel" style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
         <h3>{t("routing.analytics")}</h3>
         {analytics ? (
@@ -1134,6 +1138,7 @@ export default function RoutingProfiles({
           <p className="muted">{t("routing.analyticsEmpty")}</p>
         )}
       </div>
+      )}
     </div>
   );
 }

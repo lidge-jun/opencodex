@@ -222,3 +222,27 @@ neighbouring brand's, is a misattribution that outlives the commit.
 
 `zhipu-bigmodel` and `zhipu-bigmodel-coding` share `zai.svg`: Z.AI and BigModel
 are the same company, and the mainland console publishes only the wordmark.
+
+## Meta (2026-09-03)
+
+- `meta.svg` — the `aria-label="Meta symbol"` inline SVG that `dev.meta.ai`
+  renders in its own navigation header, read 2026-09-03 through a signed-in
+  browser session. Meta publishes no square vector at the conventional paths:
+  `dev.meta.ai/favicon.svg`, `/icon.svg` and `/logo.svg` all 404, and the
+  site's declared icon is a 32x32 `.ico` on `static.xx.fbcdn.net`. The rendered
+  header mark is therefore the first-party vector, taken from the developer
+  console the two providers actually belong to.
+
+  Path data and gradient stops are verbatim. Three normalizations: React's
+  generated gradient ids (`_r_d_`, `_r_e_`, `_r_f_`) become
+  `meta-mark-a/-b/-c`, because a generated id collides when several marks are
+  inlined into one document — the same reason `minimax.svg` renamed its
+  `未命名的渐变_6`; the presentational `height`/`width`/`role`/`aria-label`
+  are dropped in favour of the `viewBox`; and `xmlns` is added so the file
+  stands alone.
+
+  Wired to both `meta-model` (the direct Meta Model API provider) and
+  `meta-muse` (the Muse Code credential import). One brand, two credentials —
+  the same shape as the three Alibaba ids sharing `alibaba-color.svg`.
+  **Not masked:** three linear gradients in Meta brand blue
+  (#0064E0 -> #0278F1), and masking flattens a gradient to a single ink.

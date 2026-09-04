@@ -7,6 +7,10 @@ export interface AddCodexAccountUiState {
   id: string;
   error: string;
   authUrl: string;
+  /** Short human code for a device login; empty for the browser callback flow. */
+  deviceCode: string;
+  /** Provider-supplied prose that accompanies the code. */
+  instructions: string;
   manualCode: string;
   manualCodeState: ManualCodeState;
   statusNotice: string;
@@ -19,6 +23,8 @@ export const initialAddCodexAccountUiState = (reauthAccountId?: string): AddCode
   id: "",
   error: "",
   authUrl: "",
+  deviceCode: "",
+  instructions: "",
   manualCode: "",
   manualCodeState: "idle",
   statusNotice: "",
@@ -31,6 +37,7 @@ export type AddCodexAccountUiAction =
   | { type: "set-id"; id: string }
   | { type: "set-error"; error: string }
   | { type: "set-auth-url"; authUrl: string }
+  | { type: "set-login-hint"; authUrl: string; deviceCode?: string; instructions?: string }
   | { type: "set-manual-code"; manualCode: string }
   | { type: "set-manual-code-state"; manualCodeState: ManualCodeState }
   | { type: "set-status-notice"; statusNotice: string; statusTone?: StatusTone }
@@ -49,6 +56,13 @@ export function addCodexAccountUiReducer(state: AddCodexAccountUiState, action: 
       return { ...state, error: action.error };
     case "set-auth-url":
       return { ...state, authUrl: action.authUrl };
+    case "set-login-hint":
+      return {
+        ...state,
+        authUrl: action.authUrl,
+        deviceCode: action.deviceCode ?? "",
+        instructions: action.instructions ?? "",
+      };
     case "set-manual-code":
       return { ...state, manualCode: action.manualCode };
     case "set-manual-code-state":

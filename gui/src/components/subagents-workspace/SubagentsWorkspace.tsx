@@ -23,6 +23,7 @@ import {
 } from "../../icons";
 import { useT } from "../../i18n/shared";
 import { Trans } from "../../i18n/provider";
+import { Tooltip } from "../../ui";
 import { modelLabel } from "../../model-display";
 import { SectionTabs } from "../section-tabs";
 import { sectionAnchorId } from "../../section-anchors";
@@ -93,11 +94,13 @@ export default function SubagentsWorkspace({
           <div className="swi-featured-head">
             <h2 className="swi-featured-title">{t("sub.featured")}</h2>
             <span className="swi-featured-count">{chosen.length}/{FEATURED_MAX}</span>
+            {/* One-time teaching ("this order is the picker order") rides on a focusable
+                info button beside the counter instead of a paragraph above the list. */}
+            <Tooltip content={<Trans k="sub.orderHint" cmd="spawn_agent" />} side="bottom" maxWidth={380}>
+              <IconInfo width={14} height={14} aria-hidden="true" />
+              <span className="sr-only">{t("sub.orderHintAria")}</span>
+            </Tooltip>
           </div>
-          <p className="swi-featured-hint">
-            <IconInfo width={15} height={15} aria-hidden="true" />
-            <span><Trans k="sub.orderHint" cmd="spawn_agent" /></span>
-          </p>
 
           {chosen.length === 0 ? (
             <div className="swi-featured-empty">{t("sub.noneSelected")}</div>

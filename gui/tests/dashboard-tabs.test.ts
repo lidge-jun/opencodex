@@ -62,7 +62,12 @@ test("Dashboard uses the shared page-tabs strip with a tablist", async () => {
 
   // Short tab strips wrap instead of creating a horizontal scrollbar (Q7).
   const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
-  const strip = css.slice(css.indexOf(".page-tabs {"), css.indexOf("}", css.indexOf(".page-tabs {")));
+  // Anchor on the base rule at the start of a line. A descendant rule such as
+  // `.main-inner--combos > .page-tabs {` also contains the substring ".page-tabs {" and sits
+  // earlier in the file, so a bare indexOf reads the wrong block and reports the base rule as
+  // missing properties it still has.
+  const base = css.indexOf("\n.page-tabs {") + 1;
+  const strip = css.slice(base, css.indexOf("}", base));
   expect(strip).toContain("flex-wrap: wrap");
   expect(strip).toContain("overflow: visible");
 });

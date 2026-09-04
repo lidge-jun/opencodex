@@ -15,7 +15,7 @@ import Debug from "./Debug";
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
-import { modelTitle } from "./logs-model-title";
+import { modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
 import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
@@ -152,6 +152,9 @@ export interface LogEntry {
   configuredServiceTier?: string;
   configuredSpeedLabel?: string;
   responseServiceTier?: string;
+  // #2455: qualifies responseServiceTier in the model tooltip — the echoed tier alone
+  // cannot say whether Fast was granted on a backend whose echo is not authoritative.
+  tierOutcome?: ModelTitleTierOutcome;
   resolvedModel?: string;
   modelSupportsServiceTier?: boolean;
   status: number;
@@ -593,7 +596,6 @@ export default function Logs({ apiBase }: { apiBase: string }) {
         aria-labelledby="logs-tab-logs"
         hidden={tab !== "logs"}
       >
-      <p className="page-sub">{t("logs.subtitle")}</p>
 
       <div className="logs-toolbar">
         <span className="muted text-control">{t("logs.filter.surface.label")}</span>
@@ -818,12 +820,10 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                     </span>
                   </td>
-                  <td className="mono log-reasoning-cell" title={reasoningWire}>
-                    <span className="logs-stack-start">
-                      <span>{effortLabel(log)}</span>
-                      {reasoningWire && <span className="muted text-caption leading-tight">{reasoningWire}</span>}
-                    </span>
-                  </td>
+                  {/* The wire field (reasoning_effort=high) stays in the title and the detail
+                      dialog; as a second line it repeated the label and, in mono, outgrew the
+                      9% column and painted over the provider cell. */}
+                  <td className="mono log-reasoning-cell" title={reasoningWire}>{effortLabel(log)}</td>
                   <td className="muted">{formatProviderDisplayName(log.provider, t)}</td>
                   <td>
                     <span className="log-status-cell">

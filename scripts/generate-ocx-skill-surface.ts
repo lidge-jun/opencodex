@@ -3,7 +3,7 @@
  *
  * Generated rather than written, because a hand-maintained surface map is a SECOND description
  * of the CLI that is free to drift from the first -- the same defect class this unit removed from
- * the help text. `tests/skill-ocx.test.ts` asserts the committed file matches this output, so a
+ * the help text. `tests/ci-workflows/skill-ocx.test.ts` asserts the committed file matches this output, so a
  * capability added without regenerating fails CI instead of silently shipping a stale skill.
  *
  * Usage:

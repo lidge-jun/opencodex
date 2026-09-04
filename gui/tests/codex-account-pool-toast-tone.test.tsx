@@ -125,6 +125,15 @@ async function mountPool(controller: CodexAccountPoolController) {
 }
 
 async function chooseOrder(selectId: string, value: string): Promise<void> {
+  // A default-priority account renders its order select only once its ⋯ disclosure is
+  // open (050): the control is on demand, not wallpaper on every card.
+  const accountId = selectId.replace(/^codex-account-priority-/, "");
+  const more = [...host.querySelectorAll<HTMLDetailsElement>("details.codex-account-more")]
+    .find(d => d.querySelector("summary")?.getAttribute("aria-label")?.includes("—") && d.closest(".card")?.textContent?.includes(accountId.replace("pool-", "")));
+  if (more && !host.querySelector(`#${selectId}`)) {
+    await act(async () => { more.querySelector("summary")!.click(); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  }
   const trigger = host.querySelector(`#${selectId}`) as HTMLButtonElement | null;
   expect(trigger).toBeTruthy();
   await act(async () => { trigger!.click(); });
@@ -260,4 +269,63 @@ test("successful redeem clears a stale error toast tone", async () => {
 
   expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
   expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")).toBeTruthy();
+});
+
+/*
+ * devlog/_plan/260904_dashboard_minimal/050_codex_set.md: a pool card shows only its daily
+ * actions inline; alias, account id + copy, and remove sit behind a labelled ⋯ disclosure,
+ * and the order select renders on demand (inside the disclosure) unless the account already
+ * carries a non-default order.
+ */
+test("a pool card folds alias/id/remove behind a ⋯ disclosure and shows the order select on demand", async () => {
+  const removed: string[] = [];
+  await mountPool(makeController({
+    removeAccount: async (id) => { removed.push(id); return { ok: true }; },
+  }));
+  const card = [...host.querySelectorAll<HTMLElement>(".card")].find(c => c.textContent?.includes("pool@example.test"))!;
+  expect(card).toBeDefined();
+  const more = card.querySelector<HTMLDetailsElement>("details.codex-account-more")!;
+  expect(more).not.toBeNull();
+  expect(more.open).toBe(false);
+  // Closed: the alias/id/remove controls live INSIDE the (closed) details — a native details
+  // keeps its body in the DOM but not in the accessibility tree or the tab order — and the
+  // order select is not rendered at all until the disclosure opens.
+  const inline = [...card.querySelectorAll<HTMLButtonElement>("button")].filter(b => !b.closest("details"));
+  expect(inline.map(b => b.textContent?.trim())).not.toContain("Edit alias");
+  expect(card.querySelector("#codex-account-priority-pool-1")).toBeNull();
+  expect(more.querySelector(".codex-account-more-body")!.textContent).toContain("ID:");
+  const summary = more.querySelector("summary")!;
+  expect(summary.getAttribute("aria-label")).toContain("Show more actions");
+
+  await act(async () => { summary.click(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  expect(more.open).toBe(true);
+  expect([...more.querySelectorAll("button")].map(b => b.textContent?.trim())).toContain("Edit alias");
+  expect(card.querySelector("#codex-account-priority-pool-1")).not.toBeNull();
+  const copy = [...card.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === "Copy account ID")!;
+  expect(copy).toBeDefined();
+  // Clicking writes the FULL id (the visible text is masked) and flips only this card's label.
+  const written: string[] = [];
+  Object.defineProperty(win.navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { written.push(text); } } });
+  await act(async () => { copy.click(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  expect(written).toEqual(["pool-1"]);
+  expect(copy.textContent?.trim()).toBe("Copied");
+  const remove = card.querySelector<HTMLButtonElement>('button[aria-label^="Remove"]')!;
+  expect(remove).not.toBeNull();
+  await act(async () => { remove.click(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  expect(removed).toEqual(["pool-1"]);
+});
+
+test("a pool card with a non-default order keeps its order select inline", async () => {
+  await mountPool(makeController({
+    accounts: [
+      { id: "main", email: "main@example.test", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null },
+      { ...account, priority: 2 },
+    ],
+  }));
+  const card = [...host.querySelectorAll<HTMLElement>(".card")].find(c => c.textContent?.includes("pool@example.test"))!;
+  expect(card.querySelector<HTMLDetailsElement>("details.codex-account-more")!.open).toBe(false);
+  expect(card.querySelector("#codex-account-priority-pool-1")).not.toBeNull();
 });

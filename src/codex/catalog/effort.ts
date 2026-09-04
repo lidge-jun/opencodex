@@ -35,7 +35,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { generatedModelMetadata, readCatalog, readCodexCatalogPath } from "./parsing";
 import type { CatalogModel, RawEntry } from "./parsing";
 import { UPSTREAM_NATIVE_ENTRIES } from "./metadata";
-import { nativeOpenAiCapabilitySourceSlug } from "./native-models";
+import { nativeOpenAiCapabilitySourceSlug, SELF_DESCRIBED_NATIVE_OPENAI_MODELS } from "./native-models";
 import { loadBundledCodexCatalog } from "./bundled";
 import type { BundledCatalogDeps, ReadonlyRawCatalog } from "./bundled";
 import { deriveEntry } from "./sync";
@@ -158,11 +158,14 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
     entry.supports_reasoning_summaries = model.supportsReasoningSummaries;
   }
   if (model.supportsServiceTier === true) {
+    const nativeFast = model.codexForwardNativeCapabilityAlias && Array.isArray(entry.service_tiers)
+      ? entry.service_tiers.find(tier => tier?.id === "priority")
+      : undefined;
     entry.default_service_tier = null;
     entry.service_tiers = [{
       id: "priority",
       name: "Fast",
-      description: model.fastTierDescription ?? "1.5x speed, increased usage",
+      description: model.fastTierDescription ?? nativeFast?.description ?? "1.5x speed, increased usage",
     }];
     entry.additional_speed_tiers = ["fast"];
   }
@@ -258,8 +261,21 @@ export function applyReasoningLevels(
     : efforts.find(effort => effort !== "none" && effort !== "minimal") ?? efforts[0];
 }
 
+/**
+ * Native slugs entitled to the full GPT-5.6-era ladder (low..ultra, with max restored).
+ *
+ * The name is historical: membership is about the LADDER, not the model generation. `gpt-6-astra`
+ * qualifies because upstream ships it with the same six rungs
+ * (`supported_reasoning_levels` low/medium/high/xhigh/max/ultra, #42607). It used to qualify only
+ * as a side effect of borrowing Sol's capability source; once it became self-described that
+ * accident disappeared, and the sync path's else-branch
+ * (`applyReasoningLevels(entry, ["low","medium","high","xhigh"])`) would have truncated the
+ * shipped ladder, silently dropping `max` and `ultra`.
+ */
 export function isGpt56NativeSlug(slug: string): boolean {
-  return !slug.includes("/") && nativeOpenAiCapabilitySourceSlug(slug).startsWith("gpt-5.6-");
+  if (slug.includes("/")) return false;
+  if (SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(slug)) return true;
+  return nativeOpenAiCapabilitySourceSlug(slug).startsWith("gpt-5.6-");
 }
 
 export function ensureGpt56ReasoningLevels(entry: RawEntry): void {

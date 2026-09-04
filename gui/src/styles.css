@@ -254,6 +254,19 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   -webkit-backdrop-filter: var(--glass-blur);
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 6px 8px 14px; }
+/* The brand is a <button> (go home), and this stylesheet has no global button reset —
+   every control resets itself locally, the way .nav-item does. Without this the UA
+   defaults land: a grey buttonface plate, a 2px border that breaks the measured 320px
+   topbar row budget, a non-inheriting font, buttontext instead of --text on .name,
+   center text-align that shows up once .name ellipsizes, and -webkit-appearance:button
+   overriding the first two in WebKit. Layout stays with .brand; this rule only undoes
+   what the element type added. */
+.brand-home {
+  appearance: none; -webkit-appearance: none;
+  background: none; border: none;
+  font: inherit; color: inherit; text-align: left;
+  cursor: pointer;
+}
 /* logo is a white-on-transparent silhouette → recolor via mask with the theme text color so it
    stays visible in BOTH light and dark (a plain <img> was invisible white-on-white in light). */
 .brand-logo { width: 26px; height: 26px; flex-shrink: 0; background: var(--text);
@@ -449,6 +462,46 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   padding-inline: 36px;
 }
 .main-inner.main-inner--combos > .page-sub { margin-bottom: 10px; }
+
+/* Keep the Models tab strip border aligned with its tab buttons in the full-bleed layout. */
+.main-inner.main-inner--combos > .page-tabs {
+  margin-inline: 36px;
+  padding-inline: 0;
+}
+
+/*
+  Full-bleed is for the combos WORKSPACE grid only. Its loading and error fallbacks render
+  no `.combos-workspace-shell` (Combos.tsx returns a bare skeleton or an error notice), yet
+  `main-inner--combos` is applied on tab selection alone — so with no workspace to fill, the
+  lone subtitle/notice/retry stretched edge to edge (padding:0, max-width:none, flex column)
+  while every sibling Models tab stayed boxed. That is the "콤보만 영역이 이상해짐" report.
+
+  When no workspace shell is present, drop the full-bleed and box the page like the other
+  tabs: reset the container, its chrome inset, and the fill panel back to normal flow.
+*/
+/*
+  Each rule below is a SINGLE selector on purpose. Vite's Rolldown CSS minifier corrupts a
+  comma-separated selector list whose selectors carry `:not(:has(...))` — it emits a stray
+  `)` before the block and the browser then drops the whole rule. A single `:not(:has())`
+  selector minifies correctly, so the chrome inset is handled without a list: the container
+  drops its own horizontal padding and the page chrome keeps the 36px inline padding it
+  already gets above (`.main-inner--combos > .page-head` etc.), which the panel matches.
+*/
+.main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 32px 0 64px;
+  min-height: 0;
+  height: auto;
+  overflow: visible;
+  display: block;
+}
+.main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .models-tab-panel--fill:not([hidden]) {
+  flex: 0 1 auto;
+  height: auto;
+  display: block;
+  padding-inline: 36px;
+}
 
 /* ---- page header ---- */
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
@@ -1251,7 +1304,17 @@ select.input { appearance: none; }
 .empty svg { width: 30px; height: 30px; color: var(--faint); margin-bottom: 12px; }
 .empty .title { color: var(--text); font-weight: var(--weight-semibold); margin-bottom: 6px; }
 
-.notice { font-size: var(--text-control); line-height: var(--leading-body); padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; max-width: var(--prose-measure); }
+/*
+ `:not([hidden])`, not a bare `display: flex` — same cascade trap the combos panels hit.
+
+ The admin-token dialog mounts its error notice up front and hides it with the `hidden`
+ attribute until a token is actually rejected. `[hidden] { display: none }` is a
+ USER-AGENT rule, so an author `display: flex` here beat it and painted an empty red
+ bordered box the moment the dialog opened (#3483). Specificity never got a vote; origin
+ decided it. Scoping the display to `:not([hidden])` lets the UA rule win again.
+*/
+.notice:not([hidden]) { display: flex; }
+.notice { font-size: var(--text-control); line-height: var(--leading-body); padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 14px; align-items: center; gap: 8px; max-width: var(--prose-measure); }
 .notice svg { width: 15px; height: 15px; flex-shrink: 0; }
 
 /* Portaled status toast — out of document flow so Providers (etc.) do not reflow. */
@@ -1565,6 +1628,13 @@ dialog.modal-overlay::backdrop {
 .codex-request-user-input-controls > .toggle { margin-left: auto; }
 .codex-request-user-input-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
 .codex-request-user-input-feedback.is-error { color: var(--red); }
+/* Ultra Fast opt-in: same card-row idiom as the picker and request-user-input switches. */
+.codex-ultrafast-card { gap: 16px; flex-wrap: wrap; }
+.codex-ultrafast-copy { flex: 1 1 auto; min-width: 0; }
+.codex-ultrafast-copy .card-sub { padding: 2px 0 0; }
+.codex-ultrafast-controls { display: flex; align-items: flex-end; gap: 12px; flex: 0 0 auto; margin-left: auto; }
+.codex-ultrafast-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
+.codex-ultrafast-feedback.is-error { color: var(--red); }
 .codex-account-picker-card { gap: 16px; flex-wrap: wrap; margin-top: 16px; }
 .codex-auth-advanced { margin-top: 8px; }
 .codex-auth-advanced__toggle {
@@ -1723,13 +1793,26 @@ dialog.modal-overlay::backdrop {
   z-index: 1;
 }
 
-.codex-auth-page-head { align-items: flex-start; }
+/* The action cluster is four nowrap items on one line — feedback, the Spark switch,
+   and two labelled buttons. Narrow the window and that line wants ~577px inside a
+   437px column, and because `.page-head` is a plain nowrap flex row the surplus did
+   not wrap or scroll: the trailing "Refresh quotas" button rendered ~140px past its
+   own container and was sliced by the viewport edge. Both axes wrap now — the
+   cluster drops below the title first, then breaks internally if it still does not
+   fit — so every control stays reachable at any width. Wrapping is inert while the
+   line fits, so the wide layout is byte-identical. */
+.codex-auth-page-head { align-items: flex-start; flex-wrap: wrap; row-gap: 8px; }
 .codex-auth-page-head__actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
   min-width: 0;
 }
+/* Once the cluster owns its own line the title no longer competes for width, so it
+   takes the full row rather than wrapping "Codex Auth" onto two lines. */
+.codex-auth-page-head > .page-title { flex: 1 1 auto; }
 /* Spark visibility switch: a labelled toggle, not a bare knob. An unlabelled switch sitting
    between two labelled buttons is a guessing game, and this one changes what every card in the
    page renders. The label carries the meaning; the toggle carries the state. */
@@ -1742,6 +1825,17 @@ dialog.modal-overlay::backdrop {
 .codex-auth-spark-toggle__label {
   font-size: 12px;
   color: var(--muted);
+}
+/* The pause/refresh pair after it moved out of the page head. Right-aligned so it still
+   reads as chrome for the account list below rather than a heading of its own, and it
+   wraps because both labels grow substantially in several locales. */
+.codex-auth-actions-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 /* Account actions (pause / copy doctor / pause-exhausted): clearer hover than plain
    btn-ghost on card surface — same raised-hover + faint border as icon/list cues. */
@@ -1866,12 +1960,13 @@ dialog.modal-overlay::backdrop {
   background: light-dark(#fffbeb, color-mix(in oklab, var(--amber) 20%, var(--surface)));
   color: light-dark(#92400e, #fef3c7);
   border: 1px solid color-mix(in srgb, var(--amber) 32%, transparent);
-  display: flex;
   align-items: center;
   gap: 6px;
   margin-bottom: 12px;
   max-width: var(--prose-measure);
 }
+/* Same UA-vs-author `[hidden]` rule as `.notice` above: `.notice-warn` is used on its own. */
+.notice-warn:not([hidden]) { display: flex; }
 .notice-warn svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--amber); }
 
 .startup-runtime-notice__text,
@@ -1885,13 +1980,18 @@ dialog.modal-overlay::backdrop {
 .codex-pool-strategy-card .card-sub { padding: 0; }
 /* Inline selection-order row on an account card: label and trigger share one line, and the
    trigger is scaled down to the card's hint text so it reads as part of the card, not a form. */
+/* Per-account ⋯: a labelled disclosure in the action row (no menu role). Its body sits on its
+   own line under the actions so the revealed controls keep DOM tab order. */
+.codex-account-more { display: inline-flex; flex-wrap: wrap; align-items: center; }
+.codex-account-more > summary { list-style: none; cursor: pointer; min-width: 28px; justify-content: center; }
+.codex-account-more > summary::-webkit-details-marker { display: none; }
+.codex-account-more-body { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; padding-top: 6px; }
 .codex-account-identity { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px 6px; min-width: 0; }
 .codex-account-identity-copy { font-size: var(--text-label); line-height: var(--leading-body); color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
 .codex-account-priority { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0; min-width: 0; flex: 0 0 auto; }
 .codex-account-priority-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
 .codex-account-priority .select-trigger { max-width: 100%; padding: 4px 9px; font-size: var(--text-label); }
 
-.startup-page-sub { margin-bottom: 0; }
 .startup-page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .startup-runtime-notice-slot {
   margin-bottom: 12px;
@@ -1909,8 +2009,10 @@ dialog.modal-overlay::backdrop {
   box-sizing: border-box;
 }
 /* Message above, command+copy below. */
-.notice.notice-warn.startup-runtime-notice {
+.notice.notice-warn.startup-runtime-notice:not([hidden]) {
   display: flex;
+}
+.notice.notice-warn.startup-runtime-notice {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
@@ -1943,8 +2045,12 @@ dialog.modal-overlay::backdrop {
 .startup-hero-icon svg { width: 21px; height: 21px; }
 .startup-hero-copy h3 { margin: 10px 0 4px; font-size: var(--text-title); }
 .startup-hero-copy p { margin: 0; color: var(--muted); line-height: var(--leading-body); max-width: var(--prose-measure); }
-.startup-state-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
-.startup-state-grid .value { font-size: var(--text-subtitle); }
+.startup-state-line { margin: 8px 0 0; font-size: var(--text-control); }
+.startup-recovery-details > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+.startup-recovery-details > summary::-webkit-details-marker { display: none; }
+.startup-recovery-details > summary::before { content: ""; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform var(--motion-fast); }
+.startup-recovery-details[open] > summary::before { transform: rotate(90deg); }
+.startup-recovery-details[open] > summary { margin-bottom: 8px; }
 .startup-details, .startup-actions { margin-bottom: 16px; }
 .startup-actions .panel-head > svg { width: 18px; height: 18px; flex: 0 0 auto; }
 .startup-detail-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--border-soft); }
@@ -1962,7 +2068,6 @@ dialog.modal-overlay::backdrop {
 .startup-command-row code { color: var(--muted); font-size: var(--text-label); overflow-wrap: anywhere; }
 .startup-action-notice { margin: 14px 0 0; }
 @media (max-width: 700px) {
-  .startup-state-grid { grid-template-columns: 1fr; }
   .startup-command-row { align-items: flex-start; }
   .startup-detail-row { align-items: flex-start; }
   .startup-detail-row > .startup-detail-actions { flex-direction: column; align-items: flex-end; }
@@ -2006,12 +2111,22 @@ table.logs-table {
 .logs-table col.logs-col-duration { width: 8%; }
 .log-col-rate { min-width: 7ch; white-space: nowrap; }
 .log-col-cost { min-width: 10ch; white-space: nowrap; }
+/* table-layout: fixed sizes the columns but does not clip them: a cell whose content is wider
+   than its <col> paints straight over the neighbour (seen as "US$0.1401claude-fable-5-1" and a
+   "reasoning_effort=high" caption sitting under the provider name). Clip at the cell so an
+   overlong value truncates inside its own column instead. */
+.logs-table tbody td { overflow: hidden; }
+.log-reasoning-cell { overflow-wrap: anywhere; }
 .log-status-cell { display: inline-flex; flex-direction: column; align-items: flex-start; gap: var(--space-0-5); min-width: 7ch; line-height: var(--leading-tight); }
 .log-detail-btn {
   background: none; border: none; padding: 0; cursor: pointer;
   color: var(--accent-hover); font: inherit; font-size: var(--text-caption); text-decoration: underline;
-  white-space: nowrap;
+  /* Wraps rather than clips: with the cell now clipping overflow, a nowrap label such as
+     zh-TW's 檢視詳細資料 would lose its tail in the 8% status column. */
+  white-space: normal;
+  text-align: left;
 }
+.log-detail-btn:focus-visible { outline-offset: -2px; }
 
 /* Logs page layout rhythm — keep spacing in CSS so virtualized rows don't flood inline px. */
 .logs-auto-refresh {
@@ -2325,6 +2440,28 @@ button.prov-account-row.active { cursor: default; }
   .main-inner.main-inner--combos > .page-head,
   .main-inner.main-inner--combos > .page-tabs,
   .main-inner.main-inner--combos > .page-sub { padding-inline: 18px; }
+  .main-inner.main-inner--combos > .page-tabs {
+    margin-inline: 18px;
+    padding-inline: 0;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .models-tab-panel--fill:not([hidden]) {
+    padding-inline: 0;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) {
+    padding: 22px 18px 48px;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .page-head {
+    padding-inline: 0;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .page-tabs {
+    padding-inline: 0;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .page-sub {
+    padding-inline: 0;
+  }
+  .main-inner.main-inner--combos:not(:has(.combos-workspace-shell)) > .page-tabs {
+    margin-inline: 0;
+  }
   /* settings rows: copy takes the full width, controls drop underneath */
   .setting-row { flex-wrap: wrap; }
   .setting-row .setting-copy { flex: 1 1 100% !important; }

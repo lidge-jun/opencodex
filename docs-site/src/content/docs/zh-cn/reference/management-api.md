@@ -221,7 +221,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/failover` | 设置账户故障转移阈值 | 400 阈值无效 |
 | `GET /api/codex-auth/quota` | 按账户读取缓存的配额状态 | — |
 | `GET /api/codex-auth/reset-credits` | 检查某个账户是否具备 reset-credit 资格 | 400 缺少账户 id；上游状态透传；500 查询失败 |
-| `POST /api/codex-auth/reset-credits/consume` | 消耗一个符合条件的 reset credit | 400 缺少账户 id；上游状态透传；503 `server_busy`；500 消耗失败 |
+| `POST /api/codex-auth/reset-credits/consume` | 消耗一个符合条件的 reset credit。可选的 `operationId`（UUIDv4）让兑换具备幂等性：相同 id 会重放同一条持久化结果，而不会再消耗一个 credit。 | 400 缺少账户 id 或无效的 `operationId`；若该 id 属于其他账户则 409 `identity_mismatch`；上游状态透传；503 `server_busy`、`capacity` 或 `unavailable`；500 消耗失败 |
 | `POST /api/codex-auth/login` | 启动 Codex 登录或重新认证 | 400 请求无效；登录状态冲突/忙碌 |
 | `POST /api/codex-auth/login/code` | 为 Codex 登录流程提交手动代码 | 400 流程/代码无效 |
 | `POST /api/codex-auth/login/cancel` | 取消一个 Codex 登录流程 | — |

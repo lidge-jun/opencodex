@@ -1050,6 +1050,12 @@ const configSchema = z.object({
   defaultModelAliases: z.boolean().optional(),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
   cursorEffortRows: z.boolean().optional().catch(false),
+  // Same opt-in discipline: a malformed hand edit degrades to off rather than rejecting
+  // every provider.
+  fastRows: z.boolean().optional().catch(false),
+  // Ultra Fast is opt-in for the same reason and degrades the same way: a malformed hand
+  // edit turns the tier off rather than rejecting the config that carries it.
+  ultraFastTier: z.boolean().optional().catch(false),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
   // Only version 1 grants deletion authority in the rebase path.
   configRebaseProvenance: z.unknown().optional(),
@@ -3110,6 +3116,14 @@ function failClosedClientPersistenceError(
 
 export function websocketsEnabled(config: Pick<OcxConfig, "websockets">): boolean {
   return config.websockets === true;
+}
+
+/**
+ * Opt-in Ultra Fast, read with the house `=== true` idiom so an absent key and a
+ * malformed one both mean off.
+ */
+export function ultraFastTierEnabled(config: Pick<OcxConfig, "ultraFastTier">): boolean {
+  return config.ultraFastTier === true;
 }
 
 // ---------------------------------------------------------------------------

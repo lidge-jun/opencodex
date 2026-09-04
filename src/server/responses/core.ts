@@ -122,6 +122,7 @@ import {
   getAnthropicPoolAccessToken,
   getAnthropicPoolRetryAfterSeconds,
   isAnthropicAccountPoolEnabled,
+  hasAnthropicFailoverQuorum,
   promoteAnthropicActiveAccount,
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
@@ -219,6 +220,9 @@ import {
   waitForProviderRequestSlot,
 } from "../../providers/request-pacing";
 import { slugsEquivalent } from "../../providers/slug-codec";
+import { isMuseSubscriptionUsagePayload, parseMuseSubscriptionUsage } from "../../providers/muse-subscription-usage";
+import { hasPassiveAccountQuota, recordPassiveAccountQuota } from "../../providers/quota";
+import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -238,6 +242,7 @@ import {
 } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
+import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import type { WsData } from "../ws-bridge";
 import {
   codexAccountSelectionForTurn,
@@ -284,6 +289,7 @@ import {
   conversationIdFromResponsesRequest,
   normalizeLogConversationId,
   reasoningReplayConversationIdFromResponsesRequest,
+  sessionLaneIdFromRequest,
   sessionIdHeaderFromRequest,
 } from "../request-log-conversation";
 import type { AttemptRecoveryKind } from "../../usage/log";
@@ -329,6 +335,7 @@ import {
 } from "../responses-image-gen-repair";
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
 import { parseRequestEffortRowId } from "../effort-row";
+import { parseSyntheticRowId } from "../fast-row";
 import {
   collectSelfNamedNamespaceScrubAuthorization,
   createSelfNamedToolCallNamespaceScrubRewrite,
@@ -2056,6 +2063,7 @@ async function applyFinalRouteRequestNormalization(args: {
 
   // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
   // this request will actually use (#404).
+  route.provider = resolveOpenCodeGoTransport(route.provider, sessionLaneIdFromRequest(req.headers));
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = route.modelId;
@@ -2722,10 +2730,22 @@ async function handleResponsesInner(
   }
   // An effort row naming a table-less combo (`combo/x--high`) must reach the combo dispatcher
   // as its base id, so the selector is normalized here, before comboIdFromRawBody reads model.
-  const comboEffortRow = !options.comboAttempt && body && typeof body === "object" && !Array.isArray(body)
+  const comboRows = !options.comboAttempt && body && typeof body === "object" && !Array.isArray(body)
     && typeof (body as { model?: unknown }).model === "string"
-    ? parseRequestEffortRowId((body as { model: string }).model, config)
-    : null;
+    // One parse for both grammars, from the selector as the client sent it. Parsing them
+    // separately made the outcome depend on which ran first.
+    ? parseSyntheticRowId((body as { model: string }).model, config)
+    : { fastRow: null, effortRow: null };
+  const comboEffortRow = comboRows.effortRow;
+  if (comboRows.fastRow) {
+    // Same reason as the effort row above: the combo dispatcher reads `model` next, so the
+    // selector has to be normalized before it, or a combo child is built from a synthetic id.
+    const raw = body as Record<string, unknown>;
+    raw.model = comboRows.fastRow.baseId;
+    // A caller INTENT, not a decision. decideTier still rules on eligibility downstream, so
+    // fastMode:false and an ineligible route both still suppress it.
+    raw.service_tier = "priority";
+  }
   if (comboEffortRow) {
     const raw = body as Record<string, unknown>;
     raw.model = comboEffortRow.baseId;
@@ -2791,7 +2811,15 @@ async function handleResponsesInner(
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
     parsed = parseRequest(body);
-    const effortRow = parseRequestEffortRowId(parsed.modelId, config);
+    // Captured before any parser mutates it, so both grammars see the client's id.
+    const { fastRow, effortRow } = parseSyntheticRowId(parsed.modelId, config);
+    if (fastRow) {
+      parsed.modelId = fastRow.baseId;
+      parsed.options.serviceTier = "priority";
+      const raw = parsed._rawBody as Record<string, unknown>;
+      raw.model = fastRow.baseId;
+      raw.service_tier = "priority";
+    }
     if (effortRow) {
       parsed.modelId = effortRow.baseId;
       parsed.options.reasoning = effortRow.effort;
@@ -3309,6 +3337,13 @@ async function handleResponsesInner(
   let genericFailoverAccountId: string | null = null;
   let genericFailovers = 0;
   /**
+   * Config generation captured where the serving credential is RESOLVED, not where the
+   * quota is written. A streaming turn is a long await, so a generation captured at write
+   * time cannot see a config or account change that happened earlier in the same turn —
+   * the case the fence exists for. Stays 0 for every provider without a passive quota.
+   */
+  let passiveQuotaWriterGeneration = 0;
+  /**
    * Apply a rotated account's FULL credential snapshot to the live route (#2568d).
    *
    * One helper for all three rotation sites on purpose. Each site used to inline the same four
@@ -3442,6 +3477,18 @@ async function handleResponsesInner(
         // whichever account is active by the time the response comes back (#2568).
         if (isGenericFailoverProvider(route.providerName, route.provider)) {
           genericFailoverAccountId = resolved.accountId;
+        }
+        // Anthropic is excluded from isGenericFailoverProvider -- its own pool owns affinity and
+        // a fail-closed local-cli credential rule -- so without this stamp its identity is
+        // dropped whenever the pool flag is off, and a later 429 has no account to cool. Reactive
+        // failover needs only the id: no affinity bind, no promotion, no quota-ranked pick. Those
+        // are proactive and stay behind anthropicAccountPool.enabled.
+        if (route.providerName === "anthropic" && hasAnthropicFailoverQuorum()) {
+          anthropicPoolAccountId = resolved.accountId;
+        }
+        // Captured beside the account it fences, so the two can never disagree.
+        if (hasPassiveAccountQuota(route.providerName)) {
+          passiveQuotaWriterGeneration = captureConfigGeneration();
         }
         if (route.providerName === "kiro") {
           // `{}` is intentional: this is an account-scoped request with no stored routing metadata.
@@ -3779,7 +3826,7 @@ async function handleResponsesInner(
     // The guard needs a catalog to compare against, so it stands down when the request omits one.
     // An explicit empty catalog is still authoritative: it declares that no client tools may be
     // called. A passthrough request can legitimately omit `tools` entirely and still receive a call
-    // the client understands — `tests/github-copilot-stream-contract.test.ts` sends
+    // the client understands — `tests/providers/github-copilot/github-copilot-stream-contract.test.ts` sends
     // `{model, input, stream}` with no tools and Copilot answers with a `custom_tool_call` for
     // `apply_patch`. Policing an absent catalog truncates that turn. An unreadable body lands there
     // too because the proxy cannot establish the caller's declared authorization boundary.
@@ -3888,7 +3935,27 @@ async function handleResponsesInner(
     // check sees nothing undeclared, and the refused turn enters continuation state anyway. So the
     // rejection is sticky for the whole turn, set from every parsed payload on the inspection side.
     let inspectionSawUndeclaredTool = false;
+    const passiveQuotaObserved = hasPassiveAccountQuota(route.providerName)
+      && route.provider.authMode === "oauth";
     const noteInspectedPayload = (payload: unknown) => {
+      // Meta reports subscription usage ONLY as an in-stream event; there is no endpoint
+      // to poll (003 §E probed 17 paths, all 404). Observed here rather than behind a
+      // dedicated inspector handler because onParsedPayload already reaches every
+      // passthrough shape -- eager relay and both tee consumers -- through this one
+      // function.
+      //
+      // Placed BEFORE the undeclared-tool early return below, which is load-bearing: that
+      // guard latches for the rest of the turn once it fires, and a turn that tripped it
+      // still legitimately reports usage.
+      if (passiveQuotaObserved && isMuseSubscriptionUsagePayload(payload)) {
+        const quota = parseMuseSubscriptionUsage(payload);
+        // Read at EVENT time, not at handler construction: failover rebinds this, and the
+        // quota belongs to the account that actually served the turn.
+        const servingAccountId = genericFailoverAccountId;
+        if (quota && servingAccountId) {
+          recordPassiveAccountQuota(route.providerName, servingAccountId, quota, passiveQuotaWriterGeneration);
+        }
+      }
       // Gated on the same flag as the guard itself: with no readable catalog (or a forward-auth
       // provider) every name looks undeclared, and flipping this would stop recording continuation
       // state for exactly the passthrough traffic the guard deliberately stands down for.
@@ -5094,6 +5161,36 @@ async function handleResponsesInner(
     }
   }
 
+  // Tool results are PAIRED by call_id. parseRequest writes it into OcxToolResultMessage.toolCallId
+  // (parser.ts:738/752) without validating it, because inputItemSchema's permissive catch-all
+  // (schema.ts:106) accepts a tool item whose strict schema failed only for a missing call_id. A
+  // translating adapter then consumes `toolCallId: string` holding undefined: kiro-wire.ts:32
+  // TypeErrors, ollama-native.ts:334 throws, and anthropic.ts:775 sends
+  // "[tool_result without adjacent tool_use: undefined]" upstream (issue #3259).
+  //
+  // This CANNOT move into the schema. parseRequest (:2812) runs before the passthrough branch
+  // (:3719), so a parse-time rejection would also kill forward/key passthrough and routed
+  // compaction — paths that never read context.messages, build from _rawBody, and already
+  // degrade an unpaired output to "[tool output for unknown call]" on their own.
+  //
+  // Keyed on the adapter, not on position: routedCompaction skips the passthrough branch above
+  // yet still builds from _rawBody (see the :3703 comment).
+  if (!("passthrough" in adapter && adapter.passthrough)) {
+    const unpaired = parsed.context.messages.find(
+      message => message.role === "toolResult"
+        && (typeof (message as { toolCallId?: unknown }).toolCallId !== "string"
+          || (message as { toolCallId: string }).toolCallId.length === 0),
+    );
+    if (unpaired) {
+      // Never interpolate the tool output: this message reaches the client and the logs.
+      return formatErrorResponse(
+        400,
+        "invalid_request_error",
+        "tool result requires a non-empty string call_id",
+      );
+    }
+  }
+
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
   // Routed-compaction turns must NOT hit the image bridge: compaction clears tools/_webSearch but
   // leaves _imageGeneration, so planImageBridge would activate and return a normal Responses
@@ -5119,12 +5216,15 @@ async function handleResponsesInner(
     });
     if (rotated) {
       route.provider = rotated;
-    } else {
-      if (
-        !genericFailoverAccountId
-        || genericFailovers >= GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
-        || !isGenericOAuthFailoverEnabled(config, route.providerName)
-      ) return null;
+    } else if (
+      // A POSITIVE gate, not an early return. An early `return null` here made every later arm
+      // unreachable: Anthropic never has a genericFailoverAccountId (isGenericFailoverProvider
+      // excludes it), so its sidecar 429s died on this guard before the Anthropic arm below
+      // could ever be considered.
+      genericFailoverAccountId
+      && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+      && isGenericOAuthFailoverEnabled(config, route.providerName)
+    ) {
       const nextAccountId = rotateGenericOAuthAccountOn429(
         config,
         route.providerName,
@@ -5140,6 +5240,39 @@ async function handleResponsesInner(
       } catch {
         return null;
       }
+    } else if (
+      // Anthropic's pool is excluded from generic failover, so without this arm a 429 inside a
+      // web-search or image-bridge turn was terminal even with the pool fully enabled -- while
+      // the very same 429 on the main response path rotated.
+      anthropicPoolAccountId
+      && anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
+    ) {
+      const nextAccountId = rotateAnthropicAccountOn429(
+        config,
+        anthropicPoolAccountId,
+        retryAfter,
+        anthropicSessionKey,
+      );
+      if (!nextAccountId) return null;
+      try {
+        // Deliberately NOT applyFailoverSnapshot: that helper exists to pair per-account routing
+        // metadata (Copilot origin, Antigravity project, Kiro context) with its bearer. Anthropic
+        // carries none, and getAnthropicPoolAccessToken is what enforces its fail-closed
+        // local-cli credential rule. Both existing Anthropic rotation sites apply the token the
+        // same way.
+        const accessToken = await getAnthropicPoolAccessToken(nextAccountId);
+        anthropicPoolAccountId = nextAccountId;
+        anthropicPoolFailovers += 1;
+        route.provider = { ...route.provider, apiKey: accessToken };
+        promoteAnthropicActiveAccount(nextAccountId);
+        logCtx.provider = formatAnthropicProviderForLog("anthropic", nextAccountId, config);
+      } catch {
+        return null;
+      }
+    } else {
+      // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement
+      // credential. The 429 is terminal for this sidecar turn.
+      return null;
     }
     const rotatedAdapter = resolveAdapter(
       resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
@@ -6083,7 +6216,6 @@ async function handleResponsesInner(
       while (
         upstreamResponse.status === 429
         && anthropicPoolAccountId
-        && isAnthropicAccountPoolEnabled(config)
         && anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
       ) {
         const nextAccountId = rotateAnthropicAccountOn429(
@@ -6494,7 +6626,6 @@ async function handleResponsesInner(
       if (
         response.status === 429
         && anthropicPoolAccountId
-        && isAnthropicAccountPoolEnabled(config)
         && anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST
       ) {
         const nextAccountId = rotateAnthropicAccountOn429(
@@ -6520,6 +6651,48 @@ async function handleResponsesInner(
             sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
             nextContinuationRecoveryKind = "anthropic-oauth-429";
             continue;
+          } catch {
+            // fall through to emit continuation error below
+          }
+        }
+      }
+      // Generic OAuth rotation for the continuation loop. The streaming loop grew this arm with
+      // #2568 and this one did not, so an xAI/Cursor/Kimi/Copilot/Antigravity/Nous continuation
+      // 429 stayed terminal even with failover fully active -- the same class of divergence the
+      // two sidecars already produced once. Request-local state is shared with the other arms so
+      // the per-request bound cannot be silently re-armed by reaching a different loop.
+      if (
+        response.status === 429
+        && genericFailoverAccountId
+        && genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+        && isGenericOAuthFailoverEnabled(config, route.providerName)
+      ) {
+        const nextAccountId = rotateGenericOAuthAccountOn429(
+          config,
+          route.providerName,
+          genericFailoverAccountId,
+          response.headers.get("retry-after"),
+        );
+        if (nextAccountId) {
+          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+          try {
+            // The FULL snapshot through the shared helper, never a bare bearer: Antigravity
+            // pairs an account-matched projectId with its token and Kiro carries routing
+            // metadata, so a token-only swap would mix one account's credential with another's
+            // routing data.
+            const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
+            genericFailoverAccountId = nextAccountId;
+            genericFailovers += 1;
+            if (applyFailoverSnapshot(snapshot)) {
+              invalidateSameTargetRequest();
+              activeAdapter = resolveAdapter(
+                resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+                config.cacheRetention,
+              );
+              sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+              nextContinuationRecoveryKind = "oauth-account-429";
+              continue;
+            }
           } catch {
             // fall through to emit continuation error below
           }

@@ -12,6 +12,7 @@
  */
 import {
   appendOperation,
+  appendTombstone,
   captureSnapshot,
   clearPruneFailure,
   countSnapshots,
@@ -22,6 +23,7 @@ import {
   readMaintenance,
   readSnapshot,
   type JournalEntry,
+  type JournalTombstone,
   type MaintenanceState,
   type SnapshotRef,
 } from "./journal";
@@ -42,6 +44,8 @@ export interface IntegrationStateStore {
   putRecord(record: OwnershipRecord): void;
   dropRecord(clientId: IntegrationClientId): void;
   appendJournal(entry: JournalEntry): void;
+  /** Retire one operation. Append-only; see journal.ts `appendTombstone`. */
+  retireOperation(record: JournalTombstone): void;
   listOperations(clientId?: IntegrationClientId, limit?: number): JournalEntry[];
   findOperation(opId: string): JournalEntry | null;
   captureSnapshot(clientId: IntegrationClientId, opId: string, text: string | null): SnapshotRef;
@@ -78,6 +82,7 @@ export function createIntegrationStateStore(root: string = integrationsDir()): I
     putRecord: record => writeRecord(record, dir),
     dropRecord: clientId => deleteRecord(clientId, dir),
     appendJournal: entry => appendOperation(entry, dir),
+    retireOperation: record => appendTombstone(record, dir),
     listOperations: (clientId, limit) => listOperations(clientId, limit, dir),
     findOperation: opId => findOperation(opId, dir),
     captureSnapshot: (clientId, opId, text) => captureSnapshot(clientId, opId, text, dir),

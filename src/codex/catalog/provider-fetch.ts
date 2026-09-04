@@ -32,7 +32,7 @@ import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
-import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
+import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import {
   captureFastPolicyAuthority,
@@ -81,7 +81,7 @@ import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } fr
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
-import { disabledNativeSlugs, hasComboTargets, isNativeOpenAiCapabilityAliasModel, NATIVE_GPT56_MAX_INPUT_TOKENS, nativeContextLimits, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, nativeOpenAiMaxOutputTokens, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
+import { disabledNativeSlugs, hasComboTargets, hasNativeOpenAiCapabilityMetadata, NATIVE_GPT56_MAX_INPUT_TOKENS, nativeContextLimits, nativeOpenAiCapabilityDisplayName, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, nativeOpenAiMaxOutputTokens, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
@@ -380,6 +380,7 @@ function captureTrustedOpenAiApiPolicy(
     models: entry.models,
     ...(entry.modelContextWindows ? { modelContextWindows: entry.modelContextWindows } : {}),
     ...(entry.modelMaxInputTokens ? { modelMaxInputTokens: entry.modelMaxInputTokens } : {}),
+    ...(entry.modelMaxOutputTokens ? { modelMaxOutputTokens: entry.modelMaxOutputTokens } : {}),
     ...(entry.virtualModels ? { virtualModels: entry.virtualModels } : {}),
     ...(entry.modelInputModalities ? { modelInputModalities: entry.modelInputModalities } : {}),
     ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: entry.modelReasoningEfforts } : {}),
@@ -717,7 +718,7 @@ function configuredVerbositySupport(name: string, prov: OcxProviderConfig | unde
   // Read from the PROVIDER CONFIG, never from PROVIDER_REGISTRY. A gather flight captures its
   // registry authority up front and forbids any later registry read, so consulting the registry
   // here made a custom-destination flight fall back to "configured" instead of serving its own
-  // discovery result (tests/codex-gather-authority.test.ts). `applyVerbosityDefaults` in
+  // discovery result (tests/codex-integration/codex-gather-authority.test.ts). `applyVerbosityDefaults` in
   // providers/derive.ts materializes the registry default into the config at seed/enrich time.
   return prov.supportsVerbosity;
 }
@@ -863,6 +864,62 @@ interface ComboCatalogMemberFallback {
 }
 
 /**
+ * Ladder advertised for a combo member whose vendor metadata says it reasons but
+ * carries no explicit ladder (Claude, Grok). Codex needs a non-empty ladder to show
+ * the effort control; the routed adapters clamp to the real upstream top rung.
+ */
+const ROUTED_COMBO_MEMBER_REASONING_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Vendor-table lookup tolerant of point releases and date pins. Configured combo
+ * targets often name a variant the table does not carry (`claude-fable-5-1`,
+ * `claude-opus-4-5-20251101`); the base family row still describes its modality
+ * and reasoning capability, so fall back to it before giving up.
+ */
+function comboMemberVendorMetadata(provider: string, modelId: string): ModelMetadata | undefined {
+  const exact = getModelMetadataCaseInsensitive(provider, modelId);
+  if (exact) return exact;
+  let candidate = modelId.replace(/\[[^\]]*\]$/, "");
+  while (true) {
+    const trimmed = candidate.replace(/-\d+$/, "");
+    if (trimmed === candidate || !trimmed.includes("-")) return undefined;
+    const hit = getModelMetadataCaseInsensitive(provider, trimmed);
+    if (hit) return hit;
+    candidate = trimmed;
+  }
+}
+
+/**
+ * Combo members are usually thin discovery rows (id + context window). Without a
+ * capability source the combo intersection collapses to text-only / no effort ladder,
+ * and the Codex app then refuses image attachments and hides the effort picker for
+ * every Claude combo. The generated vendor table knows both, so use it as the
+ * last-resort fallback when the caller supplied none.
+ *
+ * `ModelMetadata.maxTokens` is the OUTPUT ceiling, so it fills `maxOutputTokens`.
+ * Mapping it onto `maxInputTokens` would be read by the combo intersection
+ * (`aggregation.ts` `Math.min` over member input ceilings) as a 128k input limit and
+ * shrink a 1M Claude combo window to 128k, taking autoCompactTokenLimit down with it.
+ */
+function vendorMetadataComboFallback(target: { provider: string; model: string }): ComboCatalogMemberFallback | undefined {
+  const metadataProvider = resolveMetadataProvider(target.provider);
+  const metadata = metadataProvider ? comboMemberVendorMetadata(metadataProvider, target.model) : undefined;
+  if (!metadata) return undefined;
+  return {
+    ...(typeof metadata.contextWindow === "number" && metadata.contextWindow > 0
+      ? { contextWindow: metadata.contextWindow }
+      : {}),
+    ...(typeof metadata.maxTokens === "number" && metadata.maxTokens > 0
+      ? { maxOutputTokens: metadata.maxTokens }
+      : {}),
+    ...(Array.isArray(metadata.input) && metadata.input.length > 0
+      ? { inputModalities: [...metadata.input] }
+      : {}),
+    ...(metadata.reasoning === true ? { reasoningEfforts: [...ROUTED_COMBO_MEMBER_REASONING_EFFORTS] } : {}),
+  };
+}
+
+/**
  * Resolve a combo target to a catalog member for derivation.
  * Prefer discovery metadata; when the target is missing from the gather map or
  * lacks a positive contextWindow, synthesize from the (registry-enriched)
@@ -877,11 +934,12 @@ export function resolveComboCatalogMember(
   memberByKey: ReadonlyMap<string, CatalogModel>,
   providers: ReadonlyMap<string, OcxProviderConfig>,
   contextCap?: number,
-  fallback?: ComboCatalogMemberFallback,
+  callerFallback?: ComboCatalogMemberFallback,
   metadataModelIdCaseFold?: boolean,
 ): CatalogModel | undefined {
   const existing = memberByKey.get(targetKey(target));
   const prov = providers.get(target.provider);
+  const fallback = callerFallback ?? vendorMetadataComboFallback(target);
   // Disabled providers never contribute members — even a complete discovery row
   // is unusable for catalog derivation while the provider is off.
   if (prov?.disabled === true) return undefined;
@@ -2042,6 +2100,18 @@ async function gatherRoutedModelsUncached(
     config,
     capture.openAiApiPolicy,
   );
+  const apiProvider = activeProviders.find(provider => provider.name === OPENAI_API_PROVIDER_ID);
+  // Trusted reconstruction replaces whole rows, including the earlier Fast hints.
+  // Restore only that capability from the same captured authority used by discovery.
+  if (apiProvider) {
+    for (const model of apiAugmented) {
+      if (model.provider !== OPENAI_API_PROVIDER_ID) continue;
+      const policy = fastPolicyForModel(apiProvider.provider, model.id, apiProvider.name);
+      const supported = serviceTierSupportFromPolicy(policy);
+      if (supported !== undefined) model.supportsServiceTier = supported;
+      if (supported === true && policy.fastTierDescription !== undefined) model.fastTierDescription = policy.fastTierDescription;
+    }
+  }
   const metadataModelIdCaseFoldByProvider = new Map(
     activeProviders.map(provider => [provider.name, provider.metadataModelIdCaseFold]),
   );
@@ -2132,7 +2202,7 @@ async function gatherRoutedModelsUncached(
     const nativeAliasMaxInput = combo.nativeAlias && combo.alias
       ? (combo.alias.startsWith("gpt-5.6-") || combo.alias.includes("daybreak")
         ? NATIVE_GPT56_MAX_INPUT_TOKENS
-        : nativeOpenAiMaxInputTokens(combo.alias) ?? nativeOpenAiContextWindow(combo.alias))
+        : nativeOpenAiMaxInputTokens(combo.alias, comboNativeLimits) ?? nativeOpenAiContextWindow(combo.alias, comboNativeLimits))
       : undefined;
     const nativeAliasAutoCompact = combo.nativeAlias && combo.alias
       ? nativeOpenAiAutoCompactTokenLimit(combo.alias, comboNativeLimits)
@@ -2190,7 +2260,7 @@ async function gatherRoutedModelsUncached(
     const codexForwardNativeCapabilityAlias = cm.provider === OPENAI_CODEX_PROVIDER_ID
       && providerForCanonicalCheck !== undefined
       && isCanonicalOpenAiForwardProvider(providerForCanonicalCheck)
-      && isNativeOpenAiCapabilityAliasModel(cm.modelId);
+      && hasNativeOpenAiCapabilityMetadata(cm.modelId);
     const customNativeLimits = {
       ...nativeContextLimits(config),
       ...(typeof cm.contextWindow === "number" && cm.contextWindow > 0
@@ -2252,7 +2322,8 @@ async function gatherRoutedModelsUncached(
       // Display-only label: never feeds routing (customModels are keyed by routedSlug below).
       ...(cm.displayName
         ? { displayName: cm.displayName }
-        : codexForwardNativeCapabilityAlias ? { displayName: "Daybreak Blue" } : {}),
+        : codexForwardNativeCapabilityAlias
+          ? { displayName: nativeOpenAiCapabilityDisplayName(cm.modelId) ?? cm.modelId } : {}),
       ...(customContextWindow !== undefined ? { contextWindow: customContextWindow } : {}),
       ...(customMaxInputTokens !== undefined ? { maxInputTokens: customMaxInputTokens } : {}),
       ...(customMaxOutputTokens !== undefined ? { maxOutputTokens: customMaxOutputTokens } : {}),
@@ -2454,7 +2525,9 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
     const maxOutputTokens = routedMaxOutputTokens(
       OPENAI_API_PROVIDER_ID,
       configured,
-      existingById.get(id) ?? { provider: OPENAI_API_PROVIDER_ID, id },
+      policy.modelMaxOutputTokens?.[id] !== undefined
+        ? { provider: OPENAI_API_PROVIDER_ID, id, maxOutputTokens: policy.modelMaxOutputTokens[id] }
+        : existingById.get(id) ?? { provider: OPENAI_API_PROVIDER_ID, id },
       policy.virtualModels?.[id]?.wireModelId ?? id,
     );
     return {

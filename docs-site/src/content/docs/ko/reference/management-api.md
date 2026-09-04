@@ -222,7 +222,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/failover` | account failover threshold를 설정합니다 | 400 잘못된 threshold |
 | `GET /api/codex-auth/quota` | 계정별 캐시된 quota 상태를 읽습니다 | — |
 | `GET /api/codex-auth/reset-credits` | 계정의 reset-credit 자격을 확인합니다 | 400 누락된 account id; upstream 상태 전달; 500 조회 실패 |
-| `POST /api/codex-auth/reset-credits/consume` | 사용할 수 있는 reset credit을 소비합니다 | 400 누락된 account id; upstream 상태 전달; 503 `server_busy`; 500 소비 실패 |
+| `POST /api/codex-auth/reset-credits/consume` | 사용할 수 있는 reset credit을 소비합니다. 선택적 `operationId`(UUIDv4)를 보내면 소비가 멱등해집니다 — 같은 id는 크레딧을 다시 쓰지 않고 저장된 결과 하나를 재생합니다. | 400 누락된 account id 또는 잘못된 `operationId`; id가 다른 계정 소유이면 409 `identity_mismatch`; upstream 상태 전달; 503 `server_busy`/`capacity`/`unavailable`; 500 소비 실패 |
 | `POST /api/codex-auth/login` | Codex 로그인 또는 재인증을 시작합니다 | 400 잘못된 요청; 충돌/바쁨 로그인 상태 |
 | `POST /api/codex-auth/login/code` | Codex 로그인 흐름용 수동 코드를 제출합니다 | 400 잘못된 흐름/code |
 | `POST /api/codex-auth/login/cancel` | Codex 로그인 흐름을 취소합니다 | — |

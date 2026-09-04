@@ -182,8 +182,14 @@ describe("Anthropic account pool quota window", () => {
     const host = await mountPool();
 
     expect(host.textContent).toContain("Proactive usage-based switching is off");
-    // The stages that still run must be named, and the window must still be identified.
-    expect(host.textContent).toContain("new-session selection and 429 recovery");
+    // The stage that still runs must be named, and the window must still be identified.
+    expect(host.textContent).toContain("new-session selection");
+    // "429 recovery" is deliberately NOT named as a benefit of the enabled state any more:
+    // reactive failover stopped being something this toggle controls, so advertising it here
+    // would send an operator to the EXPERIMENTAL pool for something they already have
+    // unconditionally. Scoped to the description string -- the quota-window help text below
+    // legitimately mentions 429 when explaining which bar picks a replacement account.
+    expect(host.textContent).not.toContain("429 recovery");
     expect(host.textContent).not.toContain("prefer usage under 0%");
   });
 

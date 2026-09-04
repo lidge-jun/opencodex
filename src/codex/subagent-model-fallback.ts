@@ -38,7 +38,7 @@ import {
 import { routeModel, type RouteResult } from "../router";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { codexAccountNamespaceForModel } from "./account-namespace-match";
-import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_MAIN_DRAIN_SENTINEL_MODELS } from "./catalog/native-models";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import {
   getUpstreamHostHealth,
@@ -328,9 +328,17 @@ export function isSubagentModelUnavailable(
   // preserve the credential fence. If no non-main candidate can serve an unqualified
   // gated model, retain main only as a read-free sentinel: final auth owns the atomic
   // claim and returns maintenance instead of letting a routed fallback bypass it.
+  //
+  // The predicate is its OWN set, not the account-gated one. The sentinel protects the atomic
+  // main claim during a drain, which has nothing to do with entitlement; it read the gated set
+  // only because the two happened to hold the same slugs. Ungating the flagships (2026-09-04)
+  // would have flipped this false and let a drain silently rewrite the operator's configured
+  // subagent model instead of reporting maintenance -- a different model answering than was
+  // chosen. The set is explicit rather than every supported native, so gpt-5.5 and friends keep
+  // their existing fall-back-and-answer behaviour.
   const preserveDrainingMainCandidate = route.codexAccountId === undefined
     && candidateAccountUsabilityOptions?.nativeMainSelectionOnly === true
-    && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId);
+    && NATIVE_MAIN_DRAIN_SENTINEL_MODELS.has(route.modelId);
   if (!preserveDrainingMainCandidate) return true;
   const drainingMainUsabilityOptions: CodexAccountUsabilityOptions = {
     ...candidateAccountUsabilityOptions,

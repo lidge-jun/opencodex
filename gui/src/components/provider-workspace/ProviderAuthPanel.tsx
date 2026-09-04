@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
-import { IconLock, IconTrash } from "../../icons";
+import { IconLock, IconRefresh, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
 import { displayAccountId } from "../../lib/privacy";
@@ -196,6 +196,24 @@ export default function ProviderAuthPanel({
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
   const [manualCodeOk, setManualCodeOk] = useState(true);
+  const [refreshingQuota, setRefreshingQuota] = useState(false);
+  const [quotaRefreshResult, setQuotaRefreshResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const onRefreshQuota = authHandlers?.onRefreshQuota;
+  const refreshQuota = async () => {
+    if (!onRefreshQuota || refreshingQuota) return;
+    setRefreshingQuota(true);
+    // Cleared on click so a previous "refreshed" cannot sit under a later failure.
+    setQuotaRefreshResult(null);
+    try {
+      const ok = await onRefreshQuota(item.name);
+      setQuotaRefreshResult({ ok, text: t(ok ? "codexAuth.quotaRefreshed" : "codexAuth.quotaRefreshFailed") });
+    } catch {
+      setQuotaRefreshResult({ ok: false, text: t("codexAuth.quotaRefreshFailed") });
+    } finally {
+      setRefreshingQuota(false);
+    }
+  };
 
   // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
   // bar height briefly so bars don't shove rows when WHAM returns.
@@ -340,7 +358,36 @@ export default function ProviderAuthPanel({
 
   return (
     <section className="pwi-section pwi-auth-section" aria-label={isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}>
-      <h3 className="pwi-section-title">{isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}</h3>
+      {/*
+        The refresh control is in the section HEAD, not only at the foot of the list.
+        Every account renders a stack of 5-hour/weekly/Fable bars, so with two accounts
+        the footer copy sits well below the fold: an operator looking straight at stale
+        bars had to scroll past all of them to find the button that re-reads them. The
+        header keeps it beside the numbers it refreshes; the footer copy stays where it
+        is, next to "Add account", because that is the account-management cluster.
+      */}
+      <div className="pwi-auth-head">
+        <h3 className="pwi-section-title">{isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}</h3>
+        {isOauth && loggedIn && onRefreshQuota && (
+          <div className="pwi-auth-head-actions">
+            {quotaRefreshResult && (
+              <span role="status" className={quotaRefreshResult.ok ? "pws-status-ok" : "pws-status-warn"}>
+                {quotaRefreshResult.text}
+              </span>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={refreshingQuota || busy || Boolean(switchingAccountId)}
+              onClick={() => { void refreshQuota(); }}
+            >
+              <IconRefresh width={14} height={14} aria-hidden="true" />
+              {" "}
+              {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
+            </button>
+          </div>
+        )}
+      </div>
       <div className="pwi-auth-body">
         {item.name === "xai" && (
           <XaiResponsesOptInControl
@@ -526,6 +573,9 @@ export default function ProviderAuthPanel({
                             t={t}
                             layout="stacked"
                             pending={account.quota == null}
+                            {...(item.name === "meta-muse" && account.quota
+                              ? { observedAt: account.quota.updatedAt }
+                              : {})}
                           />
                         )}
                       </div>
@@ -539,10 +589,29 @@ export default function ProviderAuthPanel({
               <div className="pwi-auth-state pwi-auth-state--empty">{t("pws.noAccounts")}</div>
             )}
             {loggedIn && (
-              <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 8 }}
-                onClick={() => void authHandlers.onLogin(item.name, true)} disabled={busy || Boolean(switchingAccountId)}>
-                {t("pws.addAccount")}
-              </button>
+              <div className="pwi-auth-actions">
+                <button type="button" className="btn btn-ghost btn-sm"
+                  onClick={() => void authHandlers.onLogin(item.name, true)} disabled={busy || Boolean(switchingAccountId)}>
+                  {t("pws.addAccount")}
+                </button>
+                {onRefreshQuota && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={refreshingQuota || busy || Boolean(switchingAccountId)}
+                    onClick={() => { void refreshQuota(); }}
+                  >
+                    <IconRefresh width={14} height={14} aria-hidden="true" />
+                    {" "}
+                    {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
+                  </button>
+                )}
+                {/*
+                  The result line lives in the section head only. Rendering it in both
+                  places would announce one refresh twice to a screen reader, since both
+                  spans carry role="status".
+                */}
+              </div>
             )}
           </>
         )}

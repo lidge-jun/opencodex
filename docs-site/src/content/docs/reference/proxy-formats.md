@@ -275,6 +275,18 @@ The proxy normalizes the upstream join URL and then transparently relays text an
 both directions. Client protocol headers are preserved while upstream authentication remains
 proxy-owned.
 
+Call creation and the sideband join must run under the same OpenAI account, or the join is refused
+upstream (`404`). Both legs carry Codex's `session-id` and `thread-id` headers; in Pool mode the
+account choice is bound to that pair (process-local), so a join that reaches the proxy reuses the
+account that created the call, while Direct mode forwards the caller's current bearer on both legs.
+The relayed client headers are exactly `openai-alpha`, `x-session-id`, `session-id`, `thread-id`,
+`originator`, and `x-oai-attestation` (`LIVE_CLIENT_PROTOCOL_HEADERS` in `src/server/live.ts`);
+`Authorization` and the ChatGPT account id are proxy-owned on ChatGPT-backed routes (Pool replaces
+them with the stored account, Direct forwards the validated caller bearer) and an API-key provider
+gets its own bearer. Codex only sends the join to the proxy when `experimental_realtime_ws_base_url`
+points at it; `ocx start` injects that key next to `openai_base_url` (see
+[Codex integration](/guides/codex-integration/)).
+
 ## `POST /v1/responses/compact`
 
 Compaction returns replacement history for clients that need to shorten a long Responses

@@ -94,6 +94,9 @@ import type { DataPlaneAdmission } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
+import { decideTier, tierValueAfterDecision } from "../../providers/fastwire";
+import { fastPolicyForModel } from "../../providers/service-tier";
+import { parseFastOnlyRowId } from "../fast-row";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -503,6 +506,16 @@ export async function handleResponsesCompact(
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
   }
+  // Correct the IDENTITY before routing, or the synthetic id does not route at all. Held in
+  // a local rather than written back to `raw.model`: assigning to the property widens it out
+  // of the `string` narrowing the guard above just established.
+  const compactFastRow = parseFastOnlyRowId(config, () => raw.model as string);
+  const compactModel = compactFastRow ? compactFastRow.baseId : raw.model;
+  if (compactFastRow) (raw as Record<string, unknown>).model = compactModel;
+  // The client's own selector, kept for the request log: `raw.model` is rewritten to the
+  // base id above, and logCtx.requestedModel is assigned from it further down, so without
+  // this the log would lose which id the client actually asked for.
+  const compactRequestedModel = compactFastRow ? compactFastRow.baseId + "--fast" : raw.model;
 
   let route;
   try {
@@ -512,7 +525,7 @@ export async function handleResponsesCompact(
     // Codex selects a bare native model for compaction even when the operator
     // routes ordinary turns elsewhere (#2901); the compaction-scoped router
     // may land that on the configured default provider instead of 404.
-    route = routeCompactionModel(config, raw.model, evidenceFromBody(raw));
+    route = routeCompactionModel(config, compactModel, evidenceFromBody(raw));
   } catch (err) {
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
@@ -529,7 +542,7 @@ export async function handleResponsesCompact(
   // exactly the selector form back down the native compact endpoint this guard exists to avoid.
   // `route.modelId` is the same value `applyCodexAccountGatedWireNormalization` uses in core.ts.
   const accountGatedCompactWireModel = codexAccountGatedCanonicalWireModel(selectedModelId);
-  logCtx.requestedModel = raw.model;
+  logCtx.requestedModel = compactRequestedModel;
   logCtx.model = selectedModelId;
   logCtx.routeDecision = route.routeDecision;
   logCtx.provider = route.codexAccountNamespace
@@ -543,6 +556,30 @@ export async function handleResponsesCompact(
     logCtx.resolvedModel = virtual.wireModelId;
   } else {
     logCtx.resolvedModel = route.modelId;
+  }
+  if (compactFastRow) {
+    // Resolved AFTER the virtual-model rewrite above, and against `route.modelId`, which is
+    // now the WIRE model: `resolveOpenAiCompactModel` maps an alias like `gpt-5.6-sol-pro`
+    // onto a different wire id, and capability overrides are keyed by exact model id, so
+    // deciding before the rewrite could set `priority` on a wire model that does not support
+    // it. `capabilityProvider` is passed for the same reason core.ts:2103 passes it.
+    const decision = decideTier(
+      fastPolicyForModel(
+        route.provider,
+        route.modelId,
+        route.providerName,
+        "responses",
+        config.providers[route.providerName],
+      ),
+      config.fastMode,
+      "priority",
+    );
+    // The WHOLE decision: native compact spreads `raw` into the forwarded body, so on a drop
+    // a caller's pre-existing service_tier must be REMOVED rather than left to ride along
+    // past the suppression.
+    const serviceTier = tierValueAfterDecision(decision, "priority");
+    if (serviceTier === undefined) delete (raw as Record<string, unknown>).service_tier;
+    else (raw as Record<string, unknown>).service_tier = serviceTier;
   }
 
   // #1686: a bearer-presented admission secret is one of ours, so the stored main credential

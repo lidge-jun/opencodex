@@ -1,4 +1,5 @@
 import { loadConfig } from "../config";
+import { hasPassiveAccountQuota } from "../providers/quota";
 import { closeSync, openSync, readSync } from "node:fs";
 import {
   MAX_ACCOUNT_PRIORITY,
@@ -330,7 +331,12 @@ export async function cmdRefresh(args: string[], deps: AccountDeps): Promise<num
     if (result.status === 0) return proxyUnreachable(result.transportError);
     if (result.status !== 200) return apiError(result.errorJson ?? {}, `failed to refresh ${name}`, result.status);
     if (wantsJson) console.log(JSON.stringify({ provider: name, report: result.report }, null, 2));
-    else console.log(result.report ? providerQuotaLine(name, result.report) : `no quota report available for ${name}`);
+    else if (result.report) console.log(providerQuotaLine(name, result.report));
+    // A passive provider has no probe to run, so "no report available" reads as a
+    // failure of something that was never attempted. Say what is actually true.
+    else if (hasPassiveAccountQuota(name)) {
+      console.log(`${name} reports usage only during a streaming response; there is nothing to refresh. Run a request through this provider to update it, then see \`ocx account list ${name}\`.`);
+    } else console.log(`no quota report available for ${name}`);
     return 0;
   }
   const result = await fetchCodexRows(deps, baseUrl, true);

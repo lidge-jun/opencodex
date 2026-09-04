@@ -1002,6 +1002,23 @@
   border-top: 1px solid color-mix(in oklab, var(--border) 45%, transparent);
 }
 
+/* Section title on the left, operator refresh control on the right. Wraps rather than
+   truncating: the status text is a full sentence in several locales. */
+.pws-usage-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pws-quota-refresh {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .pws-usage-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

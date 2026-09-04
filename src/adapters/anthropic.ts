@@ -895,11 +895,20 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       enforceAnthropicImageLimits(messages);
       const tools = toolsToAnthropicFormat(parsed, toolNames);
 
+      // Codex never sends `max_output_tokens`, so the omitted-limit default decides how
+      // long a Claude answer may run. Honor the provider's configured output budget
+      // (`modelMaxOutputTokens` / `defaultMaxOutputTokens`) before falling back to the
+      // conservative 8192, which truncates long answers with stop_reason=max_tokens.
+      const configuredMaxOut = modelRecordValue(provider.modelMaxOutputTokens, parsed.modelId)
+        ?? provider.defaultMaxOutputTokens;
+      const omittedMaxTokens = typeof configuredMaxOut === "number" && configuredMaxOut > 0
+        ? configuredMaxOut
+        : DEFAULT_MAX_TOKENS;
       const body: Record<string, unknown> = {
         model: parsed.modelId,
         messages,
         stream: parsed.stream,
-        max_tokens: parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
+        max_tokens: parsed.options.maxOutputTokens ?? omittedMaxTokens,
       };
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
@@ -942,13 +951,13 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // so effort=max (budget=32k) still leaves OUTPUT_HEADROOM tokens for visible output.
           body.max_tokens = explicitMaxOut !== undefined
             ? explicitMaxOut
-            : Math.min(ADAPTIVE_THINKING_CEILING, Math.max(DEFAULT_MAX_TOKENS, floor));
+            : Math.max(omittedMaxTokens, Math.min(ADAPTIVE_THINKING_CEILING, Math.max(DEFAULT_MAX_TOKENS, floor)));
         } else {
           // Anthropic requires max_tokens > thinking.budget_tokens (max_tokens caps thinking +
           // visible output) and budget_tokens >= 1024. Codex sends the SAME value for both, which
           // 400s ("max_tokens must be greater than thinking.budget_tokens"). Size them so max_tokens
           // always exceeds the budget within a model-safe ceiling, reserving room for visible output.
-          const maxOut = parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS;
+          const maxOut = parsed.options.maxOutputTokens ?? omittedMaxTokens;
           const wantBudget = reasoningBudget(effectiveReasoning);
           const maxTokens = Math.min(REASONING_MAX_TOKENS_CEILING, Math.max(maxOut, wantBudget + OUTPUT_HEADROOM));
           const budget = Math.max(MIN_THINKING_BUDGET, Math.min(wantBudget, maxTokens - OUTPUT_FLOOR));

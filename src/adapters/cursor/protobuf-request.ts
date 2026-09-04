@@ -298,38 +298,40 @@ function rootPromptMessages(
   // Repetition breaker (devlog 260826 gap-9): external full-replay flattens history to text,
   // so N identical assistant/tool-result rounds replay as N identical lines and PRIME the model
   // to emit the same line again (self-reinforcing loop: S2a 180x, identical-probe repetition).
-  // Collapse consecutive duplicates into one entry + a count marker, and count collapses so a
-  // strategy-change note can be appended when the pattern is severe.
-  let lastReplayText: string | undefined;
-  let lastReplayEntry: RootBlobCandidate | undefined;
-  let collapsedRepeats = 0;
+  // Collapse consecutive same-role duplicates within one user turn into one entry + a count marker.
+  // Track assistant narration separately from tool results so a real narration→tool→result cycle
+  // cannot reset the breaker before the next identical narration arrives.
+  const replayRuns = new Map<RootBlobCandidate["role"], {
+    text: string;
+    entry: RootBlobCandidate;
+    length: number;
+  }>();
+  const toolCallCounts = new Map<string, number>();
   let maxRunLength = 1;
-  let currentRun = 1;
+  let maxToolCallCount = 1;
   const pushDeduped = (
     payload: { role: string; content: [{ type: "text"; text: string }] },
     role: RootBlobCandidate["role"],
     opts: { messageIndex: number; text?: string },
     normalized: string,
   ): void => {
-    if (externalModel && lastReplayText !== undefined && normalized === lastReplayText && lastReplayEntry) {
-      collapsedRepeats++;
-      currentRun++;
-      if (currentRun > maxRunLength) maxRunLength = currentRun;
-      const marked = `${normalized}\n[note: this exact output was produced ${currentRun} times in a row]`;
+    const previous = replayRuns.get(role);
+    if (externalModel && previous?.text === normalized) {
+      const runLength = previous.length + 1;
+      if (runLength > maxRunLength) maxRunLength = runLength;
+      const marked = `${normalized}\n[note: this exact output was produced ${runLength} times in a row]`;
       const replacement = rootBlobCandidate(
         { role: payload.role, content: [{ type: "text", text: marked }] },
         role,
-        opts,
+        { ...opts, messageIndex: previous.entry.messageIndex ?? opts.messageIndex },
       );
-      entries[entries.indexOf(lastReplayEntry)] = replacement;
-      lastReplayEntry = replacement;
+      entries[entries.indexOf(previous.entry)] = replacement;
+      replayRuns.set(role, { text: normalized, entry: replacement, length: runLength });
       return;
     }
-    currentRun = 1;
     const entry = rootBlobCandidate(payload, role, opts);
     entries.push(entry);
-    lastReplayText = normalized;
-    lastReplayEntry = entry;
+    replayRuns.set(role, { text: normalized, entry, length: 1 });
   };
 
   for (let i = 0; i < messages.length; i++) {
@@ -337,14 +339,13 @@ function rootPromptMessages(
     const message = messages[i];
     if (!message) continue;
     if (message.role === "user" || message.role === "developer") {
+      replayRuns.clear();
+      toolCallCounts.clear();
       const text = historyContentText(message).trim();
       // Cursor root replay expects OpenAI-style content parts for historical user messages.
       // A bare string survives blob hydration but external workers reject the completed replay
       // before tokenization (`usedTokens: 0`, then invalid_argument).
       if (text.length > 0) {
-        lastReplayText = undefined;
-        lastReplayEntry = undefined;
-        currentRun = 1;
         entries.push(rootBlobCandidate({
           role: "user",
           content: [{ type: "text", text }],
@@ -362,9 +363,23 @@ function rootPromptMessages(
           text,
         );
       }
+      if (externalModel && Array.isArray(message.content)) {
+        const callsInMessage = new Set<string>();
+        for (const part of message.content) {
+          if (part.type !== "toolCall") continue;
+          const args = serializeToolCallArguments(part.arguments);
+          if (args === undefined) continue;
+          callsInMessage.add(JSON.stringify([namespacedToolName(part.namespace, part.name), args]));
+        }
+        for (const call of callsInMessage) {
+          const count = (toolCallCounts.get(call) ?? 0) + 1;
+          toolCallCounts.set(call, count);
+          if (count > maxToolCallCount) maxToolCallCount = count;
+        }
+      }
       // Assistant tool CALLS are NOT replayed as a separate visible "[Tool Call]" entry: a model
        // few-shot-mimics that marker and emits later tool calls as inert text (363-B guard in
-      // tests/cursor-tool-continuation.test.ts). The invocation is instead named INSIDE the paired
+      // tests/providers/cursor/cursor-tool-continuation.test.ts). The invocation is instead named INSIDE the paired
       // "[Tool Result]" envelope below, which carries the same information without a mimickable
       // call template (devlog 260829 002_audit_round2).
     } else if (message.role === "toolResult") {
@@ -382,7 +397,12 @@ function rootPromptMessages(
     }
   }
   // Severe repetition: tell the model ONCE, imperatively, to change strategy.
-  if (externalModel && maxRunLength >= 3) {
+  if (externalModel && maxToolCallCount >= 3) {
+    entries.push(rootBlobCandidate({
+      role: "user",
+      content: [{ type: "text", text: `[context note] The transcript above contains the same tool call repeated ${maxToolCallCount} times in this user turn. Repeating it again is a failure. Take a DIFFERENT action now, or state plainly what is blocking progress.` }],
+    }, "user", {}));
+  } else if (externalModel && maxRunLength >= 3) {
     entries.push(rootBlobCandidate({
       role: "user",
       content: [{ type: "text", text: `[context note] The transcript above contains the same output repeated ${maxRunLength} times in a row. Repeating it again is a failure. Take a DIFFERENT action now, or state plainly what is blocking progress.` }],
@@ -934,7 +954,7 @@ function toolCallArgumentsText(args: Record<string, unknown>): string {
  *
  * Why not a separate "[Tool Call]" entry: a model few-shot-mimics that marker and starts emitting
  * later tool calls as inert text instead of real tool frames, which halts multi-tool continuations
- * (363-B guard, tests/cursor-tool-continuation.test.ts). Why it must exist at all: without any
+ * (363-B guard, tests/providers/cursor/cursor-tool-continuation.test.ts). Why it must exist at all: without any
  * record of the invocation, the replayed result is orphaned — its `call_id` refers to nothing the
  * model can see — and live cursor/grok-4.6 turns re-ran commands that had already succeeded while
  * narrating a phantom interrupt (devlog 260829 000_rca). A prose line inside the result satisfies

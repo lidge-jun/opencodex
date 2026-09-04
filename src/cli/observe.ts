@@ -72,7 +72,9 @@ async function logs(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const limit = takeIntegerOption(args, "--limit", { min: 1 }) ?? 200;
   rejectArgs(args, USAGE);
   if (wantsJson && wantsJsonl) throw new CliUsageError("--json and --jsonl cannot be combined", USAGE);
-  if (follow && wantsJson) throw new CliUsageError("--follow uses --jsonl, not --json", USAGE);
+  if (follow && wantsJson) {
+    throw new CliUsageError("--follow cannot be combined with --json; use --jsonl for streaming JSONL", USAGE);
+  }
   let seen = new Set<string>();
   do {
     const data = await runtimeRequest(`/api/logs${query({ provider, model, status, conversationId, limit })}`, {}, deps);

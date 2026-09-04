@@ -13,7 +13,7 @@ Code 可以使用每一個已路由的供應商——包括 OAuth 登入、帳�
 每個請求只使用**作用中**帳號。
 
 **實驗性、opt-in** 的 Claude 帳號池（`anthropicAccountPool.enabled`）會在這些 OAuth 帳號之間加入
-sticky session affinity 與 429 冷卻故障轉移。僅對**新**工作階段，`anthropicAccountPool.strategy`
+sticky session affinity 與依用量的新工作階段選擇。它**不**控制 429 容錯移轉：只要儲存了兩個以上可用帳號，被限流的請求無論此開關開或關都會切換到另一個帳號，且無法關閉。僅對**新**工作階段，`anthropicAccountPool.strategy`
 會在合格帳號之間選擇：`quota`（預設）在用量高於 `autoSwitchThreshold` 時，依
 `anthropicAccountPool.quotaWindow` 所設定的視窗挑選已知用量最低者（`five-hour` 為預設，亦可選
 `weekly` 或 `max-utilization`）；

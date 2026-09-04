@@ -1,0 +1,34 @@
+opencodex
+v2.42.0
+대시보드
+Codex 설정
+프로바이더
+모델
+서브에이전트
+로그&디버그
+사용량
+저장소
+연동
+한국어
+시스템
+프록시
+GitHub
+대시보드
+
+로컬 opencodex 프록시와 프로바이더, 그리고 Codex로 라우팅되는 모델의 실시간 상태입니다.
+
+개요
+활성 프로바이더
+사용 가능한 모델
+활성 프로바이더
+9
+이름	어댑터	Base URL	모델
+OpenAI (Codex login)	openai-responses	https://chatgpt.com/backend-api/codex	—
+Anthropic Claude	anthropic	https://api.anthropic.com	claude-sonnet-5
+xAI Grok	openai-chat	https://api.x.ai/v1	grok-4.6
+Cursor	cursor	https://api2.cursor.sh	auto
+Google Antigravity	google	https://daily-cloudcode-pa.googleapis.com	gemini-3.7-flash
+OpenCode Free	openai-chat	https://opencode.ai/zen/v1	—
+Lidge	openai-chat	http://100.100.125.116:8081/v1	qwen3.8-27b-nvfp4
+Muse Code	openai-responses	https://api.meta.ai/v1	muse-spark-1.3
+Kimi	openai-chat	https://api.kimi.com/coding/v1	kimi-k2.7-code

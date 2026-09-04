@@ -16,9 +16,9 @@ import {
   type OcxErrorPayload,
 } from "./lib/errors";
 import { redactSecretString } from "./lib/redact";
-import { repairFreeformToolInput } from "./responses/apply-patch-envelope";
+import { mayBecomePatchEnvelope, repairFreeformToolInput } from "./responses/apply-patch-envelope";
 import { encodeCompactionSummary } from "./responses/compaction";
-import { compileCodeModeHelperInput } from "./responses/code-mode-helper-compat";
+import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "./responses/code-mode-helper-compat";
 import { isTruncatedStopReason, truncationReasonFor } from "./responses/truncated-stop-reason";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
 import { rememberReasoningForCall } from "./responses/reasoning-replay-cache";
@@ -33,7 +33,7 @@ import {
   stripCitationMarkers,
   type CitationMarkerFilter,
 } from "./responses/citation-markers";
-import { normalizeDeclaredToolName } from "./types";
+import { declaresCodeModeExec, normalizeDeclaredToolName } from "./types";
 import { usageDisplayTotalTokens } from "./usage/totals";
 import { appendSafeWebSearchSource, safeWebSearchSources } from "./web-search/sources";
 import {
@@ -59,6 +59,10 @@ function sseEvent(name: string, data: Record<string, unknown>): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
   // input_tokens_details / output_tokens_details are ALWAYS emitted (zero defaults):
   // strict Responses clients deserialize them as required fields — grok-build's pinned
@@ -80,7 +84,24 @@ function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
   const inputTokens = usage.contextTotalTokens !== undefined
     ? Math.max(0, usage.contextTotalTokens - usage.outputTokens)
     : usage.inputTokens;
+  // openai/codex#41980 parity: unknown upstream usage fields (subscription metadata, future
+  // counters) pass through the rebuild. Normalized values stay authoritative for the known
+  // keys (they are derived from the same raw values, so this never disagrees with upstream).
+  const raw: Record<string, unknown> = usage.rawUsage ?? {};
+  // cache_write_tokens is a KNOWN key: it is emitted only from the validated normalized
+  // value below, never copied through raw (an unknown-shaped value must not leak into the
+  // normalized contract).
+  const rawInputDetails = isRecord(raw.input_tokens_details)
+    ? Object.fromEntries(Object.entries(raw.input_tokens_details as Record<string, unknown>)
+      .filter(([key]) => key !== "cache_write_tokens"))
+    : {} as Record<string, unknown>;
+  const rawOutputDetails = isRecord(raw.output_tokens_details)
+    ? raw.output_tokens_details as Record<string, unknown>
+    : {} as Record<string, unknown>;
   const out: Record<string, unknown> = {
+    ...Object.fromEntries(Object.entries(raw).filter(([key]) =>
+      key !== "input_tokens" && key !== "output_tokens" && key !== "total_tokens"
+      && key !== "input_tokens_details" && key !== "output_tokens_details")),
     input_tokens: inputTokens,
     output_tokens: usage.outputTokens,
     total_tokens: usage.contextTotalTokens !== undefined
@@ -90,18 +111,19 @@ function responsesUsage(usage: OcxUsage | undefined): Record<string, unknown> {
   // cached_tokens carries cache READS only, matching OpenAI semantics, and is always present
   // (zero default) for strict clients. Clamp to inputTokens so a provider's absolute
   // checkpoint can never report more cache reads than input.
-  const inputDetails: Record<string, number> = {
+  const inputDetails: Record<string, unknown> = {
+    ...rawInputDetails,
     cached_tokens: Math.min(usage.cachedInputTokens ?? 0, inputTokens),
   };
   if (usage.cacheCreationInputTokens !== undefined) {
-    const cacheRead = inputDetails.cached_tokens ?? 0;
+    const cacheRead = typeof inputDetails.cached_tokens === "number" ? inputDetails.cached_tokens : 0;
     inputDetails.cache_write_tokens = Math.min(
       usage.cacheCreationInputTokens,
       Math.max(0, inputTokens - cacheRead),
     );
   }
   out.input_tokens_details = inputDetails;
-  out.output_tokens_details = { reasoning_tokens: usage.reasoningOutputTokens ?? 0 };
+  out.output_tokens_details = { ...rawOutputDetails, reasoning_tokens: usage.reasoningOutputTokens ?? 0 };
   return out;
 }
 
@@ -255,9 +277,12 @@ export function bridgeToResponsesSSE(
     toolName: string,
     namespace?: string,
     codeModeHelperName?: string,
-  ): string => codeModeHelperName
-    ? compileCodeModeHelperInput(args, codeModeHelperName)
-    : repairFreeformToolInput(args, toolName, namespace);
+  ): string => {
+    const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace, options?.declaredToolNames);
+    return helper
+      ? compileCodeModeHelperInput(args, helper)
+      : repairFreeformToolInput(args, toolName, namespace);
+  };
   // Best-effort unwrap of a PARTIAL freeform arg buffer for live input streaming
   // (`response.custom_tool_call_input.delta` — codex-rs uses it for UI preview only;
   // the completed custom_tool_call item stays authoritative). Compact `{"input":"...`
@@ -1150,7 +1175,13 @@ export function bridgeToResponsesSSE(
                   if (!FREEFORM_WRAP_PREFIX.startsWith(currentToolCall.args)) {
                     const full = freeformPartialInput(currentToolCall.args);
                     const emitted = currentToolCall.inputEmitted ?? "";
-                    if (full.startsWith(emitted) && full.length > emitted.length) {
+                    // Also hold a buffer that could still become a complete patch envelope:
+                    // at completion such a body is recompiled into an apply_patch helper call,
+                    // and streaming the envelope bytes first would be that same rewind.
+                    const mayCompile = declaresCodeModeExec(options?.declaredToolNames)
+                      && !currentToolCall.namespace
+                      && currentToolCall.name === "exec";
+                    if (!(mayCompile && mayBecomePatchEnvelope(full)) && full.startsWith(emitted) && full.length > emitted.length) {
                       emit("response.custom_tool_call_input.delta", {
                         item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
                         delta: full.slice(emitted.length),
@@ -1644,9 +1675,12 @@ function buildResponseJSONWithBudget(
     toolName: string,
     namespace?: string,
     codeModeHelperName?: string,
-  ): string => codeModeHelperName
-    ? compileCodeModeHelperInput(args, codeModeHelperName)
-    : repairFreeformToolInput(args, toolName, namespace);
+  ): string => {
+    const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace, options?.declaredToolNames);
+    return helper
+      ? compileCodeModeHelperInput(args, helper)
+      : repairFreeformToolInput(args, toolName, namespace);
+  };
   const parseArgsObj = (args: string): Record<string, unknown> => {
     try { const o = JSON.parse(args); return o && typeof o === "object" ? o : {}; } catch { return {}; }
   };

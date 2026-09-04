@@ -161,6 +161,23 @@ function barFillStyle(percent: number): CSSProperties {
   return { ["--bar-scale" as string]: String(barWidth(percent) / 100) };
 }
 
+/**
+ * How long ago an observation was taken, bucketed.
+ *
+ * Coarse on purpose: a passively observed quota is only as precise as the moment it was
+ * seen, and a to-the-second age would imply a freshness the number does not have.
+ * Negative elapsed (clock skew between the proxy that wrote it and this browser) reads as
+ * just-now rather than as a negative age.
+ */
+export function formatObservedAge(observedAt: number, t: TFn, now = Date.now()): string | null {
+  const elapsed = now - observedAt;
+  if (!Number.isFinite(elapsed) || elapsed < 60_000) return null;
+  // Units go through t(): the suffix is copy, and "m"/"h"/"d" do not survive translation.
+  if (elapsed < 60 * 60_000) return t("quota.ageMinutes").replace("{n}", String(Math.floor(elapsed / 60_000)));
+  if (elapsed < 24 * 60 * 60_000) return t("quota.ageHours").replace("{n}", String(Math.floor(elapsed / (60 * 60_000))));
+  return t("quota.ageDays").replace("{n}", String(Math.floor(elapsed / (24 * 60 * 60_000))));
+}
+
 export default function QuotaBars({
   quota,
   plan,
@@ -171,6 +188,7 @@ export default function QuotaBars({
   pending = false,
   incompleteWindowKeys,
   incompleteCustomWindowLabels,
+  observedAt,
 }: {
   quota: AccountQuota | null;
   plan?: string | null;
@@ -187,9 +205,26 @@ export default function QuotaBars({
   /** Optional overview-only coverage status. Other quota surfaces remain unchanged when omitted. */
   incompleteWindowKeys?: ReadonlySet<QuotaWindowKey>;
   incompleteCustomWindowLabels?: ReadonlySet<string>;
+  /**
+   * When set, state how old these numbers are.
+   *
+   * Set ONLY for a passively observed quota, where the value arrives as a side effect of
+   * a real request and nothing refreshes it. A probed provider re-reads on its own TTL,
+   * so an age line there would be noise; here its absence would let a days-old reading
+   * look live.
+   */
+  observedAt?: number;
 }) {
   const { locale } = useI18n();
   const rows = buildQuotaRows(quota, plan, t);
+  // Rendered above the bars in both layouts. Null age (under a minute, or no observation)
+  // renders nothing rather than "just now", which would be one more thing to read.
+  const observedAge = observedAt === undefined ? null : formatObservedAge(observedAt, t);
+  const observedLine = observedAge === null ? null : (
+    <p className="quota-observed muted" title={t("quota.observedHint")}>
+      {t("quota.observedAgo").replace("{age}", observedAge)}
+    </p>
+  );
   if (rows.length === 0) {
     if (!pending) return null;
     if (layout === "stacked") {
@@ -234,6 +269,7 @@ export default function QuotaBars({
   if (layout === "stacked") {
     return (
       <div className={`quota-stacked${className ? ` ${className}` : ""}`}>
+        {observedLine}
         {rows.map(row => (
           <StackedQuotaRow
             key={row.limitLabel}
@@ -251,6 +287,7 @@ export default function QuotaBars({
   }
   return (
     <div className={`codex-account-quota-slot quota-compact${className ? ` ${className}` : ""}`}>
+      {observedLine}
       {rows.map(row => (
         <QuotaRow
           key={row.label}

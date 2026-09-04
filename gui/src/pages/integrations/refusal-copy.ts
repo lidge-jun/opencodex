@@ -11,6 +11,8 @@ import { NativeApiError, type NativeRefusalEnvelope } from "./native-api";
  */
 const CODE_KEYS: Record<string, TKey> = {
   integration_mutation_busy: "integrations.error.busy",
+  integration_journal_newest_protected: "integrations.rollback.deleteNewest",
+  integration_operation_not_found: "integrations.rollback.deleteGone",
 };
 
 /**

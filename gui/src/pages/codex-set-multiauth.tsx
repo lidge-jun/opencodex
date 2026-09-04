@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import CodexAccountPool from "../components/CodexAccountPool";
 import DefaultModeRequestUserInputSetting from "../components/DefaultModeRequestUserInputSetting";
+import UltraFastTierSetting from "../components/UltraFastTierSetting";
 import CodexAccountPickerSetting from "../components/CodexAccountPickerSetting";
 import { codexAccountModeState, type CodexAccountModeState } from "../codex-multi-state";
 import { navigateHash } from "../hash-routing";
@@ -22,29 +23,19 @@ export function OpenAiAccountModeBanner({
   onEnable: () => void;
 }) {
   const t = useT();
+  // Nothing is known yet: an empty titled card is a blank slab that later jumps when
+  // /api/config arrives. Render nothing and let the pool section own the space.
+  if (state === null) return null;
   return (
     <div className="panel openai-account-mode-banner" style={{ marginBottom: 16 }}>
       <div className="row">
         <strong>{t("codexAuth.accountModeTitle")}</strong>
-        {state === null ? (
-          <span className="badge badge-accent openai-account-mode-banner__badge-slot openai-account-mode-banner__badge-slot--pending" aria-hidden="true">
-            {t("codexAuth.accountModePool")}
-          </span>
-        ) : state === "pool" ? (
+        {state === "pool" ? (
           <span className="badge badge-accent openai-account-mode-banner__badge-slot">{t("codexAuth.accountModePool")}</span>
         ) : state === "direct" ? (
           <span className="badge badge-green openai-account-mode-banner__badge-slot">{t("codexAuth.accountModeDirect")}</span>
         ) : null}
       </div>
-      {/*
-        Reserve the description line while config is still unknown so the pool
-        section below does not jump when /api/config arrives.
-      */}
-      {state === null && (
-        <p className="card-sub openai-account-mode-banner__desc openai-account-mode-banner__desc--pending" aria-hidden="true">
-          &nbsp;
-        </p>
-      )}
       {state === "pool" && (
         <p className="card-sub openai-account-mode-banner__desc">{t("codexAuth.accountModePoolDesc")}</p>
       )}
@@ -206,6 +197,7 @@ export default function CodexSetMultiauth({ apiBase }: { apiBase: string }) {
         advancedExtras={<>
           <CodexAccountPickerSetting apiBase={apiBase} />
           <DefaultModeRequestUserInputSetting apiBase={apiBase} />
+          <UltraFastTierSetting apiBase={apiBase} />
         </>}
       />
     </>

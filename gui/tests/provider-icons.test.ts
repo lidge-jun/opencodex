@@ -74,3 +74,21 @@ test("the MiniMax and Xiaomi MiMo provider ids resolve to their brand's mark", (
   // The precedent that makes the two above consistent rather than novel.
   expect(providerIconSrc("mimo-free")).toBe("/provider-icons/xiaomi-color.svg");
 });
+
+/*
+ * One brand, two credentials.
+ *
+ * `meta-model` is Meta's own pay-as-you-go Model API and `meta-muse` imports the
+ * Muse Code CLI's credential. They are separate providers with separate billing
+ * and separate ToS risk, but they are the same company's mark -- the same shape
+ * as the three Alibaba plan ids sharing one asset.
+ *
+ * Pinned explicitly rather than left to the generic wiring check above, because
+ * that check only fires when an asset named after the id is already committed.
+ * Neither id is `meta`, so a dropped alias row here would restore the fallback
+ * tile silently.
+ */
+test("both Meta provider ids resolve to the Meta mark", () => {
+  expect(providerIconSrc("meta-model")).toBe("/provider-icons/meta.svg");
+  expect(providerIconSrc("meta-muse")).toBe("/provider-icons/meta.svg");
+});

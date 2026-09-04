@@ -9,6 +9,16 @@ import type { TFn } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { startVisibilityPoll } from "../visibility-poll";
+
+/**
+ * How long the modal waits before giving up. The browser flow is bounded by
+ * the proxy's own callback server; the device grant lives 15 minutes and the
+ * user is expected to walk away, so it gets the grant's lifetime plus a small
+ * settlement margin for the token exchange and credential write that follow
+ * the final poll.
+ */
+const LOGIN_TIMEOUT_BROWSER_MS = 300_000;
+const LOGIN_TIMEOUT_DEVICE_MS = 960_000;
 import {
   codexAccountMutationCompletion,
   type CodexAccountMutationCompletion,
@@ -74,7 +84,9 @@ export function useAddCodexAccountOAuth({
     const flowId = flowRef.current;
     flowRef.current = null;
     dispatch({ type: "set-flow-id", flowId: null });
-    dispatch({ type: "set-auth-url", authUrl: "" });
+    // Clear the whole hint, not just the URL: leaving deviceCode behind would
+    // display an expired code next to the timeout error.
+    dispatch({ type: "set-login-hint", authUrl: "" });
     stopPolling();
     loginAbortRef.current?.abort();
     loginAbortRef.current = null;
@@ -123,7 +135,7 @@ export function useAddCodexAccountOAuth({
     onCloseRef.current();
   }, [ui.step, cancelLogin]);
 
-  const startOAuth = useCallback(async (requestedId?: string) => {
+  const startOAuth = useCallback(async (requestedId?: string, options?: { device?: boolean }) => {
     clearManualCode();
     flowRef.current = null;
     dispatch({ type: "set-flow-id", flowId: null });
@@ -134,18 +146,32 @@ export function useAddCodexAccountOAuth({
     pollErrorStreakRef.current = 0;
     try {
       const accountId = reauthAccountId ?? requestedId?.trim() ?? "";
+      // An explicit choice from the modal, not an inference. "Don't open a
+      // browser on the proxy machine" was tempting to reuse, but it means
+      // "use a different browser", not "change authentication protocol" —
+      // reading it as a device-flow request would retarget a preference some
+      // users set for an unrelated reason (#3366).
+      const wantsDeviceFlow = options?.device === true;
       const requestLogin = () => fetch(`${apiBase}/api/codex-auth/login`, {
         signal: controller.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...openBrowserRequestField(),
+          ...(wantsDeviceFlow ? { device: true } : {}),
           ...(reauthAccountId
             ? { id: reauthAccountId, reauth: true }
             : (accountId ? { id: accountId } : {})),
         }),
       });
-      type LoginResponse = { url?: string; flowId?: string; error?: string; status?: string };
+      type LoginResponse = {
+        url?: string;
+        flowId?: string;
+        error?: string;
+        status?: string;
+        deviceCode?: string;
+        instructions?: string;
+      };
       let resp = await requestLogin();
       if (!aliveRef.current) return;
       if (resp.status === 409) {
@@ -167,7 +193,15 @@ export function useAddCodexAccountOAuth({
       if (data.url) {
         flowRef.current = data.flowId ?? null;
         dispatch({ type: "set-flow-id", flowId: data.flowId ?? null });
-        dispatch({ type: "set-auth-url", authUrl: data.url });
+        // Carry the device code and prose through: LoginHint already renders a
+        // copyable code, but the Codex modal used to pass only the URL, so a
+        // device login showed a page with no code to type (#3366).
+        dispatch({
+          type: "set-login-hint",
+          authUrl: data.url,
+          deviceCode: data.deviceCode,
+          instructions: data.instructions,
+        });
         dispatch({ type: "set-step", step: "oauth-waiting" });
         stopPolling();
         const fid = data.flowId ?? "";
@@ -246,7 +280,10 @@ export function useAddCodexAccountOAuth({
               dispatch({ type: "set-error", error: t("modal.loginTimeout") });
             }
           }
-        }, 300_000);
+          // A device login is deliberately slow: the operator leaves this
+          // machine to enter the code elsewhere. Cancelling at five minutes
+          // would abort a grant that is still valid for ten more.
+        }, wantsDeviceFlow ? LOGIN_TIMEOUT_DEVICE_MS : LOGIN_TIMEOUT_BROWSER_MS);
       }
       if (data.error && !data.url) dispatch({ type: "set-error", error: data.error });
     } catch (e) {

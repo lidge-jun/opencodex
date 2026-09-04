@@ -149,6 +149,13 @@ export function compareClientVersionsForTests(left: string, right: string): numb
 }
 
 /** Numeric-segment comparison. Only used to pick the highest floor in a known-good set. */
+// Prerelease and build suffixes are deliberately NOT ordered. Splitting on [.+-] turns the
+// suffix into a non-finite segment that reads as 0, so `0.144.0-rc.1` sorts at or above
+// `0.144.0` rather than below it, the inverse of semver. That is tolerable because every
+// version this ranks against is a release version: the gated floor, the measured minimum, and
+// the snapshot's `minimal_client_version` rows. A prerelease runtime is therefore passed
+// through exactly as it was before the floor bound tier 2, so this is not a new hazard. Order
+// the suffix properly before reusing this anywhere a prerelease has to sort below its release.
 function compareClientVersions(left: string, right: string): number {
   const l = left.split(/[.+-]/).map(Number);
   const r = right.split(/[.+-]/).map(Number);
@@ -165,9 +172,10 @@ function compareClientVersions(left: string, right: string): number {
  *
  * 1. the inbound request's own `client_version` — the only value certainly describing the
  *    client being answered;
- * 2. the selected Codex runtime version, for background sync where no request exists.
- *    Retained sync refreshes runtime evidence before discovery, which is what makes this
- *    usable here; the persisted file itself carries no freshness guarantee.
+* 2. the selected Codex runtime version, for callers with no request of their own — but never
+ *    below `GATED_MODEL_CLIENT_VERSION_FLOOR`. Retained sync refreshes runtime evidence before
+ *    discovery, which is what makes this usable here; the persisted file itself carries no
+ *    freshness guarantee.
  * 3. the floor this build's own bundled roster records for the models being gated
  *    (`GATED_MODEL_CLIENT_VERSION_FLOOR`).
  *
@@ -177,6 +185,25 @@ function compareClientVersions(left: string, right: string): number {
  * fix is meant to restore. The floor is not invented: it is the version this build's own
  * snapshot states the gated models require, so asking under it is the narrowest question
  * that can still return them.
+ *
+ * The floor binds tier 2 as well, and that is the whole of #3436. #3022 gave tier 3 the
+ * measured minimum but left tier 2 to speak for itself, so a host whose persisted runtime was
+ * REAL but OLD — 0.141.0 against a measured 0.144.0 — asked upstream under a version upstream
+ * filters on, got an honest roster with no gpt-5.6, and lost sol/terra/luna everywhere. That
+ * made an outdated CLI strictly worse than no CLI at all, since the runtime-less host already
+ * asked at the floor and kept its models. The clamp only ever raises: a runtime at or above
+ * the floor is preserved exactly, because a newer client can drive models the floor cannot
+ * name.
+ *
+ * Which tier answers is a question about WHICH QUESTION IS BEING ASKED, not about background
+ * versus request path — `isDirectCallerEntitledToCodexModel` and both authorization paths in
+ * `auth-context.ts` are inbound requests that reach tier 2 because they carry no version:
+ *
+ * - No inbound version: the caller is asking whether the ACCOUNT owns the model. Upstream
+ *   only incidentally filters that answer by version, so ask at no less than the floor.
+ * - An inbound version: the caller is asking what THAT CLIENT may use. Answer verbatim, even
+ *   when it is older than the floor. Clamping there would advertise rows the client told us
+ *   it cannot drive (#2548) and would turn an honest `unknown` into a cached `denied`.
  *
  * There is deliberately no `0.0.0`-style fallback. A placeholder describes a client that
  * predates every gated model, which is what made upstream answer with an empty roster and
@@ -195,7 +222,23 @@ export function resolveCodexEntitlementClientVersion(
   const selected = bypass
     ? readRuntimeVersion(loadRuntime)
     : memoizedPersistedRuntimeVersion(loadRuntime, options.now ?? Date.now());
-  return selected ?? GATED_MODEL_CLIENT_VERSION_FLOOR;
+  return raisedToGatedFloor(selected);
+}
+
+/**
+ * The gated floor as a lower bound rather than a fallback.
+ *
+ * Applied only on the way out of the resolver. `readRuntimeVersion` and
+ * `memoizedPersistedRuntimeVersion` keep reporting what is actually on disk, because
+ * `selectedVersion` is probe evidence that runtime identity, catalog cache keys,
+ * `X-Codex-Version` and install provenance all read for their own reasons. Clamping the
+ * persisted value itself would corrupt every one of them to fix one question.
+ */
+function raisedToGatedFloor(selected: string | null): string {
+  if (selected === null) return GATED_MODEL_CLIENT_VERSION_FLOOR;
+  return compareClientVersions(selected, GATED_MODEL_CLIENT_VERSION_FLOOR) >= 0
+    ? selected
+    : GATED_MODEL_CLIENT_VERSION_FLOOR;
 }
 const MODEL_ROSTER_TTL_MS = 5 * 60_000;
 
@@ -575,6 +618,13 @@ async function fetchAccountModels(
       return unconfirmedAccountModels(credential, clientVersion, now, { kind: "parsed-empty" });
     }
     const hasUnknownGatedAbsence = [...ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS]
+      // Reachable only through tier 1, an inbound client_version below the floor. Every other
+      // resolution is now structurally >= every recorded minimum, because the floor is the max
+      // of the derived value and the same measured constant these minimums hold. So this is the
+      // escape hatch for a self-declared old client, not live protection on the background path:
+      // there, an absence really was asked for at an adequate version and is a denial. If
+      // upstream ever raises its true requirement above the measured constant, that constant is
+      // the only thing standing between an entitled account and a five-minute cached denial.
       .some(([modelId, minimum]) => (
         !models.has(modelId) && compareClientVersions(clientVersion, minimum) < 0
       ));

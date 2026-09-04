@@ -29,11 +29,14 @@ export function RollbackRow({
   row,
   showClient,
   onRestore,
+  onDelete,
 }: {
   row: IntegrationJournalRow;
   /** The overview names the client; a client tab would only repeat its heading. */
   showClient?: boolean;
   onRestore: (row: IntegrationJournalRow) => void;
+  /** Optional: a surface that cannot refresh the journal must not offer it. */
+  onDelete?: (row: IntegrationJournalRow) => void;
 }) {
   const t = useT();
   return (
@@ -55,6 +58,22 @@ export function RollbackRow({
           {row.undoable ? t("integrations.action.undo") : t("integrations.action.restorePoint")}
         </button>
       )}
+      {/*
+        Delete sits AFTER restore, and only when the server says so. An expired
+        row keeps its badge and gains this button -- that pairing is the point of
+        the feature: a row whose bytes are gone was previously a dead entry with
+        no action at all.
+      */}
+      {row.deletable && onDelete && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={() => onDelete(row)}
+          aria-label={t("integrations.rollback.deleteAria", { at: new Date(row.at).toLocaleString() })}
+        >
+          {t("integrations.rollback.delete")}
+        </button>
+      )}
     </li>
   );
 }
@@ -63,10 +82,12 @@ export function RollbackHistory({
   rows,
   showClient,
   onRestore,
+  onDelete,
 }: {
   rows: readonly IntegrationJournalRow[];
   showClient?: boolean;
   onRestore: (row: IntegrationJournalRow) => void;
+  onDelete?: (row: IntegrationJournalRow) => void;
 }) {
   const t = useT();
   const [shown, setShown] = useState(PAGE);
@@ -79,14 +100,19 @@ export function RollbackHistory({
   return (
     <div className="integration-history">
       <ul className="integration-history-list">
-        <RollbackRow row={newest} showClient={showClient} onRestore={onRestore} />
+        {/*
+          The newest row gets the prop too. The server answers `deletable: false`
+          for it, so no button appears -- but withholding the prop here would make
+          that rule depend on an omission rather than on the data.
+        */}
+        <RollbackRow row={newest} showClient={showClient} onRestore={onRestore} onDelete={onDelete} />
       </ul>
       {older.length > 0 && (
         <details className="integration-history-older">
           <summary>{t("integrations.rollback.older")}</summary>
           <ul className="integration-history-list">
             {visible.map(row => (
-              <RollbackRow key={row.opId} row={row} showClient={showClient} onRestore={onRestore} />
+              <RollbackRow key={row.opId} row={row} showClient={showClient} onRestore={onRestore} onDelete={onDelete} />
             ))}
           </ul>
           {remaining > 0 && (

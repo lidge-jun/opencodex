@@ -3,8 +3,11 @@
 Research doc. No diffs here (LEXICO-SPLIT-01); the implementation shape lives in the
 decade docs.
 
-> **Outcome: this research closed wp2 as a `NOOP` negative. See `020`.** No credential
-> was extracted, no login completed, and no Meta credential exists on this machine.
+> **Outcome: this research closed wp2 as a `NOOP` negative (see `020`), and is now
+> superseded by `003`.** At the time of writing no login had completed and no credential
+> existed on this machine. The owner has since logged in and authorized the work; `003`
+> records what became measurable, including the finding that the OAuth access token does
+> NOT authenticate the Model API while a sibling API key does.
 
 ## The docs were not the whole truth
 

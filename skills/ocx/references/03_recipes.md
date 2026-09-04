@@ -170,3 +170,38 @@ ocx storage trash restore <entry-id> --yes --json
 
 The preview runs in both paths because the mutating route requires the `digest` the preview returns
 and rejects a stale one with 409. So the two invocations agree about what is being authorized.
+
+## 9. Read Muse Code usage, and know why it can be old
+
+`meta-muse` reports usage differently from every other provider, and the difference changes what
+you can conclude from it.
+
+```bash
+ocx account list meta-muse --json --quota
+```
+
+Each row's `quota` carries the 5-hour and weekly windows plus `updatedAt`. **Read `updatedAt`, not
+just the percentages.** Meta publishes no quota endpoint; the value arrives inside a streaming
+response and is cached, so it is as old as the last streaming turn through this provider — possibly
+hours or days.
+
+```bash
+ocx account refresh meta-muse
+```
+
+This reports that there is nothing to refresh, and that is correct rather than a failure. A fresh
+number would require spending a real inference turn, so no command issues one. To update the
+reading, run an actual request through the provider and read the list again.
+
+Two absences are also expected and are not defects:
+
+- An account that has not yet served a streaming turn has **no** `quota` key at all. That is
+  distinct from `quotaUnavailable`, which means a probe was attempted and failed — nothing is
+  probed here.
+- A turn that goes through request translation rather than passthrough reports no usage, so a
+  client on a translated wire will never move this number.
+
+`ocx provider test meta-muse` answers `applicable: false` with reason `static_catalog`. The
+provider sets `liveModels: false` deliberately — its authenticated roster includes image and voice
+models this Responses-agent provider cannot drive — so the absence of a live probe is a design
+decision, not a broken connection.

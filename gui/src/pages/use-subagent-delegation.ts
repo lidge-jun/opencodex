@@ -24,10 +24,14 @@ export type UltraModeState = {
   enabled: boolean;
   hintText: string | null;
   multiAgentV2Enabled: boolean;
+  /** The raw multi-agent mode; Subagents renders the v1/base/v2 switch from it. */
+  multiAgentMode: "v1" | "default" | "v2";
 };
 
 export type UltraModePatch = {
-  multiAgentModeHintText: string | null;
+  multiAgentModeHintText?: string | null;
+  /** The v1/base/v2 switch. Models owns the catalog-side copy; this is the delegation-side one. */
+  multiAgentMode?: "v1" | "default" | "v2";
 };
 
 type DelegationResponse = {

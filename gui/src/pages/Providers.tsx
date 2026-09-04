@@ -43,7 +43,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   /** ChatGPT/Codex login from Add Provider → Accounts (uses /api/codex-auth, not /api/oauth). */
   const [codexLoginOpen, setCodexLoginOpen] = useState(false);
   const [modelsRefreshToken, setModelsRefreshToken] = useState(0);
-  const [oauthTosPending, setOauthTosPending] = useState<{ provider: string; addAccount: boolean } | null>(null);
+  // `accountId` rides along so acknowledging the warning continues the SAME operation.
+  // Without it, a reauth that reached the modal would resume as a plain login and target
+  // the active account instead of the one the user clicked.
+  const [oauthTosPending, setOauthTosPending] = useState<
+    { provider: string; addAccount: boolean; accountId?: string } | null
+  >(null);
   /** Bumped after OAuth login so ProviderDetails switches to the Accounts tab. */
   const [accountsFocus, setAccountsFocus] = useState<{ token: number; provider: string | null }>({
     token: 0,
@@ -137,6 +142,19 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const invalidateProviderQuotas = useCallback((force = false) => {
     setQuotaRefresh(previous => ({ epoch: previous.epoch + 1, force }));
   }, []);
+  /*
+   * Operator-initiated refresh needs an answer, and the bump above is not one: it is a
+   * setState, so awaiting it tells you only that React was told to re-render. The shell
+   * owns the actual `/api/provider-quotas` read, so the resolver is parked here and the
+   * shell settles it. Without this a refresh button would flip back to idle and report
+   * success while the old numbers were still on screen.
+   */
+  const quotaRefreshWaiters = useRef<Array<(ok: boolean) => void>>([]);
+  const settleQuotaRefresh = useCallback((ok: boolean) => {
+    const waiters = quotaRefreshWaiters.current;
+    quotaRefreshWaiters.current = [];
+    for (const resolve of waiters) resolve(ok);
+  }, []);
   const { fetchConfig, fetchOauth, fetchProviderQuotas } = useProvidersFetch({
     apiBase, t, setConfig, setOauthProviders, setOauthStatus, notify,
     invalidateProviderQuotas,
@@ -195,6 +213,38 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     jsonIsDirty, setJsonLeaveOpen,
   } = jsonEditor;
 
+  /**
+   * Force a fresh quota read for one provider and resolve with what actually happened.
+   *
+   * Declared here because it needs `fetchAccountSets` from the account-pool hook above.
+   * Per-account bars come from a different read (`&quota=1` inside `fetchAccountSets`),
+   * so both must fire or the rows beside each account keep their old numbers. That read's
+   * enrichment is best-effort by design — the panel shows its own load state — so the
+   * REPORTED result is the provider-level read, which is what the button is about.
+   */
+  const refreshProviderQuota = useCallback((provider: string): Promise<boolean> => {
+    const settled = new Promise<boolean>(resolve => { quotaRefreshWaiters.current.push(resolve); });
+    void fetchAccountSets([provider]);
+    void fetchProviderQuotas(true);
+    return settled;
+  }, [fetchAccountSets, fetchProviderQuotas]);
+
+  /**
+   * Force a fresh read of EVERY provider's quota, for the overview where no provider
+   * is selected.
+   *
+   * Deliberately without `fetchAccountSets`: that is the per-account enrichment read
+   * the account panels use, it costs two upstream requests per OAuth provider, and the
+   * overview renders provider-level bars from `quotaReports` rather than account sets.
+   * `/api/provider-quotas?refresh=1` already fans out across every configured provider
+   * server-side, so this is one request that answers exactly what the overview shows.
+   */
+  const refreshAllProviderQuotas = useCallback((): Promise<boolean> => {
+    const settled = new Promise<boolean>(resolve => { quotaRefreshWaiters.current.push(resolve); });
+    void fetchProviderQuotas(true);
+    return settled;
+  }, [fetchProviderQuotas]);
+
   useEffect(() => {
     // Deferred by a microtask, not a timer. A timer had to be cancelled in cleanup, so navigating
     // away within the same tick dropped both requests with nothing to retry them and the page came
@@ -227,13 +277,20 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     refreshCodexAccount: () => codexPool.load(true),
   });
 
-  const requestLoginOAuth = (provider: string, addAccount = false) => {
+  /**
+   * The single warning-aware entry point for every OAuth login.
+   *
+   * Reauthentication used to call `loginOAuth` directly, so a user who had already logged
+   * in could refresh a high-risk credential without ever seeing the ToS modal — the map
+   * gated the first login and nothing after it.
+   */
+  const requestLoginOAuth = (provider: string, addAccount = false, accountId?: string) => {
     if (busy === provider) return;
     if (oauthTosRisk(provider)) {
-      setOauthTosPending({ provider, addAccount });
+      setOauthTosPending({ provider, addAccount, ...(accountId ? { accountId } : {}) });
       return;
     }
-    void loginOAuth(provider, addAccount);
+    void loginOAuth(provider, addAccount, accountId);
   };
 
   if (!config) {
@@ -336,6 +393,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         activeAccountNeedsReauth={activeAccountNeedsReauth}
         quotaRefreshEpoch={quotaRefresh.epoch}
         quotaForceRefresh={quotaRefresh.force}
+        onQuotaRefreshSettled={settleQuotaRefresh}
+        onRefreshAllQuotas={refreshAllProviderQuotas}
         detail={(item, data) => {
           const loginStatus = accountLoginStatus[item.name] ?? oauthStatus[item.name];
           return (
@@ -367,7 +426,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               onLogin: requestLoginOAuth,
               onCancelLogin: cancelLoginOAuth,
               onLogout: logoutOAuth,
-              onReauth: (provider, accountId) => loginOAuth(provider, true, accountId),
+              onReauth: (provider, accountId) => requestLoginOAuth(provider, true, accountId),
               onSwitchAccount: switchAccount,
               onRemoveAccount: removeAccount,
               onRetryAccounts: async provider => { await fetchAccountSets([provider]); },
@@ -375,7 +434,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
               onSwitchApiKey: switchApiKey,
               onRemoveApiKey: removeApiKey,
               onEditAlias: editCredentialAlias,
+              onRefreshQuota: refreshProviderQuota,
             }}
+            onRefreshQuota={() => refreshProviderQuota(item.name)}
             isDefault={item.name === config.defaultProvider}
             onRemoveProvider={removeProvider}
             onSetDisabled={setProviderDisabled}
@@ -441,7 +502,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           const pending = oauthTosPending;
           if (!pending) return;
           setOauthTosPending(null);
-          void loginOAuth(pending.provider, pending.addAccount);
+          void loginOAuth(pending.provider, pending.addAccount, pending.accountId);
         }}
       />
     </>

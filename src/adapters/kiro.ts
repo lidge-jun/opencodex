@@ -5,6 +5,7 @@ import { resolveKiroApiRegion, resolveKiroRequestProfile } from "../oauth/kiro";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../providers/kiro-models";
 import { modelRecordValue } from "../reasoning-effort";
 import { parseKiroEvent } from "./kiro-events";
+import { calibrateKiroEstimate, recordKiroCalibration, rekeyKiroCalibration } from "./kiro-calibration";
 import {
   classifyKiroEventError,
   classifyKiroHttpError,
@@ -186,6 +187,85 @@ function estimateKiroTokens(text: string, modelId?: string): number {
   return estimateTokens(text, modelId ? `kiro/${modelId}` : "kiro");
 }
 
+/** Hangul/Han/kana ranges, matching the shared estimator's own CJK classification. */
+function kiroCjkCount(text: string): number {
+  let cjk = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (
+      (c >= 0xac00 && c <= 0xd7a3) || (c >= 0x1100 && c <= 0x11ff) || (c >= 0x3130 && c <= 0x318f)
+      || (c >= 0x4e00 && c <= 0x9fff) || (c >= 0x3400 && c <= 0x4dbf) || (c >= 0x3040 && c <= 0x30ff)
+    ) cjk++;
+  }
+  return cjk;
+}
+
+/**
+ * Token estimate for walked payload text, with the wire expansion applied to the Latin portion
+ * only. Splitting here rather than inside the shared estimator keeps that module pure and
+ * provider-neutral: the expansion is a fact about Kiro's wire, not about tokenization.
+ */
+function estimateKiroWireTokens(text: string, modelId: string): number {
+  if (!text) return 0;
+  const cjk = kiroCjkCount(text);
+  if (cjk === 0) return Math.ceil(estimateKiroTokens(text, modelId) * KIRO_LATIN_WIRE_EXPANSION);
+  const latinTokens = estimateKiroTokens("x".repeat(text.length - cjk), modelId);
+  const cjkTokens = estimateKiroTokens("\uac00".repeat(cjk), modelId);
+  return Math.ceil(latinTokens * KIRO_LATIN_WIRE_EXPANSION + cjkTokens);
+}
+
+/**
+ * Structural cost of one conversation entry, in tokens.
+ *
+ * The walker below concatenates message TEXT, but the wire carries JSON: per-entry keys
+ * (`userInputMessage`, `content`, `modelId`, `origin`) and role framing. That is charged
+ * upstream and is invisible to a text-only count, so without it a long conversation drifts
+ * further below the real charge with every turn added — an error proportional to entry COUNT,
+ * which no per-character ratio can recover.
+ *
+ * Regressing serialized bodies against what the walker counts, over eleven payload sizes from
+ * 3 to 701 entries:
+ *
+ *     bodyBytes = 1.0422 * walkedChars + 66.7 * entries + 68
+ *
+ * 66.7 bytes at the measured 2.433 bytes per charged token is 27.4 tokens per entry. The
+ * earlier value of 12 was a conservative hand-fit taken before that regression existed, and
+ * being less than half the real cost is precisely why the estimate decayed with conversation
+ * length: an under-charge of ~15 tokens per entry is invisible across four messages and
+ * dominant across seven hundred.
+ *
+ * Cross-checked against 4,090 recorded requests, where real traffic averages 1,310 bytes per
+ * message: 66.7 bytes is 5% of that, so this term charges framing and is not quietly absorbing
+ * message content.
+ */
+const KIRO_ENTRY_FRAMING_TOKENS = 27;
+
+/**
+ * Multiplier reconciling the LATIN text estimate with what the wire charges for that same text.
+ *
+ * The shared estimator counts Latin text at 2.8 chars/token, while the wire charges 2.433 bytes
+ * per token at 1.0422 bytes per walked character — an effective 2.334 chars/token, and
+ * 2.8 / 2.334 = 1.199.
+ *
+ * The evidence that the split between this term and `KIRO_ENTRY_FRAMING_TOKENS` is right is its
+ * stability: holding framing at 27, the multiplier the charge implies stays within 1.189-1.209
+ * across a 230x range of conversation sizes. A mis-specified split drifts with size, and the
+ * earlier 1.12/12 pair did — its accuracy fell from 0.92 at four messages to 0.87 at seven
+ * hundred.
+ *
+ * LATIN ONLY, deliberately. 2.433 bytes/token is a property of this traffic mix, which is Latin
+ * and code. A Hangul character is three UTF-8 bytes but roughly one token, so its bytes-per-token
+ * is entirely different and a Latin-derived byte rate says nothing about it. Scaling CJK by this
+ * factor bills Hangul at 1.25 chars/token, against recorded ground truth that already places the
+ * shared 1.5 ratio at 0.90 of the authoritative count — an over-charge that would compact Korean
+ * threads early.
+ *
+ * This is NOT JSON escaping, despite what an earlier version of this comment claimed. Measured
+ * directly, `JSON.stringify` expands prose by 1.012 (Latin) to 1.019 (Korean), nowhere near 1.2.
+ * Escaping is real but small, and is already inside the byte measurement this factor comes from.
+ */
+const KIRO_LATIN_WIRE_EXPANSION = 1.2;
+
 function estimateKiroPayloadInputTokens(payload: Record<string, unknown>, modelId: string): number {
   const conversationState = (payload as {
     conversationState?: {
@@ -216,7 +296,9 @@ function estimateKiroPayloadInputTokens(payload: Record<string, unknown>, modelI
       if (assistant.toolUses?.length) parts.push(serializeForUsage(assistant.toolUses));
     }
   }
-  return estimateKiroTokens(parts.join("\n"), modelId) + imageTokens;
+  return estimateKiroWireTokens(parts.join("\n"), modelId)
+    + imageTokens
+    + entries.length * KIRO_ENTRY_FRAMING_TOKENS;
 }
 
 function shouldCountStablePromptOverhead(parsed: OcxParsedRequest): boolean {
@@ -990,6 +1072,11 @@ async function* parseKiroAttempt(
   // the attempt boundary. Anything the inner parser leaves behind is flushed before the terminal.
   const deferred: AdapterEvent[] = [];
   const retention = createKiroAttemptRetention(budget);
+  // Shared box: the inner parser stages its calibration observation here on the completion path,
+  // and this wrapper decides whether the attempt was terminal enough to commit it. A box rather
+  // than a return field because the completion path has a dozen terminal returns and threading a
+  // field through every one of them is exactly the kind of edit that misses one.
+  const attemptCalibration: { value?: { conversationId: string; estimated: number; charged: number } } = {};
   const attempt = parseKiroAttemptEvents(
     response,
     budget,
@@ -1001,12 +1088,22 @@ async function* parseKiroAttempt(
     conversationId,
     deferred,
     retention,
+    attemptCalibration,
     contextInputEstimate,
     priorEmittedOutput,
   );
   let handedOff = false;
   try {
     const result = yield* attempt;
+    // A staged observation only counts when this attempt is the LAST one for the user turn. An
+    // attempt that asks for the bounded fallback streams again against a rebuilt payload, so
+    // committing here would move the factor twice for one turn and score the second observation
+    // against a payload the first had already inflated.
+    const staged = attemptCalibration.value;
+    attemptCalibration.value = undefined;
+    if (staged && !result.needsFallback) {
+      recordKiroCalibration(staged.conversationId, staged.estimated, staged.charged);
+    }
     for (const event of deferred.splice(0)) {
       try { yield event; } finally { retention.releaseEvent(event); }
     }
@@ -1028,10 +1125,13 @@ async function* parseKiroAttemptEvents(
   conversationId: string | undefined,
   deferred: AdapterEvent[],
   retention: KiroAttemptRetention,
+  attemptCalibration: { value?: { conversationId: string; estimated: number; charged: number } },
   contextInputEstimate?: number,
   priorEmittedOutput = false,
 ): AsyncGenerator<AdapterEvent, KiroAttemptParseResult> {
   const emptyResult = (): KiroAttemptParseResult => ({ assistantText: "", sawReasoning: false });
+  // Every early return below is a failure path that stages nothing; only the completion path
+  // writes `attemptCalibration`, and the wrapper decides whether to commit it.
   if (!response.body) {
     return {
       ...emptyResult(),
@@ -1346,7 +1446,13 @@ async function* parseKiroAttemptEvents(
           if (ev.stopReason !== undefined) stopReason = ev.stopReason;
           break;
         case "message_metadata":
-          if (isValidKiroConversationId(ev.conversationId)) returnedConversationId = ev.conversationId;
+          if (isValidKiroConversationId(ev.conversationId)) {
+            // Kiro can answer under a different conversation id than the request was built with.
+            // Carry the calibration entry across so the record below finds its own raw estimate
+            // instead of silently falling back to the already-corrected value.
+            rekeyKiroCalibration(returnedConversationId, ev.conversationId);
+            returnedConversationId = ev.conversationId;
+          }
           break;
         case "content":
           if (ev.modelId) {
@@ -1474,6 +1580,29 @@ async function* parseKiroAttemptEvents(
         contextUsagePercentage,
         ...(contextWindowState.value ? { upstreamContextWindow: contextWindowState.value } : {}),
       });
+    }
+    // Upstream just told us what this payload cost. The ratio between that and our pre-request
+    // estimate is this conversation's own measured error, and it is the only feedback the
+    // estimator ever receives.
+    //
+    // Staged, not recorded. An attempt that sets `needsFallback` is not over: the adapter rebuilds
+    // the payload and streams a second time for the SAME user turn. Learning here would apply the
+    // fresh factor to that rebuild and then learn again from it, so one turn would move the factor
+    // twice and the second observation would score a payload the first had already inflated. Only
+    // the outer parser knows whether an attempt is terminal, so it commits.
+    //
+    // Subtract the output first. `contextUsageTotalFloor` is the absolute context size AFTER the
+    // response (`OcxUsage.contextTotalTokens`, types/request.ts), while `contextInputEstimate`
+    // covers the request payload alone. Dividing one by the other would charge generated tokens to
+    // prompt-tokenization error, so a short prompt answered at length would learn a large factor
+    // and inflate every later request in that conversation — the premature compaction this work
+    // exists to prevent.
+    const chargedTotal = contextUsageTotalFloor();
+    if (chargedTotal !== undefined && contextInputEstimate !== undefined) {
+      const chargedInput = chargedTotal - finalUsage.outputTokens;
+      if (chargedInput > 0 && returnedConversationId) {
+        attemptCalibration.value = { conversationId: returnedConversationId, estimated: contextInputEstimate, charged: chargedInput };
+      }
     }
     // Native stop metadata proves that this inference ended, but it does not prove that ordinary
     // text is a final answer. Kiro has emitted END_TURN for progress prose, so tool-enabled turns
@@ -1934,7 +2063,10 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     if (profileArn) headers["x-amzn-kiro-profile-arn"] = profileArn;
     const built = buildKiroPayload(parsed, profileArn, forcedCompletionMode, wireClient);
     await normalizeKiroImages(built.payload);
-    const contextInputEstimate = estimateKiroPayloadInputTokens(built.payload, parsed.modelId);
+    // Apply what earlier turns of THIS conversation measured. An unseen conversation is
+    // unchanged, so a first turn behaves exactly as it would without calibration.
+    const rawContextInputEstimate = estimateKiroPayloadInputTokens(built.payload, parsed.modelId);
+    const contextInputEstimate = calibrateKiroEstimate(built.conversationId, rawContextInputEstimate);
     const body = JSON.stringify(built.payload);
     debugProviderDiagnostic("kiro", "request", {
       region,

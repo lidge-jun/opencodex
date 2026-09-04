@@ -34,11 +34,12 @@ import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenReques
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
 import { loginNous, NousTokenError, refreshNousToken, clearNousRefreshIntent, RefreshIntentIOError } from "./nous";
-import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
+import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
+import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
@@ -160,7 +161,17 @@ function verdictKey(p:string,a:string,c:OAuthCredentials){return `${p}\0${a}\0${
 function cached(p:string,a:string,c:OAuthCredentials,now:()=>number){const k=verdictKey(p,a,c),u=permanentRefreshFailures.get(k);if(u===undefined)return false;if(u<=now()){permanentRefreshFailures.delete(k);return false;}return true;}
 export function sweepExpiredXaiPermanentFailureVerdicts(now=Date.now()):number{let removed=0;for(const[key,until]of permanentRefreshFailures){if(until>now)continue;permanentRefreshFailures.delete(key);removed+=1;}return removed;}
 
-export interface LoginOpts { forceLogin?: boolean; /** When set, persist into this account slot and require matching identity. */ reauthAccountId?: string }
+export interface LoginOpts {
+  forceLogin?: boolean;
+  /** When set, persist into this account slot and require matching identity. */
+  reauthAccountId?: string;
+  /**
+   * ChatGPT only: `device` selects the deviceauth grant instead of the
+   * localhost:1455 callback flow, for hosts with no browser or no loopback
+   * listener (#3366). Ignored by every other provider.
+   */
+  flow?: ChatGPTLoginFlow;
+}
 
 export interface LoginFlowLifecycle {
   /** Runs after background credential/config persistence settles, before status becomes done. */
@@ -228,6 +239,16 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     providerConfig: oauthConfig("kimi"),
     defaultModel: oauthDefaultModel("kimi"),
   },
+  "meta-muse": {
+    login: ctrl => loginMetaMuse(ctrl),
+    refresh: refreshMetaMuseToken,
+    providerConfig: oauthConfig("meta-muse"),
+    defaultModel: oauthDefaultModel("meta-muse"),
+    // Static API key that Meta scopes to its own CLI. Never generate unattended traffic
+    // on it — same posture as anthropic, for the same reason: the vendor restricts use
+    // outside its own client, so every exchange stays attributable to a user action.
+    defaultRefreshPolicy: "disabled",
+  },
   nous: {
     // Nous Portal device-grant login (RFC 8628) against portal.nousresearch.com.
     // The access token is the per-request inference JWT (scope inference:invoke).
@@ -271,7 +292,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultRefreshPolicy: "lazy-only",
   },
   chatgpt: {
-    login: loginChatGPT,
+    login: (ctrl, opts) => loginChatGPT(ctrl, { forceLogin: opts?.forceLogin, flow: opts?.flow }),
     refresh: (rt) => refreshChatGPTToken(rt),
     providerConfig: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const },
     defaultModel: "gpt-5.4",

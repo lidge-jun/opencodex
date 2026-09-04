@@ -124,7 +124,7 @@ Recent request log rows, filterable by provider, model, conversation, and status
 | `--conversation` | string | Restrict to one conversation id (`--conversationId` is accepted too). |
 | `--status` | string | An exact code (429) or a class (5xx). |
 | `--limit` | number | Row cap; defaults to 200. |
-| `--follow` | boolean | Stream new rows as JSONL; implies --jsonl. |
+| `--follow` | boolean | Poll for new rows; add --jsonl to emit JSONL. |
 | `--json` | boolean | Emit the server payload as JSON. |
 | `--jsonl` | boolean | Emit one row per line. |
 
@@ -443,7 +443,7 @@ JSON mode: `envelope`.
 - A bare invocation reads and never writes.
 - The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.
 - Values are not re-validated in the CLI: the server owns the strategy names and the 1-100 sticky bound.
-- `anthropic` is the only OAuth pool with this setting; other OAuth providers are refused without a round-trip.
+- `anthropic` owns the full pool contract. Other OAuth providers reach the same endpoint with a generic subset (enabled/strategy/autoSwitchThreshold) whose settings persist but do not yet steer selection; `sticky` and `quotaWindow` are refused for them.
 
 ### `ocx account sticky`
 

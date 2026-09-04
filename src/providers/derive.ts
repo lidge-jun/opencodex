@@ -403,7 +403,7 @@ function serviceTierModelDefaultsFor(
  * The catalog hint pass must not read PROVIDER_REGISTRY: a gather flight captures its registry
  * authority up front and forbids any later read, so consulting the registry per model turned
  * every hint pass into a post-lookup read and dropped a custom-destination flight's own
- * discovery result (tests/codex-gather-authority.test.ts).
+ * discovery result (tests/codex-integration/codex-gather-authority.test.ts).
  *
  * Registry values go in first so an explicit user entry still wins, matching
  * `applyReasoningSummaryDefaults`. `supportsVerbosity` is the provider-wide default, expanded
@@ -490,7 +490,14 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if ((!prov.reasoningEfforts || hasLegacyClinePassReasoningEfforts(name, prov)) && seed.reasoningEfforts) {
     prov.reasoningEfforts = [...seed.reasoningEfforts];
   }
-  if (!prov.modelReasoningEfforts && seed.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(seed.modelReasoningEfforts);
+  // Per-model fill for the same reason as modelInputModalities above: an all-or-nothing
+  // copy let ONE customized model hide the registry's ladder for every other model on the
+  // provider. That split the two planes apart — routing merges these maps per key
+  // (mergeRecordFill in src/router.ts), so the wire honored the effort while /v1/models and
+  // every client export showed no effort control at all.
+  if (seed.modelReasoningEfforts) {
+    prov.modelReasoningEfforts = fillRecordOfArrays(seed.modelReasoningEfforts, prov.modelReasoningEfforts);
+  }
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };
   if (!prov.reasoningEffortMap && seed.reasoningEffortMap) prov.reasoningEffortMap = { ...seed.reasoningEffortMap };
   if (!prov.modelReasoningEffortMap && seed.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(seed.modelReasoningEffortMap);

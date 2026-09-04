@@ -22,11 +22,17 @@ export const CODEX_GPT5_IDENTITY_LINE = "You are Codex, a coding agent based on 
 export const CODEX_GPT5_IDENTITY_LINE_AGENT = "You are Codex, an agent based on GPT-5.";
 
 /**
- * Known Codex GPT-5 identity sentences. Narrow: only "coding agent" / "an agent" + GPT-5(.x)?
+ * Known Codex identity sentences. Narrow: only "coding agent" / "an agent" + GPT-<major>(.minor)*.
  * Avoid a broad `You are Codex.*` rewrite that could touch unrelated content.
+ *
+ * The major version is a wildcard because Codex writes the CURRENT generation into this line and
+ * bumps it: `gpt-6-astra` (upstream #42607) ships "You are Codex, an agent based on GPT-6.".
+ * Pinning `GPT-5` meant a GPT-6-era prompt routed to a third-party provider kept telling that
+ * model it was Codex-on-GPT-6 — the exact misattribution this chokepoint exists to remove, silently
+ * reintroduced by a version bump.
  */
 const CODEX_GPT5_IDENTITY_RE =
-  /You are Codex, (?:a coding agent|an agent) based on GPT-5(?:\.[0-9]+)*\./g;
+  /You are Codex, (?:a coding agent|an agent) based on GPT-[0-9]+(?:\.[0-9]+)*\./g;
 
 /** Proxy-neutral replacement: no "opencodex proxy" mention, just the GPT-5/OpenAI disclaimer. */
 export const NEUTRAL_IDENTITY_LINE = "You are a coding agent. Do not claim to be GPT-5 or to be made by OpenAI.";

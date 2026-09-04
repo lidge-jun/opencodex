@@ -23,6 +23,9 @@ const FORBIDDEN_NORMALIZED = new Set([
   "oauth_code",
   "code_verifier",
   "clientsecret",
+  // Device-flow polling handle. Not a token, but it is the bearer of an
+  // in-flight authorization and must not be logged.
+  "device_auth_id",
 ]);
 
 function isForbiddenFieldKey(key: string): boolean {

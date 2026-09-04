@@ -115,9 +115,11 @@ The port is required and must differ from the proxy port. It is never OS-assigne
 would change across restarts while already-running app-servers kept the previous `base_url`.
 
 The listener serves only `POST /v1/responses`, its WebSocket upgrade, `POST /v1/responses/compact`,
-`POST /v1/alpha/search` (the native Codex web-search relay), `GET /v1/models`, and the standalone
-realtime voice WebSocket upgrades. Everything else, including `/api/*` and the dashboard, returns
-`404`.
+`POST /v1/alpha/search` (the native Codex web-search relay), `GET /v1/models`, and the realtime
+voice surface: the standalone WebSocket upgrades, WebRTC call creation (`POST /v1/live`,
+`POST /v1/realtime/calls`), and the keyed sideband join upgrades (`/v1/live/{callId}`,
+`/v1/realtime/calls/{callId}`, `/v1/realtime?call_id=`). Everything else, including `/api/*` and
+the dashboard, returns `404`.
 
 :::danger[This is an unauthenticated surface]
 Every process on the machine can use this listener. It spends account quota and paid provider

@@ -10,7 +10,7 @@
  * categories answer the only question rotation asks — "which of these is most likely to
  * serve the retry" — and within the healthy group a simple headroom sort is enough.
  */
-import { getCachedProviderAccountQuota } from "../providers/quota";
+import { getCachedProviderAccountQuota, hasPassiveAccountQuota } from "../providers/quota";
 import { getKiroAccountExhaustion } from "../providers/kiro-usage";
 
 /** Lower sorts earlier. Unknown sits between measured-healthy and measured-empty. */
@@ -28,6 +28,24 @@ interface Ranked {
 }
 
 /**
+ * How old a PASSIVELY observed quota may be and still steer routing.
+ *
+ * A probed row is fresh by construction: it exists only because a probe wrote it, and
+ * `fetchAccountQuota` re-probes once `ACCOUNT_QUOTA_TTL_MS` has passed. So no caller has
+ * ever needed an explicit age check, and `getCachedProviderAccountQuota` does not apply
+ * one.
+ *
+ * A passive row breaks that invariant — nothing re-probes it, so it can be hours or days
+ * old. Routing on such a reading is worse than routing on none: the unranked ring at
+ * least rotates, while a stale ranking sends every first attempt to an account that may
+ * have been spent since. The bound is longer than the probe TTL (an hour-old reading of
+ * a five-hour window is still informative) and far shorter than the six-hour disk
+ * horizon, which exists to preserve a value for DISPLAY — where the age is shown to the
+ * user and no automatic decision rides on it.
+ */
+const PASSIVE_HEADROOM_MAX_AGE_MS = 60 * 60_000;
+
+/**
  * Remaining headroom across every window the provider reports.
  *
  * The minimum wins: an account at 5% of its five-hour window is unusable right now even if
@@ -36,6 +54,9 @@ interface Ranked {
 function headroomOf(provider: string, accountId: string): number | null {
   const quota = getCachedProviderAccountQuota(provider, accountId);
   if (!quota) return null;
+  // Null, not a low rank: this must reproduce "no evidence" so a stale roster degrades to
+  // the unranked ring rather than to a differently wrong answer.
+  if (hasPassiveAccountQuota(provider) && Date.now() - quota.updatedAt > PASSIVE_HEADROOM_MAX_AGE_MS) return null;
   const percents = [
     quota.fiveHourPercent,
     quota.weeklyPercent,
@@ -56,6 +77,12 @@ export function rankAccountsByHeadroom(provider: string, ring: readonly string[]
   if (ring.length < 2) return [...ring];
 
   let sawEvidence = false;
+  // Same rule as hasHeadroomEvidence: a passive provider's partial roster must not rank
+  // at all. The failover path calls this directly (selectFailoverAccount), so the guard
+  // cannot live only in the pre-dispatch predicate.
+  if (hasPassiveAccountQuota(provider) && !ring.every(id => headroomOf(provider, id) !== null)) {
+    return [...ring];
+  }
   const ranked: Ranked[] = ring.map((id, index) => {
     // A provider-declared exhaustion verdict outranks the percentage: an account may sit at
     // 100% and still be servable when overage is enabled, and the verdict knows that.
@@ -84,6 +111,18 @@ export function rankAccountsByHeadroom(provider: string, ring: readonly string[]
  * can decline to act on a roster it knows nothing about.
  */
 export function hasHeadroomEvidence(provider: string, ids: readonly string[]): boolean {
+  // A PASSIVE provider needs evidence for EVERY candidate, not any one of them.
+  //
+  // A probe fills the whole roster in one pass (fetchProviderAccountQuotas), so "any"
+  // and "every" coincide there. An observation arrives one account at a time, so the
+  // normal passive state is "one measured, N unknown" -- and RANK_UNKNOWN (1) sorts
+  // AFTER RANK_HEALTHY (0), including behind a measured row sitting at 100% with zero
+  // headroom. Accepting partial evidence would therefore redirect the first attempt
+  // AWAY from an unmeasured account and TOWARD the one account known to be spent, which
+  // is the exact inversion of what ranking is for.
+  if (hasPassiveAccountQuota(provider)) {
+    return ids.length > 0 && ids.every(id => headroomOf(provider, id) !== null);
+  }
   return ids.some(id =>
     headroomOf(provider, id) !== null
     || (provider === "kiro" && getKiroAccountExhaustion(`${provider}\u0000${id}`) !== null));

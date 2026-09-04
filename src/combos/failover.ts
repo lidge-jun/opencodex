@@ -307,6 +307,19 @@ function isModelLifecycleGone(
   );
 }
 
+function isProviderTargetContextOverflow(
+  status: number,
+  message: string,
+  code?: string | null,
+): boolean {
+  if (status !== 400) return false;
+  const normalizedCode = normalizedFailureCode(code);
+  const text = message.toLowerCase();
+  if (text.includes("invalid_request_prompt_too_long")) return true;
+  return normalizedCode === "5059"
+    && /\bprompt\s+\d+\s*>\s*\d+\s+maximum context length\b/i.test(message);
+}
+
 export function comboFailureDecision(
   status: number,
   message: string,
@@ -324,6 +337,10 @@ export function comboFailureDecision(
   if (isModelLifecycleGone(status, message, options?.code)) return "hop";
   const error = classifyError(status, "upstream_error", message);
   if (isCyberPolicyCode(error.code)) return "stop";
+  // A provider can expose its own target hard cap with a non-semantic vendor code
+  // (for example 5059 + invalid_request_prompt_too_long). That is evidence that this
+  // target is too small, not that every later combo target is incapable of serving it.
+  if (isProviderTargetContextOverflow(status, message, options?.code)) return "hop";
   // A local input-admission refusal (#1524) says "this candidate cannot fit the request",
   // not "the request is impossible": the next candidate may have a larger context window.
   //

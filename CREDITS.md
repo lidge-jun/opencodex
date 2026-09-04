@@ -55,6 +55,7 @@ Code, design, or tests from these pull requests shipped.
 | [#3078](https://github.com/lidge-jun/opencodex/pull/3078) | [@Veritas-7](https://github.com/Veritas-7) | `0ef04e640` | "reimplements both of your production hunks on `dev`" |
 | [#3142](https://github.com/lidge-jun/opencodex/pull/3142) | [@olddonkey](https://github.com/olddonkey) | `52d941640` | "That carry keeps the measurement/refusal work and ships the guard default-off" |
 | [#3300](https://github.com/lidge-jun/opencodex/pull/3300) | [@S0RYUASUKA](https://github.com/S0RYUASUKA) | `15b43e51c` | the same two test files made hermetic |
+| [#3284](https://github.com/lidge-jun/opencodex/pull/3284) | [@mdwsk88](https://github.com/mdwsk88) | `3d3c4fe26` | "Core implementation is already on `dev` via #3286 (`3d3c4fe26`), including the suffix wire ladder, picker collapse, Google adapter coverage" |
 
 ## Report and diagnosis
 
@@ -95,3 +96,34 @@ unnecessary.
 
 If you find a landing that belongs on this page, open an issue. Being missed is
 the defect this file documents, not a claim you have to argue for.
+
+### A gap the gate does not close
+
+The gate checks that a trailer is **present**. It cannot check that the trailer
+resolves to the account it names.
+
+A 2026-09-04 backlog review found carry PR
+[#3374](https://github.com/lidge-jun/opencodex/pull/3374), carrying
+[#3333](https://github.com/lidge-jun/opencodex/pull/3333) by
+[@blackjune67](https://github.com/blackjune67), with:
+
+```
+Co-authored-by: hajune <contributor@work-domain.example.test>
+```
+
+(The address is masked here — `privacy:scan` blocks real contributor emails in the
+tree. What matters is its shape: a personal work address, not a GitHub-linked one.)
+
+That is the git identity on the contributor's own commits, so it looks correct
+in every review. But GitHub attributes co-authors by **account-linked** email,
+and that address is linked to no account — so the trailer would have credited
+nobody, and the contributor would have been invisible on their own patch. The
+gate passed it, because a trailer was there.
+
+It was corrected before the merge to the contributor's account-linked
+`users.noreply.github.com` address, which is why there is no table row for it above.
+
+The lesson generalizes: when carrying work, take the trailer address from the
+author's GitHub account (the numeric-id `users.noreply.github.com` form is always
+safe), not from the commit metadata on their branch. A contributor who commits
+under a work email is the normal case, not an edge case.

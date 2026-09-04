@@ -1,4 +1,4 @@
-import { IconGlobe } from "../icons";
+import { IconGlobe, IconLink } from "../icons";
 import { useT } from "../i18n/shared";
 
 export function AddCodexAccountPickStep({
@@ -6,12 +6,14 @@ export function AddCodexAccountPickStep({
   error,
   onIdChange,
   onStartOAuth,
+  onStartDeviceOAuth,
   onClose,
 }: {
   id: string;
   error: string;
   onIdChange: (value: string) => void;
   onStartOAuth: () => void;
+  onStartDeviceOAuth: () => void;
   onClose: () => void;
 }) {
   const t = useT();
@@ -37,6 +39,16 @@ export function AddCodexAccountPickStep({
           <div>
             <div className="title">{t("codexAuth.oauthLogin")}</div>
             <div className="sub">{t("codexAuth.oauthDesc")}</div>
+          </div>
+        </div>
+      </button>
+
+      <button type="button" className="list-row" onClick={onStartDeviceOAuth} style={{ marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <IconLink width={20} />
+          <div>
+            <div className="title">{t("codexAuth.deviceLogin")}</div>
+            <div className="sub">{t("codexAuth.deviceDesc")}</div>
           </div>
         </div>
       </button>

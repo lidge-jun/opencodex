@@ -1,0 +1,59 @@
+opencodex
+v2.42.0
+대시보드
+Codex 설정
+프로바이더
+모델
+서브에이전트
+로그&디버그
+사용량
+저장소
+연동
+한국어
+시스템
+프록시
+GitHub
+시작 안전성
+
+재부팅 후 로컬 프록시 라우팅이 재연결 반복으로 이어지기 전에 Codex가 opencodex에 연결될 수 있는지 확인합니다.
+
+대시보드로 돌아가기
+새로고침
+
+OpenCodex가 Codex 0.153.0-alpha.5을(를) 사용해 일부 reasoning effort 옵션이 숨겨졌습니다(제거됨: minimal).
+
+ocx sync
+복사
+재부팅 보호됨
+재부팅 후에도 opencodex가 자동으로 준비됩니다
+
+현재 라우팅과 시작 방식이 일치합니다. 재부팅 후 ocx start를 수동으로 실행할 필요가 없습니다.
+
+Codex 라우팅
+로컬 프록시
+재부팅 보호
+백그라운드 서비스
+필요 시 자동 시작
+켜짐
+보호 상태 상세
+darwin
+백그라운드 서비스
+로그인할 때 시작하고 프록시가 중단되면 다시 실행합니다.
+사용 가능
+Codex launcher shim
+지원되는 Codex 스크립트 런처가 시작될 때 ocx ensure를 실행합니다.
+설치되지 않음
+설치하기
+복구 방법
+
+위의 원클릭 설치를 사용하거나 수동 복구 명령을 복사할 수 있습니다. Codex Desktop과 Windows 실행 파일에는 백그라운드 서비스를 권장합니다.
+
+권장: 영구 백그라운드 서비스
+ocx service repair
+복사
+대안: CLI launcher shim
+ocx codex-shim install
+복사
+안전 전환: Codex 네이티브 라우팅 복구
+ocx restore
+복사

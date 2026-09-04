@@ -42,6 +42,10 @@ export interface ExpectedPriceOverlay {
 
 const GEMINI_31_PRO: Cost4 = { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 };
 const GPT56_SOL: Cost4 = { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 };
+const GPT6_ASTRA: Cost4 = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
+const ASTRA_API_PRICING = "https://developers.openai.com/api/docs/models/gpt-6-astra";
+const CODEX_PRICING = "https://learn.chatgpt.com/docs/pricing";
+const CODEX_SPEED = "https://learn.chatgpt.com/docs/agent-configuration/speed";
 /**
  * Daybreak aliases. `daybreak-*-latest` never appears in the pricing table itself — only its
  * current snapshot does — so these tuples are the snapshot's published rates and carry
@@ -89,6 +93,15 @@ const GEMINI_38_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-0
 const MINIMAX_PRICING = "https://platform.minimax.io/docs/guides/pricing-paygo";
 const OPENAI_GPT56_PRICING = "https://developers.openai.com/api/docs/pricing";
 const META_MODEL_PRICING = "https://dev.meta.ai/docs/pricing-rate-limits";
+/*
+ * Shared by both Meta providers. Overlays resolve by EXACT provider id, so `meta-muse`
+ * cannot inherit `meta-model`'s rows — and an unpriced provider whose whole warning is
+ * "treat every call as billable" would report no cost at all.
+ */
+const META_MUSE_SPARK_13: Cost4 = { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 };
+const META_MUSE_SPARK_13_CONTRIBUTOR: Cost4 = { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0 };
+const META_SPARK_SOURCE = `Meta Model API published price ${META_MODEL_PRICING}`;
+const META_SPARK_CONTRIBUTOR_SOURCE = `Meta Model API published Contributor-tier price ${META_MODEL_PRICING}; data-sharing discount tier`;
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
 // cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
@@ -103,9 +116,15 @@ const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cac
 const QWEN38_MAX_PRICING = "https://qwen.ai/blog?id=qwen3.8 (Qwen release announcement; no Model Studio billing row yet; cache rates unpublished -> 0)";
 
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
-  // claude-fable-5-1 has no jawcode row yet, so both Anthropic surfaces need their own
-  // overlay (the overlay lookup is keyed by the configured provider id; only the jawcode
-  // bundle collapses anthropic-apikey onto anthropic).
+  { provider: "openai-apikey", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: ASTRA_API_PRICING, verifiedAt: "2026-09-05", status: "verified" },
+  // Native dollars are API-equivalent estimates, not conversion of plan-dependent credits.
+  // The native rate card publishes neither a 272k surcharge nor a cache-write price.
+  { provider: "openai", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: `API-equivalent estimate (including cache writes): ${ASTRA_API_PRICING}; native credits: ${CODEX_PRICING}`, verifiedAt: "2026-09-05", status: "verified-derived" },
+  // claude-fable-5-1 now HAS a generated jawcode row, so the two Anthropic surfaces resolve
+  // from it and these overlays are the fallback rather than the primary source. They stay:
+  // the overlay lookup is keyed by the configured provider id, so an account-pool log label
+  // like anthropic-pb51d9b still needs them, and only the jawcode bundle collapses
+  // anthropic-apikey onto anthropic.
   { provider: "anthropic", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
   { provider: "anthropic-apikey", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
   // Cursor canonicalizes every Fable 5.1 spelling onto this sole overlay row.
@@ -152,8 +171,13 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // published list prices for Meta's own endpoint (hence "verified", not derived), and
   // they match the figures Command Code republishes for the same two models.
   // cacheWrite=0: Meta publishes a cached-input price but no cache-write charge.
-  { provider: "meta-model", modelId: "muse-spark-1.3", cost4: { input: 1.25, output: 4.25, cacheRead: 0.15, cacheWrite: 0 }, source: `Meta Model API published price ${META_MODEL_PRICING}`, verifiedAt: "2026-09-03", status: "verified" },
-  { provider: "meta-model", modelId: "muse-spark-1.3-contributor", cost4: { input: 0.1, output: 0.2, cacheRead: 0.002, cacheWrite: 0 }, source: `Meta Model API published Contributor-tier price ${META_MODEL_PRICING}; data-sharing discount tier`, verifiedAt: "2026-09-03", status: "verified" },
+  { provider: "meta-model", modelId: "muse-spark-1.3", cost4: META_MUSE_SPARK_13, source: META_SPARK_SOURCE, verifiedAt: "2026-09-03", status: "verified" },
+  { provider: "meta-model", modelId: "muse-spark-1.3-contributor", cost4: META_MUSE_SPARK_13_CONTRIBUTOR, source: META_SPARK_CONTRIBUTOR_SOURCE, verifiedAt: "2026-09-03", status: "verified" },
+  // Same endpoint, same list price, different credential. Meta does not authorize this
+  // reuse and settlement is not observable, so these are the public Model API rates as a
+  // conservative estimate — not evidence of how the call is actually billed.
+  { provider: "meta-muse", modelId: "muse-spark-1.3", cost4: META_MUSE_SPARK_13, source: META_SPARK_SOURCE, verifiedAt: "2026-09-03", status: "verified-derived" },
+  { provider: "meta-muse", modelId: "muse-spark-1.3-contributor", cost4: META_MUSE_SPARK_13_CONTRIBUTOR, source: META_SPARK_CONTRIBUTOR_SOURCE, verifiedAt: "2026-09-03", status: "verified-derived" },
   // Daybreak aliases: priced as their current snapshots (red -> gpt-5.6-cyber,
   // blue -> gpt-5.6-sol). The alias ids carry no rows of their own upstream, hence
   // verified-derived. Blue deliberately reuses GPT56_SOL rather than duplicating the tuple.
@@ -223,6 +247,11 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
  * therefore cannot reprice routed resellers that reuse the same model slug.
  */
 export const VERIFIED_PRICE_OVERRIDES: readonly ExpectedPriceOverlay[] = [
+  ...["openai", "openai-apikey"].map((provider): ExpectedPriceOverlay => ({
+    provider, modelId: "gpt-5.6-sol", cost4: GPT56_SOL,
+    source: provider === "openai" ? `API-equivalent estimate: ${OPENAI_GPT56_PRICING}; native credits: ${CODEX_PRICING}` : OPENAI_GPT56_PRICING,
+    verifiedAt: "2026-09-05", status: provider === "openai" ? "verified-derived" : "verified",
+  })),
   {
     provider: "xai",
     modelId: "grok-4.6",
@@ -264,6 +293,7 @@ export function findExpectedPriceOverlay(
 
 /** OpenAI Fast price multipliers retained as a compatibility export. */
 export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
+  "gpt-6-astra": 2,
   "gpt-5.6-sol": 2,
   "gpt-daybreak-blue-latest": 2,
   "daybreak-blue-latest": 2,
@@ -292,8 +322,8 @@ export interface PriorityPricingRule {
   verifiedAt: string;
 }
 
-const OPENAI_FAST_PRICING = "https://openai.com/api-fast-mode/";
 const XAI_PRIORITY_PRICING = "https://docs.x.ai/developers/advanced-api-usage/priority-processing";
+const CODEX_FAST_CREDIT_MODELS = new Set(["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-daybreak-blue-latest"]);
 
 /**
  * Exact provider/model priority premiums. Routed resellers never inherit a vendor rule merely
@@ -310,11 +340,19 @@ export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
       .map(([modelId, multiplier]): PriorityPricingRule => ({
         provider,
         modelId,
-        multiplier,
-        source: OPENAI_FAST_PRICING,
-        verifiedAt: "2026-08-05",
+        multiplier: provider === "openai" && CODEX_FAST_CREDIT_MODELS.has(modelId)
+          ? 2.5 : multiplier,
+        source: provider === "openai" && CODEX_FAST_CREDIT_MODELS.has(modelId) ? CODEX_SPEED
+          : modelId === "gpt-6-astra" ? ASTRA_API_PRICING : "https://openai.com/api-fast-mode/",
+        verifiedAt: modelId === "gpt-6-astra" || (provider === "openai" && CODEX_FAST_CREDIT_MODELS.has(modelId))
+          ? "2026-09-05" : "2026-08-05",
       })),
   ),
+  ...["gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro"].map((modelId): PriorityPricingRule => ({
+    provider: "openai-apikey", modelId, multiplier: 2,
+    source: "https://developers.openai.com/api/docs/pricing (derived from the virtual selection's base wire model)",
+    verifiedAt: "2026-09-05",
+  })),
   ...["grok-4.5", "grok-4.6"].map((modelId): PriorityPricingRule => ({
     provider: "xai",
     modelId,
@@ -360,7 +398,7 @@ export interface ContextTier {
   /** Per-field factor from the short rate to the published long rate. */
   multiplier: Cost4;
   /** Published relationship between confirmed priority and long-context bands. */
-  confirmedPriorityRelation?: "exclusive" | "lower-bound";
+  confirmedPriorityRelation?: "exclusive" | "lower-bound" | "stack";
   source: string;
   verifiedAt: string;
 }
@@ -387,6 +425,12 @@ const OPENAI_GPT56_CONTEXT_MODELS = [
 ];
 
 export const CONTEXT_TIERS: readonly ContextTier[] = [
+  // API only: the Codex credit rate card does not establish this threshold for native Astra.
+  {
+    provider: "openai-apikey", modelId: "gpt-6-astra", thresholdInputTokens: 272_000,
+    inclusive: false, multiplier: OPENAI_LONG_CONTEXT, confirmedPriorityRelation: "stack",
+    source: ASTRA_API_PRICING, verifiedAt: "2026-09-05",
+  },
   ...["openai", "openai-apikey"].flatMap(provider =>
     OPENAI_GPT56_CONTEXT_MODELS.map((modelId): ContextTier => ({
       provider,
@@ -394,9 +438,9 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
       thresholdInputTokens: 272_000,
       inclusive: false,
       multiplier: OPENAI_LONG_CONTEXT,
-      confirmedPriorityRelation: "exclusive",
+      confirmedPriorityRelation: provider === "openai-apikey" ? "stack" : "exclusive",
       source: OPENAI_PRICING_DOC,
-      verifiedAt: "2026-08-03",
+      verifiedAt: provider === "openai-apikey" ? "2026-09-05" : "2026-08-03",
     })),
   ),
   {

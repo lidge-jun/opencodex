@@ -5,19 +5,28 @@ type EstimatedCostResult = {
   estimate: { cost: { total: number }; priorityLowerBound?: boolean };
 } | { kind: "unavailable" };
 
+/**
+ * Cost cells render a fixed `$0.1401` in every locale. The column header is the untranslated
+ * `~$`, and the CLI usage report prints `~$12.3456`, so a locale-shaped amount under that
+ * header (`약 US$0.1401`, `0,1401 $US`) read as a different unit rather than a translation.
+ * `narrowSymbol` is what drops the `US` qualifier; en-US fixes the separators.
+ */
+const USD_FORMAT = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  currencyDisplay: "narrowSymbol",
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4,
+});
+
 export function formatEstimatedUsdValue(
   value: number,
   t: TFn,
-  localeTag?: string,
+  _localeTag?: string,
   priorityLowerBound = false,
 ): string {
   if (!Number.isFinite(value) || value < 0) return t("logs.cost.unavailable");
-  const amount = new Intl.NumberFormat(localeTag, {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 4,
-    maximumFractionDigits: 4,
-  }).format(value);
+  const amount = USD_FORMAT.format(value);
   return t(priorityLowerBound ? "logs.cost.lowerBound" : "logs.cost.approximate", { amount });
 }
 

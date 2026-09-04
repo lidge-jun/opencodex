@@ -47,6 +47,7 @@ import {
 } from "../lib/translator-budget";
 import { handleNativeChatCompletions, isNativeChatRouteEligible } from "./chat-native";
 import { parseRequestEffortRowId } from "./effort-row";
+import { parseSyntheticRowId } from "./fast-row";
 
 type Rec = Record<string, unknown>;
 
@@ -105,8 +106,15 @@ async function handleChatCompletionsWithBudget(
   }
 
   const requestedModel = chatBody.model as string;
-  const effortRow = parseRequestEffortRowId(requestedModel, config);
+  const { fastRow, effortRow } = parseSyntheticRowId(requestedModel, config);
   if (effortRow) chatBody.model = effortRow.baseId;
+  if (fastRow) {
+    chatBody.model = fastRow.baseId;
+    // A caller intent; decideTier rules on it downstream. Unlike an effort row this does NOT
+    // block the native-chat shortcut below: native chat carries service_tier itself and runs
+    // the same policy, so blocking it would degrade the request for no reason.
+    chatBody.service_tier = "priority";
+  }
   const stream = chatBody.stream === true;
   // Best-effort Grok attribution: the managed fence stamps this header on every model
   // it registers (extra_headers, sent verbatim by upstream Grok). Dashboard usage

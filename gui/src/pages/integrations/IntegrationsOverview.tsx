@@ -28,6 +28,7 @@ import {
   loadIntegrationJournal,
   loadIntegrationStates,
   toggleIntegration,
+  deleteJournalEntry,
   type IntegrationJournalRow,
   type IntegrationStatus,
 } from "./integration-api";
@@ -177,6 +178,8 @@ export default function IntegrationsOverview({
   const [bulkPending, setBulkPending] = useState(false);
   const [bulkResult, setBulkResult] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [restoring, setRestoring] = useState<IntegrationJournalRow | null>(null);
+  /* The row awaiting delete confirmation. */
+  const [deleting, setDeleting] = useState<IntegrationJournalRow | null>(null);
   const [cardResults, setCardResults] = useState<Partial<Record<OverviewRow["id"], { tone: "ok" | "err"; text: string }>>>({});
   const [pendingToggle, setPendingToggle] = useState<OverviewRow | null>(null);
   /* The conflicted row awaiting overwrite confirmation. */
@@ -643,7 +646,7 @@ export default function IntegrationsOverview({
           <p className="page-sub">{t("integrations.rollback.emptyBody")}</p>
         </div>
       ) : (
-        <RollbackHistory rows={history} showClient onRestore={setRestoring} />
+        <RollbackHistory rows={history} showClient onRestore={setRestoring} onDelete={setDeleting} />
       )}
 
       {restoring && (
@@ -652,6 +655,35 @@ export default function IntegrationsOverview({
           row={restoring}
           onClose={() => setRestoring(null)}
           onRestored={refresh}
+        />
+      )}
+      {deleting && (
+        <ConsequenceDialog
+          copy={{
+            titleKey: "integrations.dialog.deleteEntry.title",
+            changesKey: "integrations.dialog.deleteEntry.changes",
+            breakageKey: "integrations.dialog.deleteEntry.breakage",
+            undoKey: "integrations.dialog.deleteEntry.undo",
+            confirmKey: "integrations.dialog.deleteEntry.confirm",
+            vars: { path: deleting.configPath },
+          }}
+          onClose={() => setDeleting(null)}
+          onConfirm={async () => {
+            try {
+              await deleteJournalEntry(apiBase, deleting.opId);
+            } catch (error) {
+              /*
+               * Rethrown as a localized message because ConsequenceDialog renders
+               * `error.message` verbatim. The 409 and 404 here carry a `code` and
+               * no `reason`, so without this the server English reaches every
+               * locale. The dialog stays open and re-enables its confirm button,
+               * which makes the same press the retry.
+               */
+              throw new Error(describeRefusal(t, error), { cause: error });
+            }
+            setDeleting(null);
+            await historyResource.refresh();
+          }}
         />
       )}
       {pendingToggle && (

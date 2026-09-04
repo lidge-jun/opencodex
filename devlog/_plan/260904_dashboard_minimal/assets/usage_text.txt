@@ -1,0 +1,256 @@
+opencodex
+v2.42.0
+대시보드
+Codex 설정
+프로바이더
+모델
+서브에이전트
+로그&디버그
+사용량
+저장소
+연동
+한국어
+시스템
+프록시
+GitHub
+사용량
+전체
+Codex
+Claude
+Grok
+사용 가능한 기록
+30일
+7일
+
+프록시의 로컬 토큰 집계입니다. 누락된 사용량은 0으로 표시하지 않습니다.
+
+개요231928
+모델66
+프로바이더19
+커버리지 상세99%
+요청
+231928
+측정됨
+229025
+총 토큰
+515.1억
+캐시 히트 토큰
+497.9억
+캐시 생성: 6.1억
+커버리지
+99%
+활동일
+30
+API 정가 환산치 (이 기간)
+~US$38,986.1775
+결제 영수증이 아닙니다. 구독 사용량 또는 프로바이더 크레딧이 대신 적용될 수 있습니다.
+비용 산정 불가 7432건 제외
+일별 활동
+Aug
+Sep
+Oct
+Nov
+Dec
+Jan
+Feb
+Mar
+Apr
+May
+Jun
+Jul
+Aug
+월
+수
+금
+적음
+많음
+모델
+모델	프로바이더	요청	측정됨	토큰	비율
+claude-opus-5	Anthropic Claude	72724	72593	284억	
+
+
+gpt-5.6-sol	OpenAI (Codex login)	70222	69384	113.9억	
+
+claude-fable-5	Anthropic Claude	12246	12183	35.7억	
+
+claude-fable-5-1	Anthropic Claude	5182	5156	17.6억	
+
+grok-4.6	xAI Grok	15461	15361	17.3억	
+
+claude-opus-4-6	Anthropic Claude	4461	4448	9.3억	
+
+k3[1m]	Kimi	3824	3758	7.5억	
+
+
+gpt-5.6-terra	OpenAI (Codex login)	6693	6604	7.5억	
+
+gemini-3.7-flash	Google Antigravity	3185	3145	4.8억	
+
+x-preview-f-free	OpenCode Free	1946	1865	4.4억	
+
+stealth/ox-alpha	OpenRouter	2126	2102	3.5억	
+
+
+gpt-5.6-luna	OpenAI (Codex login)	6030	5079	2.9억	
+
+grok-4.5	xAI Grok	1011	1001	1.7억	
+
+gemini-3.8-flash	Google Antigravity	1105	1105	1.2억	
+
+gpt-5.5	OpenAI (Codex login)	864	862	1억	
+
+qwen3.8-max-preview	Alibaba Token Plan (Intl)	337	336	8588.3만	
+
+anthropic/claude-opus-5	Kimi	758	754	8274.7만	
+
+claude-opus-5	Kiro	21651	21444	4101.1만	
+
+gemini-3.6-flash	Google Antigravity	88	88	2830.5만	
+
+grok-4.6	Cursor	304	291	2137.1만	
+
+qwen3.8-27b-nvfp4	Lidge	168	102	562.5만	
+
+gpt-5.3-codex-spark	OpenAI (Codex login)	274	265	514.5만	
+
+kimi-k3	OpenCode Go	83	79	480.4만	
+
+claude-opus-4-6-thinking	Google Antigravity	61	61	322.1만	
+
+kimi-k3-1m	Cursor	48	34	215.6만	
+
+deepseek-v4-pro	Alibaba Token Plan (Intl)	33	33	196.3만	
+
+anthropic/claude-fable-5	Kimi	9	8	191.4만	
+
+cursor/grok-4.5	Kimi	24	24	177만	
+
+gemini-3.7-flash-high	Google Antigravity	11	10	160.5만	
+
+qwen3.8-max	Alibaba Token Plan (Intl)	13	13	84.4만	
+
+gpt-5.4-mini	OpenAI (Codex login)	26	25	83.5만	
+
+grok-4.5	Cursor	13	13	80.1만	
+
+kimi-k3	Cursor	26	26	61.2만	
+
+claude-opus-4.6	Kiro	665	662	50.6만	
+
+deepseek-v4-flash	DeepSeek	16	16	32.7만	
+
+anthropic/claude-opus-4-6	Kimi	6	5	27.8만	
+
+gemini-3.7-flash	Cursor	5	5	14.8만	
+
+muse-spark-1.3-contributor	Muse Code	7	7	12.4만	
+
+k3	Kimi	3	3	6.8만	
+
+glm-5.3	Cursor	4	4	5.6만	
+
+gemini-3.5-flash	Cursor	3	3	4.4만	
+
+claude-sonnet-4-5	Anthropic Claude	7	7	3.4만	
+
+claude-3-haiku-20240307	Anthropic Claude	49	42	1.5만	
+
+unpriced-model	Unpriced Provider	7	7	770	
+
+no-such-model	No Such Provider	7	7	770	
+
+muse-spark-1.3	Muse Code	1	1	227	
+
+gemini-3.6-flash	Kimi	4	4	141	
+
+qwen3.8-27b-nvfp4	Kimi	1	1	59	
+
+gemini-3.5-flash-high	Kimi	1	1	41	
+
+gemini-3.7-flash-tiered	Kimi	2	2	38	
+
+policy/does-not-exist	Kimi	1	1	38	
+
+gemini-3.6-flash-tiered	Kimi	1	1	19	
+
+google/gemini-3.7-flash	Zenmux	1	1	1	
+
+unknown	Unknown	119	0	0	
+
+gpt-image-2	OpenAI (Codex login)	3	0	0	
+
+gpt-live	OpenAI (Codex login)	3	0	0	
+
+gpt-6-astra	OpenAI (Codex login)	2	0	0	
+
+gpt-5.6-cyber	OpenAI (Codex login)	2	0	0	
+
+claude-opus-5	Anthropic Native	1	0	0	
+
+
+gpt-daybreak-blue-latest	OpenAI (Codex login)	1	0	0	
+
+
+gpt-5.6-sol	Kiro	1	0	0	
+
+gpt-5.7-astra	OpenAI (Codex login)	1	0	0	
+
+gpt-6	OpenAI (Codex login)	1	0	0	
+
+mewfour	xAI Grok	1	0	0	
+
+astra	OpenAI (Codex login)	1	0	0	
+
+mewfour	OpenAI (Codex login)	1	0	0	
+프로바이더
+프로바이더	요청	측정됨	토큰	비율
+Anthropic Claude	94669	94429	346.5억	
+
+OpenAI (Codex login)	84124	82219	125.4억	
+
+xAI Grok	16473	16362	18.9억	
+
+Kimi	4634	4562	8.4억	
+
+Google Antigravity	4450	4409	6.3억	
+
+OpenCode Free	1946	1865	4.4억	
+
+OpenRouter	2126	2102	3.5억	
+
+Alibaba Token Plan (Intl)	383	382	8869만	
+
+Kiro	22317	22106	4151.6만	
+
+Cursor	403	376	2518.8만	
+
+Lidge	168	102	562.5만	
+
+OpenCode Go	83	79	480.4만	
+
+DeepSeek	16	16	32.7만	
+
+Muse Code	8	8	12.4만	
+
+Unpriced Provider	7	7	770	
+
+No Such Provider	7	7	770	
+
+Zenmux	1	1	1	
+
+Unknown	119	0	0	
+
+Anthropic Native	1	0	0	
+커버리지 상세
+측정됨
+229025
+제공자 보고
+206539
+추정
+22486
+미보고
+2903
+미지원
+0
+
+측정됨 항목은 제공자 보고와 추정 토큰 수치를 함께 포함합니다. 미보고/미지원 요청은 추적만 하고 0으로 환산하지 않습니다.

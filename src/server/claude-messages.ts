@@ -54,8 +54,29 @@ import {
   parseRequestEffortRowId,
   type ParsedEffortRowId,
 } from "./effort-row";
+import {
+  parseFastOnlyRowId,
+  parseSyntheticRowId,
+  type ParsedFastRowId,
+} from "./fast-row";
 
 type Rec = Record<string, unknown>;
+
+/**
+ * Decode a Claude selector that may carry the fast marker.
+ *
+ * The exact form is tried first, so a real model whose alias genuinely ends in the marker
+ * keeps winning. Only then is the marker treated as synthetic and the bare base decoded:
+ * a Desktop 3P alias is a HASH registered WITHOUT the marker, so an exact lookup can never
+ * resolve a synthetic one.
+ */
+function decodeClaudeFastSelector(raw: string, cc?: OcxConfig["claudeCode"]): string {
+  const exact = resolveInboundModel(raw, cc);
+  if (exact !== raw || !raw.endsWith("--fast")) return exact;
+  const bare = raw.slice(0, -"--fast".length);
+  const decodedBase = resolveInboundModel(bare, cc);
+  return decodedBase === bare ? exact : `${decodedBase}--fast`;
+}
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -606,6 +627,7 @@ async function handleClaudeMessagesWithBudget(
   let cacheKeySource: ClaudeCacheKeySource = null;
   let effortOverride: string | null = null;
   let effortRow: ParsedEffortRowId | null = null;
+  let fastRow: ParsedFastRowId | null = null;
   let requestedModel = "";
   try {
     anthropicBody = await readAnthropicBody(req, translatorBudget);
@@ -628,11 +650,20 @@ async function handleClaudeMessagesWithBudget(
     }
     if (isRec(anthropicBody) && typeof anthropicBody.model === "string") {
       requestedModel = anthropicBody.model;
-      effortRow = parseRequestEffortRowId(requestedModel, config);
+      // Decode for Fast only. A Claude alias is `claude-ocx-<provider>--<model>`, so it
+      // already uses `--` as its own separator: stripping the marker off the RAW alias would
+      // turn `claude-ocx-p--foo--fast` into `claude-ocx-p--foo` and route a DIFFERENT model.
+      // Effort parsing keeps the raw selector, so its behaviour is untouched.
+      ({ fastRow, effortRow } = parseSyntheticRowId(
+        requestedModel,
+        config,
+        () => decodeClaudeFastSelector(requestedModel, config.claudeCode),
+      ));
       if (effortRow) {
         anthropicBody.model = effortRow.baseId;
         effortOverride = effortRow.effort;
       }
+      if (fastRow) anthropicBody.model = fastRow.baseId;
     }
     // Debug capture (opt-in allowlist scalars) BEFORE the passthrough branch so
     // native, routed, and disabled-alias paths are all observable (devlog 130 B1).
@@ -657,7 +688,10 @@ async function handleClaudeMessagesWithBudget(
       );
       if (claudeConversationId) logCtx.conversationId = claudeConversationId;
     }
-    if (!effortRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model)) {
+    // A fast row blocks passthrough, unlike the chat case: this path forwards to Anthropic's
+    // own API, whose wire has no service_tier field and whose FastWire kind has an empty
+    // adapter set by design, so the tier would be silently dropped.
+    if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model)) {
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
     if (isRec(anthropicBody) && effortOverride) {
@@ -669,6 +703,10 @@ async function handleClaudeMessagesWithBudget(
     }
     const translation = anthropicToResponsesTranslation(anthropicBody, config.claudeCode);
     internalBody = translation.body;
+    // The Anthropic translator builds its body from model/input/store/stream plus sampling
+    // fields only, so the caller intent is applied to the TRANSLATED body rather than the
+    // inbound one.
+    if (fastRow) internalBody.service_tier = "priority";
     translatorBudget.chargeRetained(new TextEncoder().encode(JSON.stringify(internalBody)).byteLength, { kind: "request_copies" });
     cacheKeySource = translation.cacheKeySource;
   } catch (err) {
@@ -1030,6 +1068,16 @@ export async function handleClaudeCountTokens(
   const countRoute = extractOcxRouteDirective(raw);
   if (countRoute) {
     model = stripOneMillionMarker(countRoute);
+    raw.model = model;
+  }
+  // Fast-only: count_tokens never parsed an effort row, so it must not start. It returns a
+  // token estimate and sends no tier, so only the IDENTITY is corrected - without this the
+  // synthetic id reaches native passthrough as a model Anthropic has never heard of.
+  const countFastRow = parseFastOnlyRowId(
+    config, () => decodeClaudeFastSelector(model, config.claudeCode),
+  );
+  if (countFastRow) {
+    model = countFastRow.baseId;
     raw.model = model;
   }
   captureClaudeInbound("count_tokens", raw, resolveInboundModel(model, config.claudeCode), req.headers.get("anthropic-beta") ?? undefined);

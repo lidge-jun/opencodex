@@ -1,5 +1,6 @@
 import { writeSync } from "node:fs";
 import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
+import { isCodexResetCreditOperationId } from "../codex/reset-credit-recovery";
 import {
   CliUsageError,
   printData,
@@ -31,10 +32,15 @@ function writeStdoutFully(text: string): void {
 }
 
 const USAGE = `Usage:
-  ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--code -] [--no-wait] [--json]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json]
-  ocx account reset-credits <account-id|main> [--consume --yes] [--json]
+  ocx account reset-credits <account-id|main> [--consume --yes [--operation-id <uuid>]] [--json]
+
+--device runs the OpenAI device-code login instead of the browser callback: use
+it when the proxy has no browser or nothing can reach localhost:1455, such as a
+headless or remote hub. Enter the printed code at the printed URL from any other
+machine.
 
 The redirect URL or authorization code is a short-lived credential. Pipe it in
 rather than passing it as an argument, where it lands in shell history and is
@@ -53,6 +59,9 @@ interface LoginStart {
 
 /** `-` means "read it from stdin", the documented way to pass a code silently. */
 const STDIN_SENTINEL = "-";
+
+/** Providers whose ONLY login is already a device flow; --device is redundant, not wrong. */
+const DEVICE_NATIVE_PROVIDERS = new Set(["kimi", "nous", "github-copilot"]);
 
 const ARGV_WARNING =
   "warning: the authorization code was passed as a command-line argument, so it is now in your shell history and was visible in the process list while this ran. Pipe it on stdin instead, or pass `-` to read from stdin.";
@@ -86,10 +95,17 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const wantsJson = takeFlag(args, "--json");
   const noWait = takeFlag(args, "--no-wait");
   const reauth = takeFlag(args, "--reauth");
+  const device = takeFlag(args, "--device");
   const id = takeOption(args, "--id");
   const suppliedCode = takeOptionWithSyntax(args, "--code");
   if (!provider) throw new CliUsageError("provider is required", USAGE);
   rejectArgs(args, USAGE);
+  // kimi, nous, and github-copilot are already device flows, so --device is a
+  // true statement about them and is accepted as a no-op rather than an error.
+  // Anything else has no device grant at all and must fail loudly.
+  if (device && !CODEX_NAMES.has(provider) && !DEVICE_NATIVE_PROVIDERS.has(provider)) {
+    throw new CliUsageError(`--device is not supported for provider '${provider}'`, USAGE);
+  }
   // Only resolve when --code was actually given: a plain `ocx account login`
   // opens the browser flow and polls, and must not block on stdin.
   const code = await resolveCode(suppliedCode, deps, false);
@@ -97,13 +113,18 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (CODEX_NAMES.has(provider)) {
     const start = await runtimeRequest<LoginStart>("/api/codex-auth/login", {
       method: "POST",
-      body: JSON.stringify({ ...(id ? { id } : {}), ...(reauth ? { reauth: true } : {}) }),
+      body: JSON.stringify({
+        ...(id ? { id } : {}),
+        ...(reauth ? { reauth: true } : {}),
+        ...(device ? { device: true } : {}),
+      }),
     }, deps);
     if (!wantsJson) {
       // One atomic pre-poll block, flushed synchronously so a piped parent
       // reads the URL before the polling window starts (#1007).
       const block = [
         start.url ? `Open this URL to sign in:\n${start.url}` : "",
+        start.deviceCode ? `Device code: ${start.deviceCode}` : "",
         start.instructions ?? "",
         start.flowId ? `Flow: ${start.flowId}` : "",
       ].filter(line => line !== "").join("\n");
@@ -120,7 +141,12 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       return;
     }
     if (!start.flowId) throw new CliUsageError("login did not return a flow id");
-    for (let attempt = 0; attempt < 150; attempt++) {
+    // A device login is deliberately slow: the user leaves this machine to
+    // enter the code elsewhere. Match the 15-minute grant instead of giving up
+    // at minute five while it is still valid, plus settlement margin for the
+    // token exchange and credential write after the final poll.
+    const maxAttempts = device ? 480 : 150;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await Bun.sleep(2_000);
       const state = await runtimeRequest<Record<string, unknown>>(
         `/api/codex-auth/login-status?flowId=${encodeURIComponent(start.flowId)}${id ? `&accountId=${encodeURIComponent(id)}` : ""}${reauth ? "&reauth=1" : ""}`,
@@ -227,12 +253,25 @@ async function resetCredits(argv: string[], deps: RuntimeApiDeps): Promise<void>
   const wantsJson = takeFlag(args, "--json");
   const consume = takeFlag(args, "--consume");
   const yes = takeFlag(args, "--yes");
+  // Before rejectArgs: takeOption splices its two tokens out of `args`.
+  const operationId = takeOption(args, "--operation-id");
   if (!rawId) throw new CliUsageError("account id is required", USAGE);
   if (consume && !yes) throw new CliUsageError("consuming a reset credit requires --yes", USAGE);
+  if (operationId !== undefined && !consume) {
+    throw new CliUsageError("--operation-id requires --consume", USAGE);
+  }
+  if (operationId !== undefined && !isCodexResetCreditOperationId(operationId)) {
+    throw new CliUsageError("--operation-id must be a UUIDv4", USAGE);
+  }
   rejectArgs(args, USAGE);
   const accountId = rawId === "main" ? "__main__" : rawId;
   const result = consume
-    ? await runtimeRequest("/api/codex-auth/reset-credits/consume", { method: "POST", body: JSON.stringify({ accountId }) }, deps)
+    ? await runtimeRequest("/api/codex-auth/reset-credits/consume", {
+      method: "POST",
+      // Spread, not `operationId: undefined`: the server distinguishes an absent
+      // key (legacy random id) from a caller who asked for a stable identity.
+      body: JSON.stringify({ accountId, ...(operationId === undefined ? {} : { operationId }) }),
+    }, deps)
     : await runtimeRequest(`/api/codex-auth/reset-credits?accountId=${encodeURIComponent(accountId)}`, {}, deps);
   printData(result, wantsJson);
 }

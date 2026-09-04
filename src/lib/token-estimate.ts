@@ -9,50 +9,112 @@
  * ~GPT 3.6, ~Gemini 3.8 chars/token (within ~10%). Code / JSON / tool-args (the dominant Codex
  * traffic) pack MORE tokens per char, so a lower chars-per-token ratio is used for those models.
  * Over-counting fails safe (auto-compact fires earlier); under-counting risks context overflow.
+ *
+ * ## Why the estimate is segmented by script rather than a single divisor
+ *
+ * A single chars-per-token divisor cannot describe mixed text. Latin prose and code run near
+ * 3.2 chars/token; Hangul and Han run near 1.2-1.5, because a Latin-trained BPE spends a token
+ * on roughly every CJK character. That is a ~2.5x spread inside one blob, and essentially all
+ * real agent traffic is mixed: English code and JSON framing with Korean prose threaded through
+ * it.
+ *
+ * The earlier model divided the whole blob by one ratio and then clamped to a denser ratio only
+ * when a SAMPLED CJK share crossed 30%. Two failures followed from that shape. The clamp was a
+ * cliff: 29% CJK counted at the sparse ratio, 31% at the dense one, and the band where real
+ * traffic actually sits (roughly 1-30% CJK) never triggered it at all. And the sampler read
+ * every stride-th character on long blobs, so the share it measured was noisy — a payload of
+ * fixed-width records could sample as 100% CJK while being 1.6% CJK, a case still documented in
+ * `server/responses/input-admission.ts`.
+ *
+ * Counting the two scripts separately and adding them removes both problems at once. There is no
+ * threshold to sit beside, no sampling error, and the result is continuous in the CJK share, so a
+ * blob that gains one Korean character gains a fraction of a token instead of jumping a ratio.
  */
 
 /** Generic English-prose fallback ratio (chars per token). */
 const DEFAULT_CHARS_PER_TOKEN = 4;
 
 /**
- * Kiro routes code/JSON-heavy agent traffic whose true ratio is ~3.0-3.3 chars/token. 3.5 keeps a
- * small safety margin (slight over-count) without wildly inflating; tune toward 3.3 if overflow is
- * ever observed. All kiro models are text LLMs, so a single ratio applies to the whole family.
+ * Kiro routes code/JSON-heavy agent traffic: diffs, file paths, tool arguments, identifiers.
+ * That material tokenizes markedly denser than the "4 chars per token" English-prose rule.
+ *
+ * Measured two independent ways, which agree. Recorded conversations pair exact text with the
+ * provider's authoritative input-token count; over 5,799 pure-Latin samples that aggregates to
+ * 2.80 chars/token. Separately, recorded Kiro request bodies charge ~2.43 bytes per token, and
+ * those bodies run ~1.12 bytes per counted character of JSON escaping and framing, which implies
+ * ~2.17 chars/token at the wire.
+ *
+ * 2.8 takes the conservative end of that pair. All kiro models are text LLMs, so one Latin ratio
+ * applies to the whole family.
+ *
+ * Applied ONLY to `kiro/`-prefixed ids. The measurement is Kiro's charge for Kiro's payload
+ * shape, and the id families below (`claude`, `deepseek`, `qwen`, ...) are also routed by
+ * Cursor, Anthropic direct and Antigravity, whose consumers read this same helper to size
+ * admission ceilings, `count_tokens` answers, and overflow-vs-429 classification. Widening a
+ * Kiro-derived constant to those callers would retune three unrelated subsystems from evidence
+ * that says nothing about them.
  */
-const KIRO_CHARS_PER_TOKEN = 3.5;
+const KIRO_CHARS_PER_TOKEN = 2.8;
 
-const KIRO_MODEL_PREFIXES = ["kiro", "claude", "deepseek", "minimax", "glm", "qwen"];
+/**
+ * Ratio for the model families Kiro shares with other providers, when NOT routed through Kiro.
+ *
+ * These are code-heavy agent models, so 3.5 remains right for them; it is the value every
+ * non-Kiro consumer of this helper was calibrated against.
+ */
+const AGENT_MODEL_CHARS_PER_TOKEN = 3.5;
 
-/** Model-aware chars-per-token ratio. Unknown models fall back to the generic English ratio. */
+const AGENT_MODEL_PREFIXES = ["kiro", "claude", "deepseek", "minimax", "glm", "qwen"];
+
+/**
+ * Model-aware chars-per-token ratio for LATIN text. Unknown models fall back to the generic
+ * English ratio.
+ *
+ * This is the sparse-script ratio only. It stays exported, and keeps returning a single number,
+ * because callers and tests use it to compare model families; the CJK component is applied by
+ * `estimateTokens` per character rather than by rewriting this ratio.
+ */
 export function charsPerToken(modelId?: string): number {
   if (!modelId) return DEFAULT_CHARS_PER_TOKEN;
   const id = modelId.toLowerCase();
-  if (KIRO_MODEL_PREFIXES.some(p => id.startsWith(p))) return KIRO_CHARS_PER_TOKEN;
+  // `estimateKiroTokens` always prefixes `kiro/`, so the Kiro-measured ratio reaches Kiro traffic
+  // and only Kiro traffic.
+  if (id.startsWith("kiro")) return KIRO_CHARS_PER_TOKEN;
+  if (AGENT_MODEL_PREFIXES.some(p => id.startsWith(p))) return AGENT_MODEL_CHARS_PER_TOKEN;
   return DEFAULT_CHARS_PER_TOKEN;
 }
 
 /**
- * CJK-aware ratio (devlog 260712 B3, audit R2#7): Korean/Chinese/Japanese text packs
- * roughly one token per 1.5-3 chars, so a CJK-heavy blob estimated at English ratios
- * badly undercounts. When >30% of chars are CJK, clamp DOWN to 2.5 chars/token —
- * `min(model ratio, 2.5)` so per-model ratios (Claude 3.5, Kiro family) never rise.
+ * Chars per token for CJK text, applied to the CJK characters alone.
+ *
+ * Solved from the same recorded ground truth: holding the Latin ratio fixed and attributing the
+ * remainder of CJK-heavy samples to their Hangul/Han characters gives ~1.50 chars/token. A Korean
+ * character therefore costs roughly TWICE what a Latin character does, which is precisely what a
+ * single blended divisor cannot express.
  */
-const CJK_CHARS_PER_TOKEN = 2.5;
-const CJK_RATIO_THRESHOLD = 0.3;
-// Hangul syllables/jamo, CJK unified ideographs (+ext A), hiragana/katakana.
-const CJK_RE = /[\uAC00-\uD7A3\u1100-\u11FF\u3130-\u318F\u4E00-\u9FFF\u3400-\u4DBF\u3040-\u30FF]/;
+const CJK_CHARS_PER_TOKEN = 1.5;
 
-function cjkRatio(text: string): number {
-  if (text.length === 0) return 0;
-  // Sample long blobs for O(1) cost: every char up to 2k, then a stride.
-  const stride = text.length > 2048 ? Math.ceil(text.length / 2048) : 1;
+/**
+ * Count CJK characters exactly, in one pass, with no allocation and no regex object per char.
+ *
+ * Ranges: Hangul syllables and jamo, CJK unified ideographs and extension A, hiragana/katakana.
+ * Surrogate pairs (rare CJK extensions beyond the BMP) are counted as their two code units,
+ * which slightly over-counts them — again the safe direction.
+ */
+function countCjk(text: string): number {
   let cjk = 0;
-  let sampled = 0;
-  for (let i = 0; i < text.length; i += stride) {
-    sampled++;
-    if (CJK_RE.test(text[i]!)) cjk++;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (
+      (c >= 0xac00 && c <= 0xd7a3)
+      || (c >= 0x1100 && c <= 0x11ff)
+      || (c >= 0x3130 && c <= 0x318f)
+      || (c >= 0x4e00 && c <= 0x9fff)
+      || (c >= 0x3400 && c <= 0x4dbf)
+      || (c >= 0x3040 && c <= 0x30ff)
+    ) cjk++;
   }
-  return sampled === 0 ? 0 : cjk / sampled;
+  return cjk;
 }
 
 /**
@@ -80,7 +142,12 @@ export function estimateTokens(text: string, modelId?: string, contextWindow?: n
   if (!text) return 0;
   const len = text.length;
   if (len === 0) return 0;
-  let ratio = charsPerToken(modelId);
-  if (cjkRatio(text) > CJK_RATIO_THRESHOLD) ratio = Math.min(ratio, CJK_CHARS_PER_TOKEN);
-  return capEstimateAtContextWindow(Math.max(1, Math.ceil(len / ratio)), contextWindow);
+  const latinRatio = charsPerToken(modelId);
+  const cjk = countCjk(text);
+  // Continuous in the CJK share: no threshold, so one added Korean character moves the estimate
+  // by a fraction of a token instead of switching the whole blob to a different divisor.
+  const estimate = cjk === 0
+    ? Math.ceil(len / latinRatio)
+    : Math.ceil((len - cjk) / latinRatio + cjk / CJK_CHARS_PER_TOKEN);
+  return capEstimateAtContextWindow(Math.max(1, estimate), contextWindow);
 }

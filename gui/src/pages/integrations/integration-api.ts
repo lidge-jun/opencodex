@@ -59,6 +59,12 @@ export interface IntegrationJournalRow {
   configPath: string;
   snapshot: "none" | "stored" | "expired";
   undoable: boolean;
+  /**
+   * Server-computed. The DELETE route enforces the same rule, and a second
+   * copy of it here would drift; false for a client newest row, which stays
+   * available as the undo entry point.
+   */
+  deletable: boolean;
 }
 
 export interface IntegrationJournalEnvelope {
@@ -248,6 +254,31 @@ export async function restoreIntegration(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ opId, confirmDrift }),
+      signal,
+    }),
+  );
+}
+
+/**
+ * Retire one rollback row.
+ *
+ * The opId rides in the query string because the route reads it there. CSRF is
+ * not set here on purpose: api.ts attaches the header to every method that is
+ * not GET or HEAD, so a second copy would only be able to disagree.
+ */
+export async function deleteJournalEntry(
+  apiBase: string,
+  opId: string,
+  signal?: AbortSignal,
+) {
+  return readResponse<{
+    ok: true;
+    opId: string;
+    clientId: FileIntegrationClientId;
+    snapshotRemoved: boolean;
+  }>(
+    await fetch(`${apiBase}/api/client-integrations/journal?opId=${encodeURIComponent(opId)}`, {
+      method: "DELETE",
       signal,
     }),
   );

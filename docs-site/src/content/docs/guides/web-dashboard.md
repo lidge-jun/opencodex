@@ -34,6 +34,40 @@ password manager can offer to save and autofill it. The dashboard itself still k
 in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
 
+### Finding the admin token
+
+You only need this on a non-loopback bind. A local dashboard never asks, and if a local one
+*does* ask, the token is not the problem — see [When a local dashboard cannot start a
+session](#when-a-local-dashboard-cannot-start-a-session) below.
+
+The proxy generates the token for you the first time it starts. It is not printed anywhere,
+by design, so read it from the file:
+
+```bash
+cat ~/.opencodex/admin-api-token
+```
+
+If `OPENCODEX_HOME` is set, the file lives at `$OPENCODEX_HOME/admin-api-token` instead. On
+Windows that is `%USERPROFILE%\.opencodex\admin-api-token`. A generated token looks like
+`ocx_admin_` followed by 43 characters; the proxy refuses a file that does not match that
+shape rather than silently regenerating one.
+
+To choose the value yourself, set `OPENCODEX_ADMIN_AUTH_TOKEN` before starting the proxy. It
+takes precedence over the file, and the file is then neither read nor created. Pick something
+distinct from your data-plane credential (`OPENCODEX_API_AUTH_TOKEN` or a configured API key) —
+reusing one is rejected.
+
+There is no CLI command that prints the token. `ocx doctor` deliberately reports whether a
+credential is present without ever revealing its value.
+
+### When a local dashboard cannot start a session
+
+A dashboard on `localhost` mints its own session, so it will not prompt you for a token. If it
+reports that it could not start a session, the cause is the address you are using rather than a
+missing credential — the proxy did not recognise the request as loopback. Open the dashboard at
+the address the proxy prints on startup (usually `http://127.0.0.1:<port>`), and prefer that exact
+host and port over a LAN IP or an alias.
+
 ## What you can do
 
 | Area | What it does |
@@ -45,7 +79,7 @@ the browser or password manager's decision.
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
 | **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |
-| **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. |
+| **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. |
 | **Add provider** | Search registry-backed presets for account login, API-key services, local servers, or a custom endpoint. |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
 | **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. |

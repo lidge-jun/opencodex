@@ -3,6 +3,13 @@
 /* ── ProviderAuthPanel ─────────────────────────────────────── */
 
 .pwi-auth-section { display: flex; flex-direction: column; gap: 12px; }
+/* Title left, operator refresh right. Wraps rather than truncating: the refresh
+   result is a full sentence in several locales. */
+.pwi-auth-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.pwi-auth-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pwi-auth-body { display: flex; flex-direction: column; gap: 10px; }
 
 .pwi-auth-status-row { display: flex; align-items: center; gap: 8px; }
@@ -24,7 +31,7 @@
 .pwi-auth-state--error { color: var(--red); background: var(--red-soft); justify-content: space-between; }
 .pwi-auth-state--empty { justify-content: center; }
 
-.pwi-auth-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pwi-auth-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 
 .pwi-auth-optin-row {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
@@ -59,6 +66,8 @@
 .pwi-auth-acct--active .pwi-auth-row--active { background: none; }
 .pwi-auth-acct-quota { padding: 0 8px 8px 26px; }
 .pwi-auth-acct-quota-stale { margin: 4px 0 0; font-size: 0.85em; }
+/* Observation age for a passively reported quota (meta-muse). Sits above the bars. */
+.quota-observed { margin: 0 0 4px; font-size: 0.85em; }
 .pwi-auth-row-main  {
   appearance: none; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
   padding: 2px; border: 0; background: transparent; color: inherit; text-align: left;
