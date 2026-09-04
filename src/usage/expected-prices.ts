@@ -112,9 +112,11 @@ const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cac
 const QWEN38_MAX_PRICING = "https://qwen.ai/blog?id=qwen3.8 (Qwen release announcement; no Model Studio billing row yet; cache rates unpublished -> 0)";
 
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
-  // claude-fable-5-1 has no jawcode row yet, so both Anthropic surfaces need their own
-  // overlay (the overlay lookup is keyed by the configured provider id; only the jawcode
-  // bundle collapses anthropic-apikey onto anthropic).
+  // claude-fable-5-1 now HAS a generated jawcode row, so the two Anthropic surfaces resolve
+  // from it and these overlays are the fallback rather than the primary source. They stay:
+  // the overlay lookup is keyed by the configured provider id, so an account-pool log label
+  // like anthropic-pb51d9b still needs them, and only the jawcode bundle collapses
+  // anthropic-apikey onto anthropic.
   { provider: "anthropic", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
   { provider: "anthropic-apikey", modelId: "claude-fable-5-1", cost4: CLAUDE_FABLE_51, source: `anthropic official Claude Fable 5.1 ${ANTHROPIC_PRICING}; cache hit = 0.025x base input`, verifiedAt: "2026-09-02", status: "verified" },
   // Cursor canonicalizes every Fable 5.1 spelling onto this sole overlay row.

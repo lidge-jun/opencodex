@@ -305,20 +305,37 @@ const NO_FAST_TIER_NATIVE_SLUGS = new Set([
 
 /** Does this row already carry an `ultrafast` tier the operator put there themselves? */
 /**
- * Read the opt-in from the live config.
+ * Read the opt-in from the live config, ONCE per catalog build.
  *
- * `deriveEntry` and its five call sites are pure `RawEntry -> RawEntry` transforms with no
- * config parameter, and threading one through all of them to carry a single boolean would
- * be a much larger change than the behavior it gates. Callers that already hold a config
- * can still pass `opts.ultraFastTier` explicitly, which is what the tests do; this is the
- * fallback for the sync path. Failure reads as OFF, matching `.catch(false)`.
+ * `deriveEntry` and its call sites are pure `RawEntry -> RawEntry` transforms with no
+ * config parameter, so the flag is resolved here rather than threaded through all of them.
+ * It is memoized because `normalizeRoutedCatalogEntry` runs per entry in a sync loop, and
+ * `loadConfig()` chmods the config dir, hardens three secrets, reads the file and runs a
+ * full Zod parse — doing that once per catalog row would be a real cost for one boolean.
+ * Callers holding a config still pass `opts.ultraFastTier` explicitly, which bypasses this
+ * entirely and is what the tests do. A read failure means OFF, matching `.catch(false)`.
  */
+let ultraFastOptInCache: { value: boolean; at: number } | null = null;
+const ULTRA_FAST_OPT_IN_TTL_MS = 5_000;
+
 function ultraFastTierOptIn(): boolean {
-  try {
-    return ultraFastTierEnabled(loadConfig());
-  } catch {
-    return false;
+  const now = Date.now();
+  if (ultraFastOptInCache && now - ultraFastOptInCache.at < ULTRA_FAST_OPT_IN_TTL_MS) {
+    return ultraFastOptInCache.value;
   }
+  let value = false;
+  try {
+    value = ultraFastTierEnabled(loadConfig());
+  } catch {
+    value = false;
+  }
+  ultraFastOptInCache = { value, at: now };
+  return value;
+}
+
+/** Test seam: drop the memoized opt-in so a config change is observed immediately. */
+export function resetUltraFastTierOptInCache(): void {
+  ultraFastOptInCache = null;
 }
 
 function entryDeclaresUltraFast(entry: RawEntry): boolean {

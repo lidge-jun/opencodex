@@ -12,7 +12,7 @@
  * for nothing. These tests pin the corrected accounting.
  */
 import { describe, expect, test } from "bun:test";
-import { canonicalFastTierMarker } from "../src/providers/fastwire";
+import { canonicalFastTierMarker, createAdapterTierMetadata, decideTier, tierObservationContext } from "../src/providers/fastwire";
 import { requestLogSpeedLabel } from "../src/server/request-log";
 import { normalizeRoutedCatalogEntry } from "../src/codex/catalog/parsing";
 
@@ -114,5 +114,72 @@ describe("routed rows and the ultrafast opt-in", () => {
     const entry = normalizeRoutedCatalogEntry(fastOnly, false, undefined, { ultraFastTier: true });
     expect(entry.service_tiers).toBeUndefined();
     expect(entry.additional_speed_tiers).toBeUndefined();
+  });
+});
+
+/**
+ * The wire decision, which the unit tests above cannot see.
+ *
+ * Adversarial review caught this: recognising `ultrafast` as a canonical marker routed it
+ * into the canonical-wire lookup, and because it is deliberately unmapped the lookup fell
+ * through to `drop`. That made recognition strictly WORSE than leaving it unrecognised —
+ * before, it was a foreign tier and `foreignCallerTiers: "verbatim"` forwarded it. Every
+ * suite still passed, because none of them asserted the decision.
+ */
+describe("an unmapped canonical tier is forwarded, not dropped", () => {
+  const policy = {
+    capability: true,
+    eligibility: "eligible",
+    fastWire: {
+      kind: "service-tier",
+      canonicalToWire: { priority: "priority" },
+      foreignCallerTiers: "verbatim",
+    },
+    forwardCallerTier: true,
+  } as unknown as Parameters<typeof decideTier>[0];
+
+  test("ultrafast reaches the provider instead of being stripped", () => {
+    expect(decideTier(policy, undefined, "ultrafast")).toEqual({ kind: "forward-caller" });
+  });
+
+  test("mapped Fast spellings still resolve to the wire value", () => {
+    expect(decideTier(policy, undefined, "priority")).toEqual({ kind: "set", value: "priority" });
+    expect(decideTier(policy, undefined, "fast")).toEqual({ kind: "set", value: "priority" });
+  });
+
+  test("unrelated and absent tiers are unchanged", () => {
+    expect(decideTier(policy, undefined, "auto")).toEqual({ kind: "forward-caller" });
+    expect(decideTier(policy, undefined, undefined)).toEqual({ kind: "forward-caller" });
+  });
+});
+
+describe("the Fast toggle does not claim to have suppressed a different tier", () => {
+  const observe = (callerTier: string, fastMode: boolean | undefined) => {
+    const policy = {
+      capability: true,
+      eligibility: "eligible",
+      fastWire: {
+        kind: "service-tier",
+        canonicalToWire: { priority: "priority" },
+        foreignCallerTiers: "verbatim",
+      },
+      forwardCallerTier: true,
+    } as unknown as Parameters<typeof tierObservationContext>[0];
+    const context = tierObservationContext(policy, fastMode, callerTier);
+    const decision = decideTier(policy, fastMode, callerTier);
+    const wireValue = decision.kind === "set" ? decision.value : decision.kind === "drop" ? null : callerTier;
+    return createAdapterTierMetadata(context, decision, "service-tier", wireValue)?.outcome;
+  };
+
+  test("force-default suppressing a real Fast request is recorded as suppression", () => {
+    const outcome = observe("priority", false);
+    expect(outcome?.callerFastSuppressedByConfig).toBe(true);
+  });
+
+  test("force-default turning away ultrafast is a dropped tier, not a suppressed Fast", () => {
+    // The Fast toggle did not suppress a 1.5x Fast request; it turned away a different one.
+    const outcome = observe("ultrafast", false);
+    expect(outcome?.callerFastSuppressedByConfig).toBeUndefined();
+    expect(outcome?.callerTierDropped).toBe(true);
   });
 });

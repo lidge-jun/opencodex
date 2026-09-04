@@ -312,7 +312,17 @@ export function createAdapterTierMetadata(
   if (!context || !decision) return undefined;
 
   const callerMarker = canonicalFastTierMarker(context.callerTier);
-  const callerCanonicalFast = callerMarker !== undefined;
+  // Two different questions, and conflating them mislabels the record.
+  //
+  // "Did the caller ask for FAST?" governs the drop and suppression facts: the Fast
+  // toggle suppressing a request is only true of the 1.5x Fast tier, so an `ultrafast`
+  // caller turned away by `fastMode: false` was NOT a suppressed Fast request and must
+  // still read as `callerTierDropped`.
+  //
+  // "Did the caller ask for SOME fast-family tier?" is the wider question, and only
+  // `fastIntent` below is entitled to it.
+  const callerCanonicalFast = callerMarker === "priority";
+  const callerFastFamilyIntent = callerMarker !== undefined;
   const callerTierDropped = context.callerTier !== undefined
     && !callerCanonicalFast
     && wireValue === null;
@@ -352,7 +362,7 @@ export function createAdapterTierMetadata(
   // Known-unsupported routes still need a downgrade when the caller/config expressed Fast intent,
   // but they are deliberately outside the effective-demand calculation above.
   const fastIntent = context.demandDecision === "force-fast"
-    || (context.demandDecision === "inherit" && callerCanonicalFast);
+    || (context.demandDecision === "inherit" && callerFastFamilyIntent);
 
   if (!fastIntent) {
     outcome.fastOutcome = "not-requested";
@@ -435,9 +445,14 @@ export function decideTier(
   const callerCanonicalFast = canonicalFastTierMarker(callerTier);
   if (callerCanonicalFast !== undefined) {
     const value = policy.fastWire.canonicalToWire[callerCanonicalFast];
-    return typeof value === "string" && value.length > 0
-      ? { kind: "set", value }
-      : { kind: "drop" };
+    if (typeof value === "string" && value.length > 0) return { kind: "set", value };
+    // A canonical marker with NO wire mapping is not a reason to drop the tier.
+    //
+    // `ultrafast` is recognised as intent but deliberately unmapped, because no wire
+    // advertises it. Dropping here would have made recognition strictly worse than not
+    // recognising it at all: before, `ultrafast` was a foreign tier and
+    // `foreignCallerTiers: "verbatim"` forwarded it untouched. Falling through keeps that
+    // behavior, so an operator-supplied tier still reaches the provider.
   }
   if (callerTier !== undefined && !policy.forwardCallerTier) return { kind: "drop" };
   if (
