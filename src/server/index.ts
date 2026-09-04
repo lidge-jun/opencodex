@@ -512,7 +512,7 @@ function attachLiveSidebandUpstream(
 
 // Adapter resolution + wire-protocol override extracted to ./server/adapter-resolve.
 
-// Source invariant for tests/passthrough-abort.test.ts after the pure module split:
+// Source invariant for tests/responses/passthrough-abort.test.ts after the pure module split:
 // if (isEventStream && upstreamResponse.body) {
 // const repairConfig = route.provider.responsesItemIdRepair;
 // const needsClientRewrite = imageGenCallAliases.size > 0

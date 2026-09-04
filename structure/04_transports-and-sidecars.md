@@ -362,7 +362,7 @@ Native passthrough SSE has TWO shapes, selected per request in
   including the #44 late-terminal semantics.
 
 The two-shape contract is mirror-commented in `src/server/index.ts`; the real
-`core.ts` gate is source-invariant-tested by `tests/passthrough-abort.test.ts`,
+`core.ts` gate is source-invariant-tested by `tests/responses/passthrough-abort.test.ts`,
 and the platform matrix lives in `tests/lib/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
 

@@ -328,7 +328,7 @@ export const SERIAL_FULL_SUITE_FILES = [
   "codex-shim.test.ts",
   "cursor-native-exec-shell.test.ts",
   "issue-452-empty-503.test.ts",
-  "openai-provider-option-e2e.test.ts",
+  "adapters/openai/openai-provider-option-e2e.test.ts",
   "release-helper.test.ts",
   "update/update-stop-first.test.ts",
 ] as const;

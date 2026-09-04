@@ -26,9 +26,9 @@
 - `src/providers/registry.ts` — declares and resolves the built-in per-model terminal-repair policy.
 - `src/server/responses-terminal-repair.ts` — owns SSE lifecycle tracking, bounded retained state, grace scheduling, and synthetic terminal creation.
 - `src/server/responses/core.ts` — activates the repair before existing transport-specific relay branches.
-- `tests/responses-terminal-repair.test.ts` — unit state-machine and stream-race coverage.
+- `tests/responses/responses-terminal-repair.test.ts` — unit state-machine and stream-race coverage.
 - `tests/deepseek-inbound-wire.test.ts` — end-to-end official DeepSeek wire and HTTP activation.
-- `tests/ws-endpoint.test.ts` — WebSocket event parity for real and repaired terminals.
+- `tests/responses/ws-endpoint.test.ts` — WebSocket event parity for real and repaired terminals.
 - `structure/04_transports-and-sidecars.md` — architectural contract for the provider-scoped streaming repair.
 - `docs/superpowers/specs/2026-08-06-deepseek-responses-streaming-terminal-repair-design.md` — approved design authority; implementation must remain consistent with it.
 
@@ -153,7 +153,7 @@ git commit -m "fix(deepseek): restore Responses upstream streaming"
 
 **Files:**
 - Create: `src/server/responses-terminal-repair.ts`
-- Create: `tests/responses-terminal-repair.test.ts`
+- Create: `tests/responses/responses-terminal-repair.test.ts`
 
 **Interfaces:**
 - Consumes: `ResponsesTerminalRepairPolicy`
@@ -201,7 +201,7 @@ terminal followed by one `[DONE]`.
 Run:
 
 ```bash
-bun test tests/responses-terminal-repair.test.ts
+bun test tests/responses/responses-terminal-repair.test.ts
 ```
 
 Expected: module-not-found failure for
@@ -251,7 +251,7 @@ an item and release every remaining charge during disposal.
 Run:
 
 ```bash
-bun test tests/responses-terminal-repair.test.ts
+bun test tests/responses/responses-terminal-repair.test.ts
 ```
 
 Expected: healthy pass-through and five-second grace completion both pass;
@@ -260,7 +260,7 @@ translator-budget current bytes return to zero after drain.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/server/responses-terminal-repair.ts tests/responses-terminal-repair.test.ts
+git add src/server/responses-terminal-repair.ts tests/responses/responses-terminal-repair.test.ts
 git commit -m "feat(responses): repair complete terminal-less streams"
 ```
 
@@ -270,7 +270,7 @@ git commit -m "feat(responses): repair complete terminal-less streams"
 
 **Files:**
 - Modify: `src/server/responses-terminal-repair.ts`
-- Modify: `tests/responses-terminal-repair.test.ts`
+- Modify: `tests/responses/responses-terminal-repair.test.ts`
 
 **Interfaces:**
 - Preserves Task 2 public signatures.
@@ -305,7 +305,7 @@ cancellation, an empty scheduler queue, and
 Run:
 
 ```bash
-bun test tests/responses-terminal-repair.test.ts
+bun test tests/responses/responses-terminal-repair.test.ts
 ```
 
 Expected: the newly added boundary tests fail because Task 2 implements only
@@ -366,7 +366,7 @@ abort/cancel, taint, and candidate completeness immediately before enqueueing.
 Run:
 
 ```bash
-bun test tests/responses-terminal-repair.test.ts tests/sse-failed-tail.test.ts tests/relay-eager.test.ts
+bun test tests/responses/responses-terminal-repair.test.ts tests/responses/sse-failed-tail.test.ts tests/relay-eager.test.ts
 ```
 
 Expected: all tests pass with no duplicate terminal, timer leak, or retained
@@ -375,7 +375,7 @@ budget after teardown.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/server/responses-terminal-repair.ts tests/responses-terminal-repair.test.ts
+git add src/server/responses-terminal-repair.ts tests/responses/responses-terminal-repair.test.ts
 git commit -m "fix(responses): fail closed on unsafe terminal repair"
 ```
 
@@ -388,7 +388,7 @@ git commit -m "fix(responses): fail closed on unsafe terminal repair"
 - Modify: `src/server/responses/core.ts:2030-2230`
 - Modify: `tests/deepseek-inbound-wire.test.ts:115-330`
 - Modify: `tests/deepseek-responses-item-id-repair.test.ts`
-- Modify: `tests/ws-endpoint.test.ts`
+- Modify: `tests/responses/ws-endpoint.test.ts`
 
 **Interfaces:**
 - Consumes: `providerModelResponsesTerminalRepair(...)`
@@ -432,7 +432,7 @@ WebSocket handling. Assert the client receives progressive delta frames, one
 Run:
 
 ```bash
-bun test tests/deepseek-inbound-wire.test.ts tests/ws-endpoint.test.ts
+bun test tests/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts
 ```
 
 Expected: requests now carry `stream:true` from Task 1 but no provider-scoped
@@ -482,7 +482,7 @@ streaming resolver still returns `false`.
 Run:
 
 ```bash
-bun test tests/deepseek-inbound-wire.test.ts tests/ws-endpoint.test.ts tests/responses-state.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/deepseek-reasoning-replay.test.ts
+bun test tests/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts tests/responses/responses-state.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/deepseek-reasoning-replay.test.ts
 ```
 
 Expected: progressive output precedes terminal, both transports close once,
@@ -491,7 +491,7 @@ item ids are stable, and continuation state retains reasoning/function output.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/server/responses/core.ts tests/deepseek-inbound-wire.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/ws-endpoint.test.ts
+git add src/server/responses/core.ts tests/deepseek-inbound-wire.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/responses/ws-endpoint.test.ts
 git commit -m "fix(deepseek): repair terminal-less Responses streams"
 ```
 
@@ -560,7 +560,7 @@ git commit -m "docs(deepseek): describe streaming terminal repair"
 Run:
 
 ```bash
-bun test tests/responses-terminal-repair.test.ts tests/deepseek-inbound-wire.test.ts tests/ws-endpoint.test.ts tests/sse-failed-tail.test.ts tests/relay-eager.test.ts tests/responses-item-id-repair.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/deepseek-reasoning-replay.test.ts tests/responses-state.test.ts
+bun test tests/responses/responses-terminal-repair.test.ts tests/deepseek-inbound-wire.test.ts tests/responses/ws-endpoint.test.ts tests/responses/sse-failed-tail.test.ts tests/relay-eager.test.ts tests/responses/responses-item-id-repair.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/deepseek-reasoning-replay.test.ts tests/responses/responses-state.test.ts
 ```
 
 Expected: 0 failures.

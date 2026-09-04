@@ -26,7 +26,7 @@
 ### Task 1: Add adversarial RED coverage
 
 **Files:**
-- Create: `tests/lab-public-deep-review-regressions.test.ts`
+- Create: `tests/lab/lab-public-deep-review-regressions.test.ts`
 - Modify: `tests/ci-workflows.test.ts`
 
 **Interfaces:**
@@ -135,7 +135,7 @@
 - Modify: `src/lab/public/operator.ts`
 - Modify: `src/cli/lab.ts`
 - Modify: `src/server/management/lab-routes.ts`
-- Modify: `tests/lab-public-surfaces.test.ts`
+- Modify: `tests/lab/lab-public-surfaces.test.ts`
 
 **Interfaces:**
 - Produces: preview/export results that expose exclusion indices/reasons and `stored.created` only, never local event IDs or filesystem paths.

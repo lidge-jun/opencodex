@@ -187,7 +187,7 @@ const CANONICAL_ONLY_TOOL_FIELDS: readonly { field: string; toolTypes?: Readonly
   // OWNERSHIP: official OpenAI API-key traffic and unclassified gateways ACCEPT this field, so
   // it is only stripped when the provider capability denies it (supportsOpenAiWebSearchToolFields
   // === false), matching stripOpenAiOnlyWebSearchFields; see
-  // tests/responses-routed-web-search-fields.test.ts.
+  // tests/responses/responses-routed-web-search-fields.test.ts.
   { field: "external_web_access", toolTypes: new Set(["web_search", "web_search_preview"]), capabilityGated: true },
   // Deferred-discovery marker. `activateDeferredTool` clears it only for tools a `tool_search_output`
   // already loaded, so a still-deferred declaration — including one promoted out of a namespace

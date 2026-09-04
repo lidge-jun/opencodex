@@ -229,7 +229,7 @@ git commit -m "docs(codex): explain routed local tool access"
 Run:
 
 ```bash
-bun test tests/responses-parser.test.ts tests/bridge.test.ts tests/multi-agent-compat.test.ts
+bun test tests/responses/responses-parser.test.ts tests/adapters/bridge.test.ts tests/multi-agent-compat.test.ts
 ```
 
 Expected: custom declaration, streaming `custom_tool_call`, exact freeform input, and output replay remain green. Add no production protocol change unless one of these tests proves a real gap.
@@ -239,7 +239,7 @@ Expected: custom declaration, streaming `custom_tool_call`, exact freeform input
 Run:
 
 ```bash
-bun test tests/responses-terminal-repair.test.ts tests/deepseek-inbound-wire.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/passthrough-abort.test.ts
+bun test tests/responses/responses-terminal-repair.test.ts tests/deepseek-inbound-wire.test.ts tests/deepseek-responses-item-id-repair.test.ts tests/responses/passthrough-abort.test.ts
 ```
 
 Expected: progressive deltas, strict terminal repair, item IDs, and cancellation pass.
@@ -249,7 +249,7 @@ Expected: progressive deltas, strict terminal repair, item IDs, and cancellation
 Run:
 
 ```bash
-bun test tests/vision/vision-sidecar-e2e.test.ts tests/vision/vision-anthropic.test.ts tests/vision/vision-cache.test.ts tests/vision/vision-fail-closed.test.ts tests/catalog-vision-sidecar-modalities.test.ts tests/openai-responses-passthrough.test.ts
+bun test tests/vision/vision-sidecar-e2e.test.ts tests/vision/vision-anthropic.test.ts tests/vision/vision-cache.test.ts tests/vision/vision-fail-closed.test.ts tests/catalog-vision-sidecar-modalities.test.ts tests/responses/openai-responses-passthrough.test.ts
 ```
 
 Expected: captions replace raw image parts in passthrough bodies, empty references do not consume captions, and partial/failure paths omit pixels safely.
@@ -259,7 +259,7 @@ Expected: captions replace raw image parts in passthrough bodies, empty referenc
 Run:
 
 ```bash
-bun test tests/images/plan.test.ts tests/images/synthetic-tool.test.ts tests/images/z-handler-activation.test.ts tests/images/loop-reasoning-replay.test.ts tests/responses-image-gen-repair.test.ts
+bun test tests/images/plan.test.ts tests/images/synthetic-tool.test.ts tests/images/z-handler-activation.test.ts tests/images/loop-reasoning-replay.test.ts tests/responses/responses-image-gen-repair.test.ts
 ```
 
 Expected: image tool planning, activation, alias restoration, replay, and result repair pass.

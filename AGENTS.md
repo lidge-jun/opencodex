@@ -51,7 +51,7 @@ directly or transitively:
 - `src/server/lifecycle.ts`
 - `src/server/responses/core.ts`
 
-`tests/core-lab-boundary.test.ts` enforces this by walking the runtime import
+`tests/lab/core-lab-boundary.test.ts` enforces this by walking the runtime import
 graph and printing the offending chain on failure. It is not a style rule: the
 original violation hid in a six-hop chain
 (`assemble → quota → auth-api → native-main-admission → lifecycle → lab`) where
