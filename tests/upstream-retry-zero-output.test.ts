@@ -109,6 +109,31 @@ describe("refetchOnZeroOutputReset", () => {
     );
     expect(result).toBeNull();
   });
+
+  test("returns null when the replacement is non-ok even with a body (503 regression)", async () => {
+    silenceWarn();
+    // CodeRabbit review: a body-bearing 503 replacement must be treated as a
+    // failed refetch, not relayed as stream data under the original 200 status.
+    const result = await refetchOnZeroOutputReset(
+      async () => new Response(new TextEncoder().encode("service unavailable"), { status: 503 }),
+      resetError(),
+      {},
+    );
+    expect(result).toBeNull();
+  });
+
+  test("redacts the refetch error message before logging", async () => {
+    const warns: string[] = [];
+    const spy = spyOn(console, "warn").mockImplementation((msg: string) => { warns.push(String(msg)); });
+    warnSpies.push(spy);
+    await refetchOnZeroOutputReset(
+      async () => { throw new Error("fetch failed: https://api.example.com/v1?api_key=sk-secret123"); },
+      resetError(),
+      {},
+    );
+    expect(warns.some(w => w.includes("sk-secret123"))).toBe(false);
+    expect(warns.some(w => w.includes("refetch failed"))).toBe(true);
+  });
 });
 
 describe("wrapWithZeroOutputRefetch", () => {
@@ -183,6 +208,32 @@ describe("wrapWithZeroOutputRefetch", () => {
     const wrapped = wrapWithZeroOutputRefetch(
       failingStream(resetError()),
       async () => noBodyResponse(),
+      {},
+    );
+    const reader = wrapped.getReader();
+    await expect(reader.read()).rejects.toThrow(/socket connection was closed/i);
+  });
+
+  test("propagates the original error when the refetch returns a body-bearing 503 (not relayed as SSE)", async () => {
+    silenceWarn();
+    // CodeRabbit review: without a replacement.ok gate, a 503 body would be
+    // relayed as stream data under the original 200 status, surfacing as a
+    // malformed "successful" SSE stream. The wrapper must reject it and keep
+    // the original reset failure.
+    const wrapped = wrapWithZeroOutputRefetch(
+      failingStream(resetError()),
+      async () => new Response(new TextEncoder().encode("service unavailable"), { status: 503 }),
+      {},
+    );
+    const reader = wrapped.getReader();
+    await expect(reader.read()).rejects.toThrow(/socket connection was closed/i);
+  });
+
+  test("propagates the original error when the refetch returns a body-bearing 401", async () => {
+    silenceWarn();
+    const wrapped = wrapWithZeroOutputRefetch(
+      failingStream(resetError()),
+      async () => new Response(new TextEncoder().encode("unauthorized"), { status: 401 }),
       {},
     );
     const reader = wrapped.getReader();

@@ -15,6 +15,7 @@
  * the shared abort helpers from here).
  */
 import { clearableDeadline } from "./abort";
+import { redactSecretString } from "./redact";
 
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
 const RESET_RETRY_MAX_ATTEMPTS = 3;
@@ -452,8 +453,8 @@ export async function fetchWithTransientRetry(
  *
  * Returns null (and the caller keeps its existing fail-closed tail) when the
  * error is not a reset shape, the caller signal is aborted, the refetch itself
- * throws, or the replacement has no body. Callers must not retry the returned
- * response's body.
+ * throws, or the replacement is not successful (non-2xx) or has no body.
+ * Callers must not retry the returned response's body.
  */
 export async function refetchOnZeroOutputReset(
   doFetch: ReplayableFetch,
@@ -466,16 +467,23 @@ export async function refetchOnZeroOutputReset(
   try {
     replacement = await doFetch("connection-reset");
   } catch (retryErr) {
+    // The replacement rejection may carry provider-returned text (URLs, headers,
+    // tokens) in its message; redact before it reaches the log.
+    const detail = retryErr instanceof Error ? retryErr.message : String(retryErr);
     console.warn(
-      `[upstream-retry] zero-output reset${opts.label ? ` (${opts.label})` : ""} — refetch failed: ${
-        retryErr instanceof Error ? retryErr.message : String(retryErr)
-      }`,
+      `[upstream-retry] zero-output reset${opts.label ? ` (${opts.label})` : ""} — refetch failed: ${redactSecretString(detail)}`,
     );
     return null;
   }
-  if (!replacement.body) {
+  // A non-success replacement (401/429/5xx/redirect) with a body must NOT be
+  // relayed as stream data: the caller keeps the original 200 response status,
+  // so a 503 body would surface as a malformed "successful" SSE stream. Treat
+  // any non-ok replacement as a failed refetch and preserve the original error.
+  if (!replacement.ok || !replacement.body) {
     console.warn(
-      `[upstream-retry] zero-output reset${opts.label ? ` (${opts.label})` : ""} — refetch returned no body, keeping original failure`,
+      `[upstream-retry] zero-output reset${opts.label ? ` (${opts.label})` : ""} — refetch returned ${
+        replacement.ok ? "no body" : `non-ok status ${replacement.status}`
+      }, keeping original failure`,
     );
     try {
       replacement.arrayBuffer().catch(() => {});
