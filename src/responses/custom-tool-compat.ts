@@ -286,7 +286,7 @@ export function restoreRoutedCustomCalls(
       // body resolve to the same apply_patch helper (devlog/_plan/260905_apply_patch_envelope_gap).
       const helper = aliased && sourceInput !== ""
         ? item.name
-        : resolveCodeModeHelperName(undefined, targetName, sourceInput, itemNamespace);
+        : resolveCodeModeHelperName(undefined, targetName, sourceInput, itemNamespace, declaredNames);
       const restored: Record<string, unknown> = {
         ...item,
         type: "custom_tool_call",

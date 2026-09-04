@@ -102,3 +102,30 @@ the residual “the model was quoting a patch rather than applying it” case re
 accepted rather than solved: no parse can separate quoting from intent, and it is the
 stated price of treating “never valid JavaScript” as “meant apply_patch”.
 
+## Third round: gate on real code mode, not on the name `exec`
+
+The Codex and CodeRabbit reviewers independently raised the same P2, and it was correct.
+
+The resolver keyed on `toolName === "exec"`. But `exec` is a name, not a guarantee: a
+catalog that lists `exec` NEXT TO a bare `exec_command` or `shell_command` is the
+flat-bridge shape, where `exec` may be an ordinary caller-defined tool. The repository
+already knows this — `normalizeDeclaredToolName` explicitly turns normalization OFF in
+that shape — and the new resolver owed the same check but did not make it. A
+caller-defined `exec` that legitimately accepts patch text would have been handed
+generated `tools.apply_patch(...)` JavaScript referencing a helper it does not expose.
+
+Fixed by exporting `declaresCodeModeExec` from `src/types/tools.ts`, beside the existing
+normalizer that encodes the same rule, and threading the declared-name set into the
+resolver and both streaming holds. The hold has to carry the identical gate: holding a
+delta that will never be compiled would suppress a preview for no reason.
+
+A negative test covers the shapes that must be refused: no catalog, an empty catalog,
+`exec` beside `exec_command`, `exec` beside `shell_command`, and a catalog without `exec`.
+
+### Proving the native regression is not vacuous
+
+Both reviewers noted the native path had no test able to go red. After adding one, the
+gate was mutated to return `undefined` unconditionally: `holds envelope deltas and
+compiles a raw exec patch body on the native stream` failed, and passed again on restore.
+The test fails for the right reason.
+

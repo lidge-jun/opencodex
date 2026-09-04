@@ -33,7 +33,7 @@ import {
   stripCitationMarkers,
   type CitationMarkerFilter,
 } from "./responses/citation-markers";
-import { normalizeDeclaredToolName } from "./types";
+import { declaresCodeModeExec, normalizeDeclaredToolName } from "./types";
 import { usageDisplayTotalTokens } from "./usage/totals";
 import { appendSafeWebSearchSource, safeWebSearchSources } from "./web-search/sources";
 import {
@@ -278,7 +278,7 @@ export function bridgeToResponsesSSE(
     namespace?: string,
     codeModeHelperName?: string,
   ): string => {
-    const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace);
+    const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace, options?.declaredToolNames);
     return helper
       ? compileCodeModeHelperInput(args, helper)
       : repairFreeformToolInput(args, toolName, namespace);
@@ -1178,7 +1178,10 @@ export function bridgeToResponsesSSE(
                     // Also hold a buffer that could still become a complete patch envelope:
                     // at completion such a body is recompiled into an apply_patch helper call,
                     // and streaming the envelope bytes first would be that same rewind.
-                    if (!mayBecomePatchEnvelope(full) && full.startsWith(emitted) && full.length > emitted.length) {
+                    const mayCompile = declaresCodeModeExec(options?.declaredToolNames)
+                      && !currentToolCall.namespace
+                      && currentToolCall.name === "exec";
+                    if (!(mayCompile && mayBecomePatchEnvelope(full)) && full.startsWith(emitted) && full.length > emitted.length) {
                       emit("response.custom_tool_call_input.delta", {
                         item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
                         delta: full.slice(emitted.length),
@@ -1673,7 +1676,7 @@ function buildResponseJSONWithBudget(
     namespace?: string,
     codeModeHelperName?: string,
   ): string => {
-    const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace);
+    const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace, options?.declaredToolNames);
     return helper
       ? compileCodeModeHelperInput(args, helper)
       : repairFreeformToolInput(args, toolName, namespace);

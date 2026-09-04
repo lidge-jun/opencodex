@@ -84,6 +84,20 @@ export function normalizeDeclaredToolName(
     : name;
 }
 
+/**
+ * True when a declared catalog is the genuine Codex code-mode shape.
+ *
+ * `exec` is a name, not a guarantee. A catalog that lists `exec` NEXT TO a bare
+ * `exec_command` or `shell_command` is the flat-bridge shape: there `exec` may be an
+ * ordinary caller-defined tool, and nested `tools.*` helpers are not what it runs.
+ * `normalizeDeclaredToolName` already refuses to reinterpret helper names in that shape,
+ * and anything inferring code mode from the bare name owes the same check.
+ */
+export function declaresCodeModeExec(declared: ReadonlySet<string> | undefined): boolean {
+  if (!declared || !declared.has(CODE_MODE_EXEC_TOOL_NAME)) return false;
+  return !(LEGACY_SHELL_BRIDGE_TOOL_NAMES as readonly string[]).some(legacy => declared.has(legacy));
+}
+
 export function toolChoiceAliases(tool: Pick<OcxTool, "namespace" | "name">): string[] {
   const wireName = namespacedToolName(tool.namespace, tool.name);
   return tool.namespace ? [wireName, dottedToolName(tool.namespace, tool.name)] : [wireName];

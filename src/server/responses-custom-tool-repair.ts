@@ -1,6 +1,7 @@
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { mayBecomePatchEnvelope, normalizeApplyPatchDelimiters } from "../responses/apply-patch-envelope";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
+import { declaresCodeModeExec } from "../types/tools";
 import {
   customToolItemId,
   restoreRoutedCustomCalls,
@@ -320,7 +321,12 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       // recompiles such a body into an apply_patch helper call, so streaming the envelope
       // bytes first and replacing them at completion is the rewind this path forbids.
       // Mirrors the same hold in `src/bridge.ts`.
-      if (mayBecomePatchEnvelope(fullInput)) return [];
+      if (
+        declaresCodeModeExec(declaredNames)
+        && itemNames.get(upstreamItemId)?.namespace === undefined
+        && itemNames.get(upstreamItemId)?.name === "exec"
+        && mayBecomePatchEnvelope(fullInput)
+      ) return [];
       if (!fullInput.startsWith(open.emittedInput) || fullInput.length === open.emittedInput.length) return [];
       const inputDelta = fullInput.slice(open.emittedInput.length);
       open.emittedInput = fullInput;
@@ -349,7 +355,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       // resolves to the same apply_patch helper (devlog/_plan/260905_apply_patch_envelope_gap).
       const helper = itemName?.aliased
         ? itemName.name
-        : resolveCodeModeHelperName(undefined, itemName?.name ?? "", source, itemName?.namespace);
+        : resolveCodeModeHelperName(undefined, itemName?.name ?? "", source, itemName?.namespace, declaredNames);
       const next = {
         ...rest,
         type: nextType,

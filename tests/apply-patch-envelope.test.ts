@@ -112,18 +112,20 @@ describe("apply_patch envelope repair", () => {
 // callers retarget it to the apply_patch helper. See
 // devlog/_plan/260905_apply_patch_envelope_gap.
 describe("raw exec patch envelope recognition", () => {
+  // Recognition requires a genuine code-mode catalog, not merely a tool named `exec`.
+  const CODE_MODE = new Set(["exec"]);
   const ADD = "*** Begin Patch\n*** Add File: a.txt\n+hi\n*** End Patch";
   const DELETE = "*** Begin Patch\n*** Delete File: a.txt\n*** End Patch";
 
   test("accepts a complete envelope for every file operation, canonical or decorated", () => {
     for (const body of [CANONICAL_PATCH, DECORATED_PATCH, ADD, DELETE]) {
       expect(isCompletePatchEnvelope(body)).toBe(true);
-      expect(resolveCodeModeHelperName(undefined, "exec", body)).toBe("apply_patch");
+      expect(resolveCodeModeHelperName(undefined, "exec", body, undefined, CODE_MODE)).toBe("apply_patch");
     }
   });
 
   test("compiles a recognized envelope into an apply_patch helper call", () => {
-    const helper = resolveCodeModeHelperName(undefined, "exec", DECORATED_PATCH);
+    const helper = resolveCodeModeHelperName(undefined, "exec", DECORATED_PATCH, undefined, CODE_MODE);
     const source = compileCodeModeHelperInput(DECORATED_PATCH, helper!);
     expect(source).toContain("await tools.apply_patch(");
     // The patch travels as a JSON string argument, never as interpolated source, and the
@@ -142,7 +144,7 @@ describe("raw exec patch envelope recognition", () => {
     ];
     for (const source of cases) {
       expect(isCompletePatchEnvelope(source)).toBe(false);
-      expect(resolveCodeModeHelperName(undefined, "exec", source)).toBeUndefined();
+      expect(resolveCodeModeHelperName(undefined, "exec", source, undefined, CODE_MODE)).toBeUndefined();
       expect(repairFreeformToolInput(source, "exec")).toBe(source);
     }
   });
@@ -157,20 +159,28 @@ describe("raw exec patch envelope recognition", () => {
     ];
     for (const source of cases) {
       expect(isCompletePatchEnvelope(source)).toBe(false);
-      expect(resolveCodeModeHelperName(undefined, "exec", source)).toBeUndefined();
+      expect(resolveCodeModeHelperName(undefined, "exec", source, undefined, CODE_MODE)).toBeUndefined();
     }
   });
 
   test("stays scoped to a bare exec call and never double-wraps a named helper", () => {
-    expect(resolveCodeModeHelperName(undefined, "exec", CANONICAL_PATCH, "mcp")).toBeUndefined();
-    expect(resolveCodeModeHelperName(undefined, "apply_patch", CANONICAL_PATCH)).toBeUndefined();
-    expect(resolveCodeModeHelperName(undefined, "render_diagram", CANONICAL_PATCH)).toBeUndefined();
+    expect(resolveCodeModeHelperName(undefined, "exec", CANONICAL_PATCH, "mcp", CODE_MODE)).toBeUndefined();
+    expect(resolveCodeModeHelperName(undefined, "apply_patch", CANONICAL_PATCH, undefined, CODE_MODE)).toBeUndefined();
+    expect(resolveCodeModeHelperName(undefined, "render_diagram", CANONICAL_PATCH, undefined, CODE_MODE)).toBeUndefined();
     // An already-resolved name-based helper wins and is returned unchanged.
-    expect(resolveCodeModeHelperName("write_stdin", "exec", CANONICAL_PATCH)).toBe("write_stdin");
+    expect(resolveCodeModeHelperName("write_stdin", "exec", CANONICAL_PATCH, undefined, CODE_MODE)).toBe("write_stdin");
+  });
+
+  // `exec` beside a bare shell bridge is the flat-catalog shape, not code mode: there a
+  // caller-defined `exec` may legitimately take patch text.
+  test("refuses a catalog that is not genuine code mode", () => {
+    for (const declared of [undefined, new Set<string>(), new Set(["exec", "exec_command"]), new Set(["exec", "shell_command"]), new Set(["apply_patch"])]) {
+      expect(resolveCodeModeHelperName(undefined, "exec", CANONICAL_PATCH, undefined, declared)).toBeUndefined();
+    }
   });
 
   test("unwraps the {input} function wrapper before recognizing the envelope", () => {
-    expect(resolveCodeModeHelperName(undefined, "exec", JSON.stringify({ input: DECORATED_PATCH }))).toBe("apply_patch");
+    expect(resolveCodeModeHelperName(undefined, "exec", JSON.stringify({ input: DECORATED_PATCH }), undefined, CODE_MODE)).toBe("apply_patch");
   });
 
   test("holds a streaming buffer that could still become an envelope", () => {

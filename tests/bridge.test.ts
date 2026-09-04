@@ -712,7 +712,7 @@ describe("Responses bridge reasoning and usage parity", () => {
       { type: "tool_call_delta", arguments: JSON.stringify({ input: body }) },
       { type: "tool_call_end" },
       { type: "done" },
-    ], "model", { freeformToolNames: new Set(["exec"]) });
+    ], "model", { freeformToolNames: new Set(["exec"]), declaredToolNames: new Set(["exec"]) });
 
     const output = json.output as Record<string, unknown>[];
     expect(output[0]).toMatchObject({ type: "custom_tool_call", name: "exec" });
@@ -729,7 +729,7 @@ describe("Responses bridge reasoning and usage parity", () => {
       { type: "tool_call_delta", arguments: JSON.stringify({ input: body }) },
       { type: "tool_call_end" },
       { type: "done" },
-    ], "model", { freeformToolNames: new Set(["exec"]) });
+    ], "model", { freeformToolNames: new Set(["exec"]), declaredToolNames: new Set(["exec"]) });
 
     const output = json.output as Record<string, unknown>[];
     expect(output[0]).toMatchObject({ type: "custom_tool_call", name: "exec" });
