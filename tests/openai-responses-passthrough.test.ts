@@ -2335,8 +2335,26 @@ describe("OpenAI Responses passthrough sanitization", () => {
     ]);
   });
 
+  test("api-key mode leaves incomplete output without call_id fail-closed", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key" as const,
+      apiKey: "xai-test",
+    });
+    const incompleteOutput = { type: "custom_tool_call_output" };
+
+    const body = JSON.parse(adapter.buildRequest({
+      ...parsedBase,
+      _rawBody: { model: "grok-4.6", input: [incompleteOutput] },
+    }, meta).body) as { input: Record<string, unknown>[] };
+
+    expect(body.input).toEqual([incompleteOutput]);
+  });
+
   test("forward unexpanded miss converts orphan tool outputs and drops reasoning", () => {
     const adapter = createResponsesPassthroughAdapter(provider);
+    const image = { type: "input_image", image_url: "data:image/png;base64,AAAA" };
     const body = JSON.parse(adapter.buildRequest({
       ...parsedBase,
       _rawBody: {
@@ -2345,7 +2363,11 @@ describe("OpenAI Responses passthrough sanitization", () => {
         input: [
           { type: "reasoning", id: "rs_1", summary: [] },
           { type: "function_call_output", call_id: "call_orphan", output: "tool said hi" },
-          { type: "custom_tool_call_output", call_id: "call_custom", output: [{ type: "output_text", text: "custom out" }] },
+          {
+            type: "custom_tool_call_output",
+            call_id: "call_custom",
+            output: [{ type: "output_text", text: "custom out" }, image],
+          },
           { role: "user", content: "next question" },
         ],
       },
@@ -2362,7 +2384,11 @@ describe("OpenAI Responses passthrough sanitization", () => {
     expect(body.input[1]).toMatchObject({
       type: "message",
       role: "user",
-      content: [{ type: "input_text", text: "[tool output for call_custom]\ncustom out" }],
+      content: [
+        { type: "input_text", text: "[tool output for call_custom]" },
+        { type: "input_text", text: "custom out" },
+        image,
+      ],
     });
     expect(body.input[2]).toMatchObject({ role: "user", content: "next question" });
   });

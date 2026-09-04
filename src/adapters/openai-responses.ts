@@ -906,9 +906,12 @@ function toolOutputText(output: unknown): string {
   }).filter(Boolean).join("\n");
 }
 
-/** Convert unidentified tool output to user-message content without discarding valid images. */
-function unidentifiedToolOutputContent(output: unknown): Record<string, unknown>[] {
-  const marker = "[tool output for unknown call]";
+/** Convert orphaned tool output to user-message content without discarding valid images. */
+function orphanedToolOutputContent(output: unknown, callId = ""): Record<string, unknown>[] {
+  const marker = `[tool output for ${callId || "unknown call"}]`;
+  if (typeof output !== "string" && !Array.isArray(output)) {
+    return [{ type: "input_text", text: marker }];
+  }
   if (!Array.isArray(output)) {
     return [{ type: "input_text", text: `${marker}\n${toolOutputText(output)}` }];
   }
@@ -976,11 +979,12 @@ function repairUnidentifiedToolOutputItems(body: unknown): unknown {
       || (typeof item.call_id === "string" && item.call_id.length > 0)) {
       return item;
     }
+    if (typeof item.output !== "string" && !Array.isArray(item.output)) return item;
     changed = true;
     return {
       type: "message",
       role: "user",
-      content: unidentifiedToolOutputContent(item.output),
+      content: orphanedToolOutputContent(item.output),
     };
   });
   return changed ? { ...body, input } : body;
@@ -1106,12 +1110,16 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean, synthes
       flushPendingSyntheticOutputs();
       const callId = typeof item.call_id === "string" ? item.call_id : "";
       const paired = isFnOutput ? functionCallIds.has(callId) : customCallIds.has(callId);
-      if (!paired) {
+      const usableOutput = typeof item.output === "string" || Array.isArray(item.output);
+      // A known orphan call is still useful as a labeled user message even when its output is
+      // incomplete. With no call id and no output, preserve the invalid item so validation fails
+      // closed rather than pretending any tool result exists.
+      if (!paired && (callId.length > 0 || usableOutput)) {
         changed = true;
         repaired.push({
           type: "message",
           role: "user",
-          content: [{ type: "input_text", text: `[tool output for ${callId || "unknown call"}]\n${toolOutputText(item.output)}` }],
+          content: orphanedToolOutputContent(item.output, callId),
         });
         continue;
       }
