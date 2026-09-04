@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCodexHomeDir } from "./home";
 import { parseTomlDocument } from "./project-config-warnings";
+import { redactUserPath } from "../lib/redact";
 
 /**
  * Keys that are valid in model catalog data but not at the top level of the
@@ -45,7 +46,7 @@ export function collectLegacyCodexConfigKeyDiagnostics(
       found.push({
         path,
         code: key,
-        detail: `${path}: top-level '${key}' is not a valid Codex config key. `
+        detail: `top-level '${key}' is not a valid Codex config key. `
           + "codex --strict-config rejects the whole file. Remove the key and put durable guidance in AGENTS.md.",
       });
     }
@@ -56,11 +57,12 @@ export function collectLegacyCodexConfigKeyDiagnostics(
 export function formatLegacyCodexConfigKeyDiagnosticsForDoctor(
   result: LegacyCodexConfigKeyDiagnosticsResult,
 ): string[] {
+  const displayPath = redactUserPath(result.path);
   if (result.status === "unavailable") {
-    return [`  --     Codex config at ${result.path} could not be read (${result.reason}); legacy-key check skipped`];
+    return [`  --     Codex config at ${displayPath} could not be read (${result.reason}); legacy-key check skipped`];
   }
   if (result.diagnostics.length === 0) {
     return ["  ok     no unsupported legacy top-level keys in the Codex config"];
   }
-  return result.diagnostics.map(diagnostic => `[WARN] ${diagnostic.detail}`);
+  return result.diagnostics.map(diagnostic => `[WARN] ${redactUserPath(diagnostic.path)}: ${diagnostic.detail}`);
 }

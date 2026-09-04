@@ -79,4 +79,88 @@ describe("legacy Codex config keys", () => {
     if (result.status !== "available") return;
     expect(result.diagnostics).toHaveLength(0);
   });
+
+  test("ignores key-shaped and table-shaped text inside a basic multiline string", () => {
+    writeConfig([
+      'developer_instructions = """',
+      "Example only:",
+      'persistent_instructions = "not a config key"',
+      "[model_messages]",
+      'persistent_instructions = "also prose"',
+      '"""',
+      'model = "gpt-5.3"',
+    ].join("\n"));
+    const result = collectLegacyCodexConfigKeyDiagnostics({ codexConfigPath: configPath });
+    expect(result.status).toBe("available");
+    if (result.status !== "available") return;
+    expect(result.diagnostics).toHaveLength(0);
+  });
+
+  test("ignores key-shaped and table-shaped text inside a literal multiline string", () => {
+    writeConfig([
+      "developer_instructions = '''",
+      "Example only:",
+      "persistent_instructions = 'not a config key'",
+      "[profiles.example]",
+      "persistent_instructions = 'also prose'",
+      "'''",
+      'model = "gpt-5.3"',
+    ].join("\n"));
+    const result = collectLegacyCodexConfigKeyDiagnostics({ codexConfigPath: configPath });
+    expect(result.status).toBe("available");
+    if (result.status !== "available") return;
+    expect(result.diagnostics).toHaveLength(0);
+  });
+
+  test("does not treat triple-quote text inside ordinary one-line strings as multiline syntax", () => {
+    for (const content of [
+      `persistent_instructions = '"""'`,
+      `persistent_instructions = "'''"`,
+    ]) {
+      writeConfig(content);
+      const result = collectLegacyCodexConfigKeyDiagnostics({ codexConfigPath: configPath });
+      expect(result.status).toBe("available");
+      if (result.status !== "available") continue;
+      expect(result.diagnostics.map(diagnostic => diagnostic.code)).toEqual(["persistent_instructions"]);
+    }
+  });
+
+  test("tracks a second multiline value opened on the first value's closing line", () => {
+    writeConfig([
+      "instruction_fragments = [",
+      '  """first block',
+      '  """, """second block',
+      '  persistent_instructions = "still prose"',
+      '  [model_messages]',
+      '  """',
+      "]",
+    ].join("\n"));
+    const result = collectLegacyCodexConfigKeyDiagnostics({ codexConfigPath: configPath });
+    expect(result.status).toBe("available");
+    if (result.status !== "available") return;
+    expect(result.diagnostics).toHaveLength(0);
+  });
+
+  test("doctor formatting redacts user names in available and unavailable paths", () => {
+    const available = formatLegacyCodexConfigKeyDiagnosticsForDoctor({
+      status: "available",
+      path: "/home/alice/.codex/config.toml",
+      diagnostics: [{
+        path: "/home/alice/.codex/config.toml",
+        code: "persistent_instructions",
+        detail: "top-level 'persistent_instructions' is invalid",
+      }],
+    });
+    expect(available.join("\n")).toContain("/home/[USER]/.codex/config.toml");
+    expect(available.join("\n")).not.toContain("alice");
+
+    const unavailable = formatLegacyCodexConfigKeyDiagnosticsForDoctor({
+      status: "unavailable",
+      path: String.raw`C:\Users\Bob\secret-config\config.toml`,
+      reason: "read_failed",
+    });
+    expect(unavailable.join("\n")).toContain(String.raw`C:\Users\[USER]\[REDACTED]\config.toml`);
+    expect(unavailable.join("\n")).not.toContain("Bob");
+    expect(unavailable.join("\n")).not.toContain("secret-config");
+  });
 });

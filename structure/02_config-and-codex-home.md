@@ -328,6 +328,21 @@ Root TOML keys must be written before the first `[table]`. Re-injection strips t
 both shapes — opencodex blocks, injected root base-url overrides, stale root context-window
 overrides, and stale catalog paths — before rewriting, so switching between forms leaves no residue.
 
+Read-only doctor and project-routing diagnostics use a lightweight root/table TOML reader rather
+than mutating or normalizing the user's file. That reader must lexically skip both basic and literal
+multiline string bodies: instruction prose can contain key-shaped examples and `[table]` snippets,
+which are data rather than configuration. Diagnostic result objects may retain the real path for
+local correlation, but every formatted doctor line must pass it through the shared user-path
+redaction boundary before display.
+
+[Decision Log]
+- 목적과 의도: Keep strict-config diagnostics useful without interpreting instruction prose as TOML or exposing OS account names in shareable output.
+- 기존 구현 및 제약 조건: The diagnostic reader intentionally covers only Codex root keys and tables; a full TOML dependency is not otherwise required.
+- 검토한 주요 대안: Add a full TOML parser, scan raw lines for one legacy key, or preserve the lightweight parser with multiline lexical state.
+- 선택한 방식: Preserve the bounded reader, skip multiline string bodies before key/table matching, and redact paths only at the formatting boundary.
+- 다른 대안 대신 이 방식을 선택한 이유: All consumers keep one root/table interpretation while internal diagnostics retain actionable local paths.
+- 장점, 단점 및 영향: False positives and username disclosure are removed; unsupported exotic TOML syntax remains outside this diagnostic reader's contract.
+
 Native Codex sub-agent defaults are a separate, explicit opt-in. When
 `syncCodexSubagentDefaults` is true and `injectionModel` is set, injection writes marker-owned
 `agents.default_subagent_model` and, when configured,
