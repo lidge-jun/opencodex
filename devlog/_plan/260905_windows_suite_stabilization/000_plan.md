@@ -73,6 +73,15 @@ prevent a defect that does not exist.
 ## Acceptance for the unit
 
 1. Four shards, pinned runtime, **0 fail, twice consecutively**, with logs.
+
+   Status: CI run 33926041666 (`cfc8de963`) — all four Windows shards green,
+   4462/4628/4305/4413 pass. Second run 33928082123 on the rebased head
+   (`dc09663cb`): every file this unit touches green again, but windows 2/4
+   red on three cases that arrived on `dev` via #3533 between the two runs
+   (`060`). The stack's own scope is met twice; the suite-wide bar is not,
+   and `070` is the next work-phase for that drift.
+
+   Published as #3548 → #3549 → #3550 against `dev`.
 2. Every fix is a root-cause change: no assertion weakened, no timeout inflated
    without naming the intrinsic operation it covers.
 3. macOS unchanged for every touched file, verified by running it.
