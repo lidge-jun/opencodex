@@ -138,9 +138,19 @@ export function parseTomlDocument(content: string): TomlDocument {
   let multiline: TomlMultilineDelimiter | null = null;
 
   for (const line of content.split("\n")) {
+    const wasMultiline = multiline !== null;
     const multilineState = multilineStateAfterLine(line, multiline);
     multiline = multilineState.active;
-    if (multilineState.consumed) continue;
+    if (multilineState.consumed) {
+      // The declaration itself is still configuration even though its multiline VALUE must
+      // not be scanned as keys/tables. A legacy root key using a multiline value therefore
+      // remains visible to strict-config diagnostics; only the body is opaque.
+      if (!wasMultiline) {
+        const declaration = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*(?:"""|''')/);
+        if (declaration) current[declaration[1]!] = "";
+      }
+      continue;
+    }
 
     const table = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
     if (table) {

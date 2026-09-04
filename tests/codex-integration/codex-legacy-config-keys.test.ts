@@ -141,6 +141,21 @@ describe("legacy Codex config keys", () => {
     expect(result.diagnostics).toHaveLength(0);
   });
 
+  test("still flags a legacy root key whose value uses basic or literal multiline syntax", () => {
+    for (const content of [
+      'persistent_instructions = """Be brief."""',
+      `persistent_instructions = '''Be brief.'''`,
+      ['persistent_instructions = """', "Be brief.", '"""'].join("\n"),
+      ["persistent_instructions = '''", "Be brief.", "'''"].join("\n"),
+    ]) {
+      writeConfig(content);
+      const result = collectLegacyCodexConfigKeyDiagnostics({ codexConfigPath: configPath });
+      expect(result.status).toBe("available");
+      if (result.status !== "available") continue;
+      expect(result.diagnostics.map(diagnostic => diagnostic.code)).toEqual(["persistent_instructions"]);
+    }
+  });
+
   test("doctor formatting redacts user names in available and unavailable paths", () => {
     const available = formatLegacyCodexConfigKeyDiagnosticsForDoctor({
       status: "available",
