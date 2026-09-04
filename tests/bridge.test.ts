@@ -705,7 +705,7 @@ describe("Responses bridge reasoning and usage parity", () => {
 *** Update File: README.md
 @@
 -old
- new
++new
 *** End Patch ***`;
     const json = buildResponseJSON([
       { type: "tool_call_start", id: "c1", name: "exec" },

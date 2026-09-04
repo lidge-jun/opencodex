@@ -73,3 +73,32 @@ complete envelope only, tool name exactly `exec`, no namespace, and no
 `bun run typecheck` clean. Focused suite of 10 files: **276 pass, 0 fail**. The
 repository-wide suite was not run, per instruction.
 
+## Second review round, after the first implementation was pushed
+
+A second adversarial reviewer and the human maintainer independently found the SAME
+remaining defect, which is the strongest possible signal that it was real: the native
+Responses path still rewound.
+
+The first fix held streaming deltas in `src/bridge.ts` only. The native SSE path in
+`src/server/responses-custom-tool-repair.ts` kept emitting
+`response.custom_tool_call_input.delta` with the raw envelope as soon as the wrapper
+unwrapped, then replaced the same call with compiled helper JavaScript at the done
+event. So one tool call showed the patch text mid-stream and delivered entirely
+different JavaScript as its final input — exactly the rewind the first fix was written
+to prevent, left live on the route grok actually uses.
+
+Fixed by applying the same `mayBecomePatchEnvelope` hold in that delta path, and covered
+by two regressions over the full `output_item.added` -> deltas -> done sequence: envelope
+deltas are suppressed and only compiled JavaScript is delivered, while ordinary exec
+JavaScript keeps its progressive deltas.
+
+The reviewer also caught a fixture defect: the bridge test patch body used a leading
+space instead of `+` on its added line. It passed anyway, because the predicate only
+requires the operation line, so the test was not proving what its name claimed. Fixed.
+
+Two other findings were assessed and deliberately not acted on. `*** Move to:` stays
+outside the predicate, since widening the accepted grammar is not this change’s job. And
+the residual “the model was quoting a patch rather than applying it” case remains
+accepted rather than solved: no parse can separate quoting from intent, and it is the
+stated price of treating “never valid JavaScript” as “meant apply_patch”.
+

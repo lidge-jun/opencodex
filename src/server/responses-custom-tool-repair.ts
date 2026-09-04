@@ -1,5 +1,5 @@
 import type { TranslatorBudget } from "../lib/translator-budget";
-import { normalizeApplyPatchDelimiters } from "../responses/apply-patch-envelope";
+import { mayBecomePatchEnvelope, normalizeApplyPatchDelimiters } from "../responses/apply-patch-envelope";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
 import {
   customToolItemId,
@@ -316,6 +316,11 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       if (FREEFORM_WRAP_PREFIX.startsWith(open.argumentsText)) return [];
       const fullInput = partialCustomToolInput(open.argumentsText);
       if (fullInput === null) return [];
+      // Hold a buffer that could still become a complete patch envelope. The done event
+      // recompiles such a body into an apply_patch helper call, so streaming the envelope
+      // bytes first and replacing them at completion is the rewind this path forbids.
+      // Mirrors the same hold in `src/bridge.ts`.
+      if (mayBecomePatchEnvelope(fullInput)) return [];
       if (!fullInput.startsWith(open.emittedInput) || fullInput.length === open.emittedInput.length) return [];
       const inputDelta = fullInput.slice(open.emittedInput.length);
       open.emittedInput = fullInput;
