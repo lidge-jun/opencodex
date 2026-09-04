@@ -81,6 +81,10 @@ let grokApplyFlight: { startedAt: number; promise: Promise<unknown>; bytes: numb
 let grokApplyHighWaterBytes = 0;
 let grokApplyTestHooks: { now?: () => number; run?: () => Promise<unknown> } | null = null;
 
+function isModelPickerOrderMode(value: unknown): value is NonNullable<OcxConfig["modelPickerOrderMode"]> {
+  return value === "alphabetical" || value === "provider" || value === "most-used";
+}
+
 class GrokApplyBusyError extends Error {}
 
 /**
@@ -625,7 +629,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // Subagent model picker: which ≤5 routed models Codex's spawn_agent advertises (it shows the
   // first 5 routed catalog entries). PUT reorders the injected catalog so the chosen ones lead.
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
-    const models = await fetchAllModels(config);
+    const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
     const disabled = new Set(config.disabledModels ?? []);
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
     // catalog, just buried by priority. List them first so the user can feature them over routed.
@@ -657,19 +661,83 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     // in-memory catalog than the one on disk.
     const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
     const catalogState = collectCodexAppServerCatalogState();
-    return jsonResponse({ chosen, available, catalogState });
+    return jsonResponse({
+      chosen,
+      available,
+      // modelPickerOrder is deliberately display-only: native and featured rows
+      // retain their own catalog priorities, and spawn_agent keeps its natural
+      // priority through opencodex_spawn_priority.
+      pickerAvailable: visibleRouted,
+      pickerOrder: config.modelPickerOrder ?? [],
+      pickerOrderMode: config.modelPickerOrderMode ?? null,
+      catalogState,
+    });
   }
   if (url.pathname === "/api/subagent-models" && req.method === "PUT") {
-    let body: { models?: unknown };
-    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
-    const chosen = Array.isArray(body.models) ? body.models.filter((m): m is string => typeof m === "string").slice(0, 5) : [];
-    config.subagentModels = chosen;
-    const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-    save(config);
+    let rawBody: unknown;
+    try { rawBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (rawBody === null || typeof rawBody !== "object" || Array.isArray(rawBody)) {
+      return jsonResponse({ error: "JSON body must be an object" }, 400);
+    }
+    const body = rawBody as { models?: unknown; pickerOrder?: unknown; pickerOrderMode?: unknown };
+    if (body.models === undefined && body.pickerOrder === undefined) {
+      return jsonResponse({ error: "models or pickerOrder is required" }, 400);
+    }
+
+    let chosen = config.subagentModels ?? [];
+    const updatesRoster = body.models !== undefined;
+    if (updatesRoster) {
+      if (!Array.isArray(body.models) || body.models.some(m => typeof m !== "string")) {
+        return jsonResponse({ error: "models must be an array of strings" }, 400);
+      }
+      chosen = body.models.slice(0, 5);
+    }
+
+    let pickerOrder: string[] | null | undefined;
+    if (body.pickerOrder !== undefined) {
+      if (body.pickerOrder === null || (Array.isArray(body.pickerOrder) && body.pickerOrder.length === 0)) {
+        pickerOrder = null;
+      } else {
+        if (!Array.isArray(body.pickerOrder) || body.pickerOrder.some(model => typeof model !== "string" || model.trim() === "")) {
+          return jsonResponse({ error: "pickerOrder must be an array of non-empty routed model ids, or null" }, 400);
+        }
+        const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
+        const disabled = new Set(config.disabledModels ?? []);
+        const visibleRouted = new Set(models
+          .filter(m => ![...disabled].some(stored => stored === catalogModelSlug(m) || slugEquals(stored, m.provider, m.id)))
+          .map(catalogModelSlug));
+        pickerOrder = body.pickerOrder.map(model => model.trim());
+        if (new Set(pickerOrder).size !== pickerOrder.length || pickerOrder.some(model => !visibleRouted.has(model))) {
+          return jsonResponse({ error: "pickerOrder must contain each visible routed model at most once" }, 400);
+        }
+      }
+    }
+
+    let pickerOrderMode: NonNullable<OcxConfig["modelPickerOrderMode"]> | null | undefined;
+    if (body.pickerOrderMode !== undefined) {
+      if (body.pickerOrder === undefined) return jsonResponse({ error: "pickerOrderMode requires pickerOrder" }, 400);
+      if (body.pickerOrderMode === null) pickerOrderMode = null;
+      else if (isModelPickerOrderMode(body.pickerOrderMode)) pickerOrderMode = body.pickerOrderMode;
+      else return jsonResponse({ error: "pickerOrderMode must be alphabetical, provider, most-used, or null" }, 400);
+    }
+
+    if (updatesRoster) config.subagentModels = chosen;
+    if (pickerOrder === null) {
+      deleteConfigTopLevelKey(config, "modelPickerOrder");
+      deleteConfigTopLevelKey(config, "modelPickerOrderMode");
+    } else if (pickerOrder !== undefined) {
+      config.modelPickerOrder = pickerOrder;
+      if (pickerOrderMode === undefined || pickerOrderMode === null) deleteConfigTopLevelKey(config, "modelPickerOrderMode");
+      else config.modelPickerOrderMode = pickerOrderMode;
+    }
+
+    (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
     const catalogRefresh = await convergeCodexCatalog();
-    await syncClaudeAgentDefsBestEffort();
-    await autoApplyDesktopBestEffort();
-    return jsonResponse({ ok: true, applied: chosen, catalogRefresh });
+    if (updatesRoster) {
+      await syncClaudeAgentDefsBestEffort();
+      await autoApplyDesktopBestEffort();
+    }
+    return jsonResponse({ ok: true, applied: chosen, pickerOrder: config.modelPickerOrder ?? [], pickerOrderMode: config.modelPickerOrderMode ?? null, catalogRefresh });
   }
 
   // Priority-ordered subagent model fallback chain for quota-aware spawn routing.

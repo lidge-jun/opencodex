@@ -1,11 +1,12 @@
 ---
 title: Model Ordering
-description: How opencodex determines model order in the Codex picker and spawn_agent model overrides.
+description: How opencodex determines routed-model order in Codex and Claude pickers and spawn_agent model overrides.
 ---
 
-The Codex model picker does not preserve the order of provider declarations or model arrays in the
-opencodex configuration. Its final order comes from catalog priorities, with a deterministic
-alphabetical order for routed models that share the same priority.
+Codex does not preserve the order of provider declarations or model arrays in the opencodex
+configuration. Its final order comes from catalog priorities, with a deterministic alphabetical
+order for routed models that share the same priority. Claude receives the same routed-model order
+from its model-discovery response.
 
 ## The rule Codex applies
 
@@ -23,13 +24,12 @@ priorities `i * N + j`, where `j` is the selector's zero-based position; a route
 rows are moved outside those selector groups. Codex still advertises only the first five
 picker-visible rows.
 
-The relevant no-selector priorities are:
+When `modelPickerOrder` is unset, the relevant no-selector priorities are:
 
 | Catalog entry | Priority | Source |
 | --- | ---: | --- |
 | `subagentModels[i]` | `i` (`0` through `4`) | The featured rank map in `src/codex/catalog/sync.ts` |
 | Other routed models | `5` | Routed entry creation in `src/codex/catalog/sync.ts` |
-| Non-featured routed models listed in `modelPickerOrder` | `1000 + i` | Display-only picker rank in `src/codex/catalog/sync.ts` |
 | Native GPT slugs by default | `9` | Native entry creation in `src/codex/catalog/sync.ts` |
 | Unselected native models while a featured list exists | At least `featured.length + 100` | Native catalog merge in `src/codex/catalog/sync.ts` |
 
@@ -66,7 +66,8 @@ only change whether a model is included.
 
 ## Effective picker pattern
 
-With no eligible account selectors and a non-empty featured list, the resulting order is:
+When `modelPickerOrder` is unset, no eligible account selectors are present, and the featured list
+is non-empty, the resulting Codex order is:
 
 1. Models in the exact configured `subagentModels` order, with priorities `0` through `4`.
 2. All remaining routed models, ordered alphabetically by provider and then model id, at priority `5`.
@@ -117,8 +118,8 @@ if it saves the roster. Use at most five configured ids. With account selectors,
 choice can expand into multiple selector-qualified catalog rows, so configured choices and
 advertised rows are not necessarily one-to-one.
 
-Use `modelPickerOrder` for display-only ordering of routed `<provider>/<model>` rows beyond that
-featured block:
+Use `modelPickerOrder` for display-only ordering of routed `<provider>/<model>` rows in the Codex
+and Claude model pickers:
 
 ```json
 {
@@ -130,13 +131,17 @@ featured block:
 }
 ```
 
+The dashboard's **Models** page can write this setting for all currently visible routed models.
+Choose **Default** to keep the normal provider/model order, **A–Z** to sort by model id,
+**Provider** to group by provider, or **Most used** to rank by all recorded request history. The
+dashboard fetches usage only when you apply the Most used order.
+
 Listed routed rows appear in the configured order. A routed row omitted from the array keeps its
 normal priority, so it remains ahead of the `modelPickerOrder` display band; list every routed row
-whose relative position you want to control. A row also present in `subagentModels` keeps its
-featured priority. Bare native and account-qualified native rows are not reordered by
-`modelPickerOrder`; use `subagentModels` for those rows.
+whose relative position you want to control. Native and account-qualified native rows are not
+reordered by `modelPickerOrder`.
 
-`modelPickerOrder` never changes the `spawn_agent` candidate set. It changes only the
-Codex-visible picker priority while opencodex retains each moved row's natural priority for
-sub-agent selection. `disabledModels` and each provider's `selectedModels` remain visibility fields,
-not ordering controls. There is no separate `modelOrder`, `providerOrder`, or priority-map setting.
+`modelPickerOrder` never changes the `spawn_agent` candidate set. It changes only harness-visible
+picker order while opencodex retains each moved row's natural priority for sub-agent selection.
+`disabledModels` and each provider's `selectedModels` remain visibility fields, not ordering
+controls. There is no separate `modelOrder`, `providerOrder`, or priority-map setting.

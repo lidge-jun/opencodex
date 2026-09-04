@@ -63,6 +63,17 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     expect(infos).toHaveLength(1);
   });
 
+  test("routed models follow modelPickerOrder in Claude discovery", () => {
+    const infos = buildAnthropicModelInfos([], [
+      { provider: "a", id: "first" },
+      { provider: "z", id: "last" },
+    ], undefined, "readable", undefined, undefined, false, [
+      "z/last",
+      "a/first",
+    ]);
+    expect(infos.map(info => info.display_name)).toEqual(["last (z)", "first (a)"]);
+  });
+
   test("[1m] picker variants: only >=1M models get a second row (devlog 260712 B1)", () => {
     const infos = buildAnthropicModelInfos([], [
       { provider: "cursor", id: "gpt-5.6-luna", contextWindow: 1_000_000, reasoningEfforts: ["low", "high", "max"] },

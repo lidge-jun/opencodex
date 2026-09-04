@@ -68,6 +68,7 @@ import {
 import { EmptyProviderHint } from "./models-provider-hints";
 import { shadowCallModelOptions } from "./dashboard-shared";
 import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
+import { modelPickerOrder, modelPickerOrderMode, type ModelPickerOrderMode, type ModelPickerUsage, type SavedModelPickerOrderMode } from "../model-picker-order";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -76,7 +77,12 @@ type CachedModelsPage = {
   disabled: string[];
   contextCaps: Record<string, number>;
   contextCapValue: number;
+  pickerAvailable?: string[];
+  pickerOrder?: string[];
+  pickerOrderMode?: SavedModelPickerOrderMode | null;
 };
+
+type PickerOrderResponse = { pickerAvailable?: string[]; pickerOrder?: string[]; pickerOrderMode?: SavedModelPickerOrderMode | null };
 
 /** One subtitle per tab: only one panel is visible, so only one description applies. */
 const SUBTITLE_TKEY: Record<ModelsTab, TKey> = {
@@ -214,6 +220,9 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const [limit, setLimit] = useState<Record<string, number>>({});
   const [contextCaps, setContextCaps] = useState<Record<string, number>>(() => cached?.contextCaps ?? {});
   const [contextCapValue, setContextCapValue] = useState(() => cached?.contextCapValue ?? 350_000);
+  const [pickerAvailable, setPickerAvailable] = useState<string[]>(() => cached?.pickerAvailable ?? []);
+  const [pickerMode, setPickerMode] = useState<ModelPickerOrderMode>(() => modelPickerOrderMode(cached?.pickerAvailable ?? [], cached?.pickerOrder ?? [], cached?.pickerOrderMode));
+  const [pickerBusy, setPickerBusy] = useState(false);
   const [customCap, setCustomCap] = useState("");
   const [showCustom, setShowCustom] = useState(false);
   const [providerCapCustomOpen, setProviderCapCustomOpen] = useState<Record<string, boolean>>({});
@@ -400,18 +409,20 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   }, [apiBase]);
 
   const fetchCatalog = useCallback(async (signal: AbortSignal): Promise<CachedModelsPage> => {
-    const [modelsRes, capsRes, providersRes, selectionData] = await Promise.all([
+    const [modelsRes, capsRes, providersRes, selectionData, pickerRes] = await Promise.all([
       // Every request carries the resource signal, so leaving the catalog tab cancels
       // the work rather than only discarding its result.
       fetch(`${apiBase}/api/models`, { signal }),
       fetch(`${apiBase}/api/provider-context-caps`, { signal }),
       fetch(`${apiBase}/api/providers`, { signal }),
       fetchSelectedModels(apiBase, fetch, signal),
+      fetch(`${apiBase}/api/subagent-models`, { signal }),
     ]);
-    const [data, capsData, providerData] = await Promise.all([
+    const [data, capsData, providerData, pickerData] = await Promise.all([
       readJsonOrThrow<ModelRow[]>(modelsRes),
       readJsonOrThrow<ProviderContextCapsResponse>(capsRes),
       readJsonOrThrow<ConfiguredProviderSummary[]>(providersRes),
+      readJsonIfOk<PickerOrderResponse>(pickerRes),
     ]);
     if (data === undefined || capsData === undefined || providerData === undefined) {
       throw new Error("models payload missing");
@@ -429,6 +440,9 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       disabled: [...nextDisabled],
       contextCaps: capsData.caps ?? {},
       contextCapValue: nextCapValue,
+      pickerAvailable: pickerData?.pickerAvailable ?? [],
+      pickerOrder: pickerData?.pickerOrder ?? [],
+      pickerOrderMode: pickerData?.pickerOrderMode ?? null,
     } satisfies CachedModelsPage;
     writeSessionListCache(cacheKey, next);
     return next;
@@ -447,6 +461,8 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     setSelectedModels(next.selectedModels);
     setContextCapValue(next.contextCapValue);
     setContextCaps(next.contextCaps);
+    setPickerAvailable(next.pickerAvailable ?? []);
+    setPickerMode(modelPickerOrderMode(next.pickerAvailable ?? [], next.pickerOrder ?? [], next.pickerOrderMode));
   }, []);
 
   const catalogResource = useDataSurface<CachedModelsPage>(
@@ -1578,6 +1594,44 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     ? groups.filter(group => group.provider === selectedProvider)
     : groups;
 
+  const savePickerOrder = async () => {
+    if (pickerBusy || pickerMode === "custom") return;
+    setPickerBusy(true);
+    const bounded = createBoundedFetch(15_000);
+    try {
+      let usage: ModelPickerUsage[] = [];
+      if (pickerMode === "most-used") {
+        const usageResponse = await fetch(`${apiBase}/api/usage?range=all&surface=all`, { signal: bounded.signal });
+        const usageData = await readJsonOrThrow<{ models?: ModelPickerUsage[] }>(usageResponse, t("models.pickerOrder.usageFailed"));
+        usage = usageData?.models ?? [];
+      }
+      const order = modelPickerOrder(pickerMode, pickerAvailable, usage);
+      const pickerOrderMode = pickerMode === "default" ? null : pickerMode;
+      const response = await fetch(`${apiBase}/api/subagent-models`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pickerOrder: order, pickerOrderMode }),
+        signal: bounded.signal,
+      });
+      const data = await readJsonOrThrow<{ pickerOrder?: string[]; pickerOrderMode?: SavedModelPickerOrderMode | null }>(response, t("models.saveFailed"));
+      const saved = data?.pickerOrder ?? order ?? [];
+      const savedMode = data?.pickerOrderMode ?? pickerOrderMode;
+      const next = catalogState.data ?? cached;
+      if (next) {
+        const updated = { ...next, pickerAvailable, pickerOrder: saved, pickerOrderMode: savedMode };
+        writeSessionListCache(cacheKey, updated);
+        setClientResourceData(cacheKey, updated);
+      }
+      setPickerMode(modelPickerOrderMode(pickerAvailable, saved, savedMode));
+      publishFeedback(true, t("models.pickerOrder.saved"));
+    } catch (error) {
+      publishFeedback(false, error instanceof Error && error.message ? error.message : t("models.networkError"));
+    } finally {
+      bounded.clear();
+      setPickerBusy(false);
+    }
+  };
+
   const controlsBlock = (
     <>
       <div className="models-control-top-row">
@@ -1735,6 +1789,27 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         )}
         <Switch on={allCapped} onClick={setAll} disabled={busy} label={t("models.setAll")} />
         <span className="muted text-label leading-body">{t("models.setAllHint", { value: fmtK(contextCapValue) })}</span>
+      </div>
+
+      <div className="row models-cap-row">
+        <span className="muted text-control">{t("models.pickerOrder.label")}</span>
+        <Select
+          value={pickerMode}
+          options={[
+            { value: "default", label: t("models.pickerOrder.default") },
+            { value: "alphabetical", label: t("models.pickerOrder.alphabetical") },
+            { value: "provider", label: t("models.pickerOrder.provider") },
+            { value: "most-used", label: t("models.pickerOrder.mostUsed") },
+            ...(pickerMode === "custom" ? [{ value: "custom", label: t("models.pickerOrder.custom") }] : []),
+          ]}
+          onChange={value => setPickerMode(value as ModelPickerOrderMode)}
+          disabled={pickerBusy || pickerAvailable.length === 0}
+          label={t("models.pickerOrder.label")}
+        />
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void savePickerOrder()} disabled={pickerBusy || pickerMode === "custom" || pickerAvailable.length === 0}>
+          {pickerBusy ? t("models.pickerOrder.applying") : t("models.pickerOrder.apply")}
+        </button>
+        <span className="muted text-label leading-body">{t("models.pickerOrder.hint")}</span>
       </div>
 
       {(() => {

@@ -407,7 +407,7 @@ export interface ObservedCatalogEntryBuildInput {
   readonly gptSlugs: readonly string[];
   readonly goModels: readonly CatalogModel[];
   readonly featured?: readonly string[];
-  /** Optional full picker ordering (config.modelPickerOrder); orders non-featured rows. */
+  /** Optional full picker ordering (config.modelPickerOrder); orders routed rows. */
   readonly modelPickerOrder?: readonly string[];
   readonly wsEnabled: boolean;
   readonly multiAgentMode: MultiAgentMode;
@@ -485,32 +485,29 @@ export function buildCatalogEntriesFromObservedState({
   // it sorts to the front. This works for native gpt slugs AND routed slugs alike.
   const rank = new Map((featured ?? []).map((slug, i) => [slug, i] as const));
   const priorityStride = Math.max(accountSelectors.length, 1);
-  // Optional full picker order (#1649). Independent of the 5-slot spawn_agent cap: it only
-  // rewrites the Codex-visible display `priority` of listed non-featured routed rows so a >5
-  // catalog stays put across rebuilds. Featured rows keep their existing 0..N-1 band; when
-  // modelPickerOrder is unset the helper is a no-op and every priority below is byte-identical to
-  // before. The spawn_agent candidate window is derived separately from SPAWN_PRIORITY_FIELD, so
-  // this display reorder cannot change which rows are spawn candidates.
+  // Optional full picker order (#1649). Independent of the 5-slot spawn_agent cap: it rewrites
+  // the Codex-visible display `priority` of listed routed rows so a >5 catalog stays put across
+  // rebuilds. When modelPickerOrder is unset the helper is a no-op and every priority below is
+  // byte-identical to before. The spawn_agent candidate window is derived separately from
+  // SPAWN_PRIORITY_FIELD, so this display reorder cannot change which rows are spawn candidates.
   const pickerOrder = Array.isArray(modelPickerOrder)
     ? modelPickerOrder.filter((id): id is string => typeof id === "string" && id.length > 0)
     : [];
   const pickerOrderRank = new Map(pickerOrder.map((slug, i) => [slug, i] as const));
   const pickerOrderActive = pickerOrder.length > 0;
   // The display band reuses the existing high priority tier (>= PICKER_ORDER_PRIORITY_BASE, the
-  // same 1_000+ neighborhood account rows occupy), keeping listed rows visually after the featured
-  // band. Candidate membership does not depend on this — see SPAWN_PRIORITY_FIELD.
+  // same 1_000+ neighborhood account rows occupy). Candidate membership does not depend on this —
+  // see SPAWN_PRIORITY_FIELD.
   /**
-   * Priority for a non-featured routed row that is explicitly LISTED in modelPickerOrder. Listed
+   * Priority for a routed row that is explicitly LISTED in modelPickerOrder. Listed
    * slugs sort in declared order within the high picker-order display tier
    * (>= PICKER_ORDER_PRIORITY_BASE). This sets the Codex-visible `priority` only; the caller records
    * the row's natural priority in SPAWN_PRIORITY_FIELD so the spawn_agent candidate window is
    * unchanged. Returns undefined when the feature is off or the row is not listed, so those rows
    * keep their original assignment (default 5 / account 1_000+) untouched.
    *
-   * Scope: only the generic routed `<provider>/<model>` rows call this (see the goModels loop
-   * below). Native passthrough rows and account-qualified native rows keep their own priority
-   * logic and are intentionally not reordered here — this matches the documented contract on
-   * OcxConfig.modelPickerOrder (route native ordering through subagentModels instead).
+   * Scope: routed rows only. Native passthrough rows and account-qualified native rows keep their
+   * own priority logic because the Models page orders routed models.
    */
   const pickerOrderPriority = (slug: string, altSlug?: string): number | undefined => {
     if (!pickerOrderActive) return undefined;
@@ -565,6 +562,11 @@ export function buildCatalogEntriesFromObservedState({
     const rankHit = rank.get(slug) ?? rank.get(`${nativeAlias.provider}/${nativeAlias.id}`);
     if (rankHit !== undefined) routed.priority = rankHit * priorityStride;
     else if (accountSelectors.length > 0) routed.priority = 1_000 + (typeof routed.priority === "number" ? routed.priority : 5);
+    const pickerPriority = pickerOrderPriority(slug, `${nativeAlias.provider}/${nativeAlias.id}`);
+    if (pickerPriority !== undefined) {
+      routed[SPAWN_PRIORITY_FIELD] = typeof routed.priority === "number" ? routed.priority : 5;
+      routed.priority = pickerPriority;
+    }
     out.push(routed);
     emittedNativeAliases.add(nativeAlias);
     emittedNativeAliasSlugs.add(slug);
@@ -631,14 +633,12 @@ export function buildCatalogEntriesFromObservedState({
       e.priority = 1_000 + (typeof e.priority === "number" ? e.priority : 5);
     }
     // #1649: modelPickerOrder is a DISPLAY-ONLY override. Record the natural priority spawn_agent
-    // must keep using, then let modelPickerOrder move only the Codex-visible `priority`. Featured
-    // rows are never overridden (their rank is authoritative for both display and spawn).
-    if (rankHit === undefined) {
-      const pickerPriority = pickerOrderPriority(slug, `${m.provider}/${m.id}`);
-      if (pickerPriority !== undefined) {
-        e[SPAWN_PRIORITY_FIELD] = typeof e.priority === "number" ? e.priority : 5;
-        e.priority = pickerPriority;
-      }
+    // must keep using, then let modelPickerOrder move the Codex-visible `priority`, including a
+    // row selected for subagent use.
+    const pickerPriority = pickerOrderPriority(slug, `${m.provider}/${m.id}`);
+    if (pickerPriority !== undefined) {
+      e[SPAWN_PRIORITY_FIELD] = typeof e.priority === "number" ? e.priority : 5;
+      e.priority = pickerPriority;
     }
     out.push(e);
   }
@@ -685,6 +685,17 @@ export function orderForSubagents(goModels: CatalogModel[], featured?: string[])
   return [...goModels].sort((a, b) => {
     return rankOf(a) - rankOf(b);
   });
+}
+
+/** Order routed model discovery for a harness picker without changing subagent routing. */
+export function orderForModelPicker(goModels: readonly CatalogModel[], pickerOrder?: readonly string[]): readonly CatalogModel[] {
+  if (!pickerOrder || pickerOrder.length === 0) return goModels;
+  const rank = new Map(pickerOrder.map((id, i) => [id, i] as const));
+  const rankOf = (m: CatalogModel) =>
+    rank.get(catalogModelSlug(m))
+      ?? rank.get(`${m.provider}/${m.id}`)
+      ?? Number.MAX_SAFE_INTEGER;
+  return [...goModels].sort((a, b) => rankOf(a) - rankOf(b));
 }
 
 /**
