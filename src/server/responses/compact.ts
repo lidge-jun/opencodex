@@ -94,6 +94,9 @@ import type { DataPlaneAdmission } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
+import { decideTier, tierValueAfterDecision } from "../../providers/fastwire";
+import { fastPolicyForModel } from "../../providers/service-tier";
+import { parseFastOnlyRowId } from "../fast-row";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { readJsonRequestBody, DecompressedBodyTooLargeError, UnsupportedContentEncodingError } from "../request-decompress";
@@ -503,6 +506,12 @@ export async function handleResponsesCompact(
   if (typeof raw.model !== "string" || raw.model.length === 0) {
     return formatErrorResponse(400, "invalid_request_error", "compaction request requires a model");
   }
+  // Correct the IDENTITY before routing, or the synthetic id does not route at all. Held in
+  // a local rather than written back to `raw.model`: assigning to the property widens it out
+  // of the `string` narrowing the guard above just established.
+  const compactFastRow = parseFastOnlyRowId(config, () => raw.model as string);
+  const compactModel = compactFastRow ? compactFastRow.baseId : raw.model;
+  if (compactFastRow) (raw as Record<string, unknown>).model = compactModel;
 
   let route;
   try {
@@ -512,7 +521,7 @@ export async function handleResponsesCompact(
     // Codex selects a bare native model for compaction even when the operator
     // routes ordinary turns elsewhere (#2901); the compaction-scoped router
     // may land that on the configured default provider instead of 404.
-    route = routeCompactionModel(config, raw.model, evidenceFromBody(raw));
+    route = routeCompactionModel(config, compactModel, evidenceFromBody(raw));
   } catch (err) {
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
@@ -523,6 +532,22 @@ export async function handleResponsesCompact(
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
   const selectedModelId = route.modelId;
+  if (compactFastRow) {
+    // The tier is applied AFTER the route settles, exactly as the ordinary Responses path
+    // does it. Native compact spreads `raw` into the forwarded body, so writing an
+    // unconditional "priority" here would bypass fastMode:false, a withdrawn capability,
+    // and wire eligibility - the one rule this phase exists to preserve.
+    const decision = decideTier(
+      fastPolicyForModel(route.provider, route.modelId, route.providerName),
+      config.fastMode,
+      "priority",
+    );
+    // The WHOLE decision: on a drop, a caller's pre-existing service_tier must be removed
+    // rather than left to ride along.
+    const serviceTier = tierValueAfterDecision(decision, "priority");
+    if (serviceTier === undefined) delete (raw as Record<string, unknown>).service_tier;
+    else (raw as Record<string, unknown>).service_tier = serviceTier;
+  }
   // Derive from the RESOLVED route model, not the caller's raw string. An account-qualified
   // selector like `side/gpt-daybreak-blue-latest` does not match the gated map — `slugsEquivalent`
   // reads the account namespace as a routed provider prefix — so keying on `raw.model` sent

@@ -332,6 +332,7 @@ import {
 } from "../responses-image-gen-repair";
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
 import { parseRequestEffortRowId } from "../effort-row";
+import { parseSyntheticRowId } from "../fast-row";
 import {
   collectSelfNamedNamespaceScrubAuthorization,
   createSelfNamedToolCallNamespaceScrubRewrite,
@@ -2725,10 +2726,22 @@ async function handleResponsesInner(
   }
   // An effort row naming a table-less combo (`combo/x--high`) must reach the combo dispatcher
   // as its base id, so the selector is normalized here, before comboIdFromRawBody reads model.
-  const comboEffortRow = !options.comboAttempt && body && typeof body === "object" && !Array.isArray(body)
+  const comboRows = !options.comboAttempt && body && typeof body === "object" && !Array.isArray(body)
     && typeof (body as { model?: unknown }).model === "string"
-    ? parseRequestEffortRowId((body as { model: string }).model, config)
-    : null;
+    // One parse for both grammars, from the selector as the client sent it. Parsing them
+    // separately made the outcome depend on which ran first.
+    ? parseSyntheticRowId((body as { model: string }).model, config)
+    : { fastRow: null, effortRow: null };
+  const comboEffortRow = comboRows.effortRow;
+  if (comboRows.fastRow) {
+    // Same reason as the effort row above: the combo dispatcher reads `model` next, so the
+    // selector has to be normalized before it, or a combo child is built from a synthetic id.
+    const raw = body as Record<string, unknown>;
+    raw.model = comboRows.fastRow.baseId;
+    // A caller INTENT, not a decision. decideTier still rules on eligibility downstream, so
+    // fastMode:false and an ineligible route both still suppress it.
+    raw.service_tier = "priority";
+  }
   if (comboEffortRow) {
     const raw = body as Record<string, unknown>;
     raw.model = comboEffortRow.baseId;
@@ -2794,7 +2807,15 @@ async function handleResponsesInner(
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
     parsed = parseRequest(body);
-    const effortRow = parseRequestEffortRowId(parsed.modelId, config);
+    // Captured before any parser mutates it, so both grammars see the client's id.
+    const { fastRow, effortRow } = parseSyntheticRowId(parsed.modelId, config);
+    if (fastRow) {
+      parsed.modelId = fastRow.baseId;
+      parsed.options.serviceTier = "priority";
+      const raw = parsed._rawBody as Record<string, unknown>;
+      raw.model = fastRow.baseId;
+      raw.service_tier = "priority";
+    }
     if (effortRow) {
       parsed.modelId = effortRow.baseId;
       parsed.options.reasoning = effortRow.effort;

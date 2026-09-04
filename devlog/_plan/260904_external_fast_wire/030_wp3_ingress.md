@@ -259,7 +259,13 @@ settles, exactly as `core.ts:2109` does it:
 +      config.fastMode,
 +      "priority",
 +    );
-+    if (decision.kind === "set") (raw as Record<string, unknown>).service_tier = decision.value;
++    // The WHOLE decision, not just `set`. Native compact spreads `raw` into the forwarded
++    // body (compact.ts:645, serialized at :735), so leaving a caller's existing service_tier
++    // in place on a `drop` would forward a tier that fastMode:false or a capability loss
++    // just suppressed - the one rule this phase exists to preserve.
++    const serviceTier = tierValueAfterDecision(decision, "priority");
++    if (serviceTier === undefined) delete (raw as Record<string, unknown>).service_tier;
++    else (raw as Record<string, unknown>).service_tier = serviceTier;
 +  }
 ```
 
@@ -297,6 +303,12 @@ Each test drives one conditional and asserts an observable effect, per
     model on both Messages and `count_tokens`.
 14. **Nested markers resolve to neither grammar,** in both orders, identically on all five
     surfaces: `x--fast--high` must NOT reach the effort grammar with base `x--fast`.
+15. **Compact drops a caller's stale tier.** A compact fast selector sent WITH an existing
+    `service_tier`, under `fastMode: false`, forwards no tier at all. The `set`-only draft
+    left the old value in the body.
+16. **The combo pre-dispatch branch is covered on its own.** A `<combo-public-id>--fast`
+    selector dispatches as a combo under the BASE id and carries `priority` into the child
+    turns - a distinct control-flow branch the ordinary Responses test does not exercise.
 
 ## Import changes, per file
 
@@ -307,7 +319,7 @@ Every symbol the diffs above introduce, so the implementer does not have to infe
 | `src/server/responses/core.ts` | `parseSyntheticRowId` from `../fast-row` | `parseRequestEffortRowId` import, now unused |
 | `src/server/chat-completions.ts` | `parseSyntheticRowId` from `./fast-row` | `parseRequestEffortRowId` import, now unused |
 | `src/server/claude-messages.ts` | `parseSyntheticRowId`, `parseFastOnlyRowId`, and type `ParsedFastRowId` from `./fast-row` | `parseRequestEffortRowId` import, now unused |
-| `src/server/responses/compact.ts` | `parseFastOnlyRowId` from `../fast-row`; `fastPolicyForModel` from `../../providers/service-tier`; `decideTier` from `../../providers/fastwire` | — |
+| `src/server/responses/compact.ts` | `parseFastOnlyRowId` from `../fast-row`; `fastPolicyForModel` from `../../providers/service-tier`; `decideTier` and `tierValueAfterDecision` from `../../providers/fastwire` | — |
 
 `compact.ts` imports none of the tier helpers today, which is exactly why its Fast handling
 had to be written as an explicit post-routing policy call rather than assumed.
