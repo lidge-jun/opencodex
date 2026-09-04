@@ -81,12 +81,14 @@ describe("rich Logs filtering", () => {
     const rows = [
       { id: "success", status: 200 },
       { id: "error", status: 599 },
+      { id: "redirect", status: 302 },
       { id: "nan", status: Number.NaN },
       { id: "fractional", status: 200.5 },
       { id: "out-of-range", status: 600 },
     ];
     expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, status: "success" }, NOW).map(row => row.id)).toEqual(["success"]);
     expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, status: "errors" }, NOW).map(row => row.id)).toEqual(["error"]);
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, status: "all" }, NOW).map(row => row.id)).toContain("redirect");
   });
 
   test("uses deterministic time windows and rejects rows without a usable timestamp", () => {
