@@ -215,14 +215,37 @@ describe("membership oracle", () => {
     expect({ missingFromFixture, missingFromTree, wrongTarget }).toEqual({ missingFromFixture: [], missingFromTree: [], wrongTarget: [] });
   });
 
-  test("the fixture histogram matches the inventory in devlog 001 §2.B", () => {
+  test("the fixture histogram never drops below the inventory in devlog 001 §2.B", () => {
+    // 001 is a snapshot of 2026-09-05; files added on dev afterwards join the fixture and
+    // raise a domain's count. A count that falls below the snapshot means a file was dropped
+    // from the map, which is the defect this guards against.
     const histogram: Record<string, number> = {};
     for (const target of Object.values(EXPECTED)) histogram[target] = (histogram[target] ?? 0) + 1;
     const doc = readFileSync(repoPath("devlog", "_plan", "260905_test_modularization_and_windows", "001_test_inventory.md"), "utf8");
     const expected: Record<string, number> = {};
     for (const m of doc.matchAll(/^#### `tests\/([a-z0-9/-]+)\/` \((\d+)\)$/gm)) expected[m[1]!] = Number(m[2]);
     expect(Object.keys(expected).length).toBeGreaterThan(20);
-    expect(histogram).toEqual(expected);
+    expect(Object.keys(histogram).sort()).toEqual(Object.keys(expected).sort());
+    const below = Object.entries(expected).filter(([dir, n]) => (histogram[dir] ?? 0) < n).map(([dir, n]) => `${dir}: ${histogram[dir]} < ${n}`);
+    expect(below).toEqual([]);
+  });
+
+  test("a file that only the regex seeds know still resolves (new test files before they are mapped)", () => {
+    const layout = loadLayout();
+    const seedOnly: Layout = { ...layout, explicit: {} };
+    // Every explicit entry whose first token is unique to one domain must resolve through the
+    // seeds alone; that is what lets a brand-new file land in the right place on the day it is
+    // added, before someone updates the map.
+    const mismatches: string[] = [];
+    let resolved = 0;
+    for (const [name, target] of Object.entries(layout.explicit)) {
+      const r = resolveTarget(seedOnly, name);
+      if (r === null) continue;
+      resolved += 1;
+      if (r !== target) mismatches.push(`${name}: seed ${r} != ${target}`);
+    }
+    expect(resolved).toBeGreaterThan(600);
+    expect(mismatches).toEqual([]);
   });
 });
 

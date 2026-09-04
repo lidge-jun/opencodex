@@ -11,148 +11,152 @@
   "domains": {
     "providers": {
       "match": [
-        "^(provider|providers|registry|mimo|baseten|chutes|deepinfra|nous|opencode|zai|moonshot|minimax|qwen|glm|groq|together|fireworks|openrouter|deepseek)-"
+        "^(?:aside|auto|azure|baseten|chutes|cline|command|commandcode|context|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
-          "^cursor-"
+          "^(?:cursor)-"
         ],
         "kiro": [
-          "^kiro-"
+          "^(?:kiro)-"
         ],
         "xai": [
-          "^(xai|grok)-"
+          "^(?:grok)-"
         ],
         "ollama": [
-          "^ollama-"
+          "^(?:ollama)-"
         ],
         "github-copilot": [
-          "^github-copilot-"
+          "^(?:github)-"
         ]
       }
     },
     "codex-integration": {
       "match": [
-        "^(codex|native|catalog)-"
+        "^(?:active|app|bearer|catalog|combos\\.test\\.ts|doctor\\.test\\.ts|effort|gather|history|injection|issue|multi|native|parallel|project|selected|slug|ultrafast|warmup\\.test\\.ts)-"
       ]
     },
     "server": {
       "match": [
-        "^(server|api|management|loopback|listener|bounded-body|cancel-body|ws-endpoint)-"
+        "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-"
       ]
     },
     "adapters": {
       "match": [
-        "^adapter"
+        "^(?:bridge\\.test\\.ts|buffered|identity|run|tool|translator)-"
       ],
       "children": {
         "google": [
-          "^(google|gemini|antigravity)-"
+          "^(?:antigravity|gcp|google|vertex)-"
         ],
         "anthropic": [
-          "^(anthropic|claude-messages)"
+          "^(?:anthropic)-"
         ],
-        "openai": [
-          "^(openai-chat|openai-responses|openai-provider-option)"
-        ]
+        "openai": []
       }
     },
     "responses": {
       "match": [
-        "^(responses|sse|chat-completions|relay|passthrough|reasoning-replay|transient-budget)"
+        "^(?:apply|chat|citation|continuation|eventstream|legacy|namespace|passthrough|responses|sse|thought|ws)-"
       ]
     },
     "lab": {
       "match": [
-        "^lab-"
+        "^(?:core|lab)-"
       ]
     },
     "cli": {
       "match": [
-        "^(cli|ocx|star)-"
+        "^(?:cli|ensure|interactive|ocx|restore|star|uninstall\\.test\\.ts)-"
       ]
     },
     "routing": {
       "match": [
-        "^(router|routing|combo|subagent)-"
+        "^(?:cl01|destination|fastwire|policy|router|router\\.test\\.ts|subagent)-"
       ]
     },
     "gui": {
-      "match": []
+      "match": [
+        "^(?:dashboard|gui|models|qwen|tencent)-"
+      ]
     },
     "oauth": {
       "match": [
-        "^(oauth|chatgpt-oauth|chatgpt-device)"
+        "^(?:chatgpt|generic|state)-"
       ]
     },
     "claude-integration": {
-      "match": [
-        "^(claude|desktop-3p)"
-      ]
+      "match": []
     },
     "ci-workflows": {
       "match": [
-        "^(ci-|zz-ci-|release-|bump-dev|repo-hygiene|closed-pr|cleanup-orphaned|install-scripts|privacy-scan|keyring-smoke|dsh-rc6|build-release|compatibility-version|skill-ocx|test-runner|bun-runtime|fixture-dir)"
+        "^(?:assert|build|bump|ci|cleanup|closed|docs|dsh|fixture|install|keyring|package|release|repo|skill|test|zz)-"
       ]
     },
     "usage": {
       "match": [
-        "^(usage|request|quota|rate-limit)"
+        "^(?:cost|request|usage|user)-"
       ]
     },
     "lib": {
       "match": [
-        "^(strict-semver|remove-tree|lib-)"
+        "^(?:acl|clearable|credential|debug\\.test\\.ts|optional|redact\\.test\\.ts|remove|self|stall|strict|transient)-"
       ]
     },
     "clients": {
       "match": [
-        "^(clients|integrations|sync-client|aside-client)"
+        "^(?:desktop|omp|pi|prime|remote|sync)-"
       ]
     },
     "service": {
       "match": [
-        "^(service|doctor|systemd|launchd)"
+        "^(?:autostart|crash|doctor|init|service|service\\.test\\.ts|shutdown|stale|stop|systemd|winsw\\.test\\.ts)-"
       ]
     },
     "windows": {
       "match": [
-        "^(windows|win-|winsw|tray)"
+        "^(?:tray|win|windows|winsw)-"
       ]
     },
     "storage": {
       "match": [
-        "^(api-storage|storage|stale-state)"
+        "^(?:storage)-"
       ]
     },
     "vision": {
       "match": [
-        "^(vision|sidecar)"
+        "^(?:sidecar)-"
       ]
     },
     "config": {
       "match": [
-        "^config"
+        "^(?:config|expand|settings|types|url|yaml)-"
       ]
     },
     "web-search": {
       "match": [
-        "^web-search"
+        "^(?:format|web)-"
       ]
     },
     "update": {
       "match": [
-        "^update"
+        "^(?:update)-"
       ]
     },
     "images": {
-      "match": []
+      "match": [
+        "^(?:artifacts|download|loop|loop\\.test\\.ts|plan\\.test\\.ts|synthetic|z)-"
+      ]
     },
     "videos": {
-      "match": []
+      "match": [
+        "^(?:fulfill|plan)-"
+      ]
     },
     "e2e-style": {
-      "match": []
+      "match": [
+        "^(?:phase100)-"
+      ]
     }
   },
   "explicit": {
@@ -180,6 +184,7 @@
     "alibaba-region-backup.test.ts": "providers",
     "alibaba-region-migration.test.ts": "providers",
     "alibaba-region-startup.test.ts": "providers",
+    "always-on-429-failover.test.ts": "routing",
     "anthropic-account-pool.test.ts": "adapters/anthropic",
     "anthropic-agentrouter-language-framing.test.ts": "adapters/anthropic",
     "anthropic-baseurl-override.test.ts": "adapters/anthropic",
